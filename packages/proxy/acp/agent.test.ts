@@ -23,10 +23,10 @@ import {
   type AosActivityNotification,
 } from "../../protocol/acp"
 import {
-  RunEventKind,
-  pendingRequestsOf,
+  PendingRequestKind,
+  TurnEventKind,
   type PendingRequest,
-  type RunEvent,
+  type TurnEvent,
 } from "../core/events"
 import type {
   RuntimeInstance,
@@ -180,8 +180,8 @@ const USAGE = {
 
 /** One provider run segment the test drives event by event. */
 class EventSource implements ServerRunHandle {
-  readonly #values: RunEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
+  readonly #values: TurnEvent[] = []
+  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
@@ -194,21 +194,21 @@ class EventSource implements ServerRunHandle {
     })
   }
 
-  readonly events: AsyncIterable<RunEvent> = {
+  readonly events: AsyncIterable<TurnEvent> = {
     [Symbol.asyncIterator]: () => ({
       next: () => {
         const value = this.#values.shift()
         if (value) return Promise.resolve({ done: false, value })
         if (this.#closed)
           return Promise.resolve({ done: true, value: undefined })
-        return new Promise<IteratorResult<RunEvent>>((resolve) =>
+        return new Promise<IteratorResult<TurnEvent>>((resolve) =>
           this.#waiters.push(resolve)
         )
       },
     }),
   }
 
-  emit(event: RunEvent) {
+  emit(event: TurnEvent) {
     const waiter = this.#waiters.shift()
     if (waiter) waiter({ done: false, value: event })
     else this.#values.push(event)
@@ -226,12 +226,6 @@ class EventSource implements ServerRunHandle {
   }
 }
 
-const SteerValueSchema = z.object({
-  requestId: z.string(),
-  text: z.string(),
-  delivery: z.enum(["steered", "queued"]),
-})
-
 type InterruptOutbound = Extract<
   AcpOutbound,
   { kind: "request-permission" | "elicitation" }
@@ -240,24 +234,24 @@ type InterruptOutbound = Extract<
 function permissionOutbound(request: PendingRequest): InterruptOutbound {
   return {
     kind: "request-permission",
-    interruptId: request.id,
+    requestId: request.requestId,
     request: {
-      title: request.reason,
+      title: request.message ?? "",
       options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { interruptId: request.id } },
+      _meta: { [AOS_META_KEY]: { interruptId: request.requestId } },
     },
   }
 }
 
 /** Deterministic stand-ins for the translator lane's pure projections. */
 const translators: Translators = {
-  translateRunEvent(state, event, context) {
+  translateTurnEvent(state, event, context) {
     const meta = {
       _meta: {
         [AOS_META_KEY]: { sequence: context.sequence, runId: context.runId },
       },
     }
-    if (event.type === RunEventKind.RUN_STARTED)
+    if (event.kind === TurnEventKind.TurnStarted)
       return {
         state,
         outbound: [
@@ -271,7 +265,7 @@ const translators: Translators = {
           },
         ],
       }
-    if (event.type === RunEventKind.TEXT_MESSAGE_CONTENT)
+    if (event.kind === TurnEventKind.MessageChunk)
       return {
         state: { ...state, messageId: event.messageId },
         outbound: [
@@ -280,13 +274,13 @@ const translators: Translators = {
             update: {
               sessionUpdate: "agent_message_chunk",
               messageId: event.messageId,
-              content: { type: "text", text: event.delta },
+              content: { type: "text", text: event.text },
               ...meta,
             },
           },
         ],
       }
-    if (event.type === RunEventKind.RUN_ERROR)
+    if (event.kind === TurnEventKind.TurnFailed)
       return {
         state,
         outbound: [
@@ -309,36 +303,33 @@ const translators: Translators = {
           },
         ],
       }
-    if (event.type === RunEventKind.RUN_FINISHED) {
-      const interrupts = pendingRequestsOf(event)
-      return interrupts.length
-        ? { state, outbound: interrupts.map(permissionOutbound) }
-        : {
-            state,
-            outbound: [
-              {
-                kind: "update",
-                update: {
-                  sessionUpdate: "state_update",
-                  state: "idle",
-                  stopReason: context.stopping ? "cancelled" : "end_turn",
-                  ...meta,
-                },
-              },
-            ],
-          }
-    }
-    if (
-      event.type === RunEventKind.CUSTOM &&
-      event.name === "aos.steer.accepted"
-    )
+    if (event.kind === TurnEventKind.TurnRequiresAction)
+      return { state, outbound: event.requests.map(permissionOutbound) }
+    if (event.kind === TurnEventKind.TurnEnded)
+      return {
+        state,
+        outbound: [
+          {
+            kind: "update",
+            update: {
+              sessionUpdate: "state_update",
+              state: "idle",
+              stopReason: context.stopping ? "cancelled" : "end_turn",
+              ...meta,
+            },
+          },
+        ],
+      }
+    if (event.kind === TurnEventKind.SteerAccepted)
       return {
         state,
         outbound: [
           {
             kind: "steer-accepted",
             runId: context.runId,
-            ...SteerValueSchema.parse(event.value),
+            requestId: event.requestId,
+            text: event.text,
+            delivery: event.delivery,
           },
         ],
       }
@@ -357,12 +348,12 @@ const translators: Translators = {
     })),
   pendingRequestToOutbound: (request) => permissionOutbound(request),
   replyFromPermission: (request, response) => ({
-    interruptId: request.id,
+    requestId: request.requestId,
     status: "resolved",
     payload: response.outcome,
   }),
   replyFromElicitation: (request) => ({
-    interruptId: request.id,
+    requestId: request.requestId,
     status: "resolved",
   }),
   configOptionsOf: (models) => [
@@ -689,8 +680,8 @@ async function harness(options: HarnessOptions = {}) {
   }
 }
 
-function runStarted(runId: string, threadId = SESSION): RunEvent {
-  return { type: RunEventKind.RUN_STARTED, threadId, runId }
+function turnStarted(): TurnEvent {
+  return { kind: TurnEventKind.TurnStarted }
 }
 
 function updates(recorder: ReturnType<typeof createRecorder>) {
@@ -849,15 +840,7 @@ describe("AOS ACP agent", () => {
     // A run this connection did not start: the coordinator owns it already.
     await test.coordinator.start(
       test.scope,
-      {
-        threadId: SESSION,
-        runId: "run-live",
-        state: {},
-        messages: [{ id: "message-0", role: "user", content: "Go" }],
-        tools: [],
-        context: [],
-        forwardedProps: {},
-      },
+      { turnId: "run-live", messageId: "message-0", prompt: "Go" },
       {
         subscriberId: "rest",
         controllerId: "operator",
@@ -865,7 +848,7 @@ describe("AOS ACP agent", () => {
         canControl: true,
       }
     )
-    test.sources[0]?.emit(runStarted("run-live"))
+    test.sources[0]?.emit(turnStarted())
 
     const resumed = await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
@@ -898,9 +881,9 @@ describe("AOS ACP agent", () => {
       },
     })
     test.sources[0]?.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "Live",
+      text: "Live",
     })
     const streamed = await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("Live")
@@ -930,23 +913,19 @@ describe("AOS ACP agent", () => {
       .parse(accepted)._meta.aos.messageId
     expect(messageId).toHaveLength(36)
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    expect(test.start.mock.calls[0]?.[0]).toMatchObject({ threadId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
-      threadId: CREATED,
-      messages: [{ id: messageId, role: "user", content: "Summarize" }],
+      messageId,
+      prompt: "Summarize",
     })
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "Done",
+      text: "Done",
     })
-    source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source?.emit({ kind: TurnEventKind.TurnEnded })
 
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("end_turn")
@@ -995,15 +974,16 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "approval-1", reason: "permission-required" }],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "approval-1",
+          kind: PendingRequestKind.Permission,
+          message: "permission-required",
+        },
+      ],
     })
     source?.finish()
 
@@ -1019,10 +999,9 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
-      messages: [],
-      resume: [
+      replies: [
         {
-          interruptId: "approval-1",
+          requestId: "approval-1",
           status: "resolved",
           payload: { outcome: "selected", optionId: "once" },
         },
@@ -1041,7 +1020,7 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes('"state":"running"')
     )
@@ -1062,12 +1041,7 @@ describe("AOS ACP agent", () => {
       },
     })
     expect(source?.stop).toHaveBeenCalledTimes(1)
-    source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source?.emit({ kind: TurnEventKind.TurnEnded })
     const settled = await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("cancelled")
     )
@@ -1382,7 +1356,7 @@ describe("AOS ACP agent", () => {
       _meta: { [AOS_META_KEY]: {} },
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(runStarted("run-1", CREATED))
+    test.sources[0]?.emit(turnStarted())
     await vi.waitFor(() =>
       expect(
         test.coordinator.state({ agentId: AGENT, sessionId: CREATED })
@@ -1577,15 +1551,16 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "approval-1", reason: "permission-required" }],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "approval-1",
+          kind: PendingRequestKind.Permission,
+          message: "permission-required",
+        },
+      ],
     })
     source?.finish()
     await test.recorder.wait(
@@ -1633,15 +1608,16 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "approval-1", reason: "permission-required" }],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "approval-1",
+          kind: PendingRequestKind.Permission,
+          message: "permission-required",
+        },
+      ],
     })
     source?.finish()
     await test.recorder.wait(
@@ -1667,15 +1643,16 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "approval-1", reason: "permission-required" }],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "approval-1",
+          kind: PendingRequestKind.Permission,
+          message: "permission-required",
+        },
+      ],
     })
     source?.finish()
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
@@ -1701,7 +1678,7 @@ describe("AOS ACP agent", () => {
       event: "acp.request.answered",
       connectionId: "connection-1",
       sessionId: CREATED,
-      interruptId: "approval-1",
+      requestId: "approval-1",
       status: "resolved",
     })
 
@@ -1725,9 +1702,9 @@ describe("AOS ACP agent", () => {
     })
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
-    source?.emit(runStarted("run-1", CREATED))
+    source?.emit(turnStarted())
     source?.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "the transport dropped",
       code: "AOS_CONNECTION_INTERRUPTED",
     })

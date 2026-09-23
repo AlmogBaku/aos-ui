@@ -49,8 +49,8 @@ function fieldOf(outbound: AcpOutbound, name: string): unknown {
 
 /** The approval Hermes and OpenClaw raise: one choice from a public enum. */
 const approval: PendingRequest = {
-  id: "approval-1",
-  reason: "approval",
+  requestId: "approval-1",
+  kind: "permission",
   message: "Hermes wants to run `rm -rf build`.",
   toolCallId: "call-1",
   responseSchema: {
@@ -58,13 +58,12 @@ const approval: PendingRequest = {
     enum: ["once", "session", "always", "deny"],
   },
   expiresAt: "2026-09-19T10:00:00.000Z",
-  metadata: { "aos.kind": "approval", "aos.scope": "run" },
 }
 
 /** The clarification Hermes raises: prefixed per-question answer schemas. */
 const questions: PendingRequest = {
-  id: "clarify-1",
-  reason: "question",
+  requestId: "clarify-1",
+  kind: "elicitation",
   message: "2 questions require answers",
   responseSchema: {
     type: "object",
@@ -161,8 +160,8 @@ describe("pendingRequestToOutbound approvals", () => {
 
   it("titles an approval that carries no message", () => {
     const outbound = permissionOf({
-      id: "approval-2",
-      reason: "approval",
+      requestId: "approval-2",
+      kind: "permission",
       responseSchema: { type: "string", enum: ["once", "always", "deny"] },
     })
 
@@ -172,22 +171,12 @@ describe("pendingRequestToOutbound approvals", () => {
       interruptId: "approval-2",
     })
   })
-
-  it("treats a confirmation like an approval", () => {
-    expect(
-      permissionOf({
-        id: "approval-3",
-        reason: "confirmation",
-        responseSchema: { type: "string", enum: ["once", "deny"] },
-      }).request.options
-    ).toHaveLength(2)
-  })
 })
 
 /** A clarification whose words name the operator's own machine. */
 const located: PendingRequest = {
-  id: "clarify-5",
-  reason: "question",
+  requestId: "clarify-5",
+  kind: "elicitation",
   message: "Where should exports live? Not under /srv/aos/repo.",
   responseSchema: {
     type: "object",
@@ -318,8 +307,8 @@ describe("pendingRequestToOutbound questions", () => {
 
   it("offers a multi-choice question as a multi-select field", () => {
     const outbound = elicitationOf({
-      id: "clarify-2",
-      reason: "question",
+      requestId: "clarify-2",
+      kind: "elicitation",
       responseSchema: {
         type: "object",
         properties: {
@@ -366,8 +355,8 @@ describe("pendingRequestToOutbound questions", () => {
     // and the browser, which knows the locale, supplies the label.
     const description = "w".repeat(600)
     const outbound = elicitationOf({
-      id: "clarify-3",
-      reason: "question",
+      requestId: "clarify-3",
+      kind: "elicitation",
       responseSchema: {
         properties: {
           answers: { prefixItems: [{ description, maxItems: 1 }] },
@@ -382,8 +371,8 @@ describe("pendingRequestToOutbound questions", () => {
 
   it("heads a question with the short label its provider supplied", () => {
     const outbound = elicitationOf({
-      id: "clarify-6",
-      reason: "question",
+      requestId: "clarify-6",
+      kind: "elicitation",
       responseSchema: {
         properties: {
           answers: {
@@ -422,8 +411,8 @@ describe("pendingRequestToOutbound questions", () => {
     const meta = AosElicitationMetaSchema.parse(
       metaOf(
         elicitationOf({
-          id: "clarify-7",
-          reason: "question",
+          requestId: "clarify-7",
+          kind: "elicitation",
           responseSchema: {
             properties: {
               answers: { prefixItems: [{ title: "w".repeat(600) }] },
@@ -441,8 +430,8 @@ describe("pendingRequestToOutbound questions", () => {
       metaOf(
         elicitationOf(
           {
-            id: "clarify-8",
-            reason: "question",
+            requestId: "clarify-8",
+            kind: "elicitation",
             responseSchema: {
               properties: {
                 answers: {
@@ -461,8 +450,8 @@ describe("pendingRequestToOutbound questions", () => {
 
   it("asks one free-text question when the schema lists no answer fields", () => {
     const outbound = elicitationOf({
-      id: "clarify-4",
-      reason: "question",
+      requestId: "clarify-4",
+      kind: "elicitation",
       message: "Which branch should I use?",
       responseSchema: {
         type: "object",
@@ -489,7 +478,7 @@ describe("replyFromPermission", () => {
         outcome: { outcome: "selected", optionId: "session" },
       })
     ).toEqual({
-      interruptId: "approval-1",
+      requestId: "approval-1",
       status: "resolved",
       payload: "session",
     })
@@ -500,7 +489,7 @@ describe("replyFromPermission", () => {
     ["an unknown outcome", { outcome: "_dismissed" }],
   ])("cancels the interrupt on %s", (_label, outcome) => {
     expect(replyFromPermission(approval, { outcome })).toEqual({
-      interruptId: "approval-1",
+      requestId: "approval-1",
       status: "cancelled",
     })
   })
@@ -518,7 +507,7 @@ describe("replyFromElicitation", () => {
         "operator"
       )
     ).toEqual({
-      interruptId: "clarify-1",
+      requestId: "clarify-1",
       status: "resolved",
       payload: { answers: [["production"], ["logs", "metrics"]] },
     })
@@ -537,7 +526,7 @@ describe("replyFromElicitation", () => {
       "guest"
     )
     expect(reply).toEqual({
-      interruptId: "clarify-5",
+      requestId: "clarify-5",
       status: "resolved",
       payload: {
         answers: [
@@ -556,7 +545,7 @@ describe("replyFromElicitation", () => {
         "operator"
       )
     ).toEqual({
-      interruptId: "clarify-1",
+      requestId: "clarify-1",
       status: "resolved",
       payload: { answers: [[], []] },
     })
@@ -566,7 +555,7 @@ describe("replyFromElicitation", () => {
     "cancels the interrupt on %s",
     (action) => {
       expect(replyFromElicitation(questions, { action }, "operator")).toEqual({
-        interruptId: "clarify-1",
+        requestId: "clarify-1",
         status: "cancelled",
       })
     }

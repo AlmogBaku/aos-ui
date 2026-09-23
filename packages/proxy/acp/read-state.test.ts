@@ -72,15 +72,15 @@ async function settle(elapsedMs: number) {
 }
 
 function lifecycle(
-  type: "run-started" | "run-finished" | "run-failed",
+  kind: "turn-started" | "turn-finished" | "turn-failed",
   sessionId = SESSION
 ): ExecutionEvent {
   return {
     agentId: AGENT,
     sessionId,
-    runId: "run-1",
+    turnId: "run-1",
     occurredAt: "2026-09-19T10:00:00.000Z",
-    type,
+    kind,
   }
 }
 
@@ -88,10 +88,10 @@ function attention(sessionId = SESSION): ExecutionEvent {
   return {
     agentId: AGENT,
     sessionId,
-    runId: "run-1",
+    turnId: "run-1",
     occurredAt: "2026-09-19T10:00:00.000Z",
-    type: "attention-requested",
-    request: { id: "question-1", reason: "question" },
+    kind: "attention-requested",
+    request: { requestId: "question-1", kind: "elicitation" },
   }
 }
 
@@ -132,7 +132,7 @@ describe("createReadState", () => {
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
 
-    readState.onExecution(lifecycle("run-finished"))
+    readState.onExecution(lifecycle("turn-finished"))
     await settle(FOCUS_DEBOUNCE_MS)
     expect(mutateSession).toHaveBeenCalledTimes(1)
 
@@ -142,8 +142,8 @@ describe("createReadState", () => {
     expect(mutateSession).toHaveBeenCalledTimes(2)
 
     await settle(REACK_FLOOR_MS)
-    readState.onExecution(lifecycle("run-started"))
-    readState.onExecution(lifecycle("run-failed", "session-2"))
+    readState.onExecution(lifecycle("turn-started"))
+    readState.onExecution(lifecycle("turn-failed", "session-2"))
     readState.onExecution(attention("session-2"))
     await settle(FOCUS_DEBOUNCE_MS)
     expect(mutateSession).toHaveBeenCalledTimes(2)
@@ -252,7 +252,7 @@ describe("createReadState", () => {
 
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
-    readState.onExecution(lifecycle("run-finished"))
+    readState.onExecution(lifecycle("turn-finished"))
     await settle(FOCUS_DEBOUNCE_MS)
     await readState.markRead(AGENT, SESSION)
 

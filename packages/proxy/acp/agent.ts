@@ -27,9 +27,9 @@ import {
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
+import type { PromptTurnInput } from "../core/events"
 import type { SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
-import { buildNewTurnInput } from "../core/turn-input"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
@@ -509,15 +509,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
     if (meta.attachmentStageId !== undefined && !stage) throw invalidRequest()
     const messageId = crypto.randomUUID()
-    const input = buildNewTurnInput({
-      threadId: scope.threadId,
-      runId: crypto.randomUUID(),
+    const input: PromptTurnInput = {
+      turnId: crypto.randomUUID(),
       messageId,
-      content: stage ? await stage.appendTo(text) : text,
+      prompt: stage ? await stage.appendTo(text) : text,
       ...(meta.rewindSourceId === undefined
         ? {}
         : { rewindSourceId: meta.rewindSourceId }),
-    })
+    }
     const attachment = sessions.attach(client, scope)
     afterResponse(attachment, async () => {
       await attachment.update({

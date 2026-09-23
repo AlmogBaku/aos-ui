@@ -28,9 +28,9 @@ export type ReadStateOptions = {
  * is role-blind and running-blind in Hermes, so the operator's own turn and a
  * streaming answer both need another acknowledgement.
  */
-const RELIGHTING: readonly ExecutionEvent["type"][] = [
-  "run-finished",
-  "run-failed",
+const RELIGHTING: readonly ExecutionEvent["kind"][] = [
+  "turn-finished",
+  "turn-failed",
   "attention-requested",
 ]
 
@@ -129,7 +129,8 @@ export function createReadState({
    */
   const unlisten = sessionRows.subscribe((row) => {
     if (row.unread !== true || !focused) return
-    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id })) return
+    if (!sameTarget(focused, { agentId: row.agentId, sessionId: row.id }))
+      return
     arm(focused, false)
   })
 
@@ -148,7 +149,7 @@ export function createReadState({
 
     onExecution(event) {
       if (!focused || !sameTarget(focused, event)) return
-      if (!RELIGHTING.includes(event.type)) return
+      if (!RELIGHTING.includes(event.kind)) return
       arm(focused, false)
     },
 

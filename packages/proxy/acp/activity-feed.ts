@@ -1,5 +1,9 @@
 import type { AosActivityNotification } from "../../protocol/acp"
-import type { ExecutionEvent, PendingRequest } from "../core/events"
+import {
+  PendingRequestKind,
+  type ExecutionEvent,
+  type PendingRequest,
+} from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRow, SessionRows } from "../core/session-rows"
 import type { ActivityFeed } from "./types"
@@ -19,17 +23,31 @@ export type ActivityFeedOptions = {
   maxAgeMs?: number
 }
 
-/**
- * The one place the attention kind is decided. Adapters report an approval
- * interrupt as `approval` (older browser builds said `confirmation`); every
- * other reason is answered by writing, so it reads as a question.
- */
+/** The one place the attention kind is decided; every non-permission is a question. */
 export function attentionKindOf(
   request: PendingRequest
 ): "permission" | "question" {
-  return request.reason === "approval" || request.reason === "confirmation"
+  return request.kind === PendingRequestKind.Permission
     ? "permission"
     : "question"
+}
+
+const ACTIVITY_TYPES = {
+  "turn-started": "run-started",
+  "turn-finished": "run-finished",
+  "turn-failed": "run-failed",
+  "attention-requested": "attention-requested",
+  "attention-resolved": "attention-resolved",
+} as const satisfies Record<
+  ExecutionEvent["kind"],
+  AosActivityNotification["type"]
+>
+
+/** The activity type an execution event is spelled as on the wire. */
+export function activityTypeOf<Kind extends ExecutionEvent["kind"]>(
+  kind: Kind
+): (typeof ACTIVITY_TYPES)[Kind] {
+  return ACTIVITY_TYPES[kind]
 }
 
 function notificationOf(event: ExecutionEvent): AosActivityNotification {
@@ -38,20 +56,24 @@ function notificationOf(event: ExecutionEvent): AosActivityNotification {
     sessionId: event.sessionId,
     occurredAt: event.occurredAt,
   }
-  switch (event.type) {
-    case "run-started":
-    case "run-finished":
-    case "run-failed":
-      return { ...base, type: event.type, lifecycleId: event.runId }
+  switch (event.kind) {
+    case "turn-started":
+    case "turn-finished":
+    case "turn-failed":
+      return {
+        ...base,
+        type: activityTypeOf(event.kind),
+        lifecycleId: event.turnId,
+      }
     case "attention-requested":
       return {
         ...base,
-        type: event.type,
-        requestId: event.request.id,
+        type: "attention-requested",
+        requestId: event.request.requestId,
         attentionKind: attentionKindOf(event.request),
       }
     case "attention-resolved":
-      return { ...base, type: event.type, requestId: event.interruptId }
+      return { ...base, type: "attention-resolved", requestId: event.requestId }
   }
 }
 
@@ -124,11 +146,11 @@ export function createActivityFeed({
       push({ ...base, type: "run-failed", lifecycleId: runId ?? row.id })
       return
     }
-    for (const request of execution?.interrupts ?? [])
+    for (const request of execution?.requests ?? [])
       push({
         ...base,
         type: "attention-requested",
-        requestId: request.id,
+        requestId: request.requestId,
         attentionKind: attentionKindOf(request),
       })
   }

@@ -6,6 +6,7 @@ import {
   PushMessageSchema,
   type PushCategory,
 } from "../../protocol/push"
+import { activityTypeOf } from "../acp/activity-feed"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import { redactForLog } from "../redaction"
@@ -236,7 +237,7 @@ export function createPushDispatcher({
   })
 
   const unobserve = runtimeInstance.sessions.observe((event) => {
-    const category = categoryOf(event.type)
+    const category = categoryOf(activityTypeOf(event.kind))
     if (!category) return
     // A timestamp the provider left unreadable must not silence a notification.
     const occurredAtMs = Date.parse(event.occurredAt)

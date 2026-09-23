@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
-  RunEventKind,
+  PendingRequestKind,
+  TurnEventKind,
   type ExecutionEvent,
-  type RunEvent,
+  type TurnEvent,
   type TurnInput,
 } from "./events"
 
@@ -23,8 +24,8 @@ import {
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 class EventSource implements ServerRunHandle {
-  readonly #values: RunEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
+  readonly #values: TurnEvent[] = []
+  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
@@ -43,7 +44,7 @@ class EventSource implements ServerRunHandle {
     })
   }
 
-  readonly events: AsyncIterable<RunEvent> = {
+  readonly events: AsyncIterable<TurnEvent> = {
     [Symbol.asyncIterator]: () => ({
       next: () => {
         const value = this.#values.shift()
@@ -55,7 +56,7 @@ class EventSource implements ServerRunHandle {
     }),
   }
 
-  emit(event: RunEvent) {
+  emit(event: TurnEvent) {
     const waiter = this.#waiters.shift()
     if (waiter) waiter({ done: false, value: event })
     else this.#values.push(event)
@@ -95,29 +96,19 @@ const otherScope: SessionScope = {
   threadId: "stored-2",
 }
 
-function input(runId: string, resume = false): TurnInput {
-  return {
-    threadId: scope.threadId,
-    runId,
-    state: {},
-    messages: resume
-      ? []
-      : [{ id: `message-${runId}`, role: "user", content: "Hello" }],
-    tools: [],
-    context: [],
-    forwardedProps: {},
-    ...(resume
-      ? {
-          resume: [
-            {
-              interruptId: "question-1",
-              status: "resolved" as const,
-              payload: { answers: [["yes"]] },
-            },
-          ],
-        }
-      : {}),
-  }
+function input(turnId: string, resume = false): TurnInput {
+  return resume
+    ? {
+        turnId,
+        replies: [
+          {
+            requestId: "question-1",
+            status: "resolved",
+            payload: { answers: [["yes"]] },
+          },
+        ],
+      }
+    : { turnId, messageId: `message-${turnId}`, prompt: "Hello" }
 }
 
 function access(id: string, lane: "operator" | "guest" = "operator") {
@@ -150,16 +141,11 @@ function coordinator(
   })
 }
 
-function runStarted(runId: string, target: SessionScope = scope) {
-  return {
-    type: RunEventKind.RUN_STARTED,
-    threadId: target.threadId,
-    runId,
-  } as const
-}
+const turnStarted = { kind: TurnEventKind.TurnStarted } as const
+const turnEnded = { kind: TurnEventKind.TurnEnded } as const
 
 const interruptedError = {
-  type: RunEventKind.RUN_ERROR,
+  kind: TurnEventKind.TurnFailed,
   code: "AOS_CONNECTION_INTERRUPTED",
   message: "The provider connection was interrupted.",
 } as const
@@ -190,11 +176,11 @@ async function reloadedHead(
 async function neighborRun(sessions: SessionCoordinator, source: EventSource) {
   const subscription = await sessions.start(
     otherScope,
-    { ...input("neighbor-run"), threadId: otherScope.threadId },
+    input("neighbor-run"),
     access("neighbor")
   )
   const read = reader(subscription)
-  source.emit(runStarted("neighbor-run", otherScope))
+  source.emit(turnStarted)
   await read()
   subscription.close()
   return () => reloadedHead(sessions, otherScope, "neighbor-run")
@@ -215,17 +201,12 @@ async function deltaFlood(
     access("initial")
   )
   const read = reader(subscription)
-  const emitted: RunEvent[] = [
-    runStarted("run-1"),
-    {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "assistant-1",
-      role: "assistant",
-    },
+  const emitted: TurnEvent[] = [
+    turnStarted,
     ...Array.from({ length: deltas }, (_, index) => ({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT as const,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: String(index % 10),
+      text: String(index % 10),
     })),
   ]
   for (const event of emitted) {
@@ -254,7 +235,7 @@ async function oldestReplayableCursor(
     probe.close()
     const event = head.value?.event
     return (
-      event?.type === RunEventKind.RUN_ERROR &&
+      event?.kind === TurnEventKind.TurnFailed &&
       event.code === "AOS_RESET_REQUIRED"
     )
   }
@@ -298,13 +279,9 @@ describe("SessionCoordinator", () => {
     const first = await sessions.start(scope, input("run-1"), access("one"))
     const readFirst = reader(first)
 
-    source.emit({
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId: "run-1",
-    })
+    source.emit(turnStarted)
     await expect(readFirst()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
 
     const second = await sessions.recover(
@@ -314,22 +291,17 @@ describe("SessionCoordinator", () => {
     )
     const readSecond = reader(second)
     await expect(readSecond()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
 
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
 
     await expect(readFirst()).resolves.toMatchObject({
-      value: { sequence: 2, event: { type: RunEventKind.RUN_FINISHED } },
+      value: { sequence: 2, event: { kind: TurnEventKind.TurnEnded } },
     })
     await expect(readSecond()).resolves.toMatchObject({
-      value: { sequence: 2, event: { type: RunEventKind.RUN_FINISHED } },
+      value: { sequence: 2, event: { kind: TurnEventKind.TurnEnded } },
     })
     expect(engine.start).toHaveBeenCalledOnce()
     expect(engine.recover).not.toHaveBeenCalled()
@@ -350,18 +322,13 @@ describe("SessionCoordinator", () => {
 
     // Nothing reads this subscription, so the run outruns its one-event queue
     // while settling normally at the provider.
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "Hel",
+      text: "Hel",
     })
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
     // The subscriber missed part of the run, so its stream reports the gap
@@ -386,43 +353,33 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const emitted: RunEvent[] = [
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "assistant-1",
-        role: "assistant",
-      },
+    const emitted: TurnEvent[] = [
+      turnStarted,
       ...Array.from({ length: 40 }, (_, index) => ({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT as const,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: String(index % 10),
+        text: String(index % 10),
       })),
       ...Array.from({ length: 11 }, (_, index) => {
         const toolCallId = `tool-${index + 1}`
         return [
           {
-            type: RunEventKind.TOOL_CALL_START as const,
+            kind: TurnEventKind.ToolCallStarted,
             toolCallId,
-            toolCallName: "search",
+            title: "search",
             parentMessageId: "assistant-1",
           },
           {
-            type: RunEventKind.TOOL_CALL_ARGS as const,
+            kind: TurnEventKind.ToolCallInputChunk,
             toolCallId,
             delta: `{"query":"${index + 1}"}`,
           },
-          { type: RunEventKind.TOOL_CALL_END as const, toolCallId },
+          { kind: TurnEventKind.ToolCallInputEnded, toolCallId },
           {
-            type: RunEventKind.TOOL_CALL_RESULT as const,
-            messageId: `tool-result-${index + 1}`,
+            kind: TurnEventKind.ToolCallFinished,
             toolCallId,
-            content: `result-${index + 1}`,
-            role: "tool" as const,
+            output: `result-${index + 1}`,
+            failed: false,
           },
         ]
       }).flat(),
@@ -441,24 +398,23 @@ describe("SessionCoordinator", () => {
     const readRefreshed = reader(refreshed)
 
     const replayed = await Promise.all(
-      Array.from({ length: 47 }, () => readRefreshed())
+      Array.from({ length: 46 }, () => readRefreshed())
     )
     expect(replayed.map((entry) => entry.value?.event)).toEqual([
       emitted[0],
-      emitted[1],
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "0123456789012345678901234567890123456789",
+        text: "0123456789012345678901234567890123456789",
       },
-      ...emitted.slice(42),
+      ...emitted.slice(41),
     ])
 
     // The compacted prefix is followed by the live tail of the same run.
     const tail = {
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "tail",
+      text: "tail",
     } as const
     source.emit(tail)
     await expect(readRefreshed()).resolves.toMatchObject({
@@ -482,34 +438,21 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const events: RunEvent[] = [
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "reasoning-1",
-        role: "reasoning",
-      },
+    const events: TurnEvent[] = [
+      turnStarted,
       ...Array.from({ length: 20 }, () => ({
-        type: RunEventKind.REASONING_MESSAGE_CONTENT as const,
-        messageId: "reasoning-1",
-        delta: "r",
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "assistant-1",
+        text: "r",
       })),
       {
-        type: RunEventKind.REASONING_MESSAGE_END,
-        messageId: "reasoning-1",
-      },
-      {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "tool-1",
-        toolCallName: "search",
+        title: "search",
         parentMessageId: "assistant-1",
       },
       ...Array.from({ length: 20 }, () => ({
-        type: RunEventKind.TOOL_CALL_ARGS as const,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "tool-1",
         delta: "a",
       })),
@@ -527,21 +470,19 @@ describe("SessionCoordinator", () => {
     )
     const iterator = refreshed.events[Symbol.asyncIterator]()
     const replayed = await Promise.all(
-      Array.from({ length: 6 }, () => iterator.next())
+      Array.from({ length: 4 }, () => iterator.next())
     )
 
     expect(replayed.map((entry) => entry.value?.event)).toEqual([
       events[0],
-      events[1],
       {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "reasoning-1",
-        delta: "r".repeat(20),
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "assistant-1",
+        text: "r".repeat(20),
       },
-      events[22],
-      events[23],
+      events[21],
       {
-        type: RunEventKind.TOOL_CALL_ARGS,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "tool-1",
         delta: "a".repeat(20),
       },
@@ -565,26 +506,21 @@ describe("SessionCoordinator", () => {
     )
     const readInitial = reader(initial)
     for (const event of [
-      runStarted("run-1"),
+      turnStarted,
       {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        role: "assistant",
+        text: "a",
       } as const,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "a",
+        text: "b",
       } as const,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "b",
-      } as const,
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "c",
+        text: "c",
       } as const,
     ]) {
       source.emit(event)
@@ -594,7 +530,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, runId: "run-1", after: 4 },
+      { threadId: scope.threadId, runId: "run-1", after: 3 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -603,19 +539,19 @@ describe("SessionCoordinator", () => {
     // journaled text is replayed from the cursor rather than from its merge.
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        sequence: 5,
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "c" },
+        sequence: 4,
+        event: { kind: TurnEventKind.MessageChunk, text: "c" },
       },
     })
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "d",
+      text: "d",
     })
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        sequence: 6,
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "d" },
+        sequence: 5,
+        event: { kind: TurnEventKind.MessageChunk, text: "d" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -636,19 +572,14 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const emitted: RunEvent[] = [
-      runStarted("run-1"),
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "assistant-1",
-        role: "assistant",
-      },
+    const emitted: TurnEvent[] = [
+      turnStarted,
       // More single-character deltas than one browser stream may buffer: the
       // journal compacts them, so the run stays replayable from any cursor.
       ...Array.from({ length: 38 }, (_, index) => ({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT as const,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: String(index % 10),
+        text: String(index % 10),
       })),
     ]
     for (const event of emitted) {
@@ -685,23 +616,17 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const textStart = {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "assistant-1",
-      role: "assistant",
-    } as const
     for (const event of [
-      runStarted("run-1"),
-      textStart,
+      turnStarted,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "He",
+        text: "He",
       } as const,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "llo",
+        text: "llo",
       } as const,
     ]) {
       source.emit(event)
@@ -711,7 +636,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, runId: "run-1", after: 3 },
+      { threadId: scope.threadId, runId: "run-1", after: 2 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -724,37 +649,33 @@ describe("SessionCoordinator", () => {
 
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        sequence: 4,
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "llo" },
+        sequence: 3,
+        event: { kind: TurnEventKind.MessageChunk, text: "llo" },
       },
     })
-    const replayed = await Promise.all([
-      readReload(),
-      readReload(),
-      readReload(),
-    ])
+    const replayed = await Promise.all([readReload(), readReload()])
     expect(replayed.map((entry) => entry.value)).toEqual([
-      { sequence: 1, event: runStarted("run-1") },
-      { sequence: 2, event: textStart },
+      { sequence: 1, event: turnStarted },
       {
-        sequence: 4,
+        sequence: 3,
         event: {
-          type: RunEventKind.TEXT_MESSAGE_CONTENT,
+          kind: TurnEventKind.MessageChunk,
           messageId: "assistant-1",
-          delta: "Hello",
+          text: "Hello",
         },
       },
     ])
 
     const tail = {
-      type: RunEventKind.TEXT_MESSAGE_END,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
+      text: "!",
     } as const
     source.emit(tail)
     const live = await Promise.all([readRedial(), readReload()])
     expect(live.map((entry) => entry.value)).toEqual([
-      { sequence: 5, event: tail },
-      { sequence: 5, event: tail },
+      { sequence: 4, event: tail },
+      { sequence: 4, event: tail },
     ])
     expect(engine.recover).not.toHaveBeenCalled()
   })
@@ -777,21 +698,14 @@ describe("SessionCoordinator", () => {
           sessionId: `stored-${id}`,
           threadId: `stored-${id}`,
         }
-        const runInput = {
-          ...input(`run-${id}`),
-          threadId: sessionScope.threadId,
-        }
+        const runInput = input(`run-${id}`)
         const subscription = await sessions.start(
           sessionScope,
           runInput,
           access(`operator-${id}`)
         )
         const source = sources[index]!
-        source.emit({
-          type: RunEventKind.RUN_STARTED,
-          threadId: sessionScope.threadId,
-          runId: runInput.runId,
-        })
+        source.emit(turnStarted)
         await reader(subscription)()
         return { sessionScope, runInput, subscription }
       })
@@ -805,17 +719,14 @@ describe("SessionCoordinator", () => {
       oldest.sessionScope,
       {
         threadId: oldest.sessionScope.threadId,
-        runId: oldest.runInput.runId,
+        runId: oldest.runInput.turnId,
       },
       access("refreshed-oldest")
     )
     await expect(reader(leastRecent)()).resolves.toMatchObject({
       value: {
         sequence: 1,
-        event: {
-          type: RunEventKind.RUN_STARTED,
-          runId: oldest.runInput.runId,
-        },
+        event: { kind: TurnEventKind.TurnStarted },
       },
     })
 
@@ -823,7 +734,7 @@ describe("SessionCoordinator", () => {
       newest.sessionScope,
       {
         threadId: newest.sessionScope.threadId,
-        runId: newest.runInput.runId,
+        runId: newest.runInput.turnId,
       },
       access("refreshed-newest")
     )
@@ -846,7 +757,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine, { maxActiveExecutions: 1 })
     const first = await sessions.start(scope, input("run-1"), access("one"))
     const readFirst = reader(first)
-    sources[0]!.emit(runStarted("run-1"))
+    sources[0]!.emit(turnStarted)
     await readFirst()
     // The provider stream ends settled without a terminal event, so this
     // Session is idle and still holds the journal of its last run.
@@ -856,23 +767,23 @@ describe("SessionCoordinator", () => {
 
     const second = await sessions.start(
       otherScope,
-      { ...input("run-2"), threadId: otherScope.threadId },
+      input("run-2"),
       access("two")
     )
     const readSecond = reader(second)
-    sources[1]!.emit(runStarted("run-2", otherScope))
+    sources[1]!.emit(turnStarted)
     await readSecond()
 
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       }
     )
     await expect(
       reloadedHead(sessions, otherScope, "run-2")
     ).resolves.toMatchObject({
       sequence: 1,
-      event: { type: RunEventKind.RUN_STARTED },
+      event: { kind: TurnEventKind.TurnStarted },
     })
     expect(engine.recover).not.toHaveBeenCalled()
     second.close()
@@ -895,9 +806,9 @@ describe("SessionCoordinator", () => {
     const readInitial = reader(initial)
     for (const [index] of Array.from({ length: 6 }).entries()) {
       source.emit({
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: `tool-${index + 1}`,
-        toolCallName: "search",
+        title: "search",
         parentMessageId: "assistant-1",
       })
       await readInitial()
@@ -913,13 +824,13 @@ describe("SessionCoordinator", () => {
     )
     const readRedial = reader(redial)
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_START,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      role: "assistant",
+      text: "Hello",
     })
 
     await expect(readRedial()).resolves.toMatchObject({
-      value: { sequence: 7, event: { type: RunEventKind.TEXT_MESSAGE_START } },
+      value: { sequence: 7, event: { kind: TurnEventKind.MessageChunk } },
     })
     expect(sessions.state(scope)).toBe("running")
     expect(engine.recover).not.toHaveBeenCalled()
@@ -945,20 +856,13 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    const textStart = {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "assistant-1",
-      role: "assistant",
-    } as const
-    for (const event of [runStarted("run-1"), textStart]) {
-      source.emit(event)
-      await readInitial()
-    }
-    for (const delta of Array.from({ length: 120 }, () => "abcd")) {
+    source.emit(turnStarted)
+    await readInitial()
+    for (const text of Array.from({ length: 120 }, () => "abcd")) {
       source.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta,
+        text,
       })
       await readInitial()
     }
@@ -970,19 +874,14 @@ describe("SessionCoordinator", () => {
       access("reload")
     )
     const readReload = reader(reload)
-    const replayed = await Promise.all([
-      readReload(),
-      readReload(),
-      readReload(),
-    ])
+    const replayed = await Promise.all([readReload(), readReload()])
 
     expect(replayed.map((entry) => entry.value?.event)).toEqual([
-      runStarted("run-1"),
-      textStart,
+      turnStarted,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "abcd".repeat(120),
+        text: "abcd".repeat(120),
       },
     ])
     expect(engine.recover).not.toHaveBeenCalled()
@@ -1011,7 +910,7 @@ describe("SessionCoordinator", () => {
     await expect(readRedial()).resolves.toMatchObject({
       value: {
         sequence: total,
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "789" },
+        event: { kind: TurnEventKind.MessageChunk, text: "789" },
       },
     })
     redial.close()
@@ -1047,7 +946,7 @@ describe("SessionCoordinator", () => {
     const readRedial = reader(redial)
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readRedial()).resolves.toMatchObject({ done: true })
@@ -1075,7 +974,7 @@ describe("SessionCoordinator", () => {
     const readReload = reader(reload)
     await expect(readReload()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readReload()).resolves.toMatchObject({ done: true })
@@ -1102,8 +1001,9 @@ describe("SessionCoordinator", () => {
     )
     const readRedial = reader(redial)
     const tail = {
-      type: RunEventKind.TEXT_MESSAGE_END,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
+      text: "tail",
     } as const
     source.emit(tail)
 
@@ -1136,8 +1036,9 @@ describe("SessionCoordinator", () => {
     )
     const readRetried = reader(retried)
     const tail = {
-      type: RunEventKind.TEXT_MESSAGE_END,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
+      text: "tail",
     } as const
     source.emit(tail)
 
@@ -1163,14 +1064,9 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     await expect(readInitial()).resolves.toMatchObject({
-      value: { event: { type: RunEventKind.RUN_FINISHED } },
+      value: { event: { kind: TurnEventKind.TurnEnded } },
     })
 
     const refreshed = await sessions.recover(
@@ -1180,7 +1076,7 @@ describe("SessionCoordinator", () => {
     )
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -1201,14 +1097,9 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     const readInitial = reader(initial)
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     await readInitial()
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
@@ -1222,7 +1113,7 @@ describe("SessionCoordinator", () => {
     const readRedial = reader(redial)
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readRedial()).resolves.toMatchObject({ done: true })
@@ -1241,11 +1132,7 @@ describe("SessionCoordinator", () => {
       input("run-1"),
       access("initial")
     )
-    source.emit({
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId: "run-1",
-    })
+    source.emit(turnStarted)
     await reader(initial)()
     initial.close()
     let published = false
@@ -1255,12 +1142,12 @@ describe("SessionCoordinator", () => {
       {
         ...access("refreshed"),
         project(event) {
-          if (!published && event.type === RunEventKind.RUN_STARTED) {
+          if (!published && event.kind === TurnEventKind.TurnStarted) {
             published = true
             source.emit({
-              type: RunEventKind.TEXT_MESSAGE_CONTENT,
+              kind: TurnEventKind.MessageChunk,
               messageId: "assistant-1",
-              delta: "tail",
+              text: "tail",
             })
           }
           return event
@@ -1270,12 +1157,12 @@ describe("SessionCoordinator", () => {
     const readRefreshed = reader(refreshed)
 
     await expect(readRefreshed()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
     await expect(readRefreshed()).resolves.toMatchObject({
       value: {
         sequence: 2,
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "tail" },
+        event: { kind: TurnEventKind.MessageChunk, text: "tail" },
       },
     })
   })
@@ -1293,9 +1180,9 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "private",
+      text: "private",
     })
     await reader(initial)()
     initial.close()
@@ -1306,8 +1193,8 @@ describe("SessionCoordinator", () => {
       {
         ...access("guest", "guest"),
         project(event) {
-          return event.type === RunEventKind.TEXT_MESSAGE_CONTENT
-            ? { ...event, delta: "public" }
+          return event.kind === TurnEventKind.MessageChunk
+            ? { ...event, text: "public" }
             : event
         },
       }
@@ -1315,7 +1202,7 @@ describe("SessionCoordinator", () => {
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "public" },
+        event: { kind: TurnEventKind.MessageChunk, text: "public" },
       },
     })
   })
@@ -1335,9 +1222,9 @@ describe("SessionCoordinator", () => {
       access("initial")
     )
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "x".repeat(300 * 1024),
+      text: "x".repeat(300 * 1024),
     })
     // The event is larger than one subscriber queue as well as the journal, so
     // this browser is told it missed it.
@@ -1353,7 +1240,7 @@ describe("SessionCoordinator", () => {
 
     await expect(readRefreshed()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     // One overflow answers one reset: the stream ends after it.
@@ -1378,9 +1265,9 @@ describe("SessionCoordinator", () => {
     const readInitial = reader(initial)
     for (const [index] of Array.from({ length: 6 }).entries()) {
       source.emit({
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: `tool-${index + 1}`,
-        toolCallName: "search",
+        title: "search",
         parentMessageId: "assistant-1",
       })
       await readInitial()
@@ -1395,7 +1282,7 @@ describe("SessionCoordinator", () => {
     const readRedial = reader(redial)
     await expect(readRedial()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readRedial()).resolves.toMatchObject({ done: true })
@@ -1408,7 +1295,7 @@ describe("SessionCoordinator", () => {
     const readReload = reader(reload)
     await expect(readReload()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readReload()).resolves.toMatchObject({ done: true })
@@ -1435,10 +1322,7 @@ describe("SessionCoordinator", () => {
     for (const [index, sessionScope] of scopes.entries()) {
       await sessions.start(
         sessionScope,
-        {
-          ...input(`run-${index + 1}`),
-          threadId: sessionScope.threadId,
-        },
+        input(`run-${index + 1}`),
         access(`operator-${index + 1}`)
       )
     }
@@ -1507,12 +1391,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
-    const changed = {
-      ...input("run-1"),
-      messages: [
-        { id: "message-run-1", role: "user" as const, content: "Changed" },
-      ],
-    }
+    const changed = { ...input("run-1"), prompt: "Changed" }
 
     await expect(sessions.start(scope, changed, access("one"))).rejects.toThrow(
       "already active"
@@ -1539,7 +1418,7 @@ describe("SessionCoordinator", () => {
     expect(engine.start).toHaveBeenCalledOnce()
   })
 
-  it("retains an interrupted execution and resumes it as a fresh AG-UI segment", async () => {
+  it("retains a paused execution and resumes it as a fresh segment", async () => {
     const interrupted = new EventSource()
     const resumed = new EventSource()
     const engine: ServerRunEngine = {
@@ -1552,19 +1431,14 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("operator"))
     interrupted.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: "question-1",
-            reason: "input-required",
-            responseSchema: { type: "object" },
-          },
-        ],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "question-1",
+          kind: PendingRequestKind.Elicitation,
+          responseSchema: { type: "object" },
+        },
+      ],
     })
     interrupted.finish()
     await vi.waitFor(() =>
@@ -1574,10 +1448,9 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-2", true), access("operator"))
 
     expect(engine.start).toHaveBeenCalledTimes(2)
-    expect(engine.start.mock.calls[1]?.[1]).toMatchObject({
-      runId: "run-2",
-      messages: [],
-      resume: [{ interruptId: "question-1" }],
+    expect(engine.start.mock.calls[1]?.[1]).toEqual({
+      turnId: "run-2",
+      replies: [expect.objectContaining({ requestId: "question-1" })],
     })
     expect(sessions.state(scope)).toBe("running")
   })
@@ -1607,8 +1480,8 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     }
     const sessions = coordinator(engine)
-    const announced: ExecutionEvent["type"][] = []
-    sessions.observe((event) => announced.push(event.type))
+    const announced: ExecutionEvent["kind"][] = []
+    sessions.observe((event) => announced.push(event.kind))
     const onTerminal = vi.fn(async () => undefined)
     const read = reader(
       await sessions.start(scope, input("run-1"), {
@@ -1617,17 +1490,17 @@ describe("SessionCoordinator", () => {
       })
     )
     const lost = {
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_INTERACTION_LOST",
       message:
         "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
       awaitingStop: true,
     } as const
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     source.emit(lost)
 
     await expect(read()).resolves.toMatchObject({
-      value: { event: runStarted("run-1") },
+      value: { event: turnStarted },
     })
     await expect(read()).resolves.toMatchObject({ value: { event: lost } })
     expect(sessions.state(scope)).toBe("running")
@@ -1640,18 +1513,14 @@ describe("SessionCoordinator", () => {
     expect(source.stop).toHaveBeenCalledTimes(1)
     expect(sessions.state(scope)).toBe("stopping")
     const finished = {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      result: { stopped: true },
-      outcome: { type: "success" },
+      kind: TurnEventKind.TurnEnded,
     } as const
     source.emit(finished)
     source.finish()
 
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     expect(onTerminal).toHaveBeenCalledExactlyOnceWith(finished)
-    expect(announced).toEqual(["run-started", "run-finished"])
+    expect(announced).toEqual(["turn-started", "turn-finished"])
     await sessions.start(scope, input("run-2"), access("operator"))
     expect(sessions.state(scope)).toBe("running")
   })
@@ -1713,16 +1582,11 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     })
     const live = await sessions.start(scope, input("run-1"), access("one"))
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     await reader(live)()
     live.close()
 
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
 
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
@@ -1744,12 +1608,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("operator"))
     const stopping = sessions.stop(scope, "operator")
 
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     answerStop()
@@ -1776,12 +1635,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("operator"))
     const stopping = sessions.stop(scope, "operator")
 
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     refuseStop()
@@ -1836,19 +1690,14 @@ describe("SessionCoordinator", () => {
     const stopping = sessions.stop(scope, "operator")
 
     interrupted.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: "question-1",
-            reason: "input-required",
-            responseSchema: { type: "object" },
-          },
-        ],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "question-1",
+          kind: PendingRequestKind.Elicitation,
+          responseSchema: { type: "object" },
+        },
+      ],
     })
     interrupted.finish()
     await vi.waitFor(() =>
@@ -1891,13 +1740,10 @@ describe("SessionCoordinator", () => {
       value: {
         sequence: 1,
         event: {
-          type: RunEventKind.CUSTOM,
-          name: "aos.steer.accepted",
-          value: {
-            requestId: "queue-item-1",
-            text: "Use the newer API",
-            delivery: "steered",
-          },
+          kind: TurnEventKind.SteerAccepted,
+          requestId: "queue-item-1",
+          text: "Use the newer API",
+          delivery: "steered",
         },
       },
     })
@@ -2003,10 +1849,10 @@ describe("SessionCoordinator", () => {
       access("redial")
     )
     const readRedial = reader(redial)
-    recovered.emit(runStarted("run-1"))
+    recovered.emit(turnStarted)
 
     await expect(readRedial()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
     expect(engine.recover).toHaveBeenCalledOnce()
   })
@@ -2025,7 +1871,7 @@ describe("SessionCoordinator", () => {
       onTerminal,
     })
     initial.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Delivery uncertain",
       code: "AOS_SEND_UNCERTAIN",
     })
@@ -2038,7 +1884,7 @@ describe("SessionCoordinator", () => {
       access("operator")
     )
     const terminal = {
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Slash commands cannot be sent with attachments.",
       code: "AOS_COMMAND_WITH_ATTACHMENTS",
     } as const
@@ -2074,9 +1920,9 @@ describe("SessionCoordinator", () => {
 
   it("refreshes a discovered waiting execution from provider authority", async () => {
     const source = new EventSource()
-    const interrupt = {
-      id: "question-1",
-      reason: "question",
+    const request = {
+      requestId: "question-1",
+      kind: PendingRequestKind.Elicitation,
       responseSchema: { type: "string" },
     }
     const engine: ServerRunEngine = {
@@ -2087,7 +1933,7 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce({
           handle: source,
           state: "waiting-for-input",
-          interrupts: [interrupt],
+          requests: [request],
         })
         .mockResolvedValueOnce(undefined),
     }
@@ -2097,7 +1943,7 @@ describe("SessionCoordinator", () => {
     expect(discovered?.state).toBe("waiting-for-input")
     expect(sessions.snapshot(scope)).toMatchObject({
       state: "waiting-for-input",
-      interrupts: [interrupt],
+      requests: [request],
     })
 
     await expect(sessions.discover(scope)).resolves.toBeUndefined()
@@ -2121,14 +1967,14 @@ describe("SessionCoordinator", () => {
       access("refreshed")
     )
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "future-only",
+      text: "future-only",
     })
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -2156,14 +2002,9 @@ describe("SessionCoordinator", () => {
     const readLive = reader(live)
     for (const event of [
       {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        role: "assistant",
-      } as const,
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "Hel",
+        text: "Hel",
       } as const,
       interruptedError,
     ]) {
@@ -2184,7 +2025,7 @@ describe("SessionCoordinator", () => {
     const readReload = reader(reload)
     await expect(readReload()).resolves.toMatchObject({
       value: {
-        event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
     await expect(readReload()).resolves.toMatchObject({ done: true })
@@ -2204,12 +2045,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("operator"))
-    first.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    first.emit(turnEnded)
     first.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
@@ -2228,30 +2064,20 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
-    const started = {
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId: "run-1",
-    } as const
-    const textStart = {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "assistant-1",
-      role: "assistant",
-    } as const
+    const started = turnStarted
     for (const event of [
       started,
-      textStart,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "Hel",
+        text: "Hel",
       } as const,
     ]) {
       interrupted.emit(event)
       await readLive()
     }
     interrupted.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
       message: "The provider connection was interrupted.",
     })
@@ -2262,17 +2088,17 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, runId: "run-1", after: 4 },
+      { threadId: scope.threadId, runId: "run-1", after: 3 },
       access("one")
     )
     const readRedial = reader(redial)
-    // Every adapter opens a recovered segment with its own RUN_STARTED.
+    // Every adapter opens a recovered segment with its own TurnStarted.
     recovered.emit(started)
     await readRedial()
     recovered.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "lo",
+      text: "lo",
     })
     await readRedial()
     redial.close()
@@ -2283,26 +2109,18 @@ describe("SessionCoordinator", () => {
       access("two")
     )
     const readReload = reader(reload)
-    const replayed = await Promise.all([
-      readReload(),
-      readReload(),
-      readReload(),
-    ])
+    const replayed = await Promise.all([readReload(), readReload()])
     expect(replayed.map((entry) => entry.value?.event)).toEqual([
       started,
-      textStart,
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "Hello",
+        text: "Hello",
       },
     ])
-    recovered.emit({
-      type: RunEventKind.TEXT_MESSAGE_END,
-      messageId: "assistant-1",
-    })
+    recovered.emit(turnEnded)
     await expect(readReload()).resolves.toMatchObject({
-      value: { event: { type: RunEventKind.TEXT_MESSAGE_END } },
+      value: { event: { kind: TurnEventKind.TurnEnded } },
     })
   })
 
@@ -2317,27 +2135,18 @@ describe("SessionCoordinator", () => {
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
     for (const event of [
+      turnStarted,
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      } as const,
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        role: "assistant",
-      } as const,
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "Hel",
+        text: "Hel",
       } as const,
     ]) {
       interrupted.emit(event)
       await readLive()
     }
     interrupted.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
       message: "The provider connection was interrupted.",
     })
@@ -2348,25 +2157,21 @@ describe("SessionCoordinator", () => {
 
     const first = await sessions.recover(
       scope,
-      { threadId: scope.threadId, runId: "run-1", after: 3 },
+      { threadId: scope.threadId, runId: "run-1", after: 2 },
       access("one")
     )
     const readFirst = reader(first)
     const second = await sessions.recover(
       scope,
-      { threadId: scope.threadId, runId: "run-1", after: 3 },
+      { threadId: scope.threadId, runId: "run-1", after: 2 },
       access("two")
     )
     const readSecond = reader(second)
+    recovered.emit(turnStarted)
     recovered.emit({
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId: "run-1",
-    })
-    recovered.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "lo",
+      text: "lo",
     })
 
     const [leftStart, rightStart] = await Promise.all([
@@ -2374,15 +2179,15 @@ describe("SessionCoordinator", () => {
       readSecond(),
     ])
     expect(leftStart.value?.event).toMatchObject({
-      type: RunEventKind.RUN_STARTED,
+      kind: TurnEventKind.TurnStarted,
     })
     expect(rightStart.value?.event).toMatchObject({
-      type: RunEventKind.RUN_STARTED,
+      kind: TurnEventKind.TurnStarted,
     })
     const [left, right] = await Promise.all([readFirst(), readSecond()])
-    expect(left.value?.event).toMatchObject({ delta: "lo" })
-    expect(right.value?.event).toMatchObject({ delta: "lo" })
-    expect(left.value?.sequence).toBeGreaterThan(4)
+    expect(left.value?.event).toMatchObject({ text: "lo" })
+    expect(right.value?.event).toMatchObject({ text: "lo" })
+    expect(left.value?.sequence).toBeGreaterThan(3)
     expect(right.value?.sequence).toBe(left.value?.sequence)
     expect(engine.recover).toHaveBeenCalledOnce()
   })
@@ -2401,19 +2206,14 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
       message: "The provider connection was interrupted.",
     })
     interrupted.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
     // The provider answers the recovery with an already-finished run.
-    recovered.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    recovered.emit(turnEnded)
     recovered.finish()
 
     const subscription = await sessions.start(
@@ -2469,16 +2269,16 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
       message: "The provider connection was interrupted.",
     })
     interrupted.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
     recovered.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "still working",
+      text: "still working",
     })
 
     await expect(
@@ -2513,12 +2313,7 @@ describe("SessionCoordinator", () => {
       // takes more than the one event-loop turn a timer would have allowed.
       await vi.advanceTimersByTimeAsync(0)
       await vi.advanceTimersByTimeAsync(0)
-      recovered.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      })
+      recovered.emit(turnEnded)
       recovered.finish()
 
       await expect(turn).resolves.toMatchObject({ runId: "run-2" })
@@ -2539,7 +2334,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
       message: "The provider connection was interrupted.",
     })
@@ -2562,12 +2357,12 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
-    stopped.emit(runStarted("run-1"))
+    stopped.emit(turnStarted)
     await readLive()
     // The adapter stopped consuming a run Hermes may still be running, so the
     // turn is not over: the journal outlives the error and a new turn waits.
     stopped.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_STOP_UNCERTAIN",
       message: "Stop could not be confirmed.",
     })
@@ -2577,7 +2372,7 @@ describe("SessionCoordinator", () => {
 
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
-      { event: { type: RunEventKind.RUN_STARTED } }
+      { event: { kind: TurnEventKind.TurnStarted } }
     )
   })
 
@@ -2594,7 +2389,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
     overflowed.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_STREAM_OVERFLOW",
       message: "The provider produced more events than AOS can buffer.",
     })
@@ -2620,7 +2415,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
     reset.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_RESET_REQUIRED",
       message: "AOS run history must be reloaded before continuing.",
     })
@@ -2653,28 +2448,23 @@ describe("SessionCoordinator", () => {
       onTerminal,
     })
     const readLive = reader(live)
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
 
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       {
         sequence: 1,
-        event: { type: RunEventKind.RUN_STARTED },
+        event: { kind: TurnEventKind.TurnStarted },
       }
     )
     await expect(reloadNeighbor()).resolves.toMatchObject({
       sequence: 1,
-      event: { type: RunEventKind.RUN_STARTED },
+      event: { kind: TurnEventKind.TurnStarted },
     })
 
-    const terminal = {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    } as const
+    const terminal = turnEnded
     source.emit(terminal)
     source.finish()
     await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(1))
@@ -2700,7 +2490,7 @@ describe("SessionCoordinator", () => {
       onTerminal,
     })
     const readLive = reader(live)
-    interrupted.emit(runStarted("run-1"))
+    interrupted.emit(turnStarted)
     await readLive()
     interrupted.emit(interruptedError)
     await readLive()
@@ -2714,29 +2504,24 @@ describe("SessionCoordinator", () => {
       access("one")
     )
     const readRedial = reader(redial)
-    recovered.emit(runStarted("run-1"))
+    recovered.emit(turnStarted)
     // One run keeps one monotonic sequence across its segments.
     await expect(readRedial()).resolves.toMatchObject({
-      value: { sequence: 3, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 3, event: { kind: TurnEventKind.TurnStarted } },
     })
 
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       {
         sequence: 1,
-        event: { type: RunEventKind.RUN_STARTED },
+        event: { kind: TurnEventKind.TurnStarted },
       }
     )
     await expect(reloadNeighbor()).resolves.toMatchObject({
       sequence: 1,
-      event: { type: RunEventKind.RUN_STARTED },
+      event: { kind: TurnEventKind.TurnStarted },
     })
 
-    const terminal = {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    } as const
+    const terminal = turnEnded
     recovered.emit(terminal)
     recovered.finish()
     await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(2))
@@ -2770,29 +2555,24 @@ describe("SessionCoordinator", () => {
     )
     const readLive = reader(live)
     discovered.emit({
-      type: RunEventKind.TEXT_MESSAGE_START,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      role: "assistant",
+      text: "Hel",
     })
     await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.TEXT_MESSAGE_START } },
+      value: { sequence: 1, event: { kind: TurnEventKind.MessageChunk } },
     })
 
     // AOS never saw this run start, so there is nothing to replay.
     await expect(reloadedHead(sessions, scope, runId!)).resolves.toMatchObject({
-      event: { type: RunEventKind.RUN_ERROR, code: "AOS_RESET_REQUIRED" },
+      event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
     })
     await expect(reloadNeighbor()).resolves.toMatchObject({
       sequence: 1,
-      event: { type: RunEventKind.RUN_STARTED },
+      event: { kind: TurnEventKind.TurnStarted },
     })
 
-    discovered.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: runId!,
-      outcome: { type: "success" },
-    })
+    discovered.emit(turnEnded)
     discovered.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     expect(onTerminal).not.toHaveBeenCalled()
@@ -2820,19 +2600,14 @@ describe("SessionCoordinator", () => {
       onTerminal,
     })
     interrupted.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: "question-1",
-            reason: "input-required",
-            responseSchema: { type: "object" },
-          },
-        ],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "question-1",
+          kind: PendingRequestKind.Elicitation,
+          responseSchema: { type: "object" },
+        },
+      ],
     })
     interrupted.finish()
     await vi.waitFor(() =>
@@ -2845,28 +2620,23 @@ describe("SessionCoordinator", () => {
       access("one")
     )
     const readLive = reader(live)
-    resumed.emit(runStarted("run-2"))
-    // A resumed turn is a fresh AG-UI segment: its own journal and sequence.
+    resumed.emit(turnStarted)
+    // A resumed turn is a fresh segment: its own journal and sequence.
     await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { type: RunEventKind.RUN_STARTED } },
+      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
     await expect(reloadedHead(sessions, scope, "run-2")).resolves.toMatchObject(
       {
         sequence: 1,
-        event: { type: RunEventKind.RUN_STARTED },
+        event: { kind: TurnEventKind.TurnStarted },
       }
     )
     await expect(reloadNeighbor()).resolves.toMatchObject({
       sequence: 1,
-      event: { type: RunEventKind.RUN_STARTED },
+      event: { kind: TurnEventKind.TurnStarted },
     })
 
-    resumed.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-2",
-      outcome: { type: "success" },
-    })
+    resumed.emit(turnEnded)
     resumed.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     // The resumed segment carries no terminal hook of its own.
@@ -2886,7 +2656,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     await readLive()
 
     // The provider reported this turn over without a terminal AG-UI event.
@@ -2909,7 +2679,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
-    source.emit(runStarted("run-1"))
+    source.emit(turnStarted)
     await readLive()
 
     source.close()
@@ -2927,18 +2697,13 @@ describe("SessionCoordinator", () => {
     sessions.observe((event) => observed.push(event))
 
     await sessions.start(scope, input("run-1"), access("one"))
-    source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
-    })
+    source.emit(turnEnded)
     source.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
-    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
-      ["run-started", "run-1"],
-      ["run-finished", "run-1"],
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
+      ["turn-finished", "run-1"],
     ])
     expect(observed[0]).toMatchObject({
       agentId: scope.agentId,
@@ -2947,7 +2712,7 @@ describe("SessionCoordinator", () => {
     expect(Number.isNaN(Date.parse(observed[0]!.occurredAt))).toBe(false)
   })
 
-  it("observes one attention request per interrupt and resolves it on resume", async () => {
+  it("observes one attention request per pending request and resolves it on resume", async () => {
     const interrupted = new EventSource()
     const resumed = new EventSource()
     const engine: ServerRunEngine = {
@@ -2963,19 +2728,14 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: "question-1",
-            reason: "question",
-            responseSchema: { type: "object" },
-          },
-        ],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "question-1",
+          kind: PendingRequestKind.Elicitation,
+          responseSchema: { type: "object" },
+        },
+      ],
     })
     interrupted.finish()
     await vi.waitFor(() =>
@@ -2984,14 +2744,14 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-2", true), access("one"))
 
-    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
-      ["run-started", "run-1"],
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
       ["attention-requested", "run-1"],
       ["attention-resolved", "run-1"],
-      ["run-started", "run-2"],
+      ["turn-started", "run-2"],
     ])
-    expect(observed[1]).toMatchObject({ request: { id: "question-1" } })
-    expect(observed[2]).toMatchObject({ interruptId: "question-1" })
+    expect(observed[1]).toMatchObject({ request: { requestId: "question-1" } })
+    expect(observed[2]).toMatchObject({ requestId: "question-1" })
   })
 
   it("observes a failed run and stops delivering after unsubscribing", async () => {
@@ -3010,26 +2770,21 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"))
     first.emit({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_PROVIDER_FAILED",
       message: "The provider rejected the turn.",
     })
     first.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
-    expect(observed.map(({ type, runId }) => [type, runId])).toEqual([
-      ["run-started", "run-1"],
-      ["run-failed", "run-1"],
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
+      ["turn-failed", "run-1"],
     ])
 
     unobserve()
     await sessions.start(scope, input("run-2"), access("one"))
-    second.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-2",
-      outcome: { type: "success" },
-    })
+    second.emit(turnEnded)
     second.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 

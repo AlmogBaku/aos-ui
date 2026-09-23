@@ -29,7 +29,7 @@ const authorization: GuestAuthorization = {
 }
 
 describe("guest outbound projection", () => {
-  it("projects only guest-safe message content from REST, AG-UI, and WS envelopes", () => {
+  it("projects only guest-safe message content from REST and turn envelopes", () => {
     const message = {
       type: "message",
       role: "assistant",
@@ -68,7 +68,7 @@ describe("guest outbound projection", () => {
       nativePosition: 44,
     }
 
-    for (const transport of ["rest", "ag-ui", "ws"] as const) {
+    for (const transport of ["rest", "turn"] as const) {
       expect(
         projectGuestOutbound(
           {
@@ -107,7 +107,7 @@ describe("guest outbound projection", () => {
       expect(
         projectGuestOutbound(
           {
-            transport: "ws",
+            transport: "turn",
             agentId: "agent_planner",
             sessionId: "session_launch",
             payload: {
@@ -140,7 +140,7 @@ describe("guest outbound projection", () => {
     expect(
       projectGuestOutbound(
         {
-          transport: "ag-ui",
+          transport: "turn",
           agentId: "agent_planner",
           sessionId: "session_launch",
           payload: {
@@ -163,7 +163,7 @@ describe("guest outbound projection", () => {
         reduced
       )
     ).toEqual({
-      transport: "ag-ui",
+      transport: "turn",
       agentId: "agent_planner",
       sessionId: "session_launch",
       payload: { type: "message", role: "assistant", text: "Public" },
@@ -188,7 +188,7 @@ describe("guest outbound projection", () => {
       ],
     }
     const envelope = {
-      transport: "ws",
+      transport: "turn",
       agentId: "agent_planner",
       sessionId: "session_launch",
       payload,
@@ -381,46 +381,41 @@ describe("guest outbound projection", () => {
     ).toBeUndefined()
   })
 
-  it("projects public interrupt fields without approval internals", () => {
-    expect(
-      projectGuestOutbound(
-        {
-          transport: "ag-ui",
-          agentId: "agent_planner",
-          sessionId: "session_launch",
-          payload: {
-            type: "interrupt",
-            interrupts: [
-              {
-                id: "approval-1",
-                reason: "approval",
-                message: "Allow deployment?",
-                expiresAt: "2026-09-15T20:00:00.000Z",
-                responseSchema: {
-                  type: "string",
-                  enum: ["deny", "once", "always"],
-                },
-                metadata: {
-                  "aos.kind": "approval",
-                  nativeRequestId: "live-private",
-                  providerPath: "/srv/hermes/private",
-                },
-              },
-            ],
-          },
-        },
-        authorization
-      )
-    ).toEqual({
-      transport: "ag-ui",
+  it("projects public request fields without approval internals", () => {
+    const envelope = {
+      transport: "turn",
       agentId: "agent_planner",
       sessionId: "session_launch",
       payload: {
-        type: "interrupt",
-        interrupts: [
+        type: "requests",
+        requests: [
           {
-            id: "approval-1",
-            reason: "approval",
+            requestId: "approval-1",
+            kind: "permission",
+            message: "Allow deployment?",
+            expiresAt: "2026-09-15T20:00:00.000Z",
+            responseSchema: {
+              type: "string",
+              enum: ["deny", "once", "always"],
+            },
+          },
+        ],
+      },
+    }
+
+    expect(
+      projectGuestOutbound({ ...envelope, transport: "rest" }, authorization)
+    ).toBeUndefined()
+    expect(projectGuestOutbound(envelope, authorization)).toEqual({
+      transport: "turn",
+      agentId: "agent_planner",
+      sessionId: "session_launch",
+      payload: {
+        type: "requests",
+        requests: [
+          {
+            requestId: "approval-1",
+            kind: "permission",
             message: "Allow deployment?",
             responseSchema: {
               type: "string",
@@ -439,15 +434,15 @@ describe("guest outbound projection", () => {
     expect(
       projectGuestOutbound(
         {
-          transport: "ag-ui",
+          transport: "turn",
           agentId: "agent_planner",
           sessionId: "session_launch",
           payload: {
-            type: "interrupt",
-            interrupts: [
+            type: "requests",
+            requests: [
               {
-                id: "clarify-1",
-                reason: "question",
+                requestId: "clarify-1",
+                kind: "elicitation",
                 message: "1 question requires an answer",
                 responseSchema: {
                   type: "string",
@@ -463,7 +458,7 @@ describe("guest outbound projection", () => {
       )
     ).toMatchObject({
       payload: {
-        interrupts: [
+        requests: [
           {
             responseSchema: {
               type: "string",
@@ -543,13 +538,13 @@ describe("guest outbound projection", () => {
         payload: { text: "Hello", role: "assistant", type: "message" },
         sessionId: "session_launch",
         agentId: "agent_planner",
-        transport: "ws",
+        transport: "turn",
       },
       authorization
     )
     const second = projectGuestOutbound(
       {
-        transport: "ws",
+        transport: "turn",
         agentId: "agent_planner",
         sessionId: "session_launch",
         payload: { type: "message", role: "assistant", text: "Hello" },
@@ -562,7 +557,7 @@ describe("guest outbound projection", () => {
 
   it("bounds UTF-8 bytes, depth, array count, object count, and malformed values before output", () => {
     const base = {
-      transport: "ws",
+      transport: "turn",
       agentId: "agent_planner",
       sessionId: "session_launch",
     }

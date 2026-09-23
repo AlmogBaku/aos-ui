@@ -5,4 +5,4 @@ export {
   replyFromElicitation,
   replyFromPermission,
 } from "./interrupts"
-export { translateRunEvent } from "./run-events"
+export { translateTurnEvent } from "./turn-events"

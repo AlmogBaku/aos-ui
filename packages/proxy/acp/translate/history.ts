@@ -191,7 +191,7 @@ function agentOutbound(
 export const translateHistory = ((history, lane) => {
   const context = historyContext(lane)
   const outbound: AcpOutbound[] = []
-  // What live's RUN_STARTED approximates: the turn started when its prompt
+  // What live's TurnStarted approximates: the turn started when its prompt
   // landed. A page that opens mid-conversation has only the turn's own time.
   let promptedAt: string | undefined
   for (const message of history.messages) {

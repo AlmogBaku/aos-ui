@@ -1,58 +1,54 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  aggregateTokenUsage,
+  isAwaitingStopFailure,
+  isRedialableFailure,
+  isRepliesTurn,
+  isTurnEvent,
+  isUncertainFailure,
+  pendingRequestsOf,
+  PendingRequestKind,
   PendingRequestSchema,
+  ReplyStatus,
   RequestReplySchema,
-  RunEventKind,
-  RunEventSchema,
+  TurnEventKind,
+  TurnEventSchema,
   TurnInputSchema,
+  type TurnEvent,
 } from "./events"
 
 /**
- * The proxy owns its run vocabulary, so this file is where that vocabulary is
- * pinned: one fixture per kind in the wire shape the adapters emit, and an
- * explicit table of the fields each kind cannot do without. Nothing here is
- * derived from another library at runtime — a table entry changes only when the
- * wire shape deliberately changes, so drift shows up here rather than as a
- * rejected provider event in production.
+ * The proxy owns its turn vocabulary, so this file is where that vocabulary is
+ * pinned: one fixture per kind carrying every field it may carry, and an
+ * explicit table of the fields each kind cannot do without. A table entry
+ * changes only when the vocabulary deliberately changes, so drift shows up here
+ * rather than as a rejected adapter event in production.
  */
 
 const pendingRequest = {
-  id: "interrupt-1",
-  reason: "approval",
+  requestId: "request-1",
+  kind: PendingRequestKind.Permission,
   message: "Apply the patch?",
   toolCallId: "call-1",
-  responseSchema: { type: "object" },
+  responseSchema: { type: "string", enum: ["once", "deny"] },
   expiresAt: "2026-01-01T00:00:00Z",
-  metadata: { origin: "provider" },
-  subagentRunId: "subagent-1",
 }
 
 const requestReply = {
-  interruptId: "interrupt-1",
-  status: "resolved",
+  requestId: "request-1",
+  status: ReplyStatus.Resolved,
   payload: { answer: "yes" },
-  metadata: { via: "acp" },
 }
 
-const turnInput = {
-  threadId: "session-1",
-  runId: "run-1",
-  parentRunId: "run-0",
-  state: {},
-  messages: [{ id: "message-1", role: "user", content: "Hello" }],
-  tools: [
-    {
-      name: "read",
-      description: "Read a file",
-      parameters: { type: "object" },
-      metadata: { source: "native" },
-    },
-  ],
-  context: [{ description: "cwd", value: "/workspace" }],
-  forwardedProps: {},
-  resume: [requestReply],
+const promptTurn = {
+  turnId: "turn-1",
+  messageId: "message-1",
+  prompt: "Hello",
+  rewindSourceId: "message-0",
 }
+
+const repliesTurn = { turnId: "turn-2", replies: [requestReply] }
 
 const tokenUsage = {
   provider: "anthropic",
@@ -64,159 +60,91 @@ const tokenUsage = {
   cachedInputTokens: 55,
 }
 
-/** Fields every kind carries, spelled out so dropping one is a real test. */
-const base = {
-  timestamp: 1_767_225_600_000,
-  rawEvent: { provider: "native" },
-  metadata: { native: { source: "provider" } },
-}
-const attributed = { ...base, subagentRunId: "subagent-1" }
-
-const eventFixtures: Record<RunEventKind, Record<string, unknown>> = {
-  [RunEventKind.RUN_STARTED]: {
-    ...base,
-    type: RunEventKind.RUN_STARTED,
-    threadId: "session-1",
-    runId: "run-1",
-    parentRunId: "run-0",
-    input: turnInput,
-  },
-  [RunEventKind.RUN_FINISHED]: {
-    ...base,
-    type: RunEventKind.RUN_FINISHED,
-    threadId: "session-1",
-    runId: "run-1",
-    result: { ok: true },
-    outcome: { type: "interrupt", interrupts: [pendingRequest] },
+const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
+  [TurnEventKind.TurnStarted]: { kind: TurnEventKind.TurnStarted },
+  [TurnEventKind.TurnEnded]: {
+    kind: TurnEventKind.TurnEnded,
     usage: [tokenUsage],
+    composerPrefill: "/retry",
   },
-  [RunEventKind.RUN_ERROR]: {
-    ...base,
-    type: RunEventKind.RUN_ERROR,
-    message: "the provider refused",
+  [TurnEventKind.TurnRequiresAction]: {
+    kind: TurnEventKind.TurnRequiresAction,
+    requests: [pendingRequest],
+  },
+  [TurnEventKind.TurnFailed]: {
+    kind: TurnEventKind.TurnFailed,
     code: "AOS_SEND_UNCERTAIN",
-    usage: [tokenUsage],
+    message: "the provider refused",
+    awaitingStop: true,
   },
-  [RunEventKind.TEXT_MESSAGE_START]: {
-    ...attributed,
-    type: RunEventKind.TEXT_MESSAGE_START,
+  [TurnEventKind.MessageChunk]: {
+    kind: TurnEventKind.MessageChunk,
     messageId: "message-1",
-    role: "assistant",
-    name: "Claude",
+    text: "hello",
   },
-  [RunEventKind.TEXT_MESSAGE_CONTENT]: {
-    ...attributed,
-    type: RunEventKind.TEXT_MESSAGE_CONTENT,
+  [TurnEventKind.ThoughtChunk]: {
+    kind: TurnEventKind.ThoughtChunk,
     messageId: "message-1",
-    delta: "hello",
+    text: "thinking",
   },
-  [RunEventKind.TEXT_MESSAGE_END]: {
-    ...attributed,
-    type: RunEventKind.TEXT_MESSAGE_END,
-    messageId: "message-1",
-  },
-  [RunEventKind.REASONING_START]: {
-    ...attributed,
-    type: RunEventKind.REASONING_START,
-    messageId: "message-1",
-  },
-  [RunEventKind.REASONING_END]: {
-    ...attributed,
-    type: RunEventKind.REASONING_END,
-    messageId: "message-1",
-  },
-  [RunEventKind.REASONING_MESSAGE_START]: {
-    ...attributed,
-    type: RunEventKind.REASONING_MESSAGE_START,
-    messageId: "message-1:reasoning",
-    role: "reasoning",
-  },
-  [RunEventKind.REASONING_MESSAGE_CONTENT]: {
-    ...attributed,
-    type: RunEventKind.REASONING_MESSAGE_CONTENT,
-    messageId: "message-1:reasoning",
-    delta: "thinking",
-  },
-  [RunEventKind.REASONING_MESSAGE_END]: {
-    ...attributed,
-    type: RunEventKind.REASONING_MESSAGE_END,
-    messageId: "message-1:reasoning",
-  },
-  [RunEventKind.TOOL_CALL_START]: {
-    ...attributed,
-    type: RunEventKind.TOOL_CALL_START,
+  [TurnEventKind.ToolCallStarted]: {
+    kind: TurnEventKind.ToolCallStarted,
     toolCallId: "call-1",
-    toolCallName: "read",
+    title: "read",
     parentMessageId: "message-1",
   },
-  [RunEventKind.TOOL_CALL_ARGS]: {
-    ...attributed,
-    type: RunEventKind.TOOL_CALL_ARGS,
+  [TurnEventKind.ToolCallInputChunk]: {
+    kind: TurnEventKind.ToolCallInputChunk,
     toolCallId: "call-1",
     delta: '{"path":"README.md"}',
   },
-  [RunEventKind.TOOL_CALL_END]: {
-    ...attributed,
-    type: RunEventKind.TOOL_CALL_END,
+  [TurnEventKind.ToolCallInputEnded]: {
+    kind: TurnEventKind.ToolCallInputEnded,
     toolCallId: "call-1",
   },
-  [RunEventKind.TOOL_CALL_RESULT]: {
-    ...attributed,
-    type: RunEventKind.TOOL_CALL_RESULT,
-    messageId: "message-2",
+  [TurnEventKind.ToolCallFinished]: {
+    kind: TurnEventKind.ToolCallFinished,
     toolCallId: "call-1",
-    content: "file contents",
-    role: "tool",
+    output: "file contents",
+    failed: false,
   },
-  [RunEventKind.ACTIVITY_SNAPSHOT]: {
-    ...attributed,
-    type: RunEventKind.ACTIVITY_SNAPSHOT,
-    messageId: "activity-1",
-    activityType: "PLAN",
-    content: { todos: [{ content: "ship", status: "pending" }] },
-    replace: true,
+  [TurnEventKind.PlanUpdated]: {
+    kind: TurnEventKind.PlanUpdated,
+    todos: [{ id: "todo-1", label: "ship", status: "pending" }],
   },
-  [RunEventKind.ACTIVITY_DELTA]: {
-    ...attributed,
-    type: RunEventKind.ACTIVITY_DELTA,
-    messageId: "activity-1",
-    activityType: "PLAN",
-    patch: [{ op: "add", path: "/todos/0", value: { content: "ship" } }],
+  [TurnEventKind.ArtifactPublished]: {
+    kind: TurnEventKind.ArtifactPublished,
+    artifact: {
+      id: "artifact-1",
+      filename: "report.md",
+      mimeType: "text/markdown",
+      sizeBytes: 12,
+      source: { type: "provider", reference: "artifact-1" },
+    },
   },
-  [RunEventKind.CUSTOM]: {
-    ...attributed,
-    type: RunEventKind.CUSTOM,
-    name: "aos.artifact",
-    value: { kind: "chart" },
+  [TurnEventKind.SteerAccepted]: {
+    kind: TurnEventKind.SteerAccepted,
+    requestId: "steer-1",
+    text: "also check the tests",
+    delivery: "steered",
   },
 }
 
-/**
- * The fields each kind must carry beyond the `type` discriminator, which every
- * kind requires. This table is the wire shape the adapters emit: every other
- * field in a fixture above is optional or defaulted, and a kind gaining or
- * losing a required field is a deliberate protocol change that belongs here
- * before it belongs in an adapter.
- */
-const requiredFields: Record<RunEventKind, readonly string[]> = {
-  [RunEventKind.RUN_STARTED]: ["threadId", "runId"],
-  [RunEventKind.RUN_FINISHED]: ["threadId", "runId"],
-  [RunEventKind.RUN_ERROR]: ["message"],
-  [RunEventKind.TEXT_MESSAGE_START]: ["messageId"],
-  [RunEventKind.TEXT_MESSAGE_CONTENT]: ["messageId", "delta"],
-  [RunEventKind.TEXT_MESSAGE_END]: ["messageId"],
-  [RunEventKind.REASONING_START]: ["messageId"],
-  [RunEventKind.REASONING_END]: ["messageId"],
-  [RunEventKind.REASONING_MESSAGE_START]: ["messageId", "role"],
-  [RunEventKind.REASONING_MESSAGE_CONTENT]: ["messageId", "delta"],
-  [RunEventKind.REASONING_MESSAGE_END]: ["messageId"],
-  [RunEventKind.TOOL_CALL_START]: ["toolCallId", "toolCallName"],
-  [RunEventKind.TOOL_CALL_ARGS]: ["toolCallId", "delta"],
-  [RunEventKind.TOOL_CALL_END]: ["toolCallId"],
-  [RunEventKind.TOOL_CALL_RESULT]: ["messageId", "toolCallId", "content"],
-  [RunEventKind.ACTIVITY_SNAPSHOT]: ["messageId", "activityType", "content"],
-  [RunEventKind.ACTIVITY_DELTA]: ["messageId", "activityType", "patch"],
-  [RunEventKind.CUSTOM]: ["name"],
+/** The fields each kind must carry beyond the `kind` discriminator. */
+const requiredFields: Record<TurnEventKind, readonly string[]> = {
+  [TurnEventKind.TurnStarted]: [],
+  [TurnEventKind.TurnEnded]: [],
+  [TurnEventKind.TurnRequiresAction]: ["requests"],
+  [TurnEventKind.TurnFailed]: ["message"],
+  [TurnEventKind.MessageChunk]: ["messageId", "text"],
+  [TurnEventKind.ThoughtChunk]: ["messageId", "text"],
+  [TurnEventKind.ToolCallStarted]: ["toolCallId", "title"],
+  [TurnEventKind.ToolCallInputChunk]: ["toolCallId", "delta"],
+  [TurnEventKind.ToolCallInputEnded]: ["toolCallId"],
+  [TurnEventKind.ToolCallFinished]: ["toolCallId", "output", "failed"],
+  [TurnEventKind.PlanUpdated]: ["todos"],
+  [TurnEventKind.ArtifactPublished]: ["artifact"],
+  [TurnEventKind.SteerAccepted]: ["requestId", "text", "delivery"],
 }
 
 const fixtures = Object.entries(eventFixtures)
@@ -227,103 +155,67 @@ function without(fixture: Record<string, unknown>, key: string) {
   )
 }
 
-describe("the proxy-owned run vocabulary", () => {
+describe("the proxy-owned turn vocabulary", () => {
   it("covers every kind the proxy carries", () => {
     expect(Object.keys(eventFixtures).sort()).toEqual(
-      Object.values(RunEventKind).sort()
+      Object.values(TurnEventKind).sort()
     )
     expect(Object.keys(requiredFields).sort()).toEqual(
-      Object.values(RunEventKind).sort()
+      Object.values(TurnEventKind).sort()
     )
   })
 
-  it.each(fixtures)("parses the %s wire shape unchanged", (_kind, fixture) => {
-    expect(RunEventSchema.parse(fixture)).toEqual(fixture)
+  it.each(fixtures)("parses a full %s unchanged", (_kind, fixture) => {
+    expect(TurnEventSchema.parse(fixture)).toEqual(fixture)
+    expect(isTurnEvent(fixture)).toBe(true)
   })
 
-  it.each(fixtures)(
-    "keeps an unknown top-level field on %s",
-    (_kind, fixture) => {
-      const candidate = { ...fixture, providerOnlyField: "kept" }
-
-      expect(RunEventSchema.parse(candidate)).toEqual(candidate)
-    }
-  )
-
-  it.each(fixtures)("requires the %s discriminator", (_kind, fixture) => {
-    expect(RunEventSchema.safeParse(without(fixture, "type")).success).toBe(
+  it.each(fixtures)("rejects an unknown field on %s", (_kind, fixture) => {
+    expect(isTurnEvent({ ...fixture, rawEvent: { provider: "native" } })).toBe(
       false
     )
+  })
+
+  it.each(fixtures)("requires the %s discriminator", (_kind, fixture) => {
+    expect(isTurnEvent(without(fixture, "kind"))).toBe(false)
   })
 
   it.each(fixtures)(
     "rejects a %s missing a required field and accepts every other omission",
     (kind, fixture) => {
-      const required = requiredFields[kind as RunEventKind]
+      const required = requiredFields[kind as TurnEventKind]
       expect(
         required.filter((field) => field in fixture),
         `${kind} fixture covers its required fields`
       ).toEqual(required)
 
       for (const key of Object.keys(fixture)) {
-        if (key === "type") continue
+        if (key === "kind") continue
         expect(
-          RunEventSchema.safeParse(without(fixture, key)).success,
+          isTurnEvent(without(fixture, key)),
           `${kind} without ${key}`
         ).toBe(!required.includes(key))
       }
     }
   )
 
-  it("normalizes the nulls released producers still send", () => {
-    const toolCall = RunEventSchema.parse({
-      type: RunEventKind.TOOL_CALL_START,
-      toolCallId: "call-1",
-      toolCallName: "read",
-      parentMessageId: null,
-    })
-    const finished = RunEventSchema.parse({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: "session-1",
-      runId: "run-1",
-      outcome: null,
-    })
-
-    expect(toolCall).toEqual({
-      type: RunEventKind.TOOL_CALL_START,
-      toolCallId: "call-1",
-      toolCallName: "read",
-    })
-    expect(toolCall.parentMessageId).toBeUndefined()
-    expect(finished).toEqual({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: "session-1",
-      runId: "run-1",
-    })
-    expect(finished.outcome).toBeUndefined()
-  })
-
-  it("applies the defaults the adapters rely on", () => {
-    expect(
-      RunEventSchema.parse({
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "message-1",
-      })
-    ).toMatchObject({ role: "assistant" })
-    expect(
-      RunEventSchema.parse({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "activity-1",
-        activityType: "PLAN",
-        content: {},
-      })
-    ).toMatchObject({ replace: true })
-  })
-
   it("rejects a kind outside the proxy vocabulary", () => {
+    expect(isTurnEvent({ kind: "STEP_STARTED", stepName: "one" })).toBe(false)
+  })
+
+  it("pauses a turn only on at least one request", () => {
     expect(
-      RunEventSchema.safeParse({ type: "STEP_STARTED", stepName: "one" })
-        .success
+      isTurnEvent({ kind: TurnEventKind.TurnRequiresAction, requests: [] })
+    ).toBe(false)
+  })
+
+  it("marks a turn awaiting Stop only with true", () => {
+    expect(
+      isTurnEvent({
+        kind: TurnEventKind.TurnFailed,
+        message: "failed",
+        awaitingStop: false,
+      })
     ).toBe(false)
   })
 
@@ -331,22 +223,21 @@ describe("the proxy-owned run vocabulary", () => {
     // No provider can report such a count, and a value that large cannot
     // survive a round trip through JSON anyway.
     expect(
-      RunEventSchema.safeParse({
-        type: RunEventKind.RUN_ERROR,
-        message: "the provider refused",
+      isTurnEvent({
+        kind: TurnEventKind.TurnEnded,
         usage: [{ inputTokens: 1e100 }],
-      }).success
+      })
     ).toBe(false)
   })
 })
 
 describe("a pending request", () => {
-  it("parses the wire shape a provider interrupt carries", () => {
+  it("parses every field a request may carry", () => {
     expect(PendingRequestSchema.parse(pendingRequest)).toEqual(pendingRequest)
   })
 
-  it("requires only the identifier and the reason", () => {
-    const required = ["id", "reason"]
+  it("requires only the identifier and the kind", () => {
+    const required = ["requestId", "kind"]
 
     for (const key of Object.keys(pendingRequest))
       expect(
@@ -354,15 +245,39 @@ describe("a pending request", () => {
         `without ${key}`
       ).toBe(!required.includes(key))
   })
+
+  it("admits a permission or an elicitation and nothing else", () => {
+    for (const kind of Object.values(PendingRequestKind))
+      expect(
+        PendingRequestSchema.safeParse({ requestId: "request-1", kind })
+          .success,
+        kind
+      ).toBe(true)
+    expect(
+      PendingRequestSchema.safeParse({
+        requestId: "request-1",
+        kind: "question",
+      }).success
+    ).toBe(false)
+  })
+
+  it("rejects provider metadata", () => {
+    expect(
+      PendingRequestSchema.safeParse({
+        ...pendingRequest,
+        metadata: { origin: "provider" },
+      }).success
+    ).toBe(false)
+  })
 })
 
 describe("a request reply", () => {
-  it("parses the wire shape the operator's answer carries", () => {
+  it("parses every field the operator's answer may carry", () => {
     expect(RequestReplySchema.parse(requestReply)).toEqual(requestReply)
   })
 
-  it("requires only the interrupt it answers and its status", () => {
-    const required = ["interruptId", "status"]
+  it("requires only the request it answers and its status", () => {
+    const required = ["requestId", "status"]
 
     for (const key of Object.keys(requestReply))
       expect(
@@ -372,95 +287,108 @@ describe("a request reply", () => {
   })
 
   it("admits a resolved or cancelled reply and nothing else", () => {
-    for (const status of ["resolved", "cancelled"])
+    for (const status of Object.values(ReplyStatus))
       expect(
-        RequestReplySchema.safeParse({ interruptId: "interrupt-1", status })
+        RequestReplySchema.safeParse({ requestId: "request-1", status })
           .success,
         status
       ).toBe(true)
     expect(
       RequestReplySchema.safeParse({
-        interruptId: "interrupt-1",
+        requestId: "request-1",
         status: "pending",
       }).success
     ).toBe(false)
   })
 })
 
-describe("an admitted turn", () => {
-  it("parses the wire shape the proxy builds", () => {
-    expect(TurnInputSchema.parse(turnInput)).toEqual(turnInput)
+describe("a turn input", () => {
+  it("parses a prompt turn and a replies turn unchanged", () => {
+    expect(TurnInputSchema.parse(promptTurn)).toEqual(promptTurn)
+    expect(TurnInputSchema.parse(repliesTurn)).toEqual(repliesTurn)
   })
 
-  it("requires the Session, the run, and the three turn collections", () => {
-    const required = ["threadId", "runId", "messages", "tools", "context"]
+  it("requires the turn, the message, and the prompt of a prompt turn", () => {
+    const required = ["turnId", "messageId", "prompt"]
 
-    for (const key of Object.keys(turnInput))
+    for (const key of Object.keys(promptTurn))
       expect(
-        TurnInputSchema.safeParse(without(turnInput, key)).success,
+        TurnInputSchema.safeParse(without(promptTurn, key)).success,
         `without ${key}`
       ).toBe(!required.includes(key))
   })
 
-  it("accepts the text parts a user turn may carry", () => {
-    const candidate = {
-      ...turnInput,
-      messages: [
-        {
-          id: "message-1",
-          role: "user",
-          content: [{ type: "text", text: "Hello" }],
-        },
-      ],
-    }
-
-    expect(TurnInputSchema.parse(candidate)).toEqual(candidate)
-  })
-
-  it("rejects unstaged multimodal parts instead of dropping them", () => {
-    // Staged media must reach an adapter as text, never as inline bytes.
-    const candidate = {
-      ...turnInput,
-      messages: [
-        {
-          id: "message-1",
-          role: "user",
-          content: [
-            { type: "text", text: "Look" },
-            {
-              type: "image",
-              source: {
-                type: "data",
-                mimeType: "image/png",
-                value: "aGVsbG8=",
-              },
-            },
-          ],
-        },
-      ],
-    }
-
-    expect(TurnInputSchema.safeParse(candidate).success).toBe(false)
-  })
-
-  it("drops an unknown top-level field", () => {
-    const parsed = TurnInputSchema.parse({
-      ...turnInput,
-      callerOnlyField: "dropped",
-    })
-
-    expect(parsed).toEqual(turnInput)
-    expect("callerOnlyField" in parsed).toBe(false)
-  })
-
-  it("admits only the user turn the proxy builds", () => {
-    // The proxy never builds or forwards any other message, so a
-    // provider-shaped history cannot reach a runtime through this schema.
+  it("resumes only on at least one reply", () => {
     expect(
-      TurnInputSchema.safeParse({
-        ...turnInput,
-        messages: [{ id: "message-1", role: "assistant", content: "Hello" }],
-      }).success
+      TurnInputSchema.safeParse({ turnId: "turn-2", replies: [] }).success
     ).toBe(false)
+  })
+
+  it("admits a prompt turn or a replies turn, never a mix", () => {
+    expect(
+      TurnInputSchema.safeParse({ ...promptTurn, replies: [requestReply] })
+        .success
+    ).toBe(false)
+    expect(
+      TurnInputSchema.safeParse({ ...promptTurn, callerOnlyField: "x" }).success
+    ).toBe(false)
+  })
+
+  it("tells a replies turn from a prompt turn", () => {
+    expect(isRepliesTurn(repliesTurn)).toBe(true)
+    expect(isRepliesTurn(promptTurn)).toBe(false)
+  })
+})
+
+describe("turn event helpers", () => {
+  const failed = (code?: string, awaitingStop?: true): TurnEvent => ({
+    kind: TurnEventKind.TurnFailed,
+    message: "failed",
+    ...(code === undefined ? {} : { code }),
+    ...(awaitingStop ? { awaitingStop } : {}),
+  })
+
+  it("names the failures after which nothing may be retried", () => {
+    expect(isUncertainFailure(failed("AOS_SEND_UNCERTAIN"))).toBe(true)
+    expect(isUncertainFailure(failed("AOS_RESET_REQUIRED"))).toBe(true)
+    expect(isUncertainFailure(failed("AOS_PROVIDER_RUN_FAILED"))).toBe(false)
+    expect(isUncertainFailure(failed())).toBe(false)
+    expect(isUncertainFailure({ kind: TurnEventKind.TurnEnded })).toBe(false)
+  })
+
+  it("redials every uncertain failure except a reset", () => {
+    expect(isRedialableFailure(failed("AOS_CONNECTION_INTERRUPTED"))).toBe(true)
+    expect(isRedialableFailure(failed("AOS_RESET_REQUIRED"))).toBe(false)
+    expect(isRedialableFailure(failed())).toBe(false)
+  })
+
+  it("recognizes a failure that awaits Stop", () => {
+    expect(isAwaitingStopFailure(failed(undefined, true))).toBe(true)
+    expect(isAwaitingStopFailure(failed())).toBe(false)
+  })
+
+  it("reads the requests only a paused turn leaves waiting", () => {
+    expect(
+      pendingRequestsOf({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [pendingRequest],
+      })
+    ).toEqual([pendingRequest])
+    expect(pendingRequestsOf({ kind: TurnEventKind.TurnEnded })).toEqual([])
+  })
+})
+
+describe("aggregateTokenUsage", () => {
+  it("sums counts per provider and model and keeps omitted counts absent", () => {
+    expect(
+      aggregateTokenUsage([
+        { provider: "a", model: "m", inputTokens: 1, outputTokens: 2 },
+        { provider: "a", model: "m", inputTokens: 3 },
+        { provider: "b", totalTokens: 5 },
+      ])
+    ).toEqual([
+      { provider: "a", model: "m", inputTokens: 4, outputTokens: 2 },
+      { provider: "b", totalTokens: 5 },
+    ])
   })
 })

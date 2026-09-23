@@ -21,7 +21,12 @@ import {
   type GuestInvitationService,
 } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
-import { RunEventKind, type RunEvent } from "../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  type PendingRequest,
+  type TurnEvent,
+} from "../core/events"
 import type {
   RuntimeInstance,
   ServerRunEngine,
@@ -43,9 +48,9 @@ const INSTRUCTION = "Load the interview skill."
 /** JSON-RPC reserves this code; the SDK's `methodNotFound` returns it. */
 const METHOD_NOT_FOUND = -32601
 
-const APPROVAL = {
-  id: "approval-1",
-  reason: "approval",
+const APPROVAL: PendingRequest = {
+  requestId: "approval-1",
+  kind: PendingRequestKind.Permission,
   message: "Delete the notes?",
   responseSchema: { type: "string", enum: ["once", "session", "always"] },
 }
@@ -170,7 +175,7 @@ async function invite(service: GuestInvitationService) {
   ).token
 }
 
-function terminalHandle(events: readonly RunEvent[]): ServerRunHandle {
+function terminalHandle(events: readonly TurnEvent[]): ServerRunHandle {
   return {
     events: (async function* () {
       yield* events
@@ -182,7 +187,7 @@ function terminalHandle(events: readonly RunEvent[]): ServerRunHandle {
 }
 
 /** A run the provider keeps open until Stop releases it. */
-function openHandle(events: readonly RunEvent[]): ServerRunHandle {
+function openHandle(events: readonly TurnEvent[]): ServerRunHandle {
   let release = () => undefined as void
   const settled = new Promise<void>((resolve) => {
     release = () => resolve()
@@ -202,50 +207,31 @@ function openHandle(events: readonly RunEvent[]): ServerRunHandle {
 }
 
 /** One run segment whose reasoning, tool call, and prose all reach the proxy. */
-function runEvents(runId: string): RunEvent[] {
-  return [
-    { type: RunEventKind.RUN_STARTED, threadId: REF, runId },
-    {
-      type: RunEventKind.REASONING_MESSAGE_CONTENT,
-      messageId: "thought-1",
-      delta: "private reasoning",
-    },
-    {
-      type: RunEventKind.TOOL_CALL_START,
-      toolCallId: "tool-1",
-      toolCallName: "read_file",
-    },
-    {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "assistant-native",
-      role: "assistant",
-    },
-    {
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
-      messageId: "assistant-native",
-      delta: "Guest-visible answer",
-    },
-    { type: RunEventKind.TEXT_MESSAGE_END, messageId: "assistant-native" },
-    {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: REF,
-      runId,
-      outcome: { type: "success" },
-    },
-  ]
-}
+const RUN_EVENTS: TurnEvent[] = [
+  { kind: TurnEventKind.TurnStarted },
+  {
+    kind: TurnEventKind.ThoughtChunk,
+    messageId: "assistant-native",
+    text: "private reasoning",
+  },
+  {
+    kind: TurnEventKind.ToolCallStarted,
+    toolCallId: "tool-1",
+    title: "read_file",
+    parentMessageId: "assistant-native",
+  },
+  {
+    kind: TurnEventKind.MessageChunk,
+    messageId: "assistant-native",
+    text: "Guest-visible answer",
+  },
+  { kind: TurnEventKind.TurnEnded },
+]
 
-function interruptEvents(runId: string): RunEvent[] {
-  return [
-    { type: RunEventKind.RUN_STARTED, threadId: REF, runId },
-    {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: REF,
-      runId,
-      outcome: { type: "interrupt", interrupts: [APPROVAL] },
-    },
-  ]
-}
+const REQUEST_EVENTS: TurnEvent[] = [
+  { kind: TurnEventKind.TurnStarted },
+  { kind: TurnEventKind.TurnRequiresAction, requests: [APPROVAL] },
+]
 
 type Recorded = { method: string; params: unknown }
 
@@ -284,24 +270,19 @@ const unsupported = () => {
 type HarnessOptions = {
   /** The invited Session already exists; a fresh invitation creates nothing. */
   existing?: boolean
-  handle?: (runId: string) => ServerRunHandle
+  handle?: () => ServerRunHandle
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
 }
 
 function harness(options: HarnessOptions = {}) {
   const handles: ServerRunHandle[] = []
-  const start = vi.fn(
-    async (
-      _scope: unknown,
-      input: { runId: string }
-    ): Promise<ServerRunHandle> => {
-      const handle = options.handle
-        ? options.handle(input.runId)
-        : terminalHandle(runEvents(input.runId))
-      handles.push(handle)
-      return handle
-    }
-  )
+  const start = vi.fn(async (): Promise<ServerRunHandle> => {
+    const handle = options.handle
+      ? options.handle()
+      : terminalHandle(RUN_EVENTS)
+    handles.push(handle)
+    return handle
+  })
   const engine: ServerRunEngine = {
     start,
     recover: vi.fn(unsupported),
@@ -652,7 +633,7 @@ describe("guest ACP lane", () => {
   it("offers an approval without its Agent-wide or Session-wide scopes", async () => {
     const test = harness({
       existing: true,
-      handle: (runId) => terminalHandle(interruptEvents(runId)),
+      handle: () => terminalHandle(REQUEST_EVENTS),
     })
     await test.initialize()
     await test.login(await invite(test.invitations))
@@ -675,7 +656,7 @@ describe("guest ACP lane", () => {
   it("refuses an approval answer that widens the grant", async () => {
     const test = harness({
       existing: true,
-      handle: (runId) => terminalHandle(interruptEvents(runId)),
+      handle: () => terminalHandle(REQUEST_EVENTS),
       permission: async () => ({
         outcome: { outcome: "selected", optionId: "always" },
       }),
@@ -701,11 +682,9 @@ describe("guest ACP lane", () => {
   it("stops its own run through the controller the projection grants", async () => {
     const test = harness({
       existing: true,
-      handle: (runId) =>
+      handle: () =>
         openHandle(
-          runEvents(runId).filter(
-            (event) => event.type !== RunEventKind.RUN_FINISHED
-          )
+          RUN_EVENTS.filter((event) => event.kind !== TurnEventKind.TurnEnded)
         ),
     })
     await test.initialize()

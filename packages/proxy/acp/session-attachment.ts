@@ -12,12 +12,12 @@ import {
   AOS_STOP_REASONS,
   AosStateMetaSchema,
 } from "../../protocol/acp"
-import type { PendingRequest, RequestReply } from "../core/events"
 import type {
-  NewTurnRunInput,
-  ServerAttachmentStage,
-  SessionScope,
-} from "../core/runtime"
+  PendingRequest,
+  PromptTurnInput,
+  RequestReply,
+} from "../core/events"
+import type { ServerAttachmentStage, SessionScope } from "../core/runtime"
 import type { CoordinatedRunSubscription } from "../core/session-coordinator"
 import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
@@ -141,7 +141,7 @@ class SessionAttachment {
   readonly #client: AgentContext
   readonly #readUsage: () => Promise<SessionContextResponse>
   #subscription: CoordinatedRunSubscription | undefined
-  #pending: { interruptId: string; promise: Promise<void> } | undefined
+  #pending: { requestId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
   #state = initialTranslateState
   #sequence = 0
@@ -175,19 +175,19 @@ class SessionAttachment {
           runId,
           ...(after === undefined ? {} : { after }),
         },
-        this.#access(runId)
+        this.#access()
       ),
       replayedCorrections
     )
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */
-  async startTurn(input: NewTurnRunInput, stage?: ServerAttachmentStage) {
+  async startTurn(input: PromptTurnInput, stage?: ServerAttachmentStage) {
     this.#consume(
       await this.#coordinator.start(
         this.#scope,
         input,
-        this.#access(input.runId),
+        this.#access(),
         ...(stage ? [stage] : [])
       ),
       0
@@ -269,9 +269,9 @@ class SessionAttachment {
   /** Re-issues the requests a recovered wait is still holding. */
   async reissuePending() {
     const { pendingRequestToOutbound } = this.#context.translators
-    for (const request of this.#coordinator.snapshot(this.#scope).interrupts) {
-      if (this.#pending?.interruptId === request.id) continue
-      if (this.#replies.has(request.id)) continue
+    for (const request of this.#coordinator.snapshot(this.#scope).requests) {
+      if (this.#pending?.requestId === request.requestId) continue
+      if (this.#replies.has(request.requestId)) continue
       this.#ask(pendingRequestToOutbound(request, this.#context.lane))
     }
   }
@@ -414,7 +414,7 @@ class SessionAttachment {
    * projection replaces the run stream with its allowlisted events and restates
    * the same controller identity, so a guest may Stop only its own run.
    */
-  #access(runId: string) {
+  #access() {
     const { lane, guest } = this.#context
     const base = {
       subscriberId: this.#subscriberId,
@@ -422,7 +422,7 @@ class SessionAttachment {
       lane,
       canControl: lane === "operator",
     }
-    return guest ? guest.project.access(base, this.#scope, runId) : base
+    return guest ? guest.project.access(base, this.#scope) : base
   }
 
   #consume(
@@ -436,12 +436,12 @@ class SessionAttachment {
   }
 
   async #pump(subscription: CoordinatedRunSubscription) {
-    const { translateRunEvent } = this.#context.translators
+    const { translateTurnEvent } = this.#context.translators
     let overflow: FanoutOverflowError | undefined
     try {
       for await (const { sequence, event } of subscription.events) {
         this.#sequence = sequence
-        const translated = translateRunEvent(this.#state, event, {
+        const translated = translateTurnEvent(this.#state, event, {
           runId: subscription.runId,
           sequence,
           lane: this.#context.lane,
@@ -534,7 +534,7 @@ class SessionAttachment {
         ? this.#askPermission(outbound)
         : this.#askElicitation(outbound)
     ).catch((cause: unknown) => this.report(cause))
-    this.#pending = { interruptId: outbound.interruptId, promise }
+    this.#pending = { requestId: outbound.requestId, promise }
   }
 
   async #askPermission(
@@ -544,7 +544,7 @@ class SessionAttachment {
       methods.client.session.requestPermission,
       { ...outbound.request, sessionId: this.#scope.threadId }
     )
-    const request = this.#interrupt(outbound.interruptId)
+    const request = this.#pendingRequest(outbound.requestId)
     const { guest, translators } = this.#context
     const reply = translators.replyFromPermission(request, response)
     // A guest may answer only within the scope it was offered, so its
@@ -567,10 +567,10 @@ class SessionAttachment {
       {
         ...outbound.request,
         sessionId: this.#scope.threadId,
-        requestId: outbound.interruptId,
+        requestId: outbound.requestId,
       }
     )
-    const request = this.#interrupt(outbound.interruptId)
+    const request = this.#pendingRequest(outbound.requestId)
     const { replyFromElicitation } = this.#context.translators
     // The answered question reaches the transcript before the run resumes, so
     // the call that asked it stops reading as unanswered while the next segment
@@ -581,45 +581,37 @@ class SessionAttachment {
     await this.#settle(request, replyFromElicitation(request, response, lane))
   }
 
-  /** The interrupt an answer belongs to; a settled one can no longer be answered. */
-  #interrupt(interruptId: string) {
+  /** The request an answer belongs to; a settled one can no longer be answered. */
+  #pendingRequest(requestId: string) {
     const request = this.#coordinator
       .snapshot(this.#scope)
-      .interrupts.find(({ id }) => id === interruptId)
+      .requests.find((pending) => pending.requestId === requestId)
     if (!request) throw staleInterrupt()
     return request
   }
 
-  /** Starts the next run segment once every pending interrupt is answered. */
+  /** Starts the next run segment once every pending request is answered. */
   async #settle(request: PendingRequest, reply: RequestReply) {
     this.#log("info", "acp.request.answered", {
-      interruptId: request.id,
+      requestId: request.requestId,
       status: reply.status,
     })
-    if (this.#pending?.interruptId === request.id) this.#pending = undefined
-    this.#replies.set(request.id, reply)
-    const { interrupts } = this.#coordinator.snapshot(this.#scope)
-    if (!interrupts.every(({ id }) => this.#replies.has(id))) return
-    const resume = interrupts.flatMap(({ id }) => {
-      const entry = this.#replies.get(id)
+    if (this.#pending?.requestId === request.requestId)
+      this.#pending = undefined
+    this.#replies.set(request.requestId, reply)
+    const { requests } = this.#coordinator.snapshot(this.#scope)
+    if (!requests.every(({ requestId }) => this.#replies.has(requestId))) return
+    const replies = requests.flatMap(({ requestId }) => {
+      const entry = this.#replies.get(requestId)
       return entry ? [entry] : []
     })
     this.#replies.clear()
-    const runId = crypto.randomUUID()
+    const turnId = crypto.randomUUID()
     this.#consume(
       await this.#coordinator.start(
         this.#scope,
-        {
-          threadId: this.#scope.threadId,
-          runId,
-          state: {},
-          messages: [],
-          tools: [],
-          context: [],
-          forwardedProps: {},
-          resume,
-        },
-        this.#access(runId)
+        { turnId, replies },
+        this.#access()
       ),
       0
     )

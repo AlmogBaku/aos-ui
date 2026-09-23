@@ -1,101 +1,80 @@
 import { z } from "zod"
 
+import {
+  ArtifactDescriptorSchema,
+  RunSteerResponseSchema,
+  SessionTodosResponseSchema,
+} from "../../protocol"
+
 /**
- * Proxy-owned run vocabulary.
+ * Proxy-owned turn vocabulary.
  *
- * One schema per kind the proxy's runtimes emit, in the wire shapes they
- * already produce, so the coordinator, the ACP layer, and the guest projection
- * share one definition and nothing in the proxy depends on an event library.
- * The discriminator stays `type` and every literal keeps its spelling: these
- * are the bytes on the wire, not an internal naming choice.
+ * Adapters report what a provider turn did in these transport-free facts, the
+ * coordinator journals and replays them, and only the ACP translator knows how
+ * each one is spelled on the wire. Every kind carries the facts some reader
+ * uses and nothing else, so a new provider maps onto a closed set of meanings
+ * rather than a protocol's framing.
  */
 
-/** Every kind of run event the proxy carries from a runtime to its readers. */
-export const RunEventKind = {
-  RUN_STARTED: "RUN_STARTED",
-  RUN_FINISHED: "RUN_FINISHED",
-  RUN_ERROR: "RUN_ERROR",
-  TEXT_MESSAGE_START: "TEXT_MESSAGE_START",
-  TEXT_MESSAGE_CONTENT: "TEXT_MESSAGE_CONTENT",
-  TEXT_MESSAGE_END: "TEXT_MESSAGE_END",
-  REASONING_START: "REASONING_START",
-  REASONING_END: "REASONING_END",
-  REASONING_MESSAGE_START: "REASONING_MESSAGE_START",
-  REASONING_MESSAGE_CONTENT: "REASONING_MESSAGE_CONTENT",
-  REASONING_MESSAGE_END: "REASONING_MESSAGE_END",
-  TOOL_CALL_START: "TOOL_CALL_START",
-  TOOL_CALL_ARGS: "TOOL_CALL_ARGS",
-  TOOL_CALL_END: "TOOL_CALL_END",
-  TOOL_CALL_RESULT: "TOOL_CALL_RESULT",
-  ACTIVITY_SNAPSHOT: "ACTIVITY_SNAPSHOT",
-  ACTIVITY_DELTA: "ACTIVITY_DELTA",
-  CUSTOM: "CUSTOM",
+/** Every kind of turn event the proxy carries from a runtime to its readers. */
+export const TurnEventKind = {
+  TurnStarted: "turn-started",
+  /** The turn finished cleanly. */
+  TurnEnded: "turn-ended",
+  /** The turn paused on requests only the operator can answer. */
+  TurnRequiresAction: "turn-requires-action",
+  TurnFailed: "turn-failed",
+  MessageChunk: "message-chunk",
+  ThoughtChunk: "thought-chunk",
+  ToolCallStarted: "tool-call-started",
+  ToolCallInputChunk: "tool-call-input-chunk",
+  ToolCallInputEnded: "tool-call-input-ended",
+  ToolCallFinished: "tool-call-finished",
+  PlanUpdated: "plan-updated",
+  ArtifactPublished: "artifact-published",
+  SteerAccepted: "steer-accepted",
 } as const
-export type RunEventKind = (typeof RunEventKind)[keyof typeof RunEventKind]
+export type TurnEventKind = (typeof TurnEventKind)[keyof typeof TurnEventKind]
 
-/**
- * Open by key: any JSON value under any key, and no key required. Provider
- * metadata, reply schemas, and activity payloads are all this shape, and
- * validating their interiors would contradict being open.
- */
-const OpenRecordSchema = z.record(z.string(), z.any())
+/** What a pending request asks of the operator. */
+export const PendingRequestKind = {
+  /** Approve or deny an operation; the reply payload is the chosen option. */
+  Permission: "permission",
+  /** Answer questions; the reply payload is `{ answers: string[][] }`. */
+  Elicitation: "elicitation",
+} as const
+export type PendingRequestKind =
+  (typeof PendingRequestKind)[keyof typeof PendingRequestKind]
 
-/** Fields every run event carries, whatever its kind. */
-const baseEventFields = {
-  timestamp: z.number().optional(),
-  rawEvent: z.any().optional(),
-  metadata: OpenRecordSchema.optional(),
-}
+/** How the operator settled a pending request. */
+export const ReplyStatus = {
+  Resolved: "resolved",
+  Cancelled: "cancelled",
+} as const
+export type ReplyStatus = (typeof ReplyStatus)[keyof typeof ReplyStatus]
 
-/** Base fields plus the attribution every kind a subagent can emit carries. */
-const subagentAttributedFields = {
-  ...baseEventFields,
-  subagentRunId: z.string().optional(),
-}
-
-/** Who an assistant-visible text message is attributed to. */
-const TextMessageRoleSchema = z.enum([
-  "developer",
-  "system",
-  "assistant",
-  "user",
-])
-
-/** A question or approval the provider is waiting on; it ends a run segment. */
-export const PendingRequestSchema = z.object({
-  id: z.string(),
-  reason: z.string(),
+/** A question or approval the provider is waiting on; it ends a turn segment. */
+export const PendingRequestSchema = z.strictObject({
+  requestId: z.string(),
+  kind: z.enum([PendingRequestKind.Permission, PendingRequestKind.Elicitation]),
   message: z.string().optional(),
   toolCallId: z.string().optional(),
-  responseSchema: OpenRecordSchema.optional(),
+  /** JSON Schema of the expected answer: a permission's `enum` of choices. */
+  responseSchema: z.record(z.string(), z.unknown()).optional(),
   expiresAt: z.string().optional(),
-  metadata: OpenRecordSchema.optional(),
-  subagentRunId: z.string().optional(),
 })
 export type PendingRequest = z.infer<typeof PendingRequestSchema>
 
 /** The operator's answer to one pending request; it starts the next segment. */
-export const RequestReplySchema = z.object({
-  interruptId: z.string(),
-  status: z.enum(["resolved", "cancelled"]),
-  payload: z.any().optional(),
-  metadata: OpenRecordSchema.optional(),
+export const RequestReplySchema = z.strictObject({
+  requestId: z.string(),
+  status: z.enum([ReplyStatus.Resolved, ReplyStatus.Cancelled]),
+  payload: z.unknown().optional(),
 })
 export type RequestReply = z.infer<typeof RequestReplySchema>
 
-/** How a run segment ended: cleanly, or waiting on the operator. */
-export const RunOutcomeSchema = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("success") }),
-  z.strictObject({
-    type: z.literal("interrupt"),
-    interrupts: z.array(PendingRequestSchema).min(1),
-  }),
-])
-export type RunOutcome = z.infer<typeof RunOutcomeSchema>
-export type RunInterruptOutcome = Extract<RunOutcome, { type: "interrupt" }>
-
 /** What one provider call spent, as the provider reported it. */
-export const TokenUsageSchema = z.object({
+export const TokenUsageSchema = z.strictObject({
   provider: z.string().optional(),
   model: z.string().optional(),
   inputTokens: z.number().int().nonnegative().optional(),
@@ -135,228 +114,114 @@ export function aggregateTokenUsage(
   return [...grouped.values()]
 }
 
-/** One part of a user turn the proxy admits; prose only, never a blob. */
-const TurnTextPartSchema = z.object({
-  type: z.literal("text"),
-  text: z.string(),
+/** One admitted user prompt. */
+export const PromptTurnInputSchema = z.strictObject({
+  turnId: z.string(),
+  /** The user message this prompt becomes. */
+  messageId: z.string(),
+  prompt: z.string(),
+  /** User turn to rewind before Edit or Retry; validated authoritatively. */
+  rewindSourceId: z.string().optional(),
 })
+export type PromptTurnInput = z.infer<typeof PromptTurnInputSchema>
 
-/** The only message the proxy ever builds: the user turn being admitted. */
-const TurnMessageSchema = z.object({
-  id: z.string(),
-  role: z.literal("user"),
-  content: z.union([z.string(), z.array(TurnTextPartSchema)]),
+/** The replies that answer every request a paused turn is waiting on. */
+export const RepliesTurnInputSchema = z.strictObject({
+  turnId: z.string(),
+  replies: z.array(RequestReplySchema).min(1),
 })
+export type RepliesTurnInput = z.infer<typeof RepliesTurnInputSchema>
 
-/** A tool the caller offers the runtime for this turn. */
-const TurnToolSchema = z.object({
-  name: z.string(),
-  description: z.string(),
-  parameters: z.any().optional(),
-  metadata: OpenRecordSchema.optional(),
-})
-
-/** Ambient information the caller attaches to this turn. */
-const TurnContextSchema = z.object({
-  description: z.string(),
-  value: z.string(),
-})
-
-/** One admitted user turn, or a batch of request replies. */
-export const TurnInputSchema = z.object({
-  threadId: z.string(),
-  runId: z.string(),
-  parentRunId: z.string().optional(),
-  state: z
-    .any()
-    .optional()
-    .transform((value) => value ?? undefined),
-  messages: z.array(TurnMessageSchema),
-  tools: z.array(TurnToolSchema),
-  context: z.array(TurnContextSchema),
-  forwardedProps: z.any().optional(),
-  resume: z.array(RequestReplySchema).optional(),
-})
+/** What starts a turn segment: a prompt, or the replies that resume one. */
+export const TurnInputSchema = z.union([
+  PromptTurnInputSchema,
+  RepliesTurnInputSchema,
+])
 export type TurnInput = z.infer<typeof TurnInputSchema>
 
-const RunStartedEventSchema = z.looseObject({
-  ...baseEventFields,
-  type: z.literal(RunEventKind.RUN_STARTED),
-  threadId: z.string(),
-  runId: z.string(),
-  parentRunId: z.string().optional(),
-  input: TurnInputSchema.optional(),
-})
+export function isRepliesTurn(input: TurnInput): input is RepliesTurnInput {
+  return "replies" in input
+}
 
-const RunFinishedEventSchema = z.looseObject({
-  ...baseEventFields,
-  type: z.literal(RunEventKind.RUN_FINISHED),
-  threadId: z.string(),
-  runId: z.string(),
-  result: z.any().optional(),
-  // Released producers emitted `null` before omitting empty fields; tolerate it
-  // and normalize, as the shapes on the wire already do.
-  outcome: RunOutcomeSchema.nullable()
-    .optional()
-    .transform((value) => value ?? undefined),
-  usage: z.array(TokenUsageSchema).optional(),
-})
+function turnEvent<
+  const Kind extends TurnEventKind,
+  const Shape extends z.ZodRawShape,
+>(kind: Kind, shape: Shape) {
+  return z.strictObject({ kind: z.literal(kind), ...shape })
+}
 
-const RunErrorEventSchema = z.looseObject({
-  ...baseEventFields,
-  type: z.literal(RunEventKind.RUN_ERROR),
-  message: z.string(),
-  code: z.string().optional(),
-  usage: z.array(TokenUsageSchema).optional(),
-  /**
-   * The failure is final, but the provider's turn outlives it and ends only
-   * when stopped: the run stays active and stoppable, and its settlement, not
-   * this event, ends it.
-   */
-  awaitingStop: z.literal(true).optional(),
-})
-
-const TextMessageStartEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TEXT_MESSAGE_START),
-  messageId: z.string(),
-  role: TextMessageRoleSchema.default("assistant"),
-  name: z.string().optional(),
-})
-
-const TextMessageContentEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TEXT_MESSAGE_CONTENT),
-  messageId: z.string(),
-  delta: z.string(),
-})
-
-const TextMessageEndEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TEXT_MESSAGE_END),
-  messageId: z.string(),
-})
-
-const ReasoningStartEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.REASONING_START),
-  messageId: z.string(),
-})
-
-const ReasoningEndEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.REASONING_END),
-  messageId: z.string(),
-})
-
-const ReasoningMessageStartEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.REASONING_MESSAGE_START),
-  messageId: z.string(),
-  role: z.literal("reasoning"),
-})
-
-const ReasoningMessageContentEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.REASONING_MESSAGE_CONTENT),
-  messageId: z.string(),
-  delta: z.string(),
-})
-
-const ReasoningMessageEndEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.REASONING_MESSAGE_END),
-  messageId: z.string(),
-})
-
-const ToolCallStartEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TOOL_CALL_START),
-  toolCallId: z.string(),
-  toolCallName: z.string(),
-  // As with `outcome`, `null` is what released producers sent for "no parent".
-  parentMessageId: z
-    .string()
-    .nullable()
-    .optional()
-    .transform((value) => value ?? undefined),
-})
-
-const ToolCallArgsEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TOOL_CALL_ARGS),
-  toolCallId: z.string(),
-  delta: z.string(),
-})
-
-const ToolCallEndEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TOOL_CALL_END),
-  toolCallId: z.string(),
-})
-
-const ToolCallResultEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.TOOL_CALL_RESULT),
-  messageId: z.string(),
-  toolCallId: z.string(),
-  content: z.string(),
-  role: z.literal("tool").optional(),
-})
-
-const ActivitySnapshotEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.ACTIVITY_SNAPSHOT),
-  messageId: z.string(),
-  activityType: z.string(),
-  content: OpenRecordSchema,
-  replace: z.boolean().default(true),
-})
-
-const ActivityDeltaEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.ACTIVITY_DELTA),
-  messageId: z.string(),
-  activityType: z.string(),
-  patch: z.array(z.any()),
-})
-
-const CustomEventSchema = z.looseObject({
-  ...subagentAttributedFields,
-  type: z.literal(RunEventKind.CUSTOM),
-  name: z.string(),
-  value: z.any().optional(),
-})
-
-export const RunEventSchema = z.discriminatedUnion("type", [
-  RunStartedEventSchema,
-  RunFinishedEventSchema,
-  RunErrorEventSchema,
-  TextMessageStartEventSchema,
-  TextMessageContentEventSchema,
-  TextMessageEndEventSchema,
-  ReasoningStartEventSchema,
-  ReasoningEndEventSchema,
-  ReasoningMessageStartEventSchema,
-  ReasoningMessageContentEventSchema,
-  ReasoningMessageEndEventSchema,
-  ToolCallStartEventSchema,
-  ToolCallArgsEventSchema,
-  ToolCallEndEventSchema,
-  ToolCallResultEventSchema,
-  ActivitySnapshotEventSchema,
-  ActivityDeltaEventSchema,
-  CustomEventSchema,
+export const TurnEventSchema = z.discriminatedUnion("kind", [
+  turnEvent(TurnEventKind.TurnStarted, {}),
+  turnEvent(TurnEventKind.TurnEnded, {
+    usage: z.array(TokenUsageSchema).optional(),
+    /** Text the provider asks the composer to start the next prompt with. */
+    composerPrefill: z.string().optional(),
+  }),
+  turnEvent(TurnEventKind.TurnRequiresAction, {
+    requests: z.array(PendingRequestSchema).min(1),
+  }),
+  turnEvent(TurnEventKind.TurnFailed, {
+    code: z.string().optional(),
+    message: z.string(),
+    /**
+     * The failure is final, but the provider's turn outlives it and ends only
+     * when stopped: the turn stays active and stoppable, and its settlement,
+     * not this event, ends it.
+     */
+    awaitingStop: z.literal(true).optional(),
+  }),
+  /** Assistant prose; `messageId` names the assistant message it belongs to. */
+  turnEvent(TurnEventKind.MessageChunk, {
+    messageId: z.string(),
+    text: z.string(),
+  }),
+  /** Reasoning; `messageId` names the assistant message it reasons toward. */
+  turnEvent(TurnEventKind.ThoughtChunk, {
+    messageId: z.string(),
+    text: z.string(),
+  }),
+  turnEvent(TurnEventKind.ToolCallStarted, {
+    toolCallId: z.string(),
+    title: z.string(),
+    /** The assistant message that made the call. */
+    parentMessageId: z.string().optional(),
+  }),
+  /** A piece of the call's JSON arguments text. */
+  turnEvent(TurnEventKind.ToolCallInputChunk, {
+    toolCallId: z.string(),
+    delta: z.string(),
+  }),
+  turnEvent(TurnEventKind.ToolCallInputEnded, { toolCallId: z.string() }),
+  turnEvent(TurnEventKind.ToolCallFinished, {
+    toolCallId: z.string(),
+    /** The result text; JSON when the tool returned structured output. */
+    output: z.string(),
+    /** The provider reported the call as failed. */
+    failed: z.boolean(),
+  }),
+  /** The Session's whole Todo list, replacing the previous one. */
+  turnEvent(TurnEventKind.PlanUpdated, {
+    todos: SessionTodosResponseSchema.shape.todos,
+  }),
+  turnEvent(TurnEventKind.ArtifactPublished, {
+    artifact: ArtifactDescriptorSchema,
+  }),
+  /** A mid-turn correction the provider accepted; the coordinator emits it. */
+  turnEvent(TurnEventKind.SteerAccepted, {
+    requestId: z.string(),
+    text: z.string(),
+    delivery: RunSteerResponseSchema.shape.status,
+  }),
 ])
-export type RunEvent = z.infer<typeof RunEventSchema>
-export type RunEventOf<Kind extends RunEventKind> = Extract<
-  RunEvent,
-  { type: Kind }
+export type TurnEvent = z.infer<typeof TurnEventSchema>
+export type TurnEventOf<Kind extends TurnEventKind> = Extract<
+  TurnEvent,
+  { kind: Kind }
 >
 
-/** Rejects anything an adapter may have emitted that is not a run event. */
-export function isRunEvent(candidate: unknown): candidate is RunEvent {
-  return RunEventSchema.safeParse(candidate).success
+/** Rejects anything an adapter may have emitted that is not a turn event. */
+export function isTurnEvent(candidate: unknown): candidate is TurnEvent {
+  return TurnEventSchema.safeParse(candidate).success
 }
 
 /** Error codes after which Send, Stop, steer, and replies must not be retried. */
@@ -369,19 +234,19 @@ export const UNCERTAIN_ERROR_CODES = [
 ] as const
 export type UncertainErrorCode = (typeof UNCERTAIN_ERROR_CODES)[number]
 
-export function isUncertainError(event: RunEvent): boolean {
+export function isUncertainFailure(event: TurnEvent): boolean {
   return (
-    event.type === RunEventKind.RUN_ERROR &&
+    event.kind === TurnEventKind.TurnFailed &&
     UNCERTAIN_ERROR_CODES.some((code) => code === event.code)
   )
 }
 
 /**
- * The codes an adapter publishes when it stopped consuming a run that may still
- * be alive in the provider. The turn is not over, so its journal outlives the
- * error and the browser reconciles by redialing with the same run id. A reset is
- * deliberately absent: that cursor can never be served again, so its journal
- * must not be retained.
+ * The codes an adapter publishes when it stopped consuming a turn that may
+ * still be alive in the provider. The turn is not over, so its journal outlives
+ * the failure and the browser reconciles by redialing with the same turn id. A
+ * reset is deliberately absent: that cursor can never be served again, so its
+ * journal must not be retained.
  */
 export const REDIALABLE_ERROR_CODES = [
   "AOS_SEND_UNCERTAIN",
@@ -390,36 +255,35 @@ export const REDIALABLE_ERROR_CODES = [
   "AOS_CONNECTION_INTERRUPTED",
 ] as const
 
-export function isRedialableError(event: RunEvent): boolean {
+export function isRedialableFailure(event: TurnEvent): boolean {
   return (
-    event.type === RunEventKind.RUN_ERROR &&
+    event.kind === TurnEventKind.TurnFailed &&
     REDIALABLE_ERROR_CODES.some((code) => code === event.code)
   )
 }
 
-/** A final failure the run reports before its provider turn has been stopped. */
-export function isAwaitingStopError(event: RunEvent): boolean {
-  return event.type === RunEventKind.RUN_ERROR && event.awaitingStop === true
+/** A final failure the turn reports before its provider turn has been stopped. */
+export function isAwaitingStopFailure(event: TurnEvent): boolean {
+  return event.kind === TurnEventKind.TurnFailed && event.awaitingStop === true
+}
+
+/** Requests a segment's terminal event leaves waiting, if any. */
+export function pendingRequestsOf(event: TurnEvent): PendingRequest[] {
+  return event.kind === TurnEventKind.TurnRequiresAction ? event.requests : []
 }
 
 /**
  * Workspace-wide execution events published by the coordinator observer for
- * every Session it drives, independent of run-stream subscribers. Timestamps
+ * every Session it drives, independent of turn-stream subscribers. Timestamps
  * are RFC 3339 strings.
  */
 export type ExecutionEvent = {
   agentId: string
   sessionId: string
-  runId: string
+  turnId: string
   occurredAt: string
 } & (
-  | { type: "run-started" | "run-finished" | "run-failed" }
-  | { type: "attention-requested"; request: PendingRequest }
-  | { type: "attention-resolved"; interruptId: string }
+  | { kind: "turn-started" | "turn-finished" | "turn-failed" }
+  | { kind: "attention-requested"; request: PendingRequest }
+  | { kind: "attention-resolved"; requestId: string }
 )
-
-/** Pending requests carried by a segment's terminal event, if any. */
-export function pendingRequestsOf(event: RunEvent): PendingRequest[] {
-  if (event.type !== RunEventKind.RUN_FINISHED) return []
-  return event.outcome?.type === "interrupt" ? event.outcome.interrupts : []
-}

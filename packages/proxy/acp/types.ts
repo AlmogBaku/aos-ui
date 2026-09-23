@@ -22,7 +22,7 @@ import type {
   ExecutionEvent,
   PendingRequest,
   RequestReply,
-  RunEvent,
+  TurnEvent,
 } from "../core/events"
 import type {
   RuntimeInstance,
@@ -100,11 +100,7 @@ export type GuestPolicy = {
   grant(): GuestGrant | undefined
   project: {
     /** Wraps one coordinator subscription in the guest run projection. */
-    access(
-      base: CoordinatorAccess,
-      scope: SessionScope,
-      runId: string
-    ): CoordinatorAccess
+    access(base: CoordinatorAccess, scope: SessionScope): CoordinatorAccess
     history(value: SessionHistoryResponse): SessionHistoryResponse
     capabilities(value: WorkspaceCapabilities): WorkspaceCapabilities
     /** Refuses an approval answer that would widen the grant past this request. */
@@ -117,7 +113,7 @@ export type GuestPolicy = {
 /** Builds the per-connection ACP v2 agent app. Implemented in `agent.ts`. */
 export type AosAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 
-/** Inputs every run-event translation needs besides the event itself. */
+/** Inputs every turn-event translation needs besides the event itself. */
 export type TranslateContext = {
   runId: string
   sequence: number
@@ -129,7 +125,7 @@ export type TranslateContext = {
 }
 
 /**
- * State the run-event reducer carries between events of one run segment:
+ * State the turn-event reducer carries between events of one run segment:
  * the assistant message currently streaming and the arguments text streamed
  * so far per open tool call. Starts as `initialTranslateState`.
  */
@@ -170,12 +166,12 @@ export type AcpOutbound =
   | { kind: "composer-prefill"; runId: string; text: string }
   | {
       kind: "request-permission"
-      interruptId: string
+      requestId: string
       request: WithoutSession<RequestPermissionRequest>
     }
   | {
       kind: "elicitation"
-      interruptId: string
+      requestId: string
       request: WithoutSession<CreateElicitationRequest>
     }
 
@@ -212,10 +208,10 @@ export interface ActivityFeed {
 // of these types under the name given in the comment.
 // ---------------------------------------------------------------------------
 
-/** `translate/run-events.ts` → `translateRunEvent` (pure reducer) */
-export type TranslateRunEvent = (
+/** `translate/turn-events.ts` → `translateTurnEvent` (pure reducer) */
+export type TranslateTurnEvent = (
   state: TranslateState,
-  event: RunEvent,
+  event: TurnEvent,
   context: TranslateContext
 ) => { state: TranslateState; outbound: AcpOutbound[] }
 
@@ -267,7 +263,7 @@ export type ConfigWriteOf = (
 
 /** All translators, injected into the agent so lanes and tests stay decoupled. */
 export type Translators = {
-  translateRunEvent: TranslateRunEvent
+  translateTurnEvent: TranslateTurnEvent
   translateHistory: TranslateHistory
   persistedCorrections: PersistedCorrections
   pendingRequestToOutbound: PendingRequestToOutbound

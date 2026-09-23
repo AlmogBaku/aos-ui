@@ -3,7 +3,6 @@ import { createHash } from "node:crypto"
 import {
   GuestRuntimeCapabilitiesResponseSchema,
   SessionHistoryResponseSchema,
-  SessionPlanActivityMessageSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type SessionHistoryResponse,
   type SessionMessage,
@@ -19,10 +18,10 @@ import {
 } from "./guest-projection"
 import { guestAuthorizationActive, guestControllerId } from "./guest-request"
 import {
-  isRunEvent,
-  RunEventKind,
-  type RunEvent,
-  type RunEventOf,
+  isTurnEvent,
+  TurnEventKind,
+  type TurnEvent,
+  type TurnEventOf,
 } from "../core/events"
 import type { SessionScope } from "../core/runtime"
 import type { CoordinatorAccess } from "../core/session-coordinator"
@@ -139,25 +138,6 @@ export function projectGuestHistory(
         ? [{ type: "text" as const, text: projected.payload.text }]
         : []
     })
-    const interrupts =
-      message.role === "assistant" &&
-      message.metadata?.custom.agui &&
-      typeof message.metadata.custom.agui === "object" &&
-      message.metadata.custom.agui !== null &&
-      !Array.isArray(message.metadata.custom.agui)
-        ? (message.metadata.custom.agui as { interrupts?: unknown }).interrupts
-        : undefined
-    const projectedInterrupts = Array.isArray(interrupts)
-      ? projectGuestOutbound(
-          {
-            transport: "rest",
-            agentId: authorization.agentId,
-            sessionId: authorization.sessionId,
-            payload: { type: "interrupt", interrupts },
-          },
-          authorization
-        )
-      : undefined
     // A turn the provider failed reaches a guest as a failed turn, never as an
     // ordinary reply: its public text is projected like any other, and its
     // status carries the guest catalogue's description of the mapped failure.
@@ -167,7 +147,6 @@ export function projectGuestHistory(
         : undefined
     if (
       content.length === 0 &&
-      projectedInterrupts?.payload.type !== "interrupt" &&
       failure === undefined &&
       !message.attachments?.length
     )
@@ -186,23 +165,6 @@ export function projectGuestHistory(
               type: "incomplete" as const,
               reason: "error" as const,
               error: guestErrorDescription(failure.code),
-            },
-          }
-        : {}),
-      ...(projectedInterrupts?.payload.type === "interrupt"
-        ? {
-            status: {
-              type: "requires-action" as const,
-              reason: "interrupt" as const,
-            },
-            metadata: {
-              custom: {
-                agui: {
-                  interrupts: projectedInterrupts.payload.interrupts.map(
-                    (interrupt) => ({ ...interrupt })
-                  ),
-                },
-              },
             },
           }
         : {}),
@@ -308,240 +270,124 @@ function guestMessageId(tokenId: string, sourceId: string) {
     .slice(0, 24)}`
 }
 
-function projectPlanSnapshot(
-  candidate: RunEventOf<typeof RunEventKind.ACTIVITY_SNAPSHOT>
-): RunEventOf<typeof RunEventKind.ACTIVITY_SNAPSHOT> | undefined {
-  const parsed = SessionPlanActivityMessageSchema.safeParse({
-    id: candidate.messageId,
-    role: "activity",
-    activityType: candidate.activityType,
-    content: candidate.content,
-  })
-  return parsed.success
-    ? {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: parsed.data.id,
-        activityType: "PLAN" as const,
-        content: parsed.data.content,
-        replace: candidate.replace,
-      }
-    : undefined
-}
-
-function projectPlanDelta(
-  candidate: RunEventOf<typeof RunEventKind.ACTIVITY_DELTA>
-): RunEventOf<typeof RunEventKind.ACTIVITY_DELTA> | undefined {
-  const patch = candidate.patch
-  if (
-    candidate.activityType !== "PLAN" ||
-    patch.length !== 1 ||
-    typeof patch[0] !== "object" ||
-    patch[0] === null ||
-    Array.isArray(patch[0])
-  )
-    return undefined
-  const operation = patch[0] as Record<string, unknown>
-  if (
-    operation.op !== "replace" ||
-    operation.path !== "/todos" ||
-    Object.keys(operation).some(
-      (key) => key !== "op" && key !== "path" && key !== "value"
-    )
-  )
-    return undefined
-  const parsed = SessionPlanActivityMessageSchema.safeParse({
-    id: candidate.messageId,
-    role: "activity",
-    activityType: "PLAN",
-    content: { todos: operation.value },
-  })
-  return parsed.success
-    ? {
-        type: RunEventKind.ACTIVITY_DELTA,
-        messageId: parsed.data.id,
-        activityType: "PLAN" as const,
-        patch: [
-          {
-            op: "replace",
-            path: "/todos",
-            value: parsed.data.content.todos,
-          },
-        ],
-      }
-    : undefined
-}
-
+/** Passes a provider-held artifact only; guests never receive inline data. */
 function projectArtifact(
-  candidate: RunEventOf<typeof RunEventKind.CUSTOM>
-): RunEventOf<typeof RunEventKind.CUSTOM> | undefined {
+  candidate: TurnEventOf<typeof TurnEventKind.ArtifactPublished>
+): TurnEventOf<typeof TurnEventKind.ArtifactPublished> | undefined {
+  const { id, filename, mimeType, sizeBytes, source } = candidate.artifact
   if (
-    candidate.name !== "aos.artifact" ||
-    typeof candidate.value !== "object" ||
-    candidate.value === null ||
-    Array.isArray(candidate.value)
+    !validIdentifier(id) ||
+    source.type !== "provider" ||
+    source.reference !== id
   )
     return undefined
-  const value = candidate.value as Record<string, unknown>
-  const source = value.source
-  if (
-    typeof value.id !== "string" ||
-    !validIdentifier(value.id) ||
-    typeof value.filename !== "string" ||
-    value.filename.length === 0 ||
-    value.filename.length > 4_096 ||
-    (value.mimeType !== undefined &&
-      (typeof value.mimeType !== "string" || value.mimeType.length > 256)) ||
-    (value.sizeBytes !== undefined &&
-      (!Number.isSafeInteger(value.sizeBytes) ||
-        (value.sizeBytes as number) < 0)) ||
-    typeof source !== "object" ||
-    source === null ||
-    Array.isArray(source) ||
-    (source as Record<string, unknown>).type !== "provider" ||
-    (source as Record<string, unknown>).reference !== value.id
-  )
-    return undefined
-  const id = value.id
   return {
-    type: RunEventKind.CUSTOM,
-    name: "aos.artifact",
-    value: {
+    kind: TurnEventKind.ArtifactPublished,
+    artifact: {
       id,
-      filename: value.filename,
-      ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
-      ...(value.sizeBytes === undefined ? {} : { sizeBytes: value.sizeBytes }),
+      filename,
+      ...(mimeType === undefined ? {} : { mimeType }),
+      ...(sizeBytes === undefined ? {} : { sizeBytes }),
       source: { type: "provider", reference: id },
     },
-  } as const
+  }
 }
 
 function createRunProjector(
   scope: SessionScope,
-  runId: string,
   read: VerifiedGuestAuthorization,
   errors: VerifiedGuestAuthorization,
   now: () => number
 ) {
-  const assistantMessages = new Set<string>()
-  return (candidate: RunEvent): RunEvent | undefined => {
+  return (candidate: TurnEvent): TurnEvent | undefined => {
     if (
       !guestAuthorizationActive(read, now) ||
       !guestAuthorizationActive(errors, now) ||
-      !isRunEvent(candidate)
+      !isTurnEvent(candidate)
     )
       return undefined
-    if (candidate.type === RunEventKind.RUN_STARTED)
-      return { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId }
-    if (candidate.type === RunEventKind.TEXT_MESSAGE_START) {
-      if (
-        candidate.role !== "assistant" ||
-        !validIdentifier(candidate.messageId)
-      )
-        return undefined
-      assistantMessages.add(candidate.messageId)
-      return {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: guestMessageId(read.tokenId, candidate.messageId),
-        role: "assistant",
-      }
-    }
-    if (candidate.type === RunEventKind.TEXT_MESSAGE_CONTENT) {
-      if (!assistantMessages.has(candidate.messageId)) return undefined
-      const projected = projectGuestOutbound(
-        {
-          transport: "ag-ui",
-          agentId: scope.agentId,
-          sessionId: scope.threadId,
-          payload: {
-            type: "message",
-            role: "assistant",
-            text: candidate.delta,
-          },
-        },
-        read
-      )
-      return projected?.payload.type === "message" &&
-        projected.payload.text !== undefined
-        ? {
-            type: RunEventKind.TEXT_MESSAGE_CONTENT,
-            messageId: guestMessageId(read.tokenId, candidate.messageId),
-            delta: projected.payload.text,
-          }
-        : undefined
-    }
-    if (candidate.type === RunEventKind.TEXT_MESSAGE_END) {
-      if (!assistantMessages.delete(candidate.messageId)) return undefined
-      return {
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: guestMessageId(read.tokenId, candidate.messageId),
-      }
-    }
-    if (candidate.type === RunEventKind.RUN_FINISHED) {
-      if (candidate.outcome?.type === "interrupt") {
+    switch (candidate.kind) {
+      case TurnEventKind.TurnStarted:
+        return { kind: TurnEventKind.TurnStarted }
+      case TurnEventKind.TurnEnded:
+        return { kind: TurnEventKind.TurnEnded }
+      case TurnEventKind.MessageChunk: {
+        if (!validIdentifier(candidate.messageId)) return undefined
         const projected = projectGuestOutbound(
           {
-            transport: "ag-ui",
+            transport: "turn",
             agentId: scope.agentId,
             sessionId: scope.threadId,
             payload: {
-              type: "interrupt",
-              interrupts: candidate.outcome.interrupts,
+              type: "message",
+              role: "assistant",
+              text: candidate.text,
             },
           },
           read
         )
-        if (projected?.payload.type !== "interrupt") return undefined
-        return {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId,
-          outcome: {
-            type: "interrupt",
-            interrupts: [...projected.payload.interrupts],
-          },
-        }
+        return projected?.payload.type === "message" &&
+          projected.payload.text !== undefined
+          ? {
+              kind: TurnEventKind.MessageChunk,
+              messageId: guestMessageId(read.tokenId, candidate.messageId),
+              text: projected.payload.text,
+            }
+          : undefined
       }
-      return {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId,
-        outcome: { type: "success" },
-      }
-    }
-    if (candidate.type === RunEventKind.RUN_ERROR) {
-      const error = publicRunError(candidate.code)
-      const projected = projectGuestOutbound(
-        {
-          transport: "error",
-          agentId: scope.agentId,
-          sessionId: scope.threadId,
-          payload: {
-            type: "error",
-            code: error.code,
-            description: guestErrorDescription(error.code),
-            retryable: error.retryable,
+      case TurnEventKind.TurnRequiresAction: {
+        const projected = projectGuestOutbound(
+          {
+            transport: "turn",
+            agentId: scope.agentId,
+            sessionId: scope.threadId,
+            payload: { type: "requests", requests: candidate.requests },
           },
-        },
-        errors
-      )
-      return projected?.payload.type === "error"
-        ? {
-            type: RunEventKind.RUN_ERROR,
-            code: projected.payload.code,
-            message:
-              projected.payload.description ??
-              guestErrorDescription(projected.payload.code),
-            ...(candidate.awaitingStop ? { awaitingStop: true as const } : {}),
-          }
-        : undefined
+          read
+        )
+        return projected?.payload.type === "requests"
+          ? {
+              kind: TurnEventKind.TurnRequiresAction,
+              requests: [...projected.payload.requests],
+            }
+          : undefined
+      }
+      case TurnEventKind.TurnFailed: {
+        const error = publicRunError(candidate.code)
+        const projected = projectGuestOutbound(
+          {
+            transport: "error",
+            agentId: scope.agentId,
+            sessionId: scope.threadId,
+            payload: {
+              type: "error",
+              code: error.code,
+              description: guestErrorDescription(error.code),
+              retryable: error.retryable,
+            },
+          },
+          errors
+        )
+        return projected?.payload.type === "error"
+          ? {
+              kind: TurnEventKind.TurnFailed,
+              code: projected.payload.code,
+              message:
+                projected.payload.description ??
+                guestErrorDescription(projected.payload.code),
+              ...(candidate.awaitingStop
+                ? { awaitingStop: true as const }
+                : {}),
+            }
+          : undefined
+      }
+      case TurnEventKind.PlanUpdated:
+        return { kind: TurnEventKind.PlanUpdated, todos: candidate.todos }
+      case TurnEventKind.ArtifactPublished:
+        return projectArtifact(candidate)
+      default:
+        return undefined
     }
-    if (candidate.type === RunEventKind.ACTIVITY_SNAPSHOT)
-      return projectPlanSnapshot(candidate)
-    if (candidate.type === RunEventKind.ACTIVITY_DELTA)
-      return projectPlanDelta(candidate)
-    if (candidate.type === RunEventKind.CUSTOM)
-      return projectArtifact(candidate)
-    return undefined
   }
 }
 
@@ -549,7 +395,6 @@ export function createGuestRunAccess(
   read: VerifiedGuestAuthorization,
   errors: VerifiedGuestAuthorization,
   scope: SessionScope,
-  runId: string,
   now: () => number,
   subscriberId: string
 ): CoordinatorAccess {
@@ -558,6 +403,6 @@ export function createGuestRunAccess(
     controllerId: guestControllerId(read),
     lane: "guest",
     canControl: true,
-    project: createRunProjector(scope, runId, read, errors, now),
+    project: createRunProjector(scope, read, errors, now),
   }
 }

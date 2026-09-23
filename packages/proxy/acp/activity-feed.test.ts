@@ -13,7 +13,7 @@ const AT = "2026-09-19T10:00:00.000Z"
 type Execution = {
   state: string
   runId?: string
-  interrupts: PendingRequest[]
+  requests: PendingRequest[]
 }
 
 function session(overrides: Partial<Session> = {}): Session {
@@ -61,7 +61,7 @@ function harness(
         return unobserve
       },
       snapshot: ({ sessionId }: { sessionId: string }) =>
-        options.executions?.[sessionId] ?? { state: "idle", interrupts: [] },
+        options.executions?.[sessionId] ?? { state: "idle", requests: [] },
     },
   } as unknown as RuntimeInstance
   const sessionRows = createSessionRows()
@@ -82,11 +82,11 @@ function harness(
 }
 
 function lifecycle(
-  type: "run-started" | "run-finished" | "run-failed",
-  runId: string,
+  kind: "turn-started" | "turn-finished" | "turn-failed",
+  turnId: string,
   occurredAt = AT
 ): ExecutionEvent {
-  return { agentId: AGENT, sessionId: "session-1", runId, occurredAt, type }
+  return { agentId: AGENT, sessionId: "session-1", turnId, occurredAt, kind }
 }
 
 describe("createActivityFeed", () => {
@@ -103,12 +103,12 @@ describe("createActivityFeed", () => {
         "stored-session-2": {
           state: "waiting-for-input",
           runId: "run-2",
-          interrupts: [
-            { id: "approval-1", reason: "approval" },
-            { id: "question-1", reason: "question" },
+          requests: [
+            { requestId: "approval-1", kind: "permission" },
+            { requestId: "question-1", kind: "elicitation" },
           ],
         },
-        "stored-session-3": { state: "idle", runId: "run-3", interrupts: [] },
+        "stored-session-3": { state: "idle", runId: "run-3", requests: [] },
       },
     })
 
@@ -155,24 +155,24 @@ describe("createActivityFeed", () => {
     const seen: AosActivityNotification[] = []
     const unsubscribe = feed.subscribe((event) => seen.push(event))
 
-    deliver(lifecycle("run-started", "run-1"))
+    deliver(lifecycle("turn-started", "run-1"))
     deliver({
       agentId: AGENT,
       sessionId: "session-1",
-      runId: "run-1",
+      turnId: "run-1",
       occurredAt: AT,
-      type: "attention-requested",
-      request: { id: "approval-1", reason: "approval" },
+      kind: "attention-requested",
+      request: { requestId: "approval-1", kind: "permission" },
     })
     deliver({
       agentId: AGENT,
       sessionId: "session-1",
-      runId: "run-1",
+      turnId: "run-1",
       occurredAt: AT,
-      type: "attention-resolved",
-      interruptId: "approval-1",
+      kind: "attention-resolved",
+      requestId: "approval-1",
     })
-    deliver(lifecycle("run-finished", "run-1"))
+    deliver(lifecycle("turn-finished", "run-1"))
     sessionRows.rememberList([session({ unread: false })])
     sessionRows.rememberList([session({ title: "Renamed", unread: false })])
 
@@ -206,7 +206,7 @@ describe("createActivityFeed", () => {
     })
 
     for (const runId of ["run-1", "run-2", "run-3", "run-4"])
-      deliver(lifecycle("run-started", runId, new Date(clock).toISOString()))
+      deliver(lifecycle("turn-started", runId, new Date(clock).toISOString()))
 
     expect(
       feed
@@ -215,7 +215,7 @@ describe("createActivityFeed", () => {
     ).toEqual(["run-2", "run-3", "run-4"])
 
     clock += 20_000
-    deliver(lifecycle("run-started", "run-5", new Date(clock).toISOString()))
+    deliver(lifecycle("turn-started", "run-5", new Date(clock).toISOString()))
 
     expect(
       feed
@@ -249,7 +249,7 @@ describe("createActivityFeed", () => {
     feed.subscribe((event) => seen.push(event))
 
     feed.close()
-    deliver(lifecycle("run-started", "run-1"))
+    deliver(lifecycle("turn-started", "run-1"))
     sessionRows.rememberList([session({ unread: false })])
 
     expect(unobserve).toHaveBeenCalledTimes(1)

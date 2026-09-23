@@ -2,6 +2,8 @@ import { z } from "zod"
 
 import {
   AgentCatalogResponseSchema,
+  ArtifactDescriptorSchema,
+  type ArtifactDescriptor,
   RunSteerResponseSchema,
   SessionContextResponseSchema,
   SessionStatusSchema,
@@ -371,30 +373,9 @@ export const AosElicitationMetaSchema = z.strictObject({
 // extension notifications (agent → client)
 // ---------------------------------------------------------------------------
 
-/**
- * One published artifact, as every producer emits it and the browser accepts
- * it: only the identity, the name, and the source are guaranteed. A publishing
- * tool reports a media type and a size when it knows them.
- */
-export const AosArtifactDescriptorSchema = z.strictObject({
-  id: IdentifierSchema,
-  filename: z.string().min(1).max(4096),
-  mimeType: z.string().min(1).max(256).optional(),
-  sizeBytes: z.number().int().min(0).optional(),
-  source: z.discriminatedUnion("type", [
-    z.strictObject({
-      type: z.literal("inline"),
-      encoding: z.enum(["utf8", "base64"]),
-      data: z.string(),
-    }),
-    z.strictObject({ type: z.literal("url"), url: z.string().url() }),
-    z.strictObject({
-      type: z.literal("provider"),
-      reference: z.string().min(1),
-    }),
-  ]),
-})
-export type AosArtifactDescriptor = z.infer<typeof AosArtifactDescriptorSchema>
+/** One published artifact; `ArtifactDescriptorSchema` in `./index` defines it. */
+export const AosArtifactDescriptorSchema = ArtifactDescriptorSchema
+export type AosArtifactDescriptor = ArtifactDescriptor
 
 /** `_aos/artifact` */
 export const AosArtifactNotificationSchema = z.strictObject({

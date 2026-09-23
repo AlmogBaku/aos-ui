@@ -32,7 +32,13 @@ import {
   AosSessionResumeResponseMetaSchema,
 } from "../../protocol/acp"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
-import { RunEventKind, type RunEvent } from "../core/events"
+import {
+  PendingRequestKind,
+  PromptTurnInputSchema,
+  RepliesTurnInputSchema,
+  TurnEventKind,
+  type TurnEvent,
+} from "../core/events"
 import type {
   RuntimeInstance,
   ServerRunEngine,
@@ -216,8 +222,8 @@ const HISTORY: SessionHistoryResponse = {
 
 /** One provider run segment the test drives event by event. */
 class EventSource implements ServerRunHandle {
-  readonly #values: RunEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
+  readonly #values: TurnEvent[] = []
+  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
@@ -230,21 +236,21 @@ class EventSource implements ServerRunHandle {
     })
   }
 
-  readonly events: AsyncIterable<RunEvent> = {
+  readonly events: AsyncIterable<TurnEvent> = {
     [Symbol.asyncIterator]: () => ({
       next: () => {
         const value = this.#values.shift()
         if (value) return Promise.resolve({ done: false, value })
         if (this.#closed)
           return Promise.resolve({ done: true, value: undefined })
-        return new Promise<IteratorResult<RunEvent>>((resolve) =>
+        return new Promise<IteratorResult<TurnEvent>>((resolve) =>
           this.#waiters.push(resolve)
         )
       },
     }),
   }
 
-  emit(event: RunEvent) {
+  emit(event: TurnEvent) {
     const waiter = this.#waiters.shift()
     if (waiter) waiter({ done: false, value: event })
     else this.#values.push(event)
@@ -334,22 +340,6 @@ const PatchSchema = z.object({
   title: z.string().optional(),
   archived: z.boolean().optional(),
   unread: z.boolean().optional(),
-})
-
-const TurnInputSchema = z.object({
-  runId: z.string(),
-  threadId: z.string(),
-  messages: z.array(z.unknown()),
-  resume: z
-    .array(
-      z.object({
-        interruptId: z.string(),
-        status: z.string(),
-        // A cancelled reply answers with no payload at all.
-        payload: z.unknown().optional(),
-      })
-    )
-    .optional(),
 })
 
 type HarnessOptions = {
@@ -656,15 +646,9 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
   await test.coordinator.start(
     SCOPE,
     {
-      threadId: SESSION,
-      runId: "run-live",
-      state: {},
-      messages: [
-        { id: "message-user", role: "user", content: "Summarize the notes" },
-      ],
-      tools: [],
-      context: [],
-      forwardedProps: {},
+      turnId: "run-live",
+      messageId: "message-user",
+      prompt: "Summarize the notes",
     },
     {
       subscriberId: "rest",
@@ -675,7 +659,7 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
   )
   const source = test.sources[0]
   if (!source) throw new Error("The engine opened no run segment")
-  source.emit(runStarted("run-live", SESSION))
+  source.emit(turnStarted())
   await vi.waitFor(() => expect(test.coordinator.state(SCOPE)).toBe("running"))
   for (const [index, text] of corrections.entries())
     await test.coordinator.steer(
@@ -706,9 +690,9 @@ function correctedHistory(text: string): SessionHistoryResponse {
 /** Waits for the live delta that follows the replay, so a drop is observable. */
 async function drainedReplay(test: Harness, source: EventSource) {
   source.emit({
-    type: RunEventKind.TEXT_MESSAGE_CONTENT,
+    kind: TurnEventKind.MessageChunk,
     messageId: "assistant-live",
-    delta: "Live",
+    text: "Live",
   })
   await test.recorder.wait((entry) =>
     JSON.stringify(entry.params).includes("Live")
@@ -721,17 +705,12 @@ function steerAccepted(recorder: Recorder) {
     .map(({ params }) => params)
 }
 
-function runStarted(runId: string, threadId: string): RunEvent {
-  return { type: RunEventKind.RUN_STARTED, threadId, runId }
+function turnStarted(): TurnEvent {
+  return { kind: TurnEventKind.TurnStarted }
 }
 
-function runFinished(runId: string, threadId: string): RunEvent {
-  return {
-    type: RunEventKind.RUN_FINISHED,
-    threadId,
-    runId,
-    outcome: { type: "success" },
-  }
+function turnEnded(): TurnEvent {
+  return { kind: TurnEventKind.TurnEnded }
 }
 
 /**
@@ -739,61 +718,52 @@ function runFinished(runId: string, threadId: string): RunEvent {
  * schemas are a single choice, a multi-select, and a free-text question. An
  * adapter that knows which tool call is asking names it.
  */
-function runQuestioned(
-  runId: string,
-  threadId: string,
-  toolCallId?: string
-): RunEvent {
+function turnQuestioned(toolCallId?: string): TurnEvent {
   return {
-    type: RunEventKind.RUN_FINISHED,
-    threadId,
-    runId,
-    outcome: {
-      type: "interrupt",
-      interrupts: [
-        {
-          id: CLARIFY,
-          reason: "question",
-          message: "3 questions require answers",
-          ...(toolCallId === undefined ? {} : { toolCallId }),
-          responseSchema: {
-            type: "object",
-            properties: {
-              answers: {
-                type: "array",
-                prefixItems: [
-                  {
-                    type: "array",
-                    description: "Which environment?",
-                    items: { type: "string", enum: ["staging", "production"] },
-                    minItems: 0,
-                    maxItems: 1,
-                  },
-                  {
-                    type: "array",
-                    description: "Which services?",
-                    items: { type: "string", enum: ["api", "worker", "web"] },
-                    minItems: 0,
-                    maxItems: 3,
-                  },
-                  {
-                    type: "array",
-                    description: "Anything else to watch?",
-                    items: { type: "string", maxLength: 4096 },
-                    minItems: 0,
-                    maxItems: 64,
-                  },
-                ],
-                minItems: 3,
-                maxItems: 3,
-              },
+    kind: TurnEventKind.TurnRequiresAction,
+    requests: [
+      {
+        requestId: CLARIFY,
+        kind: PendingRequestKind.Elicitation,
+        message: "3 questions require answers",
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+        responseSchema: {
+          type: "object",
+          properties: {
+            answers: {
+              type: "array",
+              prefixItems: [
+                {
+                  type: "array",
+                  description: "Which environment?",
+                  items: { type: "string", enum: ["staging", "production"] },
+                  minItems: 0,
+                  maxItems: 1,
+                },
+                {
+                  type: "array",
+                  description: "Which services?",
+                  items: { type: "string", enum: ["api", "worker", "web"] },
+                  minItems: 0,
+                  maxItems: 3,
+                },
+                {
+                  type: "array",
+                  description: "Anything else to watch?",
+                  items: { type: "string", maxLength: 4096 },
+                  minItems: 0,
+                  maxItems: 64,
+                },
+              ],
+              minItems: 3,
+              maxItems: 3,
             },
-            required: ["answers"],
-            additionalProperties: false,
           },
+          required: ["answers"],
+          additionalProperties: false,
         },
-      ],
-    },
+      },
+    ],
   }
 }
 
@@ -853,27 +823,18 @@ describe("operator ACP lane", () => {
     const test = await harness()
     const { source, messageId } = await runningTurn(test, "Summarize")
 
-    source.emit(runStarted("run-1", CREATED))
+    source.emit(turnStarted())
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_START,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      role: "assistant",
+      text: "Hel",
     })
     source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      delta: "Hel",
+      text: "lo",
     })
-    source.emit({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
-      messageId: "assistant-1",
-      delta: "lo",
-    })
-    source.emit({
-      type: RunEventKind.TEXT_MESSAGE_END,
-      messageId: "assistant-1",
-    })
-    source.emit(runFinished("run-1", CREATED))
+    source.emit(turnEnded())
 
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("end_turn")
@@ -927,14 +888,14 @@ describe("operator ACP lane", () => {
       JSON.stringify(entry.params).includes("usage_update")
     )
 
-    source.emit(runStarted("run-1", CREATED))
+    source.emit(turnStarted())
     for (const delta of ["one", "two", "three", "four"])
       source.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta,
+        text: delta,
       })
-    source.emit(runFinished("run-1", CREATED))
+    source.emit(turnEnded())
 
     const invalidated = await test.recorder.wait(
       (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
@@ -957,13 +918,10 @@ describe("operator ACP lane", () => {
       { id: "todo-2", label: "Draft the summary", status: "active" as const },
     ]
 
-    source.emit(runStarted("run-1", CREATED))
+    source.emit(turnStarted())
     source.emit({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: `aos-plan:${CREATED}`,
-      activityType: "PLAN",
-      content: { todos },
-      replace: true,
+      kind: TurnEventKind.PlanUpdated,
+      todos,
     })
 
     const planned = await test.recorder.wait((entry) =>
@@ -985,26 +943,21 @@ describe("operator ACP lane", () => {
   it("requires action for an interrupt and resumes the run with the answer", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Delete it")
-    const admitted = TurnInputSchema.parse(test.start.mock.calls[0]?.[1])
+    const admitted = PromptTurnInputSchema.parse(test.start.mock.calls[0]?.[1])
 
-    source.emit(runStarted("run-1", CREATED))
+    source.emit(turnStarted())
     source.emit({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: CREATED,
-      runId: "run-1",
-      outcome: {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: "int-1",
-            reason: "approval",
-            message: "Run rm?",
-            toolCallId: "tool-1",
-            // Adapters carry the approval choices as the response schema's enum.
-            responseSchema: { type: "string", enum: ["once", "deny"] },
-          },
-        ],
-      },
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "int-1",
+          kind: PendingRequestKind.Permission,
+          message: "Run rm?",
+          toolCallId: "tool-1",
+          // Adapters carry the approval choices as the response schema's enum.
+          responseSchema: { type: "string", enum: ["once", "deny"] },
+        },
+      ],
     })
     source.finish()
 
@@ -1030,13 +983,12 @@ describe("operator ACP lane", () => {
       AosPermissionMetaSchema.parse(aosMetaOf(asked.params)).interruptId
     ).toBe("int-1")
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    const resumed = TurnInputSchema.parse(test.start.mock.calls[1]?.[1])
-    expect(resumed.messages).toEqual([])
-    expect(resumed.resume).toMatchObject([
-      { interruptId: "int-1", status: "resolved" },
+    const resumed = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(resumed.replies).toMatchObject([
+      { requestId: "int-1", status: "resolved" },
     ])
-    expect(resumed.resume?.[0]?.payload).toBeDefined()
-    expect(resumed.runId).not.toBe(admitted.runId)
+    expect(resumed.replies[0]?.payload).toBeDefined()
+    expect(resumed.turnId).not.toBe(admitted.turnId)
     test.close()
   })
 
@@ -1053,8 +1005,8 @@ describe("operator ACP lane", () => {
     })
     const { source } = await runningTurn(test, "Clarify it")
 
-    source.emit(runStarted("run-1", CREATED))
-    source.emit(runQuestioned("run-1", CREATED))
+    source.emit(turnStarted())
+    source.emit(turnQuestioned())
     source.finish()
 
     const asked = await askedElicitation(test)
@@ -1110,10 +1062,10 @@ describe("operator ACP lane", () => {
 
     // Every answer resumes the run, including the choice no question offered.
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    const resumed = TurnInputSchema.parse(test.start.mock.calls[1]?.[1])
-    expect(resumed.resume).toEqual([
+    const resumed = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(resumed.replies).toEqual([
       {
-        interruptId: CLARIFY,
+        requestId: CLARIFY,
         status: "resolved",
         payload: {
           answers: [
@@ -1136,8 +1088,8 @@ describe("operator ACP lane", () => {
     })
     const { source } = await runningTurn(test, "Clarify it")
 
-    source.emit(runStarted("run-1", CREATED))
-    source.emit(runQuestioned("run-1", CREATED, "call-9"))
+    source.emit(turnStarted())
+    source.emit(turnQuestioned("call-9"))
     source.finish()
 
     const recorded = await test.recorder.wait((entry) =>
@@ -1168,17 +1120,16 @@ describe("operator ACP lane", () => {
     })
     const { source } = await runningTurn(test, "Clarify it")
 
-    source.emit(runStarted("run-1", CREATED))
-    source.emit(runQuestioned("run-1", CREATED))
+    source.emit(turnStarted())
+    source.emit(turnQuestioned())
     source.finish()
 
     await askedElicitation(test)
 
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    const resumed = TurnInputSchema.parse(test.start.mock.calls[1]?.[1])
-    expect(resumed.messages).toEqual([])
-    expect(resumed.resume).toEqual([
-      { interruptId: CLARIFY, status: "cancelled" },
+    const resumed = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(resumed.replies).toEqual([
+      { requestId: CLARIFY, status: "cancelled" },
     ])
     test.close()
   })
@@ -1186,7 +1137,7 @@ describe("operator ACP lane", () => {
   it("stops a running turn at the provider and settles it as cancelled", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Long job")
-    source.emit(runStarted("run-1", CREATED))
+    source.emit(turnStarted())
     await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes('"state":"running"')
     )
@@ -1196,7 +1147,7 @@ describe("operator ACP lane", () => {
     })
 
     await vi.waitFor(() => expect(source.stop).toHaveBeenCalledTimes(1))
-    source.emit(runFinished("run-1", CREATED))
+    source.emit(turnEnded())
     const settled = await test.recorder.wait((entry) =>
       JSON.stringify(entry.params).includes("cancelled")
     )

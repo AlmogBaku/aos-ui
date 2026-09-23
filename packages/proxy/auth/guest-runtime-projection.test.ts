@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { z } from "zod"
 
 import { INTERACTION_PROTOCOL } from "../../protocol"
-import { RunEventKind, RunEventSchema } from "../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  TurnEventSchema,
+  type TurnEvent,
+} from "../core/events"
 import { guestErrorDescription } from "./guest-projection"
 import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
@@ -39,18 +43,17 @@ const authorization: VerifiedGuestAuthorization = {
   operation: "messages:read",
 }
 
-/** A runtime's wire shape, normalized the way the coordinator normalizes it. */
-const project = (event: z.input<typeof RunEventSchema>) =>
+/** One turn event, validated the way the projector validates it. */
+const project = (event: TurnEvent) =>
   createGuestRunAccess(
     authorization,
     { ...authorization, operation: "errors:read" },
     { agentId: "agent", sessionId: "stored", threadId: "ref" },
-    "public-run",
     () => 10_000,
     "subscriber"
-  ).project(RunEventSchema.parse(event))
+  ).project(TurnEventSchema.parse(event))
 
-describe("guest AG-UI projection", () => {
+describe("guest turn projection", () => {
   it("returns normalized friendly HTTP errors", async () => {
     const response = projectGuestError(
       { ...authorization, operation: "errors:read" },
@@ -442,66 +445,100 @@ describe("guest AG-UI projection", () => {
       ])
   })
 
-  it("preserves only normalized PLAN activity snapshots and deltas", () => {
-    const todos = [{ id: "todo-1", label: "Review", status: "active" }]
+  it("drops turn usage and the composer prefill", () => {
+    expect(
+      project({
+        kind: TurnEventKind.TurnEnded,
+        usage: [{ provider: "private", totalTokens: 12 }],
+        composerPrefill: "/private",
+      })
+    ).toEqual({ kind: TurnEventKind.TurnEnded })
+    expect(project({ kind: TurnEventKind.TurnStarted })).toEqual({
+      kind: TurnEventKind.TurnStarted,
+    })
+  })
 
-    expect(
-      project({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "plan",
-        activityType: "PLAN",
-        content: { todos },
-        replace: true,
-        rawEvent: { native: "secret" },
-      })
-    ).toEqual({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: "plan",
-      activityType: "PLAN",
-      content: { todos },
-      replace: true,
+  it("renames assistant prose and drops reasoning and tool calls", () => {
+    const projected = project({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "Hello",
     })
-    expect(
-      project({
-        type: RunEventKind.ACTIVITY_DELTA,
-        messageId: "plan",
-        activityType: "PLAN",
-        patch: [{ op: "replace", path: "/todos", value: todos }],
-      })
-    ).toEqual({
-      type: RunEventKind.ACTIVITY_DELTA,
-      messageId: "plan",
-      activityType: "PLAN",
-      patch: [{ op: "replace", path: "/todos", value: todos }],
+
+    expect(projected).toMatchObject({
+      kind: TurnEventKind.MessageChunk,
+      text: "Hello",
     })
+    expect(projected).not.toMatchObject({ messageId: "assistant-1" })
     expect(
       project({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "secret",
-        activityType: "TRACE",
-        content: { providerPath: "/private" },
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "assistant-1",
+        text: "private reasoning",
+      })
+    ).toBeUndefined()
+    expect(
+      project({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "tool-1",
+        title: "terminal",
       })
     ).toBeUndefined()
   })
 
-  it("preserves safe artifact data and drops provider fields and other custom events", () => {
+  it("projects pending requests without approval internals", () => {
     expect(
       project({
-        type: RunEventKind.CUSTOM,
-        name: "aos.artifact",
-        value: {
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          {
+            requestId: "approval-1",
+            kind: PendingRequestKind.Permission,
+            message: "Run the command?",
+            responseSchema: {
+              type: "string",
+              enum: ["once", "always", "deny"],
+            },
+          },
+        ],
+      })
+    ).toEqual({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "approval-1",
+          kind: PendingRequestKind.Permission,
+          message: "Run the command?",
+          responseSchema: { type: "string", enum: ["once", "deny"] },
+        },
+      ],
+    })
+  })
+
+  it("preserves the normalized Todo list", () => {
+    const todos = [{ id: "todo-1", label: "Review", status: "active" as const }]
+
+    expect(project({ kind: TurnEventKind.PlanUpdated, todos })).toEqual({
+      kind: TurnEventKind.PlanUpdated,
+      todos,
+    })
+  })
+
+  it("preserves a provider-held artifact and drops inline data", () => {
+    expect(
+      project({
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: {
           id: "report-1",
           filename: "report.md",
           mimeType: "text/markdown",
           sizeBytes: 42,
           source: { type: "provider", reference: "report-1" },
-          providerPath: "/private/report.md",
         },
       })
     ).toEqual({
-      type: RunEventKind.CUSTOM,
-      name: "aos.artifact",
-      value: {
+      kind: TurnEventKind.ArtifactPublished,
+      artifact: {
         id: "report-1",
         filename: "report.md",
         mimeType: "text/markdown",
@@ -510,7 +547,24 @@ describe("guest AG-UI projection", () => {
       },
     })
     expect(
-      project({ type: RunEventKind.CUSTOM, name: "hermes.native", value: {} })
+      project({
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: {
+          id: "report-2",
+          filename: "report.md",
+          source: { type: "inline", encoding: "utf8", data: "private" },
+        },
+      })
+    ).toBeUndefined()
+    expect(
+      project({
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: {
+          id: "report-3",
+          filename: "report.md",
+          source: { type: "provider", reference: "/private/report.md" },
+        },
+      })
     ).toBeUndefined()
   })
 
@@ -535,13 +589,13 @@ describe("guest AG-UI projection", () => {
     ["toString", "request_failed"],
   ])("projects the run error code %s as %s", (code, expected) => {
     const projected = project({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code,
       message: "Hermes said something private about /private/path",
     })
 
     expect(projected).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: expected,
     })
     expect(String((projected as { message?: string })?.message)).not.toContain(
@@ -551,14 +605,14 @@ describe("guest AG-UI projection", () => {
 
   it("never projects the provider detail of a run failure to a guest", () => {
     const projected = project({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_PROVIDER_RETRYABLE_FAILURE",
       message:
         "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
     })
 
     expect(projected).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "temporarily_unavailable",
       message: guestErrorDescription("temporarily_unavailable"),
     })
@@ -568,13 +622,13 @@ describe("guest AG-UI projection", () => {
   it("keeps a guest run whose failure awaits Stop stoppable", () => {
     expect(
       project({
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         code: "AOS_INTERACTION_LOST",
         message: "Hermes lost the question",
         awaitingStop: true,
       })
     ).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "request_failed",
       message: guestErrorDescription("request_failed"),
       awaitingStop: true,

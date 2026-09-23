@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
 import { AOS_META_KEY } from "../../../protocol/acp"
-import { RunEventKind, type RunEvent } from "../../core/events"
+import { TurnEventKind, type TurnEvent } from "../../core/events"
 import {
   initialTranslateState,
   type AcpOutbound,
@@ -11,7 +11,7 @@ import {
   type TranslateState,
 } from "../types"
 import { translateHistory } from "./history"
-import { translateRunEvent } from "./run-events"
+import { translateTurnEvent } from "./turn-events"
 
 /**
  * One turn, watched live and then replayed from the transcript, must reach the
@@ -38,76 +38,66 @@ const liveContext: TranslateContext = {
   now: () => Date.parse(FINISHED_AT),
 }
 
-const liveEvents: RunEvent[] = [
-  { type: RunEventKind.RUN_STARTED, threadId: "session-1", runId: "run-1" },
+const liveEvents: TurnEvent[] = [
+  { kind: TurnEventKind.TurnStarted },
   {
-    type: RunEventKind.REASONING_MESSAGE_START,
-    messageId: `${ASSISTANT}:reasoning`,
-    role: "reasoning",
-  },
-  {
-    type: RunEventKind.REASONING_MESSAGE_CONTENT,
-    messageId: `${ASSISTANT}:reasoning`,
-    delta: "Read the file ",
-  },
-  {
-    type: RunEventKind.REASONING_MESSAGE_CONTENT,
-    messageId: `${ASSISTANT}:reasoning`,
-    delta: "before writing it.",
-  },
-  {
-    type: RunEventKind.REASONING_MESSAGE_END,
-    messageId: `${ASSISTANT}:reasoning`,
-  },
-  {
-    type: RunEventKind.TEXT_MESSAGE_START,
+    kind: TurnEventKind.ThoughtChunk,
     messageId: ASSISTANT,
-    role: "assistant",
+    text: "Read the file ",
   },
   {
-    type: RunEventKind.TEXT_MESSAGE_CONTENT,
+    kind: TurnEventKind.ThoughtChunk,
     messageId: ASSISTANT,
-    delta: "Reading it now.",
+    text: "before writing it.",
   },
   {
-    type: RunEventKind.TOOL_CALL_START,
+    kind: TurnEventKind.MessageChunk,
+    messageId: ASSISTANT,
+    text: "Reading it now.",
+  },
+  {
+    kind: TurnEventKind.ToolCallStarted,
     toolCallId: "c1",
-    toolCallName: "read_file",
+    title: "read_file",
     parentMessageId: ASSISTANT,
   },
-  { type: RunEventKind.TOOL_CALL_ARGS, toolCallId: "c1", delta: READ_ARGS },
-  { type: RunEventKind.TOOL_CALL_END, toolCallId: "c1" },
   {
-    type: RunEventKind.TOOL_CALL_RESULT,
-    messageId: "tool-1",
+    kind: TurnEventKind.ToolCallInputChunk,
     toolCallId: "c1",
-    content: READ_RESULT,
+    delta: READ_ARGS,
+  },
+  { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
+  {
+    kind: TurnEventKind.ToolCallFinished,
+    toolCallId: "c1",
+    output: READ_RESULT,
+    failed: false,
   },
   {
-    type: RunEventKind.REASONING_MESSAGE_CONTENT,
-    messageId: `${ASSISTANT}:reasoning`,
-    delta: "Now write it.",
+    kind: TurnEventKind.ThoughtChunk,
+    messageId: ASSISTANT,
+    text: "Now write it.",
   },
   {
-    type: RunEventKind.TOOL_CALL_START,
+    kind: TurnEventKind.ToolCallStarted,
     toolCallId: "c2",
-    toolCallName: "write_file",
+    title: "write_file",
     parentMessageId: ASSISTANT,
   },
-  { type: RunEventKind.TOOL_CALL_ARGS, toolCallId: "c2", delta: WRITE_ARGS },
-  { type: RunEventKind.TOOL_CALL_END, toolCallId: "c2" },
   {
-    type: RunEventKind.TOOL_CALL_RESULT,
-    messageId: "tool-2",
+    kind: TurnEventKind.ToolCallInputChunk,
     toolCallId: "c2",
-    content: WRITE_RESULT,
+    delta: WRITE_ARGS,
   },
+  { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c2" },
   {
-    type: RunEventKind.TEXT_MESSAGE_CONTENT,
-    messageId: ASSISTANT,
-    delta: "Wrote it.",
+    kind: TurnEventKind.ToolCallFinished,
+    toolCallId: "c2",
+    output: WRITE_RESULT,
+    failed: false,
   },
-  { type: RunEventKind.RUN_FINISHED, threadId: "session-1", runId: "run-1" },
+  { kind: TurnEventKind.MessageChunk, messageId: ASSISTANT, text: "Wrote it." },
+  { kind: TurnEventKind.TurnEnded },
 ]
 
 /** The same turn as the provider stored it, one part per thing it produced. */
@@ -249,7 +239,7 @@ function live(): AcpOutbound[] {
   let state: TranslateState = initialTranslateState
   const outbound: AcpOutbound[] = []
   for (const event of liveEvents) {
-    const step = translateRunEvent(state, event, liveContext)
+    const step = translateTurnEvent(state, event, liveContext)
     state = step.state
     outbound.push(...step.outbound)
   }

@@ -49,21 +49,25 @@ function row(overrides: Partial<SessionRow> = {}): SessionRow {
 }
 
 function occurred(
-  type: ExecutionEvent["type"],
+  kind: ExecutionEvent["kind"],
   sessionId = SESSION,
   occurredAtMs = START
 ): ExecutionEvent {
   const base = {
     agentId: AGENT,
     sessionId,
-    runId: "run-1",
+    turnId: "run-1",
     occurredAt: new Date(occurredAtMs).toISOString(),
   }
-  if (type === "attention-requested")
-    return { ...base, type, request: { id: "request-1", reason: "approval" } }
-  if (type === "attention-resolved")
-    return { ...base, type, interruptId: "request-1" }
-  return { ...base, type }
+  if (kind === "attention-requested")
+    return {
+      ...base,
+      kind,
+      request: { requestId: "request-1", kind: "permission" },
+    }
+  if (kind === "attention-resolved")
+    return { ...base, kind, requestId: "request-1" }
+  return { ...base, kind }
 }
 
 type HarnessOptions = {
@@ -195,8 +199,8 @@ describe("push dispatcher", () => {
   it("sends a finished run to every device at the slower cadence", async () => {
     const test = harness({ devices: [device("device-1"), device("device-2")] })
 
-    test.publish(occurred("run-finished", "session-1"))
-    test.publish(occurred("run-finished", "session-2"))
+    test.publish(occurred("turn-finished", "session-1"))
+    test.publish(occurred("turn-finished", "session-2"))
     test.clock.advance(COALESCE_WINDOW_MS.input)
     expect(test.send).not.toHaveBeenCalled()
 
@@ -244,7 +248,7 @@ describe("push dispatcher", () => {
     test.rows.markRead(AGENT, SESSION)
 
     test.clock.advance(1_000)
-    test.publish(occurred("run-finished", SESSION, START + 1_000))
+    test.publish(occurred("turn-finished", SESSION, START + 1_000))
     test.clock.advance(COALESCE_WINDOW_MS.completion)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
@@ -263,7 +267,7 @@ describe("push dispatcher", () => {
     test.rows.markRead(AGENT, SESSION)
 
     test.clock.advance(1_000)
-    test.publish(occurred("run-finished", SESSION, START + 1_000))
+    test.publish(occurred("turn-finished", SESSION, START + 1_000))
     test.clock.advance(1_000)
     test.rows.rememberList([row({ unread: false })])
     test.clock.advance(COALESCE_WINDOW_MS.completion)
@@ -473,7 +477,7 @@ describe("push dispatcher", () => {
           : { result: "sent" },
     })
 
-    test.publish(occurred("run-failed"))
+    test.publish(occurred("turn-failed"))
     test.clock.advance(COALESCE_WINDOW_MS.failure)
 
     await vi.waitFor(() =>
@@ -516,7 +520,7 @@ describe("push dispatcher", () => {
   it("ignores the events no device is notified about", async () => {
     const test = harness()
 
-    test.publish(occurred("run-started"))
+    test.publish(occurred("turn-started"))
     test.publish(occurred("attention-resolved"))
     test.clock.advance(60_000)
 

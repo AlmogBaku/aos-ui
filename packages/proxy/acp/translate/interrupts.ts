@@ -11,7 +11,11 @@ import {
   AOS_PERMISSION_KIND_SESSION,
   type AosQuestion,
 } from "../../../protocol/acp"
-import type { PendingRequest } from "../../core/events"
+import {
+  PendingRequestKind,
+  ReplyStatus,
+  type PendingRequest,
+} from "../../core/events"
 import type {
   AcpOutbound,
   Lane,
@@ -20,9 +24,6 @@ import type {
   ReplyFromPermission,
 } from "../types"
 import { update } from "./updates"
-
-/** All three adapters say `approval`; the browser also accepted `confirmation`. */
-const APPROVAL_REASONS = new Set(["approval", "confirmation"])
 
 /** The approval choices the adapters normalize to, as ACP option kinds. */
 const PERMISSION_KINDS = new Map([
@@ -117,7 +118,7 @@ function permissionOutbound(
       : (words ?? "Permission required")
   return {
     kind: "request-permission",
-    interruptId: request.id,
+    requestId: request.requestId,
     request: {
       title,
       ...(words && words !== title ? { description: words } : {}),
@@ -136,7 +137,7 @@ function permissionOutbound(
       options: permissionOptions(request, lane),
       _meta: {
         [AOS_META_KEY]: {
-          interruptId: request.id,
+          interruptId: request.requestId,
           ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
           ...(request.message
             ? { message: request.message.slice(0, 4_096) }
@@ -260,13 +261,13 @@ function elicitationOutbound(
     },
     _meta: {
       [AOS_META_KEY]: {
-        interruptId: request.id,
+        interruptId: request.requestId,
         ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
         questions,
       },
     },
   }
-  return { kind: "elicitation", interruptId: request.id, request: form }
+  return { kind: "elicitation", requestId: request.requestId, request: form }
 }
 
 function answerValues(value: unknown): string[] {
@@ -281,7 +282,7 @@ function answerValues(value: unknown): string[] {
 }
 
 export const pendingRequestToOutbound = ((request, lane) =>
-  APPROVAL_REASONS.has(request.reason)
+  request.kind === PendingRequestKind.Permission
     ? permissionOutbound(request, lane)
     : elicitationOutbound(request, lane)) satisfies PendingRequestToOutbound
 
@@ -293,8 +294,12 @@ export const replyFromPermission = ((request, response) => {
       ? outcome.optionId
       : undefined
   return optionId === undefined
-    ? { interruptId: request.id, status: "cancelled" }
-    : { interruptId: request.id, status: "resolved", payload: optionId }
+    ? { requestId: request.requestId, status: ReplyStatus.Cancelled }
+    : {
+        requestId: request.requestId,
+        status: ReplyStatus.Resolved,
+        payload: optionId,
+      }
 }) satisfies ReplyFromPermission
 
 /**
@@ -312,14 +317,18 @@ function nativeAnswer(lane: Lane, question: NativeQuestion, answer: string) {
 
 export const replyFromElicitation = ((request, response, lane) => {
   if (response.action !== "accept")
-    return { interruptId: request.id, status: "cancelled" }
+    return { requestId: request.requestId, status: ReplyStatus.Cancelled }
   const content = record(response.content)
   const answers = nativeQuestionsOf(request).map((question, index) =>
     answerValues(content?.[`q${index}`]).map((answer) =>
       nativeAnswer(lane, question, answer)
     )
   )
-  return { interruptId: request.id, status: "resolved", payload: { answers } }
+  return {
+    requestId: request.requestId,
+    status: ReplyStatus.Resolved,
+    payload: { answers },
+  }
 }) satisfies ReplyFromElicitation
 
 /**

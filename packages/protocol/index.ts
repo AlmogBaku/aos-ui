@@ -640,6 +640,31 @@ export type SessionContextResponse = z.infer<
   typeof SessionContextResponseSchema
 >
 
+/**
+ * One published artifact, as every producer emits it and the browser accepts
+ * it: only the identity, the name, and the source are guaranteed. A publishing
+ * tool reports a media type and a size when it knows them.
+ */
+export const ArtifactDescriptorSchema = z.strictObject({
+  id: IdentifierSchema,
+  filename: z.string().min(1).max(4096),
+  mimeType: z.string().min(1).max(256).optional(),
+  sizeBytes: z.number().int().min(0).optional(),
+  source: z.discriminatedUnion("type", [
+    z.strictObject({
+      type: z.literal("inline"),
+      encoding: z.enum(["utf8", "base64"]),
+      data: z.string(),
+    }),
+    z.strictObject({ type: z.literal("url"), url: z.string().url() }),
+    z.strictObject({
+      type: z.literal("provider"),
+      reference: z.string().min(1),
+    }),
+  ]),
+})
+export type ArtifactDescriptor = z.infer<typeof ArtifactDescriptorSchema>
+
 export const SessionTodosResponseSchema = z.strictObject({
   todos: z.array(TodoSchema).max(10_000),
 })

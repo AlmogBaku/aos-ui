@@ -1,12 +1,15 @@
 import {
-  RunEventKind,
-  isAwaitingStopError,
-  isRedialableError,
+  TurnEventKind,
+  isAwaitingStopFailure,
+  isRedialableFailure,
+  isRepliesTurn,
   pendingRequestsOf,
   type ExecutionEvent,
   type PendingRequest,
-  type RunEvent,
-  type RunEventOf,
+  type RepliesTurnInput,
+  type TurnEvent,
+  type TurnEventOf,
+  type TurnInput,
 } from "./events"
 
 import {
@@ -15,9 +18,7 @@ import {
   ServerRunControlError,
   ServerRunStopNotDispatchedError,
   ServerRunSteerUnavailableError,
-  type NewTurnRunInput,
   type RecoveryRequest,
-  type ResumeRunInput,
   type ServerAttachmentStage,
   type ServerRunEngine,
   type ServerRunHandle,
@@ -29,9 +30,9 @@ import { SubscriberFanout } from "./subscriber-fanout"
 export type SessionExecutionState =
   "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
 
-export type SequencedRunEvent = {
+export type SequencedTurnEvent = {
   sequence: number
-  event: RunEvent
+  event: TurnEvent
 }
 
 export type CoordinatorAccess = {
@@ -39,10 +40,10 @@ export type CoordinatorAccess = {
   controllerId: string
   lane: "operator" | "guest"
   canControl: boolean
-  project?(event: RunEvent): RunEvent | undefined
+  project?(event: TurnEvent): TurnEvent | undefined
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
-  onTerminal?(event: RunEvent): void | Promise<void>
+  onTerminal?(event: TurnEvent): void | Promise<void>
 }
 
 export type CoordinatorRecoveryRequest = Pick<
@@ -54,7 +55,7 @@ export type CoordinatorRecoveryRequest = Pick<
 
 export type CoordinatedRunSubscription = {
   runId: string
-  events: AsyncIterable<SequencedRunEvent>
+  events: AsyncIterable<SequencedTurnEvent>
   close(): void
 }
 
@@ -69,7 +70,7 @@ export type SessionCoordinatorOptions = {
 }
 
 /** One journaled event and the memory its raw form occupies. */
-type JournalEntry = { value: SequencedRunEvent; bytes: number }
+type JournalEntry = { value: SequencedTurnEvent; bytes: number }
 
 /**
  * The one replay store of a run segment: every event it delivered, keyed by run
@@ -95,7 +96,7 @@ type SegmentJournal = {
    * replaces its bytes instead of adding a whole event, so both bounds measure
    * the replay a subscriber actually receives.
    */
-  tail?: { event: RunEvent; bytes: number }
+  tail?: { event: TurnEvent; bytes: number }
   /** The journal holds the run from its first event, so a reload replays it. */
   fromStart: boolean
 }
@@ -104,12 +105,12 @@ type Segment = {
   cacheKey: string
   runId: string
   handle: ServerRunHandle
-  fanout: SubscriberFanout<SequencedRunEvent>
+  fanout: SubscriberFanout<SequencedTurnEvent>
   journal?: SegmentJournal
   nextSequence: number
   terminal: boolean
-  interrupts: PendingRequest[]
-  onTerminal?: (event: RunEvent) => void | Promise<void>
+  requests: PendingRequest[]
+  onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
    * Resolves once the provider has spoken for this segment: its first event, or
    * the outcome this coordinator applied when its stream ended. An uncertain
@@ -156,7 +157,7 @@ type SegmentInit = {
   runId: string
   handle: ServerRunHandle
   history: SegmentHistory
-  onTerminal?: (event: RunEvent) => void | Promise<void>
+  onTerminal?: (event: TurnEvent) => void | Promise<void>
 }
 
 type Execution = {
@@ -220,7 +221,7 @@ function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\u0000${scope.sessionId}`
 }
 
-function safeEventBytes(event: RunEvent) {
+function safeEventBytes(event: TurnEvent) {
   try {
     return new TextEncoder().encode(JSON.stringify(event)).byteLength
   } catch {
@@ -229,45 +230,38 @@ function safeEventBytes(event: RunEvent) {
 }
 
 /** The only events a journal merges; everything else replays as it arrived. */
-const MERGED_DELTA_TYPES = [
-  RunEventKind.TEXT_MESSAGE_CONTENT,
-  RunEventKind.REASONING_MESSAGE_CONTENT,
-  RunEventKind.TOOL_CALL_ARGS,
+const MERGED_CHUNK_KINDS = [
+  TurnEventKind.MessageChunk,
+  TurnEventKind.ThoughtChunk,
+  TurnEventKind.ToolCallInputChunk,
 ] as const
 
-type DeltaEvent = RunEventOf<(typeof MERGED_DELTA_TYPES)[number]>
+type ChunkEvent = TurnEventOf<(typeof MERGED_CHUNK_KINDS)[number]>
 
-function isDeltaEvent(event: RunEvent): event is DeltaEvent {
-  return (MERGED_DELTA_TYPES as readonly RunEventKind[]).includes(event.type)
+function isChunkEvent(event: TurnEvent): event is ChunkEvent {
+  return (MERGED_CHUNK_KINDS as readonly TurnEventKind[]).includes(event.kind)
 }
 
-/** What two adjacent deltas must share to be one stream of the same text. */
-function deltaStream(event: DeltaEvent) {
-  return event.type === RunEventKind.TOOL_CALL_ARGS
-    ? event.toolCallId
-    : event.messageId
-}
-
+/** Two adjacent chunks of one stream of text as the one chunk they amount to. */
 function compactedEvent(
-  previous: RunEvent,
-  next: RunEvent
-): RunEvent | undefined {
+  previous: TurnEvent,
+  next: TurnEvent
+): TurnEvent | undefined {
+  if (!isChunkEvent(previous) || !isChunkEvent(next)) return undefined
   if (
-    previous.timestamp !== undefined ||
-    previous.rawEvent !== undefined ||
-    previous.metadata !== undefined ||
-    next.timestamp !== undefined ||
-    next.rawEvent !== undefined ||
-    next.metadata !== undefined
+    previous.kind === TurnEventKind.ToolCallInputChunk &&
+    next.kind === TurnEventKind.ToolCallInputChunk
   )
-    return undefined
-  return isDeltaEvent(previous) &&
-    isDeltaEvent(next) &&
-    previous.type === next.type &&
-    deltaStream(previous) === deltaStream(next) &&
-    previous.subagentRunId === next.subagentRunId
-    ? { ...previous, delta: previous.delta + next.delta }
-    : undefined
+    return previous.toolCallId === next.toolCallId
+      ? { ...previous, delta: previous.delta + next.delta }
+      : undefined
+  if (
+    previous.kind !== TurnEventKind.ToolCallInputChunk &&
+    previous.kind === next.kind &&
+    previous.messageId === next.messageId
+  )
+    return { ...previous, text: previous.text + next.text }
+  return undefined
 }
 
 /**
@@ -278,14 +272,14 @@ function compactedEvent(
 function compactedReplay(
   entries: readonly JournalEntry[],
   after: number
-): SequencedRunEvent[] {
-  const replay: SequencedRunEvent[] = []
+): SequencedTurnEvent[] {
+  const replay: SequencedTurnEvent[] = []
   let runStarted = false
   for (const { value } of entries) {
     if (value.sequence <= after) continue
-    // One run replays as one run: a recovered segment repeats RUN_STARTED, and
-    // a second one would make the replay an invalid AG-UI stream.
-    if (value.event.type === RunEventKind.RUN_STARTED) {
+    // One turn replays as one turn: a recovered segment repeats its start, and
+    // a second one would report the turn as starting again mid-stream.
+    if (value.event.kind === TurnEventKind.TurnStarted) {
       if (runStarted) continue
       runStarted = true
     }
@@ -340,14 +334,8 @@ function admissionFingerprint(value: unknown): string {
   return JSON.stringify(canonical(value))
 }
 
-function isResume(
-  input: NewTurnRunInput | ResumeRunInput
-): input is ResumeRunInput {
-  return Array.isArray(input.resume) && input.resume.length > 0
-}
-
-function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
-  const received = input.resume.map(({ interruptId }) => interruptId)
+function answersEvery(expected: readonly string[], input: RepliesTurnInput) {
+  const received = input.replies.map(({ requestId }) => requestId)
   return (
     expected.length > 0 &&
     expected.length === received.length &&
@@ -357,7 +345,7 @@ function sameInterrupts(expected: readonly string[], input: ResumeRunInput) {
 }
 
 /**
- * A provider stream can end without a terminal AG-UI event. The provider's own
+ * A provider stream can end without a terminal turn event. The provider's own
  * settlement decides the turn then; only an unresolved one stays uncertain.
  * One macrotask lets a settlement raced with the stream ending arrive first.
  *
@@ -408,9 +396,9 @@ export class SessionCoordinator {
       ? {
           state: execution.state,
           runId: execution.segment.runId,
-          interrupts: structuredClone(execution.segment.interrupts),
+          requests: structuredClone(execution.segment.requests),
         }
-      : { state: "idle" as const, interrupts: [] as PendingRequest[] }
+      : { state: "idle" as const, requests: [] as PendingRequest[] }
   }
 
   /**
@@ -475,14 +463,14 @@ export class SessionCoordinator {
         history: { journal: "none" },
       })
       this.#trackJournal(segment)
-      segment.interrupts = structuredClone(discovered.interrupts ?? [])
+      segment.requests = structuredClone(discovered.requests ?? [])
       const execution: Execution =
         existing ??
         this.#createExecution({
           scope,
           state: discovered.state,
           runId,
-          request: { threadId: scope.threadId, runId },
+          request: { turnId: runId },
           startedByLane: "operator",
           segment,
         })
@@ -502,14 +490,14 @@ export class SessionCoordinator {
 
   async start(
     scope: SessionScope,
-    input: NewTurnRunInput | ResumeRunInput,
+    input: TurnInput,
     access: CoordinatorAccess,
     attachments?: ServerAttachmentStage
   ): Promise<CoordinatedRunSubscription> {
     if (this.#closed) throw new Error("Session coordinator is closed")
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
-    if (existing?.segment.runId === input.runId) {
+    if (existing?.segment.runId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerRunConflictError()
       if (access.canControl) existing.controllers.add(access.controllerId)
@@ -528,12 +516,12 @@ export class SessionCoordinator {
       )
     }
 
-    if (isResume(input)) {
+    if (isRepliesTurn(input)) {
       if (
         !existing ||
         existing.state !== "waiting-for-input" ||
-        !sameInterrupts(
-          existing.segment.interrupts.map(({ id }) => id),
+        !answersEvery(
+          existing.segment.requests.map(({ requestId }) => requestId),
           input
         )
       )
@@ -560,13 +548,13 @@ export class SessionCoordinator {
       const execution: Execution = this.#createExecution({
         scope,
         state: "running",
-        runId: input.runId,
+        runId: input.turnId,
         request: input,
         startedByLane: access.lane,
         controllers: access.canControl ? [access.controllerId] : [],
         segment: this.#createSegment({
           cacheKey: key,
-          runId: input.runId,
+          runId: input.turnId,
           handle,
           history: { journal: "start" },
           onTerminal: access.onTerminal,
@@ -808,13 +796,10 @@ export class SessionCoordinator {
         text: request.text,
       })
       this.#publish(execution.segment, {
-        type: RunEventKind.CUSTOM,
-        name: "aos.steer.accepted",
-        value: {
-          requestId: request.requestId,
-          text: request.text,
-          delivery,
-        },
+        kind: TurnEventKind.SteerAccepted,
+        requestId: request.requestId,
+        text: request.text,
+        delivery,
       })
       return { status: delivery }
     })
@@ -835,7 +820,7 @@ export class SessionCoordinator {
 
   async #startSegment(
     execution: Execution,
-    input: ResumeRunInput,
+    input: RepliesTurnInput,
     access: CoordinatorAccess
   ) {
     const key = scopeKey(execution.scope)
@@ -845,7 +830,7 @@ export class SessionCoordinator {
       const handle = await this.options.engine.start(execution.scope, input)
       const segment = this.#createSegment({
         cacheKey: key,
-        runId: input.runId,
+        runId: input.turnId,
         handle,
         history: { journal: "start" },
       })
@@ -857,7 +842,7 @@ export class SessionCoordinator {
         execution,
         admittedTurn({
           state: "running",
-          runId: input.runId,
+          runId: input.turnId,
           request: input,
           segment,
         })
@@ -881,12 +866,12 @@ export class SessionCoordinator {
   }
 
   /** Scope and clock every observed `ExecutionEvent` carries. */
-  #origin(scope: SessionScope, runId: string) {
+  #origin(scope: SessionScope, turnId: string) {
     return {
       agentId: scope.agentId,
       // Observers project to the browser, which knows only public identity.
       sessionId: scope.threadId,
-      runId,
+      turnId,
       occurredAt: new Date().toISOString(),
     }
   }
@@ -902,11 +887,11 @@ export class SessionCoordinator {
 
   /** A wait answered elsewhere, ended, or cleared resolves its requests. */
   #resolveAttention(execution: Execution) {
-    const { interrupts, runId } = execution.segment
-    if (interrupts.length === 0) return
+    const { requests, runId } = execution.segment
+    if (requests.length === 0) return
     const origin = this.#origin(execution.scope, runId)
-    for (const { id } of interrupts)
-      this.#announce({ ...origin, type: "attention-resolved", interruptId: id })
+    for (const { requestId } of requests)
+      this.#announce({ ...origin, kind: "attention-resolved", requestId })
   }
 
   #createSegment(init: SegmentInit): Segment {
@@ -922,7 +907,7 @@ export class SessionCoordinator {
       cacheKey: init.cacheKey,
       runId: init.runId,
       handle: init.handle,
-      fanout: new SubscriberFanout<SequencedRunEvent>({
+      fanout: new SubscriberFanout<SequencedTurnEvent>({
         maxEvents: this.options.maxSubscriberEvents,
         maxBytes: this.options.maxSubscriberBytes,
         sizeOf: ({ event }) => safeEventBytes(event),
@@ -930,7 +915,7 @@ export class SessionCoordinator {
       journal: segmentJournal(init.history),
       nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
-      interrupts: [],
+      requests: [],
       ...(init.onTerminal ? { onTerminal: init.onTerminal } : {}),
     }
   }
@@ -941,7 +926,7 @@ export class SessionCoordinator {
     if (execution.state === "running")
       this.#announce({
         ...this.#origin(execution.scope, segment.runId),
-        type: "run-started",
+        kind: "turn-started",
       })
     void (async () => {
       let terminal = false
@@ -950,11 +935,13 @@ export class SessionCoordinator {
           if (execution.segment !== segment) return
           // A failure awaiting Stop leaves the run active: its settlement, not
           // this event, is the terminal one.
-          const awaitingStop = isAwaitingStopError(event)
+          const awaitingStop = isAwaitingStopFailure(event)
+          const ended =
+            event.kind === TurnEventKind.TurnEnded ||
+            event.kind === TurnEventKind.TurnRequiresAction
           if (
-            !awaitingStop &&
-            (event.type === RunEventKind.RUN_FINISHED ||
-              event.type === RunEventKind.RUN_ERROR)
+            ended ||
+            (event.kind === TurnEventKind.TurnFailed && !awaitingStop)
           )
             try {
               await segment.onTerminal?.(event)
@@ -967,30 +954,30 @@ export class SessionCoordinator {
           }
           // A recoverable interrupt is not part of the run: journaling it would
           // replay a failure the provider never reported.
-          const interrupted = isRedialableError(event)
+          const interrupted = isRedialableFailure(event)
           if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           segment.announce()
-          if (event.type === RunEventKind.RUN_FINISHED) {
+          if (ended) {
             this.#forgetJournal(segment)
             terminal = true
             segment.terminal = true
-            segment.interrupts = pendingRequestsOf(event)
-            execution.state = segment.interrupts.length
+            segment.requests = pendingRequestsOf(event)
+            execution.state = segment.requests.length
               ? "waiting-for-input"
               : "idle"
             const origin = this.#origin(execution.scope, segment.runId)
-            if (segment.interrupts.length)
-              for (const request of segment.interrupts)
+            if (segment.requests.length)
+              for (const request of segment.requests)
                 this.#announce({
                   ...origin,
-                  type: "attention-requested",
+                  kind: "attention-requested",
                   request: structuredClone(request),
                 })
-            else this.#announce({ ...origin, type: "run-finished" })
+            else this.#announce({ ...origin, kind: "turn-finished" })
             break
           }
-          if (event.type === RunEventKind.RUN_ERROR && !awaitingStop) {
+          if (event.kind === TurnEventKind.TurnFailed && !awaitingStop) {
             // The journal outlives an interrupt so a reload after recovery
             // still replays this run from its beginning.
             if (!interrupted) this.#forgetJournal(segment)
@@ -1003,7 +990,7 @@ export class SessionCoordinator {
             execution.state = interrupted ? "uncertain" : "idle"
             this.#announce({
               ...this.#origin(execution.scope, segment.runId),
-              type: "run-failed",
+              kind: "turn-failed",
             })
             break
           }
@@ -1028,7 +1015,7 @@ export class SessionCoordinator {
    * rest of the segment cannot answer is then sent one reset instead of a
    * partial history.
    */
-  #remember(segment: Segment, value: SequencedRunEvent) {
+  #remember(segment: Segment, value: SequencedTurnEvent) {
     const journal = segment.journal
     if (!journal) return
     const previous = journal.tail
@@ -1113,7 +1100,7 @@ export class SessionCoordinator {
     segment.journal = undefined
   }
 
-  #publish(segment: Segment, event: RunEvent) {
+  #publish(segment: Segment, event: TurnEvent) {
     const sequenced = { sequence: ++segment.nextSequence, event }
     this.#remember(segment, sequenced)
     segment.fanout.publish(sequenced)
@@ -1139,7 +1126,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess,
     plan: Exclude<ReplayPlan, "reset"> = "history"
   ) {
-    const project = (value: SequencedRunEvent) => {
+    const project = (value: SequencedTurnEvent) => {
       const event = access.project ? access.project(value.event) : value.event
       return event ? { sequence: value.sequence, event } : undefined
     }
@@ -1148,7 +1135,7 @@ export class SessionCoordinator {
       plan === "history"
         ? compactedReplay(segment.journal?.entries ?? [], after)
         : []
-    const events: AsyncIterable<SequencedRunEvent> = {
+    const events: AsyncIterable<SequencedTurnEvent> = {
       [Symbol.asyncIterator]: async function* () {
         let last = after
         try {
@@ -1176,10 +1163,10 @@ export class SessionCoordinator {
   }
 
   #resetSubscription(segment: Segment, access: CoordinatorAccess) {
-    const candidate: SequencedRunEvent = {
+    const candidate: SequencedTurnEvent = {
       sequence: segment.nextSequence + 1,
       event: {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         code: "AOS_RESET_REQUIRED",
         message: "AOS run history must be reloaded before continuing.",
       },
@@ -1187,7 +1174,7 @@ export class SessionCoordinator {
     const event = access.project
       ? access.project(candidate.event)
       : candidate.event
-    const events: AsyncIterable<SequencedRunEvent> = {
+    const events: AsyncIterable<SequencedTurnEvent> = {
       async *[Symbol.asyncIterator]() {
         if (event) yield { sequence: candidate.sequence, event }
       },

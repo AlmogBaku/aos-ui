@@ -10,14 +10,18 @@ import {
   AosStateMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
-import { RunEventKind, type RunEvent, type RunEventOf } from "../../core/events"
+import {
+  TurnEventKind,
+  type TurnEvent,
+  type TurnEventOf,
+} from "../../core/events"
 import {
   initialTranslateState,
   type AcpOutbound,
   type TranslateContext,
   type TranslateState,
 } from "../types"
-import { translateRunEvent } from "./run-events"
+import { translateTurnEvent } from "./turn-events"
 
 /** The moment every state update in this suite stamps itself with. */
 const AT = "2026-09-22T10:00:00.000Z"
@@ -31,14 +35,14 @@ const context: TranslateContext = {
 }
 
 function translate(
-  events: RunEvent[],
+  events: TurnEvent[],
   overrides?: Partial<TranslateContext>,
   initial: TranslateState = initialTranslateState
 ) {
   let state = initial
   const outbound: AcpOutbound[] = []
   for (const event of events) {
-    const step = translateRunEvent(state, event, { ...context, ...overrides })
+    const step = translateTurnEvent(state, event, { ...context, ...overrides })
     state = step.state
     outbound.push(...step.outbound)
   }
@@ -60,45 +64,25 @@ function aosMeta(update: SessionUpdate): unknown {
   return isRecord(meta) ? meta[AOS_META_KEY] : undefined
 }
 
-const started: RunEvent = {
-  type: RunEventKind.RUN_STARTED,
-  threadId: "session-1",
-  runId: "run-1",
-}
+const started: TurnEvent = { kind: TurnEventKind.TurnStarted }
 
-function finished(
-  extra?: Partial<RunEventOf<typeof RunEventKind.RUN_FINISHED>>
-): RunEvent {
+const finished: TurnEvent = { kind: TurnEventKind.TurnEnded }
+
+/** Todos the adapter reported, which the translator still checks against the wire. */
+function planUpdated(todos: unknown): TurnEvent {
   return {
-    type: RunEventKind.RUN_FINISHED,
-    threadId: "session-1",
-    runId: "run-1",
-    ...extra,
+    kind: TurnEventKind.PlanUpdated,
+    todos: todos as TurnEventOf<typeof TurnEventKind.PlanUpdated>["todos"],
   }
 }
 
-function planSnapshot(todos: unknown, activityType = "PLAN"): RunEvent {
-  return {
-    type: RunEventKind.ACTIVITY_SNAPSHOT,
-    messageId: "aos-plan:session-1",
-    activityType,
-    content: { todos },
-    replace: true,
-  }
-}
-
-function planDelta(patch: unknown[]): RunEvent {
-  return {
-    type: RunEventKind.ACTIVITY_DELTA,
-    messageId: "aos-plan:session-1",
-    activityType: "PLAN",
-    patch,
-  }
+function messageChunk(messageId: string, text: string): TurnEvent {
+  return { kind: TurnEventKind.MessageChunk, messageId, text }
 }
 
 const todo = { id: "t1", label: "Ship it", status: "active" as const }
 
-describe("translateRunEvent lifecycle", () => {
+describe("translateTurnEvent lifecycle", () => {
   it("reports a started run as running with parseable run metadata", () => {
     const [update] = updatesOf(translate([started]).outbound)
 
@@ -117,7 +101,7 @@ describe("translateRunEvent lifecycle", () => {
     ["end_turn", false],
     ["cancelled", true],
   ])("settles an uninterrupted run as idle %s", (stopReason, stopping) => {
-    const { state, outbound } = translate([finished()], { stopping })
+    const { state, outbound } = translate([finished], { stopping })
 
     expect(updatesOf(outbound)).toEqual([
       {
@@ -132,7 +116,7 @@ describe("translateRunEvent lifecycle", () => {
 
   it("emits a composer prefill before the idle state", () => {
     const { outbound } = translate([
-      finished({ result: { "aos.composerPrefill": "retry this" } }),
+      { kind: TurnEventKind.TurnEnded, composerPrefill: "retry this" },
     ])
 
     expect(outbound[0]).toEqual({
@@ -145,19 +129,17 @@ describe("translateRunEvent lifecycle", () => {
 
   it("requires action and forwards every pending request of the segment", () => {
     const { outbound } = translate([
-      finished({
-        outcome: {
-          type: "interrupt",
-          interrupts: [
-            {
-              id: "i1",
-              reason: "approval",
-              responseSchema: { enum: ["once"] },
-            },
-            { id: "i2", reason: "question", message: "Which one?" },
-          ],
-        },
-      }),
+      {
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          {
+            requestId: "i1",
+            kind: "permission",
+            responseSchema: { enum: ["once"] },
+          },
+          { requestId: "i2", kind: "elicitation", message: "Which one?" },
+        ],
+      },
     ])
 
     expect(updatesOf(outbound)[0]).toMatchObject({ state: "requires_action" })
@@ -172,7 +154,7 @@ describe("translateRunEvent lifecycle", () => {
     ["AOS_CONNECTION_INTERRUPTED", AOS_STOP_REASONS.uncertain],
   ])("maps the %s run error to %s", (code, stopReason) => {
     const { state, outbound } = translate([
-      { type: RunEventKind.RUN_ERROR, message: "provider refused", code },
+      { kind: TurnEventKind.TurnFailed, message: "provider refused", code },
     ])
     const [update] = updatesOf(outbound)
 
@@ -188,17 +170,11 @@ describe("translateRunEvent lifecycle", () => {
   })
 
   it("reports a failure awaiting Stop as a running state that keeps the segment", () => {
-    const { state: streaming } = translate([
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-    ])
+    const { state: streaming } = translate([messageChunk("m1", "he")])
     const { state, outbound } = translate(
       [
         {
-          type: RunEventKind.RUN_ERROR,
+          kind: TurnEventKind.TurnFailed,
           code: "AOS_INTERACTION_LOST",
           message: "question lost",
           awaitingStop: true,
@@ -225,17 +201,9 @@ describe("translateRunEvent lifecycle", () => {
   })
 })
 
-describe("translateRunEvent messages", () => {
+describe("translateTurnEvent messages", () => {
   it("streams assistant prose as message chunks and keeps the message id", () => {
-    const { state, outbound } = translate([
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "he" },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
-    ])
+    const { state, outbound } = translate([messageChunk("m1", "he")])
     const [update] = updatesOf(outbound)
 
     expect(updatesOf(outbound)).toHaveLength(1)
@@ -253,29 +221,12 @@ describe("translateRunEvent messages", () => {
 
   it("collapses a reasoning-first segment onto one assistant message", () => {
     const { state, outbound } = translate([
-      { type: RunEventKind.REASONING_START, messageId: "m1:reasoning" },
+      { kind: TurnEventKind.ThoughtChunk, messageId: "m1", text: "think" },
+      messageChunk("m1", "he"),
       {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "m1:reasoning",
-        role: "reasoning",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "m1:reasoning",
-        delta: "think",
-      },
-      { type: RunEventKind.REASONING_MESSAGE_END, messageId: "m1:reasoning" },
-      { type: RunEventKind.REASONING_END, messageId: "m1:reasoning" },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "he" },
-      {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "c1",
-        toolCallName: "read_file",
+        title: "read_file",
       },
     ])
 
@@ -307,22 +258,8 @@ describe("translateRunEvent messages", () => {
 
   it("streams reasoning under the message id the prose opened", () => {
     const { outbound } = translate([
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_CONTENT, messageId: "m1", delta: "he" },
-      {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "m1:reasoning",
-        role: "reasoning",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "m1:reasoning",
-        delta: "think",
-      },
+      messageChunk("m1", "he"),
+      { kind: TurnEventKind.ThoughtChunk, messageId: "m1", text: "think" },
     ])
 
     expect(updatesOf(outbound)[1]).toEqual({
@@ -333,27 +270,19 @@ describe("translateRunEvent messages", () => {
     })
   })
 
-  it("keeps one message id across the segment's later message boundaries", () => {
+  it("keeps the segment's first message id across later message ids", () => {
     const { outbound } = translate([
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m2",
-        role: "assistant",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "m2",
-        delta: "more",
-      },
+      messageChunk("m1", "he"),
+      messageChunk("m2", "more"),
     ])
 
     expect(updatesOf(outbound)).toEqual([
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "m1",
+        content: { type: "text", text: "he" },
+        _meta: { [AOS_META_KEY]: { sequence: 7, runId: "run-1" } },
+      },
       {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
@@ -362,54 +291,23 @@ describe("translateRunEvent messages", () => {
       },
     ])
   })
-
-  it.each<[string, RunEvent]>([
-    [
-      "a text message boundary",
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
-    ],
-    [
-      "a reasoning boundary",
-      { type: RunEventKind.REASONING_START, messageId: "m1" },
-    ],
-    [
-      "a reasoning message boundary",
-      { type: RunEventKind.REASONING_MESSAGE_END, messageId: "m1" },
-    ],
-    [
-      "an unrelated custom event",
-      { type: RunEventKind.CUSTOM, name: "aos.other", value: {} },
-    ],
-    [
-      "non-plan activity",
-      {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "a1",
-        activityType: "PROGRESS",
-        content: {},
-        replace: true,
-      },
-    ],
-  ])("drops %s", (_label, event) => {
-    expect(translate([event]).outbound).toEqual([])
-  })
 })
 
-describe("translateRunEvent tool calls", () => {
-  const lifecycle: RunEvent[] = [
+describe("translateTurnEvent tool calls", () => {
+  const lifecycle: TurnEvent[] = [
     {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: "m1",
-      role: "assistant",
-    },
-    {
-      type: RunEventKind.TOOL_CALL_START,
+      kind: TurnEventKind.ToolCallStarted,
       toolCallId: "c1",
-      toolCallName: "read_file",
+      title: "read_file",
+      parentMessageId: "m1",
     },
-    { type: RunEventKind.TOOL_CALL_ARGS, toolCallId: "c1", delta: '{"p":' },
-    { type: RunEventKind.TOOL_CALL_ARGS, toolCallId: "c1", delta: '"a"}' },
-    { type: RunEventKind.TOOL_CALL_END, toolCallId: "c1" },
+    {
+      kind: TurnEventKind.ToolCallInputChunk,
+      toolCallId: "c1",
+      delta: '{"p":',
+    },
+    { kind: TurnEventKind.ToolCallInputChunk, toolCallId: "c1", delta: '"a"}' },
+    { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
   ]
 
   it("opens, streams, and closes one tool call attached to the message", () => {
@@ -446,25 +344,17 @@ describe("translateRunEvent tool calls", () => {
   ])(
     "attaches a tool call to %s",
     (_label, parentMessageId, messageId, expected) => {
-      const events: RunEvent[] = [
-        ...(messageId
-          ? [
-              {
-                type: RunEventKind.TEXT_MESSAGE_START,
-                messageId,
-                role: "assistant",
-              } satisfies RunEvent,
-            ]
-          : []),
+      const events: TurnEvent[] = [
+        ...(messageId ? [messageChunk(messageId, "he")] : []),
         {
-          type: RunEventKind.TOOL_CALL_START,
+          kind: TurnEventKind.ToolCallStarted,
           toolCallId: "c1",
-          toolCallName: "read_file",
-          parentMessageId,
+          title: "read_file",
+          ...(parentMessageId ? { parentMessageId } : {}),
         },
       ]
 
-      const [update] = updatesOf(translate(events).outbound)
+      const update = updatesOf(translate(events).outbound).at(-1)
 
       expect(AosToolCallMetaSchema.parse(aosMeta(update!)).messageId).toBe(
         expected
@@ -477,41 +367,21 @@ describe("translateRunEvent tool calls", () => {
     // is one message, the tools that follow another, the closing text a third.
     // History replays the whole turn as one message, so the live stream must.
     const { outbound } = translate([
+      messageChunk("m1", "Checking."),
       {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "m1",
-        delta: "Checking.",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "m1" },
-      {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "c1",
-        toolCallName: "terminal",
+        title: "terminal",
         parentMessageId: "run-1:assistant:2",
       },
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "c1" },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "run-1:assistant:2:tool:c1",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "c1",
-        content: "ok",
-        role: "tool",
+        output: "ok",
+        failed: false,
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "run-1:assistant:3",
-        role: "assistant",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "run-1:assistant:3",
-        delta: "Done.",
-      },
+      messageChunk("run-1:assistant:3", "Done."),
     ])
 
     // Chunks name their message on the update; tool calls in `_meta.aos`.
@@ -529,21 +399,12 @@ describe("translateRunEvent tool calls", () => {
   it("lets a tool call that opens the segment name it for the text after", () => {
     const { outbound } = translate([
       {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "c1",
-        toolCallName: "read_file",
+        title: "read_file",
         parentMessageId: "m9",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "m1",
-        delta: "Read.",
-      },
+      messageChunk("m1", "Read."),
     ])
 
     const [call, chunk] = updatesOf(outbound)
@@ -554,12 +415,16 @@ describe("translateRunEvent tool calls", () => {
   it("keeps unparseable streamed arguments as text", () => {
     const { outbound } = translate([
       {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "c1",
-        toolCallName: "read_file",
+        title: "read_file",
       },
-      { type: RunEventKind.TOOL_CALL_ARGS, toolCallId: "c1", delta: "{oops" },
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "c1" },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "c1",
+        delta: "{oops",
+      },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
     ])
 
     expect(updatesOf(outbound)[2]).toMatchObject({
@@ -568,33 +433,35 @@ describe("translateRunEvent tool calls", () => {
   })
 
   it.each([
-    ['{"status":"failed"}', "failed"],
-    ['{"status":"error"}', "failed"],
-    ['{"isError":true,"status":"completed"}', "failed"],
-    ['{"status":"completed"}', "completed"],
-    ["plain provider text", "completed"],
-  ])("settles the result %s as %s", (content, status) => {
-    const [update] = updatesOf(
-      translate([
-        {
-          type: RunEventKind.TOOL_CALL_RESULT,
-          messageId: "m1:tool:c1",
-          toolCallId: "c1",
-          content,
-          role: "tool",
-        },
-      ]).outbound
-    )
+    ['{"status":"failed"}', true, "failed", { status: "failed" }],
+    ["plain provider text", true, "failed", "plain provider text"],
+    ['{"status":"completed"}', false, "completed", { status: "completed" }],
+    ["plain provider text", false, "completed", "plain provider text"],
+  ])(
+    "settles the result %s reported failed=%s as %s",
+    (output, failed, status, rawOutput) => {
+      const [update] = updatesOf(
+        translate([
+          {
+            kind: TurnEventKind.ToolCallFinished,
+            toolCallId: "c1",
+            output,
+            failed,
+          },
+        ]).outbound
+      )
 
-    expect(update).toMatchObject({
-      toolCallId: "c1",
-      status,
-      content: [{ type: "content", content: { type: "text", text: content } }],
-    })
-  })
+      expect(update).toMatchObject({
+        toolCallId: "c1",
+        status,
+        rawOutput,
+        content: [{ type: "content", content: { type: "text", text: output } }],
+      })
+    }
+  )
 })
 
-describe("translateRunEvent plans", () => {
+describe("translateTurnEvent plans", () => {
   it.each([
     ["pending", "pending"],
     ["active", "in_progress"],
@@ -602,7 +469,7 @@ describe("translateRunEvent plans", () => {
     ["failed", "_failed"],
   ])("maps the %s Todo to the %s plan entry", (todoStatus, status) => {
     const [update] = updatesOf(
-      translate([planSnapshot([{ ...todo, status: todoStatus }])]).outbound
+      translate([planUpdated([{ ...todo, status: todoStatus }])]).outbound
     )
 
     expect(update).toMatchObject({
@@ -616,7 +483,7 @@ describe("translateRunEvent plans", () => {
   })
 
   it("keeps the Session Todos losslessly in plan metadata", () => {
-    const [update] = updatesOf(translate([planSnapshot([todo])]).outbound)
+    const [update] = updatesOf(translate([planUpdated([todo])]).outbound)
 
     expect(AosPlanMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
@@ -625,71 +492,51 @@ describe("translateRunEvent plans", () => {
     })
   })
 
-  it("treats the single replace of /todos as the whole list", () => {
-    const [update] = updatesOf(
-      translate([planDelta([{ op: "replace", path: "/todos", value: [todo] }])])
-        .outbound
-    )
-
-    expect(AosPlanMetaSchema.parse(aosMeta(update!)).todos).toEqual([todo])
-  })
-
-  it.each([
-    [
-      "a patch of more than one operation",
-      [
-        { op: "replace", path: "/todos", value: [todo] },
-        { op: "replace", path: "/todos", value: [] },
-      ],
-    ],
-    ["another path", [{ op: "replace", path: "/other", value: [todo] }]],
-    ["another operation", [{ op: "add", path: "/todos", value: [todo] }]],
-    ["an unparseable list", [{ op: "replace", path: "/todos", value: [{}] }]],
-  ])("drops %s", (_label, patch) => {
-    expect(translate([planDelta(patch)]).outbound).toEqual([])
-  })
-
-  it("drops a snapshot whose Todos do not parse", () => {
-    expect(translate([planSnapshot([{ id: "t1" }])]).outbound).toEqual([])
+  it("drops Todos that do not parse", () => {
+    expect(translate([planUpdated([{ id: "t1" }])]).outbound).toEqual([])
   })
 })
 
-describe("translateRunEvent extensions", () => {
+describe("translateTurnEvent extensions", () => {
   const artifact = {
     id: "a1",
     filename: "chart.png",
     mimeType: "image/png",
-    source: { type: "provider", reference: "a1" },
+    source: { type: "provider" as const, reference: "a1" },
+  }
+
+  /** A descriptor the adapter reported, which the wire contract still checks. */
+  function published(value: unknown): TurnEvent {
+    return {
+      kind: TurnEventKind.ArtifactPublished,
+      artifact: value as TurnEventOf<
+        typeof TurnEventKind.ArtifactPublished
+      >["artifact"],
+    }
   }
 
   it("grants a validated artifact against the streaming message", () => {
     const { outbound } = translate([
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId: "m1",
-        role: "assistant",
-      },
-      { type: RunEventKind.CUSTOM, name: "aos.artifact", value: artifact },
+      messageChunk("m1", "he"),
+      published(artifact),
     ])
 
-    expect(outbound).toEqual([
+    expect(outbound.filter((item) => item.kind === "artifact")).toEqual([
       { kind: "artifact", runId: "run-1", messageId: "m1", artifact },
     ])
   })
 
   it("grants an artifact whose publisher knew a size but no media type", () => {
-    const published = {
+    const descriptor = {
       id: "a2",
       filename: "report.md",
       sizeBytes: 4_096,
       source: { type: "provider", reference: "a2" },
     }
 
-    expect(
-      translate([
-        { type: RunEventKind.CUSTOM, name: "aos.artifact", value: published },
-      ]).outbound
-    ).toEqual([{ kind: "artifact", runId: "run-1", artifact: published }])
+    expect(translate([published(descriptor)]).outbound).toEqual([
+      { kind: "artifact", runId: "run-1", artifact: descriptor },
+    ])
   })
 
   it.each([
@@ -697,33 +544,35 @@ describe("translateRunEvent extensions", () => {
     ["a negative artifact size", { ...artifact, sizeBytes: -1 }],
     ["an unknown artifact source", { ...artifact, source: { type: "magic" } }],
   ])("drops %s", (_label, value) => {
-    expect(
-      translate([{ type: RunEventKind.CUSTOM, name: "aos.artifact", value }])
-        .outbound
-    ).toEqual([])
+    expect(translate([published(value)]).outbound).toEqual([])
+  })
+
+  const accepted = (
+    requestId: string,
+    text: string,
+    delivery: "queued" | "steered" = "steered"
+  ): TurnEvent => ({
+    kind: TurnEventKind.SteerAccepted,
+    requestId,
+    text,
+    delivery,
   })
 
   it("forwards an accepted steer", () => {
-    const value = {
-      requestId: "s1",
-      text: "also check the logs",
-      delivery: "queued",
-    }
-
     expect(
-      translate([
-        { type: RunEventKind.CUSTOM, name: "aos.steer.accepted", value },
-      ]).outbound
-    ).toEqual([{ kind: "steer-accepted", runId: "run-1", ...value }])
+      translate([accepted("s1", "also check the logs", "queued")]).outbound
+    ).toEqual([
+      {
+        kind: "steer-accepted",
+        runId: "run-1",
+        requestId: "s1",
+        text: "also check the logs",
+        delivery: "queued",
+      },
+    ])
   })
 
   it("drops the acceptances the replayed history already carried", () => {
-    const accepted = (requestId: string, text: string): RunEvent => ({
-      type: RunEventKind.CUSTOM,
-      name: "aos.steer.accepted",
-      value: { requestId, text, delivery: "steered" },
-    })
-
     const replay = translate(
       [accepted("s1", "first"), accepted("s2", "second")],
       undefined,
@@ -743,17 +592,5 @@ describe("translateRunEvent extensions", () => {
         delivery: "steered",
       },
     ])
-  })
-
-  it("drops a steer acceptance with an unknown delivery", () => {
-    expect(
-      translate([
-        {
-          type: RunEventKind.CUSTOM,
-          name: "aos.steer.accepted",
-          value: { requestId: "s1", text: "hi", delivery: "maybe" },
-        },
-      ]).outbound
-    ).toEqual([])
   })
 })

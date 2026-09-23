@@ -118,6 +118,18 @@ describe("runtime adapter boundary", () => {
     }
   })
 
+  /** Adapters speak the proxy's turn vocabulary; only the translator knows ACP. */
+  it("keeps the ACP wire out of the server adapters", async () => {
+    const files = await productionFiles(join(import.meta.dirname, "adapters"))
+
+    for (const path of files) {
+      const source = await readFile(path, "utf8")
+      expect(source, path).not.toMatch(
+        /(?:from\s+|import\s*\()["'](?:@agentclientprotocol\/|[^"']*protocol\/acp(?:\.ts)?["'])/u
+      )
+    }
+  })
+
   /**
    * Raw zod issues can quote operator input, so only the loader that formats
    * them safely may reach the schema; every other caller uses `parseProxyConfig`.

@@ -1,9 +1,4 @@
-import type {
-  PendingRequest,
-  RequestReply,
-  RunEvent,
-  TurnInput,
-} from "./events"
+import type { PendingRequest, TurnEvent, TurnInput } from "./events"
 import type {
   AgentCatalogResponse,
   RuntimeAuthState,
@@ -29,18 +24,8 @@ export type SessionScope = {
 
 export type ServerRunScope = SessionScope
 
-export type NewTurnRunInput = TurnInput & {
-  resume?: undefined
-  /** User turn to rewind before Edit or Retry; validated authoritatively. */
-  rewindSourceId?: string
-}
-export type ResumeRunInput = TurnInput & {
-  messages: []
-  resume: RequestReply[]
-}
-
 export type ServerRunHandle = {
-  events: AsyncIterable<RunEvent>
+  events: AsyncIterable<TurnEvent>
   /** Resolves only when the provider segment is terminal. */
   settled: Promise<void>
   /** Idempotently requests Stop or rechecks an already-stopping native run. */
@@ -67,7 +52,7 @@ export type ServerReconnectRequest = RecoveryRequest
 export type ServerRunEngine = {
   start(
     scope: SessionScope,
-    input: NewTurnRunInput | ResumeRunInput,
+    input: TurnInput,
     /** One-shot server-owned content staged for this native admission. */
     attachments?: ServerAttachmentStage
   ): Promise<ServerRunHandle>
@@ -93,7 +78,7 @@ export type ServerRunEngine = {
     | {
         handle: ServerRunHandle
         state: "running" | "waiting-for-input"
-        interrupts?: PendingRequest[]
+        requests?: PendingRequest[]
       }
     | undefined
   >

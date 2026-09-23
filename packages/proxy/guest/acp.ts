@@ -29,6 +29,7 @@ import {
   projectGuestCapabilities,
   projectGuestHistory,
 } from "../auth/guest-runtime-projection"
+import { PendingRequestKind } from "../core/events"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 
@@ -60,8 +61,6 @@ const OPERATOR_ONLY = {
 
 /** The approval scopes the guest lane never carries, as the adapters name them. */
 const GUEST_DENIED_CHOICES = new Set(["always", "session"])
-/** Both spellings the adapters use for an approval interrupt. */
-const APPROVAL_REASONS = new Set(["approval", "confirmation"])
 
 /**
  * The invited Session's capabilities, projected to what the guest lane serves.
@@ -158,16 +157,9 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
     grant: () => redeemed?.grant,
 
     project: {
-      access(base, scope, runId) {
+      access(base, scope) {
         const { read, errors } = authorized()
-        return createGuestRunAccess(
-          read,
-          errors,
-          scope,
-          runId,
-          now,
-          base.subscriberId
-        )
+        return createGuestRunAccess(read, errors, scope, now, base.subscriberId)
       },
       history(value: SessionHistoryResponse) {
         const { read, grant } = authorized()
@@ -179,7 +171,7 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
         // Mirrors `guestResumeAllowed`: an answer may not carry a Session-wide
         // or Agent-wide approval even when the guest client names one.
         if (
-          APPROVAL_REASONS.has(request.reason) &&
+          request.kind === PendingRequestKind.Permission &&
           typeof reply.payload === "string" &&
           GUEST_DENIED_CHOICES.has(reply.payload)
         )

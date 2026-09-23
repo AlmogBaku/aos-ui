@@ -25,9 +25,11 @@ import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
 import {
-  RunEventKind,
+  PendingRequestKind,
+  PromptTurnInputSchema,
+  TurnEventKind,
   type PendingRequest,
-  type RunEvent,
+  type TurnEvent,
 } from "../../../packages/proxy/core/events"
 import type {
   RuntimeInstance,
@@ -174,8 +176,8 @@ const unsupported = () => {
 
 /** One provider run segment the test drives event by event. */
 class RunSegment implements ServerRunHandle {
-  readonly #values: RunEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<RunEvent>) => void> = []
+  readonly #values: TurnEvent[] = []
+  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
@@ -187,21 +189,21 @@ class RunSegment implements ServerRunHandle {
     })
   }
 
-  readonly events: AsyncIterable<RunEvent> = {
+  readonly events: AsyncIterable<TurnEvent> = {
     [Symbol.asyncIterator]: () => ({
       next: () => {
         const value = this.#values.shift()
         if (value) return Promise.resolve({ done: false, value })
         if (this.#closed)
           return Promise.resolve({ done: true, value: undefined })
-        return new Promise<IteratorResult<RunEvent>>((resolve) =>
+        return new Promise<IteratorResult<TurnEvent>>((resolve) =>
           this.#waiters.push(resolve)
         )
       },
     }),
   }
 
-  emit(event: RunEvent) {
+  emit(event: TurnEvent) {
     const waiter = this.#waiters.shift()
     if (waiter) waiter({ done: false, value: event })
     else this.#values.push(event)
@@ -254,9 +256,11 @@ type StartInput = Parameters<ServerRunEngine["start"]>[1]
 
 function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const segments: RunSegment[] = []
+  const scopes: SessionScope[] = []
   const inputs: StartInput[] = []
   const created: string[] = []
-  const start = vi.fn(async (_scope: SessionScope, input: StartInput) => {
+  const start = vi.fn(async (scope: SessionScope, input: StartInput) => {
+    scopes.push(scope)
     inputs.push(input)
     const segment = new RunSegment()
     segments.push(segment)
@@ -389,6 +393,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   return {
     app: createAosAcpAgent(context),
     segments,
+    scopes,
     inputs,
     created,
     attachmentStages,
@@ -598,8 +603,8 @@ const artifactsOnMessage = (runtime: HarnessRuntime, text: string) => {
 }
 
 const permissionInterrupt = (): PendingRequest => ({
-  id: "interrupt-1",
-  reason: "approval",
+  requestId: "interrupt-1",
+  kind: PendingRequestKind.Permission,
   message: "Run the tool?",
   responseSchema: { type: "string", enum: ["once", "deny"] },
 })
@@ -629,52 +634,27 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
+      segment.emit({ kind: TurnEventKind.TurnStarted })
       segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
+        kind: TurnEventKind.PlanUpdated,
+        todos: [{ id: "todo-1", label: "Draft it", status: "active" }],
       })
       segment.emit({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "aos-plan:stored-alpha",
-        activityType: "PLAN",
-        content: {
-          todos: [{ id: "todo-1", label: "Draft it", status: "active" }],
-        },
-        replace: true,
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        role: "assistant",
+        text: "Shipping it",
       })
       segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "Shipping it",
-      })
-      segment.emit({
-        type: RunEventKind.CUSTOM,
-        name: "aos.artifact",
-        value: {
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: {
           id: "artifact-1",
           filename: "plan.md",
           mimeType: "text/markdown",
           source: { type: "provider", reference: "artifact-1" },
         },
       })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "assistant-1",
-      })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "success" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
 
@@ -753,38 +733,18 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
+      segment.emit({ kind: TurnEventKind.TurnStarted })
       segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        role: "assistant",
+        text: "Shipping it",
       })
       segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-1",
-        delta: "Shipping it",
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: artifact,
       })
-      segment.emit({
-        type: RunEventKind.CUSTOM,
-        name: "aos.artifact",
-        value: artifact,
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "assistant-1",
-      })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "success" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
 
@@ -802,13 +762,8 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
-      segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
-      })
+      segment.emit({ kind: TurnEventKind.TurnStarted })
     })
     await waitFor(() =>
       expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(true)
@@ -817,12 +772,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     act(() => runtime().assistantRuntime.thread.cancelRun())
     await waitFor(() => expect(segment.stop).toHaveBeenCalledTimes(1))
     act(() => {
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "success" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
     await waitFor(() =>
@@ -839,18 +789,11 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
+      segment.emit({ kind: TurnEventKind.TurnStarted })
       segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
-      })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "interrupt", interrupts: [permissionInterrupt()] },
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [permissionInterrupt()],
       })
       segment.finish()
     })
@@ -860,9 +803,9 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
 
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(2))
     expect(proxy.inputs[1]).toMatchObject({
-      resume: [
+      replies: [
         {
-          interruptId: "interrupt-1",
+          requestId: "interrupt-1",
           status: "resolved",
           payload: "once",
         },
@@ -871,25 +814,11 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     const resumed = proxy.segments[1]!
     act(() => {
       resumed.emit({
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-2",
-        role: "assistant",
+        text: "Allowed",
       })
-      resumed.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-2",
-        delta: "Allowed",
-      })
-      resumed.emit({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "assistant-2",
-      })
-      resumed.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId: proxy.inputs[1]!.runId,
-        outcome: { type: "success" },
-      })
+      resumed.emit({ kind: TurnEventKind.TurnEnded })
       resumed.finish()
     })
     expect(await screen.findByText("Allowed")).toBeVisible()
@@ -937,37 +866,18 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     expect(proxy.created).toEqual([AGENT_ID])
-    const input = proxy.inputs[0]!
-    expect(input.threadId).toBe(CREATED_SESSION_ID)
+    expect(proxy.scopes[0]!.threadId).toBe(CREATED_SESSION_ID)
     // The turn the operator sent stays on screen across `session/new`.
     expect(messageTexts(runtime())).toEqual(["Ship it"])
     const segment = proxy.segments[0]!
     act(() => {
+      segment.emit({ kind: TurnEventKind.TurnStarted })
       segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: CREATED_SESSION_ID,
-        runId: input.runId,
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-draft",
-        role: "assistant",
+        text: "Shipping it",
       })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "assistant-draft",
-        delta: "Shipping it",
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "assistant-draft",
-      })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: CREATED_SESSION_ID,
-        runId: input.runId,
-        outcome: { type: "success" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
 
@@ -1004,7 +914,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     // The proxy only appends a stage it could claim by id, so the turn it
     // admitted proves both the `_meta.aos` stage id and the linked block.
     expect(staging.appended).toEqual(["Read this"])
-    expect(proxy.inputs[0]!.messages[0]!.content).toBe(
+    expect(PromptTurnInputSchema.parse(proxy.inputs[0]).prompt).toBe(
       "Read this\n[1 attachment]"
     )
     await proxy.close()
@@ -1017,20 +927,9 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "/undo")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
-      segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
-      })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "success" },
-        result: { "aos.composerPrefill": "next?" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnStarted })
+      segment.emit({ kind: TurnEventKind.TurnEnded, composerPrefill: "next?" })
       segment.finish()
     })
 
@@ -1060,13 +959,8 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Think it through")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     const segment = proxy.segments[0]!
-    const runId = proxy.inputs[0]!.runId
     act(() => {
-      segment.emit({
-        type: RunEventKind.RUN_STARTED,
-        threadId: SESSION_ID,
-        runId,
-      })
+      segment.emit({ kind: TurnEventKind.TurnStarted })
     })
     // The run has started but written nothing yet, so the replayed turn keeps
     // the settled disclosure it was projected with.
@@ -1076,53 +970,30 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     expect(screen.getAllByRole("button", { name: /Worked/ })).toHaveLength(1)
     expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
 
-    // Hermes streams the reasoning half of a turn under `<id>:reasoning`,
-    // before the prose it belongs to.
+    // The reasoning half of a turn names the assistant message it reasons
+    // toward, and streams before the prose it belongs to.
     act(() => {
       segment.emit({
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "assistant-1:reasoning",
-        role: "reasoning",
-      })
-      segment.emit({
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "assistant-1:reasoning",
-        delta: "Weigh ",
-      })
-      segment.emit({
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "assistant-1:reasoning",
-        delta: "the options.",
-      })
-      segment.emit({
-        type: RunEventKind.REASONING_MESSAGE_END,
-        messageId: "assistant-1:reasoning",
-      })
-      segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.ThoughtChunk,
         messageId: "assistant-1",
-        role: "assistant",
+        text: "Weigh ",
       })
       segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.ThoughtChunk,
         messageId: "assistant-1",
-        delta: "Shipping ",
+        text: "the options.",
       })
       segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        delta: "it.",
+        text: "Shipping ",
       })
       segment.emit({
-        type: RunEventKind.TEXT_MESSAGE_END,
+        kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
+        text: "it.",
       })
-      segment.emit({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: SESSION_ID,
-        runId,
-        outcome: { type: "success" },
-      })
+      segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
 

@@ -1,5 +1,6 @@
 import type { GuestAuthorization, GuestCapability } from "./guest-invitation"
 import { guestCapabilities, guestOperations } from "./guest-invitation"
+import { PendingRequestKind } from "../core/events"
 
 const MAX_INPUT_BYTES = 65_536
 const MAX_OUTPUT_BYTES = 32_768
@@ -65,17 +66,19 @@ const errorKeys = [
   "nativePosition",
 ] as const
 
-const interruptPayloadKeys = ["type", "interrupts"] as const
-const interruptKeys = [
-  "id",
-  "reason",
+const requestsPayloadKeys = ["type", "requests"] as const
+/** `toolCallId` is accepted but not projected: a guest never sees tool calls. */
+const requestKeys = [
+  "requestId",
+  "kind",
   "message",
+  "toolCallId",
   "expiresAt",
   "responseSchema",
-  "metadata",
 ] as const
 
-type Transport = "rest" | "ag-ui" | "ws" | "artifact" | "error"
+type Transport = "rest" | "turn" | "artifact" | "error"
+const TRANSPORTS: readonly Transport[] = ["rest", "turn", "artifact", "error"]
 
 const publicErrorCodes = [
   "AOS_CONNECTION_INTERRUPTED",
@@ -125,9 +128,9 @@ export type GuestSafeCustomUi = {
   items?: readonly string[]
 }
 
-export type GuestSafeInterrupt = {
-  id: string
-  reason: string
+export type GuestSafeRequest = {
+  requestId: string
+  kind: PendingRequestKind
   message?: string
   responseSchema: Record<string, unknown>
 }
@@ -147,8 +150,8 @@ export type GuestOutboundProjection = {
       }
     | ({ type: "artifact" } & GuestSafeMetadata)
     | {
-        type: "interrupt"
-        interrupts: readonly GuestSafeInterrupt[]
+        type: "requests"
+        requests: readonly GuestSafeRequest[]
       }
     | {
         type: "error"
@@ -539,26 +542,27 @@ function projectJsonSchema(
   return output
 }
 
-function projectInterrupt(
+function projectRequests(
   value: Record<string, unknown>,
   authorization: GuestAuthorization
 ): GuestOutboundProjection["payload"] | undefined {
   if (
     authorization.operation !== "messages:read" ||
-    !exactKnownKeys(value, interruptPayloadKeys) ||
-    value.type !== "interrupt" ||
-    !Array.isArray(value.interrupts) ||
-    value.interrupts.length < 1 ||
-    value.interrupts.length > 32
+    !exactKnownKeys(value, requestsPayloadKeys) ||
+    value.type !== "requests" ||
+    !Array.isArray(value.requests) ||
+    value.requests.length < 1 ||
+    value.requests.length > 32
   )
     return undefined
-  const interrupts: GuestSafeInterrupt[] = []
-  for (const candidate of value.interrupts) {
+  const requests: GuestSafeRequest[] = []
+  for (const candidate of value.requests) {
     if (
       !plainRecord(candidate) ||
-      !exactKnownKeys(candidate, interruptKeys) ||
-      !validIdentifier(candidate.id) ||
-      !validText(candidate.reason, 128) ||
+      !exactKnownKeys(candidate, requestKeys) ||
+      !validIdentifier(candidate.requestId) ||
+      (candidate.kind !== PendingRequestKind.Permission &&
+        candidate.kind !== PendingRequestKind.Elicitation) ||
       (candidate.message !== undefined &&
         !validText(candidate.message, 4_096)) ||
       (candidate.expiresAt !== undefined &&
@@ -570,23 +574,26 @@ function projectInterrupt(
       return undefined
     const responseSchema = projectJsonSchema(candidate.responseSchema)
     if (!responseSchema) return undefined
-    if (candidate.reason === "approval" && Array.isArray(responseSchema.enum)) {
+    if (
+      candidate.kind === PendingRequestKind.Permission &&
+      Array.isArray(responseSchema.enum)
+    ) {
       const choices = responseSchema.enum.filter(
         (choice) => choice !== "always"
       )
       if (choices.length === 0) return undefined
       responseSchema.enum = choices
     }
-    interrupts.push({
-      id: candidate.id,
-      reason: candidate.reason,
+    requests.push({
+      requestId: candidate.requestId,
+      kind: candidate.kind,
       ...(candidate.message === undefined
         ? {}
         : { message: candidate.message as string }),
       responseSchema,
     })
   }
-  return { type: "interrupt", interrupts }
+  return { type: "requests", requests }
 }
 
 function projectError(
@@ -626,9 +633,7 @@ export function projectGuestOutbound(
     !plainRecord(input) ||
     !exactKnownKeys(input, envelopeKeys) ||
     !validAuthorization(authorization) ||
-    !(["rest", "ag-ui", "ws", "artifact", "error"] as const).includes(
-      input.transport as never
-    ) ||
+    !TRANSPORTS.includes(input.transport as never) ||
     !validIdentifier(input.agentId) ||
     (input.sessionId !== undefined && !validIdentifier(input.sessionId)) ||
     input.agentId !== authorization.agentId ||
@@ -639,14 +644,10 @@ export function projectGuestOutbound(
     return undefined
 
   let payload: GuestOutboundProjection["payload"] | undefined
-  if (
-    input.transport === "rest" ||
-    input.transport === "ag-ui" ||
-    input.transport === "ws"
-  ) {
+  if (input.transport === "rest" || input.transport === "turn") {
     payload =
-      input.payload.type === "interrupt"
-        ? projectInterrupt(input.payload, authorization)
+      input.transport === "turn" && input.payload.type === "requests"
+        ? projectRequests(input.payload, authorization)
         : projectMessage(input.payload, authorization)
   } else if (input.transport === "artifact") {
     payload = projectArtifact(input.payload, authorization)
