@@ -16,10 +16,10 @@ export function categoryOf(type: string): PushCategory | undefined {
   switch (type) {
     case "attention-requested":
       return "input"
-    case "run-failed":
+    case "turn-failed":
     case "agent-activation-failed":
       return "failure"
-    case "run-finished":
+    case "turn-finished":
     case "agent-ready":
       return "completion"
     default:

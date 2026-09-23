@@ -27,8 +27,11 @@ import {
 } from "./index"
 import {
   AosArtifactDescriptorSchema,
+  AosElicitationMetaSchema,
   AosFocusNotificationSchema,
+  AosPermissionMetaSchema,
   AosSessionUpdateRequestSchema,
+  AosToolCallMetaSchema,
 } from "./acp"
 
 describe("AOS v1 normalized protocol", () => {
@@ -695,6 +698,35 @@ describe("AOS v1 normalized protocol", () => {
         ],
       })
     ).toThrow()
+  })
+
+  it("reads a turn meta a later proxy extended, keeping its known keys", () => {
+    const meta = AosToolCallMetaSchema.parse({
+      sequence: 3,
+      turnId: "turn-1",
+      messageId: "message-1",
+      addedLater: { nested: true },
+    })
+    expect(meta).toEqual({
+      sequence: 3,
+      turnId: "turn-1",
+      messageId: "message-1",
+    })
+    expect(() =>
+      AosToolCallMetaSchema.parse({ sequence: 3, turnId: 7, messageId: "m" })
+    ).toThrow()
+  })
+
+  it("names a pending request by requestId on permissions and questions", () => {
+    expect(
+      AosPermissionMetaSchema.parse({ requestId: "request-1", extra: 1 })
+    ).toEqual({ requestId: "request-1" })
+    expect(
+      AosElicitationMetaSchema.safeParse({
+        interruptId: "request-1",
+        questions: [{ prompt: "Which?", options: [] }],
+      }).success
+    ).toBe(false)
   })
 
   it("reads a focus report with or without the presence flags", () => {

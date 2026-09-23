@@ -15,11 +15,17 @@ import {
 
 /**
  * The AOS extension contract carried over ACP v2 between the Bun proxy (agent
- * side) and the browser (client side). ACP defines the run stream, sessions,
+ * side) and the browser (client side). ACP defines the turn stream, sessions,
  * config options, permissions, and plans; everything AOS needs beyond that
  * travels as underscore-prefixed extension methods and `_meta.aos` payloads
  * defined here. Both ends import this module and nothing else defines these
  * shapes.
+ *
+ * Client-to-agent shapes are strict: the proxy rejects what it does not
+ * define. Agent-to-client shapes are read leniently (`readObject`): the
+ * browser validates every key it knows and drops the rest, so a proxy that
+ * adds a key never costs the browser the whole payload. The proxy's builders
+ * stay exact through the inferred types.
  */
 
 export const ACP_PROTOCOL_VERSION = 2 as const
@@ -69,8 +75,8 @@ export const AOS_PLAN_ID = "todos" as const
  */
 export const AOS_JSONRPC_ERRORS = {
   authenticationRequired: -32001,
-  runInProgress: -32002,
-  staleInterrupt: -32003,
+  turnInProgress: -32002,
+  staleRequest: -32003,
   notFound: -32004,
   revisionConflict: -32005,
   temporarilyUnavailable: -32006,
@@ -94,11 +100,14 @@ export const IdentifierSchema = z
 const SequenceSchema = z.number().int().min(0)
 const LaneSchema = z.enum(["operator", "guest"])
 
+/** An agent-to-client object: known keys validated, unknown keys dropped. */
+const readObject = z.object
+
 // ---------------------------------------------------------------------------
 // initialize
 // ---------------------------------------------------------------------------
 
-export const AosExtensionsSchema = z.strictObject({
+export const AosExtensionsSchema = readObject({
   steer: z.boolean(),
   rewind: z.boolean(),
   artifacts: z.boolean(),
@@ -113,7 +122,7 @@ export const AosExtensionsSchema = z.strictObject({
 export type AosExtensions = z.infer<typeof AosExtensionsSchema>
 
 /** `InitializeResponse._meta.aos` */
-export const AosInitializeMetaSchema = z.strictObject({
+export const AosInitializeMetaSchema = readObject({
   version: z.literal(AOS_EXTENSION_VERSION),
   lane: LaneSchema,
   extensions: AosExtensionsSchema,
@@ -146,7 +155,7 @@ export const AosSessionListMetaSchema = z.strictObject({
  * runtime does not track that state or this read cannot know it; absent never
  * overwrites a known value.
  */
-export const AosSessionInfoMetaSchema = z.strictObject({
+export const AosSessionInfoMetaSchema = readObject({
   agentId: IdentifierSchema,
   status: SessionStatusSchema,
   archived: z.boolean(),
@@ -155,13 +164,13 @@ export const AosSessionInfoMetaSchema = z.strictObject({
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 
-export const AosExecutionSchema = z.strictObject({
+export const AosExecutionSchema = readObject({
   status: SessionStatusSchema,
-  runId: IdentifierSchema.optional(),
+  turnId: IdentifierSchema.optional(),
 })
 
 /** `NewSessionResponse._meta.aos` */
-export const AosSessionNewResponseMetaSchema = z.strictObject({
+export const AosSessionNewResponseMetaSchema = readObject({
   session: AosSessionInfoMetaSchema,
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
 })
@@ -170,9 +179,9 @@ export const AosSessionNewResponseMetaSchema = z.strictObject({
 export const AosSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */
   agentId: IdentifierSchema.optional(),
-  /** Last `_meta.aos.sequence` the client saw for `runId`. */
+  /** Last `_meta.aos.sequence` the client saw for `turnId`. */
   after: SequenceSchema.optional(),
-  runId: IdentifierSchema.optional(),
+  turnId: IdentifierSchema.optional(),
 })
 
 /**
@@ -180,7 +189,7 @@ export const AosSessionResumeMetaSchema = z.strictObject({
  * `messageId` field and its client parser strips unknown keys, so the proxy's
  * minted user message id travels here.
  */
-export const AosPromptResponseMetaSchema = z.strictObject({
+export const AosPromptResponseMetaSchema = readObject({
   messageId: IdentifierSchema,
 })
 
@@ -189,7 +198,7 @@ export const AosPromptResponseMetaSchema = z.strictObject({
  * bounded replay; the client must resume again with `replayFrom: { type:
  * "start" }`.
  */
-export const AosSessionResumeResponseMetaSchema = z.strictObject({
+export const AosSessionResumeResponseMetaSchema = readObject({
   session: AosSessionInfoMetaSchema,
   execution: AosExecutionSchema,
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
@@ -254,18 +263,18 @@ export const AosSetVisibilityRequestSchema =
 export const AosSetVisibilityResponseSchema = VisibilityUpdateResponseSchema
 
 // ---------------------------------------------------------------------------
-// run stream `_meta.aos`
+// turn stream `_meta.aos`
 // ---------------------------------------------------------------------------
 
-/** Base for every `session/update` the proxy emits from a run segment. */
-const RunMetaBase = {
+/** Base for every `session/update` the proxy emits from a turn segment. */
+const TurnMetaBase = {
   sequence: SequenceSchema,
-  runId: IdentifierSchema,
+  turnId: IdentifierSchema,
 }
 
 /** `state_update._meta.aos` */
-export const AosStateMetaSchema = z.strictObject({
-  ...RunMetaBase,
+export const AosStateMetaSchema = readObject({
+  ...TurnMetaBase,
   /**
    * When the state took effect. The two state updates that bracket a turn carry
    * the turn's span, live and on replay alike, so the browser reads a turn's
@@ -276,7 +285,7 @@ export const AosStateMetaSchema = z.strictObject({
   execution: z.literal("stopping").optional(),
   /**
    * Present with the `_aos_error` and `_aos_uncertain` stop reasons, and on a
-   * `running` update when the run reports a final failure but stays active
+   * `running` update when the turn reports a final failure but stays active
    * until it is stopped.
    */
   code: z.string().min(1).max(128).optional(),
@@ -284,11 +293,11 @@ export const AosStateMetaSchema = z.strictObject({
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
-export const AosChunkMetaSchema = z.strictObject(RunMetaBase)
+export const AosChunkMetaSchema = readObject(TurnMetaBase)
 
 /** `tool_call_update._meta.aos` */
-export const AosToolCallMetaSchema = z.strictObject({
-  ...RunMetaBase,
+export const AosToolCallMetaSchema = readObject({
+  ...TurnMetaBase,
   messageId: IdentifierSchema,
   /** Streaming arguments text; ACP replaces `rawInput` wholesale. */
   argsTextDelta: z.string().optional(),
@@ -311,9 +320,9 @@ export const AosAgentCreationReceiptSchema = z.discriminatedUnion("status", [
 ])
 
 /** `plan_update._meta.aos`: the lossless Session Todos. */
-export const AosPlanMetaSchema = z.strictObject({
+export const AosPlanMetaSchema = readObject({
   sequence: SequenceSchema,
-  runId: IdentifierSchema.optional(),
+  turnId: IdentifierSchema.optional(),
   todos: SessionTodosResponseSchema.shape.todos,
 })
 
@@ -322,9 +331,9 @@ export const AosPlanMetaSchema = z.strictObject({
  * token counts alone, so how the provider arrived at them and its own
  * attribution of what they hold travel here. A provider that attributes nothing
  * sends no breakdown rather than a guessed one, and usage belongs to the Session
- * rather than to a run, so this meta names neither a run nor a sequence.
+ * rather than to a turn, so this meta names neither a turn nor a sequence.
  */
-export const AosUsageMetaSchema = z.strictObject({
+export const AosUsageMetaSchema = readObject({
   source: SessionContextResponseSchema.shape.source,
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
@@ -336,18 +345,18 @@ export type AosUsageMeta = z.infer<typeof AosUsageMetaSchema>
 // ---------------------------------------------------------------------------
 
 /** `RequestPermissionRequest._meta.aos` */
-export const AosPermissionMetaSchema = z.strictObject({
-  interruptId: IdentifierSchema,
+export const AosPermissionMetaSchema = readObject({
+  requestId: IdentifierSchema,
   expiresAt: z.string().datetime().optional(),
   message: z.string().max(4096).optional(),
 })
 
-export const AosQuestionOptionSchema = z.strictObject({
+export const AosQuestionOptionSchema = readObject({
   label: z.string().min(1).max(4096),
   value: z.string().max(4096).optional(),
   description: z.string().max(4096).optional(),
 })
-export const AosQuestionSchema = z.strictObject({
+export const AosQuestionSchema = readObject({
   id: IdentifierSchema.optional(),
   /**
    * The provider's own short label for the question, when it has one. A
@@ -363,8 +372,8 @@ export const AosQuestionSchema = z.strictObject({
 export type AosQuestion = z.infer<typeof AosQuestionSchema>
 
 /** `CreateElicitationRequest._meta.aos`: lossless projection of the questions. */
-export const AosElicitationMetaSchema = z.strictObject({
-  interruptId: IdentifierSchema,
+export const AosElicitationMetaSchema = readObject({
+  requestId: IdentifierSchema,
   expiresAt: z.string().datetime().optional(),
   questions: z.array(AosQuestionSchema).min(1).max(64),
 })
@@ -378,36 +387,36 @@ export const AosArtifactDescriptorSchema = ArtifactDescriptorSchema
 export type AosArtifactDescriptor = ArtifactDescriptor
 
 /** `_aos/artifact` */
-export const AosArtifactNotificationSchema = z.strictObject({
+export const AosArtifactNotificationSchema = readObject({
   sessionId: IdentifierSchema,
-  ...RunMetaBase,
+  ...TurnMetaBase,
   messageId: IdentifierSchema.optional(),
   artifact: AosArtifactDescriptorSchema,
 })
 
 /** `_aos/steer_accepted` */
-export const AosSteerAcceptedNotificationSchema = z.strictObject({
+export const AosSteerAcceptedNotificationSchema = readObject({
   sessionId: IdentifierSchema,
-  ...RunMetaBase,
+  ...TurnMetaBase,
   requestId: IdentifierSchema,
   text: z.string(),
   delivery: RunSteerResponseSchema.shape.status,
 })
 
 /** `_aos/composer_prefill` */
-export const AosComposerPrefillNotificationSchema = z.strictObject({
+export const AosComposerPrefillNotificationSchema = readObject({
   sessionId: IdentifierSchema,
-  runId: IdentifierSchema,
+  turnId: IdentifierSchema,
   text: z.string(),
 })
 
 /** `_aos/catalog_invalidated` (no params) and `_aos/session_invalidated`. */
-export const AosSessionInvalidatedNotificationSchema = z.strictObject({
+export const AosSessionInvalidatedNotificationSchema = readObject({
   sessionId: IdentifierSchema,
 })
 
 /** `_aos/error`: a failure with no request to answer, e.g. a rejected cancel. */
-export const AosErrorNotificationSchema = z.strictObject({
+export const AosErrorNotificationSchema = readObject({
   sessionId: IdentifierSchema.optional(),
   code: z.string().min(1).max(128),
   message: z.string().max(4096),
@@ -425,28 +434,23 @@ const ActivityBase = {
  * the session list.
  */
 export const AosActivityNotificationSchema = z.discriminatedUnion("type", [
-  z.strictObject({
+  readObject({
     ...ActivityBase,
-    type: z.literal("run-started"),
-    lifecycleId: IdentifierSchema,
+    type: z.enum(["turn-started", "turn-finished", "turn-failed"]),
+    turnId: IdentifierSchema,
   }),
-  z.strictObject({
-    ...ActivityBase,
-    type: z.enum(["run-finished", "run-failed"]),
-    lifecycleId: IdentifierSchema,
-  }),
-  z.strictObject({
+  readObject({
     ...ActivityBase,
     type: z.literal("attention-requested"),
     requestId: IdentifierSchema,
     attentionKind: z.enum(["question", "permission"]),
   }),
-  z.strictObject({
+  readObject({
     ...ActivityBase,
     type: z.literal("attention-resolved"),
     requestId: IdentifierSchema,
   }),
-  z.strictObject({
+  readObject({
     ...ActivityBase,
     type: z.literal("unread-changed"),
     unread: z.boolean(),
