@@ -144,7 +144,7 @@ external reverse proxy is optional.
   `packages/proxy/adapters` owns native server clients, transports, identity,
   retention, recovery, validation, and conversion. Do not move a native
   transport concern into the shared coordinator. `packages/proxy/acp` owns ACP
-  translation, read state, activity feed, and session attachment.
+  translation, read state, activity feed, and session membership.
   `packages/proxy/auth` and `packages/proxy/guest` own authorization lanes;
   `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
   server entry point. `packages/proxy/voice` owns proxy speech providers (the

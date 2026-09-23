@@ -24,6 +24,8 @@ import type { ServerAttachmentStage, SessionScope } from "../core/runtime"
 import type { CoordinatedTurnSubscription } from "../core/session-coordinator"
 import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
+import { promptCopy, promptText } from "./prompt-content"
+import type { RoomMember, RoomTurn } from "./session-rooms"
 import { answeredQuestionOutbound } from "./translate/requests"
 import {
   initialTranslateState,
@@ -37,9 +39,10 @@ import { errorNotificationOf, staleRequest } from "./validation"
  * subscription, the reducer state that subscription's turn segment carries, and
  * the one server→client request its pending interaction is waiting on.
  *
- * The attachment owns only the browser subscriber lifetime. Detaching releases
- * the subscription and nothing else: the native Session, the coordinator's
- * logical execution, and a pending interaction all outlive it.
+ * The member owns only the browser subscriber lifetime. Leaving releases
+ * the subscription and its seat in the Session's room, and nothing else: the
+ * native Session, the coordinator's logical execution, and a pending
+ * interaction all outlive it.
  */
 
 type RequestOutbound = Extract<
@@ -128,7 +131,7 @@ const USAGE_RETRY_DELAYS_MS: readonly number[] = [
   1_000, 2_000, 4_000, 8_000, 16_000,
 ]
 
-export type SessionAttachmentOptions = {
+export type SessionMemberOptions = {
   context: AcpConnectionContext
   /** The Session's Agent, provider identity, and public `threadId`. */
   scope: SessionScope
@@ -140,7 +143,7 @@ export type SessionAttachmentOptions = {
   readModels: () => Promise<SessionModelsResponse>
 }
 
-class SessionAttachment {
+class SessionMember {
   readonly #context: AcpConnectionContext
   readonly #scope: SessionScope
   readonly #client: AgentContext
@@ -149,20 +152,44 @@ class SessionAttachment {
   #subscription: CoordinatedTurnSubscription | undefined
   #pending: { requestId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
-  #state = initialTranslateState
   #sequence = 0
   #stopRequested = false
-  #detached = false
+  #left = false
+  /** The turnId the latest subscription carried, which outlives its stream. */
+  #followedTurn: string | undefined
+  /**
+   * The follow or start in flight. Both subscribe this member, so one waits
+   * for the other rather than both subscribing it to the same turn.
+   */
+  #entering: Promise<unknown> | undefined
+  /** This member as the Session's room addresses it. */
+  readonly #seat: RoomMember
+  #leaveRoom: (() => void) | undefined
   #usageRetry: ReturnType<typeof setTimeout> | undefined
   /** Which usage report is live; a chain a newer trigger replaced stops. */
   #usageChain = 0
 
-  constructor(options: SessionAttachmentOptions) {
+  constructor(options: SessionMemberOptions) {
     this.#context = options.context
     this.#scope = options.scope
     this.#client = options.client
     this.#readUsage = options.readUsage
     this.#readModels = options.readModels
+    this.#seat = {
+      sendTurn: (turn) => this.#sendTurn(turn),
+      follow: () => this.#follow(false),
+      followedTurn: () => this.#followedTurn,
+      invalidate: () => this.#invalidate(),
+      report: (cause) => {
+        if (this.#left) return
+        const { runtime } = this.#context.runtimeInstance
+        const failure = errorNotificationOf(runtime, cause)
+        this.#log("error", "acp.room.failed", {
+          errorCode: failure.code,
+          message: failure.message,
+        })
+      },
+    }
   }
 
   /**
@@ -170,35 +197,48 @@ class SessionAttachment {
    * `replayedCorrections` names the steer acknowledgements this subscription
    * must drop because the history it follows already carried them.
    */
-  async attach(after?: number, replayedCorrections = 0) {
-    if (this.#detached || this.#subscription) return
-    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
-    if (state === "idle" || turnId === undefined) return
-    this.#consume(
-      await this.#coordinator.recover(
-        this.#scope,
-        {
-          threadId: this.#scope.threadId,
-          turnId,
-          ...(after === undefined ? {} : { after }),
-        },
-        this.#access()
-      ),
-      replayedCorrections
-    )
+  async follow(after?: number, replayedCorrections = 0) {
+    await this.#follow(true, after, replayedCorrections)
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */
   async startTurn(input: PromptTurnInput, stage?: ServerAttachmentStage) {
-    this.#consume(
-      await this.#coordinator.start(
-        this.#scope,
-        input,
-        this.#access(),
-        ...(stage ? [stage] : [])
-      ),
-      0
+    await this.#exclusive(async () =>
+      this.#consume(
+        await this.#coordinator.start(
+          this.#scope,
+          input,
+          this.#access(),
+          ...(stage ? [stage] : [])
+        ),
+        0
+      )
     )
+  }
+
+  /**
+   * Takes this member's seat in the Session's room. `hasPrompt` says the view
+   * holds the live turn's prompt; a `replayed` view was just rebuilt from
+   * history, so a member already seated is seated afresh from what it holds.
+   */
+  enterRoom(hasPrompt = false, replayed = false) {
+    if (this.#left) return
+    const { rooms } = this.#context
+    if (!this.#leaveRoom)
+      this.#leaveRoom = rooms.add(this.#scope, this.#seat, { hasPrompt })
+    else if (replayed) rooms.reseat(this.#scope, this.#seat, { hasPrompt })
+  }
+
+  /** Shows the room a turn this member admitted, then brings every member in. */
+  async announce(turn: RoomTurn) {
+    const { rooms } = this.#context
+    await rooms.broadcastTurn(this.#scope, turn, this.#seat)
+    await rooms.sync(this.#scope)
+  }
+
+  /** Brings this member alone into whatever turn the room is running. */
+  catchUp() {
+    return this.#context.rooms.catchUp(this.#scope, this.#seat)
   }
 
   /** Requests Stop, reporting an unsettled provider as `execution: stopping`. */
@@ -253,11 +293,11 @@ class SessionAttachment {
   }
 
   /**
-   * Reports the Session's context usage. Every attach and every settled turn
+   * Reports the Session's context usage. Every join and every settled turn
    * owes the client one of these, because the window moves with the
    * conversation and its size moves with the model the Session runs.
    *
-   * A window that is unreadable right after an attach is usually the provider's
+   * A window that is unreadable right after joining is usually the provider's
    * agent still being built, so the report is deferred through a bounded
    * backoff rather than dropped. Each trigger replaces whatever the previous one
    * left deferred, so one Session never has two reports in flight.
@@ -295,7 +335,7 @@ class SessionAttachment {
   update(update: SessionUpdate) {
     // Nothing to tell a client that has gone. A resolved promise rather than
     // `undefined`, because callers chain on what this returns.
-    if (this.#detached) return Promise.resolve()
+    if (this.#left) return Promise.resolve()
     const failure = turnFailureOf(update)
     if (failure) this.#log("error", "acp.turn.failed", failure)
     return this.#client.notify(methods.client.session.update, {
@@ -307,14 +347,14 @@ class SessionAttachment {
   /**
    * Reports a failure that has no request to answer.
    *
-   * A detached attachment reports nothing. Its deferred work outlives the
+   * A left member reports nothing. Its deferred work outlives the
    * client by a task or two, so whatever it was carrying fails on a socket the
    * browser already closed: that is the operator navigating away, not a fault
    * this deployment has to answer for. Logging it as one buries the failures
    * that are real.
    */
   async report(cause: unknown) {
-    if (this.#detached) return
+    if (this.#left) return
     const { runtime } = this.#context.runtimeInstance
     const failure = errorNotificationOf(runtime, cause)
     this.#log("error", "acp.error", {
@@ -329,12 +369,83 @@ class SessionAttachment {
       .catch(() => undefined)
   }
 
-  detach() {
-    this.#detached = true
+  leave() {
+    this.#left = true
+    this.#leaveRoom?.()
     this.#cancelUsageRetry()
     this.#subscription?.close()
     this.#subscription = undefined
     this.#replies.clear()
+  }
+
+  /**
+   * Subscribes to the live turn unless this member already carries it. A
+   * resume asks whether its current subscription does, so it can re-follow a
+   * turn whose stream it lost; the room asks whether any subscription ever
+   * did, so a member is never streamed one turn twice.
+   */
+  #follow(refollow: boolean, after?: number, replayedCorrections = 0) {
+    return this.#exclusive(async (): Promise<"following" | "idle"> => {
+      if (this.#left) return "idle"
+      const { state, turnId } = this.#coordinator.snapshot(this.#scope)
+      if (state === "idle" || turnId === undefined) return "idle"
+      const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
+      if (carried === turnId) return "following"
+      this.#consume(
+        await this.#coordinator.recover(
+          this.#scope,
+          {
+            threadId: this.#scope.threadId,
+            turnId,
+            ...(after === undefined ? {} : { after }),
+          },
+          this.#access()
+        ),
+        replayedCorrections
+      )
+      return "following"
+    })
+  }
+
+  /** Runs one subscribing task once every earlier one has settled. */
+  async #exclusive<T>(task: () => Promise<T>) {
+    while (this.#entering) await this.#entering.catch(() => undefined)
+    const entering = task()
+    this.#entering = entering
+    try {
+      return await entering
+    } finally {
+      if (this.#entering === entering) this.#entering = undefined
+    }
+  }
+
+  /**
+   * Shows this member a prompt another member sent. A guest sees only the
+   * text its projection allows, and nothing when that is none of it; an
+   * operator sees the blocks rebuilt from the fields a browser writes.
+   */
+  #sendTurn({ messageId, content }: RoomTurn) {
+    const { guest } = this.#context
+    const text = guest?.project.turn(promptText(content))
+    if (guest && text === undefined) return
+    return this.update({
+      sessionUpdate: "user_message",
+      messageId,
+      content:
+        text === undefined ? promptCopy(content) : [{ type: "text", text }],
+    })
+  }
+
+  /** Asks the client to reload the Session from history. */
+  async #invalidate() {
+    // A left member has no client left to resync, exactly as it has
+    // none to report a failure to.
+    if (this.#left) return
+    await this.#client
+      .notify(AOS_METHODS.notify.sessionInvalidated, {
+        sessionId: this.#scope.threadId,
+      })
+      .catch(() => undefined)
   }
 
   /**
@@ -343,9 +454,9 @@ class SessionAttachment {
    * has already moved past.
    */
   async #sendUsage(chain: number, attempt: number) {
-    if (this.#detached || chain !== this.#usageChain) return
+    if (this.#left || chain !== this.#usageChain) return
     const usage = await this.#readUsage().catch(() => undefined)
-    if (this.#detached || chain !== this.#usageChain) return
+    if (this.#left || chain !== this.#usageChain) return
     if (!usage) {
       this.#scheduleUsageRetry(chain, attempt)
       return
@@ -404,7 +515,7 @@ class SessionAttachment {
     )
   }
 
-  /** The subscriber the coordinator knows this attachment's stream by. */
+  /** The subscriber the coordinator knows this member's stream by. */
   get #subscriberId() {
     return `${this.#context.connectionId}:${this.#scope.threadId}`
   }
@@ -418,8 +529,9 @@ class SessionAttachment {
 
   /**
    * How the coordinator sees one subscription of this attachment. The guest
-   * projection replaces the turn stream with its allowlisted events and restates
-   * the same controller identity, so a guest may Stop only its own turn.
+   * projection replaces the turn stream with its allowlisted events and grants
+   * control of what it follows, so a guest may Stop any turn in its Session,
+   * not only one it started.
    */
   #access() {
     const { lane, guest } = this.#context
@@ -436,25 +548,38 @@ class SessionAttachment {
     subscription: CoordinatedTurnSubscription,
     replayedCorrections: number
   ) {
+    // A member that left while its subscription was being admitted keeps none.
+    if (this.#left) {
+      subscription.close()
+      return
+    }
     this.#subscription = subscription
-    this.#state = { ...initialTranslateState, replayedCorrections }
+    this.#followedTurn = subscription.turnId
     this.#stopRequested = false
-    void this.#pump(subscription)
+    void this.#pump(subscription, replayedCorrections)
   }
 
-  async #pump(subscription: CoordinatedTurnSubscription) {
+  /**
+   * Translates one subscription's segment. The reducer state is the segment's
+   * own, so an earlier segment still draining never mixes into a later one.
+   */
+  async #pump(
+    subscription: CoordinatedTurnSubscription,
+    replayedCorrections: number
+  ) {
     const { translateTurnEvent } = this.#context.translators
+    let state = { ...initialTranslateState, replayedCorrections }
     let overflow: FanoutOverflowError | undefined
     try {
       for await (const { sequence, event } of subscription.events) {
         this.#sequence = sequence
-        const translated = translateTurnEvent(this.#state, event, {
+        const translated = translateTurnEvent(state, event, {
           turnId: subscription.turnId,
           sequence,
           lane: this.#context.lane,
           stopping: this.#stopping,
         })
-        this.#state = translated.state
+        state = translated.state
         for (const outbound of translated.outbound)
           await this.#send(outbound, sequence)
       }
@@ -488,14 +613,7 @@ class SessionAttachment {
       events: overflow.events,
       bytes: overflow.bytes,
     })
-    // A detached attachment has no client left to resync, exactly as it has
-    // none to report a failure to.
-    if (this.#detached) return
-    await this.#client
-      .notify(AOS_METHODS.notify.sessionInvalidated, {
-        sessionId: this.#scope.threadId,
-      })
-      .catch(() => undefined)
+    await this.#invalidate()
   }
 
   async #send(outbound: AcpOutbound, sequence: number) {
@@ -622,20 +740,28 @@ class SessionAttachment {
       return entry ? [entry] : []
     })
     this.#replies.clear()
+    const from = this.#coordinator.snapshot(this.#scope).turnId
     const turnId = crypto.randomUUID()
-    this.#consume(
-      await this.#coordinator.start(
-        this.#scope,
-        { turnId, replies },
-        this.#access()
-      ),
-      0
+    await this.#exclusive(async () =>
+      this.#consume(
+        await this.#coordinator.start(
+          this.#scope,
+          { turnId, replies },
+          this.#access()
+        ),
+        0
+      )
     )
+    // Outside the admission above: syncing follows every member, this one
+    // included, and a follow waits for the admission it would be inside.
+    const { rooms } = this.#context
+    if (from !== undefined) rooms.continueTurn(this.#scope, from, turnId)
+    await rooms.sync(this.#scope)
   }
 }
 
-export function createSessionAttachment(options: SessionAttachmentOptions) {
-  return new SessionAttachment(options)
+export function createSessionMember(options: SessionMemberOptions) {
+  return new SessionMember(options)
 }
 
-export type { SessionAttachment }
+export type { SessionMember }

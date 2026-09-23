@@ -1,4 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
+import { createSessionRooms } from "./acp/session-rooms"
 import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
@@ -207,6 +208,13 @@ export async function createConfiguredProxy(
           ...clock,
         })
       : undefined
+  /**
+   * One room registry per process, like the runtime both lanes share: a room is
+   * one provider Session, whichever lane each of its members arrived on.
+   */
+  const rooms = createSessionRooms({
+    snapshot: (scope) => runtimeInstance.sessions.snapshot(scope),
+  })
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
   const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
     const attachmentStages = createGuestAttachmentStages()
@@ -225,6 +233,7 @@ export async function createConfiguredProxy(
         runtimeInstance,
         invitations: service,
         attachmentStages,
+        rooms,
         logger: dependencies.logger,
         ...clock,
       }),
@@ -253,6 +262,7 @@ export async function createConfiguredProxy(
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
+    rooms,
     sessionRows,
     logger: dependencies.logger,
     ...(push ? { presence: push.presence } : {}),

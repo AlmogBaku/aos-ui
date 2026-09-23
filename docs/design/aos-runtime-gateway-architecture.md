@@ -236,17 +236,17 @@ retains the execution in `waiting-for-input`.
 
 Delivery: each pending request is sent as a server→client `requestPermission`
 or `elicitation.create` call with a `requestId` in `_meta.aos`
-(`protocol/acp.ts:315-341`; `acp/session-attachment.ts:460-511`).
+(`protocol/acp.ts:315-341`; `acp/session-member.ts:665-716`).
 
 Answering every request starts a new turn segment whose `TurnInput` carries
-the `replies` array (`acp/session-attachment.ts`, `#settle`;
+the `replies` array (`acp/session-member.ts`, `#settle`;
 `session-coordinator.ts`).
 
 A stale request (the execution has moved on) returns JSON-RPC error
 `-32003 staleRequest` (`acp/validation.ts:58-59`).
 
 On reconnect, pending requests are re-issued via `reissuePending`
-(`acp/session-attachment.ts:249-256`).
+(`acp/session-member.ts:317-324`).
 
 ---
 
@@ -331,8 +331,8 @@ deltas merge on read to save replay size while keeping cursors exact
 journal cannot answer the cursor (`acp/agent.ts:419-428`).
 
 The `discover` preamble reconstructs authoritative state before replay
-(`acp/agent.ts:411-418`). `reissuePending` re-delivers pending requests after
-reconnect (`acp/session-attachment.ts:249-256`). Adapter-private
+(`acp/agent.ts:464-471`). `reissuePending` re-delivers pending requests after
+reconnect (`acp/session-member.ts:317-324`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
 **Accepted steering survives replay exactly once.** The browser projects

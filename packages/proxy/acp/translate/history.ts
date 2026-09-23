@@ -119,7 +119,9 @@ function toolCallOutbound(
         argsText: part.argsText,
         ...(part.startedAt ? { startedAt: part.startedAt } : {}),
         ...(part.completedAt ? { completedAt: part.completedAt } : {}),
-        ...(part.durationMs === undefined ? {} : { durationMs: part.durationMs }),
+        ...(part.durationMs === undefined
+          ? {}
+          : { durationMs: part.durationMs }),
         ...(part.app ? { app: {} } : {}),
       }
     ),
@@ -248,7 +250,9 @@ export const translateHistory = ((history, lane) => {
 }) satisfies TranslateHistory
 
 /** A user turn the provider persisted as a mid-turn correction. */
-function isCorrection(message: SessionHistoryResponse["messages"][number]) {
+export function isCorrection(
+  message: SessionHistoryResponse["messages"][number]
+) {
   return message.role === "user" && message.metadata?.custom.correction === true
 }
 

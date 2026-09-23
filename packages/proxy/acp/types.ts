@@ -29,6 +29,7 @@ import type {
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
+import type { SessionRooms } from "./session-rooms"
 
 export type Lane = "operator" | "guest"
 
@@ -59,6 +60,11 @@ export type AcpConnectionContext = {
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
+  /**
+   * The one room registry per proxy process, shared by both lanes so an
+   * operator and a guest on the same provider Session land in one room.
+   */
+  rooms: SessionRooms
   /** Present only on the guest lane; absent means an operator connection. */
   guest?: GuestPolicy
   /**
@@ -99,6 +105,11 @@ export type GuestPolicy = {
     /** Wraps one coordinator subscription in the guest run projection. */
     access(base: CoordinatorAccess, scope: SessionScope): CoordinatorAccess
     history(value: SessionHistoryResponse): SessionHistoryResponse
+    /**
+     * Another member's prompt text as the guest may see it, projected as a
+     * history user turn is; `undefined` means the guest sees no copy.
+     */
+    turn(text: string): string | undefined
     capabilities(value: WorkspaceCapabilities): WorkspaceCapabilities
     /** Refuses an approval answer that would widen the grant past this request. */
     permissionReply(request: PendingRequest, reply: RequestReply): RequestReply

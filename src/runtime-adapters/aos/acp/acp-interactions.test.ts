@@ -6,23 +6,52 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
-import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
+import { AOS_METHODS, AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
 import { createAcpInteractions } from "./acp-interactions"
 import type { AcpPendingRequest } from "./types"
 
-function harness() {
+function harness({
+  agentOf = () => "agent-1",
+}: { agentOf?: (sessionId: string) => string | undefined } = {}) {
   const listeners = new Set<(pending: AcpPendingRequest) => void>()
+  const notificationListeners = new Map<
+    string,
+    Set<(params: unknown) => void>
+  >()
   const interactions = createAcpInteractions({
     connection: {
       onPendingRequest(listener) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
+      onNotification(method, listener) {
+        const existing = notificationListeners.get(method) ?? new Set()
+        existing.add(listener)
+        notificationListeners.set(method, existing)
+        return () => existing.delete(listener)
+      },
     },
+    agentOf,
   })
   const emit = (pending: AcpPendingRequest) =>
     listeners.forEach((listener) => listener(pending))
-  return { interactions, emit }
+  const notify = (method: string, params: unknown) =>
+    notificationListeners.get(method)?.forEach((listener) => listener(params))
+  return { interactions, emit, notify }
+}
+
+function resolved({
+  requestId = "interrupt-1",
+  agentId = "agent-1",
+}: { requestId?: string; agentId?: string } = {}) {
+  return {
+    type: "attention-resolved",
+    agentId,
+    // The Session of whichever UI started the turn, not this UI's copy.
+    sessionId: "session-elsewhere",
+    occurredAt: "2026-09-23T10:00:00.000Z",
+    requestId,
+  }
 }
 
 function permission({
@@ -317,5 +346,38 @@ describe("ACP runtime interactions", () => {
     expect(respond).not.toHaveBeenCalled()
     expect(listener).toHaveBeenCalledTimes(1)
     expect(interactions.getPending("session-1")).toBeUndefined()
+  })
+
+  it("clears a question another UI answered without answering the runtime", () => {
+    const { interactions, emit, notify } = harness()
+    const { pending, respond } = permission()
+    emit(pending)
+    const listener = vi.fn()
+    interactions.subscribe("session-1", listener)
+
+    notify(AOS_METHODS.notify.activity, resolved())
+
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(respond).not.toHaveBeenCalled()
+  })
+
+  it("keeps a question another request or Agent resolved", () => {
+    const { interactions, emit, notify } = harness()
+    emit(permission().pending)
+
+    notify(AOS_METHODS.notify.activity, resolved({ requestId: "interrupt-9" }))
+    notify(AOS_METHODS.notify.activity, resolved({ agentId: "agent-2" }))
+
+    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-1")
+  })
+
+  it("keeps a question whose owning Agent is unknown", () => {
+    const { interactions, emit, notify } = harness({ agentOf: () => undefined })
+    emit(permission().pending)
+
+    notify(AOS_METHODS.notify.activity, resolved())
+
+    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-1")
   })
 })

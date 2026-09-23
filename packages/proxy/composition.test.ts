@@ -208,6 +208,9 @@ describe("configured proxy composition", () => {
 
     expect(transportFactory).toHaveBeenCalledOnce()
     expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
+    // An operator and a guest on one provider Session meet in one room.
+    expect(configured.acpService.rooms).toBeDefined()
+    expect(configured.guest?.acpService.rooms).toBe(configured.acpService.rooms)
     await expect(
       transportFactory.mock.results[0]?.value.credentials()
     ).resolves.toEqual({ "X-Hermes-Session-Token": "hermes-secret" })

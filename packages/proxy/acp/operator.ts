@@ -6,6 +6,7 @@ import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
+import type { SessionRooms } from "./session-rooms"
 import * as translators from "./translate"
 import type { AcpConnectionContext, AcpLogger } from "./types"
 
@@ -14,6 +15,8 @@ export type OperatorAcpServiceOptions = {
   runtimeInstance: RuntimeInstance
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
+  /** The one room registry the guest lane shares, so both see one room. */
+  rooms: SessionRooms
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */
@@ -34,6 +37,7 @@ export function createOperatorAcpService({
   publicOrigin,
   runtimeInstance,
   attachmentStages,
+  rooms,
   logger,
   presence,
   now = Date.now,
@@ -53,6 +57,7 @@ export function createOperatorAcpService({
       sessionRows,
       translators,
       attachmentStages,
+      rooms,
       logger,
       presence,
       readState: createReadState({
@@ -67,6 +72,7 @@ export function createOperatorAcpService({
     }),
   })
   // The cache is part of the lane's surface: push delivery gates on the rows
-  // this lane keeps current, and there is only ever one of them.
-  return { ...service, sessionRows }
+  // this lane keeps current, and there is only ever one of them. The rooms are
+  // exposed the same way, so the composition can show both lanes share them.
+  return { ...service, sessionRows, rooms }
 }

@@ -1,5 +1,7 @@
 import {
   AOS_META_KEY,
+  AOS_METHODS,
+  AosActivityNotificationSchema,
   AosElicitationMetaSchema,
   AosPermissionMetaSchema,
 } from "@aos/protocol/acp"
@@ -8,6 +10,7 @@ import type {
   RuntimeQuestion,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
+import { onAosNotification } from "./aos-notification"
 import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
@@ -15,11 +18,18 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
  * permission becomes one single-select question over its options, and an
  * elicitation carries the lossless questions the proxy put in `_meta.aos`.
  * One pending request per Session, replaced by the next one the proxy sends.
+ *
+ * Every UI with the Session open receives the same request. When another UI
+ * answers it, the proxy's `attention-resolved` activity clears this copy. The
+ * event names the Session of whichever UI started the turn, which a guest
+ * keys differently, so it is matched by request id and owning Agent instead.
  */
 
 type PendingEntry = {
   request: RuntimeQuestionRequest
   pending: AcpPendingRequest
+  /** Unknown ownership is never auto-cleared. */
+  agentId: string | undefined
 }
 
 /**
@@ -41,8 +51,11 @@ function elicitationContent(
 
 export function createAcpInteractions({
   connection,
+  agentOf,
 }: {
-  connection: Pick<AcpConnection, "onPendingRequest">
+  connection: Pick<AcpConnection, "onPendingRequest" | "onNotification">
+  /** The Agent that owns a Session, when it is known. */
+  agentOf: (sessionId: string) => string | undefined
 }): RuntimeInteractionAdapter {
   const entries = new Map<string, PendingEntry>()
   const listeners = new Map<string, Set<() => void>>()
@@ -105,11 +118,15 @@ export function createAcpInteractions({
     }
   }
 
+  function drop(sessionId: string) {
+    entries.delete(sessionId)
+    notify(sessionId)
+  }
+
   function take(request: RuntimeQuestionRequest) {
     const entry = entries.get(request.sessionId)
     if (!entry || entry.request.requestId !== request.requestId) return
-    entries.delete(request.sessionId)
-    notify(request.sessionId)
+    drop(request.sessionId)
     return entry.pending
   }
 
@@ -119,9 +136,26 @@ export function createAcpInteractions({
     if (sessionId === undefined) return
     const request = project(pending, sessionId)
     if (request === undefined) return
-    entries.set(sessionId, { request, pending })
+    entries.set(sessionId, { request, pending, agentId: agentOf(sessionId) })
     notify(sessionId)
   })
+
+  // The unanswered JSON-RPC request stays open until the socket closes.
+  onAosNotification(
+    connection,
+    AOS_METHODS.notify.activity,
+    AosActivityNotificationSchema,
+    (notification) => {
+      if (notification.type !== "attention-resolved") return
+      for (const [sessionId, entry] of entries) {
+        if (
+          entry.request.requestId === notification.requestId &&
+          entry.agentId === notification.agentId
+        )
+          drop(sessionId)
+      }
+    }
+  )
 
   return {
     async respond(request, response) {

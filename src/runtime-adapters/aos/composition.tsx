@@ -144,8 +144,8 @@ function ReadyAosRuntimeProvider({
   const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
   const mcpApps = useMemo(() => new AosMcpAppAdapter(rest), [rest])
   const interactions = useMemo(
-    () => createAcpInteractions({ connection }),
-    [connection]
+    () => createAcpInteractions({ connection, agentOf: client.knownAgentIdOf }),
+    [client, connection]
   )
   const media = useMemo(() => new VoiceMediaController(), [])
   const describeRunError = useCallback(

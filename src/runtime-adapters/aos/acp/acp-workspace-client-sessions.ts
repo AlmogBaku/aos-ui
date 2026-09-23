@@ -3,7 +3,6 @@ import {
   StateUpdate,
   type SessionInfo,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import { z } from "zod"
 
 import {
   AOS_METHODS,
@@ -22,6 +21,7 @@ import type {
   TodoItem,
   WorkspaceActivityEvent,
 } from "../../contracts"
+import { onAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 
 /**
@@ -41,19 +41,6 @@ export type AcpSessionStoreOptions = {
   now?: () => number
   /** A live turn of an attached Session just stopped, however it ended. */
   onTurnFinished?: (threadId: string) => void
-}
-
-/** Runs `handler` for every notification of `method` the proxy sends. */
-function onAosNotification<Value>(
-  connection: AcpConnection,
-  method: string,
-  schema: Pick<z.ZodType<Value>, "safeParse">,
-  handler: (value: Value) => void
-) {
-  return connection.onNotification(method, (params) => {
-    const parsed = schema.safeParse(params)
-    if (parsed.success) handler(parsed.data)
-  })
 }
 
 /** The one place a `state_update` becomes a Session status. */

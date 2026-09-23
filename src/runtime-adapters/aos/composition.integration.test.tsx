@@ -21,6 +21,7 @@ import {
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
 import { createActivityFeed } from "../../../packages/proxy/acp/activity-feed"
 import { createReadState } from "../../../packages/proxy/acp/read-state"
+import { createSessionRooms } from "../../../packages/proxy/acp/session-rooms"
 import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
@@ -397,6 +398,9 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     sessionRows,
     translators,
     attachmentStages,
+    rooms: createSessionRooms({
+      snapshot: (scope) => coordinator.snapshot(scope),
+    }),
     readState: createReadState({
       runtimeInstance,
       sessionRows,

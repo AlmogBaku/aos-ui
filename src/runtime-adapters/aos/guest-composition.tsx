@@ -353,8 +353,8 @@ function ReadyGuestAosSurface({
   const artifacts = useMemo(() => new AosArtifactAdapter(rest), [rest])
   const mcpApps = useMemo(() => new AosMcpAppAdapter(rest), [rest])
   const interactions = useMemo(
-    () => createAcpInteractions({ connection }),
-    [connection]
+    () => createAcpInteractions({ connection, agentOf: () => agentId }),
+    [agentId, connection]
   )
   const media = useMemo(() => new VoiceMediaController(), [])
   // The invited Session reports what it supports only once it is attached.

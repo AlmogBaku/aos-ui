@@ -50,6 +50,7 @@ import { createSessionRows } from "../core/session-rows"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
+import { createSessionRooms } from "./session-rooms"
 import * as translators from "./translate"
 import type { AcpConnectionContext } from "./types"
 
@@ -453,6 +454,9 @@ async function harness(options: HarnessOptions = {}) {
     sessionRows,
     translators,
     attachmentStages: new AttachmentStageRegistry(),
+    rooms: createSessionRooms({
+      snapshot: (scope) => coordinator.snapshot(scope),
+    }),
     logger: { info: vi.fn(), error: vi.fn() },
     readState: createReadState({
       runtimeInstance,
