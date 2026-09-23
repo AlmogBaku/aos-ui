@@ -848,7 +848,9 @@ describe("Hermes server adapter", () => {
         ])
       )
     const hermesWithPins = (
-      rowsByProfile: Record<string, Array<{ id: string; pinned: boolean }>>
+      rowsByProfile: Record<string, Array<{ id: string; pinned: boolean }>>,
+      /** Hermes counts hidden rows its list leaves out. */
+      hiddenByProfile: Record<string, number> = {}
     ) => {
       const request = vi.fn(async () => ({
         profiles: Object.keys(rowsByProfile).map((name) => ({
@@ -859,12 +861,16 @@ describe("Hermes server adapter", () => {
       }))
       const http = vi.fn(async (path: string) => {
         const url = new URL(path, "http://native.test")
-        const rows = rowsByProfile[url.searchParams.get("profile")!]!
+        const profileName = url.searchParams.get("profile")!
+        const rows = rowsByProfile[profileName]!
         const limit = Number(url.searchParams.get("limit"))
         const offset = Number(url.searchParams.get("offset"))
         const page = rows.slice(offset, offset + limit)
         const backfill = rows.filter((row) => row.pinned && !page.includes(row))
-        return { sessions: [...page, ...backfill], total: rows.length }
+        return {
+          sessions: [...page, ...backfill],
+          total: rows.length + (hiddenByProfile[profileName] ?? 0),
+        }
       })
       return new HermesServerAdapter({ request, http })
     }
@@ -887,6 +893,8 @@ describe("Hermes server adapter", () => {
         const page = await list(50, offset)
         pages += 1
         served.push(...ids(page.sessions))
+        if (!page.sessions.length && offset < page.total)
+          throw new Error(`the cursor stalled at ${offset}`)
         offset += page.sessions.length
         if (offset >= page.total) return { served, pages }
       }
@@ -917,7 +925,7 @@ describe("Hermes server adapter", () => {
 
     it("follows the cursor to the end of every catalog without skipping or repeating a Session", async () => {
       const rows = catalog({ alpha: 223, beta: 101, gamma: 7 }, [0, 3, 99, 200])
-      const adapter = hermesWithPins(rows)
+      const adapter = hermesWithPins(rows, { beta: 2, gamma: 1 })
       const everything = Object.values(rows)
         .flat()
         .sort((left, right) => right.last_active - left.last_active)

@@ -8,7 +8,10 @@ import {
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { SessionHistoryResponseSchema } from "../../protocol"
+import {
+  SESSION_CATALOG_MAX_WINDOW,
+  SessionHistoryResponseSchema,
+} from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_AUTH_METHOD_INVITE,
@@ -425,7 +428,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           context.sessionRows.get(session.agentId, session.id) ?? session
         return sessionInfoOf(row, sessions.status(row))
       }),
-      ...(next < page.total ? { nextCursor: encodeCursor(next) } : {}),
+      // No cursor points past the catalog window, which no runtime serves.
+      ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
+        ? { nextCursor: encodeCursor(next) }
+        : {}),
     }
   })
 

@@ -1208,6 +1208,9 @@ export class HermesServerAdapter implements ServerRuntime {
    * Hermes's order. Read contiguously from offset 0: every back-filled pin the
    * `limit` cut misses is either already read or sits further down, where its
    * own page carries it; on the short last page it is already read.
+   *
+   * Hermes counts `total` without the list's hidden-row filter, so once a short
+   * page proves the list exhausted, the rows read are the total.
    */
   async #sessionPrefix(
     profile: string,
@@ -1229,7 +1232,9 @@ export class HermesServerAdapter implements ServerRuntime {
         sessions.push(session)
       }
       offset += limit
-      if (page.sessions.length < limit || offset >= total) break
+      if (page.sessions.length < limit)
+        return { sessions, total: sessions.length }
+      if (offset >= total) break
     }
     return { sessions: sessions.slice(0, length), total }
   }
