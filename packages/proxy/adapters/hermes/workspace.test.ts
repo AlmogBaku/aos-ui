@@ -141,13 +141,13 @@ describe("Hermes workspace operations", () => {
 
     expect(operations.capabilities().activity).toEqual({
       status: "unavailable",
-      reason: "session-info-unavailable",
+      reason: "session-state-unavailable",
     })
     await expect(
       operations.activity("research", "hermes:research:stored-1")
     ).resolves.toEqual({
       status: "unavailable",
-      reason: "session-info-unavailable",
+      reason: "session-state-unavailable",
     })
     expect(request).not.toHaveBeenCalled()
   })

@@ -767,7 +767,7 @@ export const SessionActivityResponseSchema = z.discriminatedUnion("status", [
     reason: z.enum([
       "session-not-attached",
       "session-idle",
-      "session-info-unavailable",
+      "session-state-unavailable",
     ]),
   }),
   z.strictObject({

@@ -196,7 +196,7 @@ describe("AOS v1 normalized protocol", () => {
           todos: { status: "unavailable", reason: "history-unavailable" },
           activity: {
             status: "unavailable",
-            reason: "session-info-unavailable",
+            reason: "session-state-unavailable",
           },
         },
         interactions: {

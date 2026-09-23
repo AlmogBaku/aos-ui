@@ -95,7 +95,7 @@ export type HermesWorkspaceCapabilities = {
         coverage: "active-session-only"
         source: "provider-session-state"
       }
-    | { status: "unavailable"; reason: "session-info-unavailable" }
+    | { status: "unavailable"; reason: "session-state-unavailable" }
 }
 
 /** Hermes' native reasoning-effort ladder, weakest to strongest. */
@@ -140,7 +140,7 @@ export type HermesActivity =
   | {
       status: "unavailable"
       reason:
-        "session-not-attached" | "session-idle" | "session-info-unavailable"
+        "session-not-attached" | "session-idle" | "session-state-unavailable"
     }
   | {
       status: "available"
@@ -531,7 +531,7 @@ export function createHermesWorkspaceOperations(input: {
               coverage: "active-session-only",
               source: "provider-session-state",
             }
-          : { status: "unavailable", reason: "session-info-unavailable" },
+          : { status: "unavailable", reason: "session-state-unavailable" },
       }
     },
     models,
@@ -663,7 +663,7 @@ export function createHermesWorkspaceOperations(input: {
           state: "idle",
         }
       if (!input.transport.sessionInfo)
-        return { status: "unavailable", reason: "session-info-unavailable" }
+        return { status: "unavailable", reason: "session-state-unavailable" }
       const info = await input.transport.sessionInfo(session).catch(() => {
         throw new HermesWorkspaceUnavailableError()
       })

@@ -31,7 +31,7 @@ function capabilities(): AosWorkspaceCapabilities {
         breakdown: "provider-categories",
       },
       todos: { status: "unavailable", reason: "history-unavailable" },
-      activity: { status: "unavailable", reason: "session-info-unavailable" },
+      activity: { status: "unavailable", reason: "session-state-unavailable" },
     },
     interactions: {
       steering: {
