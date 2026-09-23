@@ -1,10 +1,11 @@
 import type { SessionMessage } from "../../../protocol"
 import {
+  openCodeStopReason,
   openCodeTimestamp,
   parseOpenCodeMessageCatalog,
   type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
-import { canonicalOpenCodeToolCall } from "./tool-names"
+import { canonicalOpenCodeToolCall, openCodeToolKind } from "./tool-names"
 
 type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
@@ -89,10 +90,17 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
             ? publicJson(part.state.result)
             : undefined
         )
+        const kind = openCodeToolKind(call.toolName)
+        const { completed } = part.time
         content.push({
           type: "tool-call",
           toolCallId: part.id,
           toolName: call.toolName,
+          ...(kind ? { kind } : {}),
+          startedAt: openCodeTimestamp(part.time.created),
+          ...(completed === undefined
+            ? {}
+            : { completedAt: openCodeTimestamp(completed) }),
           args: call.args,
           argsText:
             part.state.status === "pending"
@@ -104,7 +112,15 @@ function projectMessage(message: NativeMessage): SessionMessage | undefined {
       }
     }
     return content.length
-      ? { id: message.id, role: "assistant", createdAt, content }
+      ? {
+          id: message.id,
+          role: "assistant",
+          createdAt,
+          content,
+          ...(message.finish
+            ? { stopReason: openCodeStopReason(message.finish) }
+            : {}),
+        }
       : undefined
   }
   if (message.type === "system" || message.type === "synthetic")

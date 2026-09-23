@@ -1,7 +1,7 @@
 import {
   CompactionStatus,
-  StopReason,
   TurnEventKind,
+  type StopReason,
   aggregateTokenUsage,
   type TokenUsage,
   type TurnEvent,
@@ -10,7 +10,11 @@ import {
 import { projectTodos, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
-import { openCodeModelOptionId, openCodeTimestamp } from "./native-schemas"
+import {
+  openCodeModelOptionId,
+  openCodeStopReason,
+  openCodeTimestamp,
+} from "./native-schemas"
 import { OPENCODE_TODO_STATUS_ALIASES, OPENCODE_TODO_TOOL } from "./todos"
 import {
   OPENCODE_SHELL_TOOL,
@@ -281,18 +285,6 @@ function tokenUsage(value: unknown): TokenUsage[] {
       totalTokens: input + output + reasoning,
     },
   ]
-}
-
-/**
- * Why a provider step stopped. OpenCode passes the AI SDK's finish reason
- * through; a step that ended on tool calls or anything else ended its turn.
- */
-function stopReason(finish: string): StopReason {
-  if (finish === "length" || finish === "max_tokens")
-    return StopReason.MaxTokens
-  if (finish === "content-filter" || finish === "content_filter")
-    return StopReason.Refusal
-  return StopReason.EndTurn
 }
 
 type ModelRef = { id: string; providerID: string }
@@ -803,7 +795,7 @@ export class OpenCodeEventProjector {
     } else if (type === "session.next.step.ended") {
       this.#usage.push(...tokenUsage(data.tokens))
       this.#cost = (this.#cost ?? 0) + (data.cost as number)
-      this.#stopReason = stopReason(data.finish as string)
+      this.#stopReason = openCodeStopReason(data.finish as string)
     } else if (type === "session.next.model.switched") {
       events.push({
         kind: TurnEventKind.ModelChanged,

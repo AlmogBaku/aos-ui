@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { StopReason } from "../../../protocol"
+
 const IdentifierSchema = z
   .string()
   .min(1)
@@ -57,6 +59,18 @@ export function openCodeModelOptionId(model: {
   return JSON.stringify([model.providerID, model.id])
 }
 
+/**
+ * Why a provider step stopped. OpenCode passes the AI SDK's finish reason
+ * through; a step that ended on tool calls or anything else ended its turn.
+ */
+export function openCodeStopReason(finish: string): StopReason {
+  if (finish === "length" || finish === "max_tokens")
+    return StopReason.MaxTokens
+  if (finish === "content-filter" || finish === "content_filter")
+    return StopReason.Refusal
+  return StopReason.EndTurn
+}
+
 /** A native timestamp, in seconds or milliseconds, as a UTC ISO string. */
 export function openCodeTimestamp(value: number) {
   return new Date(value < 10_000_000_000 ? value * 1_000 : value).toISOString()
@@ -109,6 +123,11 @@ const NativeMessageTimeSchema = z.object({
   created: z.number().finite().nonnegative(),
 })
 
+/** When a stored part or turn was created and, once it settled, completed. */
+const NativeSpanTimeSchema = NativeMessageTimeSchema.extend({
+  completed: z.number().finite().nonnegative().optional(),
+})
+
 const NativeToolStateSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("pending"),
@@ -154,7 +173,7 @@ const NativeAssistantPartSchema = z.discriminatedUnion("type", [
     type: z.literal("tool"),
     name: IdentifierSchema,
     state: NativeToolStateSchema,
-    time: NativeMessageTimeSchema,
+    time: NativeSpanTimeSchema,
   }),
 ])
 
@@ -172,7 +191,8 @@ export const OpenCodeNativeMessageSchema = z.discriminatedUnion("type", [
     agent: IdentifierSchema,
     model: OpenCodeModelRefSchema,
     content: z.array(NativeAssistantPartSchema).max(2_000),
-    time: NativeMessageTimeSchema,
+    finish: z.string().min(1).max(256).optional(),
+    time: NativeSpanTimeSchema,
   }),
   z.object({
     id: IdentifierSchema,

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { StopReason, ToolKind } from "../../../protocol"
+
 import { projectOpenCodeHistory } from "./history"
 
 describe("OpenCode history projection", () => {
@@ -108,6 +110,8 @@ describe("OpenCode history projection", () => {
             type: "tool-call",
             toolCallId: "pending-tool",
             toolName: "read",
+            kind: ToolKind.Read,
+            startedAt: "1970-01-01T00:33:20.000Z",
             args: { safe: true },
             argsText: '{"safe":true}',
           },
@@ -115,6 +119,7 @@ describe("OpenCode history projection", () => {
             type: "tool-call",
             toolCallId: "running-tool",
             toolName: "search",
+            startedAt: "1970-01-01T00:33:20.000Z",
             args: { safe: true },
             argsText: '{"safe":true}',
           },
@@ -122,6 +127,8 @@ describe("OpenCode history projection", () => {
             type: "tool-call",
             toolCallId: "completed-tool",
             toolName: "write",
+            kind: ToolKind.Edit,
+            startedAt: "1970-01-01T00:33:20.000Z",
             args: { safe: true },
             argsText: '{"safe":true}',
             result: { ok: true },
@@ -130,6 +137,8 @@ describe("OpenCode history projection", () => {
             type: "tool-call",
             toolCallId: "error-tool",
             toolName: "shell",
+            kind: ToolKind.Execute,
+            startedAt: "1970-01-01T00:33:20.000Z",
             args: { safe: false },
             argsText: '{"safe":false}',
             isError: true,
@@ -187,6 +196,7 @@ describe("OpenCode history projection", () => {
             type: "tool-call",
             toolCallId: "subagent-tool",
             toolName: "delegate_subagent",
+            startedAt: "1970-01-01T00:33:20.000Z",
             args: { description: "Review the launch plan" },
             argsText: '{"description":"Review the launch plan"}',
             result: { summary: "The review is complete." },
@@ -194,5 +204,77 @@ describe("OpenCode history projection", () => {
         ],
       },
     ])
+  })
+
+  it.each([
+    ["stop", StopReason.EndTurn],
+    ["length", StopReason.MaxTokens],
+    ["content-filter", StopReason.Refusal],
+  ])(
+    "replays a stored %s finish and a settled call's span as the live turn reported them",
+    (finish, stopReason) => {
+      const [message] = projectOpenCodeHistory({
+        messages: [
+          {
+            id: "assistant-1",
+            type: "assistant",
+            agent: "build",
+            model: { providerID: "openai", id: "gpt" },
+            finish,
+            time: { created: 2_000, completed: 4_000 },
+            content: [
+              {
+                id: "bash-tool",
+                type: "tool",
+                name: "bash",
+                time: { created: 2_500, completed: 3_000 },
+                state: {
+                  status: "completed",
+                  input: { command: "ls" },
+                  content: [],
+                  outputPaths: ["/private/worktree/README.md"],
+                  structured: {},
+                  result: "README.md",
+                },
+              },
+            ],
+          },
+        ],
+        sessionId: "session-1",
+      })
+
+      expect(message).toMatchObject({
+        stopReason,
+        content: [
+          {
+            type: "tool-call",
+            toolName: "bash",
+            kind: ToolKind.Execute,
+            startedAt: "1970-01-01T00:41:40.000Z",
+            completedAt: "1970-01-01T00:50:00.000Z",
+          },
+        ],
+      })
+      expect(JSON.stringify(message)).not.toContain("/private")
+      expect(message?.content[0]).not.toHaveProperty("locations")
+    }
+  )
+
+  it("replays no stop reason for a turn the provider stored without a finish", () => {
+    const [message] = projectOpenCodeHistory({
+      messages: [
+        {
+          id: "assistant-1",
+          type: "assistant",
+          agent: "build",
+          model: { providerID: "openai", id: "gpt" },
+          time: { created: 2_000 },
+          content: [{ id: "text", type: "text", text: "Partial" }],
+        },
+      ],
+      sessionId: "session-1",
+    })
+
+    expect(message).not.toHaveProperty("stopReason")
   })
 })
