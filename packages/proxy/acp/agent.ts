@@ -282,7 +282,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
     } catch (cause) {
       // The stream is gone and the view was never rebuilt: have it reload.
-      if (restarted) await member.invalidate()
+      if (restarted) await member.reloadOnce(restarted.turnId)
       throw cause
     }
     if (!restarted) return { history }
@@ -308,17 +308,17 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const positioned =
       meta.turnId === undefined ||
       meta.turnId === coordinator.snapshot(scope).turnId
-    try {
-      const followed = await member.follow(
-        positioned ? meta.after : undefined,
-        replayedCorrections
-      )
-      return positioned && (restarted === undefined || followed === restarted)
-        ? {}
-        : { resync: true }
-    } catch {
+    const followed = await member
+      .follow(positioned ? meta.after : undefined, replayedCorrections)
+      .catch(() => null)
+    if (restarted !== undefined && followed !== restarted) {
+      // A view rebuilt from the start does not act on `resync`, and this one
+      // lacks the rest of its turn: have it rebuild again once this response
+      // lands.
+      afterResponse(member, () => member.reloadOnce(restarted))
       return { resync: true }
     }
+    return positioned && followed !== null ? {} : { resync: true }
   }
 
   /**

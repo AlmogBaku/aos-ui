@@ -163,6 +163,8 @@ class SessionMember {
   #left = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
+  /** The turn this member last asked its client to rebuild the view for. */
+  #reloadedTurn: string | undefined
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
@@ -224,9 +226,14 @@ class SessionMember {
     })
   }
 
-  /** Tells the client to rebuild this Session's view from history. */
-  invalidate() {
-    return this.#invalidate()
+  /**
+   * Tells the client to rebuild this Session's view from history, once per
+   * turn: a rebuild that fails the same way again must not ask again.
+   */
+  async reloadOnce(turnId: string) {
+    if (this.#reloadedTurn === turnId) return
+    this.#reloadedTurn = turnId
+    await this.#invalidate()
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */

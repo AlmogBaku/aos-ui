@@ -2468,9 +2468,11 @@ describe("Session rooms", () => {
     await liveTurn(test, [test])
 
     unreadable = true
-    await expect(
-      open(test, { replayFrom: { type: "start" } })
-    ).rejects.toThrow()
+    // The second reopen stands for the reload the first one asked for.
+    for (let attempt = 0; attempt < 2; attempt++)
+      await expect(
+        open(test, { replayFrom: { type: "start" } })
+      ).rejects.toThrow()
 
     expect(test.recorder.of(AOS_METHODS.notify.sessionInvalidated)).toHaveLength(
       1
@@ -2497,6 +2499,10 @@ describe("Session rooms", () => {
         .object({ _meta: z.object({ aos: z.object({ resync: z.boolean() }) }) })
         .parse(resumed)._meta.aos.resync
     ).toBe(true)
+    // A view rebuilt from the start reloads on invalidation, not on `resync`.
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+    )
     test.close()
   })
 
