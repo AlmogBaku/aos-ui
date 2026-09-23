@@ -164,7 +164,11 @@ export function useWorkspaceNavigation({
     sessions: [],
     error: null,
   })
-  const [preferredAgentId, setPreferredAgentId] = useState<string | null>(null)
+  // A deep link names its Agent before the route applies, so History scopes
+  // that Agent's catalog first instead of the default Agent's.
+  const [preferredAgentId, setPreferredAgentId] = useState<string | null>(
+    () => parseWorkspacePathname(pathname)?.agentId ?? null
+  )
   const [resolvedDrafts, setResolvedDrafts] = useState<ReadonlySet<string>>(
     readStoredResolvedDrafts
   )

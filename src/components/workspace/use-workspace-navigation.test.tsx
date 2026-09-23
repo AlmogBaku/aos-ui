@@ -386,3 +386,32 @@ it("scopes History's catalog to the selected Agent and reloads once per Agent", 
   expect(scopeSessionCatalog.mock.calls).toEqual([["agent-a"], ["agent-b"]])
   expect(reloads()).toBe(2)
 })
+
+it("scopes a deep link's own Agent first, never the default one", async () => {
+  const willow: AgentSummary = { kind: "ready", id: "agent-b", name: "Willow" }
+  const willowSession: SessionMetadata = {
+    ...recent,
+    threadId: "s-willow",
+    agentId: "agent-b",
+  }
+  window.history.replaceState({}, "", "/agent-b/s-willow")
+  const scopeSessionCatalog = vi.fn()
+  const threadList = createFakeThreadList(["s-recent", "s-willow"])
+  const workspace = createWorkspace([recent, willowSession], {
+    listAgents: async () => [agent, willow],
+    refreshAgents: async () => [agent, willow],
+    scopeSessionCatalog,
+  })
+  const { result } = renderHook(() =>
+    useWorkspaceNavigation({
+      bundle: { assistantRuntime: threadList.runtime, workspace },
+      locale: "en",
+      dictionary: en,
+      now: NOW,
+      readNow: () => NOW,
+    })
+  )
+  await waitFor(() => expect(result.current.visibleThreadId).toBe("s-willow"))
+  expect(scopeSessionCatalog.mock.calls).toEqual([["agent-b"]])
+  expect(threadList.log.filter((entry) => entry === "reload")).toHaveLength(1)
+})
