@@ -234,6 +234,7 @@ const MERGED_CHUNK_KINDS = [
   TurnEventKind.MessageChunk,
   TurnEventKind.ThoughtChunk,
   TurnEventKind.ToolCallInputChunk,
+  TurnEventKind.ToolCallOutputChunk,
 ] as const
 
 type ChunkEvent = TurnEventOf<(typeof MERGED_CHUNK_KINDS)[number]>
@@ -256,9 +257,18 @@ function compactedEvent(
       ? { ...previous, delta: previous.delta + next.delta }
       : undefined
   if (
-    previous.kind !== TurnEventKind.ToolCallInputChunk &&
+    previous.kind === TurnEventKind.ToolCallOutputChunk &&
+    next.kind === TurnEventKind.ToolCallOutputChunk
+  )
+    return previous.toolCallId === next.toolCallId
+      ? { ...previous, text: previous.text + next.text }
+      : undefined
+  if (
+    (previous.kind === TurnEventKind.MessageChunk ||
+      previous.kind === TurnEventKind.ThoughtChunk) &&
     previous.kind === next.kind &&
-    previous.messageId === next.messageId
+    previous.messageId === next.messageId &&
+    previous.subagentId === next.subagentId
   )
     return { ...previous, text: previous.text + next.text }
   return undefined

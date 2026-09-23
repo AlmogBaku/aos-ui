@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 
 import {
   aggregateTokenUsage,
+  CompactionStatus,
+  DiffOperation,
   isAwaitingStopFailure,
   isRedialableFailure,
   isRepliesTurn,
@@ -12,6 +14,10 @@ import {
   PendingRequestSchema,
   ReplyStatus,
   RequestReplySchema,
+  StopReason,
+  SubagentStatus,
+  sumTokenCounts,
+  ToolKind,
   TurnEventKind,
   TurnEventSchema,
   TurnInputSchema,
@@ -58,13 +64,32 @@ const tokenUsage = {
   totalTokens: 33,
   reasoningTokens: 44,
   cachedInputTokens: 55,
+  cachedWriteTokens: 66,
 }
+
+const subagent = {
+  id: "subagent-1",
+  goal: "audit the tests",
+  model: "claude",
+  depth: 1,
+  status: SubagentStatus.Completed,
+  tokens: 1200,
+  filesRead: ["/repo/a.ts"],
+  filesWritten: ["/repo/b.ts"],
+  durationMs: 4200,
+  childSessionId: "session-2",
+  summary: "two tests were missing",
+}
+
+const location = { path: "/repo/README.md", line: 3 }
 
 const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
   [TurnEventKind.TurnStarted]: { kind: TurnEventKind.TurnStarted },
   [TurnEventKind.TurnEnded]: {
     kind: TurnEventKind.TurnEnded,
+    stopReason: StopReason.MaxTokens,
     usage: [tokenUsage],
+    cost: { amount: 0.25, currency: "USD" },
     composerPrefill: "/retry",
   },
   [TurnEventKind.TurnRequiresAction]: {
@@ -76,22 +101,32 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
     code: "AOS_SEND_UNCERTAIN",
     message: "the provider refused",
     awaitingStop: true,
+    provider: "anthropic",
+    model: "claude",
   },
   [TurnEventKind.MessageChunk]: {
     kind: TurnEventKind.MessageChunk,
     messageId: "message-1",
     text: "hello",
+    subagentId: "subagent-1",
   },
   [TurnEventKind.ThoughtChunk]: {
     kind: TurnEventKind.ThoughtChunk,
     messageId: "message-1",
     text: "thinking",
+    subagentId: "subagent-1",
   },
   [TurnEventKind.ToolCallStarted]: {
     kind: TurnEventKind.ToolCallStarted,
     toolCallId: "call-1",
     title: "read",
+    name: "read_file",
+    toolKind: ToolKind.Read,
+    locations: [location],
+    startedAt: "2026-01-01T00:00:00.000Z",
     parentMessageId: "message-1",
+    subagent,
+    subagentId: "subagent-0",
   },
   [TurnEventKind.ToolCallInputChunk]: {
     kind: TurnEventKind.ToolCallInputChunk,
@@ -107,6 +142,52 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
     toolCallId: "call-1",
     output: "file contents",
     failed: false,
+    diffs: [
+      {
+        changes: [
+          { operation: DiffOperation.Modify, path: "/repo/a.ts" },
+          {
+            operation: DiffOperation.Move,
+            oldPath: "/repo/b.ts",
+            path: "/repo/c.ts",
+          },
+        ],
+        patch: "diff --git a/a.ts b/a.ts\n",
+      },
+    ],
+    locations: [location],
+    completedAt: "2026-01-01T00:00:01.000Z",
+    durationMs: 1000,
+  },
+  [TurnEventKind.ToolCallOutputChunk]: {
+    kind: TurnEventKind.ToolCallOutputChunk,
+    toolCallId: "call-1",
+    text: "partial output",
+  },
+  [TurnEventKind.TerminalOutput]: {
+    kind: TurnEventKind.TerminalOutput,
+    terminalId: "terminal-1",
+    toolCallId: "call-1",
+    command: "ls",
+    cwd: "/repo",
+    data: "README.md\n",
+    exit: { exitCode: 0, signal: "SIGTERM" },
+  },
+  [TurnEventKind.CompactionUpdated]: {
+    kind: TurnEventKind.CompactionUpdated,
+    compactionId: "compaction-1",
+    status: CompactionStatus.Failed,
+    summary: "the story so far",
+    error: "the summarizer timed out",
+  },
+  [TurnEventKind.ModelChanged]: {
+    kind: TurnEventKind.ModelChanged,
+    modelId: "claude",
+  },
+  [TurnEventKind.SubagentUpdated]: {
+    kind: TurnEventKind.SubagentUpdated,
+    toolCallId: "call-1",
+    subagent,
   },
   [TurnEventKind.PlanUpdated]: {
     kind: TurnEventKind.PlanUpdated,
@@ -142,6 +223,11 @@ const requiredFields: Record<TurnEventKind, readonly string[]> = {
   [TurnEventKind.ToolCallInputChunk]: ["toolCallId", "delta"],
   [TurnEventKind.ToolCallInputEnded]: ["toolCallId"],
   [TurnEventKind.ToolCallFinished]: ["toolCallId", "output", "failed"],
+  [TurnEventKind.ToolCallOutputChunk]: ["toolCallId", "text"],
+  [TurnEventKind.TerminalOutput]: ["terminalId", "toolCallId"],
+  [TurnEventKind.CompactionUpdated]: ["compactionId", "status"],
+  [TurnEventKind.ModelChanged]: ["modelId"],
+  [TurnEventKind.SubagentUpdated]: ["toolCallId", "subagent"],
   [TurnEventKind.PlanUpdated]: ["todos"],
   [TurnEventKind.ArtifactPublished]: ["artifact"],
   [TurnEventKind.SteerAccepted]: ["requestId", "text", "delivery"],
@@ -226,6 +312,73 @@ describe("the proxy-owned turn vocabulary", () => {
       isTurnEvent({
         kind: TurnEventKind.TurnEnded,
         usage: [{ inputTokens: 1e100 }],
+      })
+    ).toBe(false)
+  })
+})
+
+describe("the provider facts a turn event carries", () => {
+  function toolFinished(fields: Record<string, unknown>) {
+    return {
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "call-1",
+      output: "",
+      failed: false,
+      ...fields,
+    }
+  }
+
+  it("admits only the stop reasons the vocabulary names", () => {
+    for (const stopReason of Object.values(StopReason))
+      expect(isTurnEvent({ kind: TurnEventKind.TurnEnded, stopReason })).toBe(
+        true
+      )
+    expect(
+      isTurnEvent({ kind: TurnEventKind.TurnEnded, stopReason: "end_turn" })
+    ).toBe(false)
+  })
+
+  it("names where a move or copy came from and nothing else does", () => {
+    const moved = { operation: DiffOperation.Move, path: "/repo/b.ts" }
+    expect(isTurnEvent(toolFinished({ diffs: [{ changes: [moved] }] }))).toBe(
+      false
+    )
+    expect(
+      isTurnEvent(
+        toolFinished({
+          diffs: [
+            {
+              changes: [
+                {
+                  operation: DiffOperation.Add,
+                  oldPath: "/repo/a.ts",
+                  path: "/repo/b.ts",
+                },
+              ],
+            },
+          ],
+        })
+      )
+    ).toBe(false)
+  })
+
+  it("carries a diff only when it changed at least one file", () => {
+    expect(isTurnEvent(toolFinished({ diffs: [{ changes: [] }] }))).toBe(false)
+  })
+
+  it("takes timestamps only as UTC ISO 8601", () => {
+    expect(isTurnEvent(toolFinished({ completedAt: "yesterday" }))).toBe(false)
+    expect(
+      isTurnEvent(toolFinished({ completedAt: "2026-01-01T02:00:00+02:00" }))
+    ).toBe(false)
+  })
+
+  it("admits only the subagent statuses the vocabulary names", () => {
+    expect(
+      isTurnEvent({
+        kind: TurnEventKind.SubagentUpdated,
+        toolCallId: "call-1",
+        subagent: { id: "subagent-1", status: "timeout" },
       })
     ).toBe(false)
   })
@@ -375,6 +528,17 @@ describe("turn event helpers", () => {
       })
     ).toEqual([pendingRequest])
     expect(pendingRequestsOf({ kind: TurnEventKind.TurnEnded })).toEqual([])
+  })
+})
+
+describe("sumTokenCounts", () => {
+  it("sums every entry and keeps a count nobody reported absent", () => {
+    expect(
+      sumTokenCounts([
+        { provider: "a", inputTokens: 1, outputTokens: 2 },
+        { provider: "b", inputTokens: 3, cachedWriteTokens: 4 },
+      ])
+    ).toEqual({ inputTokens: 4, outputTokens: 2, cachedWriteTokens: 4 })
   })
 })
 

@@ -126,12 +126,18 @@ export type TranslateContext = {
 
 /**
  * State the turn-event reducer carries between events of one turn segment:
- * the assistant message currently streaming and the arguments text streamed
- * so far per open tool call. Starts as `initialTranslateState`.
+ * the assistant message currently streaming, the arguments text streamed so
+ * far per open tool call, the tool call each announced terminal belongs to,
+ * and the tool call that spawned each subagent. Starts as
+ * `initialTranslateState`.
  */
 export type TranslateState = {
   messageId: string | undefined
   toolArgsText: Readonly<Record<string, string>>
+  /** terminalId → toolCallId, for every terminal the segment announced. */
+  terminals: Readonly<Record<string, string>>
+  /** subagentId → the toolCallId that spawned it. */
+  subagents: Readonly<Record<string, string>>
   /**
    * Acknowledgements a from-start replay drops because authoritative history
    * already carried those corrections.
@@ -141,6 +147,8 @@ export type TranslateState = {
 export const initialTranslateState: TranslateState = {
   messageId: undefined,
   toolArgsText: {},
+  terminals: {},
+  subagents: {},
   replayedCorrections: 0,
 }
 
@@ -164,6 +172,11 @@ export type AcpOutbound =
       delivery: "steered" | "queued"
     }
   | { kind: "composer-prefill"; turnId: string; text: string }
+  /**
+   * The Session now runs `modelId`. ACP restates the whole option set, which
+   * only the attachment can read, so it sends the `config_option_update`.
+   */
+  | { kind: "model-changed"; modelId: string }
   | {
       kind: "request-permission"
       requestId: string

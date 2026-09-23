@@ -490,6 +490,76 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
+  it("compacts tool output per call and keeps a subagent's prose apart", async () => {
+    const source = new EventSource()
+    const engine: ServerRunEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("native recovery must not run for a fresh browser")
+      }),
+    }
+    const sessions = coordinator(engine)
+    const initial = await sessions.start(
+      scope,
+      input("run-1"),
+      access("initial")
+    )
+    const readInitial = reader(initial)
+    const output = (toolCallId: string, text: string): TurnEvent => ({
+      kind: TurnEventKind.ToolCallOutputChunk,
+      toolCallId,
+      text,
+    })
+    const prose = (text: string, subagentId?: string): TurnEvent => ({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text,
+      ...(subagentId ? { subagentId } : {}),
+    })
+    const terminal: TurnEvent = {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "term-1",
+      toolCallId: "tool-1",
+      data: "x",
+    }
+    const events: TurnEvent[] = [
+      turnStarted,
+      output("tool-1", "a"),
+      output("tool-1", "b"),
+      output("tool-2", "c"),
+      terminal,
+      terminal,
+      prose("own "),
+      prose("child ", "sub-1"),
+      prose("prose", "sub-1"),
+    ]
+    for (const event of events) {
+      source.emit(event)
+      await readInitial()
+    }
+    initial.close()
+
+    const refreshed = await sessions.recover(
+      scope,
+      { threadId: scope.threadId, runId: "run-1" },
+      access("refreshed")
+    )
+    const iterator = refreshed.events[Symbol.asyncIterator]()
+    const replayed = await Promise.all(
+      Array.from({ length: 7 }, () => iterator.next())
+    )
+
+    expect(replayed.map((entry) => entry.value?.event)).toEqual([
+      turnStarted,
+      output("tool-1", "ab"),
+      output("tool-2", "c"),
+      terminal,
+      terminal,
+      prose("own "),
+      prose("child prose", "sub-1"),
+    ])
+  })
+
   it("replays only the events after a redial cursor", async () => {
     const source = new EventSource()
     const engine: ServerRunEngine = {

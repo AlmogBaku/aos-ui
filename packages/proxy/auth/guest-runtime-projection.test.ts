@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import {
+  CompactionStatus,
   PendingRequestKind,
+  StopReason,
   TurnEventKind,
   TurnEventSchema,
   type TurnEvent,
@@ -445,14 +447,22 @@ describe("guest turn projection", () => {
       ])
   })
 
-  it("drops turn usage and the composer prefill", () => {
+  it("drops turn usage, cost, and the composer prefill but keeps the stop reason", () => {
     expect(
       project({
         kind: TurnEventKind.TurnEnded,
         usage: [{ provider: "private", totalTokens: 12 }],
+        cost: { amount: 0.5, currency: "USD" },
         composerPrefill: "/private",
       })
     ).toEqual({ kind: TurnEventKind.TurnEnded })
+    expect(
+      project({
+        kind: TurnEventKind.TurnEnded,
+        stopReason: StopReason.Refusal,
+        cost: { amount: 0.5, currency: "USD" },
+      })
+    ).toEqual({ kind: TurnEventKind.TurnEnded, stopReason: StopReason.Refusal })
     expect(project({ kind: TurnEventKind.TurnStarted })).toEqual({
       kind: TurnEventKind.TurnStarted,
     })
@@ -484,6 +494,52 @@ describe("guest turn projection", () => {
         title: "terminal",
       })
     ).toBeUndefined()
+  })
+
+  it("drops a subagent's prose and every tool, terminal, compaction, and model fact", () => {
+    const hidden: TurnEvent[] = [
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "child prose",
+        subagentId: "sub-1",
+      },
+      { kind: TurnEventKind.ToolCallOutputChunk, toolCallId: "t", text: "ls" },
+      {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "term-1",
+        toolCallId: "t",
+        command: "ls",
+        data: "secret.txt",
+      },
+      {
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: "c1",
+        status: CompactionStatus.Completed,
+        summary: "private context",
+      },
+      { kind: TurnEventKind.ModelChanged, modelId: "private-model" },
+      {
+        kind: TurnEventKind.SubagentUpdated,
+        toolCallId: "t",
+        subagent: { id: "sub-1", goal: "private goal" },
+      },
+    ]
+
+    for (const event of hidden)
+      expect(project(event), event.kind).toBeUndefined()
+  })
+
+  it("keeps a failure's provider and model from guests", () => {
+    expect(
+      project({
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_ERROR",
+        message: "private",
+        provider: "private-provider",
+        model: "private-model",
+      })
+    ).not.toMatchObject({ provider: expect.anything() })
   })
 
   it("projects pending requests without approval internals", () => {

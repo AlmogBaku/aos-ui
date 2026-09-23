@@ -880,6 +880,26 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
+  it("restates the model options when the provider switches the model mid-turn", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Summarize")
+
+    source.emit(turnStarted())
+    source.emit({ kind: TurnEventKind.ModelChanged, modelId: "opus" })
+
+    const reported = await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("config_option_update")
+    )
+    expect(reported.params).toMatchObject({
+      sessionId: CREATED,
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ configId: "model", currentValue: "opus" }],
+      },
+    })
+    test.close()
+  })
+
   it("asks the browser to resync a run its stream was dropped from", async () => {
     // One event of queue, so the burst below outruns the send the pump awaits.
     const test = await harness({ maxSubscriberEvents: 1 })

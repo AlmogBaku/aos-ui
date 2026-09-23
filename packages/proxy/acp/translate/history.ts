@@ -94,6 +94,7 @@ function toolCallOutbound(
     {
       toolCallId: part.toolCallId,
       title: part.toolName,
+      name: part.toolName,
       status: part.isError ? "failed" : "completed",
       rawInput: part.args,
       ...(part.result === undefined ? {} : { rawOutput: part.result }),

@@ -5,7 +5,10 @@ import {
   type AgentContext,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionContextResponse } from "../../protocol"
+import type {
+  SessionContextResponse,
+  SessionModelsResponse,
+} from "../../protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
@@ -133,6 +136,8 @@ export type SessionAttachmentOptions = {
   client: AgentContext
   /** The Session's context usage, as the workspace reads and validates it. */
   readUsage: () => Promise<SessionContextResponse>
+  /** The Session's model catalog, as the workspace reads and validates it. */
+  readModels: () => Promise<SessionModelsResponse>
 }
 
 class SessionAttachment {
@@ -140,6 +145,7 @@ class SessionAttachment {
   readonly #scope: SessionScope
   readonly #client: AgentContext
   readonly #readUsage: () => Promise<SessionContextResponse>
+  readonly #readModels: () => Promise<SessionModelsResponse>
   #subscription: CoordinatedRunSubscription | undefined
   #pending: { requestId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
@@ -156,6 +162,7 @@ class SessionAttachment {
     this.#scope = options.scope
     this.#client = options.client
     this.#readUsage = options.readUsage
+    this.#readModels = options.readModels
   }
 
   /**
@@ -521,6 +528,8 @@ class SessionAttachment {
           turnId: outbound.turnId,
           text: outbound.text,
         })
+      case "model-changed":
+        return this.#reportModel(outbound.modelId)
       case "request-permission":
       case "elicitation":
         return this.#ask(outbound)
@@ -528,6 +537,23 @@ class SessionAttachment {
   }
 
   /** Issues one server→client request and settles it as a resume reply. */
+  /**
+   * ACP restates the whole option set on a model switch, so the catalog is
+   * read and the model the provider reported is selected in it. An unreadable
+   * catalog leaves the options the client holds standing, as usage does.
+   */
+  async #reportModel(modelId: string) {
+    const models = await this.#readModels().catch(() => undefined)
+    if (!models) return
+    await this.update({
+      sessionUpdate: "config_option_update",
+      configOptions: this.#context.translators.configOptionsOf({
+        ...models,
+        selectedId: modelId,
+      }),
+    })
+  }
+
   #ask(outbound: RequestOutbound) {
     const promise = (
       outbound.kind === "request-permission"

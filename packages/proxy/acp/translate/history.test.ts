@@ -255,6 +255,7 @@ describe("translateHistory", () => {
       sessionUpdate: "tool_call_update",
       toolCallId: "c1",
       title: "read_file",
+      name: "read_file",
       status: "completed",
       rawInput: { path: "a.txt" },
       rawOutput: { ok: true },

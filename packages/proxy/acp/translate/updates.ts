@@ -1,7 +1,9 @@
 import type {
   ContentBlock,
   SessionUpdate,
+  ToolCallContent,
   ToolCallUpdate,
+  Usage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
@@ -9,6 +11,9 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosPlanMetaSchema,
+  type AosChunkMetaSchema,
+  type AosStateMetaSchema,
+  type AosToolCallMetaSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext } from "../types"
 
@@ -37,6 +42,12 @@ export function update(value: SessionUpdate): AcpOutbound {
   return { kind: "update", update: value }
 }
 
+/** What a builder adds to the turn meta every update carries. */
+type ExtraMeta<Schema extends z.ZodObject> = Omit<
+  z.input<Schema>,
+  "sequence" | "turnId"
+>
+
 /**
  * `at` says when the state took effect: a live run reads the clock, and a replay
  * passes the time the transcript recorded, so a turn's span is the same whether
@@ -47,8 +58,8 @@ export function stateOutbound(
   state:
     | { state: "running" }
     | { state: "requires_action" }
-    | { state: "idle"; stopReason: string },
-  extra?: { code?: string; message?: string; at?: string }
+    | { state: "idle"; stopReason: string; usage?: Usage },
+  extra?: ExtraMeta<typeof AosStateMetaSchema>
 ): AcpOutbound {
   const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()
   return update({
@@ -63,27 +74,45 @@ export function chunkOutbound(
   context: TranslateContext,
   sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
   messageId: string,
-  content: string | ContentBlock
+  content: string | ContentBlock,
+  extra?: ExtraMeta<typeof AosChunkMetaSchema>
 ): AcpOutbound {
   return update({
     sessionUpdate,
     messageId,
     content:
       typeof content === "string" ? { type: "text", text: content } : content,
-    _meta: { [AOS_META_KEY]: turnMeta(context) },
+    _meta: { [AOS_META_KEY]: { ...turnMeta(context), ...extra } },
   })
 }
+
+type ToolMeta = Omit<ExtraMeta<typeof AosToolCallMetaSchema>, "messageId">
 
 export function toolOutbound(
   context: TranslateContext,
   messageId: string,
   call: Omit<ToolCallUpdate, "_meta">,
-  args?: { argsTextDelta: string } | { argsText: string }
+  extra?: ToolMeta
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_update",
     ...call,
-    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId, ...args } },
+    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId, ...extra } },
+  })
+}
+
+/** Appends one item to a call's content; `tool_call_update` replaces it all. */
+export function toolContentOutbound(
+  context: TranslateContext,
+  messageId: string,
+  toolCallId: string,
+  content: ToolCallContent
+): AcpOutbound {
+  return update({
+    sessionUpdate: "tool_call_content_chunk",
+    toolCallId,
+    content,
+    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId } },
   })
 }
 

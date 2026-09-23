@@ -309,10 +309,19 @@ function createRunProjector(
     switch (candidate.kind) {
       case TurnEventKind.TurnStarted:
         return { kind: TurnEventKind.TurnStarted }
+      // Why the turn stopped is the guest's to know; what it spent is not.
       case TurnEventKind.TurnEnded:
-        return { kind: TurnEventKind.TurnEnded }
+        return {
+          kind: TurnEventKind.TurnEnded,
+          ...(candidate.stopReason ? { stopReason: candidate.stopReason } : {}),
+        }
       case TurnEventKind.MessageChunk: {
-        if (!validIdentifier(candidate.messageId)) return undefined
+        // A subagent's prose is its tool call's output, which guests never see.
+        if (
+          !validIdentifier(candidate.messageId) ||
+          candidate.subagentId !== undefined
+        )
+          return undefined
         const projected = projectGuestOutbound(
           {
             transport: "turn",

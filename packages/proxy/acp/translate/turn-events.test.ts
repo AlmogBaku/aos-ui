@@ -9,8 +9,14 @@ import {
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosToolCallMetaSchema,
+  AosTurnMetaSchema,
 } from "../../../protocol/acp"
 import {
+  CompactionStatus,
+  DiffOperation,
+  StopReason,
+  SubagentStatus,
+  ToolKind,
   TurnEventKind,
   type TurnEvent,
   type TurnEventOf,
@@ -592,5 +598,422 @@ describe("translateTurnEvent extensions", () => {
         delivery: "steered",
       },
     ])
+  })
+})
+
+describe("provider facts", () => {
+  const turn = { sequence: 7, turnId: "run-1" }
+
+  function toolStarted(
+    fields: Partial<TurnEventOf<typeof TurnEventKind.ToolCallStarted>> = {}
+  ): TurnEvent {
+    return {
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId: "c1",
+      title: "Read README.md",
+      parentMessageId: "m1",
+      ...fields,
+    }
+  }
+
+  function toolFinished(
+    fields: Partial<TurnEventOf<typeof TurnEventKind.ToolCallFinished>> = {}
+  ): TurnEvent {
+    return {
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "c1",
+      output: "done",
+      failed: false,
+      ...fields,
+    }
+  }
+
+  function terminal(
+    fields: Partial<TurnEventOf<typeof TurnEventKind.TerminalOutput>> = {}
+  ): TurnEvent {
+    return {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "term-1",
+      toolCallId: "c1",
+      ...fields,
+    }
+  }
+
+  function lastUpdate(events: TurnEvent[]) {
+    return updatesOf(translate(events).outbound).at(-1)!
+  }
+
+  it("spells every stop reason in ACP's words", () => {
+    const spelled = {
+      [StopReason.EndTurn]: "end_turn",
+      [StopReason.MaxTokens]: "max_tokens",
+      [StopReason.MaxTurnRequests]: "max_turn_requests",
+      [StopReason.Refusal]: "refusal",
+      [StopReason.Cancelled]: "cancelled",
+    }
+    for (const [stopReason, acp] of Object.entries(spelled))
+      expect(
+        lastUpdate([
+          {
+            kind: TurnEventKind.TurnEnded,
+            stopReason: stopReason as StopReason,
+          },
+        ])
+      ).toMatchObject({ sessionUpdate: "state_update", stopReason: acp })
+  })
+
+  it("lets the provider's stop reason win over an acknowledged Stop", () => {
+    const update = updatesOf(
+      translate(
+        [{ kind: TurnEventKind.TurnEnded, stopReason: StopReason.MaxTokens }],
+        { stopping: true }
+      ).outbound
+    )[0]
+    expect(update).toMatchObject({ stopReason: "max_tokens" })
+  })
+
+  it("sums the turn's provider calls into one ACP usage", () => {
+    const update = lastUpdate([
+      {
+        kind: TurnEventKind.TurnEnded,
+        usage: [
+          {
+            provider: "a",
+            inputTokens: 10,
+            outputTokens: 5,
+            reasoningTokens: 2,
+            cachedInputTokens: 4,
+          },
+          {
+            provider: "b",
+            inputTokens: 1,
+            outputTokens: 1,
+            totalTokens: 2,
+            cachedWriteTokens: 3,
+          },
+        ],
+      },
+    ])
+    expect(update).toMatchObject({
+      usage: {
+        inputTokens: 11,
+        outputTokens: 6,
+        totalTokens: 2,
+        thoughtTokens: 2,
+        cachedReadTokens: 4,
+        cachedWriteTokens: 3,
+      },
+    })
+  })
+
+  it("derives the total from input and output when nobody reported one", () => {
+    expect(
+      lastUpdate([
+        {
+          kind: TurnEventKind.TurnEnded,
+          usage: [{ inputTokens: 3, outputTokens: 4 }],
+        },
+      ])
+    ).toMatchObject({
+      usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+    })
+  })
+
+  it("reports no usage rather than zeros when input or output is unknown", () => {
+    expect(
+      lastUpdate([
+        { kind: TurnEventKind.TurnEnded, usage: [{ totalTokens: 12 }] },
+      ])
+    ).not.toHaveProperty("usage")
+  })
+
+  it("carries the turn's cost in the state meta", () => {
+    const update = lastUpdate([
+      {
+        kind: TurnEventKind.TurnEnded,
+        cost: { amount: 0.25, currency: "USD" },
+      },
+    ])
+    expect(AosStateMetaSchema.parse(aosMeta(update)).cost).toEqual({
+      amount: 0.25,
+      currency: "USD",
+    })
+  })
+
+  it("names the provider and model a failure ran on", () => {
+    const update = lastUpdate([
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_ERROR",
+        message: "overloaded",
+        provider: "anthropic",
+        model: "claude",
+      },
+    ])
+    expect(AosStateMetaSchema.parse(aosMeta(update))).toMatchObject({
+      provider: "anthropic",
+      model: "claude",
+    })
+  })
+
+  it("puts a call's name, kind, and locations in ACP's own fields", () => {
+    const update = lastUpdate([
+      toolStarted({
+        name: "read_file",
+        toolKind: ToolKind.Read,
+        locations: [{ path: "/repo/README.md", line: 3 }],
+        startedAt: "2026-09-22T10:00:01.000Z",
+      }),
+    ])
+    expect(update).toMatchObject({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+      title: "Read README.md",
+      name: "read_file",
+      kind: "read",
+      status: "in_progress",
+      locations: [{ path: "/repo/README.md", line: 3 }],
+    })
+    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toEqual({
+      ...turn,
+      messageId: "m1",
+      startedAt: "2026-09-22T10:00:01.000Z",
+    })
+  })
+
+  it("attributes a subagent's chunks and calls to the call that spawned it", () => {
+    const updates = updatesOf(
+      translate([
+        toolStarted({
+          name: "delegate_task",
+          subagent: { id: "sub-1", goal: "audit", depth: 1 },
+        }),
+        {
+          kind: TurnEventKind.MessageChunk,
+          messageId: "m1",
+          text: "child prose",
+          subagentId: "sub-1",
+        },
+        toolStarted({ toolCallId: "c2", subagentId: "sub-1" }),
+      ]).outbound
+    )
+    expect(AosToolCallMetaSchema.parse(aosMeta(updates[0]!)).subagent).toEqual({
+      id: "sub-1",
+      goal: "audit",
+      depth: 1,
+    })
+    expect(AosChunkMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
+      ...turn,
+      subagentId: "sub-1",
+      parentToolCallId: "c1",
+    })
+    expect(AosToolCallMetaSchema.parse(aosMeta(updates[2]!))).toMatchObject({
+      subagentId: "sub-1",
+      parentToolCallId: "c1",
+    })
+  })
+
+  it("names a subagent without a parent it never saw spawned", () => {
+    const update = lastUpdate([
+      {
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "m1",
+        text: "child thought",
+        subagentId: "sub-9",
+      },
+    ])
+    expect(AosChunkMetaSchema.parse(aosMeta(update))).toEqual({
+      ...turn,
+      subagentId: "sub-9",
+    })
+  })
+
+  it("appends streamed tool output as call content", () => {
+    const update = lastUpdate([
+      toolStarted(),
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "c1",
+        text: "line 1",
+      },
+    ])
+    expect(update).toMatchObject({
+      sessionUpdate: "tool_call_content_chunk",
+      toolCallId: "c1",
+      content: { type: "content", content: { type: "text", text: "line 1" } },
+    })
+    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toEqual({
+      ...turn,
+      messageId: "m1",
+    })
+  })
+
+  it("settles a call with its diffs, locations, and timing", () => {
+    const update = lastUpdate([
+      toolStarted(),
+      toolFinished({
+        diffs: [
+          {
+            changes: [
+              { operation: DiffOperation.Modify, path: "/repo/a.ts" },
+              {
+                operation: DiffOperation.Move,
+                oldPath: "/repo/b.ts",
+                path: "/repo/c.ts",
+              },
+            ],
+            patch: "diff --git a/a.ts b/a.ts",
+          },
+          { changes: [{ operation: DiffOperation.Add, path: "/repo/d.ts" }] },
+        ],
+        locations: [{ path: "/repo/a.ts" }],
+        completedAt: "2026-09-22T10:00:02.000Z",
+        durationMs: 1000,
+      }),
+    ])
+    expect(update).toMatchObject({
+      status: "completed",
+      locations: [{ path: "/repo/a.ts" }],
+      content: [
+        { type: "content", content: { type: "text", text: "done" } },
+        {
+          type: "diff",
+          changes: [
+            { operation: "modify", path: "/repo/a.ts" },
+            { operation: "move", oldPath: "/repo/b.ts", path: "/repo/c.ts" },
+          ],
+          patch: { format: "git_patch", text: "diff --git a/a.ts b/a.ts" },
+        },
+        { type: "diff", changes: [{ operation: "add", path: "/repo/d.ts" }] },
+      ],
+    })
+    expect(update).not.toHaveProperty("content.2.patch")
+    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toMatchObject({
+      completedAt: "2026-09-22T10:00:02.000Z",
+      durationMs: 1000,
+    })
+  })
+
+  it("announces a terminal once and streams its output as base64", () => {
+    const updates = updatesOf(
+      translate([
+        toolStarted(),
+        terminal({ command: "ls", cwd: "/repo", data: "a.txt\n" }),
+        terminal({ data: "שלום" }),
+        terminal({ exit: { exitCode: 0 } }),
+      ]).outbound
+    )
+    expect(updates.slice(1)).toMatchObject([
+      {
+        sessionUpdate: "terminal_update",
+        terminalId: "term-1",
+        command: "ls",
+        cwd: "/repo",
+      },
+      {
+        sessionUpdate: "tool_call_content_chunk",
+        toolCallId: "c1",
+        content: { type: "terminal", terminalId: "term-1" },
+      },
+      {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId: "term-1",
+        data: Buffer.from("a.txt\n").toString("base64"),
+      },
+      {
+        sessionUpdate: "terminal_output_chunk",
+        data: Buffer.from("שלום", "utf8").toString("base64"),
+      },
+      { sessionUpdate: "terminal_update", exitStatus: { exitCode: 0 } },
+    ])
+    expect(updates).toHaveLength(6)
+    expect(AosTurnMetaSchema.parse(aosMeta(updates[1]!))).toEqual(turn)
+  })
+
+  it("restates a call's terminals when the call settles", () => {
+    const update = lastUpdate([
+      toolStarted(),
+      terminal({ command: "ls" }),
+      toolFinished(),
+    ])
+    expect(update).toMatchObject({
+      content: [
+        { type: "content" },
+        { type: "terminal", terminalId: "term-1" },
+      ],
+    })
+  })
+
+  it("keeps a compaction's summary and error to the status ACP allows them on", () => {
+    function compaction(status: CompactionStatus) {
+      return lastUpdate([
+        {
+          kind: TurnEventKind.CompactionUpdated,
+          compactionId: "k1",
+          status,
+          summary: "so far",
+          error: "timed out",
+        },
+      ])
+    }
+    expect(compaction(CompactionStatus.Started)).toEqual({
+      sessionUpdate: "compaction_update",
+      compactionId: "k1",
+      status: "in_progress",
+      _meta: { [AOS_META_KEY]: turn },
+    })
+    expect(compaction(CompactionStatus.Completed)).toMatchObject({
+      status: "completed",
+      summary: [{ type: "text", text: "so far" }],
+    })
+    expect(compaction(CompactionStatus.Completed)).not.toHaveProperty("error")
+    expect(compaction(CompactionStatus.Failed)).toMatchObject({
+      status: "failed",
+      error: "timed out",
+    })
+    expect(compaction(CompactionStatus.Failed)).not.toHaveProperty("summary")
+  })
+
+  it("hands a model change to the attachment", () => {
+    expect(
+      translate([{ kind: TurnEventKind.ModelChanged, modelId: "claude" }])
+        .outbound
+    ).toEqual([{ kind: "model-changed", modelId: "claude" }])
+  })
+
+  it("patches a subagent onto the call that spawned it", () => {
+    const update = lastUpdate([
+      toolStarted(),
+      {
+        kind: TurnEventKind.SubagentUpdated,
+        toolCallId: "c1",
+        subagent: {
+          id: "sub-1",
+          status: SubagentStatus.Completed,
+          summary: "done",
+        },
+      },
+    ])
+    expect(update).toMatchObject({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "c1",
+    })
+    expect(AosToolCallMetaSchema.parse(aosMeta(update)).subagent).toEqual({
+      id: "sub-1",
+      status: "completed",
+      summary: "done",
+    })
+  })
+
+  it("drops a subagent patch the wire contract refuses", () => {
+    expect(
+      translate([
+        {
+          kind: TurnEventKind.SubagentUpdated,
+          toolCallId: "c1",
+          subagent: { id: "" },
+        },
+      ]).outbound
+    ).toEqual([])
   })
 })

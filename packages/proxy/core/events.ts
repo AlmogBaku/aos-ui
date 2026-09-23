@@ -29,7 +29,17 @@ export const TurnEventKind = {
   ToolCallStarted: "tool-call-started",
   ToolCallInputChunk: "tool-call-input-chunk",
   ToolCallInputEnded: "tool-call-input-ended",
+  /** A piece of the text a running call has produced so far. */
+  ToolCallOutputChunk: "tool-call-output-chunk",
   ToolCallFinished: "tool-call-finished",
+  /** Output and exit of a terminal a tool call runs. */
+  TerminalOutput: "terminal-output",
+  /** The provider compacted the conversation's context. */
+  CompactionUpdated: "compaction-updated",
+  /** The Session now runs on another model. */
+  ModelChanged: "model-changed",
+  /** Progress of a subagent a tool call spawned. */
+  SubagentUpdated: "subagent-updated",
   PlanUpdated: "plan-updated",
   ArtifactPublished: "artifact-published",
   SteerAccepted: "steer-accepted",
@@ -73,15 +83,32 @@ export const RequestReplySchema = z.strictObject({
 })
 export type RequestReply = z.infer<typeof RequestReplySchema>
 
+/** Why a turn that ended cleanly stopped. */
+export const StopReason = {
+  EndTurn: "end-turn",
+  /** The model hit its output token limit. */
+  MaxTokens: "max-tokens",
+  /** The turn used up the provider's budget of model requests. */
+  MaxTurnRequests: "max-turn-requests",
+  Refusal: "refusal",
+  Cancelled: "cancelled",
+} as const
+export type StopReason = (typeof StopReason)[keyof typeof StopReason]
+
+const CountSchema = z.number().int().nonnegative()
+
 /** What one provider call spent, as the provider reported it. */
 export const TokenUsageSchema = z.strictObject({
   provider: z.string().optional(),
   model: z.string().optional(),
-  inputTokens: z.number().int().nonnegative().optional(),
-  outputTokens: z.number().int().nonnegative().optional(),
-  totalTokens: z.number().int().nonnegative().optional(),
-  reasoningTokens: z.number().int().nonnegative().optional(),
-  cachedInputTokens: z.number().int().nonnegative().optional(),
+  inputTokens: CountSchema.optional(),
+  outputTokens: CountSchema.optional(),
+  totalTokens: CountSchema.optional(),
+  reasoningTokens: CountSchema.optional(),
+  /** Input tokens read from the provider's prompt cache. */
+  cachedInputTokens: CountSchema.optional(),
+  /** Input tokens written to the provider's prompt cache. */
+  cachedWriteTokens: CountSchema.optional(),
 })
 export type TokenUsage = z.infer<typeof TokenUsageSchema>
 
@@ -91,28 +118,153 @@ const TOKEN_COUNT_KEYS = [
   "totalTokens",
   "reasoningTokens",
   "cachedInputTokens",
+  "cachedWriteTokens",
 ] as const
+
+export type TokenCounts = Omit<TokenUsage, "provider" | "model">
+
+/** Sums every entry's counts, dropping counts no entry reported. */
+export function sumTokenCounts(entries: readonly TokenUsage[]): TokenCounts {
+  const total: TokenCounts = {}
+  for (const entry of entries)
+    for (const field of TOKEN_COUNT_KEYS) {
+      const value = entry[field]
+      if (value !== undefined) total[field] = (total[field] ?? 0) + value
+    }
+  return total
+}
 
 /** Sums usage per provider and model, dropping counts a provider omitted. */
 export function aggregateTokenUsage(
   entries: readonly TokenUsage[]
 ): TokenUsage[] {
-  const grouped = new Map<string, TokenUsage>()
+  const grouped = new Map<string, TokenUsage[]>()
   for (const entry of entries) {
     const key = `${entry.provider ?? ""} ${entry.model ?? ""}`
-    const target = grouped.get(key) ?? {
-      ...(entry.provider === undefined ? {} : { provider: entry.provider }),
-      ...(entry.model === undefined ? {} : { model: entry.model }),
-    }
-    for (const field of TOKEN_COUNT_KEYS) {
-      const value = entry[field]
-      if (value === undefined) continue
-      target[field] = (target[field] ?? 0) + value
-    }
-    grouped.set(key, target)
+    grouped.set(key, [...(grouped.get(key) ?? []), entry])
   }
-  return [...grouped.values()]
+  return [...grouped.values()].map((group) => {
+    const { provider, model } = group[0]!
+    return {
+      ...(provider === undefined ? {} : { provider }),
+      ...(model === undefined ? {} : { model }),
+      ...sumTokenCounts(group),
+    }
+  })
 }
+
+/** What a turn cost, as the provider priced it; ISO 4217 currency. */
+export const CostSchema = z.strictObject({
+  amount: z.number().nonnegative(),
+  currency: z.string().min(1).max(16),
+})
+export type Cost = z.infer<typeof CostSchema>
+
+/** What a tool does, so a reader can pick how to show it. */
+export const ToolKind = {
+  Read: "read",
+  Edit: "edit",
+  Delete: "delete",
+  Move: "move",
+  Search: "search",
+  Execute: "execute",
+  Think: "think",
+  Fetch: "fetch",
+  Other: "other",
+} as const
+export type ToolKind = (typeof ToolKind)[keyof typeof ToolKind]
+
+/** Timestamps are UTC ISO 8601, as `Date.prototype.toISOString` writes them. */
+const TimestampSchema = z.string().datetime()
+
+/** A file a tool call reads or changes; the path is absolute. */
+export const ToolLocationSchema = z.strictObject({
+  path: z.string().min(1),
+  line: CountSchema.optional(),
+})
+export type ToolLocation = z.infer<typeof ToolLocationSchema>
+
+/** What a change did to one file. */
+export const DiffOperation = {
+  Add: "add",
+  Delete: "delete",
+  Modify: "modify",
+  Move: "move",
+  Copy: "copy",
+} as const
+export type DiffOperation = (typeof DiffOperation)[keyof typeof DiffOperation]
+
+/** One changed file; a move or copy also names where it came from. */
+export const DiffChangeSchema = z.union([
+  z.strictObject({
+    operation: z.enum([
+      DiffOperation.Add,
+      DiffOperation.Delete,
+      DiffOperation.Modify,
+    ]),
+    path: z.string().min(1),
+  }),
+  z.strictObject({
+    operation: z.enum([DiffOperation.Move, DiffOperation.Copy]),
+    oldPath: z.string().min(1),
+    path: z.string().min(1),
+  }),
+])
+
+/** The files a call changed and, when the provider has it, the git patch. */
+export const ToolDiffSchema = z.strictObject({
+  changes: z.array(DiffChangeSchema).min(1),
+  /** Unified diff text in `git diff` format. */
+  patch: z.string().optional(),
+})
+export type ToolDiff = z.infer<typeof ToolDiffSchema>
+
+/** How far a delegated subagent has got. */
+export const SubagentStatus = {
+  Running: "running",
+  Completed: "completed",
+  Failed: "failed",
+  Cancelled: "cancelled",
+} as const
+export type SubagentStatus =
+  (typeof SubagentStatus)[keyof typeof SubagentStatus]
+
+/**
+ * A subagent a tool call delegated to, keyed by `id`. A later report is a
+ * patch: it restates only what changed.
+ */
+export const SubagentSchema = z.strictObject({
+  id: z.string().min(1),
+  goal: z.string().optional(),
+  model: z.string().min(1).optional(),
+  /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
+  depth: z.number().int().min(1).optional(),
+  status: z.enum(SubagentStatus).optional(),
+  /** Every token the subagent spent. */
+  tokens: CountSchema.optional(),
+  filesRead: z.array(z.string()).optional(),
+  filesWritten: z.array(z.string()).optional(),
+  durationMs: CountSchema.optional(),
+  /** The provider Session the subagent runs in, when it has its own. */
+  childSessionId: z.string().min(1).optional(),
+  summary: z.string().optional(),
+})
+export type Subagent = z.infer<typeof SubagentSchema>
+
+/** Where a compaction has got. */
+export const CompactionStatus = {
+  Started: "started",
+  Completed: "completed",
+  Failed: "failed",
+} as const
+export type CompactionStatus =
+  (typeof CompactionStatus)[keyof typeof CompactionStatus]
+
+/**
+ * The subagent that produced an event; absent means the turn's own agent did.
+ * Only what a subagent streams back into its parent's turn carries it.
+ */
+const subagentId = z.string().min(1).optional()
 
 /** One admitted user prompt. */
 export const PromptTurnInputSchema = z.strictObject({
@@ -153,7 +305,11 @@ function turnEvent<
 export const TurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.TurnStarted, {}),
   turnEvent(TurnEventKind.TurnEnded, {
+    /** Absent reads as `EndTurn`, or `Cancelled` once Stop was requested. */
+    stopReason: z.enum(StopReason).optional(),
+    /** Every provider call of the turn; readers sum them into one usage. */
     usage: z.array(TokenUsageSchema).optional(),
+    cost: CostSchema.optional(),
     /** Text the provider asks the composer to start the next prompt with. */
     composerPrefill: z.string().optional(),
   }),
@@ -169,22 +325,37 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
      * not this event, ends it.
      */
     awaitingStop: z.literal(true).optional(),
+    /** The provider and model the turn ran on, when the failure names them. */
+    provider: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
   }),
   /** Assistant prose; `messageId` names the assistant message it belongs to. */
   turnEvent(TurnEventKind.MessageChunk, {
     messageId: z.string(),
     text: z.string(),
+    subagentId,
   }),
   /** Reasoning; `messageId` names the assistant message it reasons toward. */
   turnEvent(TurnEventKind.ThoughtChunk, {
     messageId: z.string(),
     text: z.string(),
+    subagentId,
   }),
   turnEvent(TurnEventKind.ToolCallStarted, {
     toolCallId: z.string(),
+    /** What a reader shows for the call. */
     title: z.string(),
+    /** The canonical tool name, the one tool presentation keys on. */
+    name: z.string().min(1).optional(),
+    /** Named apart from the event's own `kind` discriminator. */
+    toolKind: z.enum(ToolKind).optional(),
+    locations: z.array(ToolLocationSchema).optional(),
+    startedAt: TimestampSchema.optional(),
     /** The assistant message that made the call. */
     parentMessageId: z.string().optional(),
+    /** The subagent this call delegated to. */
+    subagent: SubagentSchema.optional(),
+    subagentId,
   }),
   /** A piece of the call's JSON arguments text. */
   turnEvent(TurnEventKind.ToolCallInputChunk, {
@@ -192,12 +363,57 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     delta: z.string(),
   }),
   turnEvent(TurnEventKind.ToolCallInputEnded, { toolCallId: z.string() }),
+  /** Streamed output a later `ToolCallFinished` replaces with the whole. */
+  turnEvent(TurnEventKind.ToolCallOutputChunk, {
+    toolCallId: z.string(),
+    text: z.string(),
+  }),
   turnEvent(TurnEventKind.ToolCallFinished, {
     toolCallId: z.string(),
     /** The result text; JSON when the tool returned structured output. */
     output: z.string(),
     /** The provider reported the call as failed. */
     failed: z.boolean(),
+    /** The files the call changed. */
+    diffs: z.array(ToolDiffSchema).optional(),
+    /** Replaces the locations the call started with. */
+    locations: z.array(ToolLocationSchema).optional(),
+    completedAt: TimestampSchema.optional(),
+    /** How long the call ran, for a provider that reports a span. */
+    durationMs: CountSchema.optional(),
+  }),
+  /**
+   * One step of a terminal a tool call runs, after that call started: the
+   * first names the command, `data` appends plain text, `exit` ends it.
+   */
+  turnEvent(TurnEventKind.TerminalOutput, {
+    terminalId: z.string().min(1),
+    toolCallId: z.string(),
+    command: z.string().optional(),
+    /** Absolute working directory. */
+    cwd: z.string().min(1).optional(),
+    data: z.string().optional(),
+    /** Present once the process exited, even when neither value is known. */
+    exit: z
+      .strictObject({
+        exitCode: z.number().int().optional(),
+        signal: z.string().min(1).optional(),
+      })
+      .optional(),
+  }),
+  /** `summary` belongs to a completed compaction, `error` to a failed one. */
+  turnEvent(TurnEventKind.CompactionUpdated, {
+    compactionId: z.string().min(1),
+    status: z.enum(CompactionStatus),
+    summary: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  /** `modelId` is the model's id in the Session's model catalog. */
+  turnEvent(TurnEventKind.ModelChanged, { modelId: z.string().min(1) }),
+  /** A patch of the subagent `toolCallId` spawned. */
+  turnEvent(TurnEventKind.SubagentUpdated, {
+    toolCallId: z.string(),
+    subagent: SubagentSchema,
   }),
   /** The Session's whole Todo list, replacing the previous one. */
   turnEvent(TurnEventKind.PlanUpdated, {

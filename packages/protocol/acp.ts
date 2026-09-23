@@ -272,6 +272,62 @@ const TurnMetaBase = {
   turnId: IdentifierSchema,
 }
 
+/**
+ * `_meta.aos` of a `terminal_update`, `terminal_output_chunk`, or
+ * `compaction_update`: ACP's own fields carry every fact, so only the turn it
+ * belongs to travels here.
+ */
+export const AosTurnMetaSchema = readObject(TurnMetaBase)
+
+const CountSchema = z.number().int().nonnegative()
+
+/** What a turn cost, as the provider priced it; ISO 4217 currency. */
+export const AosCostSchema = readObject({
+  amount: z.number().nonnegative(),
+  currency: z.string().min(1).max(16),
+})
+export type AosCost = z.infer<typeof AosCostSchema>
+
+/** How far a delegated subagent has got. */
+export const AOS_SUBAGENT_STATUSES = [
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+] as const
+
+/**
+ * One delegated subagent, as a patch keyed by `id`: a later report restates
+ * only what changed, so an omitted key leaves the known value standing.
+ */
+export const AosSubagentSchema = readObject({
+  id: IdentifierSchema,
+  goal: z.string().max(65_536).optional(),
+  model: z.string().min(1).max(256).optional(),
+  /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
+  depth: z.number().int().min(1).optional(),
+  status: z.enum(AOS_SUBAGENT_STATUSES).optional(),
+  /** Every token the subagent spent. */
+  tokens: CountSchema.optional(),
+  filesRead: z.array(z.string()).optional(),
+  filesWritten: z.array(z.string()).optional(),
+  durationMs: CountSchema.optional(),
+  /** The provider Session the subagent runs in, when it has its own. */
+  childSessionId: IdentifierSchema.optional(),
+  summary: z.string().max(65_536).optional(),
+})
+export type AosSubagent = z.infer<typeof AosSubagentSchema>
+
+/**
+ * Names the delegated subagent a chunk or tool call came from and, when the
+ * spawning call is in the same stream, that call. Absent means the turn's own
+ * agent produced it.
+ */
+const SubagentAttribution = {
+  subagentId: IdentifierSchema.optional(),
+  parentToolCallId: IdentifierSchema.optional(),
+}
+
 /** `state_update._meta.aos` */
 export const AosStateMetaSchema = readObject({
   ...TurnMetaBase,
@@ -290,18 +346,37 @@ export const AosStateMetaSchema = readObject({
    */
   code: z.string().min(1).max(128).optional(),
   message: z.string().max(4096).optional(),
+  /** The provider and model a failed turn ran on, when the failure names them. */
+  provider: z.string().min(1).max(256).optional(),
+  model: z.string().min(1).max(256).optional(),
+  /**
+   * What the turn cost, on its `idle` update. ACP prices only a Session's
+   * cumulative spend, on a `usage_update` that also needs the context window.
+   */
+  cost: AosCostSchema.optional(),
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
-export const AosChunkMetaSchema = readObject(TurnMetaBase)
+export const AosChunkMetaSchema = readObject({
+  ...TurnMetaBase,
+  ...SubagentAttribution,
+})
 
-/** `tool_call_update._meta.aos` */
+/** `tool_call_update` / `tool_call_content_chunk` `_meta.aos` */
 export const AosToolCallMetaSchema = readObject({
   ...TurnMetaBase,
+  ...SubagentAttribution,
   messageId: IdentifierSchema,
   /** Streaming arguments text; ACP replaces `rawInput` wholesale. */
   argsTextDelta: z.string().optional(),
   argsText: z.string().optional(),
+  /** When the call started and finished, as the provider timed it. */
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  /** How long the call ran, when the provider reports a span, not the ends. */
+  durationMs: CountSchema.optional(),
+  /** The subagent this call spawned; later updates patch it by `id`. */
+  subagent: AosSubagentSchema.optional(),
 })
 
 /** The creator tool's settled output, as one content-free creation receipt. */

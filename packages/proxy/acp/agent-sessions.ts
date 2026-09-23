@@ -272,6 +272,7 @@ export function createSessions(context: AcpConnectionContext) {
         scope,
         client,
         readUsage: () => workspace.usage(scope),
+        readModels: () => workspace.models(scope),
       })
       attachments.set(scope.threadId, attachment)
       return attachment

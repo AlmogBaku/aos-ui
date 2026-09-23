@@ -59,6 +59,7 @@ const liveEvents: TurnEvent[] = [
     kind: TurnEventKind.ToolCallStarted,
     toolCallId: "c1",
     title: "read_file",
+    name: "read_file",
     parentMessageId: ASSISTANT,
   },
   {
@@ -82,6 +83,7 @@ const liveEvents: TurnEvent[] = [
     kind: TurnEventKind.ToolCallStarted,
     toolCallId: "c2",
     title: "write_file",
+    name: "write_file",
     parentMessageId: ASSISTANT,
   },
   {

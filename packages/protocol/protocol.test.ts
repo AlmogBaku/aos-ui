@@ -31,6 +31,8 @@ import {
   AosFocusNotificationSchema,
   AosPermissionMetaSchema,
   AosSessionUpdateRequestSchema,
+  AosChunkMetaSchema,
+  AosStateMetaSchema,
   AosToolCallMetaSchema,
 } from "./acp"
 
@@ -715,6 +717,65 @@ describe("AOS v1 normalized protocol", () => {
     expect(() =>
       AosToolCallMetaSchema.parse({ sequence: 3, turnId: 7, messageId: "m" })
     ).toThrow()
+  })
+
+  it("reads the provider facts a turn meta carries", () => {
+    const subagent = {
+      id: "sub-1",
+      goal: "audit",
+      model: "claude",
+      depth: 1,
+      status: "completed",
+      tokens: 12,
+      filesRead: ["/repo/a.ts"],
+      filesWritten: [],
+      durationMs: 40,
+      childSessionId: "session-2",
+      summary: "done",
+    }
+    const tool = {
+      sequence: 3,
+      turnId: "turn-1",
+      messageId: "message-1",
+      subagentId: "sub-0",
+      parentToolCallId: "call-0",
+      startedAt: "2026-09-22T10:00:00.000Z",
+      completedAt: "2026-09-22T10:00:01.000Z",
+      durationMs: 1000,
+      subagent,
+    }
+    expect(AosToolCallMetaSchema.parse(tool)).toEqual(tool)
+    expect(
+      AosChunkMetaSchema.parse({
+        sequence: 3,
+        turnId: "turn-1",
+        subagentId: "sub-1",
+      })
+    ).toEqual({ sequence: 3, turnId: "turn-1", subagentId: "sub-1" })
+    const failed = {
+      sequence: 3,
+      turnId: "turn-1",
+      provider: "anthropic",
+      model: "claude",
+      cost: { amount: 0.25, currency: "USD" },
+    }
+    expect(AosStateMetaSchema.parse(failed)).toEqual(failed)
+  })
+
+  it("keeps a subagent's known keys and refuses a status it does not name", () => {
+    const base = { sequence: 3, turnId: "turn-1", messageId: "message-1" }
+    expect(
+      AosToolCallMetaSchema.parse({
+        ...base,
+        subagent: { id: "sub-1", addedLater: true },
+      }).subagent
+    ).toEqual({ id: "sub-1" })
+    expect(
+      AosToolCallMetaSchema.safeParse({
+        ...base,
+        subagent: { id: "sub-1", status: "timeout" },
+      }).success
+    ).toBe(false)
   })
 
   it("names a pending request by requestId on permissions and questions", () => {

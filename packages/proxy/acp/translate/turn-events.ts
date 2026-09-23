@@ -1,11 +1,25 @@
+import type {
+  SessionUpdate,
+  ToolCallContent,
+  Usage,
+} from "@agentclientprotocol/sdk/experimental/v2"
+
 import {
+  AOS_META_KEY,
   AosArtifactDescriptorSchema,
   AOS_STOP_REASONS,
+  AosSubagentSchema,
 } from "../../../protocol/acp"
 import {
+  CompactionStatus,
   isAwaitingStopFailure,
   isUncertainFailure,
+  StopReason,
+  sumTokenCounts,
   TurnEventKind,
+  type Subagent,
+  type TokenUsage,
+  type ToolDiff,
   type TurnEvent,
   type TurnEventOf,
 } from "../../core/events"
@@ -23,9 +37,24 @@ import {
   turnMeta,
   stateOutbound,
   TodosSchema,
+  toolContentOutbound,
   toolOutbound,
   update,
 } from "./updates"
+
+const ACP_STOP_REASON = {
+  [StopReason.EndTurn]: "end_turn",
+  [StopReason.MaxTokens]: "max_tokens",
+  [StopReason.MaxTurnRequests]: "max_turn_requests",
+  [StopReason.Refusal]: "refusal",
+  [StopReason.Cancelled]: "cancelled",
+} as const satisfies Record<StopReason, string>
+
+const ACP_COMPACTION_STATUS = {
+  [CompactionStatus.Started]: "in_progress",
+  [CompactionStatus.Completed]: "completed",
+  [CompactionStatus.Failed]: "failed",
+} as const satisfies Record<CompactionStatus, string>
 
 /**
  * One ACP assistant message per run segment: the first message chunk, thought
@@ -70,6 +99,68 @@ function jsonOr(text: string, fallback: unknown): unknown {
 
 type Step = { state: TranslateState; outbound: AcpOutbound[] }
 
+/** An update whose ACP fields carry every fact but the turn it belongs to. */
+function turnUpdate(context: TranslateContext, value: SessionUpdate) {
+  return update({ ...value, _meta: { [AOS_META_KEY]: turnMeta(context) } })
+}
+
+/** The subagent an event came from and, once seen, the call that spawned it. */
+function attribution(state: TranslateState, subagentId: string | undefined) {
+  if (subagentId === undefined) return {}
+  const parentToolCallId = state.subagents[subagentId]
+  return {
+    subagentId,
+    ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
+  }
+}
+
+/**
+ * Adapters are typed, not validated: a subagent the wire contract refuses is
+ * dropped rather than costing the browser the whole tool meta.
+ */
+function wireSubagent(subagent: Subagent | undefined) {
+  const parsed = AosSubagentSchema.safeParse(subagent)
+  return parsed.success ? { subagent: parsed.data } : {}
+}
+
+function textContent(text: string): ToolCallContent {
+  return { type: "content", content: { type: "text", text } }
+}
+
+function diffContent({ changes, patch }: ToolDiff): ToolCallContent {
+  return {
+    type: "diff",
+    changes,
+    ...(patch === undefined
+      ? {}
+      : { patch: { format: "git_patch", text: patch } }),
+  }
+}
+
+/**
+ * One ACP usage for the whole turn. ACP requires the input and output counts,
+ * so a turn whose provider reported neither reports no usage rather than zeros.
+ */
+function turnUsage(entries: readonly TokenUsage[]): Usage | undefined {
+  const counts = sumTokenCounts(entries)
+  const { inputTokens, outputTokens } = counts
+  if (inputTokens === undefined || outputTokens === undefined) return undefined
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: counts.totalTokens ?? inputTokens + outputTokens,
+    ...(counts.reasoningTokens === undefined
+      ? {}
+      : { thoughtTokens: counts.reasoningTokens }),
+    ...(counts.cachedInputTokens === undefined
+      ? {}
+      : { cachedReadTokens: counts.cachedInputTokens }),
+    ...(counts.cachedWriteTokens === undefined
+      ? {}
+      : { cachedWriteTokens: counts.cachedWriteTokens }),
+  }
+}
+
 function chunkStep(
   state: TranslateState,
   context: TranslateContext,
@@ -85,7 +176,13 @@ function chunkStep(
   return {
     state: segment.state,
     outbound: [
-      chunkOutbound(context, sessionUpdate, segment.messageId, event.text),
+      chunkOutbound(
+        context,
+        sessionUpdate,
+        segment.messageId,
+        event.text,
+        attribution(state, event.subagentId)
+      ),
     ],
   }
 }
@@ -148,11 +245,21 @@ function endedOutbound(
       turnId: context.turnId,
       text: event.composerPrefill,
     })
+  const usage = event.usage && turnUsage(event.usage)
   outbound.push(
-    stateOutbound(context, {
-      state: "idle",
-      stopReason: context.stopping ? "cancelled" : "end_turn",
-    })
+    stateOutbound(
+      context,
+      {
+        state: "idle",
+        stopReason: event.stopReason
+          ? ACP_STOP_REASON[event.stopReason]
+          : context.stopping
+            ? "cancelled"
+            : "end_turn",
+        ...(usage ? { usage } : {}),
+      },
+      event.cost ? { cost: event.cost } : undefined
+    )
   )
   return outbound
 }
@@ -176,6 +283,8 @@ function failedOutbound(
   const failure = {
     ...(event.code ? { code: event.code } : {}),
     message: event.message.slice(0, 4_096),
+    ...(event.provider ? { provider: event.provider } : {}),
+    ...(event.model ? { model: event.model } : {}),
   }
   return [
     stateOutbound(
@@ -202,12 +311,29 @@ function toolStarted(
     toolCallId: event.toolCallId,
     title: event.title,
     status: "in_progress",
+    ...(event.name ? { name: event.name } : {}),
+    ...(event.toolKind ? { kind: event.toolKind } : {}),
+    ...(event.locations ? { locations: event.locations } : {}),
+  }
+  const extra = {
+    ...(event.startedAt ? { startedAt: event.startedAt } : {}),
+    ...wireSubagent(event.subagent),
+    ...attribution(state, event.subagentId),
   }
   // The adapter's parent id only names the segment when nothing has yet.
   const segment = segmentMessage(state, event.parentMessageId ?? context.turnId)
+  const opened = openArgs(segment.state, event.toolCallId, "")
   return {
-    state: openArgs(segment.state, event.toolCallId, ""),
-    outbound: [toolOutbound(context, segment.messageId, call)],
+    state: event.subagent
+      ? {
+          ...opened,
+          subagents: {
+            ...opened.subagents,
+            [event.subagent.id]: event.toolCallId,
+          },
+        }
+      : opened,
+    outbound: [toolOutbound(context, segment.messageId, call, extra)],
   }
 }
 
@@ -252,18 +378,145 @@ function toolFinished(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.ToolCallFinished>
 ): Step {
+  // The settled content replaces everything streamed into the call, so it
+  // restates the terminals the call announced.
+  const terminals = Object.entries(state.terminals).flatMap(
+    ([terminalId, toolCallId]): ToolCallContent[] =>
+      toolCallId === event.toolCallId ? [{ type: "terminal", terminalId }] : []
+  )
   const call = {
     toolCallId: event.toolCallId,
     status: event.failed ? "failed" : "completed",
     rawOutput: jsonOr(event.output, event.output),
     content: [
-      { type: "content", content: { type: "text", text: event.output } },
+      textContent(event.output),
+      ...(event.diffs ?? []).map(diffContent),
+      ...terminals,
     ],
+    ...(event.locations ? { locations: event.locations } : {}),
+  }
+  const extra = {
+    ...(event.completedAt ? { completedAt: event.completedAt } : {}),
+    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
   }
   return {
     state,
-    outbound: [toolOutbound(context, attachedTo(state, context), call)],
+    outbound: [toolOutbound(context, attachedTo(state, context), call, extra)],
   }
+}
+
+function toolOutputChunk(
+  state: TranslateState,
+  context: TranslateContext,
+  event: TurnEventOf<typeof TurnEventKind.ToolCallOutputChunk>
+): AcpOutbound[] {
+  return [
+    toolContentOutbound(
+      context,
+      attachedTo(state, context),
+      event.toolCallId,
+      textContent(event.text)
+    ),
+  ]
+}
+
+/**
+ * A terminal's first output announces it, both as ACP's terminal and as the
+ * call's content; later output only appends. ACP carries terminal output as
+ * base64 bytes, so the adapter's text travels as its UTF-8 encoding.
+ */
+function terminalStep(
+  state: TranslateState,
+  context: TranslateContext,
+  event: TurnEventOf<typeof TurnEventKind.TerminalOutput>
+): Step {
+  const { terminalId, command, cwd, data, exit } = event
+  const first = state.terminals[terminalId] === undefined
+  const outbound: AcpOutbound[] = []
+  if (first || command !== undefined || cwd !== undefined)
+    outbound.push(
+      turnUpdate(context, {
+        sessionUpdate: "terminal_update",
+        terminalId,
+        ...(command === undefined ? {} : { command }),
+        ...(cwd === undefined ? {} : { cwd }),
+      })
+    )
+  if (first)
+    outbound.push(
+      toolContentOutbound(
+        context,
+        attachedTo(state, context),
+        event.toolCallId,
+        {
+          type: "terminal",
+          terminalId,
+        }
+      )
+    )
+  if (data)
+    outbound.push(
+      turnUpdate(context, {
+        sessionUpdate: "terminal_output_chunk",
+        terminalId,
+        data: Buffer.from(data, "utf8").toString("base64"),
+      })
+    )
+  if (exit)
+    outbound.push(
+      turnUpdate(context, {
+        sessionUpdate: "terminal_update",
+        terminalId,
+        exitStatus: exit,
+      })
+    )
+  return {
+    state: first
+      ? {
+          ...state,
+          terminals: { ...state.terminals, [terminalId]: event.toolCallId },
+        }
+      : state,
+    outbound,
+  }
+}
+
+/** ACP admits a summary only on a completed compaction, an error on a failed one. */
+function compactionOutbound(
+  context: TranslateContext,
+  event: TurnEventOf<typeof TurnEventKind.CompactionUpdated>
+): AcpOutbound[] {
+  const { compactionId, status, summary, error } = event
+  return [
+    turnUpdate(context, {
+      sessionUpdate: "compaction_update",
+      compactionId,
+      status: ACP_COMPACTION_STATUS[status],
+      ...(status === CompactionStatus.Completed && summary !== undefined
+        ? { summary: [{ type: "text", text: summary }] }
+        : {}),
+      ...(status === CompactionStatus.Failed && error !== undefined
+        ? { error }
+        : {}),
+    }),
+  ]
+}
+
+function subagentOutbound(
+  state: TranslateState,
+  context: TranslateContext,
+  event: TurnEventOf<typeof TurnEventKind.SubagentUpdated>
+): AcpOutbound[] {
+  const extra = wireSubagent(event.subagent)
+  if (!extra.subagent) return []
+  return [
+    toolOutbound(
+      context,
+      attachedTo(state, context),
+      { toolCallId: event.toolCallId },
+      extra
+    ),
+  ]
 }
 
 function planOutbound(
@@ -289,8 +542,21 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
       return toolInputChunk(state, context, event)
     case TurnEventKind.ToolCallInputEnded:
       return toolInputEnded(state, context, event)
+    case TurnEventKind.ToolCallOutputChunk:
+      return { state, outbound: toolOutputChunk(state, context, event) }
     case TurnEventKind.ToolCallFinished:
       return toolFinished(state, context, event)
+    case TurnEventKind.TerminalOutput:
+      return terminalStep(state, context, event)
+    case TurnEventKind.CompactionUpdated:
+      return { state, outbound: compactionOutbound(context, event) }
+    case TurnEventKind.ModelChanged:
+      return {
+        state,
+        outbound: [{ kind: "model-changed", modelId: event.modelId }],
+      }
+    case TurnEventKind.SubagentUpdated:
+      return { state, outbound: subagentOutbound(state, context, event) }
     case TurnEventKind.PlanUpdated:
       return { state, outbound: planOutbound(context, event) }
     case TurnEventKind.ArtifactPublished:
