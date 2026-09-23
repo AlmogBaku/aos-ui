@@ -47,6 +47,7 @@ function harness(
     drafts,
     titleFor,
     ...(options.agentIdFor ? { agentIdFor: options.agentIdFor } : {}),
+    ...(options.agentScope ? { agentScope: options.agentScope } : {}),
   })
   return { adapter, connection, drafts }
 }
@@ -126,6 +127,110 @@ describe("ACP remote thread-list adapter", () => {
     expect(second.threads.map(({ remoteId }) => remoteId)).toEqual([
       "session-2",
     ])
+  })
+
+  describe("scoped to the selected Agent", () => {
+    const pinned = sessionInfo({ sessionId: "aster-pinned", agentId: "aster" })
+    // Every Agent's page one and Aster's own pages, as the proxy serves them.
+    function scopedCatalog(asterPages: SessionInfo[][]) {
+      return vi.fn(
+        async (meta: { agentId?: string }, cursor?: string) => {
+          if (meta.agentId === undefined)
+            return {
+              sessions: [
+                sessionInfo({ sessionId: "willow-1", agentId: "willow" }),
+                pinned,
+              ],
+              nextCursor: "every-agent-2",
+            }
+          const index = cursor === undefined ? 0 : Number(cursor)
+          return {
+            sessions: asterPages[index] ?? [],
+            ...(index + 1 < asterPages.length
+              ? { nextCursor: String(index + 1) }
+              : {}),
+          }
+        }
+      )
+    }
+
+    it("loads more of that Agent's Sessions only, with the Agent in the list meta", async () => {
+      const listSessions = scopedCatalog([
+        [sessionInfo({ sessionId: "aster-1", agentId: "aster" }), pinned],
+        [sessionInfo({ sessionId: "aster-2", agentId: "aster" }), pinned],
+      ])
+      const { adapter } = harness(
+        { listSessions },
+        { agentScope: () => "aster" }
+      )
+
+      const first = await adapter.list()
+      // Other Agents keep their page one; the pinned Session is listed once.
+      expect(first.threads.map(({ remoteId }) => remoteId)).toEqual([
+        "aster-1",
+        "aster-pinned",
+        "willow-1",
+      ])
+      expect(first.nextCursor).toBe("1")
+
+      listSessions.mockClear()
+      const second = await adapter.list({ after: first.nextCursor })
+
+      expect(listSessions.mock.calls).toEqual([[{ agentId: "aster" }, "1"]])
+      expect(second.threads.map(({ remoteId }) => remoteId)).toEqual([
+        "aster-2",
+        "aster-pinned",
+      ])
+      expect(second.nextCursor).toBeUndefined()
+    })
+
+    it("offers no further page to an Agent whose Sessions all fit", async () => {
+      const { adapter } = harness(
+        {
+          listSessions: scopedCatalog([
+            [sessionInfo({ sessionId: "aster-1", agentId: "aster" })],
+          ]),
+        },
+        { agentScope: () => "aster" }
+      )
+
+      await expect(adapter.list()).resolves.not.toHaveProperty("nextCursor")
+    })
+
+    it("ends the cursor at a page that adds no Session", async () => {
+      const { adapter } = harness(
+        {
+          listSessions: vi.fn(async () => ({
+            sessions: [],
+            nextCursor: "still-more",
+          })),
+        },
+        { agentScope: () => "aster" }
+      )
+
+      await expect(
+        adapter.list({ after: "more" })
+      ).resolves.not.toHaveProperty("nextCursor")
+    })
+
+    it("resolves an unlisted Session from that Agent's own pages", async () => {
+      const listSessions = scopedCatalog([
+        [sessionInfo({ sessionId: "aster-1", agentId: "aster" })],
+        [sessionInfo({ sessionId: "aster-2", agentId: "aster" })],
+      ])
+      const { adapter } = harness(
+        { listSessions },
+        { agentScope: () => "aster" }
+      )
+
+      await expect(adapter.fetch("aster-2")).resolves.toMatchObject({
+        remoteId: "aster-2",
+      })
+      expect(listSessions.mock.calls).toEqual([
+        [{ agentId: "aster" }, undefined],
+        [{ agentId: "aster" }, "1"],
+      ])
+    })
   })
 
   it("rejects a Session the proxy described without AOS metadata", async () => {

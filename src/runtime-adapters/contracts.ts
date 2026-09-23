@@ -152,6 +152,12 @@ export type WorkspaceAdapter = {
   markSessionRead?: (threadId: string) => Promise<void>
   /** Provider-owned pin; rename, archival, and deletion travel with threads. */
   setSessionPinned?: (threadId: string, pinned: boolean) => Promise<void>
+  /**
+   * Names the Agent whose History the thread list pages. A runtime whose
+   * catalog spans every Agent reads further pages for this Agent alone; the
+   * caller reloads the thread list, so its cursor belongs to this Agent.
+   */
+  scopeSessionCatalog?: (agentId: string) => void
   /** What the runtime declares about the Session actions the UI may offer. */
   sessionActionCapabilities?: () => Promise<SessionActionCapabilities>
   /**

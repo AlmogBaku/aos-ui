@@ -363,3 +363,26 @@ it("renames through the thread list and pins through the provider", async () => 
   })
   expect(setSessionPinned).toHaveBeenCalledWith("s-recent", true)
 })
+
+it("scopes History's catalog to the selected Agent and reloads once per Agent", async () => {
+  const willow: AgentSummary = { kind: "ready", id: "agent-b", name: "Willow" }
+  const scopeSessionCatalog = vi.fn()
+  const { result, log } = await mountNavigation(["s-recent"], [recent], {
+    listAgents: async () => [agent, willow],
+    refreshAgents: async () => [agent, willow],
+    scopeSessionCatalog,
+  })
+  const reloads = () => log.filter((entry) => entry === "reload").length
+  expect(scopeSessionCatalog.mock.calls).toEqual([["agent-a"]])
+  expect(reloads()).toBe(1)
+
+  await act(async () => {
+    await result.current.selectAgent("agent-b")
+  })
+  await act(async () => {
+    await result.current.selectAgent("agent-b")
+  })
+
+  expect(scopeSessionCatalog.mock.calls).toEqual([["agent-a"], ["agent-b"]])
+  expect(reloads()).toBe(2)
+})
