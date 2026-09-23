@@ -434,6 +434,8 @@ describe("conversation search", () => {
 })
 
 describe("virtualized thread", () => {
+  // A deliberately coupled jsdom layout simulator: it knows the list's rows
+  // and spacing, so the virtualizer has real sizes to work with.
   const VIEWPORT_HEIGHT = 600
   const MESSAGE_HEIGHT = 100
   const LONG_THREAD_LENGTH = 200

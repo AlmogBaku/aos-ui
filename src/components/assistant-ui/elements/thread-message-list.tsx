@@ -13,6 +13,8 @@ import {
 import {
   useCallback,
   useImperativeHandle,
+  useLayoutEffect,
+  useRef,
   useState,
   type ComponentProps,
   type FocusEvent,
@@ -49,6 +51,30 @@ function messageElement(viewport: HTMLElement | null, messageId: string) {
   )
 }
 
+/**
+ * Where the browser keeps the reader's place across a resize above the
+ * viewport itself (`overflow-anchor`), the virtualizer must not correct too.
+ * WebKit has no scroll anchoring, so there the virtualizer's own correction
+ * for messages above the viewport stands in for it.
+ */
+const BROWSER_ANCHORS_SCROLL =
+  typeof CSS !== "undefined" && CSS.supports?.("overflow-anchor", "auto")
+
+/**
+ * The list's top within the viewport's scrolled content. The viewport is
+ * positioned, so the list's offset chain ends at it and ignores scrolling.
+ */
+function offsetWithin(viewport: HTMLElement, list: HTMLElement) {
+  let top = 0
+  for (
+    let element: Element | null = list;
+    element instanceof HTMLElement && element !== viewport;
+    element = element.offsetParent
+  )
+    top += element.offsetTop
+  return top
+}
+
 function setScrollTopImmediately(viewport: HTMLElement, scrollTop: number) {
   const previousScrollBehavior = viewport.style.scrollBehavior
   viewport.style.scrollBehavior = "auto"
@@ -80,6 +106,10 @@ export function ThreadMessageList({
   ref?: Ref<ThreadMessageListHandle>
 }) {
   const messageIds = unstable_useThreadMessageIds()
+  const listRef = useRef<HTMLDivElement>(null)
+  // What sits above the list in the viewport (padding, the search bar) offsets
+  // every message, so the window and `getOffsetForIndex` count it in.
+  const [scrollMargin, setScrollMargin] = useState(0)
   // The last message to hold focus stays mounted, so scrolling never pulls
   // focus out from under the keyboard and a menu can return focus to it.
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null)
@@ -108,9 +138,21 @@ export function ThreadMessageList({
     initialOffset: () => viewportRef.current?.scrollTop ?? 0,
     overscan: OVERSCAN,
     rangeExtractor,
+    scrollMargin,
   })
-  // An instance field, not an option: scroll stays with the controller.
-  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+  // An instance field, not an option. Where the browser anchors scroll, the
+  // reading-position controller and the browser keep the reader's place.
+  if (BROWSER_ANCHORS_SCROLL)
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+
+  // The list re-renders on every scroll, so the margin follows what moves above
+  // it; an unchanged value bails out of the update, so it cannot loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    const list = listRef.current
+    if (viewport && list) setScrollMargin(offsetWithin(viewport, list))
+  })
 
   useImperativeHandle(
     ref,
@@ -142,9 +184,10 @@ export function ThreadMessageList({
     : virtualizer.getVirtualItems()
   const remainder = whole
     ? 0
-    : virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0)
+    : virtualizer.getTotalSize() + scrollMargin - (items.at(-1)?.end ?? 0)
   return (
     <div
+      ref={listRef}
       className={cn("flex flex-col", className)}
       style={remainder > 0 ? { paddingBottom: remainder } : undefined}
       onFocus={onFocus}
@@ -152,7 +195,7 @@ export function ThreadMessageList({
       {items.map((item, position) => {
         const messageId = messageIds[item.index]
         if (!messageId) return null
-        const gap = item.start - (items[position - 1]?.end ?? 0)
+        const gap = item.start - (items[position - 1]?.end ?? scrollMargin)
         return (
           <div
             key={item.key}
