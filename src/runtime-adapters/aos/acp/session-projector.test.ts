@@ -859,6 +859,20 @@ describe("applyUpdate turn timing", () => {
     })
   })
 
+  it("keeps the start when the run repeats its running state untimed", () => {
+    const timed = fold([
+      started(STARTED_AT),
+      started(),
+      agentChunk("a1", "Done"),
+      settled(COMPLETED_AT),
+    ])
+
+    expect(toThreadMessages(timed)[0]?.metadata?.timing).toMatchObject({
+      streamStartTime: Date.parse(STARTED_AT),
+      totalStreamTime: 4_500,
+    })
+  })
+
   it("leaves a turn untimed when its run reported no moment", () => {
     const untimed = fold([started(), agentChunk("a1", "Hello"), settled()])
 

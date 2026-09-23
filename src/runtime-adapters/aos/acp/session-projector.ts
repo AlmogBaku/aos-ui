@@ -610,6 +610,19 @@ function applyIdle(
       )
 }
 
+/**
+ * The start the same turn's run already recorded while it is still under way,
+ * so a repeated or resumed state that reports no moment keeps it.
+ */
+function ongoingStart(
+  state: ProjectorState,
+  turnId: string | undefined
+): number | undefined {
+  const { status, startedAt } = state.execution
+  const ongoing = status === "running" || status === "waiting-for-input"
+  return ongoing && state.execution.turnId === turnId ? startedAt : undefined
+}
+
 function applyState(
   state: ProjectorState,
   update: UpdatePayload,
@@ -626,7 +639,7 @@ function applyState(
   if (next === "running") {
     const failure = errorFrom(aos)
     if (failure) return applyRunningFailure(state, carried, failure)
-    const startedAt = epochOf(aos?.at)
+    const startedAt = epochOf(aos?.at) ?? ongoingStart(state, turnId)
     const reported = reportedFailure(state, turnId)
     return {
       ...state,
@@ -639,9 +652,14 @@ function applyState(
     }
   }
   if (next === "requires_action") {
+    const startedAt = ongoingStart(state, turnId)
     const blocked: ProjectorState = {
       ...state,
-      execution: { status: "waiting-for-input", ...carried },
+      execution: {
+        status: "waiting-for-input",
+        ...carried,
+        ...(startedAt === undefined ? {} : { startedAt }),
+      },
     }
     // A wait this projection did not watch start is a replayed one: its turn is
     // already in the transcript and owns the request. A live run that asks
