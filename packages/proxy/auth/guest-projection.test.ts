@@ -427,10 +427,16 @@ describe("guest outbound projection", () => {
     })
   })
 
-  it("keeps a guest's question schema, words and label alike", () => {
-    // The words of a question describe its answer field. Dropping an unknown
-    // key here would take the whole schema with it and leave the guest a
-    // question with no answer field at all.
+  it("keeps a guest's questions, words, label and choices alike", () => {
+    const questions = [
+      {
+        label: "Region",
+        text: "Which region?",
+        choices: ["eu", "us"],
+        multiple: false,
+        custom: true,
+      },
+    ]
     expect(
       projectGuestOutbound(
         {
@@ -444,32 +450,14 @@ describe("guest outbound projection", () => {
                 requestId: "clarify-1",
                 kind: "elicitation",
                 message: "1 question requires an answer",
-                responseSchema: {
-                  type: "string",
-                  title: "Region",
-                  description: "Which region?",
-                  enum: ["eu", "us"],
-                },
+                questions,
               },
             ],
           },
         },
         authorization
       )
-    ).toMatchObject({
-      payload: {
-        requests: [
-          {
-            responseSchema: {
-              type: "string",
-              title: "Region",
-              description: "Which region?",
-              enum: ["eu", "us"],
-            },
-          },
-        ],
-      },
-    })
+    ).toMatchObject({ payload: { requests: [{ questions }] } })
   })
 
   it("rejects cross-Agent and cross-Session projection", () => {

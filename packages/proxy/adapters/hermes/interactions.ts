@@ -20,6 +20,7 @@ import { INTERACTION_PROTOCOL } from "../../../protocol"
 import {
   PendingRequestKind,
   ReplyStatus,
+  type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
 
@@ -194,7 +195,7 @@ type Question = {
   choices: string[] | null
   nativeChoices: string[] | null
   multiple: boolean
-  /** Public projection of an answer Hermes already locked, for the schema default. */
+  /** Public projection of an answer Hermes already locked. */
   locked?: string[]
   /** The exact native values behind `locked`; a redaction must never be answered. */
   lockedNative?: string[]
@@ -459,24 +460,18 @@ function lockAnswers(answers: unknown, questions: Question[]) {
 }
 
 /**
- * `title` is a label and `description` the words: `clarify` carries only the
- * words, so the question text describes the field and the label stays unset.
- * Naming the whole question as a label is what put a paragraph in a tab.
+ * `clarify` carries only the question's words, never a short label: naming the
+ * whole question as a label is what put a paragraph in a tab. Every question
+ * takes free text, because Hermes always offers it beside the choices it lists
+ * (`MAX_CHOICES` in `tools/clarify_tool.py`: "the UI always appends an Other
+ * (type your answer) row").
  */
-function questionSchema(question: Question) {
+function pendingQuestion(question: Question): PendingQuestion {
   return {
-    type: "array",
-    description: question.question,
-    items: question.choices
-      ? { type: "string", enum: question.choices }
-      : { type: "string", maxLength: HERMES_INTERACTION_LIMITS.maxStringBytes },
-    minItems: 0,
-    maxItems: question.multiple
-      ? (question.choices?.length ??
-        HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
-      : 1,
-    ...(question.multiple ? { uniqueItems: true } : {}),
-    ...(question.locked ? { default: question.locked } : {}),
+    text: question.question,
+    choices: (question.choices ?? []).filter((choice) => choice.trim()),
+    multiple: question.multiple,
+    custom: true,
   }
 }
 
@@ -496,19 +491,7 @@ function clarifyInteraction(
         questions.length === 1
           ? questions[0]!.question
           : `${questions.length} questions require answers`,
-      responseSchema: {
-        type: "object",
-        properties: {
-          answers: {
-            type: "array",
-            prefixItems: questions.map(questionSchema),
-            minItems: questions.length,
-            maxItems: questions.length,
-          },
-        },
-        required: ["answers"],
-        additionalProperties: false,
-      },
+      questions: questions.map(pendingQuestion),
     },
   }
 }

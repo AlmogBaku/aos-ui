@@ -14,6 +14,7 @@ import {
 import {
   PendingRequestKind,
   ReplyStatus,
+  type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
 import type {
@@ -148,59 +149,18 @@ function permissionOutbound(
   }
 }
 
-/** The answer fields as the adapter shaped them, before any lane projection. */
-type NativeQuestion = {
-  /** The provider's short label, from JSON Schema `title`. */
-  label: string | undefined
-  /** The question's own words, from JSON Schema `description`. */
-  text: string | undefined
-  choices: string[]
-  multiple: boolean
-}
-
-function schemaText(schema: Record<string, unknown> | undefined, key: string) {
-  const value = schema?.[key]
-  return typeof value === "string" && value.length > 0 ? value : undefined
-}
-
-function nativeQuestionsOf(request: PendingRequest): NativeQuestion[] {
-  const schema = record(request.responseSchema)
-  const answers = record(record(schema?.properties)?.answers)
-  const prefixItems = Array.isArray(answers?.prefixItems)
-    ? answers.prefixItems
-    : undefined
-  if (prefixItems?.length)
-    return prefixItems.map((item: unknown) => {
-      const question = record(item)
-      return {
-        label: schemaText(question, "title"),
-        text: schemaText(question, "description"),
-        choices: enumValues(record(question?.items)),
-        multiple: question?.maxItems !== 1,
-      }
-    })
-  return [
-    {
-      label: schemaText(schema, "title"),
-      text: schemaText(schema, "description"),
-      choices: enumValues(schema),
-      multiple: false,
-    },
-  ]
+/** A request that lists no questions asks one free-text question: its message. */
+function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
+  return request.questions ?? [{ choices: [], multiple: false, custom: true }]
 }
 
 /**
- * Every question is `custom`: a clarify answer may be free text that is none of
- * the offered choices (`MAX_CHOICES` in Hermes' `tools/clarify_tool.py`: "the UI
- * always appends an Other (type your answer) row"), so the browser must always
- * offer that row.
- *
  * A header is the provider's short label and only that: a provider without one
  * leaves it unset rather than have the proxy invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
 function questionsOf(request: PendingRequest, lane: Lane): AosQuestion[] {
-  return nativeQuestionsOf(request).map((question) => ({
+  return pendingQuestionsOf(request).map((question) => ({
     ...(question.label
       ? { header: laneText(lane, question.label).slice(0, 256) }
       : {}),
@@ -212,7 +172,7 @@ function questionsOf(request: PendingRequest, lane: Lane): AosQuestion[] {
       label: laneText(lane, label),
     })),
     multiple: question.multiple,
-    custom: true,
+    custom: question.custom,
   }))
 }
 
@@ -305,7 +265,7 @@ export const replyFromPermission = ((request, response) => {
  * label, so the choice whose projection it is goes back to the adapter; free
  * text, and everything the operator sees unprojected, travels as typed.
  */
-function nativeAnswer(lane: Lane, question: NativeQuestion, answer: string) {
+function nativeAnswer(lane: Lane, question: PendingQuestion, answer: string) {
   if (lane !== "guest") return answer
   return (
     question.choices.find((choice) => laneText(lane, choice) === answer) ??
@@ -317,7 +277,7 @@ export const replyFromElicitation = ((request, response, lane) => {
   if (response.action !== "accept")
     return { requestId: request.requestId, status: ReplyStatus.Cancelled }
   const content = record(response.content)
-  const answers = nativeQuestionsOf(request).map((question, index) =>
+  const answers = pendingQuestionsOf(request).map((question, index) =>
     answerValues(content?.[`q${index}`]).map((answer) =>
       nativeAnswer(lane, question, answer)
     )

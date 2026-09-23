@@ -714,9 +714,9 @@ function turnEnded(): TurnEvent {
 }
 
 /**
- * The clarification Hermes raises: one question interrupt whose prefixed answer
- * schemas are a single choice, a multi-select, and a free-text question. An
- * adapter that knows which tool call is asking names it.
+ * The clarification Hermes raises: one question interrupt asking a single
+ * choice, a multi-select, and a free-text question. An adapter that knows which
+ * tool call is asking names it.
  */
 function turnQuestioned(toolCallId?: string): TurnEvent {
   return {
@@ -727,41 +727,26 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
         kind: PendingRequestKind.Elicitation,
         message: "3 questions require answers",
         ...(toolCallId === undefined ? {} : { toolCallId }),
-        responseSchema: {
-          type: "object",
-          properties: {
-            answers: {
-              type: "array",
-              prefixItems: [
-                {
-                  type: "array",
-                  description: "Which environment?",
-                  items: { type: "string", enum: ["staging", "production"] },
-                  minItems: 0,
-                  maxItems: 1,
-                },
-                {
-                  type: "array",
-                  description: "Which services?",
-                  items: { type: "string", enum: ["api", "worker", "web"] },
-                  minItems: 0,
-                  maxItems: 3,
-                },
-                {
-                  type: "array",
-                  description: "Anything else to watch?",
-                  items: { type: "string", maxLength: 4096 },
-                  minItems: 0,
-                  maxItems: 64,
-                },
-              ],
-              minItems: 3,
-              maxItems: 3,
-            },
+        questions: [
+          {
+            text: "Which environment?",
+            choices: ["staging", "production"],
+            multiple: false,
+            custom: true,
           },
-          required: ["answers"],
-          additionalProperties: false,
-        },
+          {
+            text: "Which services?",
+            choices: ["api", "worker", "web"],
+            multiple: true,
+            custom: true,
+          },
+          {
+            text: "Anything else to watch?",
+            choices: [],
+            multiple: true,
+            custom: true,
+          },
+        ],
       },
     ],
   }

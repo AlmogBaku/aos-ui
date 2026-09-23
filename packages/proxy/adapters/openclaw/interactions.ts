@@ -1,6 +1,7 @@
 import {
   PendingRequestKind,
   RequestReplySchema,
+  type PendingQuestion,
   type PendingRequest,
   type RequestReply,
 } from "../../core/events"
@@ -67,6 +68,7 @@ export class OpenClawInteractionPublicError extends Error {
 }
 type Question = {
   questionId: string
+  header: string
   question: string
   options: string[]
   multi?: boolean
@@ -180,6 +182,7 @@ function record(
     })
     return {
       questionId: questionId!,
+      header: q.header as string,
       question: q.question as string,
       options,
       ...(q.multiSelect ? { multi: true } : {}),
@@ -226,28 +229,32 @@ function parseReply(raw: unknown): { entry: RequestReply; fingerprint: string } 
   if (!entry || !id(entry.requestId)) invalid()
   return { entry, fingerprint: jsonFingerprint(entry) }
 }
+/** A free-text answer is valid wherever OpenClaw accepts one. */
+const acceptsText = (q: Question) => !!q.other || !!q.secret || !q.options.length
+function pendingQuestion(q: Question): PendingQuestion {
+  return {
+    label: q.header,
+    text: q.question,
+    choices: q.options,
+    multiple: !!q.multi,
+    custom: acceptsText(q),
+  }
+}
+/** The normalized `{ answers: string[][] }`, keyed back to native question ids. */
 function answerMap(value: unknown, questions: Question[]) {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    !(value as Record<string, unknown>).answers ||
-    typeof (value as Record<string, unknown>).answers !== "object"
-  )
-    invalid()
-  const raw = (value as { answers: Record<string, unknown> }).answers
-  if (Object.keys(raw).length !== questions.length) invalid()
+  const raw =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>).answers
+      : undefined
+  if (!Array.isArray(raw) || raw.length !== questions.length) invalid()
   const answers: Record<string, string[]> = {}
-  for (const q of questions) {
-    const values = raw[q.questionId]
+  for (const [index, q] of questions.entries()) {
+    const values: unknown = raw[index]
     if (
       !Array.isArray(values) ||
       (!q.multi && values.length > 1) ||
       values.some((v) => !text(v)) ||
-      (!q.other &&
-        !q.secret &&
-        q.options.length > 0 &&
-        values.some((v) => !q.options.includes(v as string)))
+      (!acceptsText(q) && values.some((v) => !q.options.includes(v as string)))
     )
       invalid()
     answers[q.questionId] = values as string[]
@@ -335,11 +342,7 @@ export class OpenClawInteractions {
             ? r.questions[0]!.question
             : `${r.questions.length} questions require answers`,
         expiresAt: new Date(r.expiresAtMs).toISOString(),
-        responseSchema: {
-          type: "object",
-          properties: { answers: { type: "object" } },
-          required: ["answers"],
-        },
+        questions: r.questions.map(pendingQuestion),
       }
     return this.remember({
       kind: "question",

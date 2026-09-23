@@ -75,9 +75,13 @@ const resolvedQuestion = [
   {
     requestId: "q",
     status: "resolved" as const,
-    payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
+    payload: { answers: [["other"], ["secret-value"]] },
   },
 ]
+/** The same answers keyed by native question id, as `question.resolve` takes them. */
+const nativeAnswers = {
+  answers: { choice: ["other"], secret: ["secret-value"] },
+}
 describe("OpenClaw interactions", () => {
   it.each([
     ["missing creation time", withoutCreatedAt],
@@ -134,7 +138,7 @@ describe("OpenClaw interactions", () => {
         ? { question }
         : {
             status: "answered",
-            answers: resolvedQuestion[0].payload,
+            answers: nativeAnswers,
             impossible: true,
           }
     )
@@ -163,13 +167,60 @@ describe("OpenClaw interactions", () => {
     expect(JSON.stringify(request)).not.toContain("allow-always")
   })
 
+  it("keeps the choices of a multi-choice question and answers every one", async () => {
+    const multi = {
+      ...question,
+      questions: [
+        {
+          questionId: "checks",
+          header: "Checks",
+          question: "Which checks?",
+          options: [{ label: "smoke" }, { label: "e2e" }, { label: "unit" }],
+          multiSelect: true,
+        },
+      ],
+    }
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question: multi }
+        : {
+            status: "answered",
+            answers: { answers: { checks: ["smoke", "unit"] } },
+          }
+    )
+    const interactions = new OpenClawInteractions({ request })
+
+    expect(interactions.acceptQuestion(scope, multi).questions).toEqual([
+      {
+        label: "Checks",
+        text: "Which checks?",
+        choices: ["smoke", "e2e", "unit"],
+        multiple: true,
+        custom: false,
+      },
+    ])
+    await expect(
+      interactions.respond(scope, [
+        {
+          requestId: "q",
+          status: "resolved",
+          payload: { answers: [["smoke", "unit"]] },
+        },
+      ])
+    ).resolves.toEqual({ status: "resolved" })
+    expect(request).toHaveBeenLastCalledWith("question.resolve", {
+      id: "q",
+      answers: { answers: { checks: ["smoke", "unit"] } },
+    })
+  })
+
   it("rediscovers and binds one exact pending question after restart", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "question.list") return { questions: [question] }
       if (method === "question.get") return { question }
       return {
         status: "answered",
-        answers: resolvedQuestion[0].payload,
+        answers: nativeAnswers,
       }
     })
     const interactions = new OpenClawInteractions({ request })
@@ -252,12 +303,12 @@ describe("OpenClaw interactions", () => {
         { requestId: "approval-a", kind: PendingRequestKind.Permission },
       ],
     })
-    await expect(interactions.validate(repliesScope, response)).resolves.toEqual(
-      { runId: "native-recovered" }
-    )
-    await expect(interactions.dispatch(repliesScope, response)).resolves.toEqual(
-      { status: "resolved" }
-    )
+    await expect(
+      interactions.validate(repliesScope, response)
+    ).resolves.toEqual({ runId: "native-recovered" })
+    await expect(
+      interactions.dispatch(repliesScope, response)
+    ).resolves.toEqual({ status: "resolved" })
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "question.list",
       "approval.get",
@@ -419,7 +470,7 @@ describe("OpenClaw interactions", () => {
         ? { question }
         : {
             status: "answered",
-            answers: resolvedQuestion[0].payload,
+            answers: nativeAnswers,
           }
     )
     const interactions = new OpenClawInteractions({ request })
@@ -435,7 +486,7 @@ describe("OpenClaw interactions", () => {
     expect(request).toHaveBeenCalledTimes(3)
     expect(request).toHaveBeenLastCalledWith("question.resolve", {
       id: "q",
-      answers: resolvedQuestion[0].payload,
+      answers: nativeAnswers,
     })
   })
 
@@ -444,9 +495,11 @@ describe("OpenClaw interactions", () => {
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
 
-    await expect(interactions.validate(repliesScope, [])).rejects.toMatchObject({
-      code: "AOS_INVALID_INTERACTION",
-    })
+    await expect(interactions.validate(repliesScope, [])).rejects.toMatchObject(
+      {
+        code: "AOS_INVALID_INTERACTION",
+      }
+    )
     await expect(
       interactions.validate(
         { ...repliesScope, threadId: "foreign" },
@@ -547,7 +600,7 @@ describe("OpenClaw interactions", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "question.get") return { question }
       await gate
-      return { status: "answered", answers: resolvedQuestion[0].payload }
+      return { status: "answered", answers: nativeAnswers }
     })
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
@@ -616,9 +669,7 @@ describe("OpenClaw interactions", () => {
         ? { question }
         : {
             status: "answered",
-            answers: {
-              answers: { choice: ["other"], secret: ["secret-value"] },
-            },
+            answers: nativeAnswers,
           }
     )
     const x = new OpenClawInteractions({ request })
@@ -631,7 +682,7 @@ describe("OpenClaw interactions", () => {
         {
           requestId: "q",
           status: "resolved",
-          payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
+          payload: { answers: [["other"], ["secret-value"]] },
         },
       ])
     ).resolves.toEqual({ status: "resolved" })
@@ -748,7 +799,7 @@ describe("OpenClaw interactions", () => {
         {
           requestId: "q",
           status: "resolved",
-          payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
+          payload: { answers: [["other"], ["secret-value"]] },
         },
       ])
     ).rejects.toBeInstanceOf(OpenClawInteractionPublicError)

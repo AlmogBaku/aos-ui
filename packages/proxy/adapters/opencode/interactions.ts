@@ -1,4 +1,8 @@
-import { PendingRequestKind, type PendingRequest } from "../../core/events"
+import {
+  PendingRequestKind,
+  type PendingQuestion,
+  type PendingRequest,
+} from "../../core/events"
 
 import { OpenCodeMutationUncertainError } from "./client"
 
@@ -56,11 +60,7 @@ export class OpenCodeInteractionPublicError extends Error {
   }
 }
 type Scope = Omit<OpenCodeInteractionScope, "turnId">
-type Question = {
-  options: { publicValue: string; nativeLabel: string }[]
-  multiple: boolean
-  custom: boolean
-}
+type Question = PendingQuestion
 type Pending = {
   id: string
   scope: Scope
@@ -107,19 +107,24 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
       (row.custom !== undefined && typeof row.custom !== "boolean")
     )
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
-    const options = row.options.map((option, index) => {
+    const choices = row.options.map((option) => {
       const value = record(option)
       const label = text(value?.label, 256)
       if (!label || !text(value?.description))
         throw new OpenCodeInteractionPublicError(
           "AOS_PROVIDER_INVALID_RESPONSE"
         )
-      return { publicValue: `option-${index + 1}`, nativeLabel: label }
+      return label
     })
+    if (new Set(choices).size !== choices.length)
+      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    // OpenCode offers free text unless the question turns it off.
     return {
-      options,
+      label: row.header as string,
+      text: row.question as string,
+      choices,
       multiple: row.multiple === true,
-      custom: row.custom === true,
+      custom: row.custom !== false,
     }
   })
 }
@@ -309,19 +314,7 @@ export class OpenCodeInteractions {
         requestId: p.id,
         kind: PendingRequestKind.Elicitation,
         message: `${p.questions!.length} questions require answers`,
-        responseSchema: {
-          type: "array",
-          minItems: p.questions!.length,
-          maxItems: p.questions!.length,
-          items: p.questions!.map((q) => ({
-            type: "array",
-            minItems: 0,
-            maxItems: q.multiple ? q.options.length : 1,
-            items: q.custom
-              ? { type: "string", maxLength: MAX_TEXT_BYTES }
-              : { type: "string", enum: q.options.map((o) => o.publicValue) },
-          })),
-        },
+        questions: p.questions!,
       }
     })
   }
@@ -421,21 +414,21 @@ export class OpenCodeInteractions {
       throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
     }
   }
+  /** The normalized `{ answers: string[][] }`, in question order. */
   #answers(questions: Question[], input: unknown) {
-    if (!Array.isArray(input) || input.length !== questions.length)
+    const answers = record(input)?.answers
+    if (!Array.isArray(answers) || answers.length !== questions.length)
       throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
-    return input.map((answer, index) => {
+    return answers.map((answer, index) => {
       const q = questions[index]!
       if (
         !Array.isArray(answer) ||
-        answer.length > (q.multiple ? q.options.length : 1)
+        answer.length > (q.multiple ? q.choices.length : 1)
       )
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
       const selected = answer.map((raw) => {
-        const value = text(raw, 256)
-        const option = q.options.find((x) => x.publicValue === value)
-        if (option) return option.nativeLabel
-        if (value && q.custom) return value
+        const value = text(raw)
+        if (value && (q.custom || q.choices.includes(value))) return value
         throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
       })
       if (new Set(selected).size !== selected.length)

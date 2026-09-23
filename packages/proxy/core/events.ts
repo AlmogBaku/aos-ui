@@ -80,14 +80,32 @@ export const ReplyStatus = {
 } as const
 export type ReplyStatus = (typeof ReplyStatus)[keyof typeof ReplyStatus]
 
+/**
+ * One question an elicitation asks, in the words the operator may read. Its
+ * answer is the chosen `choices`, or free text when `custom` allows it.
+ */
+export const PendingQuestionSchema = z.strictObject({
+  /** The provider's own short label, when it has one. */
+  label: z.string().min(1).optional(),
+  /** The question's own words. */
+  text: z.string().min(1).optional(),
+  choices: z.array(z.string().min(1)),
+  multiple: z.boolean(),
+  /** An answer may be free text that is none of the choices. */
+  custom: z.boolean(),
+})
+export type PendingQuestion = z.infer<typeof PendingQuestionSchema>
+
 /** A question or approval the provider is waiting on; it ends a turn segment. */
 export const PendingRequestSchema = z.strictObject({
   requestId: z.string(),
   kind: z.enum([PendingRequestKind.Permission, PendingRequestKind.Elicitation]),
   message: z.string().optional(),
   toolCallId: z.string().optional(),
-  /** JSON Schema of the expected answer: a permission's `enum` of choices. */
+  /** JSON Schema of a permission's answer: its `enum` of choices. */
   responseSchema: z.record(z.string(), z.unknown()).optional(),
+  /** An elicitation's questions, in the order its reply answers them. */
+  questions: z.array(PendingQuestionSchema).min(1).optional(),
   expiresAt: z.string().optional(),
 })
 export type PendingRequest = z.infer<typeof PendingRequestSchema>
