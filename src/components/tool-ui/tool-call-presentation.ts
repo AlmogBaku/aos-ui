@@ -178,6 +178,22 @@ export function toolSubject(
   return first ? formatToolLocation(first) : part.toolName
 }
 
+/**
+ * A command or a path reads left to right in either locale; any other subject
+ * follows its own text.
+ */
+export function toolSubjectDir(
+  part: ToolPresentationPart,
+  kind: ToolUiActionKind = toolActionKind(part)
+): "ltr" | "auto" {
+  if (kind === "command") return "ltr"
+  const first = readAosToolArtifact(part.artifact)?.locations?.[0]
+  return first !== undefined &&
+    toolSubject(part, kind) === formatToolLocation(first)
+    ? "ltr"
+    : "auto"
+}
+
 /** A tool call's span, down to the second; a sub-second call says so. */
 export function formatToolDuration(
   ms: number,

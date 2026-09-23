@@ -27,6 +27,7 @@ import {
   toolActionKind,
   toolIconForKind,
   toolSubject,
+  toolSubjectDir,
 } from "./tool-call-presentation"
 import {
   ToolLocationList,
@@ -105,10 +106,13 @@ function toolErrorMessage(part: RichToolPart) {
 
 export const AosToolError: RichToolFallbackComponent = (part) => {
   const { locale } = useToolUiLocale()
+  const kind = toolActionKind(part)
   return (
     <ToolError
       name={part.toolName}
-      target={toolSubject(part)}
+      target={toolSubject(part, kind)}
+      targetDir={toolSubjectDir(part, kind)}
+      messageDir={kind === "command" ? "ltr" : "auto"}
       message={
         part.result === undefined
           ? locale === "he"
@@ -235,7 +239,7 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
       requestLabel={requestLabel}
       resultLabel={resultLabel}
       query={query}
-      queryDir={namesFirstLocation ? "ltr" : "auto"}
+      queryDir={toolSubjectDir(part, kind)}
       meta={
         <ToolRowMeta
           moreLocations={namesFirstLocation ? locations.length - 1 : 0}

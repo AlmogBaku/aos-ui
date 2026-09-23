@@ -77,11 +77,11 @@ export function TerminalTextFallback({
   labels: ToolTerminalLabels
 }) {
   return (
-    <div dir="ltr" className="flex min-w-0 flex-col gap-2 text-sm">
+    <div className="flex min-w-0 flex-col gap-2 text-sm">
       {terminal.command && (
         <p className="font-mono text-xs">
           <span className="sr-only">{labels.command}: </span>
-          {terminal.command}
+          <bdi dir="ltr">{terminal.command}</bdi>
         </p>
       )}
       <p className="text-muted-foreground">

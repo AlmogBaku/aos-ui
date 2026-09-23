@@ -277,6 +277,34 @@ describe("AosToolFallback", () => {
     ).toBeVisible()
   })
 
+  it.each([
+    { name: "stopped", exitCode: 130, output: "[Command interrupted]" },
+    { name: "finished", exitCode: 0, output: "Built successfully" },
+  ])(
+    "reads a $name command and its output left to right in Hebrew",
+    async ({ exitCode, output }) => {
+      const user = userEvent.setup()
+      render(
+        <ToolUiLocaleProvider locale="he">
+          <AosToolFallback
+            {...toolPart({
+              toolName: "terminal",
+              args: { command: "bun run build --filter web" },
+              result: { output, exit_code: exitCode },
+            })}
+          />
+        </ToolUiLocaleProvider>
+      )
+
+      const trigger = screen.queryByRole("button")
+      if (trigger) await user.click(trigger)
+      for (const text of ["bun run build --filter web", output]) {
+        for (const element of screen.getAllByText(text))
+          expect(element.closest("bdi")).toHaveAttribute("dir", "ltr")
+      }
+    }
+  )
+
   it("uses Terminal Block for command output", async () => {
     const user = userEvent.setup()
     const { container } = render(

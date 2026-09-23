@@ -38,7 +38,8 @@ export function TerminalBlock({
       {...props}
     >
       <div className="flex items-center justify-between gap-3 px-4 pt-3 pb-1.5">
-        <span
+        <bdi
+          dir="ltr"
           className={cn(
             "min-w-0 truncate",
             ink
@@ -47,7 +48,7 @@ export function TerminalBlock({
           )}
         >
           {command}
-        </span>
+        </bdi>
         {done ? (
           <div className="flex shrink-0 items-center gap-1">
             <CheckIcon className="size-3 text-success" />
@@ -73,7 +74,8 @@ export function TerminalBlock({
           />
         )}
       </div>
-      <div
+      <bdi
+        dir="ltr"
         className={cn(
           "flex min-h-[8.5rem] flex-col gap-1 overflow-x-auto px-4 pt-1 pb-3.5",
           ink
@@ -104,7 +106,7 @@ export function TerminalBlock({
             className="inline-block h-3 w-1.5 animate-pulse bg-primary/70 motion-reduce:animate-none"
           />
         ) : null}
-      </div>
+      </bdi>
     </div>
   )
 }
