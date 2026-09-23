@@ -397,6 +397,25 @@ assistant's answer.
   permission flows, subagent activity, and attached data, media or sources stay
   outside the fold. Nothing folds while the turn is still running: a live turn
   offers only the elapsed time.
+- **Tool facts live in the trace:** a tool row reads by the provider's ACP
+  kind when it declares one and by the tool's name otherwise, and carries its
+  paths and duration. Diffs sit folded inside the edit tool's details, with
+  "+N −M" on the row and the turn's total in the fold summary ("Changed 3
+  files +42 −7"). A live terminal opens while its command runs and folds with
+  the turn once it settles. Paths, patches, and terminal output render
+  left-to-right in both locales. Each keeps a plain-text fallback.
+- **Compaction is a quiet divider:** it sits outside the fold, keeps its summary
+  behind a disclosure, and splits the fold into before and after when it lands
+  mid-turn. A failed compaction is a warning System Notice.
+- **Stops say why:** a turn stopped at the length limit or refused by the
+  provider gets a warning System Notice under the message, and the fold
+  headline says so ("Stopped at the length limit after 40 s"). A failure notice
+  names the provider and model when the runtime reports them.
+- **Usage stays in the composer:** the last turn's tokens and the Session cost
+  appear only in the composer's context popover; messages carry no numbers.
+- **Subagents stay visible:** a subagent's work nests under the call that
+  spawned it, outside the fold, with its goal, status, and counts, and offers
+  its child Session when the workspace knows it.
 - **Preserve fidelity:** retain provider order and lifecycle, render each piece
   of content once, and degrade to an honest inspectable fallback when richer
   presentation is unavailable.
