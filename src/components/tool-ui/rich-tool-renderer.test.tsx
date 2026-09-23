@@ -257,6 +257,54 @@ describe("AosToolFallback", () => {
     expect(screen.getByText("Build failed")).toBeVisible()
   })
 
+  it("keeps a stopped command's output line breaks as written", () => {
+    render(
+      <AosToolPresentation
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "sleep 30" },
+          result: { output: "waiting\n[Command interrupted]", exit_code: 130 },
+        })}
+      />
+    )
+
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "waiting\n[Command interrupted]" &&
+          element.children.length === 0
+      )
+    ).toBeVisible()
+  })
+
+  it.each([
+    { name: "stopped", exitCode: 130, output: "[Command interrupted]" },
+    { name: "finished", exitCode: 0, output: "Built successfully" },
+  ])(
+    "lays a $name command and its output out left to right in Hebrew",
+    async ({ exitCode, output }) => {
+      const user = userEvent.setup()
+      render(
+        <ToolUiLocaleProvider locale="he">
+          <AosToolFallback
+            {...toolPart({
+              toolName: "terminal",
+              args: { command: "bun run build --filter web" },
+              result: { output, exit_code: exitCode },
+            })}
+          />
+        </ToolUiLocaleProvider>
+      )
+
+      const trigger = screen.queryByRole("button")
+      if (trigger) await user.click(trigger)
+      for (const text of ["bun run build --filter web", output]) {
+        for (const element of screen.getAllByText(text))
+          expect(element.closest("[dir]")).toHaveAttribute("dir", "ltr")
+      }
+    }
+  )
+
   it("uses Terminal Block for command output", async () => {
     const user = userEvent.setup()
     const { container } = render(

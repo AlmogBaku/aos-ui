@@ -864,7 +864,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
   // The edit row names its kind, location, line totals and duration; its diff
   // stays folded until the row opens.
   const edit = page.getByRole("button", {
-    name: "Edited /w/src/pricing/tiers.ts:2 2 lines added, 1 removed 1 s",
+    name: "Edited /w/src/pricing/tiers.ts:2 2 lines added, 1 removed 1s",
     exact: true,
   })
   await expect(page.getByRole("list", { name: "Changed files" })).toHaveCount(0)
@@ -879,7 +879,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
 
   // The command's terminal decodes the base64 output ACP carried.
   await expandByKeyboard(
-    page.getByRole("button", { name: "Ran bun run test 3 s", exact: true })
+    page.getByRole("button", { name: "Ran bun run test 3s", exact: true })
   )
   await expect(
     page.getByRole("region", { name: "Terminal output" })

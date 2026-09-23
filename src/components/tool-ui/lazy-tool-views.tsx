@@ -88,7 +88,6 @@ export function TerminalTextFallback({
         {terminalStatus(terminal, labels)}
       </p>
       <pre
-        dir="ltr"
         aria-label={labels.output}
         className="max-h-80 overflow-auto rounded-lg border border-border bg-card p-3 font-mono text-xs"
       >

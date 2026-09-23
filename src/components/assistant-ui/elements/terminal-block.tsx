@@ -36,6 +36,7 @@ export function TerminalBlock({
         className
       )}
       {...props}
+      dir="ltr"
     >
       <div className="flex items-center justify-between gap-3 px-4 pt-3 pb-1.5">
         <span

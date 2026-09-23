@@ -57,9 +57,9 @@ export function ToolError({
       <div className="flex items-center gap-2.5">
         <AlertCircleIcon className="size-3.5 shrink-0 text-destructive" />
         <span className={cn(mono, "shrink-0 text-foreground/55")}>{name}</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] text-foreground/80">
+        <bdi className="min-w-0 flex-1 truncate text-[13px] text-foreground/80">
           {target}
-        </span>
+        </bdi>
         <span className={cn(mono, "shrink-0 text-foreground/30 tabular-nums")}>
           {attempt}/{maxAttempts}
         </span>
@@ -68,7 +68,7 @@ export function ToolError({
       <div
         className={cn(
           field,
-          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed text-destructive"
+          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive"
         )}
       >
         {message}

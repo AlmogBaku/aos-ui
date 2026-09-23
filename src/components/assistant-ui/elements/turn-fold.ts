@@ -11,14 +11,10 @@ import type {
   ToolRunKind,
 } from "@/components/tool-ui/locale"
 import {
+  formatDuration,
   toolActionKind,
   type ToolPresentationPart,
 } from "@/components/tool-ui/tool-call-presentation"
-import {
-  diffStats,
-  readAosToolArtifact,
-  type AosDiffStats,
-} from "@/components/tool-ui/tool-artifact"
 import type { RichToolPart } from "@/components/tool-ui/types"
 
 /**
@@ -224,17 +220,6 @@ export function turnOutcome(
   }
 }
 
-/** What every tool call in the turn changed, summed over its reported diffs. */
-export function turnDiffStats(parts: readonly TurnPart[]): AosDiffStats {
-  return diffStats(
-    parts.flatMap((part) =>
-      part.type === "tool-call"
-        ? (readAosToolArtifact(part.artifact)?.diffs ?? [])
-        : []
-    )
-  )
-}
-
 function toolRunKind(part: ToolPresentationPart): ToolRunKind {
   const kind = TOOL_RUN_KINDS[toolActionKind(part)]
   return kind === "searchedCode" && WEB_SEARCH.test(part.toolName.toLowerCase())
@@ -268,8 +253,5 @@ export function formatTurnDuration(
   ms: number,
   labels: ToolUiLocaleLabels["assistant"]["duration"]
 ): string {
-  const seconds = Math.max(0, Math.round(ms / 1000))
-  return seconds < 60
-    ? labels.seconds(seconds)
-    : labels.minutes(Math.floor(seconds / 60), seconds % 60)
+  return formatDuration(Math.max(0, Math.round(ms / 1000)), labels)
 }

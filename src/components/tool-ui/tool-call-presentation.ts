@@ -178,14 +178,44 @@ export function toolSubject(
   return first ? formatToolLocation(first) : part.toolName
 }
 
+/**
+ * A command or a path reads left to right in either locale; any other subject
+ * follows its own text.
+ */
+export function toolSubjectDir(
+  part: ToolPresentationPart,
+  kind: ToolUiActionKind = toolActionKind(part)
+): "ltr" | "auto" {
+  if (kind === "command") return "ltr"
+  const first = readAosToolArtifact(part.artifact)?.locations?.[0]
+  return first !== undefined &&
+    toolSubject(part, kind) === formatToolLocation(first)
+    ? "ltr"
+    : "auto"
+}
+
+type DurationLabels = ToolUiLocaleLabels["assistant"]["duration"]
+
+/**
+ * Whole seconds in their two largest units, a zero second unit dropped:
+ * `20s`, `17m 27s`, `2m`, `1h 5m`.
+ */
+export function formatDuration(totalSeconds: number, labels: DurationLabels) {
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const seconds = totalSeconds % 60
+  const units =
+    hours > 0
+      ? [labels.hours(hours), minutes > 0 ? labels.minutes(minutes) : ""]
+      : minutes > 0
+        ? [labels.minutes(minutes), seconds > 0 ? labels.seconds(seconds) : ""]
+        : [labels.seconds(seconds)]
+  return units.filter(Boolean).join(" ")
+}
+
 /** A tool call's span, down to the second; a sub-second call says so. */
-export function formatToolDuration(
-  ms: number,
-  labels: ToolUiLocaleLabels["assistant"]["duration"]
-) {
-  if (ms < 1000) return labels.underSecond
-  const seconds = Math.floor(ms / 1000)
-  return seconds < 60
-    ? labels.seconds(seconds)
-    : labels.minutes(Math.floor(seconds / 60), seconds % 60)
+export function formatToolDuration(ms: number, labels: DurationLabels) {
+  return ms < 1000
+    ? labels.underSecond
+    : formatDuration(Math.floor(ms / 1000), labels)
 }

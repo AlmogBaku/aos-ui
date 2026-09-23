@@ -23,7 +23,6 @@ import {
   formatTurnDuration,
   isFoldablePart,
   partsAt,
-  turnDiffStats,
   turnOutcome,
 } from "./turn-fold"
 
@@ -77,18 +76,6 @@ export function TurnWorkingFold({
         )
       : ""
   )
-  // The opening run speaks for the whole turn, so it also totals what the
-  // turn's tools changed; each count is a scalar the store can compare.
-  const changedFiles = useAuiState((state) =>
-    continues ? 0 : turnDiffStats(state.message.parts).files
-  )
-  const additions = useAuiState((state) =>
-    continues ? 0 : turnDiffStats(state.message.parts).additions
-  )
-  const deletions = useAuiState((state) =>
-    continues ? 0 : turnDiffStats(state.message.parts).deletions
-  )
-  const changed = labels.assistant.toolRun.changedFiles(changedFiles)
   const duration =
     timing?.totalStreamTime === undefined
       ? undefined
@@ -109,16 +96,6 @@ export function TurnWorkingFold({
       >
         <span className="tabular-nums">
           {ran || labels.assistant.fold[outcome](duration)}
-          {changedFiles > 0 && (
-            <>
-              {" · "}
-              {changed.charAt(0).toLocaleUpperCase(locale) +
-                changed.slice(1)}{" "}
-              <bdi dir="ltr">
-                +{additions} −{deletions}
-              </bdi>
-            </>
-          )}
         </span>
         <DisclosureChevron className="ms-1 opacity-60" />
       </CollapsibleTrigger>

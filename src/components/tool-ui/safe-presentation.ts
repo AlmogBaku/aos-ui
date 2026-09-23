@@ -27,6 +27,11 @@ export function safeToolPresentation(value: unknown): SafeToolPresentation {
   return { text, title: titleFrom(sanitized) }
 }
 
+/** Redacted, bounded text shown as it reads, never re-encoded as JSON. */
+export function safeToolText(value: string): string {
+  return safeString(value)
+}
+
 /** Returns a redacted, bounded primitive from an object without reading raw args. */
 export function safeToolDisplayValue(
   value: unknown,

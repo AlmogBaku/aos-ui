@@ -202,7 +202,7 @@ describe("settled turn fold", () => {
     )
 
     const fold = await screen.findByRole("button", {
-      name: "Worked for 29 s",
+      name: "Worked for 29s",
     })
     expect(fold).toHaveAttribute("aria-expanded", "false")
     expect(
@@ -263,7 +263,7 @@ describe("settled turn fold", () => {
     )
 
     expect(screen.getByText("The fix is in place.")).toBeVisible()
-    await user.click(screen.getByRole("button", { name: "Worked for 29 s" }))
+    await user.click(screen.getByRole("button", { name: "Worked for 29s" }))
 
     const firstRun = screen.getByText("Read 1 file")
     const prose = screen.getByText(

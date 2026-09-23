@@ -102,7 +102,7 @@ describe("model stop notices", () => {
     ).toBeVisible()
     expect(
       await screen.findByRole("button", {
-        name: "Stopped at the length limit after 40 s",
+        name: "Stopped at the length limit after 40s",
       })
     ).toBeVisible()
   })
@@ -173,7 +173,7 @@ describe("turn failure detail", () => {
   })
 })
 
-describe("settled fold change summary", () => {
+describe("settled fold headline", () => {
   const patch = (additions: number, deletions: number) =>
     [
       "--- a/file",
@@ -182,7 +182,7 @@ describe("settled fold change summary", () => {
       ...Array.from({ length: deletions }, (_, index) => `-removed ${index}`),
     ].join("\n")
 
-  it("totals the files and lines the turn's tools changed", async () => {
+  it("names only the turn's duration, not what its tools changed", async () => {
     render(
       <LocalThread
         messages={turn([
@@ -228,7 +228,7 @@ describe("settled fold change summary", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Worked for 40 s · Changed 3 files +42 −7",
+        name: "Worked for 40s",
       })
     ).toBeVisible()
   })
@@ -261,7 +261,7 @@ describe("context compaction", () => {
     )
 
     const before = await screen.findByRole("button", {
-      name: "Worked for 40 s",
+      name: "Worked for 40s",
     })
     const divider = await screen.findByRole("button", {
       name: "Context compacted",

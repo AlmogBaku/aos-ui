@@ -517,17 +517,18 @@ function toolArtifact(call: ProjectedToolCall): AosToolArtifact | undefined {
 }
 
 /**
- * The call's span from whichever two of its start, end, and duration the
- * provider reported; a call with neither end is untimed.
+ * The call's span from whichever of its start, end, and duration the provider
+ * reported. A duration alone (Hermes reports neither end) spans from epoch
+ * zero, since only the span is ever read; a call with no start and no
+ * duration is untimed.
  */
 function toolTiming(call: ProjectedToolCall): ToolCallTiming | undefined {
-  const { completedAt, durationMs } = call
-  const startedAt =
-    call.startedAt ??
-    (completedAt === undefined || durationMs === undefined
-      ? undefined
-      : completedAt - durationMs)
-  if (startedAt === undefined) return undefined
+  const { startedAt, completedAt, durationMs } = call
+  if (startedAt === undefined) {
+    if (durationMs === undefined) return undefined
+    const end = completedAt ?? durationMs
+    return { startedAt: end - durationMs, completedAt: end }
+  }
   const end =
     completedAt ??
     (durationMs === undefined ? undefined : startedAt + durationMs)

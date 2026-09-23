@@ -192,7 +192,7 @@ describe("tool locations and duration", () => {
         )}
       />
     )
-    expect(within(screen.getByRole("button")).getByText("4 s")).toBeVisible()
+    expect(within(screen.getByRole("button")).getByText("4s")).toBeVisible()
   })
 })
 
@@ -306,7 +306,7 @@ describe("subagents", () => {
       "Depth 1",
       "Completed",
       "18K tokens",
-      "Took 1 min 12 s",
+      "Took 1m 12s",
       "Read 3 files",
       "Wrote 1 file",
     ])
