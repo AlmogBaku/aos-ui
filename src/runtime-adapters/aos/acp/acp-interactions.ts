@@ -1,7 +1,5 @@
 import {
   AOS_META_KEY,
-  AOS_METHODS,
-  AosActivityNotificationSchema,
   AosElicitationMetaSchema,
   AosPermissionMetaSchema,
 } from "@aos/protocol/acp"
@@ -10,7 +8,6 @@ import type {
   RuntimeQuestion,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
-import { onAosNotification } from "./aos-notification"
 import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
@@ -20,16 +17,13 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
  * One pending request per Session, replaced by the next one the proxy sends.
  *
  * Every UI with the Session open receives the same request. When another UI
- * answers it, the proxy's `attention-resolved` activity clears this copy. The
- * event names the Session of whichever UI started the turn, which a guest
- * keys differently, so it is matched by request id and owning Agent instead.
+ * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
+ * `$/cancel_request`, which aborts the request's own signal.
  */
 
 type PendingEntry = {
   request: RuntimeQuestionRequest
   pending: AcpPendingRequest
-  /** Unknown ownership is never auto-cleared. */
-  agentId: string | undefined
 }
 
 /**
@@ -51,11 +45,8 @@ function elicitationContent(
 
 export function createAcpInteractions({
   connection,
-  agentOf,
 }: {
-  connection: Pick<AcpConnection, "onPendingRequest" | "onNotification">
-  /** The Agent that owns a Session, when it is known. */
-  agentOf: (sessionId: string) => string | undefined
+  connection: Pick<AcpConnection, "onPendingRequest">
 }): RuntimeInteractionAdapter {
   const entries = new Map<string, PendingEntry>()
   const listeners = new Map<string, Set<() => void>>()
@@ -136,26 +127,18 @@ export function createAcpInteractions({
     if (sessionId === undefined) return
     const request = project(pending, sessionId)
     if (request === undefined) return
-    entries.set(sessionId, { request, pending, agentId: agentOf(sessionId) })
+    entries.set(sessionId, { request, pending })
     notify(sessionId)
+    // A withdrawn request leaves the Session only while it is still the one
+    // shown there; a newer request has replaced it otherwise.
+    pending.signal.addEventListener(
+      "abort",
+      () => {
+        if (entries.get(sessionId)?.pending === pending) drop(sessionId)
+      },
+      { once: true }
+    )
   })
-
-  // The unanswered JSON-RPC request stays open until the socket closes.
-  onAosNotification(
-    connection,
-    AOS_METHODS.notify.activity,
-    AosActivityNotificationSchema,
-    (notification) => {
-      if (notification.type !== "attention-resolved") return
-      for (const [sessionId, entry] of entries) {
-        if (
-          entry.request.requestId === notification.requestId &&
-          entry.agentId === notification.agentId
-        )
-          drop(sessionId)
-      }
-    }
-  )
 
   return {
     async respond(request, response) {

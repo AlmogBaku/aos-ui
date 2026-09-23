@@ -380,7 +380,10 @@ export class SessionCoordinator {
   readonly #admissions = new Set<string>()
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
-  readonly #observers = new Set<(event: ExecutionEvent) => void>()
+  readonly #observers = new Set<{
+    key?: string
+    listener: (event: ExecutionEvent) => void
+  }>()
   #closed = false
 
   constructor(private readonly options: SessionCoordinatorOptions) {
@@ -428,9 +431,27 @@ export class SessionCoordinator {
    * subscriptions and their replay.
    */
   observe(listener: (event: ExecutionEvent) => void) {
-    this.#observers.add(listener)
+    return this.#addObserver({ listener })
+  }
+
+  /**
+   * One Session's execution feed, matched on its provider scope, so a member can
+   * follow the requests its own Session resolves without the event naming them.
+   */
+  observeScope(
+    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    listener: (event: ExecutionEvent) => void
+  ) {
+    return this.#addObserver({ key: scopeKey(scope), listener })
+  }
+
+  #addObserver(observer: {
+    key?: string
+    listener: (event: ExecutionEvent) => void
+  }) {
+    this.#observers.add(observer)
     return () => {
-      this.#observers.delete(listener)
+      this.#observers.delete(observer)
     }
   }
 
@@ -897,13 +918,15 @@ export class SessionCoordinator {
     }
   }
 
-  #announce(event: ExecutionEvent) {
-    for (const observer of [...this.#observers])
-      try {
-        observer(event)
-      } catch {
-        // An observer must not rewrite the provider outcome.
-      }
+  #announce(scope: SessionScope, event: ExecutionEvent) {
+    const key = scopeKey(scope)
+    for (const { key: observed, listener } of [...this.#observers])
+      if (observed === undefined || observed === key)
+        try {
+          listener(event)
+        } catch {
+          // An observer must not rewrite the provider outcome.
+        }
   }
 
   /** A wait answered elsewhere, ended, or cleared resolves its requests. */
@@ -912,7 +935,11 @@ export class SessionCoordinator {
     if (requests.length === 0) return
     const origin = this.#origin(execution.scope, turnId)
     for (const { requestId } of requests)
-      this.#announce({ ...origin, kind: "attention-resolved", requestId })
+      this.#announce(execution.scope, {
+        ...origin,
+        kind: "attention-resolved",
+        requestId,
+      })
   }
 
   #createSegment(init: SegmentInit): Segment {
@@ -945,7 +972,7 @@ export class SessionCoordinator {
     // One start per consumed segment: a new turn, a reply, or a recovered
     // turn. A rediscovered wait is not a start, so it announces nothing here.
     if (execution.state === "running")
-      this.#announce({
+      this.#announce(execution.scope, {
         ...this.#origin(execution.scope, segment.turnId),
         kind: "turn-started",
       })
@@ -990,12 +1017,16 @@ export class SessionCoordinator {
             const origin = this.#origin(execution.scope, segment.turnId)
             if (segment.requests.length)
               for (const request of segment.requests)
-                this.#announce({
+                this.#announce(execution.scope, {
                   ...origin,
                   kind: "attention-requested",
                   request: structuredClone(request),
                 })
-            else this.#announce({ ...origin, kind: "turn-finished" })
+            else
+              this.#announce(execution.scope, {
+                ...origin,
+                kind: "turn-finished",
+              })
             break
           }
           if (event.kind === TurnEventKind.TurnFailed && !awaitingStop) {
@@ -1009,7 +1040,7 @@ export class SessionCoordinator {
             // so the execution settles and the next turn is admitted, which the
             // adapter still refuses if the native Session is busy.
             execution.state = interrupted ? "uncertain" : "idle"
-            this.#announce({
+            this.#announce(execution.scope, {
               ...this.#origin(execution.scope, segment.turnId),
               kind: "turn-failed",
             })

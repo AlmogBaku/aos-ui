@@ -6,52 +6,23 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
-import { AOS_METHODS, AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
+import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
 import { createAcpInteractions } from "./acp-interactions"
 import type { AcpPendingRequest } from "./types"
 
-function harness({
-  agentOf = () => "agent-1",
-}: { agentOf?: (sessionId: string) => string | undefined } = {}) {
+function harness() {
   const listeners = new Set<(pending: AcpPendingRequest) => void>()
-  const notificationListeners = new Map<
-    string,
-    Set<(params: unknown) => void>
-  >()
   const interactions = createAcpInteractions({
     connection: {
       onPendingRequest(listener) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
-      onNotification(method, listener) {
-        const existing = notificationListeners.get(method) ?? new Set()
-        existing.add(listener)
-        notificationListeners.set(method, existing)
-        return () => existing.delete(listener)
-      },
     },
-    agentOf,
   })
   const emit = (pending: AcpPendingRequest) =>
     listeners.forEach((listener) => listener(pending))
-  const notify = (method: string, params: unknown) =>
-    notificationListeners.get(method)?.forEach((listener) => listener(params))
-  return { interactions, emit, notify }
-}
-
-function resolved({
-  requestId = "interrupt-1",
-  agentId = "agent-1",
-}: { requestId?: string; agentId?: string } = {}) {
-  return {
-    type: "attention-resolved",
-    agentId,
-    // The Session of whichever UI started the turn, not this UI's copy.
-    sessionId: "session-elsewhere",
-    occurredAt: "2026-09-23T10:00:00.000Z",
-    requestId,
-  }
+  return { interactions, emit }
 }
 
 function permission({
@@ -85,13 +56,16 @@ function permission({
       aos: { requestId, ...(message === undefined ? {} : { message }) },
     },
   }
+  // The proxy withdraws a request by aborting its signal.
+  const withdrawal = new AbortController()
   const pending: AcpPendingRequest = {
     kind: "permission",
     sessionId,
     request,
     respond,
+    signal: withdrawal.signal,
   }
-  return { pending, respond }
+  return { pending, respond, withdraw: () => withdrawal.abort() }
 }
 
 function elicitation({
@@ -139,6 +113,7 @@ function elicitation({
     sessionId,
     request,
     respond,
+    signal: new AbortController().signal,
   }
   return { pending, respond }
 }
@@ -349,35 +324,39 @@ describe("ACP runtime interactions", () => {
   })
 
   it("clears a question another UI answered without answering the runtime", () => {
-    const { interactions, emit, notify } = harness()
-    const { pending, respond } = permission()
+    const { interactions, emit } = harness()
+    const { pending, respond, withdraw } = permission()
     emit(pending)
     const listener = vi.fn()
     interactions.subscribe("session-1", listener)
 
-    notify(AOS_METHODS.notify.activity, resolved())
+    withdraw()
 
     expect(interactions.getPending("session-1")).toBeUndefined()
     expect(listener).toHaveBeenCalledTimes(1)
     expect(respond).not.toHaveBeenCalled()
   })
 
-  it("keeps a question another request or Agent resolved", () => {
-    const { interactions, emit, notify } = harness()
-    emit(permission().pending)
+  it("keeps another Session's question that shares the withdrawn request id", () => {
+    const { interactions, emit } = harness()
+    const withdrawn = permission({ sessionId: "session-1" })
+    emit(withdrawn.pending)
+    emit(permission({ sessionId: "session-2" }).pending)
 
-    notify(AOS_METHODS.notify.activity, resolved({ requestId: "interrupt-9" }))
-    notify(AOS_METHODS.notify.activity, resolved({ agentId: "agent-2" }))
+    withdrawn.withdraw()
 
-    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-1")
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(interactions.getPending("session-2")?.requestId).toBe("interrupt-1")
   })
 
-  it("keeps a question whose owning Agent is unknown", () => {
-    const { interactions, emit, notify } = harness({ agentOf: () => undefined })
-    emit(permission().pending)
+  it("keeps the newer question when a superseded one is withdrawn", () => {
+    const { interactions, emit } = harness()
+    const superseded = permission({ requestId: "interrupt-1" })
+    emit(superseded.pending)
+    emit(permission({ requestId: "interrupt-2" }).pending)
 
-    notify(AOS_METHODS.notify.activity, resolved())
+    superseded.withdraw()
 
-    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-1")
+    expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-2")
   })
 })

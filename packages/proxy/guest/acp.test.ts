@@ -353,7 +353,11 @@ type HarnessOptions = {
   /** The invited Session already exists; a fresh invitation creates nothing. */
   existing?: boolean
   handle?: () => ServerTurnHandle
-  permission?: (params: unknown) => Promise<RequestPermissionResponse>
+  /** The guest's answer; `signal` aborts as the proxy withdraws the request. */
+  permission?: (
+    params: unknown,
+    signal: AbortSignal
+  ) => Promise<RequestPermissionResponse>
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -464,17 +468,20 @@ function harness(options: HarnessOptions = {}) {
     .onNotification(methods.client.session.update, ({ params }) => {
       recorder.add({ method: methods.client.session.update, params })
     })
-    .onRequest(methods.client.session.requestPermission, async ({ params }) => {
-      recorder.add({
-        method: methods.client.session.requestPermission,
-        params,
-      })
-      return (
-        (await options.permission?.(params)) ?? {
-          outcome: { outcome: "selected", optionId: "once" },
-        }
-      )
-    })
+    .onRequest(
+      methods.client.session.requestPermission,
+      async ({ params, signal }) => {
+        recorder.add({
+          method: methods.client.session.requestPermission,
+          params,
+        })
+        return (
+          (await options.permission?.(params, signal)) ?? {
+            outcome: { outcome: "selected", optionId: "once" },
+          }
+        )
+      }
+    )
   for (const method of Object.values(AOS_METHODS.notify))
     clientApp.onNotification(
       method,
@@ -494,6 +501,7 @@ function harness(options: HarnessOptions = {}) {
     clock,
     invitations,
     policy: context.guest,
+    coordinator,
     start,
     handles,
     history,
@@ -892,6 +900,50 @@ describe("guest ACP lane", () => {
     })
     // The refused answer starts no reply segment.
     expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("withdraws its request once an operator answers it", async () => {
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = harness({
+      existing: true,
+      handle: () =>
+        terminalHandle(
+          test.start.mock.calls.length > 1 ? RUN_EVENTS : REQUEST_EVENTS
+        ),
+      permission: (_params, signal) => {
+        withdrawal.resolve(signal)
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason))
+        })
+      },
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Delete the notes")
+    const signal = await withdrawal.promise
+
+    // The operator addresses the Session by its own public id.
+    const reply = await test.coordinator.start(
+      { agentId: AGENT, sessionId: STORED, threadId: "operator-view" },
+      {
+        turnId: "operator-reply",
+        replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+      },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    reply.close()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.start).toHaveBeenCalledTimes(2)
     test.close()
   })
 

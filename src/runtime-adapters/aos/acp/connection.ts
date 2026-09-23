@@ -200,25 +200,50 @@ export function createAcpConnection(
       }
   }
 
-  function permissionRequest(request: RequestPermissionRequest) {
-    return new Promise<RequestPermissionResponse>((respond) => {
+  /**
+   * Holds one request open until it is answered or withdrawn. A withdrawn one
+   * rejects with the abort's reason, the SDK's `requestCancelled`, so the SDK
+   * answers it as cancelled and releases it.
+   */
+  function held<Response>(
+    signal: AbortSignal,
+    emit: (respond: (response: Response) => void) => void
+  ) {
+    return new Promise<Response>((respond, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      })
+      emit(respond)
+    })
+  }
+
+  function permissionRequest(
+    request: RequestPermissionRequest,
+    signal: AbortSignal
+  ) {
+    return held<RequestPermissionResponse>(signal, (respond) => {
       emitPending({
         kind: "permission",
         sessionId: request.sessionId,
         request,
         respond,
+        signal,
       })
     })
   }
 
-  function elicitationRequest(request: CreateElicitationRequest) {
+  function elicitationRequest(
+    request: CreateElicitationRequest,
+    signal: AbortSignal
+  ) {
     const scope = ElicitationScopeSchema.safeParse(request)
-    return new Promise<CreateElicitationResponse>((respond) => {
+    return held<CreateElicitationResponse>(signal, (respond) => {
       emitPending({
         kind: "elicitation",
         sessionId: scope.success ? scope.data.sessionId : undefined,
         request,
         respond,
+        signal,
       })
     })
   }
@@ -239,11 +264,11 @@ export function createAcpConnection(
       for (const listener of updateListeners.get(params.sessionId) ?? [])
         listener(params.update, meta)
     })
-    .onRequest(methods.client.session.requestPermission, ({ params }) =>
-      permissionRequest(params)
+    .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
+      permissionRequest(params, signal)
     )
-    .onRequest(methods.client.elicitation.create, ({ params }) =>
-      elicitationRequest(params)
+    .onRequest(methods.client.elicitation.create, ({ params, signal }) =>
+      elicitationRequest(params, signal)
     )
   for (const [method, parser] of Object.entries(NOTIFICATION_PARSERS))
     app.onNotification(method, parser, ({ params }) => {

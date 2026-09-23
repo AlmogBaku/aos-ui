@@ -192,7 +192,7 @@ const USAGE = {
 class EventSource implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
-  readonly stop = vi.fn(async () => "stopping" as const)
+  readonly stop = vi.fn<ServerTurnHandle["stop"]>(async () => "stopping")
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
@@ -449,7 +449,11 @@ type HarnessOptions = {
   guest?: boolean
   total?: number
   activity?: AosActivityNotification[]
-  permission?: (params: unknown) => Promise<RequestPermissionResponse>
+  /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
+  permission?: (
+    params: unknown,
+    signal: AbortSignal
+  ) => Promise<RequestPermissionResponse>
   discover?: ServerTurnEngine["discover"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
@@ -677,13 +681,13 @@ async function harness(options: HarnessOptions = {}) {
       })
       .onRequest(
         methods.client.session.requestPermission,
-        async ({ params }) => {
+        async ({ params, signal }) => {
           recorder.add({
             method: methods.client.session.requestPermission,
             params,
           })
           return (
-            (await permission?.(params)) ?? {
+            (await permission?.(params, signal)) ?? {
               outcome: { outcome: "selected", optionId: "once" },
             }
           )
@@ -1652,9 +1656,15 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("drops a reply for a request the provider no longer holds", async () => {
+  it("withdraws a request the provider no longer holds and drops its reply", async () => {
     const answer = Promise.withResolvers<RequestPermissionResponse>()
-    const test = await harness({ permission: () => answer.promise })
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = await harness({
+      permission: (_params, signal) => {
+        withdrawal.resolve(signal)
+        return answer.promise
+      },
+    })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
@@ -1685,22 +1695,12 @@ describe("AOS ACP agent", () => {
       cwd: "/",
     })
     expect(test.discover).toHaveBeenCalled()
+    const signal = await withdrawal.promise
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
 
-    const failed = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
-    )
-    expect(failed.params).toMatchObject({
-      sessionId: CREATED,
-      code: "stale_request",
-    })
-    expect(test.logged()).toContainEqual({
-      event: "acp.error",
-      connectionId: "connection-1",
-      sessionId: CREATED,
-      errorCode: "stale_request",
-      message: "stale_request",
-    })
+    await settled()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })
@@ -2036,6 +2036,15 @@ function gate() {
   return { held: promise, release: () => resolve() }
 }
 
+/** A browser holding its answer until the proxy withdraws the request. */
+function heldUntilWithdrawn(signal: AbortSignal) {
+  return new Promise<never>((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    })
+  })
+}
+
 const GUEST_REF = "guest-ref"
 
 /** A redeemed invitation to the seeded Session, marking what it projects. */
@@ -2143,10 +2152,12 @@ describe("Session rooms", () => {
 
   it("asks every browser, takes the first answer, and streams the rest to all", async () => {
     const late = gate()
+    const withdrawal = Promise.withResolvers<AbortSignal>()
     const test = await harness({ providerIds: true })
     await test.list()
     const other = await test.connect("connection-2", {
-      permission: async () => {
+      permission: async (_params, signal) => {
+        withdrawal.resolve(signal)
         await late.held
         return { outcome: { outcome: "selected", optionId: "once" } }
       },
@@ -2170,12 +2181,51 @@ describe("Session rooms", () => {
     await replyWhileWatched(test.sources[1], "Resumed", [other])
     expect(flow(other.recorder)).toContain("chunk Resumed")
 
+    // The first answer withdrew the request from the other browser, so the
+    // answer it gives anyway is dropped rather than refused.
+    const signal = await withdrawal.promise
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
     late.release()
-    const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
-    )
-    expect(refused.params).toMatchObject({ code: "stale_request" })
+    await settled()
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+    other.close()
+  })
+
+  it("withdraws every browser's request when Stop ends the wait", async () => {
+    const signals: AbortSignal[] = []
+    const holding = async (_params: unknown, signal: AbortSignal) => {
+      signals.push(signal)
+      return heldUntilWithdrawn(signal)
+    }
+    const test = await harness({ providerIds: true, permission: holding })
+    await test.list()
+    const other = await test.connect("connection-2", { permission: holding })
+    await other.list()
+    await open(other)
+    await prompt(test, "Delete it")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.stop.mockResolvedValue("idle")
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(signals).toHaveLength(2))
+
+    await test.agent.notify(methods.agent.session.cancel, {
+      sessionId: SESSION,
+    })
+
+    await vi.waitFor(() =>
+      expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
+    )
+    await settled()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
     other.close()
   })

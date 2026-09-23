@@ -152,7 +152,11 @@ class SessionMember {
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
-  #pending: { requestId: string; promise: Promise<void> } | undefined
+  /** The requests this member asked and has not settled, by requestId. */
+  readonly #pending = new Map<
+    string,
+    { promise: Promise<void>; controller: AbortController }
+  >()
   readonly #replies = new Map<string, RequestReply>()
   #sequence = 0
   #stopRequested = false
@@ -243,9 +247,18 @@ class SessionMember {
   enterRoom(hasPrompt = false, replayed = false) {
     if (this.#left) return
     const { rooms } = this.#context
-    if (!this.#leaveRoom)
-      this.#leaveRoom = rooms.add(this.#scope, this.#seat, { hasPrompt })
-    else if (replayed) rooms.reseat(this.#scope, this.#seat, { hasPrompt })
+    if (!this.#leaveRoom) {
+      const leave = rooms.add(this.#scope, this.#seat, { hasPrompt })
+      // A request the Session resolves, through another member's answer or a
+      // Stop, is withdrawn here so this UI stops offering it.
+      const unobserve = this.#coordinator.observeScope(this.#scope, (event) => {
+        if (event.kind === "attention-resolved") this.#withdraw(event.requestId)
+      })
+      this.#leaveRoom = () => {
+        leave()
+        unobserve()
+      }
+    } else if (replayed) rooms.reseat(this.#scope, this.#seat, { hasPrompt })
   }
 
   /** Shows the room a turn this member admitted, then brings every member in. */
@@ -691,25 +704,42 @@ class SessionMember {
    */
   #ask(outbound: RequestOutbound) {
     if (
-      this.#pending?.requestId === outbound.requestId ||
+      this.#pending.has(outbound.requestId) ||
       this.#replies.has(outbound.requestId)
     )
       return
+    const controller = new AbortController()
+    const { signal } = controller
     const promise = (
       outbound.kind === "request-permission"
-        ? this.#askPermission(outbound)
-        : this.#askElicitation(outbound)
-    ).catch((cause: unknown) => this.report(cause))
-    this.#pending = { requestId: outbound.requestId, promise }
+        ? this.#askPermission(outbound, signal)
+        : this.#askElicitation(outbound, signal)
+    ).catch((cause: unknown) =>
+      // A withdrawn request is refused as cancelled, which is no failure.
+      signal.aborted ? undefined : this.report(cause)
+    )
+    this.#pending.set(outbound.requestId, { promise, controller })
+  }
+
+  /** Cancels a request the Session resolved, which is `$/cancel_request`. */
+  #withdraw(requestId: string) {
+    const pending = this.#pending.get(requestId)
+    if (!pending) return
+    this.#pending.delete(requestId)
+    pending.controller.abort()
   }
 
   async #askPermission(
-    outbound: Extract<AcpOutbound, { kind: "request-permission" }>
+    outbound: Extract<AcpOutbound, { kind: "request-permission" }>,
+    signal: AbortSignal
   ) {
     const response = await this.#client.request(
       methods.client.session.requestPermission,
-      { ...outbound.request, sessionId: this.#scope.threadId }
+      { ...outbound.request, sessionId: this.#scope.threadId },
+      { cancellationSignal: signal }
     )
+    // An answer that crossed its withdrawal is no longer this member's to give.
+    if (signal.aborted) return
     const request = this.#pendingRequest(outbound.requestId)
     const { guest, translators } = this.#context
     const reply = translators.replyFromPermission(request, response)
@@ -722,7 +752,8 @@ class SessionMember {
   }
 
   async #askElicitation(
-    outbound: Extract<AcpOutbound, { kind: "elicitation" }>
+    outbound: Extract<AcpOutbound, { kind: "elicitation" }>,
+    signal: AbortSignal
   ) {
     if (!hasMode(outbound.request))
       throw new Error("The elicitation carries no mode")
@@ -734,8 +765,10 @@ class SessionMember {
         ...outbound.request,
         sessionId: this.#scope.threadId,
         requestId: outbound.requestId,
-      }
+      },
+      { cancellationSignal: signal }
     )
+    if (signal.aborted) return
     const request = this.#pendingRequest(outbound.requestId)
     const { replyFromElicitation } = this.#context.translators
     // The answered question reaches the transcript before the turn continues, so
@@ -762,8 +795,9 @@ class SessionMember {
       requestId: request.requestId,
       status: reply.status,
     })
-    if (this.#pending?.requestId === request.requestId)
-      this.#pending = undefined
+    // Before the next segment resolves this request, so the member answering it
+    // does not withdraw it from itself.
+    this.#pending.delete(request.requestId)
     this.#replies.set(request.requestId, reply)
     const { requests } = this.#coordinator.snapshot(this.#scope)
     if (!requests.every(({ requestId }) => this.#replies.has(requestId))) return

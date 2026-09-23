@@ -2855,6 +2855,47 @@ describe("SessionCoordinator", () => {
     expect(observed[2]).toMatchObject({ requestId: "question-1" })
   })
 
+  it("observes one Session alone, matched on its provider scope", async () => {
+    const [first, other, later] = [
+      new EventSource(),
+      new EventSource(),
+      new EventSource(),
+    ]
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(other)
+        .mockResolvedValueOnce(later),
+      recover: vi.fn(async () => later),
+    }
+    const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    const unobserve = sessions.observeScope(
+      { agentId: scope.agentId, sessionId: scope.sessionId },
+      (event) => observed.push(event)
+    )
+
+    // A guest's thread names the same Session under another public id.
+    await sessions.start(
+      { ...scope, threadId: "guest-ref" },
+      input("run-1"),
+      access("one")
+    )
+    await sessions.start(otherScope, input("run-2"), access("two"))
+    first.emit(turnEnded)
+    other.emit(turnEnded)
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    await vi.waitFor(() => expect(sessions.state(otherScope)).toBe("idle"))
+    unobserve()
+    await sessions.start(scope, input("run-3"), access("one"))
+
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
+      ["turn-finished", "run-1"],
+    ])
+  })
+
   it("observes a failed run and stops delivering after unsubscribing", async () => {
     const first = new EventSource()
     const second = new EventSource()

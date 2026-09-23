@@ -43,12 +43,15 @@ export type AcpPendingRequest =
       sessionId: string
       request: RequestPermissionRequest
       respond(response: RequestPermissionResponse): void
+      /** Aborts when the proxy withdraws the request, which needs no answer. */
+      signal: AbortSignal
     }
   | {
       kind: "elicitation"
       sessionId: string | undefined
       request: CreateElicitationRequest
       respond(response: CreateElicitationResponse): void
+      signal: AbortSignal
     }
 
 export type AcpSessionUpdateListener = (
