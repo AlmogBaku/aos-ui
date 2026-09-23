@@ -1,4 +1,6 @@
 import {
+  CompactionStatus,
+  StopReason,
   TurnEventKind,
   aggregateTokenUsage,
   type TokenUsage,
@@ -8,10 +10,13 @@ import {
 import { projectTodos, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
+import { openCodeModelOptionId, openCodeTimestamp } from "./native-schemas"
 import { OPENCODE_TODO_STATUS_ALIASES, OPENCODE_TODO_TOOL } from "./todos"
 import {
+  OPENCODE_SHELL_TOOL,
   canonicalOpenCodeToolCall,
   canonicalOpenCodeToolName,
+  openCodeToolKind,
 } from "./tool-names"
 
 const MAX_ID_LENGTH = 512
@@ -19,6 +24,8 @@ const MAX_TEXT_BYTES = 1024 * 1024
 const MAX_EVENT_BYTES = 2 * 1024 * 1024
 const MAX_DUPLICATE_FINGERPRINTS = 256
 const MAX_JSON_DEPTH = 64
+/** The latest instant a JavaScript `Date` can name, in milliseconds. */
+const MAX_DATE_MS = 8.64e15
 
 type Projection = Readonly<{
   events: TurnEvent[]
@@ -42,6 +49,8 @@ type ToolState = {
   name: string
   args: string
   ended: boolean
+  /** The progress text already streamed, which each snapshot extends. */
+  output: string
   /**
    * The native Todo tool's own call input, kept only for that tool. The input
    * is the list OpenCode is about to write, so the plan needs no second read.
@@ -268,9 +277,30 @@ function tokenUsage(value: unknown): TokenUsage[] {
       outputTokens: output,
       reasoningTokens: reasoning,
       cachedInputTokens: cached,
+      cachedWriteTokens: written,
       totalTokens: input + output + reasoning,
     },
   ]
+}
+
+/**
+ * Why a provider step stopped. OpenCode passes the AI SDK's finish reason
+ * through; a step that ended on tool calls or anything else ended its turn.
+ */
+function stopReason(finish: string): StopReason {
+  if (finish === "length" || finish === "max_tokens")
+    return StopReason.MaxTokens
+  if (finish === "content-filter" || finish === "content_filter")
+    return StopReason.Refusal
+  return StopReason.EndTurn
+}
+
+type ModelRef = { id: string; providerID: string }
+
+/** When a validated event happened, unless its timestamp names no real date. */
+function occurredAt(data: Record<string, unknown>) {
+  const timestamp = data.timestamp as number
+  return timestamp <= MAX_DATE_MS ? openCodeTimestamp(timestamp) : undefined
 }
 
 function validateRetryError(value: unknown) {
@@ -531,6 +561,12 @@ export class OpenCodeEventProjector {
    */
   #plan?: string
   readonly #usage: TokenUsage[] = []
+  /** The turn's price so far, summed over every step that ended. */
+  #cost?: number
+  /** How the last step that ended stopped. */
+  #stopReason?: StopReason
+  /** The model the latest step ran on. */
+  #model?: ModelRef
 
   constructor(
     sessionId: string,
@@ -614,9 +650,16 @@ export class OpenCodeEventProjector {
     )
     events.push({
       kind: TurnEventKind.TurnEnded,
+      // A stop the operator asked for outranks how the last step ended.
+      ...(this.#stopReason && !this.#stopping
+        ? { stopReason: this.#stopReason }
+        : {}),
       ...(this.#usage.length
         ? { usage: aggregateTokenUsage(this.#usage) }
         : {}),
+      ...(this.#cost === undefined
+        ? {}
+        : { cost: { amount: this.#cost, currency: "USD" } }),
     })
     return { events, terminal: "finished" }
   }
@@ -625,7 +668,14 @@ export class OpenCodeEventProjector {
     if (this.#closed) return { events: [] }
     this.#closed = true
     const events = this.#closeOpenTools()
-    events.push({ kind: TurnEventKind.TurnFailed, code, message })
+    events.push({
+      kind: TurnEventKind.TurnFailed,
+      code,
+      message,
+      ...(this.#model
+        ? { provider: this.#model.providerID, model: this.#model.id }
+        : {}),
+    })
     return { events, terminal: "error" }
   }
 
@@ -660,7 +710,8 @@ export class OpenCodeEventProjector {
         events,
         data.callID as string,
         data.assistantMessageID as string,
-        data.name as string
+        data.name as string,
+        occurredAt(data)
       )
     } else if (type === "session.next.tool.input.ended") {
       const callId = data.callID as string
@@ -682,7 +733,8 @@ export class OpenCodeEventProjector {
         events,
         callId,
         data.assistantMessageID as string,
-        data.tool as string
+        data.tool as string,
+        occurredAt(data)
       )
       if (tool.name === OPENCODE_TODO_TOOL)
         tool.todoInput = data.input as Record<string, unknown>
@@ -696,9 +748,28 @@ export class OpenCodeEventProjector {
         tool.args = args
       }
     } else if (type === "session.next.tool.progress") {
-      // Progress has no turn fact of its own yet; it only has to name a call.
-      if (!this.#tools.has(data.callID as string))
-        throw new OpenCodeEventValidationError()
+      const callId = data.callID as string
+      const tool = this.#tools.get(callId)
+      if (!tool) throw new OpenCodeEventValidationError()
+      // Each report restates the call's whole output so far, so only text that
+      // extends what already streamed is new; the settled output replaces it.
+      const text = safeTextContent(data.content)
+      if (
+        !tool.ended &&
+        text.length > tool.output.length &&
+        text.startsWith(tool.output)
+      ) {
+        events.push({
+          kind: TurnEventKind.ToolCallOutputChunk,
+          toolCallId: callId,
+          text: text.slice(tool.output.length),
+        })
+        tool.output = text
+      }
+    } else if (type === "session.next.shell.started") {
+      this.#startShell(events, data)
+    } else if (type === "session.next.shell.ended") {
+      this.#endShell(events, data)
     } else if (
       type === "session.next.tool.success" ||
       type === "session.next.tool.failed"
@@ -708,6 +779,7 @@ export class OpenCodeEventProjector {
       if (!tool || tool.ended) throw new OpenCodeEventValidationError()
       tool.ended = true
       const failed = type === "session.next.tool.failed"
+      const completedAt = occurredAt(data)
       events.push(
         { kind: TurnEventKind.ToolCallInputEnded, toolCallId: callId },
         {
@@ -717,6 +789,7 @@ export class OpenCodeEventProjector {
             ? JSON.stringify({ status: "error" })
             : toolResultContent(tool.name, safeTextContent(data.content)),
           failed,
+          ...(completedAt ? { completedAt } : {}),
         }
       )
       // A written list is authoritative; a failed write left the plan alone.
@@ -724,8 +797,34 @@ export class OpenCodeEventProjector {
         const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
         if (todos) this.#emitPlan(events, todos)
       }
+    } else if (type === "session.next.step.started") {
+      const { id, providerID } = data.model as ModelRef
+      this.#model = { id, providerID }
     } else if (type === "session.next.step.ended") {
       this.#usage.push(...tokenUsage(data.tokens))
+      this.#cost = (this.#cost ?? 0) + (data.cost as number)
+      this.#stopReason = stopReason(data.finish as string)
+    } else if (type === "session.next.model.switched") {
+      events.push({
+        kind: TurnEventKind.ModelChanged,
+        modelId: openCodeModelOptionId(data.model as ModelRef),
+      })
+    } else if (type === "session.next.compaction.started") {
+      events.push({
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: data.messageID as string,
+        status: CompactionStatus.Started,
+      })
+    } else if (type === "session.next.compaction.ended") {
+      // The recent tail OpenCode keeps verbatim stays native: only the
+      // summary is what the compaction wrote.
+      const summary = data.text as string
+      events.push({
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId: data.messageID as string,
+        status: CompactionStatus.Completed,
+        ...(summary ? { summary } : {}),
+      })
     } else if (type === "session.next.step.failed") {
       return this.fail(
         "AOS_PROVIDER_RUN_FAILED",
@@ -743,11 +842,71 @@ export class OpenCodeEventProjector {
     this.#plan = plan
   }
 
+  /**
+   * A command the operator ran in the Session's shell, told as a call that
+   * runs a terminal: OpenCode reports it apart from the model's tools.
+   */
+  #startShell(events: TurnEvent[], data: Record<string, unknown>) {
+    const callId = data.callID as string
+    const command = data.command as string
+    const tool = this.#openTool(
+      events,
+      callId,
+      data.messageID as string,
+      OPENCODE_SHELL_TOOL,
+      occurredAt(data)
+    )
+    if (tool.args) return
+    tool.args = JSON.stringify({ command })
+    events.push(
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: callId,
+        delta: tool.args,
+      },
+      {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: callId,
+        toolCallId: callId,
+        command,
+      }
+    )
+  }
+
+  /** OpenCode reports a shell's output whole, and never its exit code. */
+  #endShell(events: TurnEvent[], data: Record<string, unknown>) {
+    const callId = data.callID as string
+    const tool = this.#tools.get(callId)
+    // A shell that started before this segment has no call here to end.
+    if (!tool || tool.ended || tool.name !== OPENCODE_SHELL_TOOL) return
+    tool.ended = true
+    const output = data.output as string
+    const completedAt = occurredAt(data)
+    events.push(
+      {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: callId,
+        toolCallId: callId,
+        ...(output ? { data: output } : {}),
+        exit: {},
+      },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: callId },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: callId,
+        output: output || JSON.stringify({ status: "completed" }),
+        failed: false,
+        ...(completedAt ? { completedAt } : {}),
+      }
+    )
+  }
+
   #openTool(
     events: TurnEvent[],
     callId: string,
     messageId: string,
-    name: string
+    name: string,
+    startedAt: string | undefined
   ) {
     const existing = this.#tools.get(callId)
     if (existing) {
@@ -755,12 +914,23 @@ export class OpenCodeEventProjector {
         throw new OpenCodeEventValidationError()
       return existing
     }
-    const tool: ToolState = { messageId, name, args: "", ended: false }
+    const tool: ToolState = {
+      messageId,
+      name,
+      args: "",
+      ended: false,
+      output: "",
+    }
     this.#tools.set(callId, tool)
+    const canonical = canonicalOpenCodeToolName(name)
+    const toolKind = openCodeToolKind(canonical)
     events.push({
       kind: TurnEventKind.ToolCallStarted,
       toolCallId: callId,
-      title: canonicalOpenCodeToolName(name),
+      title: canonical,
+      name: canonical,
+      ...(toolKind ? { toolKind } : {}),
+      ...(startedAt ? { startedAt } : {}),
       parentMessageId: messageId,
     })
     return tool

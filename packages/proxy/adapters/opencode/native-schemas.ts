@@ -49,6 +49,19 @@ export const OpenCodeModelRefSchema = z
     ...(value.variant === undefined ? {} : { variant: value.variant }),
   }))
 
+/** A native model's id in the Session model catalog AOS exposes. */
+export function openCodeModelOptionId(model: {
+  providerID: string
+  id: string
+}) {
+  return JSON.stringify([model.providerID, model.id])
+}
+
+/** A native timestamp, in seconds or milliseconds, as a UTC ISO string. */
+export function openCodeTimestamp(value: number) {
+  return new Date(value < 10_000_000_000 ? value * 1_000 : value).toISOString()
+}
+
 export const OpenCodeModelCatalogSchema = z.object({
   data: z
     .array(

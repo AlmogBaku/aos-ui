@@ -1,14 +1,41 @@
 import { describe, expect, it } from "vitest"
 
+import { ToolKind } from "../../core/events"
+
 import {
   canonicalOpenCodeToolCall,
   canonicalOpenCodeToolName,
+  openCodeToolKind,
 } from "./tool-names"
 
 describe("canonicalOpenCodeToolName", () => {
   it("renames the native subagent tool and passes every other name through", () => {
     expect(canonicalOpenCodeToolName("task")).toBe("delegate_subagent")
     expect(canonicalOpenCodeToolName("read")).toBe("read")
+  })
+})
+
+describe("openCodeToolKind", () => {
+  it.each([
+    ["read", ToolKind.Read],
+    ["write", ToolKind.Edit],
+    ["edit", ToolKind.Edit],
+    ["patch", ToolKind.Edit],
+    ["bash", ToolKind.Execute],
+    ["shell", ToolKind.Execute],
+    ["grep", ToolKind.Search],
+    ["glob", ToolKind.Search],
+    ["list", ToolKind.Search],
+    ["webfetch", ToolKind.Fetch],
+    ["todowrite", ToolKind.Think],
+    ["todoread", ToolKind.Think],
+  ])("names what %s does", (name, kind) => {
+    expect(openCodeToolKind(name)).toBe(kind)
+  })
+
+  it("leaves every other tool, the delegation tool included, without a kind", () => {
+    expect(openCodeToolKind("delegate_subagent")).toBeUndefined()
+    expect(openCodeToolKind("mcp_lookup")).toBeUndefined()
   })
 })
 

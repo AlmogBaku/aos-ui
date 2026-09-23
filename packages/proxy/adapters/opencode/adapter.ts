@@ -37,6 +37,7 @@ import {
   OpenCodeInteractions,
 } from "./interactions"
 import {
+  openCodeModelOptionId,
   parseOpenCodeMessageCatalog,
   parseOpenCodeModelCatalog,
   parseOpenCodeSession,
@@ -599,16 +600,13 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     >()
     const options = catalog.data.data.flatMap((model) => {
       if (!model.enabled) return []
-      const id = JSON.stringify([model.providerID, model.id])
+      const id = openCodeModelOptionId(model)
       if (!identifier(id) || native.has(id))
         throw new OpenCodeWorkspaceUnavailableError()
       native.set(id, { providerID: model.providerID, id: model.id })
       return [{ id, label: model.name, group: model.providerID }]
     })
-    const selectedId = JSON.stringify([
-      session.data.model.providerID,
-      session.data.model.id,
-    ])
+    const selectedId = openCodeModelOptionId(session.data.model)
     if (!identifier(selectedId) || !native.has(selectedId))
       throw new OpenCodeWorkspaceUnavailableError()
     return { selectedId, options, native }

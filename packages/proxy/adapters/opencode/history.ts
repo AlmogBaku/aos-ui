@@ -1,5 +1,6 @@
 import type { SessionMessage } from "../../../protocol"
 import {
+  openCodeTimestamp,
   parseOpenCodeMessageCatalog,
   type OpenCodeNativeMessageSchema,
 } from "./native-schemas"
@@ -9,10 +10,6 @@ type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
 type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
-
-function timestamp(value: number) {
-  return new Date(value < 10_000_000_000 ? value * 1_000 : value).toISOString()
-}
 
 function safeFilename(value: string | undefined) {
   return value &&
@@ -55,7 +52,7 @@ function publicJson(value: unknown, depth = 0): JsonValue | undefined {
 }
 
 function projectMessage(message: NativeMessage): SessionMessage | undefined {
-  const createdAt = timestamp(message.time.created)
+  const createdAt = openCodeTimestamp(message.time.created)
   if (message.type === "user") {
     const content: SessionMessage["content"] = [
       { type: "text", text: message.text },

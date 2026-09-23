@@ -1,4 +1,11 @@
-import { TurnEventKind, TurnEventSchema } from "../../core/events"
+import {
+  CompactionStatus,
+  StopReason,
+  ToolKind,
+  TurnEventKind,
+  TurnEventSchema,
+  type TurnEvent,
+} from "../../core/events"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -140,6 +147,9 @@ describe("OpenCodeEventProjector", () => {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "call-1",
         title: "read",
+        name: "read",
+        toolKind: ToolKind.Read,
+        startedAt: "1970-01-01T00:00:05.000Z",
         parentMessageId: "assistant-1",
       },
       {
@@ -147,26 +157,35 @@ describe("OpenCodeEventProjector", () => {
         toolCallId: "call-1",
         delta: '{"path":"README.md"}',
       },
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "call-1",
+        text: "Reading",
+      },
       { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-1" },
       {
         kind: TurnEventKind.ToolCallFinished,
         toolCallId: "call-1",
         output: "contents",
         failed: false,
+        completedAt: "1970-01-01T00:00:08.000Z",
       },
     ])
     expect(JSON.stringify(events)).not.toContain("/private/worktree")
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
       usage: [
         {
           inputTokens: 11,
           outputTokens: 7,
           reasoningTokens: 5,
           cachedInputTokens: 3,
+          cachedWriteTokens: 2,
           totalTokens: 23,
         },
       ],
+      cost: { amount: 0.01, currency: "USD" },
     })
     for (const event of events)
       expect(TurnEventSchema.safeParse(event).success).toBe(true)
@@ -201,6 +220,7 @@ describe("OpenCodeEventProjector", () => {
           toolCallId: "call-1",
           output: '{"status":"error"}',
           failed: true,
+          completedAt: "1970-01-01T00:00:02.000Z",
         },
       ],
     })
@@ -223,6 +243,8 @@ describe("OpenCodeEventProjector", () => {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "call-1",
         title: "delegate_subagent",
+        name: "delegate_subagent",
+        startedAt: "1970-01-01T00:00:01.000Z",
         parentMessageId: "assistant-1",
       },
     ])
@@ -264,6 +286,7 @@ describe("OpenCodeEventProjector", () => {
         toolCallId: "call-1",
         output: '{"summary":"The review is complete."}',
         failed: false,
+        completedAt: "1970-01-01T00:00:03.000Z",
       },
     ])
   })
@@ -368,6 +391,7 @@ describe("OpenCodeEventProjector", () => {
         toolCallId: "call-1",
         output: "Todos updated.",
         failed: false,
+        completedAt: "1970-01-01T00:00:02.000Z",
       },
     ])
   })
@@ -598,9 +622,266 @@ describe("OpenCodeEventProjector", () => {
           outputTokens: 10,
           reasoningTokens: 4,
           cachedInputTokens: 6,
+          cachedWriteTokens: 2,
           totalTokens: 44,
         },
       ],
+      cost: { amount: 0, currency: "USD" },
+    })
+  })
+
+  function stepEnded(seq: number, finish: string, cost = 0.25) {
+    return live(seq, "session.next.step.ended", {
+      assistantMessageID: `assistant-${seq}`,
+      finish,
+      cost,
+      tokens: {
+        input: 1,
+        output: 1,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+      timestamp: seq,
+    })
+  }
+
+  it.each([
+    ["length", StopReason.MaxTokens],
+    ["content-filter", StopReason.Refusal],
+    ["stop", StopReason.EndTurn],
+    ["tool-calls", StopReason.EndTurn],
+    ["other", StopReason.EndTurn],
+  ])(
+    "ends the turn with the last step's %s finish and the summed cost",
+    (finish, stopReason) => {
+      const projector = new OpenCodeEventProjector(sessionId, 0)
+      projector.accept(stepEnded(1, "tool-calls"))
+      projector.accept(stepEnded(2, finish, 0.5))
+
+      expect(projector.finish().events.at(-1)).toMatchObject({
+        kind: TurnEventKind.TurnEnded,
+        stopReason,
+        cost: { amount: 0.75, currency: "USD" },
+      })
+    }
+  )
+
+  it("leaves a stopped turn's reason to the stop rather than its last step", () => {
+    const projector = new OpenCodeEventProjector(sessionId, 0)
+    projector.accept(stepEnded(1, "stop"))
+    projector.markStopping()
+
+    const ended = projector.finish().events.at(-1)
+    expect(ended).toMatchObject({ kind: TurnEventKind.TurnEnded })
+    expect(ended).not.toHaveProperty("stopReason")
+  })
+
+  it("names the provider and model of the step that failed", () => {
+    const projector = new OpenCodeEventProjector(sessionId, 0)
+    projector.accept(
+      live(1, "session.next.step.started", {
+        assistantMessageID: "assistant-1",
+        agent: "build",
+        model: { id: "gpt-5", providerID: "openai" },
+        timestamp: 1,
+      })
+    )
+
+    expect(
+      projector.accept(
+        live(2, "session.next.step.failed", {
+          assistantMessageID: "assistant-1",
+          error: { type: "unknown", message: "secret native failure" },
+          timestamp: 2,
+        })
+      )
+    ).toEqual({
+      events: [
+        {
+          kind: TurnEventKind.TurnFailed,
+          code: "AOS_PROVIDER_RUN_FAILED",
+          message: "OpenCode could not complete this turn.",
+          provider: "openai",
+          model: "gpt-5",
+        },
+      ],
+      terminal: "error",
+    })
+  })
+
+  it("streams only the text each progress snapshot adds to a running call", () => {
+    const projector = new OpenCodeEventProjector(sessionId, 0)
+    projector.accept(
+      live(1, "session.next.tool.input.started", {
+        assistantMessageID: "assistant-1",
+        callID: "call-1",
+        name: "bash",
+        timestamp: 1,
+      })
+    )
+    const progress = (seq: number, text: string) =>
+      projector.accept(
+        live(seq, "session.next.tool.progress", {
+          assistantMessageID: "assistant-1",
+          callID: "call-1",
+          structured: {},
+          content: [{ type: "text", text }],
+          timestamp: seq,
+        })
+      ).events
+
+    expect(progress(2, "Build")).toEqual([
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "call-1",
+        text: "Build",
+      },
+    ])
+    expect(progress(3, "Building")).toEqual([
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "call-1",
+        text: "ing",
+      },
+    ])
+    expect(progress(4, "Building")).toEqual([])
+    expect(progress(5, "Rewritten")).toEqual([])
+  })
+
+  // Live and replayed durable events project through one path, so a recovered
+  // turn reports the same facts the watched turn did.
+  type Frame = [seq: number, type: string, data: Record<string, unknown>]
+  function valid(events: TurnEvent[]) {
+    for (const event of events)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
+    return events
+  }
+  describe.each([
+    [
+      "live",
+      (projector: OpenCodeEventProjector, ...[seq, type, data]: Frame) =>
+        valid(projector.accept(live(seq, type, data)).events),
+    ],
+    [
+      "replayed",
+      (projector: OpenCodeEventProjector, ...[seq, type, data]: Frame) =>
+        valid(projector.acceptHistory(durable(seq, type, data)).events),
+    ],
+  ] as const)("%s durable events", (_, accept) => {
+    it("tell an operator shell command as a call that runs a terminal", () => {
+      const projector = new OpenCodeEventProjector(sessionId, 0)
+
+      expect(
+        accept(projector, 1, "session.next.shell.started", {
+          messageID: "shell-1",
+          callID: "call-shell",
+          command: "ls",
+          timestamp: 1_000,
+        })
+      ).toEqual([
+        {
+          kind: TurnEventKind.ToolCallStarted,
+          toolCallId: "call-shell",
+          title: "shell",
+          name: "shell",
+          toolKind: ToolKind.Execute,
+          startedAt: "1970-01-01T00:16:40.000Z",
+          parentMessageId: "shell-1",
+        },
+        {
+          kind: TurnEventKind.ToolCallInputChunk,
+          toolCallId: "call-shell",
+          delta: '{"command":"ls"}',
+        },
+        {
+          kind: TurnEventKind.TerminalOutput,
+          terminalId: "call-shell",
+          toolCallId: "call-shell",
+          command: "ls",
+        },
+      ])
+      expect(
+        accept(projector, 2, "session.next.shell.ended", {
+          callID: "call-shell",
+          output: "README.md\n",
+          timestamp: 2_000,
+        })
+      ).toEqual([
+        {
+          kind: TurnEventKind.TerminalOutput,
+          terminalId: "call-shell",
+          toolCallId: "call-shell",
+          data: "README.md\n",
+          exit: {},
+        },
+        { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-shell" },
+        {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "call-shell",
+          output: "README.md\n",
+          failed: false,
+          completedAt: "1970-01-01T00:33:20.000Z",
+        },
+      ])
+    })
+
+    it("ignore the end of a shell that started before the segment", () => {
+      const projector = new OpenCodeEventProjector(sessionId, 0)
+      expect(
+        accept(projector, 1, "session.next.shell.ended", {
+          callID: "call-shell",
+          output: "",
+          timestamp: 1,
+        })
+      ).toEqual([])
+    })
+
+    it("report a compaction's start and its summary, never the kept tail", () => {
+      const projector = new OpenCodeEventProjector(sessionId, 0)
+      const events = [
+        ...accept(projector, 1, "session.next.compaction.started", {
+          messageID: "compaction-1",
+          reason: "auto",
+          timestamp: 1,
+        }),
+        ...accept(projector, 2, "session.next.compaction.ended", {
+          messageID: "compaction-1",
+          reason: "auto",
+          text: "Earlier work",
+          recent: "private recent data",
+          timestamp: 2,
+        }),
+      ]
+
+      expect(events).toEqual([
+        {
+          kind: TurnEventKind.CompactionUpdated,
+          compactionId: "compaction-1",
+          status: CompactionStatus.Started,
+        },
+        {
+          kind: TurnEventKind.CompactionUpdated,
+          compactionId: "compaction-1",
+          status: CompactionStatus.Completed,
+          summary: "Earlier work",
+        },
+      ])
+    })
+
+    it("name a model switch by its Session model catalog id", () => {
+      const projector = new OpenCodeEventProjector(sessionId, 0)
+      expect(
+        accept(projector, 1, "session.next.model.switched", {
+          messageID: "switch-1",
+          model: { id: "claude", providerID: "anthropic" },
+          timestamp: 1,
+        })
+      ).toEqual([
+        {
+          kind: TurnEventKind.ModelChanged,
+          modelId: '["anthropic","claude"]',
+        },
+      ])
     })
   })
 })

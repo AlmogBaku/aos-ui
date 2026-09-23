@@ -1,3 +1,5 @@
+import { ToolKind } from "../../core/events"
+
 /** OpenCode's native tool names AOS renames. */
 export const OPENCODE_CANONICAL_TOOL_NAMES = new Map<string, string>([
   ["task", "delegate_subagent"],
@@ -5,6 +7,32 @@ export const OPENCODE_CANONICAL_TOOL_NAMES = new Map<string, string>([
 
 export function canonicalOpenCodeToolName(name: string) {
   return OPENCODE_CANONICAL_TOOL_NAMES.get(name) ?? name
+}
+
+/**
+ * The name AOS gives a command the operator ran in the Session's own shell,
+ * which OpenCode reports apart from the model's tool calls.
+ */
+export const OPENCODE_SHELL_TOOL = "shell"
+
+/** What each canonical OpenCode tool does; any other tool has no kind. */
+const OPENCODE_TOOL_KINDS = new Map<string, ToolKind>([
+  ["read", ToolKind.Read],
+  ["write", ToolKind.Edit],
+  ["edit", ToolKind.Edit],
+  ["patch", ToolKind.Edit],
+  ["bash", ToolKind.Execute],
+  [OPENCODE_SHELL_TOOL, ToolKind.Execute],
+  ["grep", ToolKind.Search],
+  ["glob", ToolKind.Search],
+  ["list", ToolKind.Search],
+  ["webfetch", ToolKind.Fetch],
+  ["todowrite", ToolKind.Think],
+  ["todoread", ToolKind.Think],
+])
+
+export function openCodeToolKind(canonicalName: string) {
+  return OPENCODE_TOOL_KINDS.get(canonicalName)
 }
 
 /**
