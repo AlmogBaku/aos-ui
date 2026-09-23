@@ -271,9 +271,12 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("rejects browser invitation signing from an untrusted origin", async () => {
+  it("issues invitations without an Origin header", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "profiles.list" ? { profiles: [profile()] } : undefined
+    )
     const configured = await createConfiguredProxy(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
+      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: { info: vi.fn(), error: vi.fn() },
     })
 
@@ -281,15 +284,56 @@ describe("configured proxy composition", () => {
       "https://aos.example.test/api/aos/v1/guest-invitations",
       {
         method: "POST",
-        headers: {
-          origin: "https://attacker.example.test",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ agent: "researcher", ref: "guest-ref" }),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          agent: "researcher",
+          ref: "guest-ref",
+          expiresIn: "5m",
+        }),
       }
     )
 
-    expect(response.status).toBe(403)
+    expect(response.status).toBe(201)
+  })
+
+  it("names the rejected field when invitation input is invalid", async () => {
+    const configured = await createConfiguredProxy(await configuration(true), {
+      runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
+      logger: { info: vi.fn(), error: vi.fn() },
+    })
+    const post = (body: unknown) =>
+      configured.app.request(
+        "https://aos.example.test/api/aos/v1/guest-invitations",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ expiresIn: "5m", ...body }),
+        }
+      )
+
+    for (const [body, reason] of [
+      [{ agent: "researcher", title: "x".repeat(300) }, "title: too long"],
+      [
+        { agent: "researcher", agentId: "researcher" },
+        "unknown field(s): agentId",
+      ],
+      [
+        { agent: "researcher", expiresIn: "soon" },
+        "expiresIn: must be a positive duration",
+      ],
+      [
+        { agent: "researcher", instruction: "x".repeat(2_001) },
+        "instruction: too long",
+      ],
+    ] as const) {
+      const response = await post(body)
+      expect(response.status).toBe(400)
+      const { error } = (await response.json()) as {
+        error: { code: string; description: string }
+      }
+      expect(error.code).toBe("invalid_request")
+      expect(error.description).toContain(reason)
+    }
   })
 
   it("does not return an invitation for an unknown Agent", async () => {

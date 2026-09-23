@@ -137,18 +137,12 @@ describe("createToolTimelineModel", () => {
   })
 
   it("derives one semantic state for a collapsed tool run", () => {
-    expect(toolRunState([{ status: { type: "complete" } }], false)).toBe(
-      "complete"
-    )
-    expect(toolRunState([{ status: { type: "requires-action" } }], true)).toBe(
+    expect(toolRunState([{ status: { type: "complete" } }])).toBe("complete")
+    expect(toolRunState([{ status: { type: "requires-action" } }])).toBe(
       "attention"
     )
-    expect(toolRunState([{ status: { type: "incomplete" } }], false)).toBe(
-      "failed"
-    )
-    expect(toolRunState([{ status: { type: "running" } }], true)).toBe(
-      "running"
-    )
+    expect(toolRunState([{ status: { type: "incomplete" } }])).toBe("failed")
+    expect(toolRunState([{ status: { type: "running" } }])).toBe("running")
   })
 
   it("uses semantic icons for compact tool rows", () => {
@@ -212,21 +206,18 @@ describe("createToolTimelineModel", () => {
 
   it("reads a run as failed when a call's result is an error", () => {
     expect(
-      toolRunState([{ status: { type: "complete" }, isError: true }], false)
+      toolRunState([{ status: { type: "complete" }, isError: true }])
     ).toBe("failed")
   })
 
   it("reads a run as failed when a completed command exited non-zero", () => {
     expect(
-      toolRunState(
-        [
-          {
-            status: { type: "complete" },
-            result: { output: "[Command interrupted]", exit_code: 130 },
-          },
-        ],
-        false
-      )
+      toolRunState([
+        {
+          status: { type: "complete" },
+          result: { output: "[Command interrupted]", exit_code: 130 },
+        },
+      ])
     ).toBe("failed")
   })
 

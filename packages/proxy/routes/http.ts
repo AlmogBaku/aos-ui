@@ -36,11 +36,19 @@ const errorDescriptions: Record<ErrorCode, string> = {
   internal_error: "Something went wrong. Please try again.",
 }
 
-export function errorResponse(code: ErrorCode, status: number) {
+export function errorResponse(
+  code: ErrorCode,
+  status: number,
+  description?: string
+) {
   return new Response(
     JSON.stringify(
       ErrorResponseSchema.parse({
-        error: { code, description: errorDescriptions[code] },
+        error: {
+          code,
+          description:
+            description?.trim().slice(0, 512) || errorDescriptions[code],
+        },
       })
     ),
     {
