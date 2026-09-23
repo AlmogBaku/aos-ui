@@ -165,6 +165,8 @@ class SessionMember {
   #followedTurn: string | undefined
   /** The turn this member last asked its client to rebuild the view for. */
   #reloadedTurn: string | undefined
+  /** Set while a from-start replay rebuilds the view: the room waits for it. */
+  #rebuilding = false
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
@@ -184,9 +186,12 @@ class SessionMember {
     this.#readUsage = options.readUsage
     this.#readModels = options.readModels
     this.#seat = {
-      sendTurn: (turn) => this.#sendTurn(turn),
+      sendTurn: (turn) => (this.#rebuilding ? undefined : this.#sendTurn(turn)),
+      // A view being rebuilt is seated afresh and follows once its page lands.
       follow: async () =>
-        (await this.#follow(false)) === undefined ? "idle" : "following",
+        this.#rebuilding || (await this.#follow(false)) !== undefined
+          ? "following"
+          : "idle",
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
       report: (cause) => {
@@ -227,13 +232,28 @@ class SessionMember {
   }
 
   /**
+   * Keeps the room's prompts and streams from this view while it is rebuilt
+   * from history, so none lands above the page. `enterRoom` or `releaseRoom`
+   * ends it.
+   */
+  holdRoom() {
+    this.#rebuilding = true
+  }
+
+  releaseRoom() {
+    this.#rebuilding = false
+  }
+
+  /**
    * Tells the client to rebuild this Session's view from history, once per
-   * turn: a rebuild that fails the same way again must not ask again.
+   * turn: a rebuild that fails the same way again must not ask again. Returns
+   * whether it asked.
    */
   async reloadOnce(turnId: string) {
-    if (this.#reloadedTurn === turnId) return
+    if (this.#reloadedTurn === turnId) return false
     this.#reloadedTurn = turnId
     await this.#invalidate()
+    return true
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */
@@ -257,6 +277,7 @@ class SessionMember {
    * history, so a member already seated is seated afresh from what it holds.
    */
   enterRoom(hasPrompt = false, replayed = false) {
+    this.#rebuilding = false
     if (this.#left) return
     const { rooms } = this.#context
     if (!this.#leaveRoom) {

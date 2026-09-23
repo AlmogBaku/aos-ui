@@ -913,6 +913,30 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await proxy.close()
   })
 
+  it("opens the next draft empty after a refused one", async () => {
+    const { proxy, runtime } = await mount()
+    await screen.findByText("Ready")
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
+    })
+    proxy.unavailable.creates = 1
+    await send(runtime(), "Ship it")
+    expect(
+      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).toBeVisible()
+
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
+    })
+
+    expect(
+      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).not.toBeInTheDocument()
+    expect(runtime().assistantRuntime.thread.getState().messages).toEqual([])
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
+    await proxy.close()
+  })
+
   it("keeps a draft's turn in the composer when session/new is refused", async () => {
     const { proxy, runtime } = await mount()
     await screen.findByText("Ready")

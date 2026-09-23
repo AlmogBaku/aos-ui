@@ -394,6 +394,12 @@ function harness(options: HarnessOptions = {}) {
   const runtimeInfo = vi.fn(unsupported)
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(async () => HISTORY)
+  const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
+    sessions: [],
+    total: 0,
+    limit,
+    offset,
+  }))
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
@@ -404,12 +410,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     listAgents: unsupported,
     updateAgentVisibility: unsupported,
-    listAllSessions: async (limit, offset) => ({
-      sessions: [],
-      total: 0,
-      limit,
-      offset,
-    }),
+    listAllSessions,
     listSessions: unsupported,
     history,
     getSession: async () => ({
@@ -509,6 +510,7 @@ function harness(options: HarnessOptions = {}) {
     deleteSession,
     runtimeInfo,
     resolveInvitedSession,
+    listAllSessions,
     initialize: () =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
@@ -983,6 +985,36 @@ describe("guest ACP lane", () => {
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("carries no activity from any Session of the invited Agent", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    const other = await test.coordinator.start(
+      { agentId: AGENT, sessionId: "operator-session", threadId: "operator" },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    for await (const _ of other.events) void _
+    await test.prompt("Hello")
+    await test.recorder.wait(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes('"idle"')
+    )
+
+    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
+    // Nor does it list the deployment's Sessions to seed one.
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
   })
 

@@ -56,7 +56,8 @@ export type AcpConnectionContext = {
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
   readState: ReadState
-  activityFeed: ActivityFeed
+  /** Operator lane only: a guest learns nothing about the rest of the Agent. */
+  activityFeed?: ActivityFeed
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages

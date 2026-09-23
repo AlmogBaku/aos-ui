@@ -266,30 +266,45 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * provider already stored of that turn are cut: `restarted` names the turn
    * the view then shows only while its follow streams it. Any other turn keeps
    * both: its journal starts after rows the page already holds, or its start
-   * is gone and a cursorless follow could only reset it. The guest lane
-   * validates its authoritative page before anything reads it.
+   * is gone and a cursorless follow could only reset it. A turn the room
+   * admits during the read waits for the page and is replayed the same way.
+   * The guest lane validates its authoritative page before anything reads it.
    */
   async function replayPage(member: SessionMember, scope: SessionScope) {
-    const turn = context.rooms.current(scope)
-    const restarted =
+    const restartable = (turn: RoomTurn | undefined) =>
       turn && !turn.continued && coordinator.replaysFromStart(scope)
         ? turn
         : undefined
+    const before = context.rooms.current(scope)
+    const restarted = restartable(before)
+    member.holdRoom()
     if (restarted) await member.restartStream()
     let history: SessionHistoryResponse
     try {
       const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
       history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
     } catch (cause) {
-      // The stream is gone and the view was never rebuilt: have it reload.
-      if (restarted) await member.reloadOnce(restarted.turnId)
+      member.releaseRoom()
+      // The stream is gone and the view was never rebuilt: have it reload,
+      // and once that failed too, stream it the turn from its prompt. A turn
+      // admitted during the read was held back, so it streams the same way.
+      const after = context.rooms.current(scope)
+      const held = after && after.turnId !== before?.turnId
+      if (restarted ? !(await member.reloadOnce(restarted.turnId)) : held) {
+        member.enterRoom(false, true)
+        await member.follow().catch(() => undefined)
+      }
       throw cause
     }
-    if (!restarted) return { history }
-    const index = promptIndex(restarted, history)
+    const after = context.rooms.current(scope)
+    const shown =
+      restarted ??
+      (after?.turnId === before?.turnId ? undefined : restartable(after))
+    if (!shown) return { history }
+    const index = promptIndex(shown, history)
     return {
-      history: throughLivePrompt(history, index, restarted.at) ?? history,
-      restarted: restarted.turnId,
+      history: throughLivePrompt(history, index, shown.at) ?? history,
+      restarted: shown.turnId,
     }
   }
 
@@ -315,7 +330,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // A view rebuilt from the start does not act on `resync`, and this one
       // lacks the rest of its turn: have it rebuild again once this response
       // lands.
-      afterResponse(member, () => member.reloadOnce(restarted))
+      afterResponse(member, async () => {
+        await member.reloadOnce(restarted)
+      })
       return { resync: true }
     }
     return positioned && followed !== null ? {} : { resync: true }
@@ -794,10 +811,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const notify = (method: `_${string}`, params?: unknown) => {
       void client.notify(method, params).catch(() => undefined)
     }
-    for (const event of context.activityFeed.snapshot())
+    for (const event of context.activityFeed?.snapshot() ?? [])
       notify(AOS_METHODS.notify.activity, event)
     const stops = [
-      context.activityFeed.subscribe((event) =>
+      context.activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
       // A guest owns no roster and no catalog, and its connection ends with the
@@ -823,7 +840,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     sessions.close()
     context.presence?.clear(context.principalId, context.connectionId)
     context.readState.close()
-    context.activityFeed.close()
+    context.activityFeed?.close()
   })
 
   return app

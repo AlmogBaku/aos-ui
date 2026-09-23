@@ -1,3 +1,4 @@
+import { ExportedMessageRepository } from "@assistant-ui/core"
 import type { AssistantRuntime } from "@assistant-ui/react"
 
 /**
@@ -51,7 +52,10 @@ export async function createAosSessionDraft(
       if (!item || item.remoteId || item.externalId)
         throw new Error("AOS draft did not create a local thread")
       const thread = runtime.threads.getById(state.mainThreadId)
-      thread.reset([])
+      // Assistant UI can hand back a draft slot that still holds a refused
+      // turn. `reset` writes through `setMessages`, which the ACP store leaves
+      // out, so the slot is emptied through the store's import instead.
+      thread.import(ExportedMessageRepository.fromArray([]))
       await thread.composer.reset()
       registry.record(state.mainThreadId, agentId)
       return state.mainThreadId

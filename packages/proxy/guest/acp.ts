@@ -2,7 +2,6 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   type SessionHistoryResponse,
 } from "../../protocol"
-import { createActivityFeed } from "../acp/activity-feed"
 import { createAosAcpAgent } from "../acp/agent"
 import { createReadState } from "../acp/read-state"
 import { createAcpService } from "../acp/service"
@@ -209,8 +208,9 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
 }
 
 /**
- * One accepted guest connection: its own invitation policy, read-state service
- * (inert on this lane), and activity feed scoped to the invited Agent alone.
+ * One accepted guest connection: its own invitation policy and read-state
+ * service (inert on this lane). It carries no activity feed, which would
+ * describe the Agent's other Sessions.
  */
 export function createGuestConnection(
   options: GuestAcpServiceOptions,
@@ -239,16 +239,6 @@ export function createGuestConnection(
       lane,
       now,
       onUnreadChanged: () => undefined,
-    }),
-    activityFeed: createActivityFeed({
-      runtimeInstance,
-      sessionRows,
-      now,
-      // Only the invited Agent, and nothing at all until it is invited.
-      agentIds: async () => {
-        const grant = guest.grant()
-        return grant ? [grant.agentId] : []
-      },
     }),
   }
 }
