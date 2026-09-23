@@ -289,7 +289,10 @@ export function createAcpWorkspaceClient({
     },
     /** The newest usage the provider pushed, read synchronously. */
     context: composer.context,
+    turnUsage: composer.turnUsage,
     subscribeContext: composer.subscribeContext,
+    /** The model the provider reports the Session on, as it changes. */
+    modelFeed: composer.modelFeed,
     selectModel: composer.selectModel,
     selectEffort: composer.selectEffort,
     /** One provider write per half; the response settles what the Session runs. */

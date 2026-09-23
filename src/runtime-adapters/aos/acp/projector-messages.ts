@@ -1,12 +1,27 @@
 import type {
   ContentBlock,
   ToolCallContent,
+  ToolCallLocation,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type {
-  MessageStatus,
-  MessageTiming,
-  ThreadMessageLike,
+import {
+  fromThreadMessageLike,
+  type MessageStatus,
+  type MessageTiming,
+  type ThreadMessageLike,
+  type ToolCallTiming,
 } from "@assistant-ui/core"
+
+import type { AosSubagent } from "@aos/protocol/acp"
+
+import {
+  readAosToolArtifact,
+  withAosToolArtifact,
+  type AosDiff,
+  type AosTerminal,
+  type AosToolArtifact,
+} from "@/components/tool-ui/tool-artifact"
+
+import type { ProjectedTerminal } from "./projector-terminals"
 
 /**
  * The message half of the ACP session projector: ACP blocks kept in arrival
@@ -25,26 +40,48 @@ export type BlockSource = "message" | "thought"
 
 export type ProjectedToolCall = {
   readonly toolCallId: string
+  /** The programmatic name; the title stands in for a call that has none. */
+  readonly name?: string
   readonly title?: string
+  readonly kind?: string
   readonly status?: string
   readonly rawInput?: unknown
   readonly rawOutput?: unknown
   readonly content?: readonly ToolCallContent[]
+  readonly locations?: readonly ToolCallLocation[]
   readonly argsText?: string
+  /** The call's own span in epoch ms, as the provider timed it. */
+  readonly startedAt?: number
+  readonly completedAt?: number
+  readonly durationMs?: number
+  /** The subagent this call spawned, patched by id. */
+  readonly subagent?: AosSubagent
+  /** The subagent's own turns, keyed by its id. */
+  readonly messages?: readonly ProjectedMessage[]
+  /** The terminals the call's content names, as the projector last saw them. */
+  readonly terminals?: readonly ProjectedTerminal[]
 }
 
 export type ToolCallPatch = {
   readonly toolCallId: string
+  readonly name?: string | null
   readonly title?: string | null
+  readonly kind?: string | null
   readonly status?: string | null
   readonly content?: readonly ToolCallContent[] | null
+  readonly locations?: readonly ToolCallLocation[] | null
   readonly rawInput?: unknown
   readonly rawOutput?: unknown
 }
 
-export type ToolArgsPatch = {
+/** What `_meta.aos` adds to a call beyond its ACP fields. */
+export type ToolMetaPatch = {
   readonly argsText?: string
   readonly argsTextDelta?: string
+  readonly startedAt?: number
+  readonly completedAt?: number
+  readonly durationMs?: number
+  readonly subagent?: AosSubagent
 }
 
 export type ProjectedPart =
@@ -96,15 +133,70 @@ export function latestAssistantId(messages: readonly ProjectedMessage[]) {
   return messages.findLast((message) => message.role === "assistant")?.id
 }
 
+/** The first call that matches, its subagents' calls included. */
+export function findCall(
+  messages: readonly ProjectedMessage[],
+  matches: (call: ProjectedToolCall) => boolean
+): ProjectedToolCall | undefined {
+  for (const message of messages)
+    for (const part of message.parts) {
+      if (part.source !== "tool") continue
+      if (matches(part.call)) return part.call
+      const nested = findCall(part.call.messages ?? [], matches)
+      if (nested) return nested
+    }
+  return undefined
+}
+
+const byId = (toolCallId: string) => (call: ProjectedToolCall) =>
+  call.toolCallId === toolCallId
+
+/** The turn that holds the call, at whatever depth a subagent nests it. */
 export function toolCallOwner(
   messages: readonly ProjectedMessage[],
   toolCallId: string
 ) {
-  return messages.findLast((message) =>
-    message.parts.some(
-      (part) => part.source === "tool" && part.call.toolCallId === toolCallId
-    )
+  return messages.findLast((message) => findCall([message], byId(toolCallId)))
+}
+
+/**
+ * Passes every call of the turn, its subagents' calls included, through `fn`,
+ * keeping the turn's identity when nothing changed.
+ */
+export function mapCalls(
+  message: ProjectedMessage,
+  fn: (call: ProjectedToolCall) => ProjectedToolCall
+): ProjectedMessage {
+  let changed = false
+  const parts = message.parts.map((part) => {
+    if (part.source !== "tool") return part
+    const children = part.call.messages
+    const nested = children?.map((child) => mapCalls(child, fn))
+    const call =
+      nested && nested.some((child, index) => child !== children![index])
+        ? { ...part.call, messages: nested }
+        : part.call
+    const next = fn(call)
+    if (next === part.call) return part
+    changed = true
+    return { ...part, call: next }
+  })
+  return changed ? { ...message, parts } : message
+}
+
+/** Upserts the subagent's own turn inside the call that spawned it. */
+export function withChildMessage(
+  call: ProjectedToolCall,
+  subagentId: string,
+  patch: (message: ProjectedMessage) => ProjectedMessage
+): ProjectedToolCall {
+  const messages = withMessage(
+    call.messages ?? [],
+    subagentId,
+    "assistant",
+    patch
   )
+  return messages === call.messages ? call : { ...call, messages }
 }
 
 /**
@@ -169,6 +261,22 @@ export function appendData(
   }
 }
 
+/** Replaces the data of the parts that match, in place. */
+export function replaceData(
+  message: ProjectedMessage,
+  matches: (name: string, data: unknown) => boolean,
+  data: unknown
+): ProjectedMessage {
+  return {
+    ...message,
+    parts: message.parts.map((part) =>
+      part.source === "data" && matches(part.name, part.data)
+        ? { ...part, data }
+        : part
+    ),
+  }
+}
+
 export function withStatus(
   message: ProjectedMessage,
   status: MessageStatus
@@ -203,42 +311,58 @@ export function countChunk(message: ProjectedMessage): ProjectedMessage {
     : { ...message, timing: { ...timing, chunks: timing.chunks + 1 } }
 }
 
+/** A later report restates only what changed about the same subagent. */
+function mergeSubagent(
+  current: AosSubagent | undefined,
+  next: AosSubagent | undefined
+) {
+  if (next === undefined) return current
+  return current?.id === next.id ? { ...current, ...next } : next
+}
+
 function mergeCall(
   current: ProjectedToolCall,
   patch: ToolCallPatch,
-  args: ToolArgsPatch
+  meta: ToolMetaPatch
 ): ProjectedToolCall {
   const argsText =
-    args.argsText ??
-    (args.argsTextDelta === undefined
+    meta.argsText ??
+    (meta.argsTextDelta === undefined
       ? current.argsText
-      : (current.argsText ?? "") + args.argsTextDelta)
+      : (current.argsText ?? "") + meta.argsTextDelta)
   return {
-    toolCallId: current.toolCallId,
+    ...current,
+    name: patched(current.name, patch.name),
     title: patched(current.title, patch.title),
+    kind: patched(current.kind, patch.kind),
     status: patched(current.status, patch.status),
     content: patched(current.content, patch.content),
+    locations: patched(current.locations, patch.locations),
     rawInput: patched(current.rawInput, patch.rawInput),
     rawOutput: patched(current.rawOutput, patch.rawOutput),
     argsText,
+    startedAt: meta.startedAt ?? current.startedAt,
+    completedAt: meta.completedAt ?? current.completedAt,
+    durationMs: meta.durationMs ?? current.durationMs,
+    subagent: mergeSubagent(current.subagent, meta.subagent),
   }
 }
 
-/** Creates the tool call on first sight, then patches it in place. */
+/**
+ * Creates the tool call on first sight, then patches it in place, at whatever
+ * depth a subagent nests it.
+ */
 export function patchToolCall(
   message: ProjectedMessage,
   patch: ToolCallPatch,
-  args: ToolArgsPatch
+  meta: ToolMetaPatch
 ): ProjectedMessage {
-  let replaced = false
-  const parts = message.parts.map((part) => {
-    if (part.source !== "tool" || part.call.toolCallId !== patch.toolCallId)
-      return part
-    replaced = true
-    return { ...part, call: mergeCall(part.call, patch, args) }
-  })
-  if (replaced) return { ...message, parts }
-  const call = mergeCall({ toolCallId: patch.toolCallId }, patch, args)
+  const matches = byId(patch.toolCallId)
+  if (findCall([message], matches))
+    return mapCalls(message, (call) =>
+      matches(call) ? mergeCall(call, patch, meta) : call
+    )
+  const call = mergeCall({ toolCallId: patch.toolCallId }, patch, meta)
   return { ...message, parts: [...message.parts, { source: "tool", call }] }
 }
 
@@ -247,18 +371,21 @@ export function appendToolContent(
   toolCallId: string,
   content: ToolCallContent
 ): ProjectedMessage {
-  const parts = message.parts.map((part) =>
-    part.source === "tool" && part.call.toolCallId === toolCallId
-      ? {
-          ...part,
-          call: {
-            ...part.call,
-            content: [...(part.call.content ?? []), content],
-          },
-        }
-      : part
+  return mapCalls(message, (call) =>
+    call.toolCallId === toolCallId
+      ? { ...call, content: [...(call.content ?? []), content] }
+      : call
   )
-  return { ...message, parts }
+}
+
+/** The terminal ids the call's content names, once each. */
+export function terminalIds(call: ProjectedToolCall): readonly string[] {
+  const ids = (call.content ?? []).flatMap((item) =>
+    item.type === "terminal" && typeof item.terminalId === "string"
+      ? [item.terminalId]
+      : []
+  )
+  return [...new Set(ids)]
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -322,16 +449,122 @@ function contentResult(content: readonly ToolCallContent[] | undefined) {
   return text.length > 0 ? text.join("") : undefined
 }
 
+const DIFF_OPERATIONS = new Set(["add", "delete", "modify", "move", "copy"])
+
+/** An ACP diff as the tool UI draws it; unreadable changes are dropped. */
+function diffOf(item: ToolCallContent): AosDiff[] {
+  if (item.type !== "diff" || !Array.isArray(item.changes)) return []
+  const changes = item.changes.flatMap((change: unknown) =>
+    isRecord(change) &&
+    typeof change.operation === "string" &&
+    DIFF_OPERATIONS.has(change.operation) &&
+    typeof change.path === "string"
+      ? [
+          {
+            kind: change.operation as AosDiff["changes"][number]["kind"],
+            path: change.path,
+            ...(typeof change.oldPath === "string"
+              ? { oldPath: change.oldPath }
+              : {}),
+          },
+        ]
+      : []
+  )
+  const patch =
+    isRecord(item.patch) && typeof item.patch.text === "string"
+      ? item.patch.text
+      : undefined
+  return changes.length === 0
+    ? []
+    : [{ changes, ...(patch === undefined ? {} : { patch }) }]
+}
+
+function terminalOf(
+  { exited, exitCode, signal, ...terminal }: ProjectedTerminal,
+  settled: boolean
+): AosTerminal {
+  return {
+    ...terminal,
+    running: !exited && !settled,
+    ...(exitCode === undefined ? {} : { exitCode }),
+    ...(signal === undefined ? {} : { signal }),
+  }
+}
+
+/** Only a kind the tool UI knows travels; an unknown one reads as none. */
+const knownKind = (kind: string | undefined) =>
+  kind === undefined ? undefined : readAosToolArtifact({ aos: { kind } })?.kind
+
+/** What the call carries beyond args and result, or nothing at all. */
+function toolArtifact(call: ProjectedToolCall): AosToolArtifact | undefined {
+  const kind = knownKind(call.kind)
+  const locations = (call.locations ?? []).map(({ path, line }) =>
+    typeof line === "number" ? { path, line } : { path }
+  )
+  const diffs = (call.content ?? []).flatMap(diffOf)
+  const settled = call.status === "completed" || call.status === "failed"
+  const terminals = (call.terminals ?? []).map((terminal) =>
+    terminalOf(terminal, settled)
+  )
+  const artifact: AosToolArtifact = {
+    ...(kind === undefined ? {} : { kind }),
+    ...(locations.length === 0 ? {} : { locations }),
+    ...(diffs.length === 0 ? {} : { diffs }),
+    ...(terminals.length === 0 ? {} : { terminals }),
+    ...(call.subagent === undefined ? {} : { subagent: call.subagent }),
+  }
+  return Object.keys(artifact).length === 0 ? undefined : artifact
+}
+
+/**
+ * The call's span from whichever two of its start, end, and duration the
+ * provider reported; a call with neither end is untimed.
+ */
+function toolTiming(call: ProjectedToolCall): ToolCallTiming | undefined {
+  const { completedAt, durationMs } = call
+  const startedAt =
+    call.startedAt ??
+    (completedAt === undefined || durationMs === undefined
+      ? undefined
+      : completedAt - durationMs)
+  if (startedAt === undefined) return undefined
+  const end =
+    completedAt ??
+    (durationMs === undefined ? undefined : startedAt + durationMs)
+  return end === undefined ? { startedAt } : { startedAt, completedAt: end }
+}
+
+/** A subagent's turn, as the nested thread message the call part carries. */
+function childMessage(message: ProjectedMessage, call: ProjectedToolCall) {
+  const status: MessageStatus =
+    call.status === "failed"
+      ? { type: "incomplete", reason: "error" }
+      : call.status === "completed"
+        ? { type: "complete", reason: "stop" }
+        : { type: "running" }
+  return fromThreadMessageLike(toThreadMessage(message), message.id, status)
+}
+
 function toolPart(call: ProjectedToolCall): ThreadMessagePart {
   const result = call.rawOutput ?? contentResult(call.content)
+  const artifact = toolArtifact(call)
+  const timing = toolTiming(call)
+  const messages = call.messages ?? []
   return {
     type: "tool-call",
     toolCallId: call.toolCallId,
-    toolName: call.title ?? call.toolCallId,
+    toolName: call.name ?? call.title ?? call.toolCallId,
     args: isJsonObject(call.rawInput) ? call.rawInput : {},
     ...(call.argsText === undefined ? {} : { argsText: call.argsText }),
     ...(result === undefined ? {} : { result }),
     isError: call.status === "failed",
+    ...(artifact === undefined
+      ? {}
+      : { artifact: withAosToolArtifact(undefined, artifact) }),
+    ...(timing === undefined ? {} : { timing }),
+    ...(messages.length === 0
+      ? {}
+      : { messages: messages.map((message) => childMessage(message, call)) }),
   }
 }
 

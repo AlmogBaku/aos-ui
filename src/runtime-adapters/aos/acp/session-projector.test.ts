@@ -1,10 +1,15 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
 import { AOS_METHODS, AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+import { COMPACTION_DATA_PART_NAME } from "@/components/assistant-ui/elements/compaction-divider"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+
+import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
   applyNotification,
@@ -1290,5 +1295,537 @@ describe("local turn bookkeeping", () => {
       reason: "error",
       error: { message: "This Session is still busy." },
     })
+  })
+})
+
+const toolPartOf = (state: ProjectorState, toolCallId = "t1") =>
+  toThreadMessages(state)
+    .flatMap((message) =>
+      Array.isArray(message.content) ? message.content : []
+    )
+    .find(
+      (part) => part.type === "tool-call" && part.toolCallId === toolCallId
+    ) as ToolCallMessagePart | undefined
+
+const aosOf = (state: ProjectorState, toolCallId?: string) =>
+  readAosToolArtifact(toolPartOf(state, toolCallId)?.artifact)
+
+const base64 = (bytes: string | readonly number[]) =>
+  Buffer.from(typeof bytes === "string" ? bytes : [...bytes]).toString("base64")
+
+const terminalUpdate = (patch: Record<string, unknown>): Entry => [
+  { sessionUpdate: "terminal_update", terminalId: "term-1", ...patch },
+  TURN_META,
+]
+
+const terminalChunk = (bytes: string | readonly number[]): Entry => [
+  {
+    sessionUpdate: "terminal_output_chunk",
+    terminalId: "term-1",
+    data: base64(bytes),
+  },
+  TURN_META,
+]
+
+const toolContent = (content: unknown, toolCallId = "t1"): Entry => [
+  { sessionUpdate: "tool_call_content_chunk", toolCallId, content },
+  { ...TOOL_META },
+]
+
+const terminalContent = toolContent({ type: "terminal", terminalId: "term-1" })
+
+describe("applyUpdate tool facts", () => {
+  it("names the call by its programmatic name and reads its kind and locations", () => {
+    const state = fold([
+      toolCall(
+        {
+          title: "Read notes.md",
+          name: "read_file",
+          kind: "read",
+          status: "in_progress",
+          locations: [{ path: "/w/notes.md", line: 3 }, { path: "/w/b.md" }],
+        },
+        TOOL_META
+      ),
+    ])
+    expect(toolPartOf(state)?.toolName).toBe("read_file")
+    expect(aosOf(state)).toEqual({
+      kind: "read",
+      locations: [{ path: "/w/notes.md", line: 3 }, { path: "/w/b.md" }],
+    })
+  })
+
+  it("falls back to the title and drops a kind the tool UI does not know", () => {
+    const state = fold([
+      toolCall({ title: "Mystery", kind: "teleport" }, TOOL_META),
+    ])
+    expect(toolPartOf(state)?.toolName).toBe("Mystery")
+    expect(toolPartOf(state)?.artifact).toBeUndefined()
+  })
+
+  it("carries diff content as the call's diffs", () => {
+    const state = fold([
+      toolCall(
+        {
+          title: "Edit",
+          status: "completed",
+          content: [
+            {
+              type: "diff",
+              changes: [
+                { operation: "modify", path: "a.ts" },
+                { operation: "move", path: "c.ts", oldPath: "b.ts" },
+              ],
+              patch: { format: "git_patch", text: "+one\n-two" },
+            },
+          ],
+        },
+        TOOL_META
+      ),
+    ])
+    expect(aosOf(state)?.diffs).toEqual([
+      {
+        changes: [
+          { kind: "modify", path: "a.ts" },
+          { kind: "move", path: "c.ts", oldPath: "b.ts" },
+        ],
+        patch: "+one\n-two",
+      },
+    ])
+  })
+
+  it("times the call from its reported start and end", () => {
+    const state = fold([
+      toolCall(
+        { title: "grep" },
+        { ...TOOL_META, startedAt: "2026-01-01T00:00:00.000Z" }
+      ),
+      toolCall(
+        { status: "completed" },
+        { ...TOOL_META, completedAt: "2026-01-01T00:00:02.000Z" }
+      ),
+    ])
+    const startedAt = Date.parse("2026-01-01T00:00:00.000Z")
+    expect(toolPartOf(state)?.timing).toEqual({
+      startedAt,
+      completedAt: startedAt + 2000,
+    })
+  })
+
+  it("times the call from its end and duration when it reported no start", () => {
+    const completedAt = Date.parse("2026-01-01T00:00:05.000Z")
+    const state = fold([
+      toolCall(
+        { title: "grep", status: "completed" },
+        {
+          ...TOOL_META,
+          completedAt: "2026-01-01T00:00:05.000Z",
+          durationMs: 1500,
+        }
+      ),
+    ])
+    expect(toolPartOf(state)?.timing).toEqual({
+      startedAt: completedAt - 1500,
+      completedAt,
+    })
+  })
+
+  it("appends partial output held back until its call appears", () => {
+    const early = fold([
+      agentChunk("a1", "Working"),
+      toolContent({
+        type: "content",
+        content: { type: "text", text: "early " },
+      }),
+    ])
+    expect(toolPartOf(early)).toBeUndefined()
+    const state = fold(
+      [
+        toolCall({ title: "run", status: "in_progress" }, TOOL_META),
+        toolContent({
+          type: "content",
+          content: { type: "text", text: "late" },
+        }),
+      ],
+      early
+    )
+    expect(toolPartOf(state)?.result).toBe("early late")
+    expect(state.early).toBeUndefined()
+  })
+
+  it("drops output still waiting for a call when the run ends", () => {
+    const state = fold([
+      toolContent({ type: "content", content: { type: "text", text: "x" } }),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(state.early).toBeUndefined()
+  })
+})
+
+describe("applyUpdate terminals", () => {
+  const opened = fold([
+    toolCall({ title: "bash", status: "in_progress" }, TOOL_META),
+    terminalUpdate({ command: "ls", cwd: "/w" }),
+    terminalContent,
+  ])
+
+  it("streams a terminal's output into the call that shows it", () => {
+    const state = fold([terminalChunk("one\n"), terminalChunk("two\n")], opened)
+    expect(aosOf(state)?.terminals).toEqual([
+      {
+        terminalId: "term-1",
+        command: "ls",
+        cwd: "/w",
+        output: "one\ntwo\n",
+        running: true,
+      },
+    ])
+  })
+
+  it("decodes a character split across two chunks", () => {
+    // "é" is 0xC3 0xA9 in UTF-8; the chunk boundary falls between them.
+    const state = fold(
+      [terminalChunk([0x61, 0xc3]), terminalChunk([0xa9, 0x62])],
+      opened
+    )
+    expect(aosOf(state)?.terminals?.[0]?.output).toBe("aéb")
+  })
+
+  it("replaces the output with a snapshot and reports the exit", () => {
+    const state = fold(
+      [
+        terminalChunk("stale"),
+        terminalUpdate({
+          output: { data: base64("fresh") },
+          exitStatus: { exitCode: 2, signal: null },
+        }),
+      ],
+      opened
+    )
+    expect(aosOf(state)?.terminals).toEqual([
+      {
+        terminalId: "term-1",
+        command: "ls",
+        cwd: "/w",
+        output: "fresh",
+        running: false,
+        exitCode: 2,
+        signal: null,
+      },
+    ])
+  })
+
+  it("keeps only the tail of a long output", () => {
+    const state = fold(
+      [
+        terminalChunk("head"),
+        terminalChunk("x".repeat(TERMINAL_TAIL_LIMIT)),
+        terminalChunk("end"),
+      ],
+      opened
+    )
+    const terminal = aosOf(state)?.terminals?.[0]
+    expect(terminal?.output).toHaveLength(TERMINAL_TAIL_LIMIT)
+    expect(terminal?.output.endsWith("xend")).toBe(true)
+    expect(terminal?.truncated).toBe(true)
+  })
+
+  it("shows output that streamed before the call named its terminal", () => {
+    const state = fold([
+      toolCall({ title: "bash", status: "in_progress" }, TOOL_META),
+      terminalUpdate({}),
+      terminalChunk("early"),
+      terminalContent,
+    ])
+    expect(aosOf(state)?.terminals?.[0]?.output).toBe("early")
+  })
+
+  it("lists a terminal the settled content restates once, and stops it running", () => {
+    const state = fold(
+      [
+        terminalChunk("done"),
+        toolCall(
+          {
+            status: "completed",
+            content: [
+              { type: "content", content: { type: "text", text: "done" } },
+              { type: "terminal", terminalId: "term-1" },
+              { type: "terminal", terminalId: "term-1" },
+            ],
+          },
+          TOOL_META
+        ),
+      ],
+      opened
+    )
+    expect(aosOf(state)?.terminals).toMatchObject([
+      { terminalId: "term-1", output: "done", running: false },
+    ])
+  })
+
+  it("forgets terminals with the transcript a replay resends", () => {
+    expect(clearTranscript(fold([terminalChunk("x")], opened)).terminals).toBe(
+      undefined
+    )
+  })
+})
+
+describe("applyUpdate subagents", () => {
+  const SPAWN_META = {
+    ...TOOL_META,
+    subagent: { id: "sub-1", goal: "Research", status: "running" },
+  }
+  const CHILD = { subagentId: "sub-1", parentToolCallId: "t1" }
+  const spawned = fold([
+    toolCall({ title: "delegate", status: "in_progress" }, SPAWN_META),
+  ])
+
+  const childMessages = (state: ProjectorState) =>
+    toolPartOf(state)?.messages?.map(({ id, role, content }) => ({
+      id,
+      role,
+      content,
+    }))
+
+  it("nests what the subagent writes under the call that spawned it", () => {
+    const state = fold(
+      [
+        [
+          {
+            sessionUpdate: "agent_message_chunk",
+            messageId: "a1",
+            content: { type: "text", text: "Looking" },
+          },
+          { ...TURN_META, ...CHILD },
+        ],
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t2",
+            name: "web_search",
+            status: "in_progress",
+          },
+          { ...TOOL_META, ...CHILD },
+        ],
+      ],
+      spawned
+    )
+    expect(toThreadMessages(state)).toHaveLength(1)
+    expect(toThreadMessages(state)[0]?.content).toHaveLength(1)
+    expect(childMessages(state)).toMatchObject([
+      {
+        id: "sub-1",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking" },
+          { type: "tool-call", toolCallId: "t2", toolName: "web_search" },
+        ],
+      },
+    ])
+  })
+
+  it("settles a nested call its update no longer attributes", () => {
+    const state = fold(
+      [
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t2",
+            name: "web_search",
+          },
+          { ...TOOL_META, ...CHILD },
+        ],
+        [
+          {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "t2",
+            status: "completed",
+            rawOutput: "found",
+          },
+          TOOL_META,
+        ],
+      ],
+      spawned
+    )
+    expect(childMessages(state)?.[0]?.content).toMatchObject([
+      { toolCallId: "t2", result: "found", isError: false },
+    ])
+  })
+
+  it("patches the subagent's status, tokens, and duration by id", () => {
+    const state = fold(
+      [
+        toolCall(
+          {},
+          {
+            ...TOOL_META,
+            subagent: {
+              id: "sub-1",
+              status: "completed",
+              tokens: 900,
+              durationMs: 4000,
+            },
+          }
+        ),
+      ],
+      spawned
+    )
+    expect(aosOf(state)?.subagent).toEqual({
+      id: "sub-1",
+      goal: "Research",
+      status: "completed",
+      tokens: 900,
+      durationMs: 4000,
+    })
+  })
+
+  it("holds a child update until the spawning call it names appears", () => {
+    const state = fold([
+      agentChunk("a1", "Delegating"),
+      [
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "a1",
+          content: { type: "text", text: "Early" },
+        },
+        { ...TURN_META, ...CHILD },
+      ],
+      toolCall({ title: "delegate" }, SPAWN_META),
+    ])
+    expect(childMessages(state)).toMatchObject([
+      { id: "sub-1", content: [{ type: "text", text: "Early" }] },
+    ])
+    expect(toThreadMessages(state)[0]?.content).toHaveLength(2)
+  })
+
+  it("synthesizes a spawning call for a subagent the stream never announced", () => {
+    const state = fold([
+      agentChunk("a1", "Working"),
+      [
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "a1",
+          content: { type: "text", text: "Orphan" },
+        },
+        { ...TURN_META, subagentId: "sub-9" },
+      ],
+    ])
+    const spawn = toolPartOf(state, "aos-subagent-sub-9")
+    expect(spawn?.toolName).toBe("subagent")
+    expect(readAosToolArtifact(spawn?.artifact)?.subagent).toEqual({
+      id: "sub-9",
+    })
+    expect(spawn?.messages?.[0]?.content).toMatchObject([
+      { type: "text", text: "Orphan" },
+    ])
+  })
+})
+
+describe("applyUpdate stop reasons", () => {
+  const answering = fold([
+    stateUpdate({ state: "running" }),
+    agentChunk("a1", "Part"),
+  ])
+
+  it.each([
+    ["end_turn", { type: "complete", reason: "stop" }],
+    ["cancelled", { type: "incomplete", reason: "cancelled" }],
+    ["max_tokens", { type: "incomplete", reason: "length" }],
+    ["refusal", { type: "incomplete", reason: "content-filter" }],
+    ["max_turn_requests", { type: "incomplete", reason: "other" }],
+  ])("settles a turn that stopped on %s", (stopReason, status) => {
+    const settled = fold(
+      [stateUpdate({ state: "idle", stopReason })],
+      answering
+    )
+    expect(settled.execution.status).toBe("idle")
+    expect(toThreadMessages(settled)[0]?.status).toEqual(status)
+  })
+
+  it("names the provider and model a failed turn ran on", () => {
+    const failed = fold(
+      [
+        stateUpdate(
+          { state: "idle", stopReason: AOS_STOP_REASONS.error },
+          {
+            ...TURN_META,
+            code: "provider_error",
+            message: "Broke",
+            provider: "openai",
+            model: "gpt-9",
+          }
+        ),
+      ],
+      answering
+    )
+    expect(failed.execution.error).toEqual({
+      code: "provider_error",
+      message: "Broke",
+      provider: "openai",
+      model: "gpt-9",
+    })
+  })
+})
+
+describe("applyUpdate compaction", () => {
+  const compaction = (patch: Record<string, unknown>): Entry => [
+    { sessionUpdate: "compaction_update", compactionId: "c1", ...patch },
+    TURN_META,
+  ]
+  const compactionParts = (state: ProjectorState) =>
+    toThreadMessages(state).flatMap((message) =>
+      (Array.isArray(message.content) ? message.content : []).filter(
+        (part) => part.type === "data"
+      )
+    )
+
+  it("places a compaction in order and updates it in place", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Before"),
+      compaction({ status: "in_progress" }),
+      agentChunk("a1", "After"),
+      compaction({
+        status: "completed",
+        summary: [{ type: "text", text: "Summed up" }],
+      }),
+    ])
+    expect(toThreadMessages(state)[0]?.content).toEqual([
+      { type: "text", text: "Before" },
+      {
+        type: "data",
+        name: COMPACTION_DATA_PART_NAME,
+        data: { compactionId: "c1", status: "completed", summary: "Summed up" },
+      },
+      { type: "text", text: "After" },
+    ])
+  })
+
+  it("leads the run's first turn when it compacts before writing", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      compaction({ status: "failed", error: "Too big" }),
+      agentChunk("a1", "Answer"),
+    ])
+    expect(toThreadMessages(state)).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          {
+            type: "data",
+            data: { compactionId: "c1", status: "failed", error: "Too big" },
+          },
+          { type: "text", text: "Answer" },
+        ],
+      },
+    ])
+  })
+
+  it("ignores a status the divider does not draw", () => {
+    const state = fold([
+      agentChunk("a1", "Hi"),
+      compaction({ status: "cancelled" }),
+    ])
+    expect(compactionParts(state)).toEqual([])
   })
 })

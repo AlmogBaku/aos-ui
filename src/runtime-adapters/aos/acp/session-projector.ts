@@ -3,6 +3,7 @@ import type {
   ContentBlock,
   SessionConfigOption,
   SessionUpdate,
+  ToolCallLocation,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
 import type { z } from "zod"
@@ -12,13 +13,19 @@ import {
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
   AosArtifactNotificationSchema,
+  AosChunkMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosSteerAcceptedNotificationSchema,
   AosToolCallMetaSchema,
+  AosTurnMetaSchema,
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+import {
+  COMPACTION_DATA_PART_NAME,
+  type AosCompaction,
+} from "@/components/assistant-ui/elements/compaction-divider"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
@@ -28,21 +35,33 @@ import {
   appendToolContent,
   completeTiming,
   countChunk,
+  findCall,
   isContentBlock,
   isRecord,
   isToolCallContent,
   latestAssistantId,
+  mapCalls,
   patchToolCall,
   replaceBlocks,
+  replaceData,
   startTiming,
+  terminalIds,
   toolCallOwner,
   toThreadMessage,
+  withChildMessage,
   withMessage,
   withStatus,
   type MessageRole,
   type ProjectedMessage,
+  type ProjectedToolCall,
   type ToolCallPatch,
+  type ToolMetaPatch,
 } from "./projector-messages"
+import {
+  appendTerminal,
+  snapshotTerminal,
+  type TerminalStream,
+} from "./projector-terminals"
 
 /**
  * Folds one Session's ACP `session/update` stream and its extension
@@ -90,7 +109,16 @@ export type ProjectorState = {
   readonly title?: string
   readonly configOptions?: readonly SessionConfigOption[]
   readonly commands?: readonly AvailableCommand[]
+  /** Every terminal the run announced, whichever call shows it. */
+  readonly terminals?: ReadonlyMap<string, TerminalStream>
+  /**
+   * Updates that arrived before the call they belong to, keyed by that call's
+   * id, and applied the moment it appears.
+   */
+  readonly early?: ReadonlyMap<string, readonly EarlyUpdate[]>
 }
+
+type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
 
 export const initialProjectorState: ProjectorState = {
   messages: [],
@@ -220,8 +248,12 @@ function emptyRequestHostId(state: ProjectorState): string | undefined {
   const id = state.activeAssistantId
   if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
   const host = state.messages.find((message) => message.id === id)
-  return host?.parts.length === 0 ? id : undefined
+  return host?.parts.every(isCompaction) ? id : undefined
 }
+
+/** A compaction the host shows ahead of the run's turn moves with it. */
+const isCompaction = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -233,21 +265,215 @@ function emptyRequestHostId(state: ProjectorState): string | undefined {
  */
 function applyToolCall(
   state: ProjectorState,
-  patch: ToolCallPatch | undefined,
+  update: SessionUpdate,
   meta: unknown
 ): ProjectorState {
+  const patch = toolPatch(update)
   if (!patch) return state
-  const aos = AosToolCallMetaSchema.safeParse(meta)
+  const parsed = AosToolCallMetaSchema.safeParse(meta)
+  const aos = parsed.success ? parsed.data : undefined
+  const toolMeta = toolMetaPatch(aos)
+  const owner = toolCallOwner(state.messages, patch.toolCallId)
+  // A subagent's call nests under the call that spawned it; one already
+  // projected is patched where it is, however the update attributes it.
+  if (!owner && aos?.subagentId !== undefined)
+    return applyChild(state, { update, meta }, aos, aos.messageId, (message) =>
+      patchToolCall(message, patch, toolMeta)
+    )
   const named =
-    toolCallOwner(state.messages, patch.toolCallId)?.id ??
-    (aos.success ? aos.data.messageId : latestAssistantId(state.messages))
+    owner?.id ?? (aos ? aos.messageId : latestAssistantId(state.messages))
   const messageId = named === undefined ? undefined : addressed(state, named)
   if (messageId === undefined) return state
-  const args = aos.success
-    ? { argsText: aos.data.argsText, argsTextDelta: aos.data.argsTextDelta }
-    : {}
   return onMessage(state, messageId, "assistant", (message) =>
-    patchToolCall(message, patch, args)
+    patchToolCall(message, patch, toolMeta)
+  )
+}
+
+type ToolMeta = z.infer<typeof AosToolCallMetaSchema>
+
+function toolMetaPatch(aos: ToolMeta | undefined): ToolMetaPatch {
+  if (!aos) return {}
+  return {
+    argsText: aos.argsText,
+    argsTextDelta: aos.argsTextDelta,
+    startedAt: epochOf(aos.startedAt),
+    completedAt: epochOf(aos.completedAt),
+    durationMs: aos.durationMs,
+    subagent: aos.subagent,
+  }
+}
+
+const SUBAGENT_CALL_PREFIX = "aos-subagent-"
+
+/**
+ * Applies what a subagent produced inside its own turn, under the call that
+ * spawned it. A named spawning call not seen yet holds the update until it
+ * appears; a subagent whose spawning call the stream never names gets one, so
+ * its work still reads under a call rather than as the turn's own.
+ */
+function applyChild(
+  state: ProjectorState,
+  pending: EarlyUpdate,
+  attribution: { subagentId?: string; parentToolCallId?: string },
+  hostId: string,
+  patch: (message: ProjectedMessage) => ProjectedMessage
+): ProjectorState {
+  const { subagentId, parentToolCallId } = attribution
+  if (subagentId === undefined) return state
+  const spawn = findCall(state.messages, (call) =>
+    parentToolCallId === undefined
+      ? call.subagent?.id === subagentId
+      : call.toolCallId === parentToolCallId
+  )
+  if (!spawn && parentToolCallId !== undefined)
+    return holdEarly(state, parentToolCallId, pending)
+  const spawnId = spawn?.toolCallId ?? `${SUBAGENT_CALL_PREFIX}${subagentId}`
+  const hosted = spawn
+    ? state
+    : onMessage(state, addressed(state, hostId), "assistant", (message) =>
+        patchToolCall(
+          message,
+          { toolCallId: spawnId, name: "subagent", status: "in_progress" },
+          { subagent: { id: subagentId } }
+        )
+      )
+  const owner = toolCallOwner(hosted.messages, spawnId)
+  if (!owner) return state
+  return onMessage(hosted, owner.id, owner.role, (message) =>
+    mapCalls(message, (call) =>
+      call.toolCallId === spawnId
+        ? withChildMessage(call, subagentId, patch)
+        : call
+    )
+  )
+}
+
+function holdEarly(
+  state: ProjectorState,
+  toolCallId: string,
+  pending: EarlyUpdate
+): ProjectorState {
+  const early = new Map(state.early)
+  early.set(toolCallId, [...(early.get(toolCallId) ?? []), pending])
+  return { ...state, early }
+}
+
+/** Applies what waited for the call, now that it is projected. */
+function flushEarly(state: ProjectorState, toolCallId: string): ProjectorState {
+  const pending = state.early?.get(toolCallId)
+  if (!pending || !toolCallOwner(state.messages, toolCallId)) return state
+  const early = new Map(state.early)
+  early.delete(toolCallId)
+  return pending.reduce<ProjectorState>(
+    (next, { update, meta }) => applyUpdate(next, update, meta),
+    { ...state, early: early.size === 0 ? undefined : early }
+  )
+}
+
+/**
+ * Re-reads the terminals of the calls that match, so a call re-renders as its
+ * terminal streams; a call whose terminals did not change keeps its identity.
+ */
+function stampTerminals(
+  state: ProjectorState,
+  matches: (call: ProjectedToolCall) => boolean
+): ProjectorState {
+  const { terminals } = state
+  if (!terminals) return state
+  const stamp = (call: ProjectedToolCall) => {
+    if (!matches(call)) return call
+    const views = terminalIds(call).flatMap((id) => {
+      const stream = terminals.get(id)
+      return stream ? [stream.view] : []
+    })
+    const current = call.terminals ?? []
+    const same =
+      views.length === current.length &&
+      views.every((view, index) => view === current[index])
+    return same ? call : { ...call, terminals: views }
+  }
+  return withMessages(
+    state,
+    state.messages.map((message) => mapCalls(message, stamp))
+  )
+}
+
+function applyTerminal(
+  state: ProjectorState,
+  kind: "terminal_update" | "terminal_output_chunk",
+  update: UpdatePayload
+): ProjectorState {
+  const terminalId = text(update.terminalId)
+  if (terminalId === undefined) return state
+  const current = state.terminals?.get(terminalId)
+  const data = text(update.data)
+  const stream =
+    kind === "terminal_update"
+      ? snapshotTerminal(current, terminalId, update)
+      : data === undefined
+        ? undefined
+        : appendTerminal(current, terminalId, data)
+  if (!stream) return state
+  const terminals = new Map(state.terminals)
+  terminals.set(terminalId, stream)
+  return stampTerminals({ ...state, terminals }, (call) =>
+    terminalIds(call).includes(terminalId)
+  )
+}
+
+const COMPACTION_STATUS = new Map<string, AosCompaction["status"]>([
+  ["in_progress", "started"],
+  ["completed", "completed"],
+  ["failed", "failed"],
+])
+
+const compactionOf = (id: string) => (name: string, data: unknown) =>
+  name === COMPACTION_DATA_PART_NAME &&
+  isRecord(data) &&
+  data.compactionId === id
+
+/**
+ * A compaction reads where it happened: at first sight it takes its place
+ * among the turn's parts, and every later report updates that one divider.
+ */
+function applyCompaction(
+  state: ProjectorState,
+  update: UpdatePayload,
+  meta: unknown
+): ProjectorState {
+  const compactionId = text(update.compactionId)
+  const status = COMPACTION_STATUS.get(text(update.status) ?? "")
+  if (compactionId === undefined || status === undefined) return state
+  const summary = listOf(update.summary, isContentBlock)
+    ?.flatMap((block) => (block.type === "text" ? [block.text] : []))
+    .join("\n")
+  const error = text(update.error)
+  const data: AosCompaction = {
+    compactionId,
+    status,
+    ...(summary ? { summary } : {}),
+    ...(error === undefined ? {} : { error }),
+  }
+  const matches = compactionOf(compactionId)
+  const placed = state.messages.find((message) =>
+    message.parts.some(
+      (part) => part.source === "data" && matches(part.name, part.data)
+    )
+  )
+  if (placed)
+    return onMessage(state, placed.id, placed.role, (message) =>
+      replaceData(message, matches, data)
+    )
+  const parsed = AosTurnMetaSchema.safeParse(meta)
+  const turnId = parsed.success ? parsed.data.turnId : state.execution.turnId
+  const id =
+    activeAssistantId(state) ??
+    (state.execution.status === "running"
+      ? undefined
+      : latestAssistantId(state.messages)) ??
+    requestHostId(turnId)
+  return onMessage(state, id, "assistant", (message) =>
+    appendData(message, COMPACTION_DATA_PART_NAME, data)
   )
 }
 
@@ -256,6 +482,8 @@ function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
     ...(aos?.code === undefined ? {} : { code: aos.code }),
     ...(aos?.message === undefined ? {} : { message: aos.message }),
+    ...(aos?.provider === undefined ? {} : { provider: aos.provider }),
+    ...(aos?.model === undefined ? {} : { model: aos.model }),
   }
   return error.code === undefined && error.message === undefined
     ? undefined
@@ -299,6 +527,16 @@ function applyRunningFailure(
   }
 }
 
+type IncompleteReason = Extract<MessageStatus, { type: "incomplete" }>["reason"]
+
+/** The ACP stop reasons that end a turn short of its answer. */
+const STOP_INCOMPLETE = new Map<string, IncompleteReason>([
+  ["cancelled", "cancelled"],
+  ["max_tokens", "length"],
+  ["refusal", "content-filter"],
+  ["max_turn_requests", "other"],
+])
+
 function applyIdle(
   state: ProjectorState,
   carried: { turnId?: string },
@@ -317,10 +555,11 @@ function applyIdle(
     ...(stopReason === undefined ? {} : { stopReason }),
     ...(error === undefined ? {} : { error }),
   }
+  const incomplete = STOP_INCOMPLETE.get(stopReason ?? "")
   const status: MessageStatus = failed
     ? { type: "incomplete", reason: "error", ...(error && { error }) }
-    : stopReason === "cancelled"
-      ? { type: "incomplete", reason: "cancelled" }
+    : incomplete
+      ? { type: "incomplete", reason: incomplete }
       : { type: "complete", reason: "stop" }
   // The turn this run opened ends where the wire says the run did; a moment it
   // did not report leaves the turn's span as open as it was.
@@ -329,11 +568,13 @@ function applyIdle(
   // A run that wrote no turn settles the Session alone: the history before it
   // keeps the status it was projected with. Only the run a correction
   // interrupted can address the turn it superseded, so that mapping ends here.
+  // Whatever still waits for a call the run never announced is dropped with it.
   const settled: ProjectorState = {
     ...state,
     execution,
     activeAssistantId: undefined,
     supersededAssistants: undefined,
+    early: undefined,
   }
   return id === undefined
     ? settled
@@ -432,45 +673,74 @@ function applyWhole(
 
 function applyChunk(
   state: ProjectorState,
-  kind: string,
-  update: UpdatePayload
+  update: SessionUpdate & UpdatePayload,
+  meta: unknown
 ): ProjectorState {
+  const kind = update.sessionUpdate
   const named = text(update.messageId)
   const block = update.content
   if (named === undefined || !isContentBlock(block)) return state
+  const aos = AosChunkMetaSchema.safeParse(meta)
+  if (aos.success && aos.data.subagentId !== undefined)
+    return applyChild(state, { update, meta }, aos.data, named, (message) =>
+      appendBlock(message, sourceOf(kind), block)
+    )
   return onMessage(state, addressed(state, named), roleOf(kind), (message) =>
     countChunk(appendBlock(message, sourceOf(kind), block))
   )
 }
+
+const isLocation = (value: unknown): value is ToolCallLocation =>
+  isRecord(value) && typeof value.path === "string"
 
 function toolPatch(update: UpdatePayload): ToolCallPatch | undefined {
   const toolCallId = text(update.toolCallId)
   if (toolCallId === undefined) return undefined
   return {
     toolCallId,
+    name: textPatch(update.name),
     title: textPatch(update.title),
+    kind: textPatch(update.kind),
     status: textPatch(update.status),
     content:
       update.content === null
         ? null
         : listOf(update.content, isToolCallContent),
+    locations:
+      update.locations === null ? null : listOf(update.locations, isLocation),
     rawInput: update.rawInput,
     rawOutput: update.rawOutput,
   }
 }
 
+/** Partial output appends; output ahead of its call waits for it. */
 function applyToolContent(
   state: ProjectorState,
-  update: UpdatePayload
+  update: SessionUpdate & UpdatePayload,
+  meta: unknown
 ): ProjectorState {
   const toolCallId = text(update.toolCallId)
   const content = update.content
   if (toolCallId === undefined || !isToolCallContent(content)) return state
   const owner = toolCallOwner(state.messages, toolCallId)
-  if (!owner) return state
+  if (!owner) return holdEarly(state, toolCallId, { update, meta })
   return onMessage(state, owner.id, owner.role, (message) =>
     appendToolContent(message, toolCallId, content)
   )
+}
+
+/** A call's update also re-reads its terminals and releases what waited. */
+function afterToolCall(
+  state: ProjectorState,
+  update: UpdatePayload
+): ProjectorState {
+  const toolCallId = text(update.toolCallId)
+  if (toolCallId === undefined) return state
+  const stamped = stampTerminals(
+    state,
+    (call) => call.toolCallId === toolCallId
+  )
+  return flushEarly(stamped, toolCallId)
 }
 
 function applyTitle(
@@ -497,11 +767,16 @@ export function applyUpdate(
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":
-      return applyChunk(state, kind, update)
+      return applyChunk(state, update, meta)
     case "tool_call_update":
-      return applyToolCall(state, toolPatch(update), meta)
+      return afterToolCall(applyToolCall(state, update, meta), update)
     case "tool_call_content_chunk":
-      return applyToolContent(state, update)
+      return afterToolCall(applyToolContent(state, update, meta), update)
+    case "terminal_update":
+    case "terminal_output_chunk":
+      return applyTerminal(state, kind, update)
+    case "compaction_update":
+      return applyCompaction(state, update, meta)
     case "state_update":
       return applyState(state, update, meta)
     case "plan_update":
@@ -633,12 +908,15 @@ export function clearTranscript(state: ProjectorState): ProjectorState {
   const kept = state.messages.filter((message) =>
     message.id.startsWith(LOCAL_PROMPT_PREFIX)
   )
-  if (kept.length === state.messages.length) return state
+  const bare = !state.terminals && !state.early
+  if (kept.length === state.messages.length && bare) return state
   return {
     ...state,
     messages: kept,
     activeAssistantId: undefined,
     supersededAssistants: undefined,
+    terminals: undefined,
+    early: undefined,
   }
 }
 

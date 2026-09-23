@@ -169,15 +169,15 @@ describe("AOS composer features", () => {
       source: "provider-usage" as const,
       breakdown: { systemTokens: 100, toolTokens: 200, messageTokens: 900 },
     }
-    let announce: (() => void) | undefined
+    const listeners = new Set<() => void>()
     const context = vi.fn(() => reading)
     const client = {
       workspaceCapabilities: vi.fn(async () => capabilities()),
       models,
       context,
       subscribeContext: vi.fn((_threadId: string, listener: () => void) => {
-        announce = listener
-        return () => undefined
+        listeners.add(listener)
+        return () => listeners.delete(listener)
       }),
       updateModel: vi.fn(),
       steerRun: vi.fn(),
@@ -210,7 +210,7 @@ describe("AOS composer features", () => {
     // A later reading is what the composer shows: the window grows with the
     // conversation, so one read at attach time cannot stay correct.
     reading = { ...reading, usedTokens: 4_400 }
-    act(() => announce?.())
+    act(() => listeners.forEach((listener) => listener()))
 
     await waitFor(() =>
       // The provider's shares are reapportioned over the larger total.
@@ -669,5 +669,58 @@ describe("AOS composer features", () => {
       )
     )
     expect(hidden.current.steer).toBeUndefined()
+  })
+
+  it("carries the settled turns' spend and the provider's model feed", async () => {
+    const models = vi.fn(async () => ({
+      selectedId: "small",
+      options: [
+        { id: "small", label: "Small", group: "Native" },
+        { id: "large", label: "Large", group: "Native", efforts: ["high"] },
+      ],
+    }))
+    const followers = new Set<() => void>()
+    const follow = {
+      current: () => undefined,
+      subscribe: (listener: () => void) => {
+        followers.add(listener)
+        return () => followers.delete(listener)
+      },
+    }
+    const reading = {
+      usedTokens: 1_000,
+      maxTokens: 8_000,
+      source: "provider-usage" as const,
+    }
+    const spend = {
+      lastTurn: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      cost: { amount: 0.5, currency: "USD" },
+    }
+    const client = {
+      workspaceCapabilities: vi.fn(async () => capabilities()),
+      models,
+      context: () => reading,
+      turnUsage: () => spend,
+      subscribeContext: () => () => undefined,
+      modelFeed: vi.fn(() => follow),
+      updateModel: vi.fn(),
+      steerRun: vi.fn(),
+    }
+    const { result } = renderHook(() => {
+      const sessionCapabilities = useAosSessionCapabilities(client, "session-1")
+      return useAosComposerFeatures(
+        client,
+        { modelSelectorEnabled: true, contextEnabled: true },
+        "session-1",
+        sessionCapabilities
+      )
+    })
+
+    await waitFor(() => expect(result.current.model?.follow).toBe(follow))
+    expect(result.current.context).toMatchObject(spend)
+    // A provider-side switch re-reads the choices the new model brings.
+    expect(models).toHaveBeenCalledTimes(1)
+    act(() => followers.forEach((listener) => listener()))
+    await waitFor(() => expect(models).toHaveBeenCalledTimes(2))
   })
 })

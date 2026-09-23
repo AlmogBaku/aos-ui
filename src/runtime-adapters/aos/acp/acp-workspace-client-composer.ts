@@ -3,14 +3,23 @@ import {
   SessionUpdate,
   type SessionConfigSelectGroup,
   type SessionConfigSelectOption,
+  type Usage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
 import type { SlashCommand } from "@aos/protocol"
 import {
+  AosStateMetaSchema,
   AosUsageMetaSchema,
+  type AosCost,
   type AosSessionResumeResponseMetaSchema,
 } from "@aos/protocol/acp"
+
+import type {
+  ComposerModelCurrent,
+  ComposerModelFeed,
+  ComposerTurnUsage,
+} from "@/components/assistant-ui/composer-features"
 
 import type {
   AosContext,
@@ -51,10 +60,19 @@ export type AcpModelProjection = {
   effortConfigId?: string
 }
 
+/** What the Session's settled turns spent, read from their `idle` updates. */
+export type AcpTurnUsage = {
+  readonly lastTurn?: ComposerTurnUsage
+  readonly cost?: AosCost
+}
+
 type SessionEntry = {
   capabilities: AcpCapabilities
   projection: AcpModelProjection
+  /** The model the projection names, the same reference until it changes. */
+  current?: ComposerModelCurrent
   context?: AosContext
+  turns?: AcpTurnUsage
   commands?: SlashCommand[]
 }
 
@@ -144,6 +162,78 @@ function projectContext(
   }
 }
 
+/** The model a projection names; an equal one keeps the previous reference. */
+function currentOf(
+  projection: AcpModelProjection,
+  previous: ComposerModelCurrent | undefined
+): ComposerModelCurrent | undefined {
+  const models = projection.models
+  if (!models) return undefined
+  if (
+    previous?.selectedId === models.selectedId &&
+    previous.effortId === models.effortId
+  )
+    return previous
+  return {
+    selectedId: models.selectedId,
+    ...(models.effortId === undefined ? {} : { effortId: models.effortId }),
+  }
+}
+
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && value >= 0
+
+/** The three counts ACP requires; a usage without them reports nothing. */
+const isUsage = (value: unknown): value is Usage =>
+  typeof value === "object" &&
+  value !== null &&
+  "inputTokens" in value &&
+  "outputTokens" in value &&
+  "totalTokens" in value &&
+  isCount(value.inputTokens) &&
+  isCount(value.outputTokens) &&
+  isCount(value.totalTokens)
+
+function turnUsageOf({
+  inputTokens,
+  outputTokens,
+  totalTokens,
+  thoughtTokens,
+  cachedReadTokens,
+  cachedWriteTokens,
+}: Usage): ComposerTurnUsage {
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    ...(isCount(thoughtTokens) ? { thoughtTokens } : {}),
+    ...(isCount(cachedReadTokens) ? { cachedReadTokens } : {}),
+    ...(isCount(cachedWriteTokens) ? { cachedWriteTokens } : {}),
+  }
+}
+
+/**
+ * Folds one settled turn into the Session's spend: its usage becomes the last
+ * turn's, and its cost adds to the total while the currency holds. Amounts in
+ * two currencies cannot be summed, so a switch restarts the total there.
+ */
+export function foldTurnUsage(
+  previous: AcpTurnUsage | undefined,
+  usage: Usage | undefined,
+  cost: AosCost | undefined
+): AcpTurnUsage | undefined {
+  if (!usage && !cost) return previous
+  const total =
+    cost && previous?.cost?.currency === cost.currency
+      ? { amount: previous.cost.amount + cost.amount, currency: cost.currency }
+      : (cost ?? previous?.cost)
+  const lastTurn = usage ? turnUsageOf(usage) : previous?.lastTurn
+  return {
+    ...(lastTurn ? { lastTurn } : {}),
+    ...(total ? { cost: total } : {}),
+  }
+}
+
 /** Slash commands stay part of the capability projection the composer reads. */
 function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
   if (!entry.commands) return entry.capabilities
@@ -164,6 +254,39 @@ export function createAcpComposerStore(connection: AcpConnection) {
   const sessions = new Map<string, SessionEntry>()
   const observed = new Set<string>()
   const contextListeners = new Map<string, Set<() => void>>()
+  const modelListeners = new Map<string, Set<() => void>>()
+  const feeds = new Map<string, ComposerModelFeed>()
+
+  function listen(
+    registry: Map<string, Set<() => void>>,
+    threadId: string,
+    listener: () => void
+  ) {
+    const listeners = registry.get(threadId) ?? new Set()
+    listeners.add(listener)
+    registry.set(threadId, listeners)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) registry.delete(threadId)
+    }
+  }
+
+  function notify(registry: Map<string, Set<() => void>>, threadId: string) {
+    for (const listener of registry.get(threadId) ?? []) listener()
+  }
+
+  /** Every projection change goes through here, so the feed follows each one. */
+  function project(
+    known: SessionEntry,
+    threadId: string,
+    next: AcpModelProjection
+  ) {
+    known.projection = next
+    const current = currentOf(next, known.current)
+    if (current === known.current) return
+    known.current = current
+    notify(modelListeners, threadId)
+  }
 
   function entry(threadId: string) {
     const known = sessions.get(threadId)
@@ -176,7 +299,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
     const known = sessions.get(threadId)
     if (!known) return
     if (SessionUpdate.isConfigOptionUpdate(update))
-      known.projection = projectModels(update.configOptions)
+      project(known, threadId, projectModels(update.configOptions))
     else if (SessionUpdate.isAvailableCommandsUpdate(update))
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
@@ -185,7 +308,17 @@ export function createAcpComposerStore(connection: AcpConnection) {
       const context = projectContext(update, meta)
       if (!context) return
       known.context = context
-      for (const listener of contextListeners.get(threadId) ?? []) listener()
+      notify(contextListeners, threadId)
+    } else if (SessionUpdate.isStateUpdate(update) && update.state === "idle") {
+      const aos = AosStateMetaSchema.safeParse(meta)
+      const turns = foldTurnUsage(
+        known.turns,
+        isUsage(update.usage) ? update.usage : undefined,
+        aos.success ? aos.data.cost : undefined
+      )
+      if (turns === known.turns) return
+      known.turns = turns
+      notify(contextListeners, threadId)
     }
   }
 
@@ -198,17 +331,39 @@ export function createAcpComposerStore(connection: AcpConnection) {
     }
   ) {
     const previous = sessions.get(threadId)
-    sessions.set(threadId, {
+    const known: SessionEntry = {
       capabilities: attached.capabilities,
-      projection: projectModels(attached.configOptions),
+      projection: {},
+      ...(previous?.current ? { current: previous.current } : {}),
       ...(previous?.context ? { context: previous.context } : {}),
+      ...(previous?.turns ? { turns: previous.turns } : {}),
       ...(previous?.commands ? { commands: previous.commands } : {}),
-    })
+    }
+    sessions.set(threadId, known)
+    project(known, threadId, projectModels(attached.configOptions))
     if (observed.has(threadId)) return
     observed.add(threadId)
     connection.onSessionUpdate(threadId, (update, meta) =>
       accept(threadId, update, meta)
     )
+    // A from-start replay restates every settled turn, so the spend it folds
+    // starts over rather than counting each turn twice.
+    connection.onSessionReplay(threadId, () => {
+      const replayed = sessions.get(threadId)
+      if (replayed) delete replayed.turns
+    })
+  }
+
+  /** One feed per Session, so the composer subscribes to a stable value. */
+  function modelFeed(threadId: string): ComposerModelFeed {
+    const known = feeds.get(threadId)
+    if (known) return known
+    const feed: ComposerModelFeed = {
+      current: () => sessions.get(threadId)?.current,
+      subscribe: (listener) => listen(modelListeners, threadId, listener),
+    }
+    feeds.set(threadId, feed)
+    return feed
   }
 
   function models(threadId: string) {
@@ -227,8 +382,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
       (category === MODEL_CATEGORY
         ? known.projection.modelConfigId
         : known.projection.effortConfigId) ?? category
-    known.projection = projectModels(
-      await connection.setConfigOption(threadId, configId, valueId)
+    project(
+      known,
+      threadId,
+      projectModels(
+        await connection.setConfigOption(threadId, configId, valueId)
+      )
     )
     return models(threadId)
   }
@@ -239,15 +398,11 @@ export function createAcpComposerStore(connection: AcpConnection) {
     models,
     /** The newest reading, or none while the provider has reported none. */
     context: (threadId: string) => sessions.get(threadId)?.context,
-    subscribeContext(threadId: string, listener: () => void) {
-      const listeners = contextListeners.get(threadId) ?? new Set()
-      listeners.add(listener)
-      contextListeners.set(threadId, listeners)
-      return () => {
-        listeners.delete(listener)
-        if (!listeners.size) contextListeners.delete(threadId)
-      }
-    },
+    /** The settled turns' spend, notified with the context. */
+    turnUsage: (threadId: string) => sessions.get(threadId)?.turns,
+    subscribeContext: (threadId: string, listener: () => void) =>
+      listen(contextListeners, threadId, listener),
+    modelFeed,
     selectModel: (threadId: string, selectedId: string) =>
       select(threadId, MODEL_CATEGORY, selectedId),
     selectEffort: (threadId: string, effortId: string) =>

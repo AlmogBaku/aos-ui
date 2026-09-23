@@ -12,8 +12,11 @@ import {
 import {
   composerUsageFromTokens,
   type ComposerFeatureViewModel,
+  type ComposerModelFeed,
   type ComposerModelSelectionState,
   type ComposerModelUpdate,
+  type ComposerSessionCost,
+  type ComposerTurnUsage,
 } from "@/components/assistant-ui/composer-features"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import type {
@@ -40,6 +43,15 @@ type ComposerClient = SessionCapabilityClient & {
    */
   context(threadId: string): AosContext | undefined
   subscribeContext(threadId: string, listener: () => void): () => void
+  /**
+   * What the Session's settled turns spent, notified with the context: the
+   * same reference until a settled turn replaces it.
+   */
+  turnUsage?(
+    threadId: string
+  ): { lastTurn?: ComposerTurnUsage; cost?: ComposerSessionCost } | undefined
+  /** The model the provider reports the Session on, one feed per Session. */
+  modelFeed?(threadId: string): ComposerModelFeed
   updateModel(
     threadId: string,
     patch: SessionModelUpdateRequest
@@ -127,17 +139,22 @@ export function useAosComposerFeatures(
   // Usage is pushed, not polled: the provider restates it on every attach, every
   // settled turn, and every model change, so the composer reads the newest one
   // rather than whatever a single read at attach time happened to catch.
+  const subscribeContext = useCallback(
+    (listener: () => void) =>
+      threadId ? client.subscribeContext(threadId, listener) : () => undefined,
+    [client, threadId]
+  )
   const context = useSyncExternalStore(
-    useCallback(
-      (listener: () => void) =>
-        threadId
-          ? client.subscribeContext(threadId, listener)
-          : () => undefined,
-      [client, threadId]
-    ),
+    subscribeContext,
     () => (threadId ? client.context(threadId) : undefined),
     () => undefined
   )
+  const turnUsage = useSyncExternalStore(
+    subscribeContext,
+    () => (threadId ? client.turnUsage?.(threadId) : undefined),
+    () => undefined
+  )
+  const follow = threadId ? client.modelFeed?.(threadId) : undefined
   // In-flight switch state is tagged with its Session so a switch that settles
   // after the selected Session changed neither shows nor lands in the new one.
   const [selectionRecord, setSelectionRecord] = useState<SelectionRecord>()
@@ -173,6 +190,29 @@ export function useAosComposerFeatures(
       active = false
     }
   }, [client, config.modelSelectorEnabled, modelsAvailable, onError, threadId])
+
+  // A model the provider switched to brings its own efforts, so the choices
+  // are re-read whenever the followed model changes.
+  useEffect(() => {
+    if (
+      !follow ||
+      !threadId ||
+      !config.modelSelectorEnabled ||
+      !modelsAvailable
+    )
+      return undefined
+    let active = true
+    const unsubscribe = follow.subscribe(() => {
+      void client.models(threadId).then(
+        (next) => active && setModels(next),
+        () => undefined
+      )
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [client, config.modelSelectorEnabled, follow, modelsAvailable, threadId])
 
   return useMemo(
     () => ({
@@ -248,6 +288,7 @@ export function useAosComposerFeatures(
           effortId: models.effortId,
           selection,
           update,
+          ...(follow ? { follow } : {}),
           // Retry repeats only the patch that failed; a settled pick has none.
           ...(selection.status === "error"
             ? { retry: () => update(selection.target) }
@@ -270,6 +311,8 @@ export function useAosComposerFeatures(
               segments: context.breakdown
                 ? ["system", "tools", "messages"]
                 : [],
+              ...(turnUsage?.lastTurn ? { lastTurn: turnUsage.lastTurn } : {}),
+              ...(turnUsage?.cost ? { cost: turnUsage.cost } : {}),
             }
           : undefined,
     }),
@@ -278,6 +321,7 @@ export function useAosComposerFeatures(
       config.contextEnabled,
       config.modelSelectorEnabled,
       context,
+      follow,
       models,
       modelsAvailable,
       onError,
@@ -285,6 +329,7 @@ export function useAosComposerFeatures(
       slashCommands,
       steeringAvailable,
       threadId,
+      turnUsage,
     ]
   )
 }
