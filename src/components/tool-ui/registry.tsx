@@ -215,9 +215,7 @@ export const richToolRegistry: RichToolRegistry = Object.freeze({
   ask_user_question: question,
   question,
   request_permission: permission,
-  request_approval: permission,
   delegate_subagent: subagentActivity,
-  run_subagent: subagentActivity,
 })
 
 /** Direct `MessagePrimitive.Parts` tool-call renderer. */

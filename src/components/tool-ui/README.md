@@ -27,14 +27,14 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 
 ## Tool names each surface answers
 
-| Registry key(s)                             | Surface       |
-| ------------------------------------------- | ------------- |
-| `render_chart`                              | chart         |
-| `render_map`                                | geo-map       |
-| `render_stats`                              | stats-display |
-| `ask_user_question`, `question`             | question-flow |
-| `request_permission`, `request_approval`    | permission    |
-| `delegate_subagent`, `run_subagent`, `task` | activity      |
+| Registry key(s)                 | Surface       |
+| ------------------------------- | ------------- |
+| `render_chart`                  | chart         |
+| `render_map`                    | geo-map       |
+| `render_stats`                  | stats-display |
+| `ask_user_question`, `question` | question-flow |
+| `request_permission`            | permission    |
+| `delegate_subagent`, `task`     | activity      |
 
 ## Tool artifact views
 
