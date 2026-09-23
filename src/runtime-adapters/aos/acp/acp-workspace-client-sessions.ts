@@ -253,6 +253,11 @@ export function createAcpSessionStore({
     })
   }
 
+  /** Tells a Session's observers to re-read what the provider now holds. */
+  function invalidate(threadId: string) {
+    for (const listener of invalidationListeners.get(threadId) ?? []) listener()
+  }
+
   /** An update whose `_meta.aos` does not parse carries nothing to publish. */
   function acceptUpdate(
     threadId: string,
@@ -265,7 +270,10 @@ export function createAcpSessionStore({
       return patch(threadId, { status })
     }
     if (SessionUpdate.isSessionInfoUpdate(update)) {
-      if (update.title) titles.set(threadId, update.title)
+      if (update.title && update.title !== titles.get(threadId)) {
+        titles.set(threadId, update.title)
+        invalidate(threadId)
+      }
       const info = AosSessionInfoMetaSchema.safeParse(meta)
       if (info.success) put(threadId, info.data, update.updatedAt)
       return
@@ -322,10 +330,7 @@ export function createAcpSessionStore({
     connection,
     AOS_METHODS.notify.sessionInvalidated,
     AosSessionInvalidatedNotificationSchema,
-    ({ sessionId }) => {
-      for (const listener of invalidationListeners.get(sessionId) ?? [])
-        listener()
-    }
+    ({ sessionId }) => invalidate(sessionId)
   )
 
   return {

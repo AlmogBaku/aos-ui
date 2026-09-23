@@ -445,6 +445,32 @@ describe("provider-neutral AOS runtime composition", () => {
     )
   })
 
+  it("shows the title the provider gives an opened Session", async () => {
+    const { proxy, runtime } = mount()
+    await waitFor(() => expect(runtime()).toBeDefined())
+    const supplied = runtime()!
+    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
+    await act(async () => {
+      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
+    })
+    expect(await screen.findByText("Ready")).toBeVisible()
+
+    act(() => {
+      proxy.push(SESSION_ID, {
+        sessionUpdate: "session_info_update",
+        title: "Quarterly plan",
+        _meta: { [AOS_META_KEY]: sessionInfo },
+      })
+    })
+
+    await waitFor(() =>
+      expect(
+        supplied.assistantRuntime.threads.getItemById(SESSION_ID).getState()
+          .title
+      ).toBe("Quarterly plan")
+    )
+  })
+
   it("resumes each opened Session once and replays nothing on return", async () => {
     const { proxy, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())

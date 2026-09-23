@@ -293,7 +293,10 @@ function ReadyAosRuntimeProvider({
       (candidate) =>
         (candidate.remoteId ?? candidate.externalId) === selectedSessionId
     )
-    if (!selectedItem || !drafts.agentFor(selectedItem.id)) return
+    if (!selectedItem) return
+    // Only a draft may hold a title it has not read yet; any Session re-reads
+    // one the provider changes or invalidates.
+    const isDraft = drafts.agentFor(selectedItem.id) !== undefined
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
     let refreshing = false
@@ -335,7 +338,7 @@ function ReadyAosRuntimeProvider({
       selectedSessionId,
       scheduleRefresh
     )
-    scheduleRefresh()
+    if (isDraft) scheduleRefresh()
     return () => {
       active = false
       if (timer !== undefined) clearTimeout(timer)
