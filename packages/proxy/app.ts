@@ -152,7 +152,6 @@ export function createProxyApp(options: ProxyAppOptions) {
   registerPushRoutes(app, options, resolvePrincipal)
   if (options.guestInvitations)
     registerInvitationRoutes(app, {
-      publicOrigin: options.publicOrigin,
       guestPublicOrigin: options.guestInvitations.publicOrigin,
       invitations: options.guestInvitations.service,
       runtime,
