@@ -20,7 +20,13 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { useMemo, useState } from "react"
+import {
+  createRef,
+  useImperativeHandle,
+  useMemo,
+  useState,
+  type Ref,
+} from "react"
 import { createPortal } from "react-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
@@ -458,10 +464,11 @@ describe("virtualized thread", () => {
   const descriptors = new Map<string, PropertyDescriptor | undefined>()
   const scrollTops = new WeakMap<HTMLElement, number>()
   const resizeCallbacks = new Set<() => void>()
-  /** Whether the emulated browser anchors scroll (`overflow-anchor`). */
-  let anchoring = true
-  /** The row the emulated browser keeps in place, with its content top. */
-  let anchor: { row: HTMLElement; top: number } | undefined
+  /**
+   * The row the emulated browser keeps in place, with its content top and the
+   * top margin it had when picked.
+   */
+  let anchor: { row: HTMLElement; top: number; margin: string } | undefined
   let adjusting = false
 
   function isViewport(element: HTMLElement) {
@@ -516,18 +523,27 @@ describe("virtualized thread", () => {
         rowTop(viewport, candidate) + messageHeight(candidate) >
         viewport.scrollTop
     )
-    anchor = row && { row, top: rowTop(viewport, row) }
+    anchor = row && {
+      row,
+      top: rowTop(viewport, row),
+      margin: row.style.marginTop,
+    }
   }
 
   /**
    * Native scroll anchoring, applied whenever layout is read: a moved anchor
    * shifts the scroll position by as much, then the anchor is picked again.
+   * Like Chromium, it declines when the anchor's own margin changed.
    */
   function anchorScroll(viewport: HTMLElement) {
-    if (!anchoring || adjusting) return
+    if (adjusting) return
     adjusting = true
     try {
-      if (anchor?.row.isConnected && viewport.contains(anchor.row)) {
+      if (
+        anchor?.row.isConnected &&
+        viewport.contains(anchor.row) &&
+        anchor.row.style.marginTop === anchor.margin
+      ) {
         const shift = rowTop(viewport, anchor.row) - anchor.top
         if (shift !== 0) viewport.scrollTop += shift
       }
@@ -576,14 +592,7 @@ describe("virtualized thread", () => {
   }
 
   beforeEach(() => {
-    anchoring = true
     anchor = undefined
-    const escape = CSS.escape.bind(CSS)
-    vi.stubGlobal("CSS", {
-      escape,
-      supports: (property: string) =>
-        anchoring && property === "overflow-anchor",
-    })
     define("offsetTop", {
       get(this: HTMLElement) {
         const viewport = this.closest(VIEWPORT_SELECTOR)
@@ -629,7 +638,7 @@ describe("virtualized thread", () => {
           : 0
         if (next === (scrollTops.get(this) ?? 0)) return
         scrollTops.set(this, next)
-        if (anchoring && !adjusting && isViewport(this)) selectAnchor(this)
+        if (!adjusting && isViewport(this)) selectAnchor(this)
         this.dispatchEvent(new Event("scroll"))
       },
     })
@@ -877,21 +886,14 @@ describe("virtualized thread", () => {
   const topOf = (text: string) =>
     screen.getByText(text).getBoundingClientRect().top
 
-  describe.each([
-    ["anchors scroll", true],
-    ["does not anchor scroll", false],
-  ])("where the browser %s", (_, browserAnchors) => {
-    beforeEach(() => {
-      anchoring = browserAnchors
-    })
-
+  describe("as older messages land", () => {
     it("keeps the reader's place in a long thread as older messages land above", async () => {
-      const thread: PagedThreadHandle = {}
+      const thread = createRef<PagedThreadHandle>()
       render(
         <PagedThread
           initialMessages={longThread()}
           history={historyState()}
-          handle={thread}
+          ref={thread}
         />
       )
       await settle()
@@ -901,7 +903,7 @@ describe("virtualized thread", () => {
       const reading = firstVisibleText()
       const top = topOf(reading)
 
-      act(() => thread.prepend?.(olderMessages(20)))
+      act(() => thread.current?.prepend(olderMessages(20)))
 
       // Already in place as the page commits, before any frame runs.
       expect(topOf(reading)).toBe(top)
@@ -909,13 +911,35 @@ describe("virtualized thread", () => {
       expect(topOf(reading)).toBe(top)
     })
 
+    it("keeps the reader's place near the top of a long thread as unmeasured messages mount above it", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread()}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 150
+      await settle()
+      const reading = firstVisibleText()
+      const top = topOf(reading)
+
+      act(() => thread.current?.prepend(olderMessages(20)))
+      await settle()
+
+      expect(topOf(reading)).toBe(top)
+    })
+
     it("keeps the reader's place at the top of a short thread as older messages land above", async () => {
-      const thread: PagedThreadHandle = {}
+      const thread = createRef<PagedThreadHandle>()
       render(
         <PagedThread
           initialMessages={longThread().slice(0, 20)}
           history={historyState()}
-          handle={thread}
+          ref={thread}
         />
       )
       await settle()
@@ -924,7 +948,7 @@ describe("virtualized thread", () => {
       await settle()
       const top = topOf("Long thread message 0")
 
-      act(() => thread.prepend?.(olderMessages(8)))
+      act(() => thread.current?.prepend(olderMessages(8)))
 
       expect(topOf("Long thread message 0")).toBe(top)
       await settle()
@@ -1251,7 +1275,7 @@ function LocalThread({
 }
 
 type PagedThreadHandle = {
-  prepend?: (older: readonly ThreadMessageLike[]) => void
+  prepend(older: readonly ThreadMessageLike[]): void
 }
 
 function historyState(
@@ -1285,12 +1309,12 @@ function PagedThread({
   initialMessages,
   history,
   labels,
-  handle,
+  ref,
 }: {
   initialMessages: readonly ThreadMessageLike[]
   history?: ThreadHistoryState
   labels?: Partial<ThreadLabels>
-  handle?: PagedThreadHandle
+  ref?: Ref<PagedThreadHandle>
 }) {
   const [messages, setMessages] = useState(initialMessages)
   const extras = useMemo(
@@ -1306,8 +1330,9 @@ function PagedThread({
     onNew: async () => {},
     extras,
   })
-  if (handle)
-    handle.prepend = (older) => setMessages((current) => [...older, ...current])
+  useImperativeHandle(ref, () => ({
+    prepend: (older) => setMessages((current) => [...older, ...current]),
+  }))
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <Thread autoFocus={false} labels={labels} />
