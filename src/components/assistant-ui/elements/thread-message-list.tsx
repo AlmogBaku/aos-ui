@@ -1,0 +1,173 @@
+"use client"
+
+import { cn } from "@/lib/utils"
+import {
+  ThreadPrimitive,
+  unstable_useThreadMessageIds,
+} from "@assistant-ui/react"
+import {
+  defaultRangeExtractor,
+  useVirtualizer,
+  type Range,
+} from "@tanstack/react-virtual"
+import {
+  useCallback,
+  useImperativeHandle,
+  useState,
+  type ComponentProps,
+  type FocusEvent,
+  type Ref,
+  type RefObject,
+} from "react"
+
+/** A first guess only; every mounted message is measured as it renders. */
+const ESTIMATED_MESSAGE_HEIGHT_PX = 160
+/** Messages mounted beyond each edge of the viewport. */
+const OVERSCAN = 6
+/**
+ * A Session this short mounts whole: the window would save nothing, and the
+ * browser's own find and a screen reader's browse mode then reach every
+ * message. It also keeps a layout-free renderer showing the whole thread.
+ */
+export const WHOLE_THREAD_MESSAGE_LIMIT = 30
+
+type MessageComponents = ComponentProps<
+  typeof ThreadPrimitive.Unstable_MessageById
+>["components"]
+
+export type ThreadMessageListHandle = {
+  /**
+   * Brings a message into the mounted window. Returns true once its element
+   * is in the document, false while the thread is still scrolling it in.
+   */
+  revealMessage(messageId: string): boolean
+}
+
+function messageElement(viewport: HTMLElement | null, messageId: string) {
+  return viewport?.querySelector<HTMLElement>(
+    `[data-message-id="${CSS.escape(messageId)}"]`
+  )
+}
+
+function setScrollTopImmediately(viewport: HTMLElement, scrollTop: number) {
+  const previousScrollBehavior = viewport.style.scrollBehavior
+  viewport.style.scrollBehavior = "auto"
+  viewport.scrollTop = scrollTop
+  viewport.style.scrollBehavior = previousScrollBehavior
+}
+
+/**
+ * The thread's messages, virtualized: only the messages near the viewport are
+ * mounted, following assistant-ui's virtualization guide
+ * (`unstable_useThreadMessageIds` with `ThreadPrimitive.Unstable_MessageById`).
+ * Spacing before and after the mounted window stands in for the rest, so the
+ * rows stay in normal flow.
+ *
+ * The virtualizer never moves the scroll position on its own. The
+ * reading-position controller and the browser's scroll anchoring already keep
+ * the reader's place and follow the latest content; a second correction from
+ * here would double every adjustment while a message streams.
+ */
+export function ThreadMessageList({
+  viewportRef,
+  components,
+  className,
+  ref,
+}: {
+  viewportRef: RefObject<HTMLElement | null>
+  components: MessageComponents
+  className?: string
+  ref?: Ref<ThreadMessageListHandle>
+}) {
+  const messageIds = unstable_useThreadMessageIds()
+  // The last message to hold focus stays mounted, so scrolling never pulls
+  // focus out from under the keyboard and a menu can return focus to it.
+  const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null)
+  const count = messageIds.length
+
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      const indexes = defaultRangeExtractor(range)
+      const focusedIndex = focusedMessageId
+        ? messageIds.indexOf(focusedMessageId)
+        : -1
+      if (focusedIndex < 0 || indexes.includes(focusedIndex)) return indexes
+      return [...indexes, focusedIndex].sort((left, right) => left - right)
+    },
+    [focusedMessageId, messageIds]
+  )
+
+  // The list re-renders with every virtualizer change by design, so the
+  // compiler skipping its memoization costs nothing.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => viewportRef.current,
+    estimateSize: () => ESTIMATED_MESSAGE_HEIGHT_PX,
+    getItemKey: (index) => messageIds[index] ?? index,
+    initialOffset: () => viewportRef.current?.scrollTop ?? 0,
+    overscan: OVERSCAN,
+    rangeExtractor,
+  })
+  // An instance field, not an option: scroll stays with the controller.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      revealMessage(messageId) {
+        const viewport = viewportRef.current
+        if (!viewport || messageElement(viewport, messageId)) return true
+        const index = messageIds.indexOf(messageId)
+        if (index < 0) return true
+        const offset = virtualizer.getOffsetForIndex(index, "center")?.[0]
+        if (offset !== undefined) setScrollTopImmediately(viewport, offset)
+        return false
+      },
+    }),
+    [messageIds, viewportRef, virtualizer]
+  )
+
+  const onFocus = (event: FocusEvent<HTMLDivElement>) => {
+    const row = (event.target as Element).closest<HTMLElement>("[data-index]")
+    const messageId = row ? messageIds[Number(row.dataset.index)] : undefined
+    if (messageId && messageId !== focusedMessageId)
+      setFocusedMessageId(messageId)
+  }
+
+  // A short Session skips the window, so it also renders before layout.
+  const whole = count <= WHOLE_THREAD_MESSAGE_LIMIT
+  const items = whole
+    ? messageIds.map((key, index) => ({ key, index, start: 0, end: 0 }))
+    : virtualizer.getVirtualItems()
+  const remainder = whole
+    ? 0
+    : virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0)
+  return (
+    <div
+      className={cn("flex flex-col", className)}
+      style={remainder > 0 ? { paddingBottom: remainder } : undefined}
+      onFocus={onFocus}
+    >
+      {items.map((item, position) => {
+        const messageId = messageIds[item.index]
+        if (!messageId) return null
+        const gap = item.start - (items[position - 1]?.end ?? 0)
+        return (
+          <div
+            key={item.key}
+            data-index={item.index}
+            ref={virtualizer.measureElement}
+            className={cn("flex flex-col", item.index < count - 1 && "pb-6")}
+            style={gap > 0 ? { marginTop: gap } : undefined}
+          >
+            <ThreadPrimitive.Unstable_MessageById
+              messageId={messageId}
+              components={components}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}

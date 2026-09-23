@@ -20,7 +20,7 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { createPortal } from "react-dom"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   createComposerHistorySelector,
   Thread,
@@ -430,6 +430,274 @@ describe("conversation search", () => {
     expect(search).toBeInTheDocument()
     expect(search).toHaveValue("launch")
     expect(await screen.findByText("2 of 3")).toBeVisible()
+  })
+})
+
+describe("virtualized thread", () => {
+  const VIEWPORT_HEIGHT = 600
+  const MESSAGE_HEIGHT = 100
+  const LONG_THREAD_LENGTH = 200
+  const descriptors = new Map<string, PropertyDescriptor | undefined>()
+  const scrollTops = new WeakMap<HTMLElement, number>()
+  const resizeCallbacks = new Set<() => void>()
+
+  function isViewport(element: HTMLElement) {
+    return element.dataset.slot === "aui_thread-viewport"
+  }
+
+  /** One line per 40 characters, so a streaming message grows. */
+  function messageHeight(row: HTMLElement) {
+    const lines = Math.ceil((row.textContent?.length ?? 0) / 40)
+    return MESSAGE_HEIGHT * Math.max(1, lines)
+  }
+
+  /** Laid out like a real page: the mounted rows plus the spacing around them. */
+  function contentHeight(viewport: HTMLElement) {
+    const rows = Array.from(
+      viewport.querySelectorAll<HTMLElement>("[data-index]")
+    )
+    const list = rows[0]?.parentElement
+    return (
+      rows.reduce(
+        (total, row) =>
+          total +
+          messageHeight(row) +
+          (Number.parseFloat(row.style.marginTop) || 0),
+        0
+      ) + (Number.parseFloat(list?.style.paddingBottom ?? "") || 0)
+    )
+  }
+
+  function maximumScrollTop(viewport: HTMLElement) {
+    return Math.max(0, contentHeight(viewport) - VIEWPORT_HEIGHT)
+  }
+
+  function define(name: string, descriptor: PropertyDescriptor) {
+    descriptors.set(
+      name,
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)
+    )
+    Object.defineProperty(HTMLElement.prototype, name, {
+      configurable: true,
+      ...descriptor,
+    })
+  }
+
+  beforeEach(() => {
+    define("offsetHeight", {
+      get(this: HTMLElement) {
+        if (isViewport(this)) return VIEWPORT_HEIGHT
+        return this.dataset.index === undefined ? 0 : messageHeight(this)
+      },
+    })
+    define("offsetWidth", { get: () => 800 })
+    define("clientHeight", {
+      get(this: HTMLElement) {
+        return isViewport(this) ? VIEWPORT_HEIGHT : 0
+      },
+    })
+    define("scrollHeight", {
+      get(this: HTMLElement) {
+        return isViewport(this) ? contentHeight(this) : 0
+      },
+    })
+    define("scrollTop", {
+      get(this: HTMLElement) {
+        return scrollTops.get(this) ?? 0
+      },
+      set(this: HTMLElement, value: number) {
+        const next = isViewport(this)
+          ? Math.min(maximumScrollTop(this), Math.max(0, value))
+          : 0
+        if (next === (scrollTops.get(this) ?? 0)) return
+        scrollTops.set(this, next)
+        this.dispatchEvent(new Event("scroll"))
+      },
+    })
+    // Like the browser's: every observed element reports its current size.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class implements ResizeObserver {
+        readonly #targets = new Set<Element>()
+        readonly #notify: () => void
+        constructor(callback: ResizeObserverCallback) {
+          this.#notify = () =>
+            callback(
+              Array.from(this.#targets, (target) => {
+                const blockSize = (target as HTMLElement).offsetHeight
+                return {
+                  target,
+                  borderBoxSize: [{ blockSize, inlineSize: 800 }],
+                } as unknown as ResizeObserverEntry
+              }),
+              this
+            )
+          resizeCallbacks.add(this.#notify)
+        }
+        observe(target: Element) {
+          this.#targets.add(target)
+        }
+        unobserve(target: Element) {
+          this.#targets.delete(target)
+        }
+        disconnect() {
+          this.#targets.clear()
+          resizeCallbacks.delete(this.#notify)
+        }
+      }
+    )
+  })
+
+  afterEach(() => {
+    cleanup()
+    for (const [name, descriptor] of descriptors) {
+      if (descriptor)
+        Object.defineProperty(HTMLElement.prototype, name, descriptor)
+      else Reflect.deleteProperty(HTMLElement.prototype, name)
+    }
+    descriptors.clear()
+    resizeCallbacks.clear()
+    vi.unstubAllGlobals()
+  })
+
+  function longThread(marker?: { index: number; text: string }) {
+    return Array.from(
+      { length: LONG_THREAD_LENGTH },
+      (_, index): ThreadMessageLike => ({
+        id: `long-${index}`,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: [
+          {
+            type: "text",
+            text:
+              marker?.index === index
+                ? marker.text
+                : `Long thread message ${index}`,
+          },
+        ],
+      })
+    )
+  }
+
+  /** Lets rows measure, the viewport react to growth, and frames run out. */
+  async function settle(rounds = 6) {
+    for (let round = 0; round < rounds; round += 1) {
+      await act(async () => {
+        for (const notify of resizeCallbacks) notify()
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve())
+        )
+      })
+    }
+  }
+
+  function viewport() {
+    const element = document.querySelector<HTMLElement>(
+      '[data-slot="aui_thread-viewport"]'
+    )
+    if (!element) throw new Error("Thread viewport is not mounted")
+    return element
+  }
+
+  function mountedMessageCount() {
+    return document.querySelectorAll("[data-message-id]").length
+  }
+
+  it("mounts only the messages near the viewport and opens a long Session at its latest message", async () => {
+    render(<LocalThread initialMessages={longThread()} />)
+    await settle()
+
+    expect(mountedMessageCount()).toBeGreaterThan(0)
+    expect(mountedMessageCount()).toBeLessThanOrEqual(30)
+    expect(
+      screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Long thread message 0")).not.toBeInTheDocument()
+  })
+
+  it("finds a message outside the mounted window and reveals it", async () => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={longThread({
+          index: 12,
+          text: "The zephyr checkpoint",
+        })}
+      />
+    )
+    await settle()
+    expect(screen.queryByText("The zephyr checkpoint")).not.toBeInTheDocument()
+
+    window.dispatchEvent(new Event("aos:conversation-search"))
+    const search = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(search, "zephyr")
+
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    expect(await screen.findByText("The zephyr checkpoint")).toBeInTheDocument()
+    expect(mountedMessageCount()).toBeLessThanOrEqual(30)
+  })
+
+  it("keeps the newest streamed content in view until the reader scrolls up", async () => {
+    const gates: Array<() => void> = []
+    const nextChunk = () =>
+      new Promise<void>((resolve) => {
+        gates.push(resolve)
+      })
+    const release = async () => {
+      await waitFor(() => expect(gates).toHaveLength(1))
+      await act(async () => gates.shift()?.())
+    }
+    const growing = "Streaming words that keep arriving".repeat(4)
+    let runtime: AssistantRuntime | undefined
+    const model: ChatModelAdapter = {
+      async *run() {
+        yield { content: [{ type: "text", text: "Streaming first words" }] }
+        await nextChunk()
+        yield { content: [{ type: "text", text: growing }] }
+        await nextChunk()
+        yield { content: [{ type: "text", text: growing.repeat(3) }] }
+      },
+    }
+    render(
+      <LocalThread
+        initialMessages={longThread()}
+        model={model}
+        exposeRuntime={(value) => {
+          runtime = value
+        }}
+      />
+    )
+    await settle()
+
+    await act(async () => {
+      runtime?.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Keep going" }],
+      })
+    })
+    expect(await screen.findByText("Streaming first words")).toBeInTheDocument()
+    await settle()
+    expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+
+    const beforeGrowth = viewport().scrollTop
+    await release()
+    expect(await screen.findByText(growing)).toBeInTheDocument()
+    await settle()
+    expect(viewport().scrollTop).toBeGreaterThan(beforeGrowth)
+    expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+
+    fireEvent.wheel(viewport())
+    viewport().scrollTop = viewport().scrollTop - 300
+    await settle()
+    const readingTop = viewport().scrollTop
+
+    await release()
+    expect(await screen.findByText(growing.repeat(3))).toBeInTheDocument()
+    await settle()
+    expect(viewport().scrollTop).toBe(readingTop)
+    expect(viewport().scrollTop).toBeLessThan(maximumScrollTop(viewport()))
   })
 })
 
