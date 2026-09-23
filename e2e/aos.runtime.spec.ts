@@ -18,6 +18,12 @@ const PENDING_PROMPT = "Keep running until I stop it"
 const VOCABULARY_PROMPT = "Lengthen the trial and run the tests"
 /** The Session the scripted turn's subagent runs in. */
 const CHILD_SESSION_ID = "session-2"
+/** A prompt whose turn asks permission to run the tool call it guards. */
+const GUARDED_PERMISSION_PROMPT = "Clean the build directory"
+/** A prompt whose turn asks a permission no tool call carries. */
+const STANDALONE_PERMISSION_PROMPT = "Ask before touching the network"
+/** The tool call the guarded permission request is about. */
+const GUARDED_TOOL_CALL_ID = "clean-build"
 
 const runtime = {
   runtime: { id: "hermes", name: "Hermes" },
@@ -304,6 +310,35 @@ const vocabularyTurn = [
   },
 ]
 
+/**
+ * `session/request_permission` params in the shape `permissionOutbound` in
+ * `packages/proxy/acp/translate/requests.ts` builds: the schema title names the
+ * operation, the message explains it, and a request that knows its tool call
+ * names it as the subject.
+ */
+function permissionRequest(requestId: string, toolCallId?: string) {
+  const title = "Run command"
+  const message = "Delete the build directory?"
+  return {
+    sessionId: SESSION_ID,
+    title,
+    description: message,
+    ...(toolCallId === undefined
+      ? {}
+      : {
+          subject: {
+            type: "tool_call",
+            toolCall: { toolCallId, title, status: "pending" },
+          },
+        }),
+    options: [
+      { optionId: "once", name: "Allow once", kind: "allow_once" },
+      { optionId: "deny", name: "Deny", kind: "reject_once" },
+    ],
+    _meta: { aos: { requestId, message } },
+  }
+}
+
 /** Every payload the scripted responder answers with, in one serializable object. */
 const script = {
   acpPath: ACP_PATH,
@@ -312,6 +347,20 @@ const script = {
   pendingPrompt: PENDING_PROMPT,
   vocabularyPrompt: VOCABULARY_PROMPT,
   vocabularyTurn,
+  guardedPermissionPrompt: GUARDED_PERMISSION_PROMPT,
+  standalonePermissionPrompt: STANDALONE_PERMISSION_PROMPT,
+  /** The guarded command the permission turn streams before it waits. */
+  guardedToolCall: {
+    sessionUpdate: "tool_call_update",
+    toolCallId: GUARDED_TOOL_CALL_ID,
+    title: "rm -rf build",
+    name: "run_command",
+    kind: "execute",
+    status: "pending",
+    rawInput: { command: "rm -rf build" },
+  },
+  guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
+  standalonePermission: permissionRequest("permission-2"),
   /** `InitializeResponse._meta.aos` for the operator lane. */
   initializeMeta: {
     version: 1,
@@ -423,6 +472,7 @@ const script = {
 
 type AcpScript = typeof script
 type AcpCall = { method: string; params: unknown }
+type AcpReply = { method: string; result?: unknown; error?: unknown }
 type ResumeParams = {
   sessionId: string
   replayFrom?: { type: string }
@@ -434,6 +484,8 @@ declare global {
     __acpStub: {
       /** Every JSON-RPC call the browser sent, in order. */
       calls: AcpCall[]
+      /** Every reply the browser sent to a request the stub made, in order. */
+      replies: AcpReply[]
       /** How many transports the browser has opened. */
       connections: number
       /** The newest `_meta.aos.sequence` the stub has emitted. */
@@ -454,6 +506,7 @@ function installAcpStub(script: AcpScript) {
   const RealWebSocket = window.WebSocket
   const stub: Window["__acpStub"] = {
     calls: [],
+    replies: [],
     connections: 0,
     sequence: 0,
     dropSocket: () => {},
@@ -461,6 +514,7 @@ function installAcpStub(script: AcpScript) {
   }
   window.__acpStub = stub
   let turn = 0
+  let requests = 0
 
   const asRecord = (value: unknown): Record<string, unknown> =>
     typeof value === "object" && value !== null
@@ -478,6 +532,11 @@ function installAcpStub(script: AcpScript) {
     handlers = new Map<
       string,
       (params: Record<string, unknown>, id: unknown) => void
+    >()
+    /** Requests this stub made that the browser has not answered yet. */
+    outstanding = new Map<
+      unknown,
+      { method: string; onReply: (reply: AcpReply) => void }
     >()
 
     constructor() {
@@ -509,7 +568,7 @@ function installAcpStub(script: AcpScript) {
 
     accept(message: Record<string, unknown>) {
       const method = message.method
-      if (typeof method !== "string") return
+      if (typeof method !== "string") return this.acceptReply(message)
       const params = asRecord(message.params)
       stub.calls.push({ method, params })
       const handler = this.handlers.get(method)
@@ -520,6 +579,18 @@ function installAcpStub(script: AcpScript) {
           id: message.id,
           error: { code: -32601, message: `Unscripted ACP method: ${method}` },
         })
+    }
+
+    /** A reply to one of this stub's own requests, recorded in order. */
+    acceptReply(message: Record<string, unknown>) {
+      const request = this.outstanding.get(message.id)
+      if (!request) return
+      this.outstanding.delete(message.id)
+      const reply: AcpReply = { method: request.method }
+      if ("result" in message) reply.result = message.result
+      if ("error" in message) reply.error = message.error
+      stub.replies.push(reply)
+      request.onReply(reply)
     }
 
     /**
@@ -542,6 +613,18 @@ function installAcpStub(script: AcpScript) {
 
     notify(method: string, params: unknown) {
       this.deliver({ jsonrpc: "2.0", method, params })
+    }
+
+    /** A server-to-client request; `onReply` runs once the browser answers. */
+    request(
+      method: string,
+      params: unknown,
+      onReply: (reply: AcpReply) => void = () => {}
+    ) {
+      requests += 1
+      const id = `stub-request-${requests}`
+      this.outstanding.set(id, { method, onReply })
+      this.deliver({ jsonrpc: "2.0", id, method, params })
     }
 
     /** One unsequenced `session/update`, as a replay or an out-of-band read. */
@@ -626,6 +709,43 @@ function installAcpStub(script: AcpScript) {
         })
         this.run({ sessionUpdate: "state_update", state: "running" })
         if (promptText(params).includes(script.pendingPrompt)) return
+        const settle = () =>
+          this.run({
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+          })
+        // A permission turn waits on the operator, as the proxy's
+        // `requiresActionOutbound` does: the wait, then the request.
+        if (promptText(params).includes(script.guardedPermissionPrompt)) {
+          const call = script.guardedToolCall
+          this.run({ ...call, _meta: { aos: { messageId: answerId } } })
+          this.run({ sessionUpdate: "state_update", state: "requires_action" })
+          this.request(
+            "session/request_permission",
+            script.guardedPermission,
+            () => {
+              this.run({
+                sessionUpdate: "tool_call_update",
+                toolCallId: call.toolCallId,
+                status: "completed",
+                rawOutput: "removed",
+                _meta: { aos: { messageId: answerId } },
+              })
+              settle()
+            }
+          )
+          return
+        }
+        if (promptText(params).includes(script.standalonePermissionPrompt)) {
+          this.run({ sessionUpdate: "state_update", state: "requires_action" })
+          this.request(
+            "session/request_permission",
+            script.standalonePermission,
+            settle
+          )
+          return
+        }
         if (promptText(params).includes(script.vocabularyPrompt)) {
           // A model switch is Session state, not a position in the run.
           for (const update of script.vocabularyTurn)
@@ -928,4 +1048,54 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
   await expect
     .poll(async () => (await resumes(page)).map((call) => call.sessionId))
     .toContain(CHILD_SESSION_ID)
+})
+
+test("AOS proxy answers a permission request on the tool call it guards, and one that stands alone", async ({
+  page,
+}) => {
+  await serveAcp(page)
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  const input = page.getByRole("textbox", { name: "Message input" })
+  const card = page.getByRole("heading", { name: "Permission request" })
+  const choices = page.getByRole("group", {
+    name: "Delete the build directory?",
+  })
+  const replies = () => page.evaluate(() => window.__acpStub.replies)
+  const allowed = {
+    method: "session/request_permission",
+    result: { outcome: { outcome: "selected", optionId: "once" } },
+  }
+
+  // The request that names its tool call is answered on that call, and the
+  // composer stays the composer rather than turning into a Questions form.
+  await input.fill(GUARDED_PERMISSION_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(choices).toBeVisible()
+  await expect(card).toHaveCount(1)
+  await expect(input).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send answer" })).toHaveCount(0)
+
+  await choices.getByRole("button", { name: "Allow once" }).click()
+  await expect.poll(replies).toEqual([allowed])
+  // The card was the call's own: once the call settles, its outcome replaces
+  // the card, where a request on no call would have left a card behind.
+  await expect(card).toHaveCount(0)
+  await expandByKeyboard(page.getByRole("button", { name: "Worked" }))
+  await expect(
+    page.getByRole("button", { name: /^Ran rm -rf build/ })
+  ).toBeVisible()
+
+  // A request no call carries is still answered in the transcript, on its own.
+  await input.fill(STANDALONE_PERMISSION_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(choices).toBeVisible()
+  await expect(card).toHaveCount(1)
+  await expect(input).toBeVisible()
+  await expect(page.getByRole("button", { name: "Send answer" })).toHaveCount(0)
+
+  await choices.getByRole("button", { name: "Allow once" }).click()
+  await expect.poll(replies).toEqual([allowed, allowed])
+  await expect(page.getByText("Answered: Allow once")).toBeVisible()
+  await expect(choices).toHaveCount(0)
 })

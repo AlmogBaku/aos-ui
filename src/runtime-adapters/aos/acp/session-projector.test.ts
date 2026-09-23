@@ -8,11 +8,14 @@ import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { COMPACTION_DATA_PART_NAME } from "@/components/assistant-ui/elements/compaction-divider"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
+import { permissionProviderMetadata } from "@/components/tool-ui/payloads/permission"
 import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
+import type { AcpApproval } from "./acp-approvals"
 import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
+  applyApprovals,
   applyNotification,
   applyUpdate,
   clearTranscript,
@@ -2004,5 +2007,226 @@ describe("applyUpdate compaction", () => {
       compaction({ status: "cancelled" }),
     ])
     expect(compactionParts(state)).toEqual([])
+  })
+})
+
+describe("applyApprovals", () => {
+  const approval = (patch: Partial<AcpApproval> = {}): AcpApproval => ({
+    id: "interrupt-1",
+    action: "Run the deploy script",
+    options: [
+      { id: "once", kind: "allow-once" },
+      { id: "deny", kind: "reject-once" },
+    ],
+    ...patch,
+  })
+
+  const toolParts = (state: ProjectorState) =>
+    toThreadMessages(state).flatMap((message) =>
+      typeof message.content === "string"
+        ? []
+        : message.content.filter((part) => part.type === "tool-call")
+    ) as ToolCallMessagePart[]
+
+  const waiting = fold([
+    stateUpdate({ state: "running" }),
+    agentChunk("a1", "Deploying"),
+    toolCall({ title: "bash", status: "in_progress" }, TOOL_META),
+    stateUpdate({ state: "requires_action" }),
+  ])
+
+  it("puts an approval on the tool call it guards", () => {
+    const state = applyApprovals(waiting, [
+      approval({
+        toolCallId: "t1",
+        action: "rm -rf /tmp/build",
+        description: "Hermes flagged a recursive delete",
+      }),
+    ])
+
+    expect(toolParts(state)).toEqual([
+      expect.objectContaining({
+        toolCallId: "t1",
+        toolName: "bash",
+        approval: {
+          id: "interrupt-1",
+          prompt: "Hermes flagged a recursive delete",
+          options: [
+            { id: "once", kind: "allow-once" },
+            { id: "deny", kind: "reject-once" },
+          ],
+        },
+        providerMetadata: permissionProviderMetadata("rm -rf /tmp/build"),
+      }),
+    ])
+  })
+
+  it("asks with the operation alone when nothing explains it", () => {
+    const state = applyApprovals(waiting, [approval()])
+    const standalone = toolParts(state)[1]
+
+    expect(standalone?.approval?.prompt).toBe("Run the deploy script")
+    expect(standalone?.providerMetadata).toEqual(
+      permissionProviderMetadata("Run the deploy script")
+    )
+  })
+
+  it("carries the recorded answer or resolution on the approval", () => {
+    const answered = applyApprovals(waiting, [
+      approval({ toolCallId: "t1", optionId: "once", approved: true }),
+    ])
+    expect(toolParts(answered)[0]?.approval).toMatchObject({
+      optionId: "once",
+      approved: true,
+    })
+
+    const expired = applyApprovals(waiting, [
+      approval({ toolCallId: "t1", resolution: "expired" }),
+    ])
+    expect(toolParts(expired)[0]?.approval?.resolution).toBe("expired")
+  })
+
+  it("adds a standalone permission to the turn when no call matches", () => {
+    const state = applyApprovals(waiting, [approval()])
+    const [message] = toThreadMessages(state)
+
+    expect(message?.id).toBe("a1")
+    expect(toolParts(state)).toEqual([
+      expect.objectContaining({ toolCallId: "t1" }),
+      expect.objectContaining({
+        toolName: "request_permission",
+        args: { action: "Run the deploy script" },
+        approval: expect.objectContaining({ id: "interrupt-1" }),
+      }),
+    ])
+    expect(toolParts(state)[0]?.approval).toBeUndefined()
+  })
+
+  it("keeps a standalone permission on the turn it was first seen on", () => {
+    const state = applyApprovals(waiting, [approval()])
+    const later = fold(
+      [
+        stateUpdate({ state: "idle", stopReason: "end_turn" }),
+        userChunk("u2", "Next"),
+        stateUpdate({ state: "running" }),
+        agentChunk("a2", "Another turn"),
+      ],
+      state
+    )
+
+    const [first, , second] = toThreadMessages(later)
+    expect(first?.id).toBe("a1")
+    expect(JSON.stringify(first?.content)).toContain("request_permission")
+    expect(second?.id).toBe("a2")
+    expect(JSON.stringify(second?.content)).not.toContain("request_permission")
+  })
+
+  it("moves a standalone permission onto its call once the call arrives", () => {
+    const early = applyApprovals(
+      fold([stateUpdate({ state: "running" }), agentChunk("a1", "Deploying")]),
+      [approval({ toolCallId: "t1" })]
+    )
+    expect(toolParts(early)).toEqual([
+      expect.objectContaining({ toolName: "request_permission" }),
+    ])
+
+    const linked = fold(
+      [toolCall({ title: "bash", status: "pending" }, TOOL_META)],
+      early
+    )
+    expect(toolParts(linked)).toEqual([
+      expect.objectContaining({
+        toolCallId: "t1",
+        approval: expect.objectContaining({ id: "interrupt-1" }),
+      }),
+    ])
+  })
+
+  it.each(["completed", "failed"])(
+    "drops a linked approval once its call has %s",
+    (status) => {
+      const state = fold(
+        [toolCall({ status }, TOOL_META)],
+        applyApprovals(waiting, [
+          approval({ toolCallId: "t1", optionId: "once", approved: true }),
+        ])
+      )
+
+      expect(toolParts(state)).toEqual([
+        expect.objectContaining({ toolCallId: "t1" }),
+      ])
+      expect(toolParts(state)[0]?.approval).toBeUndefined()
+    }
+  )
+
+  it.each([
+    ["answered", { optionId: "once", approved: true }],
+    ["cancelled", { resolution: "cancelled" as const }],
+    ["expired", { resolution: "expired" as const }],
+  ])(
+    "leaves out a standalone permission %s before a remount replays",
+    (_case, settled) => {
+      // A remounted thread binds the Session's approvals before any turn is back.
+      const remounted = applyApprovals(initialProjectorState, [
+        approval(settled),
+      ])
+      const replayed = fold(
+        [
+          userChunk("u1", "Deploy"),
+          agentChunk("a1", "Deploying"),
+          userChunk("u2", "Again"),
+          agentChunk("a2", "Deployed"),
+        ],
+        remounted
+      )
+
+      expect(JSON.stringify(toThreadMessages(replayed))).not.toContain(
+        "request_permission"
+      )
+    }
+  )
+
+  it("still shows a pending standalone permission on the newest turn after a remount", () => {
+    const replayed = fold(
+      [
+        userChunk("u1", "Deploy"),
+        agentChunk("a1", "Deploying"),
+        userChunk("u2", "Again"),
+        agentChunk("a2", "Deployed"),
+      ],
+      applyApprovals(initialProjectorState, [approval()])
+    )
+
+    const messages = toThreadMessages(replayed)
+    expect(JSON.stringify(messages.at(-1)?.content)).toContain(
+      "request_permission"
+    )
+  })
+
+  it("keeps its approvals across a replay that clears the transcript", () => {
+    const cleared = clearTranscript(
+      applyApprovals(waiting, [approval({ toolCallId: "t1" })])
+    )
+    const replayed = fold(
+      [
+        agentChunk("a1", "Deploying"),
+        toolCall({ title: "bash", status: "in_progress" }, TOOL_META),
+      ],
+      cleared
+    )
+
+    expect(toolParts(replayed)[0]?.approval?.id).toBe("interrupt-1")
+  })
+
+  it("keeps turns without an approval, and unchanged ones, reference-equal", () => {
+    const withTurns = fold([userChunk("u0", "Hi")], waiting)
+    const list = [approval({ toolCallId: "t1" })]
+    const first = applyApprovals(withTurns, list)
+    const again = applyApprovals(fold([], first), [...list])
+
+    expect(toThreadMessages(first)[1]).toBe(toThreadMessages(withTurns)[1])
+    expect(toThreadMessages(again)[0]).toBe(toThreadMessages(first)[0])
+    expect(toThreadMessages(first)[0]).not.toBe(toThreadMessages(withTurns)[0])
+    expect(applyApprovals(first, list)).toBe(first)
   })
 })

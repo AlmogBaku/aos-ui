@@ -26,6 +26,7 @@ import type {
   RuntimeAdapterDefinition,
   RuntimeAdapterProps,
 } from "../definition"
+import { createAcpApprovals } from "./acp/acp-approvals"
 import { createAcpInteractions } from "./acp/acp-interactions"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
@@ -147,6 +148,10 @@ function ReadyAosRuntimeProvider({
     () => createAcpInteractions({ connection }),
     [connection]
   )
+  const approvals = useMemo(
+    () => createAcpApprovals({ connection }),
+    [connection]
+  )
   const media = useMemo(() => new VoiceMediaController(), [])
   const describeRunError = useCallback(
     (code: string | undefined, fallback: string) =>
@@ -232,6 +237,7 @@ function ReadyAosRuntimeProvider({
       }, [])
       const runtime = useAcpRuntime({
         connection,
+        approvals,
         sessionId: remoteId,
         agentId: agentId ?? "",
         // A locally-created draft has an Agent before it has a remote Session.
@@ -251,6 +257,7 @@ function ReadyAosRuntimeProvider({
       return runtime
     },
     [
+      approvals,
       attach,
       attachments,
       client,

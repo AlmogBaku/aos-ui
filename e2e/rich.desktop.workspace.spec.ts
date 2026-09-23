@@ -121,7 +121,7 @@ test("permission choices preserve the provider label and visible persistent scop
 
   await expect(permission).toHaveAttribute("data-state", "answered")
   await expect(
-    permission.getByText("Your provider recorded this decision.")
+    permission.getByText("Answered: Always for this dataset")
   ).toBeVisible()
   await expect(permission.getByRole("button")).toHaveCount(0)
   await expect(

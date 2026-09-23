@@ -41,8 +41,10 @@ import {
 
 import type { TodoItem } from "@/runtime-adapters/contracts"
 
+import type { AcpApprovals } from "./acp-approvals"
 import type { AcpConnection } from "./types"
 import {
+  applyApprovals,
   applyNotification,
   applyUpdate,
   clearTranscript,
@@ -89,6 +91,11 @@ export type AcpAttachmentStage = {
 
 export type UseAcpRuntimeOptions = {
   connection: AcpConnection
+  /**
+   * The connection's permission requests, shown and answered as tool
+   * approvals. They outlive the thread, since the proxy sends each one once.
+   */
+  approvals?: AcpApprovals
   sessionId: string | undefined
   agentId: string
   isDisabled?: boolean
@@ -208,6 +215,7 @@ function refusalText(
 
 type ControllerOptions = {
   connection: AcpConnection
+  approvals: AcpApprovals | undefined
   /** The Session this thread opened with; a local draft has none yet. */
   sessionId: string | undefined
 }
@@ -233,6 +241,7 @@ type ControllerCallbacks = Pick<
 function createAcpController({
   sessionId: openedWith,
   connection,
+  approvals,
 }: ControllerOptions) {
   let callbacks: ControllerCallbacks = {}
   const resume = (id: string) =>
@@ -378,7 +387,13 @@ function createAcpController({
     const generation = bindings
     const { steerAccepted, composerPrefill, sessionInvalidated } =
       AOS_METHODS.notify
+    // What is already pending was sent before this thread bound the Session.
+    const takeApprovals = () => {
+      if (approvals) commit(applyApprovals(state, approvals.list(next)))
+    }
+    takeApprovals()
     const subscriptions = [
+      approvals?.subscribe(next, takeApprovals) ?? (() => {}),
       connection.onSessionUpdate(next, (update, meta) => {
         commit(applyUpdate(state, update, meta))
       }),
@@ -549,6 +564,15 @@ function createAcpController({
     cancel: () => {
       if (bound !== undefined) connection.cancel(bound)
     },
+    respondToApproval: (
+      approvalId: string,
+      optionId: string,
+      approved: boolean
+    ) => {
+      if (!approvals || bound === undefined)
+        throw new Error("The ACP Session has no pending permission")
+      return approvals.respond(bound, approvalId, optionId, approved)
+    },
     importMessages: (messages: readonly ThreadMessage[]) => {
       commit(
         retainMessages(
@@ -607,7 +631,8 @@ function toRepository(
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
-  const { connection, sessionId, enableMessageQueue, isDisabled } = options
+  const { connection, approvals, sessionId, enableMessageQueue, isDisabled } =
+    options
   // One controller per mounted thread: a local draft gains its Session while
   // this thread stays mounted, so keying the store on that Session would
   // discard the very turn that created it, mid-prompt. Only the Session the
@@ -615,8 +640,8 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
   // around that one and the later binding moves underneath it.
   const [openedWith] = useState(sessionId)
   const controller = useMemo(
-    () => createAcpController({ connection, sessionId: openedWith }),
-    [connection, openedWith]
+    () => createAcpController({ connection, approvals, sessionId: openedWith }),
+    [approvals, connection, openedWith]
   )
   // Ordered before the binding so the first resume already reaches the caller's
   // `attach`, and before the subscription so a replayed update already reports.
@@ -700,6 +725,12 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       onCancel: async () => {
         queue?.notifyCancelled()
         controller.cancel()
+      },
+      // A permission answers with one of its own options, never a bare verdict.
+      onRespondToToolApproval: ({ approvalId, optionId, approved }) => {
+        if (optionId === undefined)
+          throw new Error("A permission answer must choose one of its options")
+        return controller.respondToApproval(approvalId, optionId, approved)
       },
       // No `setMessages`: with it, Stop before any reply unsends the prompt
       // into the composer, but the provider has already saved it.

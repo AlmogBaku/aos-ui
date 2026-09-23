@@ -310,6 +310,84 @@ describe("OpenCodeInteractions", () => {
     )
   })
 
+  const permission = {
+    id: "permission-1",
+    sessionID: "native-session-1",
+    action: "edit",
+    resources: ["src/a.ts", "src/b.ts"],
+    source: { type: "tool", messageID: "message-1", callID: "call-1" },
+  }
+  const linkedPermission = {
+    requestId: "permission-1",
+    kind: PendingRequestKind.Permission,
+    toolCallId: "call-1",
+    message: "src/a.ts\nsrc/b.ts",
+    responseSchema: {
+      type: "string",
+      title: "edit",
+      enum: ["once", "always", "deny"],
+    },
+  }
+  const newInteractions = () =>
+    new OpenCodeInteractions({
+      questions: {
+        reply: vi.fn(async () => undefined),
+        reject: vi.fn(async () => undefined),
+      },
+      permissions: { reply: vi.fn(async () => undefined) },
+    })
+
+  it("names the tool call a permission guards, its action, and its resources", () => {
+    expect(newInteractions().acceptPermission(scope, permission)).toEqual([
+      linkedPermission,
+    ])
+  })
+
+  it("leaves a permission without a tool source unlinked", () => {
+    const unsourced = { ...permission, source: undefined }
+    const unlinked = { ...linkedPermission }
+    delete (unlinked as { toolCallId?: string }).toolCallId
+    expect(newInteractions().acceptPermission(scope, unsourced)).toEqual([
+      unlinked,
+    ])
+    expect(
+      newInteractions().acceptPermission(scope, {
+        ...permission,
+        source: { type: "tool", messageID: "message-1", callID: "" },
+      })
+    ).toEqual([unlinked])
+  })
+
+  it("keeps a permission's tool call, action, and resources through reconciliation", () => {
+    const interactions = newInteractions()
+    interactions.acceptPermission(scope, permission)
+    expect(
+      interactions.reconcile(scope, {
+        questions: [],
+        permissions: { data: [permission] },
+      })
+    ).toEqual([linkedPermission])
+  })
+
+  it("counts the resources a permission's message leaves out", () => {
+    const long = "x".repeat(4_000)
+    const [request] = newInteractions().acceptPermission(scope, {
+      ...permission,
+      resources: ["src/a.ts", long, "src/b.ts", "y".repeat(100)],
+    })
+    expect(request!.message).toBe(`src/a.ts\n${long}\nsrc/b.ts\n…(+1)`)
+  })
+
+  it("keeps a permission's message, and its count, within the text bound", () => {
+    // The first two fit alone, but not with the count of the one left out.
+    const long = "x".repeat(4_080)
+    const [request] = newInteractions().acceptPermission(scope, {
+      ...permission,
+      resources: ["src/a.ts", long, "src/b.ts"],
+    })
+    expect(request!.message).toBe("src/a.ts\n…(+2)")
+  })
+
   it("removes externally resolved interactions during authoritative reconciliation without dispatch", async () => {
     const reply = vi.fn(async () => undefined)
     const interactions = new OpenCodeInteractions({

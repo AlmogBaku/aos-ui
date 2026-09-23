@@ -146,11 +146,13 @@ export type ToolUiLocaleLabels = {
     back: string
     sending: string
     answered: string
+    answeredWith: (choice: string) => string
     expired: string
     failed: string
     unavailable: string
     allowOnce: string
     allowAlways: string
+    allowSession: string
     rejectAlways: string
     reject: string
     scopeTitle: string
@@ -311,12 +313,14 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     back: "Back",
     sending: "Sending your decision…",
     answered: "Your provider recorded this decision.",
+    answeredWith: (choice) => `Answered: ${choice}`,
     expired: "This permission request expired. No permission was granted.",
     failed:
       "The provider did not record this decision. The request may be retried while active.",
     unavailable: "The provider did not supply an answerable choice.",
     allowOnce: "Allow once",
     allowAlways: "Always allow",
+    allowSession: "Allow for this session",
     rejectAlways: "Always reject",
     reject: "Reject",
     scopeTitle: "Persistent scope",
@@ -523,11 +527,13 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     back: "חזרה",
     sending: "ההחלטה נשלחת…",
     answered: "הספק שמר את ההחלטה.",
+    answeredWith: (choice) => `נענה: ${choice}`,
     expired: "תוקף בקשת ההרשאה פג. לא ניתנה הרשאה.",
     failed: "הספק לא שמר את ההחלטה. אפשר לנסות שוב כל עוד הבקשה פעילה.",
     unavailable: "הספק לא סיפק אפשרות שניתן להשיב באמצעותה.",
     allowOnce: "אישור חד־פעמי",
     allowAlways: "אישור קבוע",
+    allowSession: "אישור לסשן הזה",
     rejectAlways: "דחייה קבועה",
     reject: "דחייה",
     scopeTitle: "היקף הרשאה קבועה",

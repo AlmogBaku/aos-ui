@@ -9,7 +9,13 @@ import {
   type RequestPermissionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -416,15 +422,18 @@ describe("AOS guest browser composition", () => {
     ).toEqual([])
   })
 
-  it("answers a permission request through the shared pending composer", async () => {
+  it("answers a permission request on its approval card", async () => {
     const user = userEvent.setup()
     const { proxy } = mount()
     await screen.findByText("Earlier guest answer")
 
     const answered = proxy.askPermission()
 
-    await user.click(await screen.findByRole("option", { name: /Allow once/ }))
-    await user.click(screen.getByRole("button", { name: "Send answer" }))
+    const card = await screen.findByRole("group", { name: "Delete the notes?" })
+    expect(
+      screen.queryByRole("button", { name: "Send answer" })
+    ).not.toBeInTheDocument()
+    await user.click(within(card).getByRole("button", { name: "Allow once" }))
 
     await expect(answered).resolves.toMatchObject({
       outcome: { outcome: "selected", optionId: "once" },
