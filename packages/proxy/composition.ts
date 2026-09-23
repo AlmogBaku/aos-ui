@@ -212,8 +212,20 @@ export async function createConfiguredProxy(
    * One room registry per process, like the runtime both lanes share: a room is
    * one provider Session, whichever lane each of its members arrived on.
    */
+  const { sessions } = runtimeInstance
+  const { turns } = runtimeInstance.runtime
   const rooms = createSessionRooms({
-    snapshot: (scope) => runtimeInstance.sessions.snapshot(scope),
+    snapshot: (scope) => sessions.snapshot(scope),
+    // A room adopts what the runtime starts only where the runtime reports it.
+    ...(turns.watch
+      ? {
+          adoption: {
+            watch: (scope, watcher) => turns.watch!(scope, watcher),
+            discover: (scope, lane) => sessions.discover(scope, lane),
+            observe: (scope, listener) => sessions.observeScope(scope, listener),
+          },
+        }
+      : {}),
   })
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
   const guestLane = (publicOrigin: string, service: GuestInvitationService) => {

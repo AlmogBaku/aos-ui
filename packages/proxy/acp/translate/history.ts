@@ -276,24 +276,32 @@ export const persistedCorrections = ((history) =>
     .filter((message) => message.role === "user")
     .length) satisfies PersistedCorrections
 
-/** How far a provider's clock may run behind the proxy's for a stored prompt. */
+/** How far a provider's clock may run behind the proxy's for a stored row. */
 const PROMPT_CLOCK_SKEW_MS = 5_000
 
 /**
- * The page cut back to the live turn's prompt at `index`, when that prompt was
- * stored no earlier than the turn was admitted. The provider folds the rows the
- * turn stored so far into one message that reads as a finished reply, so a view
- * that replays the turn from its start drops them, corrections included, and
- * shows the turn once. `undefined` when the page shows no such prompt.
+ * The page a view shows beside a live turn replayed from `startedAt`: the
+ * stream owns every row the turn stored from then on, corrections included,
+ * so they are dropped and the turn shows once. The page's last prompt stays,
+ * since the provider stores no other prompt while a turn runs and the stream
+ * carries none. `undefined` when a row after that prompt has no time to cut
+ * it by, so only a reset can show the turn once.
  */
-export function throughLivePrompt(
+export function beforeLiveTurn(
   history: SessionHistoryResponse,
-  index: number,
-  admittedAt: number
+  startedAt: number
 ): SessionHistoryResponse | undefined {
-  const prompt = history.messages[index]
-  if (prompt?.role !== "user") return undefined
-  if (Date.parse(prompt.createdAt) < admittedAt - PROMPT_CLOCK_SKEW_MS)
-    return undefined
-  return { ...history, messages: history.messages.slice(0, index + 1) }
+  const threshold = startedAt - PROMPT_CLOCK_SKEW_MS
+  const prompt = lastPromptIndex(history)
+  const messages = []
+  for (const [index, message] of history.messages.entries()) {
+    if (index <= prompt || message.role === "activity") {
+      messages.push(message)
+      continue
+    }
+    const createdAt = Date.parse(message.createdAt)
+    if (Number.isNaN(createdAt)) return undefined
+    if (createdAt < threshold) messages.push(message)
+  }
+  return { ...history, messages }
 }

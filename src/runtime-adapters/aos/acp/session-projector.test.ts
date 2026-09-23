@@ -1475,12 +1475,84 @@ describe("local turn bookkeeping", () => {
   })
 
   it("reports a refusal in the same failure shape a failed run uses", () => {
-    const refused = failLatestTurn(sent, "This Session is still busy.")
+    const refused = failLatestTurn(sent, {
+      message: "This Session is still busy.",
+    })
     expect(toThreadMessages(refused)[1]?.status).toEqual({
       type: "incomplete",
       reason: "error",
       error: { message: "This Session is still busy." },
     })
+  })
+})
+
+describe("saved ids", () => {
+  /** A turn streamed under the proxy's live ids, still running. */
+  const streamed = fold([
+    userChunk("u1", "Hi"),
+    stateUpdate({ state: "running" }),
+    agentChunk("run-1:assistant", "Checking"),
+    toolCall({ title: "grep" }, { ...TURN_META, messageId: "run-1:assistant" }),
+    agentChunk("run-1:assistant:2", "Done"),
+  ])
+  const ended = (savedIds: Record<string, string>, from = streamed) =>
+    fold(
+      [
+        stateUpdate(
+          { state: "idle", stopReason: "end_turn" },
+          { ...TURN_META, savedIds }
+        ),
+      ],
+      from
+    )
+  const ids = (state: ProjectorState) =>
+    toThreadMessages(state).map((message) => message.id)
+
+  it("re-keys each streamed turn onto the id the provider saved it under", () => {
+    const saved = ended({
+      u1: "hermes-row-1",
+      "run-1:assistant": "hermes-row-2",
+      "run-1:assistant:2": "hermes-row-3",
+    })
+    expect(ids(saved)).toEqual(["hermes-row-1", "hermes-row-2", "hermes-row-3"])
+    expect(toThreadMessages(saved)[2]).toMatchObject({
+      content: [{ type: "text", text: "Done" }],
+      status: { type: "complete", reason: "stop" },
+    })
+  })
+
+  it("folds the replies the provider saved as one message, in their order", () => {
+    const saved = ended({
+      u1: "hermes-row-1",
+      "run-1:assistant": "hermes-row-2",
+      "run-1:assistant:2": "hermes-row-2",
+    })
+    expect(ids(saved)).toEqual(["hermes-row-1", "hermes-row-2"])
+    expect(toThreadMessages(saved)[1]).toMatchObject({
+      content: [
+        { type: "text", text: "Checking" },
+        { type: "tool-call", toolCallId: "t1" },
+        { type: "text", text: "Done" },
+      ],
+      status: { type: "complete", reason: "stop" },
+    })
+  })
+
+  it("keeps one message when the saved id is already projected", () => {
+    const replayed = fold([agentChunk("hermes-row-3", "Done")], streamed)
+    const saved = ended({ "run-1:assistant:2": "hermes-row-3" }, replayed)
+    expect(ids(saved)).toEqual(["u1", "run-1:assistant", "hermes-row-3"])
+  })
+
+  it("leaves unlisted turns as they are and ignores an id it does not hold", () => {
+    const saved = ended({ u1: "hermes-row-1", missing: "hermes-row-9" })
+    expect(ids(saved)).toEqual([
+      "hermes-row-1",
+      "run-1:assistant",
+      "run-1:assistant:2",
+    ])
+    const plain = ended({})
+    expect(plain.messages[0]).toBe(streamed.messages[0])
   })
 })
 

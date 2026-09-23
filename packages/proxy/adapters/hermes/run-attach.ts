@@ -57,6 +57,8 @@ type AttachCursor = {
   head?: number
   replayed?: readonly HermesNativeEvent[]
   reconcile?: boolean
+  /** `replayed` begins at the open native turn's own `message.start`. */
+  fromStart?: boolean
 }
 
 /** Why the observed frame stream ended. */
@@ -64,13 +66,15 @@ type LostReason = "disconnected" | "rebound" | "restart"
 
 /**
  * The one path that binds a run to a live Hermes Session: a new turn, a
- * reconnect, discovery and an in-place reattach differ only in `mode`.
+ * reconnect, discovery and an in-place reattach differ only in `mode`. Resolves
+ * whether the run's frames begin at the native turn's first frame, which only a
+ * discovery that found Hermes' open turn in its ring can say.
  */
 export async function attachTurn(
   host: TurnEngineHost,
   active: ActiveTurn,
   mode: AttachMode
-) {
+): Promise<boolean> {
   const buffered = nativeEventBuffer()
   let accepting = false
   let reattached = false
@@ -130,19 +134,22 @@ export async function attachTurn(
   host.turns.set(sessionKey(active.scope), active)
   if (cursor.reconcile || buffered.overflow) {
     drainBufferedEvents(buffered)
-    return failReset(
+    failReset(
       host,
       active,
       cursor.reconcile ? "attach-cursor-reconcile" : "attach-buffer-overflow"
     )
+    return false
   }
   if (lost) {
     drainBufferedEvents(buffered)
-    return lostTurn(host, active, lost)
+    lostTurn(host, active, lost)
+    return false
   }
   if (cursor.replayed && !acceptReplayed(host, active, cursor.replayed)) {
     drainBufferedEvents(buffered)
-    return failReset(host, active, "attach-replay-rejected")
+    failReset(host, active, "attach-replay-rejected")
+    return false
   }
   // A watermark past the last frame this page carried means the sequences
   // in between are missing rather than delivered: read the ring once more.
@@ -153,6 +160,7 @@ export async function attachTurn(
     host.accept(active, event, true)
   if (reattached) scheduleCatchUp(host, active)
   if (asked) host.requireAction(active, [asked])
+  return cursor.fromStart === true
 }
 
 /** The cursor each attach mode derives from Hermes' own ring. */
@@ -190,6 +198,7 @@ async function attachCursor(
       barrier: open[0]!.seq! - 1,
       head: recovery.lastSeen,
       replayed: open,
+      fromStart: true,
     }
   if (!events || settledStatus(await host.native.status(liveSessionId)))
     return {

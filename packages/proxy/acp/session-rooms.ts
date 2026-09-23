@@ -1,12 +1,19 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionScope } from "../core/runtime"
+import type { ExecutionEvent } from "../core/events"
+import {
+  ServerTurnConflictError,
+  type ServerTurnWatcher,
+  type SessionScope,
+} from "../core/runtime"
 
 /**
  * A room is one provider Session; its members are the connections that have
  * it open. The coordinator already fans a turn's stream out to many followers,
  * so a room only carries what the stream cannot: the prompt that started the
  * turn, and a nudge to reload when a member saw a prompt but missed its reply.
+ * A room with members also watches its Session, so a turn the runtime starts
+ * by itself is adopted and streamed to every member like one of their own.
  */
 
 export type RoomScope = Pick<SessionScope, "agentId" | "sessionId">
@@ -17,8 +24,6 @@ export type RoomTurn = {
   content: readonly ContentBlock[]
   /** Epoch ms when the turn was admitted. */
   at: number
-  /** An answered question resumed the turn, so its live stream starts there. */
-  continued?: true
 }
 
 export type RoomMember = {
@@ -36,7 +41,24 @@ export type RoomMember = {
 
 export type SessionRooms = ReturnType<typeof createSessionRooms>
 
+type Lane = "operator" | "guest"
+
+/** What lets a room adopt a turn the runtime started by itself. */
+export type RoomAdoption = {
+  watch(scope: SessionScope, watcher: ServerTurnWatcher): () => void
+  /** Adopts the runtime's running turn, if any, counted under `lane`. */
+  discover(scope: SessionScope, lane: Lane): Promise<unknown>
+  /** The Session's execution feed. */
+  observe(
+    scope: RoomScope,
+    listener: (event: ExecutionEvent) => void
+  ): () => void
+}
+
 type Delivery = {
+  /** The member's own scope and lane, which an adoption runs under. */
+  scope: SessionScope
+  lane: Lane
   /** The turnId whose prompt this member already holds. */
   delivered?: string
   /** Whether the room sent that prompt, rather than the member owning it. */
@@ -46,6 +68,13 @@ type Delivery = {
 type Room = {
   turn?: RoomTurn
   members: Map<RoomMember, Delivery>
+  /** Ends the room's watch and its execution feed. */
+  unwatch?: () => void
+  /** One adoption runs at a time; a trigger meanwhile asks for one more. */
+  adopting?: boolean
+  again?: boolean
+  /** The turn this room adopted, whose prompt no member has seen. */
+  adopted?: string
 }
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
@@ -71,13 +100,25 @@ async function attempt<T>(
   }
 }
 
+/**
+ * The member an adoption runs as. An operator comes first: the coordinator
+ * reports the turn under this member's thread, and activity and push read it.
+ */
+function adopter(room: Room) {
+  const members = [...room.members]
+  return members.find(([, { lane }]) => lane === "operator") ?? members[0]
+}
+
 export function createSessionRooms({
   snapshot,
+  adoption,
   now = Date.now,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
   snapshot: (scope: RoomScope) => { state: string; turnId?: string }
+  /** Absent when the runtime cannot report the turns it starts. */
+  adoption?: RoomAdoption
   now?: () => number
   backstopMs?: number
 }) {
@@ -138,25 +179,106 @@ export function createSessionRooms({
     await attempt(member, () => member.invalidate())
   }
 
+  async function syncRoom(scope: RoomScope, room: Room) {
+    await Promise.all(
+      [...room.members].map(([member, delivery]) =>
+        catchUpMember(scope, room, member, delivery)
+      )
+    )
+  }
+
   /** Records what a member holds of the live turn, sending it the prompt if not. */
   function seat(
-    scope: RoomScope,
     room: Room,
     member: RoomMember,
+    delivery: Delivery,
     hasPrompt: boolean
   ) {
-    const delivery: Delivery = { fromRoom: false }
     room.members.set(member, delivery)
-    const turn = currentTurn(scope, room)
+    const turn = currentTurn(delivery.scope, room)
     if (!turn) return
     if (hasPrompt) delivery.delivered = turn.turnId
     else void send(member, delivery, turn)
   }
 
+  /**
+   * Asks the runtime for a turn it started by itself and, when it adopts one,
+   * brings every member into it. Runs one at a time per room, and once more
+   * when asked again meanwhile.
+   */
+  async function adopt(room: Room) {
+    if (room.adopting) {
+      room.again = true
+      return
+    }
+    room.adopting = true
+    try {
+      do {
+        room.again = false
+        await adoptOnce(room)
+      } while (room.again)
+    } finally {
+      room.adopting = false
+    }
+  }
+
+  async function adoptOnce(room: Room) {
+    const seated = adopter(room)
+    if (!adoption || !seated) return
+    const [member, { scope, lane }] = seated
+    const before = snapshot(scope).turnId
+    try {
+      await adoption.discover(scope, lane)
+    } catch (cause) {
+      // A proxy turn still starting refuses it; that turn's end asks again.
+      if (!(cause instanceof ServerTurnConflictError)) member.report(cause)
+      return
+    }
+    const { state, turnId } = snapshot(scope)
+    if (state === "idle" || turnId === undefined || turnId === before) return
+    room.adopted = turnId
+    await syncRoom(scope, room)
+  }
+
+  /**
+   * Every turn's end asks the runtime once more, which finds a turn it started
+   * while the proxy's own ran. An adopted turn's end reloads every member,
+   * since none of them was shown its prompt.
+   */
+  function onExecution(room: Room, event: ExecutionEvent) {
+    if (event.kind !== "turn-finished" && event.kind !== "turn-failed") return
+    if (event.turnId === room.adopted) {
+      room.adopted = undefined
+      for (const member of room.members.keys())
+        void attempt(member, () => member.invalidate())
+    }
+    void adopt(room)
+  }
+
+  function watch(scope: SessionScope, room: Room) {
+    if (!adoption) return
+    const unobserve = adoption.observe(scope, (event) =>
+      onExecution(room, event)
+    )
+    const unwatch = adoption.watch(scope, {
+      onTurn: () => void adopt(room),
+      onError: (cause) => adopter(room)?.[0].report(cause),
+    })
+    room.unwatch = () => {
+      unwatch()
+      unobserve()
+    }
+  }
+
   return {
-    add(scope: RoomScope, member: RoomMember, options: { hasPrompt: boolean }) {
+    add(
+      scope: SessionScope,
+      member: RoomMember,
+      options: { hasPrompt: boolean; lane?: Lane }
+    ) {
       const key = roomKey(scope)
       let room = rooms.get(key)
+      const created = !room
       if (!room) {
         room = { members: new Map() }
         rooms.set(key, room)
@@ -166,10 +288,19 @@ export function createSessionRooms({
         joined.members.delete(member)
         if (joined.members.size === 0 && rooms.get(key) === joined) {
           rooms.delete(key)
+          joined.unwatch?.()
         }
       }
       if (joined.members.has(member)) return remove
-      seat(scope, joined, member, options.hasPrompt)
+      const delivery: Delivery = {
+        scope,
+        lane: options.lane ?? "operator",
+        fromRoom: false,
+      }
+      seat(joined, member, delivery, options.hasPrompt)
+      // Watched once the first member is seated, so a turn already running
+      // has someone to adopt it as.
+      if (created) watch(scope, joined)
       return remove
     },
 
@@ -183,8 +314,14 @@ export function createSessionRooms({
       options: { hasPrompt: boolean }
     ) {
       const room = rooms.get(roomKey(scope))
-      if (room?.members.has(member))
-        seat(scope, room, member, options.hasPrompt)
+      const delivery = room?.members.get(member)
+      if (room && delivery)
+        seat(
+          room,
+          member,
+          { scope: delivery.scope, lane: delivery.lane, fromRoom: false },
+          options.hasPrompt
+        )
     },
 
     /** Called only after the coordinator admitted `turn`. */
@@ -209,7 +346,7 @@ export function createSessionRooms({
     continueTurn(scope: RoomScope, fromTurnId: string, toTurnId: string) {
       const room = rooms.get(roomKey(scope))
       if (!room?.turn || room.turn.turnId !== fromTurnId) return
-      room.turn = { ...room.turn, turnId: toTurnId, continued: true }
+      room.turn = { ...room.turn, turnId: toTurnId }
       for (const delivery of room.members.values()) {
         if (delivery.delivered === fromTurnId) delivery.delivered = toTurnId
       }
@@ -229,12 +366,16 @@ export function createSessionRooms({
 
     async sync(scope: RoomScope) {
       const room = rooms.get(roomKey(scope))
-      if (!room) return
-      await Promise.all(
-        [...room.members].map(([member, delivery]) =>
-          catchUpMember(scope, room, member, delivery)
-        )
-      )
+      if (room) await syncRoom(scope, room)
+    },
+
+    /**
+     * A member's own start failed without a turn to end, so no turn end asks
+     * the runtime; this asks once instead.
+     */
+    async recheck(scope: RoomScope) {
+      const room = rooms.get(roomKey(scope))
+      if (room) await adopt(room)
     },
   }
 }

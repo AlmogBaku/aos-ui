@@ -30,6 +30,7 @@ import {
   type ServerAttachmentStage,
   type ServerTurnEngine,
   type ServerTurnHandle,
+  type ServerTurnWatcher,
   type SessionScope,
 } from "../../core/runtime"
 import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
@@ -60,6 +61,9 @@ const MAX_TEXT_BYTES = 2_000_000
 const MAX_QUEUE_EVENTS = 4_096
 const MAX_QUEUE_BYTES = 8_000_000
 const MAX_SESSION_LOOKUP_ROWS = 100
+/** Native runs remembered as AOS's own, so a settling one is never adopted. */
+const MAX_ADMITTED_RUNS = 1_024
+const WATCH_RETRY_MS = 5_000
 const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
@@ -511,6 +515,25 @@ function uniqueActiveRunId(history: HistorySnapshot) {
   return active.size === 1 ? [...active][0] : undefined
 }
 
+/** The run a native event shows in progress; a run's end announces nothing. */
+function progressRunId(event: EventFrame) {
+  const payload = record(event.payload)
+  if (!payload || !validId(payload.runId)) return undefined
+  if (event.event === "chat")
+    return payload.state === "final" ||
+      payload.state === "aborted" ||
+      payload.state === "error"
+      ? undefined
+      : payload.runId
+  if (event.event !== "agent" && event.event !== "session.tool")
+    return undefined
+  const phase = record(payload.data)?.phase
+  return payload.stream === "lifecycle" &&
+    (phase === "end" || phase === "error")
+    ? undefined
+    : payload.runId
+}
+
 function authoritativelyIdle(history: HistorySnapshot) {
   return (
     history.hasActiveRun === false ||
@@ -713,6 +736,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #mcpToolNames?: OpenClawMcpToolNames
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
+  /** Every native run a segment was bound to, oldest first. */
+  readonly #admitted = new Set<string>()
 
   constructor(options: {
     client: OpenClawRunRequestClient
@@ -785,24 +810,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.sessionId },
         (event) => {
-          const current = holder.active
-          if (!current) admissionDirty = true
-          else if (current.reconciling) current.reconciliationDirty = true
-          else this.#accept(current, event)
+          if (holder.active) this.#observe(holder.active, event)
+          else admissionDirty = true
         },
         async (_reason, fence) => {
-          const current = holder.active
-          if (current) {
-            current.lastSeen = 0
-            current.lastAgentSeq = -1
-            current.lastChatSeq = -1
-            try {
-              await this.#reconcile(current, fence)
-            } catch (error) {
-              this.#markInterrupted(current)
-              throw error
-            }
-          }
+          if (holder.active) await this.#resync(holder.active, fence)
         }
       )
       let baseline: HistorySnapshot
@@ -891,7 +903,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         ...settlement(),
       }
       holder.active = active
-      this.#active.set(key, active)
+      this.#register(key, active)
       if (waiting) {
         this.#waiting.delete(key)
         waiting.terminal = true
@@ -1051,24 +1063,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.sessionId },
         (event) => {
-          const current = holder.active
-          if (!current) recoveryDirty = true
-          else if (current.reconciling) current.reconciliationDirty = true
-          else this.#accept(current, event)
+          if (holder.active) this.#observe(holder.active, event)
+          else recoveryDirty = true
         },
         async (_reason, fence) => {
-          const current = holder.active
-          if (current) {
-            current.lastSeen = 0
-            current.lastAgentSeq = -1
-            current.lastChatSeq = -1
-            try {
-              await this.#reconcile(current, fence)
-            } catch (error) {
-              this.#markInterrupted(current)
-              throw error
-            }
-          }
+          if (holder.active) await this.#resync(holder.active, fence)
         }
       )
       let baseline: HistorySnapshot
@@ -1086,48 +1085,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           ? baseline.inFlightRun
           : undefined
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
-      const queue = new EventQueue(() => {
-        if (holder.active)
-          this.#fail(
-            holder.active,
-            "AOS_RESET_REQUIRED",
-            "OpenClaw produced more live output than AOS can safely buffer."
-          )
-      })
-      queue.push({ kind: TurnEventKind.TurnStarted })
-      const active: ActiveRun = {
-        scope,
-        turnId: request.turnId,
+      const active = this.#bindRun(scope, request.turnId, lease, holder, {
+        baseline,
         nativeRunId: nativeRunId ?? "",
-        nativeSessionKey: baseline.sessionKey,
-        nativeSessionId: baseline.sessionId,
-        queue,
-        lease,
-        terminal: false,
-        stopping: false,
-        uncertain: false,
         lastSeen: request.position?.lastSeen ?? 0,
-        lastAgentSeq: inFlightSnapshot
-          ? baselineAgentSequence(baseline, inFlightSnapshot.runId)
-          : -1,
-        lastChatSeq: -1,
-        gapPending: false,
-        reconciling: false,
-        reconciliationDirty: false,
-        text: inFlightSnapshot?.text ?? "",
-        ...(inFlightSnapshot ? { textBaseline: inFlightSnapshot.text } : {}),
-        ...(inFlightSnapshot?.todos
-          ? { planFingerprint: JSON.stringify(inFlightSnapshot.todos) }
-          : {}),
-        projectedText: "",
-        textGeneration: 0,
-        textStarted: false,
-        reasoning: "",
-        tools: new Map(),
-        ...settlement(),
-      }
-      holder.active = active
-      this.#active.set(key, active)
+        ...(inFlightSnapshot ? { shown: inFlightSnapshot } : {}),
+      })
       if (!nativeRunId)
         this.#fail(
           active,
@@ -1144,6 +1107,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
   }
 
+  /**
+   * Finds the Session's unique active native run: a wait when a request is
+   * pending on it, and otherwise a running run AOS did not bind. Only bound
+   * replies can rule out a wait, so an engine without them discovers nothing.
+   */
   async discover(scope: SessionScope, turnId: string) {
     const key = scopeKey(scope)
     const existingWaiting = this.#waiting.get(key)
@@ -1173,15 +1141,17 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         await retireExisting()
         return undefined
       }
-      const holder: { waiting?: WaitingRun } = {}
+      const holder: { waiting?: WaitingRun; active?: ActiveRun } = {}
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.sessionId },
         (event) => {
-          if (!holder.waiting) discoveryDirty = true
-          else this.#acceptWaiting(holder.waiting, event)
+          if (holder.active) this.#observe(holder.active, event)
+          else if (holder.waiting) this.#acceptWaiting(holder.waiting, event)
+          else discoveryDirty = true
         },
-        async () => {
-          discoveryDirty = true
+        async (_reason, fence) => {
+          if (holder.active) await this.#resync(holder.active, fence)
+          else discoveryDirty = true
         }
       )
       let refreshApprovalReplay = discoveryDirty || lease.takeApprovalDirty()
@@ -1217,6 +1187,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           },
           approvalReplay.replay
         )
+        // A run nothing waits on is running; one AOS bound is its own.
+        const adopting = !discovered && !this.#admittedRun(scope, nativeRunId)
+        if (adopting)
+          await this.#mcpToolNames?.load(scope.agentId, history.sessionKey)
         const currentApprovalReplay = lease.approvalReplay()
         const currentApprovalReplayKey = lease.approvalReplayKey
         if (discoveryDirty || generation !== this.#subscriptions.generation) {
@@ -1231,7 +1205,21 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         ) {
           return notDiscovered()
         }
-        if (!discovered) return notDiscovered()
+        if (!discovered) {
+          if (!adopting) return notDiscovered()
+          const active = this.#bindRun(scope, turnId, lease, holder, {
+            baseline: history,
+            nativeRunId,
+            lastSeen: 0,
+          })
+          // The snapshot goes first: a live event must not overtake it.
+          this.#applyHistory(active, history)
+          lease = undefined
+          await retireExisting()
+          // A bounded snapshot cannot prove it holds the run's first event,
+          // so `fromStart` stays unset.
+          return { state: "running" as const, handle: this.#handle(active) }
+        }
         const waiting: WaitingRun = {
           scope,
           turnId,
@@ -1273,6 +1261,65 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       await lease?.release().catch(() => {})
       if (error instanceof OpenClawTurnPublicError) throw error
       throw providerUnavailable()
+    }
+  }
+
+  /**
+   * Announces the Session's native runs AOS did not bind: each once as its
+   * events arrive, and any found running when the subscription is set up or
+   * reconciled after a reconnect.
+   */
+  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+    let stopped = false
+    let lease: OpenClawSessionLease | undefined
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let announced: string | undefined
+    const announce = (runId: string | undefined, again: boolean) => {
+      if (
+        stopped ||
+        !runId ||
+        this.#admittedRun(scope, runId) ||
+        (!again && runId === announced)
+      )
+        return
+      announced = runId
+      watcher.onTurn()
+    }
+    const check = async (current: OpenClawSessionLease, again: boolean) => {
+      try {
+        announce(uniqueActiveRunId(await this.#history(scope, current)), again)
+      } catch (error) {
+        if (!stopped) watcher.onError(error)
+      }
+    }
+    const subscribe = () => {
+      this.#subscriptions
+        .acquire(
+          { agentId: scope.agentId, sessionKey: scope.sessionId },
+          (event) => announce(progressRunId(event), false),
+          async () => {
+            if (lease) await check(lease, true)
+          }
+        )
+        .then(
+          async (acquired) => {
+            if (stopped) return void acquired.release().catch(() => {})
+            lease = acquired
+            await check(acquired, false)
+          },
+          (error: unknown) => {
+            if (stopped) return
+            watcher.onError(error)
+            retry = setTimeout(subscribe, WATCH_RETRY_MS)
+          }
+        )
+    }
+    subscribe()
+    return () => {
+      if (stopped) return
+      stopped = true
+      clearTimeout(retry)
+      void lease?.release().catch(() => {})
     }
   }
 
@@ -1322,6 +1369,99 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   #authoritativelyIdle(history: HistorySnapshot) {
     return authoritativelyIdle(history)
+  }
+
+  /** Makes `active` the Session's run and remembers its native run as AOS's. */
+  #register(key: string, active: ActiveRun) {
+    this.#active.set(key, active)
+    if (!active.nativeRunId) return
+    const run = `${key}\u0000${active.nativeRunId}`
+    this.#admitted.delete(run)
+    this.#admitted.add(run)
+    if (this.#admitted.size > MAX_ADMITTED_RUNS)
+      this.#admitted.delete(this.#admitted.values().next().value!)
+  }
+
+  #admittedRun(scope: SessionScope, nativeRunId: string) {
+    return this.#admitted.has(`${scopeKey(scope)}\u0000${nativeRunId}`)
+  }
+
+  /**
+   * Binds and registers a fresh segment for a native run AOS did not just
+   * send. `shown` is in-flight progress an earlier segment of the turn already
+   * published, which this one continues from instead of repeating.
+   */
+  #bindRun(
+    scope: SessionScope,
+    turnId: string,
+    lease: OpenClawSessionLease,
+    holder: { active?: ActiveRun },
+    options: {
+      baseline: HistorySnapshot
+      nativeRunId: string
+      lastSeen: number
+      shown?: NonNullable<HistorySnapshot["inFlightRun"]>
+    }
+  ) {
+    const { baseline, shown } = options
+    const queue = new EventQueue(() => {
+      if (holder.active)
+        this.#fail(
+          holder.active,
+          "AOS_RESET_REQUIRED",
+          "OpenClaw produced more live output than AOS can safely buffer."
+        )
+    })
+    queue.push({ kind: TurnEventKind.TurnStarted })
+    const active: ActiveRun = {
+      scope,
+      turnId,
+      nativeRunId: options.nativeRunId,
+      nativeSessionKey: baseline.sessionKey,
+      nativeSessionId: baseline.sessionId,
+      queue,
+      lease,
+      terminal: false,
+      stopping: false,
+      uncertain: false,
+      lastSeen: options.lastSeen,
+      lastAgentSeq: shown ? baselineAgentSequence(baseline, shown.runId) : -1,
+      lastChatSeq: -1,
+      gapPending: false,
+      reconciling: false,
+      reconciliationDirty: false,
+      text: shown?.text ?? "",
+      ...(shown ? { textBaseline: shown.text } : {}),
+      ...(shown?.todos ? { planFingerprint: JSON.stringify(shown.todos) } : {}),
+      projectedText: "",
+      textGeneration: 0,
+      textStarted: false,
+      reasoning: "",
+      tools: new Map(),
+      ...settlement(),
+    }
+    holder.active = active
+    this.#register(scopeKey(scope), active)
+    return active
+  }
+
+  /** Delivers a subscribed event to a bound run, or defers it to reconciliation. */
+  #observe(active: ActiveRun, event: EventFrame) {
+    if (active.reconciling) active.reconciliationDirty = true
+    else this.#accept(active, event)
+  }
+
+  /** Reconciles a bound run after its subscription was replaced. */
+  async #resync(active: ActiveRun, fence: OpenClawReconciliationFence) {
+    active.lastSeen = 0
+    active.lastAgentSeq = -1
+    active.lastChatSeq = -1
+    try {
+      await this.#reconcile(active, fence)
+    } catch (error) {
+      this.#markInterrupted(active)
+      throw error
+    }
   }
 
   #handle(active: ActiveRun): ServerTurnHandle {

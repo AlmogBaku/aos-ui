@@ -21,6 +21,7 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
+  AOS_STOP_REASONS,
   type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
@@ -92,6 +93,8 @@ function createFakeConnection(
   const resumed = new Promise<ResumeReply>((resolve) => {
     settle = () => resolve(resumeReply())
   })
+  /** What a from-start replay resends, while the resume is still in flight. */
+  let replayedTurns: readonly SessionUpdate[] = []
   const fake = { history: options.history }
   const histories = new Map<string, AosHistoryCursor>()
   /** A from-start replay: announced, recorded, then settled, as the connection does. */
@@ -99,6 +102,9 @@ function createFakeConnection(
     const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
       listener()
     )
+    for (const update of replayedTurns)
+      for (const listener of updates.get(sessionId) ?? [])
+        listener(update, TURN_META)
     try {
       const resumed = await reply
       if (fake.history) histories.set(sessionId, { ...fake.history })
@@ -175,6 +181,10 @@ function createFakeConnection(
     resumePage,
     prompt,
     cancel,
+    /** Stores the turns a later from-start replay resends. */
+    replayOnResume: (turns: readonly SessionUpdate[]) => {
+      replayedTurns = turns
+    },
     /** The history the next from-start replay reports. */
     set history(history: AosHistoryCursor | undefined) {
       fake.history = history
@@ -691,6 +701,159 @@ describe("useAcpRuntime", () => {
     expect(result.current.thread.composer.getState().text).toBe("")
   })
 
+  describe("a run that fails before it writes a reply", () => {
+    const HISTORY = [
+      textUpdate("user_message", "u1", "Ship it"),
+      textUpdate("agent_message", "a1", "On it"),
+    ]
+    const FAILURE = { code: "AOS_PROVIDER_RUN_FAILED", message: "Broke" }
+
+    /** A thread holding the history the provider saved, and replays again. */
+    async function mountWithHistory() {
+      const fake = createFakeConnection()
+      const hook = await mount(fake)
+      act(() => {
+        for (const update of HISTORY) fake.emit(update)
+      })
+      fake.replayOnResume(HISTORY)
+      fake.prompt.mockResolvedValueOnce({ messageId: "u2" })
+      return { fake, result: hook.result }
+    }
+
+    const fail = async (fake: Fake) => {
+      await act(async () => {
+        fake.emit({ sessionUpdate: "state_update", state: "running" })
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.error,
+          },
+          { ...TURN_META, ...FAILURE }
+        )
+      })
+    }
+
+    const statusOf = (
+      runtime: ReturnType<typeof useAcpRuntime>,
+      index: number
+    ) => runtime.thread.getState().messages[index]?.status
+
+    it("reloads the Session and keeps the failure in view", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Again" }],
+        })
+      })
+      await waitFor(() => {
+        expect(fake.prompt).toHaveBeenCalled()
+      })
+      await fail(fake)
+      // The provider never saved the prompt, so the reloaded thread drops it.
+      await waitFor(() => {
+        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      })
+      await waitFor(() => {
+        expect(statusOf(result.current, 1)).toEqual({
+          type: "incomplete",
+          reason: "error",
+          error: FAILURE,
+        })
+      })
+      expect(visible(result.current)).toEqual([
+        { id: "u1", role: "user", text: "Ship it" },
+        { id: "a1", role: "assistant", text: "On it" },
+      ])
+    })
+
+    it("brings back the turns a failed edit replaced", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Ship it now" }],
+          parentId: null,
+          sourceId: "u1",
+        })
+      })
+      await waitFor(() => {
+        expect(fake.prompt).toHaveBeenCalledWith(
+          SESSION_ID,
+          [{ type: "text", text: "Ship it now" }],
+          { rewindSourceId: "provider-u1" }
+        )
+      })
+      await fail(fake)
+      await waitFor(() => {
+        expect(visible(result.current)).toEqual([
+          { id: "u1", role: "user", text: "Ship it" },
+          { id: "a1", role: "assistant", text: "On it" },
+        ])
+      })
+      expect(statusOf(result.current, 1)).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: FAILURE,
+      })
+    })
+
+    it("does not reload a failure the replay itself restates", async () => {
+      const fake = createFakeConnection()
+      fake.replayOnResume([
+        ...HISTORY,
+        { sessionUpdate: "state_update", state: "running" },
+        {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: AOS_STOP_REASONS.error,
+        },
+      ])
+      await mount(fake)
+      await act(async () => {})
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not reload an uncertain state restated after the replay", async () => {
+      const { fake } = await mountWithHistory()
+      await act(async () => {
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.uncertain,
+          },
+          TURN_META
+        )
+      })
+      await act(async () => {})
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not reload a failure its reply already shows", async () => {
+      const { fake, result } = await mountWithHistory()
+      await act(async () => {
+        fake.emit({ sessionUpdate: "state_update", state: "running" })
+        fake.emit(chunkUpdate("a2", "Half"))
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.error,
+          },
+          { ...TURN_META, ...FAILURE }
+        )
+      })
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(statusOf(result.current, 2)).toEqual({
+        type: "incomplete",
+        reason: "error",
+        error: FAILURE,
+      })
+    })
+  })
+
   it("creates the Session a draft's first turn needs, then prompts it", async () => {
     const fake = createFakeConnection()
     const attach = vi.fn(async () => undefined)
@@ -1096,6 +1259,41 @@ describe("useAcpRuntime older history", () => {
     expect(ids(result.current).slice(0, 2)).toEqual(["a1", "u2"])
     expect(ids(result.current)).toHaveLength(3)
     expect(result.current.thread.getState().isRunning).toBe(true)
+  })
+
+  it("keeps a turn re-keyed onto its saved rows once when a page carries them", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u2", "Newer question"))
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+      fake.emit(textUpdate("agent_message", "run-1:assistant", "Live answer"))
+      fake.emit(
+        {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "end_turn",
+        },
+        { ...TURN_META, savedIds: { "run-1:assistant": "hermes-row-3" } }
+      )
+    })
+
+    // The turn stored enough rows to shift the offsets, so the page reaches it.
+    await loadOlder(result.current)
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf(
+          [
+            textUpdate("user_message", "u1", "First question"),
+            textUpdate("agent_message", "hermes-row-3", "Live answer"),
+          ],
+          {}
+        )
+      )
+    })
+
+    expect(ids(result.current)).toEqual(["u1", "u2", "hermes-row-3"])
   })
 
   it("keeps a failed page failed until asked again, with no retry of its own", async () => {

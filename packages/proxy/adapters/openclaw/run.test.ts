@@ -944,22 +944,25 @@ describe("OpenClaw run engine", () => {
       approvalReplay([pendingApproval], true),
       ["native-original"],
       [] as unknown[],
+      "running",
     ],
     [
       "ambiguous active native runs",
       approvalReplay(),
       ["native-original", "native-other"],
       [pendingQuestion],
+      undefined,
     ],
     [
       "no active native run",
       approvalReplay(),
       [] as string[],
       [pendingQuestion],
+      undefined,
     ],
   ])(
-    "fails closed during discovery with %s",
-    async (_label, replay, activeRunIds, questions) => {
+    "fabricates no wait during discovery with %s",
+    async (_label, replay, activeRunIds, questions, state) => {
       const native = new ControlledNative()
       native.approvalReplay = replay
       native.history = {
@@ -983,9 +986,9 @@ describe("OpenClaw run engine", () => {
         replies: interactions,
       })
 
-      await expect(
-        engine.discover(scope, "restored-unsafe")
-      ).resolves.toBeUndefined()
+      // A lone active run with no provable wait is adopted as running.
+      const discovered = await engine.discover(scope, "restored-unsafe")
+      expect(discovered?.state).toBe(state)
       expect(
         native.calls.filter(({ method }) => method === "chat.send")
       ).toEqual([])
@@ -1047,7 +1050,14 @@ describe("OpenClaw run engine", () => {
       inFlightRun: { runId: "native-original", text: "retired" },
     })
 
-    await expect(discovering).resolves.toBeUndefined()
+    // With no wait on it, the run is adopted from the current snapshot only.
+    const discovered = await discovering
+    expect(discovered?.state).toBe("running")
+    const events = discovered!.handle.events[Symbol.asyncIterator]()
+    await events.next()
+    await expect(events.next()).resolves.toMatchObject({
+      value: { kind: TurnEventKind.MessageChunk, text: "current" },
+    })
     expect(historyReads).toBe(2)
     expect(discover).toHaveBeenCalledExactlyOnceWith(
       { ...scope, nativeRunId: "native-original" },
@@ -2242,6 +2252,237 @@ describe("OpenClaw run engine", () => {
         }),
       ])
     )
+  })
+})
+
+describe("OpenClaw run engine runtime-started turns", () => {
+  function running(runId: string, text = "Working") {
+    return {
+      sessionKey: scope.sessionId,
+      sessionId: "transcript-a",
+      messages: [],
+      sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+      inFlightRun: { runId, text },
+    }
+  }
+
+  function progress(
+    subscriptions: OpenClawSessionSubscriptions,
+    runId: string,
+    seq: number
+  ) {
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "agent",
+        seq,
+        payload: {
+          runId,
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq,
+          stream: "assistant",
+          ts: 1_000 + seq,
+          data: { delta: "x" },
+        },
+      },
+      subscriptions.generation
+    )
+  }
+
+  function chat(
+    subscriptions: OpenClawSessionSubscriptions,
+    runId: string,
+    payload: Record<string, unknown>
+  ) {
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 90,
+        payload: {
+          runId,
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq: 0,
+          ...payload,
+        },
+      },
+      subscriptions.generation
+    )
+  }
+
+  function engineFor(native: ControlledNative) {
+    native.approvalReplay = approvalReplay()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawTurnEngine({
+      client: native,
+      subscriptions,
+      replies: {
+        validate: vi.fn(),
+        dispatch: vi.fn(),
+        discover: vi.fn(async () => undefined),
+      },
+    })
+    return { subscriptions, engine }
+  }
+
+  function watcher() {
+    return { onTurn: vi.fn(), onError: vi.fn() }
+  }
+
+  const calls = (native: ControlledNative, method: string) =>
+    native.calls.filter((call) => call.method === method).length
+
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  async function drain(events: AsyncIterable<unknown>) {
+    const drained: unknown[] = []
+    for await (const event of events) drained.push(event)
+    return drained
+  }
+
+  async function watching(native: ControlledNative) {
+    const { subscriptions, engine } = engineFor(native)
+    const turns = watcher()
+    const stop = engine.watch(scope, turns)
+    await vi.waitFor(() => expect(calls(native, "chat.history")).toBe(1))
+    await settle()
+    return { subscriptions, engine, turns, stop }
+  }
+
+  it("stays silent through the proxy's own turn", async () => {
+    const native = new ControlledNative()
+    const { subscriptions, engine, turns } = await watching(native)
+
+    const handle = await engine.start(scope, input())
+    progress(subscriptions, "run-a", 0)
+    chat(subscriptions, "run-a", { state: "final" })
+    await drain(handle.events)
+    await settle()
+
+    expect(turns.onTurn).not.toHaveBeenCalled()
+    expect(turns.onError).not.toHaveBeenCalled()
+  })
+
+  it("announces each foreign run once however often the runtime announces it", async () => {
+    const native = new ControlledNative()
+    const { subscriptions, turns } = await watching(native)
+
+    progress(subscriptions, "foreign-run", 0)
+    progress(subscriptions, "foreign-run", 1)
+    chat(subscriptions, "foreign-run", { state: "delta", deltaText: "x" })
+    expect(turns.onTurn).toHaveBeenCalledOnce()
+
+    chat(subscriptions, "foreign-ended", { state: "final" })
+    progress(subscriptions, "foreign-next", 0)
+    expect(turns.onTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it("announces a foreign run already running at setup once", async () => {
+    const native = new ControlledNative()
+    native.history = running("foreign-run")
+    const { subscriptions, turns } = await watching(native)
+    expect(turns.onTurn).toHaveBeenCalledOnce()
+
+    progress(subscriptions, "foreign-run", 5)
+    expect(turns.onTurn).toHaveBeenCalledOnce()
+  })
+
+  it("rechecks after a reconnect and announces the foreign run it finds", async () => {
+    const native = new ControlledNative()
+    const { subscriptions, turns } = await watching(native)
+    expect(turns.onTurn).not.toHaveBeenCalled()
+
+    native.history = running("foreign-run")
+    await subscriptions.replaceGeneration("reconnect")
+
+    expect(turns.onTurn).toHaveBeenCalledOnce()
+  })
+
+  it("stops idempotently and releases its subscription", async () => {
+    const native = new ControlledNative()
+    const { subscriptions, turns, stop } = await watching(native)
+
+    stop()
+    stop()
+    await vi.waitFor(() =>
+      expect(calls(native, "sessions.messages.unsubscribe")).toBe(1)
+    )
+    progress(subscriptions, "foreign-run", 0)
+
+    expect(turns.onTurn).not.toHaveBeenCalled()
+  })
+
+  it("reports a failed subscription, retries it, and stops retrying once stopped", async () => {
+    vi.useFakeTimers()
+    try {
+      const native = new ControlledNative()
+      native.subscriptionRequest = async () => {
+        throw new Error("gateway down")
+      }
+      const { engine } = engineFor(native)
+      const turns = watcher()
+      const stop = engine.watch(scope, turns)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(turns.onError).toHaveBeenCalledOnce()
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(calls(native, "sessions.messages.subscribe")).toBe(2)
+
+      stop()
+      stop()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(calls(native, "sessions.messages.subscribe")).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("discovers a running foreign run with its progress so far", async () => {
+    const native = new ControlledNative()
+    native.history = running("foreign-run", "Working")
+    const { subscriptions, engine } = engineFor(native)
+
+    const discovered = await engine.discover(scope, "aos-recovered-a")
+    expect(discovered?.state).toBe("running")
+    chat(subscriptions, "foreign-run", {
+      state: "final",
+      message: { content: [{ type: "text", text: "Working, done" }] },
+    })
+
+    expect(await drain(discovered!.handle.events)).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "aos-recovered-a:assistant",
+        text: "Working",
+      },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "aos-recovered-a:assistant",
+        text: ", done",
+      },
+      { kind: TurnEventKind.TurnEnded },
+    ])
+    expect(calls(native, "chat.send")).toBe(0)
+  })
+
+  it("discovers nothing for the proxy's own run, even while it settles", async () => {
+    const native = new ControlledNative()
+    const { subscriptions, engine } = engineFor(native)
+    const handle = await engine.start(scope, input())
+    native.history = running("run-a")
+    await expect(
+      engine.discover(scope, "aos-recovered-a")
+    ).resolves.toBeUndefined()
+
+    chat(subscriptions, "run-a", { state: "final" })
+    await drain(handle.events)
+
+    await expect(
+      engine.discover(scope, "aos-recovered-b")
+    ).resolves.toBeUndefined()
   })
 })
 

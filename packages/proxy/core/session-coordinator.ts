@@ -51,6 +51,8 @@ export type CoordinatorRecoveryRequest = Pick<
   "threadId" | "turnId"
 > & {
   after?: number
+  /** The reader holds part of the turn it cannot position, so it reloads. */
+  reset?: true
 }
 
 export type CoordinatedTurnSubscription = {
@@ -112,6 +114,12 @@ type Segment = {
   requests: PendingRequest[]
   onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
+   * Epoch ms the turn's replay starts from: its admission, the answer that
+   * continued it, or the native start an adopted turn reported. Absent for a
+   * turn joined midway, or adopted without a start.
+   */
+  startedAt?: number
+  /**
    * Resolves once the provider has spoken for this segment: its first event, or
    * the outcome this coordinator applied when its stream ended. An uncertain
    * turn waits for that signal instead of for a timer.
@@ -122,8 +130,11 @@ type Segment = {
 
 /** How a segment relates to the replayable history of its turn. */
 type SegmentHistory =
-  /** First segment of a turn: its own journal, its own sequence. */
-  | { journal: "start" }
+  /**
+   * First segment of a turn, which began at `at` when that is known: its own
+   * journal and sequence.
+   */
+  | { journal: "start"; at: number | undefined }
   /** Later segment of the same turn: continues the replaced segment's journal. */
   | { journal: "continue"; previous?: Segment }
   /** A provider turn AOS never streamed from its beginning. */
@@ -415,14 +426,15 @@ export class SessionCoordinator {
   }
 
   /**
-   * Whether a cursorless follow of the live segment replays its turn from the
-   * first event, which is what lets a view rebuilt from history read it again.
+   * The live turn a cursorless follow replays from its first event, and when
+   * that start was if it is known: a view rebuilt from history reads the turn
+   * from there.
    */
-  replaysFromStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
-    const execution = this.#executions.get(scopeKey(scope))
-    return execution
-      ? replayPlan(execution.segment, undefined) === "history"
-      : false
+  replayStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment || replayPlan(segment, undefined) !== "history")
+      return undefined
+    return { turnId: segment.turnId, at: segment.startedAt }
   }
 
   /**
@@ -455,17 +467,33 @@ export class SessionCoordinator {
     }
   }
 
-  async discover(scope: SessionScope) {
+  /**
+   * Asks the provider for a turn this coordinator is not already streaming: one
+   * it lost to a restart, a wait to refresh, or a turn the runtime started by
+   * itself after an earlier one finished. `lane` is the lane that turn is
+   * counted under.
+   */
+  async discover(
+    scope: SessionScope,
+    lane: Execution["startedByLane"] = "operator"
+  ) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (
       !this.options.engine.discover ||
-      (existing && existing.state !== "waiting-for-input")
+      (existing &&
+        existing.state !== "waiting-for-input" &&
+        existing.state !== "idle")
     )
       return existing
     const inFlight = this.#discoveries.get(key)
     if (inFlight) return inFlight
-    const discovery = this.#discover(scope, key, existing)
+    const discovery = this.#discover(
+      scope,
+      key,
+      lane,
+      existing?.state === "waiting-for-input" ? existing : undefined
+    )
     this.#discoveries.set(key, discovery)
     void discovery
       .finally(() => {
@@ -476,13 +504,15 @@ export class SessionCoordinator {
     return discovery
   }
 
+  /** `existing` is a waiting record to refresh; any other turn is new. */
   async #discover(
     scope: SessionScope,
     key: string,
+    lane: Execution["startedByLane"],
     existing: Execution | undefined
   ) {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    if (!existing) this.#assertCapacity("operator")
+    this.#assertCapacity(lane, existing)
     this.#admissions.add(key)
     try {
       const turnId =
@@ -501,8 +531,11 @@ export class SessionCoordinator {
         cacheKey: key,
         turnId,
         handle: discovered.handle,
-        // AOS never saw this turn start, so it has nothing to replay.
-        history: { journal: "none" },
+        // Only a stream that begins at the native turn's start can replay it;
+        // any other joined the turn midway and has nothing a reload can trust.
+        history: discovered.fromStart
+          ? { journal: "start", at: discovered.startedAt }
+          : { journal: "none" },
       })
       this.#trackJournal(segment)
       segment.requests = structuredClone(discovered.requests ?? [])
@@ -513,7 +546,7 @@ export class SessionCoordinator {
           state: discovered.state,
           turnId,
           request: { turnId },
-          startedByLane: "operator",
+          startedByLane: lane,
           segment,
         })
       if (existing) {
@@ -582,6 +615,7 @@ export class SessionCoordinator {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
     try {
+      const at = Date.now()
       const handle = await this.options.engine.start(
         scope,
         input,
@@ -598,7 +632,7 @@ export class SessionCoordinator {
           cacheKey: key,
           turnId: input.turnId,
           handle,
-          history: { journal: "start" },
+          history: { journal: "start", at },
           onTerminal: access.onTerminal,
         }),
       })
@@ -625,7 +659,9 @@ export class SessionCoordinator {
       existing?.segment.turnId === request.turnId &&
       existing.state !== "uncertain"
     ) {
-      const plan = replayPlan(existing.segment, request.after)
+      const plan = request.reset
+        ? "reset"
+        : replayPlan(existing.segment, request.after)
       if (plan === "reset")
         return this.#resetSubscription(existing.segment, access)
       if (access.canControl) existing.controllers.add(access.controllerId)
@@ -642,7 +678,7 @@ export class SessionCoordinator {
     // browser cursor still applies. A recovery of a turn this coordinator never
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
-    const plan = replayPlan(recovered.segment, after)
+    const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
     if (plan === "reset")
       return this.#resetSubscription(recovered.segment, access)
     if (access.canControl) recovered.controllers.add(access.controllerId)
@@ -869,12 +905,13 @@ export class SessionCoordinator {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
     try {
+      const at = Date.now()
       const handle = await this.options.engine.start(execution.scope, input)
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: input.turnId,
         handle,
-        history: { journal: "start" },
+        history: { journal: "start", at },
       })
       // The reply that continued this turn ends its wait.
       this.#resolveAttention(execution)
@@ -961,6 +998,13 @@ export class SessionCoordinator {
         sizeOf: ({ event }) => safeEventBytes(event),
       }),
       journal: segmentJournal(init.history),
+      ...(init.history.journal === "start"
+        ? init.history.at === undefined
+          ? {}
+          : { startedAt: init.history.at }
+        : previous?.startedAt === undefined
+          ? {}
+          : { startedAt: previous.startedAt }),
       nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
       requests: [],
@@ -979,8 +1023,13 @@ export class SessionCoordinator {
     void (async () => {
       let terminal = false
       try {
-        for await (const event of segment.handle.events) {
+        for await (const raw of segment.handle.events) {
           if (execution.segment !== segment) return
+          // Dated where the replay starts, so a reload counts from there.
+          const event =
+            raw.kind === TurnEventKind.TurnStarted && segment.startedAt
+              ? { ...raw, startedAt: new Date(segment.startedAt).toISOString() }
+              : raw
           // A failure awaiting Stop leaves the turn active: its settlement, not
           // this event, is the terminal one.
           const awaitingStop = isAwaitingStopFailure(event)

@@ -199,6 +199,11 @@ function isInterruptMarker(value: JsonRecord, text: string): boolean {
   )
 }
 
+/** The id history gives the message a durable row opens. */
+export function hermesRowMessageId(rowId: number) {
+  return `hermes-row-${rowId}`
+}
+
 /**
  * The index of the oldest row that opens a turn: the first user row the
  * projection turns into a message. `-1` when the rows hold no turn start.
@@ -294,11 +299,11 @@ export function projectHermesHistory(
     const rowId = value.row_id ?? value._row_id
     const id =
       typeof rowId === "number" && Number.isSafeInteger(rowId) && rowId > 0
-        ? `hermes-row-${rowId}`
+        ? hermesRowMessageId(rowId)
         : typeof value.id === "number" &&
             Number.isSafeInteger(value.id) &&
             value.id > 0
-          ? `hermes-row-${value.id}`
+          ? hermesRowMessageId(value.id)
           : (trimmedText(value.id) ?? `hermes-history-${index}`)
     const previousAssistant =
       role === "assistant" && messages.at(-1)?.role === "assistant"

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import type { SessionScope } from "../core/runtime"
+import type { ExecutionEvent } from "../core/events"
+import {
+  ServerTurnConflictError,
+  type ServerTurnWatcher,
+  type SessionScope,
+} from "../core/runtime"
 import {
   createSessionRooms,
   type RoomMember,
@@ -412,5 +417,214 @@ describe("createSessionRooms", () => {
 
     setSnapshot({ state: "idle", turnId: "turn-1" })
     expect(rooms.current(SCOPE)).toBeUndefined()
+  })
+})
+
+/** A runtime whose Session the rooms watch, driven by hand. */
+function adoptingHarness() {
+  let state: { state: string; turnId?: string } = { state: "idle" }
+  const watchers: ServerTurnWatcher[] = []
+  const listeners = new Set<(event: ExecutionEvent) => void>()
+  const discovered: Array<{ scope: SessionScope; lane: string }> = []
+  let stopped = 0
+  let discover: () => Promise<unknown> = async () => undefined
+  const rooms = createSessionRooms({
+    snapshot: () => state,
+    adoption: {
+      watch(_scope, watcher) {
+        watchers.push(watcher)
+        return () => {
+          stopped += 1
+        }
+      },
+      async discover(scope, lane) {
+        discovered.push({ scope, lane })
+        return discover()
+      },
+      observe(_scope, listener) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    },
+  })
+  return {
+    rooms,
+    watchers,
+    discovered,
+    stopped: () => stopped,
+    observers: () => listeners.size,
+    /** The runtime starts `turnId`, which the next `discover` adopts. */
+    runtimeStarts(turnId: string) {
+      discover = async () => {
+        state = { state: "running", turnId }
+      }
+    },
+    failDiscover(cause: unknown) {
+      discover = async () => {
+        throw cause
+      }
+    },
+    end(turnId: string) {
+      state = { state: "idle", turnId }
+      for (const listener of listeners)
+        listener({
+          agentId: SCOPE.agentId,
+          sessionId: SCOPE.sessionId,
+          turnId,
+          occurredAt: "2026-09-23T00:00:00Z",
+          kind: "turn-finished",
+        })
+    },
+  }
+}
+
+const GUEST_SCOPE: SessionScope = { ...SCOPE, threadId: "thread-guest" }
+
+describe("createSessionRooms adopting runtime-started turns", () => {
+  it("watches while the room has members and stops when the last leaves", () => {
+    const runtime = adoptingHarness()
+    const removeFirst = runtime.rooms.add(SCOPE, member().fake, {
+      hasPrompt: false,
+    })
+    const removeSecond = runtime.rooms.add(SCOPE, member().fake, {
+      hasPrompt: false,
+    })
+
+    expect(runtime.watchers).toHaveLength(1)
+    removeFirst()
+    expect(runtime.stopped()).toBe(0)
+    removeSecond()
+    expect(runtime.stopped()).toBe(1)
+    expect(runtime.observers()).toBe(0)
+  })
+
+  it("adopts a turn the runtime started and brings every member into it", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    const second = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.rooms.add(SCOPE, second.fake, { hasPrompt: false })
+    runtime.runtimeStarts("aos-recovered-1")
+
+    runtime.watchers[0]!.onTurn()
+    await settle()
+
+    expect(runtime.discovered).toHaveLength(1)
+    expect(first.follows()).toBe(1)
+    expect(second.follows()).toBe(1)
+  })
+
+  it("reloads every member when an adopted turn ends, for the prompt it never showed", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    const second = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.rooms.add(SCOPE, second.fake, { hasPrompt: false })
+    runtime.runtimeStarts("aos-recovered-1")
+    runtime.watchers[0]!.onTurn()
+    await settle()
+
+    runtime.end("aos-recovered-1")
+    await settle()
+
+    expect(first.invalidations()).toBe(1)
+    expect(second.invalidations()).toBe(1)
+  })
+
+  it("asks the runtime again when the room's own turn ends, without a reload", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+
+    runtime.end("turn-1")
+    await settle()
+
+    expect(first.invalidations()).toBe(0)
+    expect(runtime.discovered).toHaveLength(1)
+  })
+
+  it("adopts as an operator even when a guest joined first", async () => {
+    const runtime = adoptingHarness()
+    runtime.rooms.add(GUEST_SCOPE, member().fake, {
+      hasPrompt: false,
+      lane: "guest",
+    })
+    runtime.rooms.add(SCOPE, member().fake, { hasPrompt: false })
+
+    runtime.watchers[0]!.onTurn()
+    await settle()
+
+    expect(runtime.discovered).toEqual([{ scope: SCOPE, lane: "operator" }])
+  })
+
+  it("adopts under the guest lane when only a guest is in the room", async () => {
+    const runtime = adoptingHarness()
+    runtime.rooms.add(GUEST_SCOPE, member().fake, {
+      hasPrompt: false,
+      lane: "guest",
+    })
+
+    runtime.watchers[0]!.onTurn()
+    await settle()
+
+    expect(runtime.discovered).toEqual([{ scope: GUEST_SCOPE, lane: "guest" }])
+  })
+
+  it("skips a conflict silently and adopts at the proxy turn's end", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.failDiscover(new ServerTurnConflictError())
+    runtime.watchers[0]!.onTurn()
+    await settle()
+    expect(first.reported).toEqual([])
+    expect(first.follows()).toBe(0)
+
+    runtime.runtimeStarts("aos-recovered-1")
+    runtime.end("turn-1")
+    await settle()
+
+    expect(first.follows()).toBe(1)
+  })
+
+  it("reports any other failure and stays usable", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    const failure = new Error("discover failed")
+    runtime.failDiscover(failure)
+    runtime.watchers[0]!.onTurn()
+    await settle()
+    const watchFailure = new Error("watch lost")
+    runtime.watchers[0]!.onError(watchFailure)
+
+    expect(first.reported).toEqual([failure, watchFailure])
+    runtime.runtimeStarts("aos-recovered-1")
+    runtime.watchers[0]!.onTurn()
+    await settle()
+    expect(first.follows()).toBe(1)
+  })
+
+  it("asks once more when a trigger arrives while adopting", async () => {
+    const runtime = adoptingHarness()
+    runtime.rooms.add(SCOPE, member().fake, { hasPrompt: false })
+
+    runtime.watchers[0]!.onTurn()
+    runtime.watchers[0]!.onTurn()
+    runtime.watchers[0]!.onTurn()
+    await settle()
+
+    expect(runtime.discovered).toHaveLength(2)
+  })
+
+  it("rechecks after a member's own start fails", async () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.runtimeStarts("aos-recovered-1")
+
+    await runtime.rooms.recheck(SCOPE)
+
+    expect(first.follows()).toBe(1)
   })
 })

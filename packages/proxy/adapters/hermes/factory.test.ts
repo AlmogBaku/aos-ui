@@ -126,6 +126,15 @@ describe("Hermes runtime shutdown", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it("hands the proxy a turn engine that watches for turns Hermes starts by itself", async () => {
+    const { runtime } = await attachedRuntime(async (method) =>
+      method === "session.resume" ? { session_id: "live-stored" } : {}
+    )
+
+    expect(runtime.runtime.turns.watch).toBeTypeOf("function")
+    await runtime.close()
+  })
+
   it("closes at once when Hermes answers the courtesy close", async () => {
     vi.useFakeTimers()
     const { runtime, transport } = await attachedRuntime(async (method) =>

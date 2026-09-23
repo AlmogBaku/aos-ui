@@ -75,9 +75,11 @@ export type ServerTurnEngine = {
     request: RecoveryRequest
   ): Promise<ServerTurnHandle>
   /**
-   * Reconstructs provider-authoritative execution state after process loss.
-   * A repeated call refreshes an existing waiting execution; `undefined`
-   * authoritatively clears that recovered wait.
+   * Reconstructs provider-authoritative execution state after process loss, or
+   * adopts a turn the runtime started by itself. A repeated call refreshes an
+   * existing waiting execution; `undefined` authoritatively clears that
+   * recovered wait. A turn this adapter admitted, including one still settling,
+   * is never discovered: the coordinator already owns it.
    */
   discover?(
     scope: SessionScope,
@@ -87,9 +89,36 @@ export type ServerTurnEngine = {
         handle: ServerTurnHandle
         state: "running" | "waiting-for-input"
         requests?: PendingRequest[]
+        /** The handle's events begin at the native turn's first event. */
+        fromStart?: boolean
+        /**
+         * Epoch ms the native turn began. With `fromStart`, a reload cuts its
+         * history page there; without it, that reload can only be reset.
+         */
+        startedAt?: number
       }
     | undefined
   >
+  /**
+   * Watches one Session for turns this adapter did not start: a subagent
+   * result, a loop tick, a heartbeat, cron, or another native client. Rules:
+   * - `onTurn` fires when such a turn starts, and whenever the watch
+   *   (re)subscribes, at setup or after a reconnect or rebind, while one is
+   *   running;
+   * - it stays silent for the adapter's own turns; a foreign turn that starts
+   *   during one is found by the `discover` that follows every turn's end;
+   * - it fires at most once per native turn, however often the runtime
+   *   announces it;
+   * - setup may be asynchronous: the adapter owns reconnect retries and reports
+   *   failures through `onError`, never by throwing.
+   * The returned stop function may be called more than once and ends retries.
+   */
+  watch?(scope: SessionScope, watcher: ServerTurnWatcher): () => void
+}
+
+export type ServerTurnWatcher = {
+  onTurn(): void
+  onError(cause: unknown): void
 }
 
 export type RuntimeInstance = {

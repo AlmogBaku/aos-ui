@@ -444,13 +444,19 @@ describe("guest turn projection", () => {
       ])
   })
 
-  it("drops turn usage, cost, and the composer prefill but keeps the stop reason", () => {
+  it("drops turn usage, cost, the composer prefill, and saved ids but keeps the stop reason", () => {
     expect(
       project({
         kind: TurnEventKind.TurnEnded,
         usage: [{ provider: "private", totalTokens: 12 }],
         cost: { amount: 0.5, currency: "USD" },
         composerPrefill: "/private",
+        // The guest's live ids are hashed, so a native saved id would name
+        // rows its projection may hide.
+        saved: {
+          user: { messageId: "user-1", savedId: "hermes-row-7" },
+          replyId: "hermes-row-8",
+        },
       })
     ).toEqual({ kind: TurnEventKind.TurnEnded })
     expect(

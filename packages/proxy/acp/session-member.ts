@@ -208,11 +208,12 @@ class SessionMember {
 
   /**
    * Subscribes to the Session's live turn, if one is still in flight, and
-   * returns the turnId it streams. `replayedCorrections` names the steer
-   * acknowledgements this subscription must drop because the history it
-   * follows already carried them.
+   * returns the turnId it streams. `after` is the cursor the view holds, or
+   * `"reset"` for a view holding part of the turn it cannot position.
+   * `replayedCorrections` names the steer acknowledgements this subscription
+   * must drop because the history it follows already carried them.
    */
-  follow(after?: number, replayedCorrections = 0) {
+  follow(after?: number | "reset", replayedCorrections = 0) {
     return this.#follow(true, after, replayedCorrections)
   }
 
@@ -258,17 +259,23 @@ class SessionMember {
 
   /** Admits one user turn and subscribes to the segment it starts. */
   async startTurn(input: PromptTurnInput, stage?: ServerAttachmentStage) {
-    await this.#exclusive(async () =>
-      this.#consume(
-        await this.#coordinator.start(
+    await this.#exclusive(async () => {
+      let subscription
+      try {
+        subscription = await this.#coordinator.start(
           this.#scope,
           input,
           this.#access(),
           ...(stage ? [stage] : [])
-        ),
-        0
-      )
-    )
+        )
+      } catch (cause) {
+        // No turn started, so no turn end asks the runtime for one it started
+        // meanwhile, which may be what refused this one.
+        void this.#context.rooms.recheck(this.#scope)
+        throw cause
+      }
+      await this.#consume(subscription, 0)
+    })
   }
 
   /**
@@ -281,7 +288,10 @@ class SessionMember {
     if (this.#left) return
     const { rooms } = this.#context
     if (!this.#leaveRoom) {
-      const leave = rooms.add(this.#scope, this.#seat, { hasPrompt })
+      const leave = rooms.add(this.#scope, this.#seat, {
+        hasPrompt,
+        lane: this.#context.lane,
+      })
       // A request the Session resolves, through another member's answer or a
       // Stop, is withdrawn here so this UI stops offering it.
       const unobserve = this.#coordinator.observeScope(this.#scope, (event) => {
@@ -453,7 +463,11 @@ class SessionMember {
    * did, so a member is never streamed one turn twice. Returns the turnId it
    * streams, or `undefined` when no turn is live.
    */
-  #follow(refollow: boolean, after?: number, replayedCorrections = 0) {
+  #follow(
+    refollow: boolean,
+    after?: number | "reset",
+    replayedCorrections = 0
+  ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
       if (this.#left) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
@@ -466,7 +480,11 @@ class SessionMember {
           {
             threadId: this.#scope.threadId,
             turnId,
-            ...(after === undefined ? {} : { after }),
+            ...(after === "reset"
+              ? { reset: true as const }
+              : after === undefined
+                ? {}
+                : { after }),
           },
           this.#access()
         ),

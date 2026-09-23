@@ -305,6 +305,68 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
+  describe("the ids Hermes saved the turn under", () => {
+    const receipt = {
+      row_ids: [7, 8, 9, 10],
+      complete: true,
+      user_row_id: 7,
+      final_assistant_row_id: 10,
+    }
+
+    async function endOf(persisted_turn: unknown) {
+      const attachment = observation()
+      const publish = (event: unknown) =>
+        attachment.publish("live-secret", event)
+      const engine = new HermesTurnEngine(
+        runtime({ observe: attachment.observe })
+      )
+      const handle = await engine.start(scope, input())
+      const t = nativeTurn("live-secret", 1)
+      publish(t.messageStart("reply"))
+      publish(t.delta("Done"))
+      publish(
+        t.frame("message.complete", {
+          message_id: "reply",
+          text: "Done",
+          status: "complete",
+          persisted_turn,
+        })
+      )
+      return ofKind(await collect(handle), TurnEventKind.TurnEnded)[0]
+    }
+
+    it("names the prompt and its reply by the rows a complete receipt committed", async () => {
+      await expect(endOf(receipt)).resolves.toMatchObject({
+        saved: {
+          user: { messageId: "user-1", savedId: "hermes-row-7" },
+          replyId: "hermes-row-8",
+        },
+      })
+    })
+
+    it.each([
+      ["a partial receipt", { ...receipt, complete: false }],
+      ["no user row", { ...receipt, user_row_id: undefined }],
+      [
+        "a user row that does not open the turn",
+        { ...receipt, user_row_id: 8 },
+      ],
+      ["no final reply", { ...receipt, final_assistant_row_id: undefined }],
+      [
+        "a final reply that does not close it",
+        { ...receipt, final_assistant_row_id: 9 },
+      ],
+      ["rows out of order", { ...receipt, row_ids: [7, 9, 8, 10] }],
+      ["a fractional row", { ...receipt, row_ids: [7, 8.5, 9, 10] }],
+      ["no reply row", { ...receipt, row_ids: [7], final_assistant_row_id: 7 }],
+      ["no receipt", undefined],
+    ])("claims no saved ids from %s", async (_, persisted) => {
+      const ended = await endOf(persisted)
+      expect(ended).toBeDefined()
+      expect(ended).not.toHaveProperty("saved")
+    })
+  })
+
   it.each([false, true])(
     "uses authoritative completion text without duplicating a fully streamed answer (streamed: %s)",
     async (streamed) => {
@@ -4279,6 +4341,8 @@ describe("HermesRunEngine", () => {
 
     const discovered = await engine.discover(scope, "recovered-run")
     expect(discovered?.state).toBe("running")
+    // The ring still holds the open turn's own start, so a reload can replay it.
+    expect(discovered?.fromStart).toBe(true)
     attachment.publish(
       "live-secret",
       ring.complete("new-message", "new", "complete")
@@ -4350,6 +4414,8 @@ describe("HermesRunEngine", () => {
     )
 
     const discovered = await engine.discover(scope, "recovered-run")
+    // Joined from the live cursor, so the turn's own start was never read.
+    expect(discovered?.fromStart).toBe(false)
     const live = nativeTurn("live-secret", 43)
     attachment.publish("live-secret", live.messageStart("new-message"))
     attachment.publish("live-secret", live.delta("new"))
@@ -7026,5 +7092,300 @@ describe("Hermes native provider facts", () => {
         },
       },
     ])
+  })
+})
+
+/**
+ * The registry's fan-out: every observer of a live Session receives its frames
+ * and signals, so a watch and a run can observe one Session at once.
+ */
+function sharedObservation() {
+  const observers = new Map<string, Set<AttachmentObserver>>()
+  const of = (liveSessionId: string) => [
+    ...(observers.get(liveSessionId) ?? []),
+  ]
+  return {
+    observe: async (liveSessionId: string, observer: AttachmentObserver) => {
+      const live = observers.get(liveSessionId) ?? new Set()
+      observers.set(liveSessionId, live)
+      live.add(observer)
+      return () => {
+        live.delete(observer)
+      }
+    },
+    observers(liveSessionId: string) {
+      return of(liveSessionId).length
+    },
+    publish(liveSessionId: string, event: unknown) {
+      for (const observer of of(liveSessionId))
+        observer({ kind: "event", event })
+    },
+    signal(liveSessionId: string, signal: AttachmentSignal) {
+      for (const observer of of(liveSessionId)) observer(signal)
+    },
+  }
+}
+
+describe("Hermes turn watch", () => {
+  /** A watched Session whose status a test sets as Hermes would report it. */
+  function watched(overrides: Partial<HermesTurnNative> = {}) {
+    const attachment = sharedObservation()
+    const hermes: { status: HermesNativeStatus } = { status: "idle" }
+    const onTurn = vi.fn()
+    const onError = vi.fn()
+    const engine = new HermesTurnEngine(
+      runtime({
+        observe: attachment.observe,
+        status: async () => hermes.status,
+        ...overrides,
+      })
+    )
+    return {
+      engine,
+      attachment,
+      hermes,
+      onTurn,
+      onError,
+      watch: () => engine.watch(scope, { onTurn, onError }),
+      publish: (frame: unknown) => attachment.publish("live-secret", frame),
+      observed: () =>
+        vi.waitFor(() => expect(attachment.observers("live-secret")).toBe(1)),
+    }
+  }
+
+  it("stays silent through a turn this engine started", async () => {
+    const { engine, onTurn, watch, publish, observed } = watched()
+    watch()
+    await observed()
+
+    const handle = await engine.start(scope, input())
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    publish(turn.delta("Hi"))
+    publish(turn.complete("reply", "Hi"))
+    publish(turn.idle())
+    await handle.settled
+
+    expect(onTurn).not.toHaveBeenCalled()
+  })
+
+  it("announces each turn Hermes starts by itself", async () => {
+    const { onTurn, watch, publish, observed } = watched()
+    watch()
+    await observed()
+
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("delegation-result"))
+    expect(onTurn).toHaveBeenCalledTimes(1)
+    publish(turn.complete("delegation-result", "Done"))
+    publish(turn.messageStart("loop-tick"))
+    expect(onTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it("announces a turn once however often Hermes announces its start", async () => {
+    const { onTurn, watch, publish, observed } = watched()
+    watch()
+    await observed()
+
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    publish(turn.messageStart("reply"))
+    publish(turn.delta("Hi"))
+
+    expect(onTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it("announces a turn already running when the watch starts, once", async () => {
+    const { hermes, onTurn, watch, publish } = watched()
+    hermes.status = "working"
+    watch()
+    await vi.waitFor(() => expect(onTurn).toHaveBeenCalledTimes(1))
+
+    publish(nativeTurn("live-secret", 7).messageStart("reply"))
+
+    expect(onTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it("observes the new live Session after Hermes restarts and announces its running turn", async () => {
+    const live = ["live-secret", "live-restarted"]
+    const { attachment, hermes, onTurn, watch, observed } = watched({
+      resume: async () => ({ liveSessionId: live.shift()!, running: false }),
+    })
+    watch()
+    await observed()
+
+    hermes.status = "working"
+    attachment.signal("live-secret", { kind: "lost", reason: "restart" })
+
+    await vi.waitFor(() => expect(onTurn).toHaveBeenCalledTimes(1))
+    expect(attachment.observers("live-secret")).toBe(0)
+    expect(attachment.observers("live-restarted")).toBe(1)
+    attachment.publish(
+      "live-restarted",
+      nativeTurn("live-restarted", 1).messageStart("reply")
+    )
+    expect(onTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it("announces a turn running when the socket reattaches the same live Session", async () => {
+    const { attachment, hermes, onTurn, watch, observed } = watched()
+    watch()
+    await observed()
+
+    hermes.status = "working"
+    attachment.signal("live-secret", { kind: "reattached" })
+
+    await vi.waitFor(() => expect(onTurn).toHaveBeenCalledTimes(1))
+  })
+
+  it("reports a failed subscription once and retries until it observes", async () => {
+    vi.useFakeTimers()
+    try {
+      let resumes = 0
+      const { attachment, onError, watch } = watched({
+        resume: async () => {
+          resumes += 1
+          if (resumes <= 2) throw new HermesUnavailableError()
+          return { liveSessionId: "live-secret", running: false }
+        },
+      })
+      watch()
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      expect(resumes).toBe(3)
+      expect(onError).toHaveBeenCalledOnce()
+      expect(attachment.observers("live-secret")).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops once and for all, however often it is stopped", async () => {
+    vi.useFakeTimers()
+    try {
+      const resume = vi.fn(async () => {
+        throw new HermesUnavailableError()
+      })
+      const { onError, watch } = watched({ resume })
+      const stop = watch()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(onError).toHaveBeenCalledOnce()
+
+      stop()
+      stop()
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      expect(resume).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("releases its observation when stopped", async () => {
+    const { attachment, onTurn, watch, publish, observed } = watched()
+    const stop = watch()
+    await observed()
+
+    stop()
+    stop()
+    publish(nativeTurn("live-secret", 1).messageStart("reply"))
+
+    expect(attachment.observers("live-secret")).toBe(0)
+    expect(onTurn).not.toHaveBeenCalled()
+  })
+
+  it("announces a turn Hermes starts while the next Send waits for the last one to settle", async () => {
+    const { engine, hermes, onTurn, watch, publish, observed } = watched()
+    watch()
+    await observed()
+    const first = await engine.start(scope, input())
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    // Hermes still finishes the first turn's bookkeeping after its completion.
+    hermes.status = "working"
+    publish(turn.complete("reply", "Done"))
+    await first.settled
+
+    const second = engine.start(scope, input({ turnId: "run-2" }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    publish(turn.messageStart("delegation-result"))
+
+    expect(onTurn).toHaveBeenCalledOnce()
+    await expect(collect(await second)).resolves.toContainEqual(
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
+    )
+  })
+})
+
+describe("Hermes discovery of its own turns", () => {
+  /** One engine over a ring that records every frame the test publishes. */
+  function ringed() {
+    const attachment = sharedObservation()
+    const hermes: { status: HermesNativeStatus } = { status: "idle" }
+    const ring: unknown[] = []
+    const engine = new HermesTurnEngine(
+      runtime({
+        observe: attachment.observe,
+        status: async () => hermes.status,
+        inspectExecution: async () => ({ running: true, status: "running" }),
+        cursor: async () => ({ epoch: "epoch-1", latestSeq: ring.length }),
+        replay: async () => ({
+          epoch: "epoch-1",
+          lastSeen: ring.length,
+          events: [...ring],
+        }),
+      })
+    )
+    return {
+      engine,
+      hermes,
+      publish: (frame: unknown) => {
+        ring.push(frame)
+        attachment.publish("live-secret", frame)
+      },
+    }
+  }
+
+  it("discovers nothing while its own turn runs", async () => {
+    const { engine, hermes, publish } = ringed()
+    await engine.start(scope, input())
+    hermes.status = "working"
+    publish(nativeTurn("live-secret", 1).messageStart("reply"))
+
+    await expect(engine.discover(scope, "adopted")).resolves.toBeUndefined()
+  })
+
+  it("discovers nothing while Hermes still settles its own finished turn", async () => {
+    const { engine, hermes, publish } = ringed()
+    const first = await engine.start(scope, input())
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    hermes.status = "working"
+    publish(turn.complete("reply", "Done"))
+    await first.settled
+
+    await expect(engine.discover(scope, "adopted")).resolves.toBeUndefined()
+  })
+
+  it("discovers from its start a turn Hermes began while its own one settled", async () => {
+    const { engine, hermes, publish } = ringed()
+    const first = await engine.start(scope, input())
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    hermes.status = "working"
+    publish(turn.complete("reply", "Done"))
+    await first.settled
+    publish(turn.messageStart("delegation-result"))
+    publish(turn.delta("Result"))
+
+    const discovered = await engine.discover(scope, "adopted")
+
+    expect(discovered).toMatchObject({ state: "running", fromStart: true })
+    publish(turn.complete("delegation-result", "Result"))
+    await expect(collect(discovered!.handle)).resolves.toContainEqual({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "delegation-result",
+      text: "Result",
+    })
   })
 })

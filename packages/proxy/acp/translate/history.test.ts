@@ -12,8 +12,8 @@ import {
 } from "../../../protocol/acp"
 import type { AcpOutbound } from "../types"
 import {
+  beforeLiveTurn,
   persistedCorrections,
-  throughLivePrompt,
   translateHistory,
 } from "./history"
 
@@ -596,43 +596,60 @@ describe("persistedCorrections", () => {
   })
 })
 
-describe("throughLivePrompt", () => {
-  const admitted = Date.parse(PROMPTED_AT)
+describe("beforeLiveTurn", () => {
+  const started = Date.parse(PROMPTED_AT)
   const page = (messages: SessionHistoryResponse["messages"]) => ({
     ...history,
     messages,
   })
+  const plan = {
+    id: "plan-1",
+    role: "activity" as const,
+    activityType: "PLAN" as const,
+    content: { todos: [] },
+  }
 
-  it("cuts the page back to the live prompt, dropping what the turn stored", () => {
-    const earlier = { ...agent, id: "a1" }
+  it("keeps the prompt and drops what the turn stored from its start", () => {
+    const earlier = {
+      ...agent,
+      id: "a1",
+      createdAt: "2026-09-19T08:00:00.000Z",
+    }
     const stored = page([
       earlier,
       user("u1", "Summarize"),
       user("u2", "Shorter", true),
       agent,
+      plan,
     ])
 
-    expect(throughLivePrompt(stored, 1, admitted)?.messages).toEqual([
+    expect(beforeLiveTurn(stored, started)?.messages).toEqual([
       earlier,
       user("u1", "Summarize"),
+      plan,
     ])
   })
 
-  it("keeps a page whose prompt was stored before the turn was admitted", () => {
+  it("keeps what a continued turn stored before the answer resumed it", () => {
     const stored = page([user("u1", "Summarize"), agent])
 
-    expect(throughLivePrompt(stored, 0, admitted + 60_000)).toBeUndefined()
+    expect(beforeLiveTurn(stored, started + 60_000)?.messages).toEqual([
+      user("u1", "Summarize"),
+      agent,
+    ])
   })
 
   it("allows a provider clock a moment behind the proxy's", () => {
     const stored = page([user("u1", "Summarize"), agent])
 
-    expect(throughLivePrompt(stored, 0, admitted + 2_000)?.messages).toEqual([
+    expect(beforeLiveTurn(stored, started + 2_000)?.messages).toEqual([
       user("u1", "Summarize"),
     ])
   })
 
-  it("keeps a page that shows no prompt", () => {
-    expect(throughLivePrompt(page([agent]), -1, admitted)).toBeUndefined()
+  it("finds no clean cut in a turn's rows without a time", () => {
+    const stored = page([user("u1", "Summarize"), { ...agent, createdAt: "" }])
+
+    expect(beforeLiveTurn(stored, started)).toBeUndefined()
   })
 })

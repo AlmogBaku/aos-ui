@@ -413,6 +413,14 @@ export const AosStateMetaSchema = readObject({
    * cumulative spend, on a `usage_update` that also needs the context window.
    */
   cost: AosCostSchema.optional(),
+  /**
+   * On a turn's `idle` update: each message id the turn streamed under, mapped
+   * to the id the provider saved that message under. The browser re-keys those
+   * messages, so an edit and a later history replay address the saved rows.
+   */
+  savedIds: z
+    .record(z.string().min(1).max(512), z.string().min(1).max(512))
+    .optional(),
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
