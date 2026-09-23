@@ -28,33 +28,46 @@ export function useLoadMoreSentinel({
   rootMargin,
 }: LoadMoreSentinelOptions) {
   const [sentinel, setSentinel] = useState<Element | null>(null)
-  const [inView, setInView] = useState(false)
+  // The key the sentinel was last seen in view at, or null while it is not.
+  const [inViewAt, setInViewAt] = useState<{ key: unknown } | null>(null)
   // The key the last automatic read started from.
   const readFrom = useRef<{ key: unknown } | null>(null)
 
+  // Observed afresh for every key: a read that lands moves the rows, and the
+  // sentinel's place before it says nothing about its place after it.
   useEffect(() => {
     if (!sentinel || typeof IntersectionObserver !== "function") return
     const observer = new IntersectionObserver(
-      ([entry]) => setInView(entry?.isIntersecting === true),
+      // One delivery can batch several crossings, oldest first: a list that
+      // mounts at its start and then scrolls to its end reports both, and
+      // only the last is where the sentinel is now.
+      (entries) =>
+        setInViewAt(
+          entries.at(-1)?.isIntersecting === true ? { key: loadKey } : null
+        ),
       { root: root?.current ?? null, ...(rootMargin ? { rootMargin } : {}) }
     )
     observer.observe(sentinel)
     return () => {
       observer.disconnect()
-      setInView(false)
+      setInViewAt(null)
     }
-  }, [root, rootMargin, sentinel])
+  }, [loadKey, root, rootMargin, sentinel])
 
   useEffect(() => {
-    if (!inView) {
+    if (!inViewAt) {
       readFrom.current = null
       return
     }
-    if (disabled || (readFrom.current && readFrom.current.key === loadKey))
+    if (
+      inViewAt.key !== loadKey ||
+      disabled ||
+      readFrom.current?.key === loadKey
+    )
       return
     readFrom.current = { key: loadKey }
     load()
-  }, [disabled, inView, load, loadKey])
+  }, [disabled, inViewAt, load, loadKey])
 
   return setSentinel
 }

@@ -326,6 +326,7 @@ const script = {
       readState: true,
       focus: true,
       guestProjection: false,
+      historyPages: false,
     },
   },
   agentCatalog: {
@@ -392,6 +393,12 @@ const script = {
       text: "Restored from AOS.",
     },
   ],
+  /**
+   * A history too long for one replay: a from-start resume sends only its
+   * newest page, and each `_aos/before` read sends the page before its cursor,
+   * held until the test calls `__acpStub.releasePage()`.
+   */
+  pagedHistory: null as PagedHistory | null,
   recovered: {
     messageId: "reconnect-answer",
     text: "Recovered after reconnect.",
@@ -421,6 +428,10 @@ const script = {
   },
 }
 
+type PagedHistory = {
+  pageSize: number
+  messages: { role: string; messageId: string; text: string }[]
+}
 type AcpScript = typeof script
 type AcpCall = { method: string; params: unknown }
 type ResumeParams = {
@@ -442,6 +453,8 @@ declare global {
       dropSocket: () => void
       /** Releases the window a deferred resume is holding back. */
       pushUsage: () => void
+      /** Sends the held `_aos/before` page, if one is waiting. */
+      releasePage: () => void
     }
   }
 }
@@ -458,6 +471,7 @@ function installAcpStub(script: AcpScript) {
     sequence: 0,
     dropSocket: () => {},
     pushUsage: () => {},
+    releasePage: () => {},
   }
   window.__acpStub = stub
   let turn = 0
@@ -561,12 +575,34 @@ function installAcpStub(script: AcpScript) {
       })
     }
 
-    message(role: string, messageId: string, text: string) {
+    message(
+      role: string,
+      messageId: string,
+      text: string,
+      meta?: Record<string, unknown>
+    ) {
       this.update({
         sessionUpdate: role === "user" ? "user_message" : "agent_message",
         messageId,
         content: [{ type: "text", text }],
+        ...(meta ? { _meta: { aos: meta } } : {}),
       })
+    }
+
+    /**
+     * The page ending `offset` messages before the newest, as the proxy reads
+     * it: its messages, then the cursor of the page before it, if any.
+     */
+    historyPage(
+      paged: PagedHistory,
+      offset: number,
+      meta?: Record<string, unknown>
+    ) {
+      const end = paged.messages.length - offset
+      const start = Math.max(0, end - paged.pageSize)
+      for (const entry of paged.messages.slice(start, end))
+        this.message(entry.role, entry.messageId, entry.text, meta)
+      return start > 0 ? { nextCursor: `offset-${offset + end - start}` } : {}
     }
 
     registerHandlers() {
@@ -594,7 +630,31 @@ function installAcpStub(script: AcpScript) {
             configOptions: script.configOptions,
             _meta: { aos: script.resumeMeta },
           })
-        if (asRecord(params.replayFrom).type === "start")
+        const replayFrom = asRecord(params.replayFrom)
+        const paged = script.pagedHistory
+        // An older page is its own read: tagged updates and a cursor, with no
+        // reattach, so neither the configuration nor the window is restated.
+        if (paged && replayFrom.type === "_aos/before") {
+          const cursor = String(replayFrom.cursor)
+          const offset = Number(cursor.replace("offset-", ""))
+          stub.releasePage = () => {
+            stub.releasePage = () => {}
+            const history = this.historyPage(paged, offset, {
+              historyPage: { cursor },
+            })
+            this.respond(id, { _meta: { aos: { history } } })
+          }
+          return
+        }
+        if (paged && replayFrom.type === "start") {
+          const history = this.historyPage(paged, 0)
+          this.respond(id, {
+            configOptions: script.configOptions,
+            _meta: { aos: { ...script.resumeMeta, history } },
+          })
+          return
+        }
+        if (replayFrom.type === "start")
           for (const entry of script.history)
             this.message(entry.role, entry.messageId, entry.text)
         else
@@ -799,6 +859,84 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
     .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
+})
+
+test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({
+  page,
+}) => {
+  // Five pages of scrolling through 1,200 messages outlast the default budget
+  // on a loaded machine.
+  test.slow()
+  const length = 1_200
+  const text = (index: number) => `Long history message ${index}`
+  await serveAcp(page, {
+    initializeMeta: {
+      ...script.initializeMeta,
+      extensions: { ...script.initializeMeta.extensions, historyPages: true },
+    },
+    pagedHistory: {
+      // Even pages start at a user message, as the proxy's turn-aligned pages do.
+      pageSize: 200,
+      messages: Array.from({ length }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        messageId: `older-${index}`,
+        text: text(index),
+      })),
+    },
+  })
+  await page.goto("/")
+
+  // The Session opens at its latest message, not at its first.
+  const newest = page.getByText(text(length - 1), { exact: true })
+  await expect(newest).toBeInViewport()
+  const box = await newest.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+
+  const pageReads = async () =>
+    (await resumes(page)).filter(
+      (call) => call.replayFrom?.type === "_aos/before"
+    ).length
+  // The message nearest the top of the thread that the reader can see whole.
+  const firstInView = () =>
+    page.evaluate(() => {
+      const shown = [...document.querySelectorAll("[data-message-id]")].find(
+        (row) => {
+          const { top, bottom } = row.getBoundingClientRect()
+          return top >= 0 && bottom <= window.innerHeight
+        }
+      )
+      return /Long history message \d+/.exec(shown?.textContent ?? "")?.[0]
+    })
+
+  const beginning = page.getByText("Beginning of conversation")
+  for (let loaded = 0; loaded < length / 200 - 1; loaded += 1) {
+    // The reader scrolls up until the read-ahead margin asks for the page
+    // before; the stub holds it, so the reader's place is fixed when it lands.
+    await expect(async () => {
+      if ((await pageReads()) === loaded) await page.mouse.wheel(0, -6_000)
+      expect(await pageReads()).toBe(loaded + 1)
+    }).toPass({ intervals: [50] })
+    const anchor = await firstInView()
+    expect(anchor).toBeDefined()
+    await page.evaluate(() => window.__acpStub.releasePage())
+    await expect(
+      page.getByRole("button", { name: "Loading earlier messages" })
+    ).toHaveCount(0)
+    // Prepending a page moves nothing the reader is looking at.
+    await expect(page.getByText(anchor!, { exact: true })).toBeInViewport()
+  }
+
+  // The last page carries no cursor: the thread says so, reads no further,
+  // and the reader can scroll to the very first message.
+  await expect(beginning).toBeAttached()
+  const first = page.getByText(text(0), { exact: true })
+  await expect(async () => {
+    await page.mouse.wheel(0, -6_000)
+    await expect(first).toBeInViewport({ timeout: 500 })
+  }).toPass({ intervals: [50] })
+  await expect(beginning).toBeInViewport()
+  expect(await pageReads()).toBe(length / 200 - 1)
 })
 
 test("AOS proxy shows the context gauge when the window arrives after the resume", async ({
