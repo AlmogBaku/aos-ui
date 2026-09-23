@@ -11,7 +11,7 @@ export type OpenCodeInteractionScope = {
   sessionId: string
   threadId: string
   /** A normalized segment ID is not native interaction identity. */
-  runId?: string
+  turnId?: string
 }
 export type OpenCodeInteractionTransport = {
   questions: {
@@ -55,7 +55,7 @@ export class OpenCodeInteractionPublicError extends Error {
     this.name = "OpenCodeInteractionPublicError"
   }
 }
-type Scope = Omit<OpenCodeInteractionScope, "runId">
+type Scope = Omit<OpenCodeInteractionScope, "turnId">
 type Question = {
   options: { publicValue: string; nativeLabel: string }[]
   multiple: boolean

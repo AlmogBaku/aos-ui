@@ -8,18 +8,18 @@
  * the settling watcher is what holds the next Send until Hermes is really done.
  */
 import {
-  ServerRunConflictError,
-  ServerRunSteerUncertainError,
+  ServerTurnConflictError,
+  ServerTurnSteerUncertainError,
 } from "../../core/runtime"
 import { sessionKey } from "./native"
 import {
   loggedFields,
   loggedNativeMessage,
-  publicRunFailure,
+  publicTurnFailure,
   stopUncertain,
-  RUN_FAILED_LOG,
-  RUN_FAILURES,
-  RUN_NATIVE_ERROR_LOG,
+  TURN_FAILED_LOG,
+  TURN_FAILURES,
+  TURN_NATIVE_ERROR_LOG,
   type NativeFailure,
 } from "./run-failures"
 import { nativeEvent, payloadOf } from "./run-frames"
@@ -28,8 +28,8 @@ import {
   readStatus,
   safelyUnsubscribe,
   settledStatus,
-  type ActiveRun,
-  type RunEngineHost,
+  type ActiveTurn,
+  type TurnEngineHost,
   type SettlementEdge,
   type SettlingWatcher,
   type TurnOutcome,
@@ -58,11 +58,11 @@ export function turnOutcome(status: unknown): TurnOutcome {
  * sealing a generation moves that id into `sealedMessageIds`, so the two
  * together are the run's own record that Hermes ran something for it.
  */
-function outputObserved(active: ActiveRun) {
+function outputObserved(active: ActiveTurn) {
   return active.messageId !== undefined || active.sealedMessageIds.size > 0
 }
 
-function settlingWatcher(active: ActiveRun): SettlingWatcher {
+function settlingWatcher(active: ActiveTurn): SettlingWatcher {
   const { promise, resolve } = deferred()
   const watcher: SettlingWatcher = {
     active,
@@ -88,10 +88,10 @@ function resolvedWithin(done: Promise<unknown>, ms: number) {
 }
 
 /** Hermes' authoritative answer to "is this Session's turn over?". */
-export async function settleStale(host: RunEngineHost, active: ActiveRun) {
+export async function settleStale(host: TurnEngineHost, active: ActiveTurn) {
   const status = await readStatus(host, active.liveSessionId)
   if (status === undefined || !settledStatus(status))
-    throw new ServerRunConflictError()
+    throw new ServerTurnConflictError()
   host.settle(active)
 }
 
@@ -100,8 +100,8 @@ export async function settleStale(host: RunEngineHost, active: ActiveRun) {
  * `edge` records what proved Hermes has nothing left to run for this turn.
  */
 export function settleFrom(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   edge: SettlementEdge
 ) {
   if (active.terminal) return
@@ -162,14 +162,14 @@ export function settleFrom(
 
 /** The only producer of a public run failure from a native turn outcome. */
 export function failTurn(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   override?: NativeFailure
 ) {
   const failure = override ?? active.failure ?? {}
-  const { code, message } = publicRunFailure(failure)
+  const { code, message } = publicTurnFailure(failure)
   host.log.warn(
-    RUN_FAILED_LOG,
+    TURN_FAILED_LOG,
     loggedFields({
       publicCode: code,
       code: failure.code,
@@ -187,8 +187,8 @@ export function failTurn(
  * usable edge: a correction in flight at the boundary, or an unstarted turn.
  */
 function recheckSettlement(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   delayMs: number,
   rereads = QUEUED_START_REREADS
 ) {
@@ -201,8 +201,8 @@ function recheckSettlement(
 }
 
 async function settleIfIdle(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   rereads: number
 ) {
   if (active.terminal || active.redirect.pending) return
@@ -228,8 +228,8 @@ async function settleIfIdle(
  * advisory failures too. One status read decides, logged once per frame.
  */
 export async function reconcileNativeError(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   failure: NativeFailure
 ) {
   // A failed read cannot prove termination; later frames stay authoritative.
@@ -241,7 +241,7 @@ export async function reconcileNativeError(
         ? "terminal"
         : "advisory"
   host.log.warn(
-    RUN_NATIVE_ERROR_LOG,
+    TURN_NATIVE_ERROR_LOG,
     loggedFields({
       verdict,
       status,
@@ -259,9 +259,9 @@ export async function reconcileNativeError(
   settleFrom(host, active, "status")
 }
 
-export async function stopRun(
-  host: RunEngineHost,
-  active: ActiveRun
+export async function stopTurn(
+  host: TurnEngineHost,
+  active: ActiveTurn
 ): Promise<"stopping" | "idle"> {
   if (active.terminal) return "idle"
   if (!active.stopping) {
@@ -274,7 +274,7 @@ export async function stopRun(
       // consuming exactly like every other uncertain outcome: its cursor
       // freezes at the last delivered frame and the browser reconciles from
       // there. Following further frames would strand the turn's own end.
-      host.detach(active, RUN_FAILURES.stopUncertain)
+      host.detach(active, TURN_FAILURES.stopUncertain)
       throw stopUncertain()
     }
     // Hermes stating it has no live Session left is a confirmed Stop.
@@ -297,9 +297,9 @@ export async function stopRun(
   return "stopping"
 }
 
-export async function steerRun(
-  host: RunEngineHost,
-  active: ActiveRun,
+export async function steerTurn(
+  host: TurnEngineHost,
+  active: ActiveTurn,
   text: string
 ) {
   if (
@@ -308,7 +308,7 @@ export async function steerRun(
     active.uncertain ||
     active.redirect.pending
   )
-    throw new ServerRunConflictError()
+    throw new ServerTurnConflictError()
   const generation = active.generation
   const previousChain = active.redirect.chain
   active.redirect.pending = true
@@ -320,7 +320,7 @@ export async function steerRun(
     active.redirect.pending = false
     // Hermes may have applied a correction whose acknowledgement was lost, so
     // the run keeps following the chain; a rejected correction never landed.
-    if (error instanceof ServerRunSteerUncertainError)
+    if (error instanceof ServerTurnSteerUncertainError)
       steerAcknowledged(host, active, generation, true)
     else {
       active.redirect.chain = previousChain
@@ -333,8 +333,8 @@ export async function steerRun(
 
 /** The correction is Hermes' now: this run follows the turn it lands in. */
 function steerAcknowledged(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   generation: number,
   queued: boolean
 ) {
@@ -349,7 +349,7 @@ function steerAcknowledged(
     recheckSettlement(host, active, queued ? QUEUED_START_GRACE_MS : 0)
 }
 
-export function watchSettling(host: RunEngineHost, active: ActiveRun) {
+export function watchSettling(host: TurnEngineHost, active: ActiveTurn) {
   const key = sessionKey(active.scope)
   host.settling.get(key)?.settle()
   const watcher = settlingWatcher(active)
@@ -358,7 +358,7 @@ export function watchSettling(host: RunEngineHost, active: ActiveRun) {
 }
 
 async function awaitSettled(
-  host: RunEngineHost,
+  host: TurnEngineHost,
   key: string,
   watcher: SettlingWatcher
 ) {
@@ -387,8 +387,8 @@ async function awaitSettled(
 
 /** After the turn ended, the only frame left that matters is Hermes idling. */
 export function observeSettling(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   value: unknown
 ) {
   const watcher = host.settling.get(sessionKey(active.scope))

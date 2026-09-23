@@ -19,12 +19,12 @@ describe("OpenClaw capabilities", () => {
     ).toEqual({
       steering: {
         status: "unavailable",
-        reason: "active-run-steering-unavailable",
+        reason: "active-turn-steering-unavailable",
       },
       approvals: {
         status: "available",
         protocol: "acp-request",
-        scope: "run",
+        scope: "turn",
         choices: [
           { value: "once", scope: "request" },
           { value: "always", scope: "agent" },
@@ -35,7 +35,7 @@ describe("OpenClaw capabilities", () => {
       questions: {
         status: "available",
         protocol: "acp-request",
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-cancel",
         maxQuestions: 3,

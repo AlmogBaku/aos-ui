@@ -27,7 +27,7 @@ describe("the bounded turn event queue", () => {
 
     queue.terminal({
       kind: TurnEventKind.TurnFailed,
-      message: "Hermes could not complete this run.",
+      message: "Hermes could not complete this turn.",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
 
@@ -35,7 +35,7 @@ describe("the bounded turn event queue", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.TurnFailed,
-        message: "Hermes could not complete this run.",
+        message: "Hermes could not complete this turn.",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])

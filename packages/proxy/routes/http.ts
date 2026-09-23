@@ -6,8 +6,8 @@ export type ErrorCode =
   | "invalid_request"
   | "not_found"
   | "revision_conflict"
-  | "run_conflict"
-  | "run_capacity_exceeded"
+  | "turn_conflict"
+  | "turn_capacity_exceeded"
   | "registration_limit_exceeded"
   | "runtime_authentication_required"
   | "temporarily_unavailable"
@@ -21,8 +21,8 @@ const errorDescriptions: Record<ErrorCode, string> = {
   invalid_request: "The request could not be processed.",
   not_found: "The requested item was not found.",
   revision_conflict: "This item changed. Refresh and try again.",
-  run_conflict: "A run is already active for this session.",
-  run_capacity_exceeded: "AOS is at capacity. Please try again shortly.",
+  turn_conflict: "A turn is already active for this session.",
+  turn_capacity_exceeded: "AOS is at capacity. Please try again shortly.",
   registration_limit_exceeded:
     "This account already has the maximum number of devices registered for notifications. Remove one to add another.",
   runtime_authentication_required:

@@ -7,12 +7,12 @@ import {
 } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
-import { ServerRunStopNotDispatchedError } from "../../core/runtime"
+import { ServerTurnStopNotDispatchedError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenClawClientRequestError } from "./client"
 import { stageOpenClawChatAttachments } from "./content"
 import { OpenClawInteractions } from "./interactions"
-import { OpenClawRunEngine, type OpenClawRunRequestClient } from "./run"
+import { OpenClawTurnEngine, type OpenClawRunRequestClient } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
 
 class ControlledNative implements OpenClawRunRequestClient {
@@ -146,9 +146,9 @@ function input(turnId = "run-a"): TurnInput {
   return { turnId, messageId: "user-a", prompt: "Investigate this" }
 }
 
-function resumeInput(
+function repliesInput(
   replies: RequestReply[],
-  turnId = "run-resume"
+  turnId = "turn-replies"
 ): RepliesTurnInput {
   return { turnId, replies }
 }
@@ -161,7 +161,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-function coordinator(engine: OpenClawRunEngine) {
+function coordinator(engine: OpenClawTurnEngine) {
   return new SessionCoordinator({
     engine,
     maxActiveExecutions: 8,
@@ -184,7 +184,7 @@ describe("OpenClaw run engine", () => {
   it("submits one exact Agent-bound native-idempotent text turn after authoritative idle", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.start(scope, input())
     const iterator = handle.events[Symbol.asyncIterator]()
@@ -214,7 +214,7 @@ describe("OpenClaw run engine", () => {
   it("sends one provider-validated staged attachment with the exact native turn", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const stage = stageOpenClawChatAttachments(
       [
         {
@@ -253,15 +253,15 @@ describe("OpenClaw run engine", () => {
     ])
   })
 
-  it("rejects resume attachments and foreign stages before native dispatch", async () => {
+  it("rejects reply attachments and foreign stages before native dispatch", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const validate = vi.fn(async () => ({ runId: "native-original" }))
     const dispatch = vi.fn(async () => ({ status: "resolved" as const }))
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: { validate, dispatch },
+      replies: { validate, dispatch },
     })
     const stage = stageOpenClawChatAttachments(
       [{ type: "image", dataUrl: "data:image/png;base64,aGk=" }],
@@ -274,7 +274,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       engine.start(
         scope,
-        resumeInput([
+        repliesInput([
           {
             requestId: "question-a",
             status: "resolved",
@@ -302,7 +302,7 @@ describe("OpenClaw run engine", () => {
     const native = new ControlledNative()
     native.sendError = new OpenClawClientRequestError("connection closed", true)
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const stage = stageOpenClawChatAttachments(
       [{ type: "file", dataUrl: "data:text/plain;base64,aGk=" }],
       {
@@ -327,7 +327,7 @@ describe("OpenClaw run engine", () => {
   it("rejects a staged request that exceeds the negotiated frame before reserving the run", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const stage = stageOpenClawChatAttachments(
       [{ type: "file", dataUrl: "data:text/plain;base64,aGk=" }],
       {
@@ -363,7 +363,7 @@ describe("OpenClaw run engine", () => {
       }
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const starting = engine.start(scope, input())
     await vi.waitFor(() => expect(reads).toBe(1))
@@ -391,7 +391,7 @@ describe("OpenClaw run engine", () => {
     })
 
     await expect(starting).rejects.toMatchObject({
-      name: "ServerRunConflictError",
+      name: "ServerTurnConflictError",
     })
     expect(reads).toBe(2)
     expect(
@@ -408,7 +408,7 @@ describe("OpenClaw run engine", () => {
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
       name: "OpenClawRunPublicError",
@@ -429,7 +429,7 @@ describe("OpenClaw run engine", () => {
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     await expect(engine.start(scope, input())).resolves.toBeDefined()
     expect(
@@ -455,7 +455,7 @@ describe("OpenClaw run engine", () => {
       },
     ],
   ])(
-    "validates an exact bound %s resume before observing and dispatches it once after attachment",
+    "validates an exact bound %s reply before observing and dispatches it once after attachment",
     async (_kind, response) => {
       const native = new ControlledNative()
       native.history = {
@@ -478,12 +478,12 @@ describe("OpenClaw run engine", () => {
         ).toBe(true)
         return { status: "resolved" as const }
       })
-      const engine = new OpenClawRunEngine({
+      const engine = new OpenClawTurnEngine({
         client: native,
         subscriptions,
-        resume: { validate, dispatch },
+        replies: { validate, dispatch },
       })
-      const candidate = resumeInput([response])
+      const candidate = repliesInput([response])
 
       await expect(engine.start(scope, candidate)).resolves.toBeDefined()
       expect(validate).toHaveBeenCalledExactlyOnceWith(scope, candidate.replies)
@@ -494,14 +494,14 @@ describe("OpenClaw run engine", () => {
     }
   )
 
-  it("rejects an unbound resume before attaching or dispatching it", async () => {
+  it("rejects an unbound reply before attaching or dispatching it", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const dispatch = vi.fn()
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: {
+      replies: {
         validate: vi.fn(async () => {
           throw new Error("interaction does not belong to this Session")
         }),
@@ -512,7 +512,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       engine.start(
         scope,
-        resumeInput([
+        repliesInput([
           {
             requestId: "foreign-question",
             status: "cancelled",
@@ -542,10 +542,10 @@ describe("OpenClaw run engine", () => {
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const dispatch = vi.fn(async () => ({ status: "uncertain" as const }))
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: {
+      replies: {
         validate: vi.fn(async () => ({ runId: "native-waiting" })),
         dispatch,
       },
@@ -553,7 +553,7 @@ describe("OpenClaw run engine", () => {
 
     const handle = await engine.start(
       scope,
-      resumeInput([
+      repliesInput([
         {
           requestId: "question-a",
           status: "resolved",
@@ -570,7 +570,7 @@ describe("OpenClaw run engine", () => {
 
     const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-resume",
+      turnId: "turn-replies",
     })
     await expect(
       recovered.events[Symbol.asyncIterator]().next()
@@ -580,7 +580,7 @@ describe("OpenClaw run engine", () => {
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
 
-  it("rediscovers and resumes one exact pending question through a fresh engine", async () => {
+  it("rediscovers and answers one exact pending question through a fresh engine", async () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay()
     native.history = {
@@ -602,10 +602,10 @@ describe("OpenClaw run engine", () => {
     })
     const interactions = new OpenClawInteractions({ request })
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: interactions,
+      replies: interactions,
     })
 
     const discovered = await engine.discover(scope, "restored-question")
@@ -628,9 +628,9 @@ describe("OpenClaw run engine", () => {
       },
     ])
 
-    const resumed = await engine.start(
+    const answered = await engine.start(
       scope,
-      resumeInput(
+      repliesInput(
         [
           {
             requestId: "question-restored",
@@ -657,15 +657,15 @@ describe("OpenClaw run engine", () => {
       },
       subscriptions.generation
     )
-    const resumedEvents: unknown[] = []
-    for await (const event of resumed.events) resumedEvents.push(event)
+    const answeredEvents: unknown[] = []
+    for await (const event of answered.events) answeredEvents.push(event)
 
-    expect(resumedEvents).toContainEqual({
+    expect(answeredEvents).toContainEqual({
       kind: TurnEventKind.MessageChunk,
       messageId: "question-continuation:assistant",
       text: " after",
     })
-    expect(resumedEvents.at(-1)).toEqual({ kind: TurnEventKind.TurnEnded })
+    expect(answeredEvents.at(-1)).toEqual({ kind: TurnEventKind.TurnEnded })
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "question.list",
       "question.get",
@@ -677,7 +677,7 @@ describe("OpenClaw run engine", () => {
     )
   })
 
-  it("rediscovers and resumes one approval against the unique history-proven native run", async () => {
+  it("rediscovers and answers one approval against the unique history-proven native run", async () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay([pendingApproval])
     native.history = {
@@ -709,10 +709,10 @@ describe("OpenClaw run engine", () => {
     })
     const interactions = new OpenClawInteractions({ request })
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: interactions,
+      replies: interactions,
     })
 
     const discovered = await engine.discover(scope, "restored-approval")
@@ -725,7 +725,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       engine.start(
         scope,
-        resumeInput(
+        repliesInput(
           [
             {
               requestId: "approval-restored",
@@ -749,7 +749,7 @@ describe("OpenClaw run engine", () => {
     )
   })
 
-  it("uses an acknowledged approval replay key to recover and resume a canonical Session alias", async () => {
+  it("uses an acknowledged approval replay key to recover and reply on a canonical Session alias", async () => {
     const publicScope = { ...scope, sessionId: "global" }
     const replayKey = "agent:research:global"
     const approval = {
@@ -798,10 +798,10 @@ describe("OpenClaw run engine", () => {
       throw new Error(`Unexpected interaction method ${method}`)
     })
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: new OpenClawInteractions({ request }),
+      replies: new OpenClawInteractions({ request }),
     })
 
     const discovering = engine.discover(publicScope, "restored-alias")
@@ -838,7 +838,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       engine.start(
         publicScope,
-        resumeInput(
+        repliesInput(
           [
             {
               requestId: approval.id,
@@ -881,17 +881,17 @@ describe("OpenClaw run engine", () => {
       throw new Error(`Unexpected interaction method ${method}`)
     })
     const sessions = coordinator(
-      new OpenClawRunEngine({
+      new OpenClawTurnEngine({
         client: native,
         subscriptions: new OpenClawSessionSubscriptions(native),
-        resume: new OpenClawInteractions({ request }),
+        replies: new OpenClawInteractions({ request }),
       })
     )
 
     await expect(sessions.discover(scope)).resolves.toMatchObject({
       state: "waiting-for-input",
     })
-    const recoveredRunId = sessions.snapshot(scope).runId
+    const recoveredRunId = sessions.snapshot(scope).turnId
 
     native.approvalReplay = approvalReplay()
     native.history = {
@@ -951,10 +951,10 @@ describe("OpenClaw run engine", () => {
       }
       const request = vi.fn(async () => ({ questions }))
       const interactions = new OpenClawInteractions({ request })
-      const engine = new OpenClawRunEngine({
+      const engine = new OpenClawTurnEngine({
         client: native,
         subscriptions: new OpenClawSessionSubscriptions(native),
-        resume: interactions,
+        replies: interactions,
       })
 
       await expect(
@@ -997,10 +997,10 @@ describe("OpenClaw run engine", () => {
     }
     const discover = vi.fn(async () => undefined)
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: {
+      replies: {
         validate: vi.fn(),
         dispatch: vi.fn(),
         discover,
@@ -1066,10 +1066,10 @@ describe("OpenClaw run engine", () => {
         throw new Error(`Unexpected interaction method ${method}`)
       })
       const subscriptions = new OpenClawSessionSubscriptions(native)
-      const engine = new OpenClawRunEngine({
+      const engine = new OpenClawTurnEngine({
         client: native,
         subscriptions,
-        resume: new OpenClawInteractions({ request }),
+        replies: new OpenClawInteractions({ request }),
       })
 
       const discovering = engine.discover(scope, "approval-during-history")
@@ -1111,7 +1111,7 @@ describe("OpenClaw run engine", () => {
     }
   )
 
-  it("authoritatively binds a cold recovered resume segment to the unique active native run", async () => {
+  it("authoritatively binds a cold recovered reply segment to the unique active native run", async () => {
     const native = new ControlledNative()
     native.history = {
       sessionKey: scope.sessionId,
@@ -1129,11 +1129,11 @@ describe("OpenClaw run engine", () => {
       abortedRunId: "native-original",
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "segment-resumed",
+      turnId: "segment-continued",
     })
     await expect(handle.stop()).resolves.toBe("stopping")
     expect(
@@ -1149,7 +1149,7 @@ describe("OpenClaw run engine", () => {
     ])
   })
 
-  it("uses pre-dispatch native state as a private resume baseline and emits only the suffix", async () => {
+  it("uses pre-dispatch native state as a private reply baseline and emits only the suffix", async () => {
     const oldEvents = [
       {
         runId: "native-original",
@@ -1239,10 +1239,10 @@ describe("OpenClaw run engine", () => {
       }
       return { status: "resolved" as const }
     })
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
-      resume: {
+      replies: {
         validate: vi.fn(async () => ({ runId: "native-original" })),
         dispatch,
       },
@@ -1250,7 +1250,7 @@ describe("OpenClaw run engine", () => {
 
     const handle = await engine.start(
       scope,
-      resumeInput([
+      repliesInput([
         {
           requestId: "question-a",
           status: "resolved",
@@ -1285,7 +1285,7 @@ describe("OpenClaw run engine", () => {
     expect(serialized).not.toContain("old-tool")
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "run-resume:assistant",
+      messageId: "turn-replies:assistant",
       text: " after answer",
     })
     expect(events).toContainEqual(
@@ -1301,7 +1301,7 @@ describe("OpenClaw run engine", () => {
   it("maps validated native reasoning, text, usage, and tools in order and drops progress", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({
+    const engine = new OpenClawTurnEngine({
       client: native,
       subscriptions,
       toolEvents: true,
@@ -1435,7 +1435,7 @@ describe("OpenClaw run engine", () => {
   it("aborts only the exact run and remains stopping until native terminal evidence", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
     const iterator = handle.events[Symbol.asyncIterator]()
     await iterator.next()
@@ -1507,7 +1507,7 @@ describe("OpenClaw run engine", () => {
       false
     )
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
 
     await expect(handle.stop()).rejects.toMatchObject({
@@ -1524,7 +1524,7 @@ describe("OpenClaw run engine", () => {
     const acknowledgement = deferred<unknown>()
     native.abortRequest = () => acknowledgement.promise
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
 
     const stopping = handle.stop()
@@ -1560,7 +1560,7 @@ describe("OpenClaw run engine", () => {
   it("returns idle when authoritative history is already idle after the abort acknowledgement", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
 
     await expect(handle.stop()).resolves.toBe("idle")
@@ -1575,11 +1575,11 @@ describe("OpenClaw run engine", () => {
       false
     )
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
 
     const error = await handle.stop().catch((cause: unknown) => cause)
-    expect(error).toBeInstanceOf(ServerRunStopNotDispatchedError)
+    expect(error).toBeInstanceOf(ServerTurnStopNotDispatchedError)
     expect(error).toMatchObject({
       failure: {
         name: "OpenClawRunPublicError",
@@ -1596,7 +1596,7 @@ describe("OpenClaw run engine", () => {
       false
     )
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.start(scope, input())
     const events: unknown[] = []
@@ -1618,7 +1618,7 @@ describe("OpenClaw run engine", () => {
     }
     const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-a",
+      turnId: "run-a",
     })
     await expect(
       recovered.events[Symbol.asyncIterator]().next()
@@ -1638,7 +1638,7 @@ describe("OpenClaw run engine", () => {
   it("rejects foreign runs and reduces tool detail when tool events were not negotiated", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
     const emit = (runId: string, seq: number, data: Record<string, unknown>) =>
       subscriptions.accept(
@@ -1713,7 +1713,7 @@ describe("OpenClaw run engine", () => {
   it("flushes validated final-only chat text before terminal lifecycle", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
 
     subscriptions.accept(
@@ -1746,7 +1746,7 @@ describe("OpenClaw run engine", () => {
   it("resubscribes and reconciles active-run identity without resending the prompt", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const original = await engine.start(scope, input())
     native.history = {
       sessionKey: scope.sessionId,
@@ -1758,7 +1758,7 @@ describe("OpenClaw run engine", () => {
 
     const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-a",
+      turnId: "run-a",
       position: original.recoveryPosition(),
     })
     const iterator = recovered.events[Symbol.asyncIterator]()
@@ -1801,7 +1801,7 @@ describe("OpenClaw run engine", () => {
   it("rejects reconnect history from a rotated foreign transcript generation", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
     native.history = {
       sessionKey: scope.sessionId,
@@ -1837,11 +1837,11 @@ describe("OpenClaw run engine", () => {
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-a",
+      turnId: "run-a",
     })
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
@@ -1898,10 +1898,10 @@ describe("OpenClaw run engine", () => {
       },
     }
     const subscriptions = new OpenClawSessionSubscriptions(native)
-    const engine = new OpenClawRunEngine({ client: native, subscriptions })
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-a",
+      turnId: "run-a",
     })
 
     const emitSessionTool = (seq: number, data: Record<string, unknown>) =>

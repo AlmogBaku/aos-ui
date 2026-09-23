@@ -17,12 +17,12 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
     interactions: {
       steering: {
         status: "unavailable" as const,
-        reason: "active-run-steering-unavailable" as const,
+        reason: "active-turn-steering-unavailable" as const,
       },
       approvals: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,
-        scope: "run" as const,
+        scope: "turn" as const,
         choices: [
           { value: "once" as const, scope: "request" as const },
           { value: "always" as const, scope: "agent" as const },
@@ -33,7 +33,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
       questions: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,
-        scope: "run" as const,
+        scope: "turn" as const,
         answerModes: ["single", "multiple", "free-text"] as const,
         cancellation: "native-cancel" as const,
         maxQuestions: 3,

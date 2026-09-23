@@ -1,7 +1,7 @@
 # Hermes turn lifecycle
 
 This document explains how the Hermes `/api/ws` protocol represents one model
-turn and how the AOS Hermes adapter maps that turn to the proxy-owned run
+turn and how the AOS Hermes adapter maps that turn to the proxy-owned turn
 vocabulary defined in `packages/proxy/core/events.ts`. The ACP layer then
 delivers those events to the browser. This is a reference for contributors
 changing `gateway.ts`, `gateway-socket.ts`, `run.ts`, recovery, or history.
@@ -20,8 +20,8 @@ The layers have separate responsibilities:
    `gateway.ts` / `gateway-socket.ts` wrap it with the token dial, bounded
    decoding, error classification, and one event fan-out.
 2. `run.ts` validates events for one attached Session and maps their semantics
-   to a proxy-owned run segment.
-3. The shared run coordinator owns subscriber replay and terminal settlement.
+   to a proxy-owned turn segment.
+3. The shared turn coordinator owns subscriber replay and terminal settlement.
 4. Authoritative Hermes HTTP history reconciles durable transcript state.
 
 Do not infer turn completion from a request acknowledgement, a tool result, a
@@ -46,7 +46,7 @@ any number of assistant text segments and tool calls in source order.
 
 Hermes sets the Session to idle after emitting the turn's completion frame. A
 consumer should prefer `message.complete` as the semantic terminal event and
-use idle `session.info` only to avoid leaving a run permanently pending when a
+use idle `session.info` only to avoid leaving an AOS turn permanently pending when a
 terminal frame is absent.
 
 ## Interwoven text and tools
@@ -85,7 +85,7 @@ that must not be conflated:
 - The turn accepted at `2026-09-15 19:44:53` included a failed `skill_view`,
   continued through later tools and model calls, and ended with native
   `status=complete`. AOS must preserve the failed tool and every interim text
-  boundary without settling the run.
+  boundary without settling the AOS turn.
 - The turns accepted at `2026-09-16 07:28:26` and `07:37:00` continued through
   several tools, then Hermes exhausted three Bedrock retries because the model
   rejected assistant-message prefill. Hermes ended both native turns with
@@ -111,23 +111,23 @@ proxy-owned vocabulary for the browser):
 
 - `message.interim` ends only the current text segment in the proxy-owned
   vocabulary. It emits neither `TurnEnded` nor `TurnFailed`. The adapter
-  rotates its own message id at that boundary, but the ACP translation pins every chunk and tool call of the run to
+  rotates its own message id at that boundary, but the ACP translation pins every chunk and tool call of the AOS turn to
   the segment's first id, so the browser streams the one assistant turn that
   history later replays.
 - When `already_streamed` is false, the adapter emits the interim text as that
   segment's last chunk. When it is true, the text already arrived through
   `message.delta` and is not duplicated.
-- Tool failure terminates that tool call, not the run.
+- Tool failure terminates that tool call, not the AOS turn.
 - A successful `message.complete` settles outstanding tool calls and emits
   exactly one `TurnEnded`.
-- A terminal native error becomes a localized AOS run error, never an assistant
+- A terminal native error becomes a localized AOS turn error, never an assistant
   message: a failed completion's `text` is published as assistant text only when
-  `partial` is true, so Hermes' own failure copy never reads as a reply. The run
+  `partial` is true, so Hermes' own failure copy never reads as a reply. The turn
   error carries the catalogue headline for the mapped code, followed by Hermes'
   own error text bounded to 500 characters and dropped whole when it trips the
   adapter's redaction rule. Transport details never reach the browser.
 - A generic `error` frame records a possible failure and triggers an
-  authoritative Session-status read. `running` or `waiting` keeps the run open;
+  authoritative Session-status read. `running` or `waiting` keeps the AOS turn open;
   `idle` confirms the failure. A failed status read cannot prove termination,
   so later message or Session lifecycle events remain authoritative.
 - Idle `session.info` is a fallback terminal edge, never the primary completion
@@ -138,7 +138,7 @@ proxy-owned vocabulary for the browser):
   snapshot instead of its transcript, and only `session.resume` returns that
   snapshot. A history load whose last page ends with an unanswered prompt
   therefore resumes the Session once and restores the retained turn with the
-  same public failure code and message the live run published, restoring the
+  same public failure code and message the live AOS turn published, restoring the
   retained assistant text only when Hermes streamed prose before failing. No
   other history load resumes anything.
 
@@ -170,18 +170,18 @@ not replace correct turn interpretation.
 The following test titles in `run.test.ts` cover the sequences described in
 this document. Changing any of these behaviors requires updating the test.
 
-- `keeps one AOS run while redirecting into a distinct assistant generation`
-- `keeps the run open across a failed tool, interim text, and recovered tools`
+- `keeps one AOS turn while redirecting into a distinct assistant generation`
+- `keeps the turn open across a failed tool, interim text, and recovered tools`
 - `seals already-streamed interim text without duplicating it`
-- `settles a run when its native turn later completes`
-- `treats a failed message completion as a run error with its cause`
+- `settles an AOS turn when its native turn later completes`
+- `treats a failed message completion as a turn error with its cause`
 - `keeps Hermes partial output visible when message completion fails`
 - `never publishes Hermes' failure copy as assistant text`
 - `terminalizes a confirmed idle native failure with its bounded cause`
-- `keeps the run open after an advisory native error while Hermes is running`
-- `completes the advisory-error sequence without a run error`
+- `keeps the turn open after an advisory native error while Hermes is running`
+- `completes the advisory-error sequence without a turn error`
 - `fails the terminal-error sequence once at the idle edge`
 - `replays missed events from the same Hermes epoch before buffered live events`
-- `reattaches an interrupted active run and replays without resubmitting the prompt`
+- `reattaches an interrupted active turn and replays without resubmitting the prompt`
 - `classifies a changed Hermes replay epoch as reset-required`
 - `live and refreshed Hermes tool projection agree` (describe block with multiple cases)

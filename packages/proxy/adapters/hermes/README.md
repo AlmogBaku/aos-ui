@@ -7,12 +7,12 @@ for other harnesses.
 Read the [runtime adapter authoring guide](../../../../docs/development/runtime-adapter-authoring.md)
 for shared obligations. [`UPSTREAM.md`](UPSTREAM.md) records the pinned MIT
 sources and attribution. [`TURN-LIFECYCLE.md`](TURN-LIFECYCLE.md) defines the
-native `/api/ws` turn boundaries and their mapping to the proxy-owned run vocabulary.
+native `/api/ws` turn boundaries and their mapping to the proxy-owned turn vocabulary.
 The ACP layer translates that vocabulary to the browser.
 
 ## Package map
 
-- `adapter.ts` composes normalized workspace, run, command, rewind, interaction,
+- `adapter.ts` composes normalized workspace, turn, command, rewind, interaction,
   content, and capability operations.
 - `dashboard-client.ts` owns validated HTTP reads and durable mutations.
 - `vendor/hermes-shared/` is a byte-identical copy of the `JsonRpcGatewayClient`
@@ -29,8 +29,8 @@ The ACP layer translates that vocabulary to the browser.
   rebinds after a heal, invalidates on 4001/4007 rejection, clears on restart,
   and applies running-aware warm-idle release.
 - `run-native.ts` defines typed native outcomes and the Hermes rejection-code
-  table used to classify run errors.
-- `run.ts` converts native execution frames into ordered proxy-owned run
+  table used to classify turn errors.
+- `run.ts` converts native execution frames into ordered proxy-owned turn
   events: the single attach path, per-Session contiguity and catch-up,
   discovery by open-turn ring scan, one turn outcome, the settlement watcher,
   and the failure catalogue.
@@ -69,7 +69,7 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   therefore drops the journal acknowledgements that history already carried,
   counted in acceptance order, so the correction is announced once.
 - A redirect can close one assistant generation and begin another without a
-  second logical run or `TurnStarted`.
+  second logical turn or `TurnStarted`.
 - `session.interrupt` requests Stop; the coordinator remains `stopping` until a
   terminal event or authoritative idle result.
 - A recognized slash command may return output, prefill, alias, or submit work.

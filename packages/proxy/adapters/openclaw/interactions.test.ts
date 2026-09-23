@@ -66,7 +66,7 @@ const approvalReplay = {
   approvals: [approval],
   truncated: false,
 }
-const resumeScope = {
+const repliesScope = {
   agentId: scope.agentId,
   sessionId: scope.sessionId,
   threadId: scope.threadId,
@@ -109,7 +109,7 @@ describe("OpenClaw interactions", () => {
 
     await expect(
       interactions.discover(
-        { ...resumeScope, nativeRunId: "run-a" },
+        { ...repliesScope, nativeRunId: "run-a" },
         approvalReplay
       )
     ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
@@ -176,17 +176,17 @@ describe("OpenClaw interactions", () => {
 
     await expect(
       interactions.discover(
-        { ...resumeScope, nativeRunId: "run-a" },
+        { ...repliesScope, nativeRunId: "run-a" },
         { ...approvalReplay, approvals: [] }
       )
     ).resolves.toMatchObject({
       requests: [{ requestId: "q", kind: PendingRequestKind.Elicitation }],
     })
     await expect(
-      interactions.validate(resumeScope, resolvedQuestion)
+      interactions.validate(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ runId: "run-a" })
     await expect(
-      interactions.dispatch(resumeScope, resolvedQuestion)
+      interactions.dispatch(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ status: "resolved" })
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "question.list",
@@ -208,10 +208,10 @@ describe("OpenClaw interactions", () => {
       const interactions = new OpenClawInteractions({ request })
 
       await expect(
-        interactions.discover({ ...resumeScope, nativeRunId: "run-a" }, replay)
+        interactions.discover({ ...repliesScope, nativeRunId: "run-a" }, replay)
       ).resolves.toBeUndefined()
       await expect(
-        interactions.validate(resumeScope, resolvedQuestion)
+        interactions.validate(repliesScope, resolvedQuestion)
       ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
       expect(request).not.toHaveBeenCalled()
     }
@@ -244,7 +244,7 @@ describe("OpenClaw interactions", () => {
 
     await expect(
       interactions.discover(
-        { ...resumeScope, nativeRunId: "native-recovered" },
+        { ...repliesScope, nativeRunId: "native-recovered" },
         approvalReplay
       )
     ).resolves.toMatchObject({
@@ -252,10 +252,10 @@ describe("OpenClaw interactions", () => {
         { requestId: "approval-a", kind: PendingRequestKind.Permission },
       ],
     })
-    await expect(interactions.validate(resumeScope, response)).resolves.toEqual(
+    await expect(interactions.validate(repliesScope, response)).resolves.toEqual(
       { runId: "native-recovered" }
     )
-    await expect(interactions.dispatch(resumeScope, response)).resolves.toEqual(
+    await expect(interactions.dispatch(repliesScope, response)).resolves.toEqual(
       { status: "resolved" }
     )
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -272,7 +272,7 @@ describe("OpenClaw interactions", () => {
   })
 
   it.each(["allow-once", "allow-always"])(
-    "rejects native approval decision %s as normalized resume input",
+    "rejects native approval decision %s as a normalized request reply",
     async (nativeDecision) => {
       const request = vi.fn()
       const interactions = new OpenClawInteractions({ request })
@@ -404,16 +404,16 @@ describe("OpenClaw interactions", () => {
       const interactions = new OpenClawInteractions({ request })
 
       await expect(
-        interactions.discover({ ...resumeScope, nativeRunId: "run-a" }, replay)
+        interactions.discover({ ...repliesScope, nativeRunId: "run-a" }, replay)
       ).resolves.toBeUndefined()
       await expect(
-        interactions.validate(resumeScope, resolvedQuestion)
+        interactions.validate(repliesScope, resolvedQuestion)
       ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
       expect(request).toHaveBeenCalledTimes(reads)
     }
   )
 
-  it("binds a Session resume to its original native run before dispatch", async () => {
+  it("binds a Session reply to its original native run before dispatch", async () => {
     const request = vi.fn(async (method: string) =>
       method === "question.get"
         ? { question }
@@ -426,10 +426,10 @@ describe("OpenClaw interactions", () => {
     interactions.acceptQuestion(scope, question)
 
     await expect(
-      interactions.validate(resumeScope, resolvedQuestion)
+      interactions.validate(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ runId: "run-a" })
     await expect(
-      interactions.dispatch(resumeScope, resolvedQuestion)
+      interactions.dispatch(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ status: "resolved" })
 
     expect(request).toHaveBeenCalledTimes(3)
@@ -439,36 +439,36 @@ describe("OpenClaw interactions", () => {
     })
   })
 
-  it("rejects missing, foreign, ambiguous, and malformed bound resumes before native access", async () => {
+  it("rejects missing, foreign, ambiguous, and malformed bound replies before native access", async () => {
     const request = vi.fn()
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
 
-    await expect(interactions.validate(resumeScope, [])).rejects.toMatchObject({
+    await expect(interactions.validate(repliesScope, [])).rejects.toMatchObject({
       code: "AOS_INVALID_INTERACTION",
     })
     await expect(
       interactions.validate(
-        { ...resumeScope, threadId: "foreign" },
+        { ...repliesScope, threadId: "foreign" },
         resolvedQuestion
       )
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
     await expect(
-      interactions.validate(resumeScope, [
+      interactions.validate(repliesScope, [
         ...resolvedQuestion,
         { requestId: "other", status: "cancelled" },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
     await expect(
-      interactions.validate(resumeScope, [
-        { ...resolvedQuestion[0], extra: "not-part-of-resume" },
+      interactions.validate(repliesScope, [
+        { ...resolvedQuestion[0], extra: "not-part-of-reply" },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
 
     const otherRun = { ...scope, runId: "run-b" }
     interactions.acceptQuestion(otherRun, { ...question, runId: "run-b" })
     await expect(
-      interactions.validate(resumeScope, resolvedQuestion)
+      interactions.validate(repliesScope, resolvedQuestion)
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
     expect(request).not.toHaveBeenCalled()
   })
@@ -485,9 +485,9 @@ describe("OpenClaw interactions", () => {
       },
     ]
 
-    await interactions.validate(resumeScope, allowed)
+    await interactions.validate(repliesScope, allowed)
     await expect(
-      interactions.dispatch(resumeScope, [{ ...allowed[0], payload: "deny" }])
+      interactions.dispatch(repliesScope, [{ ...allowed[0], payload: "deny" }])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
     expect(request).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledWith("approval.get", { id: "approval-a" })
@@ -506,10 +506,10 @@ describe("OpenClaw interactions", () => {
       interactions.acceptQuestion(scope, question)
 
       await expect(
-        interactions.validate(resumeScope, resolvedQuestion)
+        interactions.validate(repliesScope, resolvedQuestion)
       ).resolves.toEqual({ runId: "run-a" })
       await expect(
-        interactions.dispatch(resumeScope, resolvedQuestion)
+        interactions.dispatch(repliesScope, resolvedQuestion)
       ).resolves.toEqual({ status: expectedStatus })
       expect(request).toHaveBeenCalledTimes(1)
     }
@@ -524,15 +524,15 @@ describe("OpenClaw interactions", () => {
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
 
-    await interactions.validate(resumeScope, resolvedQuestion)
+    await interactions.validate(repliesScope, resolvedQuestion)
     await expect(
-      interactions.dispatch(resumeScope, resolvedQuestion)
+      interactions.dispatch(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ status: "uncertain" })
     await expect(
-      interactions.validate(resumeScope, resolvedQuestion)
+      interactions.validate(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ runId: "run-a" })
     await expect(
-      interactions.dispatch(resumeScope, resolvedQuestion)
+      interactions.dispatch(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ status: "uncertain" })
     expect(
       request.mock.calls.filter(([method]) => method === "question.resolve")
@@ -551,16 +551,16 @@ describe("OpenClaw interactions", () => {
     })
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
-    await interactions.validate(resumeScope, resolvedQuestion)
+    await interactions.validate(repliesScope, resolvedQuestion)
 
-    const first = interactions.dispatch(resumeScope, resolvedQuestion)
+    const first = interactions.dispatch(repliesScope, resolvedQuestion)
     await vi.waitFor(() =>
       expect(
         request.mock.calls.filter(([method]) => method === "question.resolve")
       ).toHaveLength(1)
     )
     await expect(
-      interactions.dispatch(resumeScope, resolvedQuestion)
+      interactions.dispatch(repliesScope, resolvedQuestion)
     ).resolves.toEqual({ status: "in-progress" })
     release()
     await expect(first).resolves.toEqual({ status: "resolved" })
@@ -652,7 +652,7 @@ describe("OpenClaw interactions", () => {
       })
     ).toThrow(OpenClawInteractionPublicError)
   })
-  it("reconciles a terminal native record before resume and never dispatches it", async () => {
+  it("reconciles a terminal native record before a reply and never dispatches it", async () => {
     const request = vi.fn(async () => ({
       question: { ...question, status: "expired" },
     }))

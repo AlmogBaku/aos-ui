@@ -10,7 +10,7 @@ describe("openCodeCapabilities", () => {
         questions: {
           status: "available",
           protocol: "acp-request",
-          scope: "run",
+          scope: "turn",
         },
         approvals: {
           status: "available",

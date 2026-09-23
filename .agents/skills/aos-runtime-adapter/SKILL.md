@@ -1,6 +1,6 @@
 ---
 name: aos-runtime-adapter
-description: Add, audit, or debug how the AOS proxy adapts a native harness onto the ACP v2 browser wire: native client → ServerRuntime/ServerRunEngine → SessionCoordinator → ACP translation → browser.
+description: Add, audit, or debug how the AOS proxy adapts a native harness onto the ACP v2 browser wire: native client → ServerRuntime/ServerTurnEngine → SessionCoordinator → ACP translation → browser.
 ---
 
 # Work on an AOS runtime adapter
@@ -15,20 +15,20 @@ and `TURN-LIFECYCLE.md` for a worked example.
 | Layer | Files |
 | --- | --- |
 | Native transport, identity, retention, validation, conversion | `packages/proxy/adapters/<kind>/`: `adapter.ts`, `factory.ts`, `capabilities.ts`, `client.ts` / `dashboard-client.ts`, `content.ts`, `history.ts`, `interactions.ts`, `run.ts`, `workspace.ts`, `native-schemas.ts`; Hermes also has `run-attach.ts`, `run-failures.ts`, `run-frames.ts`, `run-native.ts`, `run-settlement.ts`, `run-state.ts`, `slash-commands.ts`, `attachment-registry.ts`, `media-artifacts.ts`, `vendor/` |
-| Seam | `packages/proxy/core/runtime.ts` (`ServerRuntime`, `ServerRunEngine`, `ServerRunHandle` with `stop`/`steer?`/`recoveryPosition`, `SessionScope`); vocabulary `core/events.ts`; coordination `core/session-coordinator.ts`; rows `core/session-rows.ts`; stages `core/attachment-stages.ts` |
-| ACP adapter | `packages/proxy/acp/agent.ts` (method handlers, `GUEST_METHODS`, connect-time hydration), `agent-sessions.ts` (per-connection ownership, list cursor), `session-attachment.ts` (`reportExecution`/`reportUsage`/`reissuePending`, `_aos/*` emission), `translate/turn-events.ts`, `translate/history.ts`, `translate/requests.ts`, `translate/updates.ts` (pure reducers from run vocabulary to ACP), `config-options.ts`, `read-state.ts`, `activity-feed.ts`, `service.ts`/`socket.ts`, `validation.ts`, `types.ts` |
+| Seam | `packages/proxy/core/runtime.ts` (`ServerRuntime`, `ServerTurnEngine`, `ServerTurnHandle` with `stop`/`steer?`/`recoveryPosition`, `SessionScope`); vocabulary `core/events.ts`; coordination `core/session-coordinator.ts`; rows `core/session-rows.ts`; stages `core/attachment-stages.ts` |
+| ACP adapter | `packages/proxy/acp/agent.ts` (method handlers, `GUEST_METHODS`, connect-time hydration), `agent-sessions.ts` (per-connection ownership, list cursor), `session-attachment.ts` (`reportExecution`/`reportUsage`/`reissuePending`, `_aos/*` emission), `translate/turn-events.ts`, `translate/history.ts`, `translate/requests.ts`, `translate/updates.ts` (pure reducers from turn vocabulary to ACP), `config-options.ts`, `read-state.ts`, `activity-feed.ts`, `service.ts`/`socket.ts`, `validation.ts`, `types.ts` |
 | Contract | `packages/protocol/acp.ts` (`_meta.aos` schemas, `AOS_METHODS`, error codes); browser consumer `src/runtime-adapters/aos/acp/*` |
 
 ## ACP surface coverage
 
-| ACP surface | Run-vocabulary / seam input | Adapter obligation |
+| ACP surface | Turn-vocabulary / seam input | Adapter obligation |
 | --- | --- | --- |
-| `session/update` text / reasoning / tool chunks | `RunEvent` kinds (`TEXT_MESSAGE_*`, `REASONING_*`, `TOOL_CALL_*`) | Emit the correct kinds from `run.ts` |
-| `plan_update` `_meta.aos.todos` | `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` carrying Todos | Populate the activity payload |
+| `session/update` text / reasoning / tool chunks | `TurnEvent` kinds (`message-chunk`, `thought-chunk`, `tool-call-*`) | Emit the correct kinds from `run.ts` |
+| `plan_update` `_meta.aos.todos` | `plan-updated` carrying Todos | Populate the plan payload |
 | `usage_update` | `SessionContextResponse` (`session-attachment.ts:85-91, 245, 305-323`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
 | `session/request_permission` / `elicitation/create` | `PendingRequest` (`translate/requests.ts`, incl. `_allow_session`, multi-select `items.enum`) | Emit `PendingRequest` from `interactions.ts` |
-| `_aos/artifact` | `CUSTOM` event `aos.artifact` with `AosArtifactDescriptor` (`translate/turn-events.ts:133`) | Emit from `run.ts` on trusted tool receipt |
-| `_aos/steer_accepted` | `steer` handle + `CUSTOM` event `aos.steer.accepted` (`core/session-coordinator.ts:809-817`) | Implement `handle.steer` |
+| `_aos/artifact` | `artifact-published` event with `AosArtifactDescriptor` (`translate/turn-events.ts`) | Emit from `run.ts` on trusted tool receipt |
+| `_aos/steer_accepted` | `steer` handle + `steer-accepted` event (`core/session-coordinator.ts`) | Implement `handle.steer` |
 | `session_info_update` `{status, archived, unread}` | Catalog rows (`SessionRows`) | Implement `getSession` / `listSessions` |
 | `_aos/catalog_invalidated` | `subscribeCatalogChanges` callback | Implement `subscribeCatalogChanges` on `ServerRuntime` |
 | `_aos/session/update` intents | `sessionTitle` / `sessionArchival` / `sessionDeletion` capabilities | Route to `mutateSession(agentId, runtimeSessionId, "PATCH" \| "DELETE", body?)` (`core/runtime.ts:226-231`; called from `acp/agent-sessions.ts:184`) gated by those capabilities |
@@ -50,9 +50,9 @@ selector file is the only file with the `case`.
 
 Keep connection topology, live identities, attachment, retention, payload
 validation, and native recovery inside the adapter. Keep admission, normalized
-run state, control serialization, subscriber fanout, and run segment identity
-in the coordinator. Emit the proxy-owned run vocabulary (`core/events.ts`); use
-a `CUSTOM` event only for behavior the vocabulary cannot express.
+turn state, control serialization, subscriber fanout, and turn segment identity
+in the coordinator. Emit the proxy-owned turn vocabulary (`core/events.ts`);
+extend the vocabulary there only for behavior it cannot yet express.
 
 ## Attachments and Artifacts
 

@@ -41,8 +41,8 @@ import {
 } from "../core/events"
 import type {
   RuntimeInstance,
-  ServerRunEngine,
-  ServerRunHandle,
+  ServerTurnEngine,
+  ServerTurnHandle,
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -116,7 +116,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionArchival: AVAILABLE,
     sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
-    sessionRun: AVAILABLE,
+    sessionTurn: AVAILABLE,
     sessionStop: AVAILABLE,
     sessionSteer: AVAILABLE,
     sessionReadState: AVAILABLE,
@@ -153,7 +153,7 @@ const CAPABILITIES = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -161,7 +161,7 @@ const CAPABILITIES = {
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       choices: [
         { value: "once", scope: "request" },
         { value: "deny", scope: "request" },
@@ -171,7 +171,7 @@ const CAPABILITIES = {
     questions: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-cancel",
       maxQuestions: 1,
@@ -221,7 +221,7 @@ const HISTORY: SessionHistoryResponse = {
 }
 
 /** One provider run segment the test drives event by event. */
-class EventSource implements ServerRunHandle {
+class EventSource implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
@@ -360,7 +360,7 @@ async function harness(options: HarnessOptions = {}) {
     return source
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
-  const engine: ServerRunEngine = { start, recover }
+  const engine: ServerTurnEngine = { start, recover }
   const coordinator = new SessionCoordinator({
     engine,
     maxActiveExecutions: 8,
@@ -405,7 +405,7 @@ async function harness(options: HarnessOptions = {}) {
   const history = vi.fn(async () => options.history ?? HISTORY)
 
   const runtime: ServerRuntime = {
-    runs: engine,
+    turns: engine,
     resolveInvitedSession: unsupported,
     resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
     publicError: () => undefined,
@@ -664,7 +664,7 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
   for (const [index, text] of corrections.entries())
     await test.coordinator.steer(
       SCOPE,
-      { requestId: `steer-${index + 1}`, expectedRunId: "run-live", text },
+      { requestId: `steer-${index + 1}`, expectedTurnId: "run-live", text },
       "operator"
     )
   return source

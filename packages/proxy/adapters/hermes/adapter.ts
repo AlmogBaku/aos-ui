@@ -30,11 +30,11 @@ import { projectHermesHistory } from "./history"
 import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
 import {
-  HermesRunEngine,
-  HermesRunPublicError,
-  type HermesRunScope,
+  HermesTurnEngine,
+  HermesTurnPublicError,
+  type HermesTurnScope,
 } from "./run"
-import { HermesNativeRuntime, type HermesRunNative } from "./run-native"
+import { HermesNativeRuntime, type HermesTurnNative } from "./run-native"
 import {
   createHermesWorkspaceOperations,
   HermesWorkspaceScopeError,
@@ -295,9 +295,9 @@ export class HermesServerAdapter implements ServerRuntime {
     Promise<{ sessionId: string; created: boolean }>
   >()
   readonly interactions: HermesInteractions
-  /** The typed native run boundary; `run-native.ts` owns every native outcome. */
-  readonly native: HermesRunNative
-  readonly runs: HermesRunEngine
+  /** The typed native turn boundary; `run-native.ts` owns every native outcome. */
+  readonly native: HermesTurnNative
+  readonly turns: HermesTurnEngine
   readonly #retry: HermesRetrySchedule
 
   constructor(
@@ -398,7 +398,7 @@ export class HermesServerAdapter implements ServerRuntime {
       },
       // The registry requires observation, so a transport that cannot observe
       // is adapted here rather than silently skipped there: such a transport
-      // serves only the read-only surfaces, and no run can attach through it.
+      // serves only the read-only surfaces, and no turn can attach through it.
       {
         // Every observed `session.info` is retained on its way through, so a
         // workspace read never answers from the attach-time snapshot.
@@ -416,7 +416,7 @@ export class HermesServerAdapter implements ServerRuntime {
     // interactions `resume`) needs Hermes' own answer, whose `open_requests`
     // re-deliver whatever is still waiting on it.
     const ensureAttached = async (
-      scope: HermesRunScope,
+      scope: HermesTurnScope,
       attach: { refresh?: boolean } = {}
     ) => ({
       liveSessionId: (await this.#attachments.ensure(scope, attach))
@@ -458,7 +458,7 @@ export class HermesServerAdapter implements ServerRuntime {
       retry: this.#retry,
       ...(options.log ? { log: options.log } : {}),
     })
-    this.runs = new HermesRunEngine(this.native, {
+    this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
     })
   }
@@ -600,14 +600,14 @@ export class HermesServerAdapter implements ServerRuntime {
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (
-      cause instanceof HermesRunPublicError &&
+      cause instanceof HermesTurnPublicError &&
       cause.code === "AOS_STOP_UNCERTAIN"
     )
       return { code: "uncertain_mutation", status: 409 } as const
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
-      cause instanceof HermesRunPublicError ||
+      cause instanceof HermesTurnPublicError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
@@ -762,7 +762,7 @@ export class HermesServerAdapter implements ServerRuntime {
         ...this.interactions.capabilities(),
         steering: {
           status: "available" as const,
-          scope: "active-run" as const,
+          scope: "active-turn" as const,
           semantics: "visible-user-message" as const,
           input: "text" as const,
           fallback: "provider-queue" as const,
@@ -799,14 +799,14 @@ export class HermesServerAdapter implements ServerRuntime {
   async pendingInteractions(
     agentId: string,
     publicSessionId: string,
-    requestedRunId?: string
+    requestedTurnId?: string
   ) {
     const storedId = storedSessionIdentity(agentId, publicSessionId)
     if (!storedId) throw new HermesSessionNotFoundError()
     await this.getSession(agentId, storedId)
-    const runId = requestedRunId ?? "aos-hermes-restored-interaction"
+    const turnId = requestedTurnId ?? "aos-hermes-restored-interaction"
     return {
-      runId,
+      turnId,
       ...(await this.interactions.resume({
         agentId,
         sessionId: storedId,
@@ -937,7 +937,7 @@ export class HermesServerAdapter implements ServerRuntime {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
-          sessionRun: {
+          sessionTurn: {
             status: "unavailable",
             reason: "temporarily-unavailable",
           },
@@ -986,7 +986,7 @@ export class HermesServerAdapter implements ServerRuntime {
         sessionArchival: { status: "available" },
         sessionPin: { status: "available" },
         sessionDeletion: { status: "available" },
-        sessionRun: { status: "available" },
+        sessionTurn: { status: "available" },
         sessionStop: { status: "available" },
         sessionSteer: { status: "available" },
         sessionReadState: { status: "available" },
@@ -1055,7 +1055,7 @@ export class HermesServerAdapter implements ServerRuntime {
     await this.transport.close?.()
   }
 
-  async #resumeNative(scope: HermesRunScope) {
+  async #resumeNative(scope: HermesTurnScope) {
     let payload: unknown
     try {
       // A reattach Hermes fences while it settles a disconnect is let through

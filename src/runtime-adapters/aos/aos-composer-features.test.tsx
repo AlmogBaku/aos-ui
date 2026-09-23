@@ -36,7 +36,7 @@ function capabilities(): AosWorkspaceCapabilities {
     interactions: {
       steering: {
         status: "available",
-        scope: "active-run",
+        scope: "active-turn",
         semantics: "visible-user-message",
         input: "text",
         fallback: "provider-queue",
@@ -44,7 +44,7 @@ function capabilities(): AosWorkspaceCapabilities {
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         choices: [
           { value: "once", scope: "request" },
           { value: "session", scope: "session" },
@@ -56,7 +56,7 @@ function capabilities(): AosWorkspaceCapabilities {
       questions: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",
         maxQuestions: 32,

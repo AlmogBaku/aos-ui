@@ -10,7 +10,7 @@ import {
 } from "../auth/guest-invitation"
 import type {
   RuntimeInstance,
-  ServerRunEngine,
+  ServerTurnEngine,
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -58,7 +58,7 @@ function workspaceCapabilities() {
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         choices: [
           { value: "once", scope: "request" },
           { value: "session", scope: "session" },
@@ -70,7 +70,7 @@ function workspaceCapabilities() {
       questions: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",
         maxQuestions: 10,
@@ -102,7 +102,7 @@ function workspaceCapabilities() {
 }
 
 function harness(options: { existing?: boolean } = {}) {
-  const engine: ServerRunEngine = { start: vi.fn(), recover: vi.fn() }
+  const engine: ServerTurnEngine = { start: vi.fn(), recover: vi.fn() }
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
       options.existing || create
@@ -120,7 +120,7 @@ function harness(options: { existing?: boolean } = {}) {
     mimeType: "audio/mpeg",
   }))
   const runtime = {
-    runs: engine,
+    turns: engine,
     resolveInvitedSession,
     runtimeInfo: vi.fn(async () => ({
       runtime: { id: "hermes-primary", name: "Hermes" },
@@ -150,7 +150,7 @@ function harness(options: { existing?: boolean } = {}) {
         sessionArchival: { status: "available" },
         sessionPin: { status: "available" },
         sessionDeletion: { status: "available" },
-        sessionRun: { status: "available" },
+        sessionTurn: { status: "available" },
         sessionStop: { status: "available" },
         sessionSteer: { status: "available" },
         sessionReadState: { status: "available" },
@@ -597,7 +597,7 @@ describe("guest app", () => {
     expect(refused.status).toBe(503)
     await expect(refused.json()).resolves.toEqual({
       error: {
-        code: "run_capacity_exceeded",
+        code: "turn_capacity_exceeded",
         description: "Too many requests. Please try again shortly.",
       },
     })
@@ -628,7 +628,7 @@ describe("guest app", () => {
 
     expect(refused.status).toBe(503)
     await expect(refused.json()).resolves.toMatchObject({
-      error: { code: "run_capacity_exceeded" },
+      error: { code: "turn_capacity_exceeded" },
     })
     expect(subject.speak).toHaveBeenCalledTimes(60)
   })

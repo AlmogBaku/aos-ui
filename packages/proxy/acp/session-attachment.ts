@@ -21,7 +21,7 @@ import type {
   RequestReply,
 } from "../core/events"
 import type { ServerAttachmentStage, SessionScope } from "../core/runtime"
-import type { CoordinatedRunSubscription } from "../core/session-coordinator"
+import type { CoordinatedTurnSubscription } from "../core/session-coordinator"
 import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
 import { answeredQuestionOutbound } from "./translate/requests"
@@ -34,7 +34,7 @@ import { errorNotificationOf, staleRequest } from "./validation"
 
 /**
  * One Session as one ACP connection observes it: at most one coordinator
- * subscription, the reducer state that subscription's run segment carries, and
+ * subscription, the reducer state that subscription's turn segment carries, and
  * the one server→client request its pending interaction is waiting on.
  *
  * The attachment owns only the browser subscriber lifetime. Detaching releases
@@ -64,7 +64,7 @@ function hasMode(request: ElicitationRequest): request is ModedElicitation {
   return typeof request.mode === "string"
 }
 
-/** The vendor stop reasons that mean the run failed rather than finished. */
+/** The vendor stop reasons that mean the turn failed rather than finished. */
 const AOS_STOP_CODES: ReadonlySet<string> = new Set(
   Object.values(AOS_STOP_REASONS)
 )
@@ -77,10 +77,10 @@ const MAX_LOGGED_FAILURE_CHARS = 200
  * update — including every streamed chunk — falls out on the first check. A
  * stop reason names the class of failure and nothing else, so the machine code
  * and the provider's sentence travel with it: they are what an operator
- * diagnoses one run by. `errorCode` is the name `acp.error` already logs the
+ * diagnoses one turn by. `errorCode` is the name `acp.error` already logs the
  * same classification under.
  */
-function runFailureOf(update: SessionUpdate) {
+function turnFailureOf(update: SessionUpdate) {
   if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
     return undefined
   const stopReason = update.stopReason
@@ -146,7 +146,7 @@ class SessionAttachment {
   readonly #client: AgentContext
   readonly #readUsage: () => Promise<SessionContextResponse>
   readonly #readModels: () => Promise<SessionModelsResponse>
-  #subscription: CoordinatedRunSubscription | undefined
+  #subscription: CoordinatedTurnSubscription | undefined
   #pending: { requestId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
   #state = initialTranslateState
@@ -166,20 +166,20 @@ class SessionAttachment {
   }
 
   /**
-   * Subscribes to the Session's live run, if one is still in flight.
+   * Subscribes to the Session's live turn, if one is still in flight.
    * `replayedCorrections` names the steer acknowledgements this subscription
    * must drop because the history it follows already carried them.
    */
   async attach(after?: number, replayedCorrections = 0) {
     if (this.#detached || this.#subscription) return
-    const { state, runId } = this.#coordinator.snapshot(this.#scope)
-    if (state === "idle" || runId === undefined) return
+    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
+    if (state === "idle" || turnId === undefined) return
     this.#consume(
       await this.#coordinator.recover(
         this.#scope,
         {
           threadId: this.#scope.threadId,
-          runId,
+          turnId,
           ...(after === undefined ? {} : { after }),
         },
         this.#access()
@@ -210,20 +210,20 @@ class SessionAttachment {
   }
 
   /**
-   * Reports the Session's execution as one `state_update`. A run segment's
+   * Reports the Session's execution as one `state_update`. A turn segment's
    * `state_update`s come from the translator; this is the out-of-band one a
    * resume or an acknowledged Stop owes the client.
    */
   reportExecution() {
-    const { state, runId } = this.#coordinator.snapshot(this.#scope)
+    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
     const meta =
-      runId === undefined
+      turnId === undefined
         ? {}
         : {
             _meta: {
               [AOS_META_KEY]: {
                 sequence: this.#sequence,
-                turnId: runId,
+                turnId,
                 ...(state === "stopping"
                   ? { execution: "stopping" as const }
                   : {}),
@@ -284,8 +284,8 @@ class SessionAttachment {
   }
 
   /**
-   * Sends one translated item outside a run segment, which is what a replay is:
-   * the same `session/update` and `_aos/*` notifications the run pump sends,
+   * Sends one translated item outside a turn segment, which is what a replay is:
+   * the same `session/update` and `_aos/*` notifications the turn pump sends,
    * under the sequence this attachment has reached.
    */
   send(outbound: AcpOutbound) {
@@ -296,7 +296,7 @@ class SessionAttachment {
     // Nothing to tell a client that has gone. A resolved promise rather than
     // `undefined`, because callers chain on what this returns.
     if (this.#detached) return Promise.resolve()
-    const failure = runFailureOf(update)
+    const failure = turnFailureOf(update)
     if (failure) this.#log("error", "acp.turn.failed", failure)
     return this.#client.notify(methods.client.session.update, {
       sessionId: this.#scope.threadId,
@@ -359,7 +359,7 @@ class SessionAttachment {
     this.#usageRetry = setTimeout(() => {
       this.#usageRetry = undefined
       // Nothing awaits a deferred report, so it reports its own failure rather
-      // than rejecting into nowhere, exactly as the run pump's report does.
+      // than rejecting into nowhere, exactly as the turn pump's report does.
       void this.#sendUsage(chain, attempt + 1).catch((cause: unknown) =>
         this.report(cause)
       )
@@ -418,8 +418,8 @@ class SessionAttachment {
 
   /**
    * How the coordinator sees one subscription of this attachment. The guest
-   * projection replaces the run stream with its allowlisted events and restates
-   * the same controller identity, so a guest may Stop only its own run.
+   * projection replaces the turn stream with its allowlisted events and restates
+   * the same controller identity, so a guest may Stop only its own turn.
    */
   #access() {
     const { lane, guest } = this.#context
@@ -433,7 +433,7 @@ class SessionAttachment {
   }
 
   #consume(
-    subscription: CoordinatedRunSubscription,
+    subscription: CoordinatedTurnSubscription,
     replayedCorrections: number
   ) {
     this.#subscription = subscription
@@ -442,14 +442,14 @@ class SessionAttachment {
     void this.#pump(subscription)
   }
 
-  async #pump(subscription: CoordinatedRunSubscription) {
+  async #pump(subscription: CoordinatedTurnSubscription) {
     const { translateTurnEvent } = this.#context.translators
     let overflow: FanoutOverflowError | undefined
     try {
       for await (const { sequence, event } of subscription.events) {
         this.#sequence = sequence
         const translated = translateTurnEvent(this.#state, event, {
-          turnId: subscription.runId,
+          turnId: subscription.turnId,
           sequence,
           lane: this.#context.lane,
           stopping: this.#stopping,
@@ -464,7 +464,7 @@ class SessionAttachment {
     } finally {
       if (this.#subscription === subscription) this.#subscription = undefined
     }
-    if (overflow) return this.#resync(subscription.runId, overflow)
+    if (overflow) return this.#resync(subscription.turnId, overflow)
     // The turn this segment carried has settled, so the window it grew is now
     // readable. A failed or cancelled turn still consumed context, so this
     // follows the drain rather than a successful outcome. Nothing awaits the
@@ -476,7 +476,7 @@ class SessionAttachment {
    * Tells the client that what it holds of this Session is incomplete, because
    * the stream it was reading was dropped for falling behind its bounds.
    *
-   * The run itself is unharmed and may still be going, so this is not a run
+   * The turn itself is unharmed and may still be going, so this is not a turn
    * failure and the segment did not settle: reporting either would leave the
    * client believing a turn it only saw part of had ended. The client owes
    * itself the Session from the start, which is what invalidation asks for.
@@ -536,7 +536,7 @@ class SessionAttachment {
     }
   }
 
-  /** Issues one server→client request and settles it as a resume reply. */
+  /** Issues one server→client request and settles it as a request reply. */
   /**
    * ACP restates the whole option set on a model switch, so the catalog is
    * read and the model the provider reported is selected in it. An unreadable
@@ -574,7 +574,7 @@ class SessionAttachment {
     const { guest, translators } = this.#context
     const reply = translators.replyFromPermission(request, response)
     // A guest may answer only within the scope it was offered, so its
-    // projection refuses a widened grant the way the guest run route does.
+    // projection refuses a widened grant the way the guest turn route does.
     await this.#settle(
       request,
       guest ? guest.project.permissionReply(request, reply) : reply
@@ -598,7 +598,7 @@ class SessionAttachment {
     )
     const request = this.#pendingRequest(outbound.requestId)
     const { replyFromElicitation } = this.#context.translators
-    // The answered question reaches the transcript before the run resumes, so
+    // The answered question reaches the transcript before the turn continues, so
     // the call that asked it stops reading as unanswered while the next segment
     // streams.
     const lane = this.#context.lane
@@ -616,7 +616,7 @@ class SessionAttachment {
     return request
   }
 
-  /** Starts the next run segment once every pending request is answered. */
+  /** Starts the next turn segment once every pending request is answered. */
   async #settle(request: PendingRequest, reply: RequestReply) {
     this.#log("info", "acp.request.answered", {
       requestId: request.requestId,

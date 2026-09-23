@@ -30,8 +30,8 @@ import {
 } from "../core/events"
 import type {
   RuntimeInstance,
-  ServerRunEngine,
-  ServerRunHandle,
+  ServerTurnEngine,
+  ServerTurnHandle,
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
@@ -103,7 +103,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionArchival: AVAILABLE,
     sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
-    sessionRun: AVAILABLE,
+    sessionTurn: AVAILABLE,
     sessionStop: AVAILABLE,
     sessionSteer: AVAILABLE,
     sessionReadState: AVAILABLE,
@@ -135,7 +135,7 @@ const CAPABILITIES = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -143,14 +143,14 @@ const CAPABILITIES = {
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       choices: [{ value: "once", scope: "request" }],
       maxPending: 1,
     },
     questions: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-cancel",
       maxQuestions: 1,
@@ -179,7 +179,7 @@ const USAGE = {
 }
 
 /** One provider run segment the test drives event by event. */
-class EventSource implements ServerRunHandle {
+class EventSource implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
@@ -440,7 +440,7 @@ type HarnessOptions = {
   total?: number
   activity?: AosActivityNotification[]
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
-  discover?: ServerRunEngine["discover"]
+  discover?: ServerTurnEngine["discover"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -456,7 +456,7 @@ async function harness(options: HarnessOptions = {}) {
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
   const discover = vi.fn(options.discover ?? (async () => undefined))
-  const engine: ServerRunEngine = { start, recover, discover }
+  const engine: ServerTurnEngine = { start, recover, discover }
   const coordinator = new SessionCoordinator({
     engine,
     maxActiveExecutions: 8,
@@ -522,7 +522,7 @@ async function harness(options: HarnessOptions = {}) {
   }))
 
   const runtime: ServerRuntime = {
-    runs: engine,
+    turns: engine,
     resolveInvitedSession: unsupported,
     resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
     publicError: () => undefined,
@@ -964,7 +964,7 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a permission request and starts the resume segment", async () => {
+  it("answers a permission request and starts the reply segment", async () => {
     const test = await harness()
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {

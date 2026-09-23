@@ -39,7 +39,7 @@ import {
 } from "./native"
 
 /**
- * The run scope an interaction belongs to. `threadId` travels with it for the
+ * The turn scope an interaction belongs to. `threadId` travels with it for the
  * caller's benefit; interactions themselves are Session-scoped, because a
  * Hermes Session carries exactly one thread.
  */
@@ -742,7 +742,7 @@ export class HermesInteractions {
   /**
    * Sessions with a `resume()` in flight, by depth. Its own re-deliveries ride
    * the snapshot it returns to the caller, so they notify no listener; every
-   * other re-delivery (a heal, a catch-up) is the first the run hears of that
+   * other re-delivery (a heal, a catch-up) is the first the turn hears of that
    * request and must be notified.
    */
   readonly #resuming = new Map<string, number>()
@@ -792,7 +792,7 @@ export class HermesInteractions {
       .map(({ pendingRequest }) => pendingRequest)
   }
 
-  /** Notify the run observing this Session of every live request. */
+  /** Notify the turn observing this Session of every live request. */
   onPendingRequest(
     scope: HermesInteractionScope,
     listener: HermesPendingRequestListener
@@ -940,7 +940,7 @@ export class HermesInteractions {
       approvals: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,
-        scope: "run" as const,
+        scope: "turn" as const,
         choices: [
           { value: "once" as const, scope: "request" as const },
           { value: "session" as const, scope: "session" as const },
@@ -952,7 +952,7 @@ export class HermesInteractions {
       questions: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,
-        scope: "run" as const,
+        scope: "turn" as const,
         answerModes: ["single", "multiple", "free-text"] as const,
         cancellation: "native-empty-answer" as const,
         maxQuestions: HERMES_INTERACTION_LIMITS.maxQuestions,
@@ -1005,7 +1005,7 @@ export class HermesInteractions {
     const existing = this.#pending.get(key)
     if (existing) {
       // A re-delivery after a heal answers on the current socket; the card is
-      // already up, so the run is not notified again.
+      // already up, so the turn is not notified again.
       existing.request = request
       existing.liveSessionId = liveSessionId
       existing.confirmed = this.#reconciliation

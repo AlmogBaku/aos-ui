@@ -284,7 +284,7 @@ export const pendingRequestToOutbound = ((request, lane) =>
     ? permissionOutbound(request, lane)
     : elicitationOutbound(request, lane)) satisfies PendingRequestToOutbound
 
-/** `optionId` is the adapter's own choice value, which is what resume expects. */
+/** `optionId` is the adapter's own choice value, which is what the reply expects. */
 export const replyFromPermission = ((request, response) => {
   const outcome = response.outcome
   const optionId =

@@ -25,7 +25,7 @@ import {
   guestControllerId,
 } from "../auth/guest-request"
 import {
-  createGuestRunAccess,
+  createGuestTurnAccess,
   projectGuestCapabilities,
   projectGuestHistory,
 } from "../auth/guest-runtime-projection"
@@ -159,7 +159,7 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
     project: {
       access(base, scope) {
         const { read, errors } = authorized()
-        return createGuestRunAccess(read, errors, scope, now, base.subscriberId)
+        return createGuestTurnAccess(read, errors, scope, now, base.subscriberId)
       },
       history(value: SessionHistoryResponse) {
         const { read, grant } = authorized()

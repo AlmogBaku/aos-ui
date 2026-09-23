@@ -3,11 +3,11 @@ import type { z } from "zod"
 
 import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
-  ServerRunCapacityError,
-  ServerRunConflictError,
-  ServerRunControlError,
-  ServerRunSteerUnavailableError,
-  ServerRunSteerUncertainError,
+  ServerTurnCapacityError,
+  ServerTurnConflictError,
+  ServerTurnControlError,
+  ServerTurnSteerUnavailableError,
+  ServerTurnSteerUncertainError,
   ServerSessionNotFoundError,
   type ServerRuntime,
   type ServerRuntimePublicError,
@@ -73,22 +73,22 @@ const PUBLIC_ERROR_CODES: Readonly<
 
 /** Coordinator control failures, mirroring the normalized HTTP error map. */
 function coordinatorError(cause: unknown) {
-  if (cause instanceof ServerRunConflictError) return turnInProgress()
+  if (cause instanceof ServerTurnConflictError) return turnInProgress()
   if (
-    cause instanceof ServerRunCapacityError ||
-    cause instanceof ServerRunSteerUnavailableError
+    cause instanceof ServerTurnCapacityError ||
+    cause instanceof ServerTurnSteerUnavailableError
   )
     return new RequestError(
       AOS_JSONRPC_ERRORS.temporarilyUnavailable,
       "temporarily_unavailable"
     )
-  if (cause instanceof ServerRunSteerUncertainError)
+  if (cause instanceof ServerTurnSteerUncertainError)
     return new RequestError(
       AOS_JSONRPC_ERRORS.uncertainMutation,
       "uncertain_mutation"
     )
   if (
-    cause instanceof ServerRunControlError ||
+    cause instanceof ServerTurnControlError ||
     cause instanceof ServerSessionNotFoundError
   )
     return notFound()

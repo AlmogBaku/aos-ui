@@ -14,7 +14,7 @@ matrix that answers:
 
 - Which identities are durable, and which are process- or connection-local?
 - Which reads are authoritative, and which streams are incremental?
-- How are runs started, observed, stopped, resumed, and reconciled?
+- How are turns started, observed, stopped, continued, and reconciled?
 - Can a running turn be redirected or queued, and what does acknowledgement
   mean?
 - How are commands, questions, approvals, tools, Todos, and content represented?
@@ -30,7 +30,7 @@ similar.
 browser presentation and drafts
         -> ACP v2 WebSocket (ACP layer) / AOS REST (bytes/discovery)
         -> SessionCoordinator
-        -> ServerRuntime / ServerRunEngine
+        -> ServerRuntime / ServerTurnEngine
         -> native adapter clients and transports
 ```
 
@@ -38,12 +38,12 @@ browser presentation and drafts
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                        |
 | Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                      |
-| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, run segment identities, subscriber fanout, bounded replay, and authoritative settlement.      |
+| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, turn segment identities, subscriber fanout, bounded replay, and authoritative settlement.     |
 | Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention. |
 | Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                          |
 
 The coordinator must not learn native WebSocket methods, live Session IDs, or
-provider event shapes. The adapter must not create a second run coordinator or
+provider event shapes. The adapter must not create a second turn coordinator or
 browser runtime. Add a shared abstraction only after two adapters demonstrate
 the same semantic requirement.
 
@@ -54,41 +54,40 @@ Treat these as separate objects:
 1. The durable native Session and transcript.
 2. The adapter's live attachment, subscription, or process-local Session ID.
 3. The coordinator's logical execution.
-4. A proxy run segment (a sequence of events with a stable `runId`).
+4. A proxy turn segment (a sequence of events with a stable `turnId`).
 5. A downstream browser subscriber.
 
 A browser disconnect releases only its subscriber. It does not stop native
 work, settle the logical execution, discard a pending interaction, or close a
 provider attachment still needed for recovery.
 
-A question ends one run segment. Answering resumes the run, while the logical execution and native Session continue.
-Active-turn steering stays inside the current segment and creates no new run.
+A question ends one turn segment. Answering continues the turn, while the logical execution and native Session continue.
+Active-turn steering stays inside the current segment and creates no new turn.
 
 Connection and retention topology remains provider-private. Hermes uses a
 multiplexed JSON-RPC connection and durable-to-live Session attachments;
 OpenClaw and OpenCode have different native observation and recovery models.
 They share coordinator semantics, not a generic socket manager.
 
-## Map native output to the proxy-owned run vocabulary
+## Map native output to the proxy-owned turn vocabulary
 
-Adapters emit the proxy-owned run vocabulary (`RunEvent`, `RunEventKind`,
+Adapters emit the proxy-owned turn vocabulary (`TurnEvent`, `TurnEventKind`,
 `PendingRequest`, `RequestReply`, `TurnInput`, `ExecutionEvent` from
 `packages/proxy/core/events.ts`); the ACP layer in `packages/proxy/acp/`
-translates them for the browser. The `RunEventKind` names
-(`RUN_STARTED`, `TEXT_MESSAGE_*`, `TOOL_CALL_*`, `ACTIVITY_SNAPSHOT`,
-`ACTIVITY_DELTA`, `CUSTOM`, …) are the proxy-owned vocabulary inherited from
-the retired AG-UI wire; the browser never sees them. Treat the vocabulary as
-an event grammar, not a bag of JSON:
+translates them for the browser. The `TurnEventKind` names
+(`turn-started`, `message-chunk`, `thought-chunk`, `tool-call-*`,
+`plan-updated`, `turn-requires-action`, …) follow ACP's language and are
+proxy-internal; the browser sees only the ACP messages they translate to.
+Treat the vocabulary as an event grammar, not a bag of JSON:
 
-- final assistant prose is text message content, never reasoning content;
+- final assistant prose is a message chunk, never a thought chunk;
 - reasoning starts and ends independently of final text;
-- every tool call and result reaches a terminal state before the run ends;
-- run completion carries success, interruption, or cancellation only after the
-  segment is complete;
-- provider progress uses structured activity when it is meaningful to the UI;
-- Session Todos use an `ACTIVITY_SNAPSHOT` or `ACTIVITY_DELTA` event
-  (`RunEventKind`, `packages/proxy/core/events.ts:30-31`); the ACP layer
-  projects them as `plan_update` with `_meta.aos.todos`;
+- every tool call and result reaches a terminal state before the turn ends;
+- turn completion carries success, a request for the operator, or cancellation
+  only after the segment is complete;
+- provider progress uses structured events when it is meaningful to the UI;
+- Session Todos use a `plan-updated` event (`TurnEventKind.PlanUpdated`); the
+  ACP layer projects them as `plan_update` with `_meta.aos.todos`;
 - restored Todo activity is presentation state and is never forwarded as
   native prompt history.
 
@@ -107,11 +106,11 @@ These operations have different authority and retry semantics:
 | ------------------------ | ------------------------ | ---------------------------------------------------------------------------------- |
 | Send while idle          | Coordinator and adapter  | Admit one new native user turn.                                                    |
 | Browser follow-up queue  | Assistant UI             | Retain FIFO user intent until the Session can accept it.                           |
-| Active-turn steering     | Coordinator control lane | Correct the current native execution without starting another run.                 |
+| Active-turn steering     | Coordinator control lane | Correct the current native execution without starting another turn.                |
 | Provider-queued steering | Native runtime           | The steering request was accepted for later application; do not send another copy. |
 | Native command           | Adapter                  | Execute a catalog-recognized provider operation with its native result semantics.  |
 
-Steering requires an exact active `runId`, a unique request ID, text-only
+Steering requires an exact active `turnId`, a unique request ID, text-only
 input, and the controller's authorization. Stop and steering serialize through
 the same control lane. Steering is unavailable while idle, stopping,
 uncertain, or waiting for input.
@@ -140,9 +139,9 @@ native identities; matching an older row by text can truncate the wrong
 conversation. If history changed incompatibly, reconcile and return a
 normalized conflict rather than guessing.
 
-## Preserve interrupts
+## Preserve requests
 
-Questions and approvals use normalized interruption. The ACP layer delivers
+Questions and approvals are normalized pending requests. The ACP layer delivers
 them as `session/request_permission` or `elicitation/create` to the browser.
 The `_meta.aos` extensions on these requests are defined in
 `packages/protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
@@ -156,15 +155,15 @@ while the response schema does not constrain values to the enum.
 Steps for the adapter:
 
 1. Validate the complete native interaction batch.
-2. Finish the current segment with an interrupt outcome.
-3. Preserve normalized interrupt metadata in authoritative history.
+2. Finish the current segment with a `turn-requires-action` outcome.
+3. Preserve normalized request metadata in authoritative history.
 4. Retain the native Session while it waits for input.
 5. Accept one complete response with `resolved` or `cancelled` entries.
-6. Resume the same logical execution (no new run created).
+6. Continue the same logical execution (no new turn created).
 
 An answer is not a new user prompt. Repeated identical responses may be
 idempotent; conflicting, expired, wrong-Session, or incomplete responses make
-no native call. Reload reconstructs the interrupt from normalized history or
+no native call. Reload reconstructs the request from normalized history or
 adapter-private native discovery, not from a browser polling contract.
 
 ## Design for uncertainty and reconnect
@@ -199,9 +198,9 @@ invalidations are not capability changes. A local draft has no Session-scoped
 capabilities.
 
 Derive `running`, `stopping`, `waiting-for-input`, and terminal state from the
-coordinator and ACP lifecycle state. Use `ACTIVITY_SNAPSHOT`/`ACTIVITY_DELTA` events for Todos (the ACP layer
-translates them to `plan_update`) and structured activity for progress. Do not create polling endpoints for state already
-carried by the normalized run or history.
+coordinator and ACP lifecycle state. Use `plan-updated` events for Todos (the ACP layer
+translates them to `plan_update`) and structured events for progress. Do not create polling endpoints for state already
+carried by the normalized turn or history.
 
 Parse provider-injected attachment and context envelopes server-side. Return
 safe filenames, MIME types, sizes, and opaque content identities. Native paths,
@@ -246,8 +245,8 @@ An adapter is ready when:
 
 - its capability matrix matches inspected native behavior;
 - stable identity and Session ownership are enforced on every operation;
-- its event stream obeys the proxy-owned run vocabulary ordering and rejects foreign Session events;
-- Stop, steering, commands, Edit/Retry, and interrupts preserve native
+- its event stream obeys the proxy-owned turn vocabulary ordering and rejects foreign Session events;
+- Stop, steering, commands, Edit/Retry, and requests preserve native
   semantics where supported;
 - lost mutation acknowledgements are uncertain and never replayed;
 - reconnect restores observation and state without resending prompts;
@@ -309,18 +308,18 @@ union (`packages/proxy/config.ts:109`) and add a corresponding branch in
 `packages/proxy/adapters/create-runtime.ts`. The conventional per-adapter
 module layout (as used by OpenCode and OpenClaw) is:
 
-| Module           | Responsibility                                           |
-| ---------------- | -------------------------------------------------------- |
-| `adapter.ts`     | Composes all modules into `ServerRuntime`                |
-| `factory.ts`     | Entry point; builds and returns a `RuntimeInstance`      |
-| `capabilities.ts`| Maps native capabilities to normalized form              |
-| `client.ts`      | Validated HTTP or RPC client for native API calls        |
-| `content.ts`     | Normalizes native content types and attachment envelopes |
-| `history.ts`     | Converts authoritative native history rows               |
-| `interactions.ts`| Answers native clarify/approval interactions             |
-| `run.ts`         | Converts native execution frames to proxy-owned events   |
-| `workspace.ts`   | Agent/Session catalog and metadata                       |
-| `native-schemas.ts` | Validated Zod schemas for native payloads             |
+| Module              | Responsibility                                           |
+| ------------------- | -------------------------------------------------------- |
+| `adapter.ts`        | Composes all modules into `ServerRuntime`                |
+| `factory.ts`        | Entry point; builds and returns a `RuntimeInstance`      |
+| `capabilities.ts`   | Maps native capabilities to normalized form              |
+| `client.ts`         | Validated HTTP or RPC client for native API calls        |
+| `content.ts`        | Normalizes native content types and attachment envelopes |
+| `history.ts`        | Converts authoritative native history rows               |
+| `interactions.ts`   | Answers native clarify/approval interactions             |
+| `run.ts`            | Converts native execution frames to proxy-owned events   |
+| `workspace.ts`      | Agent/Session catalog and metadata                       |
+| `native-schemas.ts` | Validated Zod schemas for native payloads                |
 
 The Hermes adapter predates this layout and uses different module names for
 some of these roles; see

@@ -6,13 +6,13 @@ describe("log redaction", () => {
   it("keeps a classification code while stripping a credential-bearing URL query", () => {
     expect(
       redactForLog({
-        event: "hermes.run.failed",
+        event: "hermes.turn.failed",
         publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
         code: "validation_exception",
         url: "https://example.test/oauth/callback?code=native-secret",
       })
     ).toEqual({
-      event: "hermes.run.failed",
+      event: "hermes.turn.failed",
       publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
       code: "validation_exception",
       url: "https://example.test/oauth/callback",

@@ -1,5 +1,5 @@
 /**
- * What a Hermes run may say about a failure, and to whom.
+ * What a Hermes turn may say about a failure, and to whom.
  *
  * Every public failure is one of the entries below: a stable AOS code and the
  * headline AOS authored for it. A failure the operator has to act on also needs
@@ -17,7 +17,7 @@ const MAX_LOGGED_NATIVE_CHARS = 200
 const MAX_PUBLIC_DETAIL_CHARS = 500
 
 /** The public shape of every terminal AOS failure: a code and its message. */
-export type RunFailure = {
+export type TurnFailure = {
   readonly code: string
   readonly message: string
 }
@@ -36,7 +36,7 @@ export type NativeFailure = {
   detail?: string
 }
 
-export class HermesRunPublicError extends Error {
+export class HermesTurnPublicError extends Error {
   readonly code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN"
 
   constructor(
@@ -44,33 +44,33 @@ export class HermesRunPublicError extends Error {
     message: string
   ) {
     super(message)
-    this.name = "HermesRunPublicError"
+    this.name = "HermesTurnPublicError"
     this.code = code
   }
 }
 
 /** The requested rewind point no longer exists in authoritative Hermes history. */
-export class HermesRunRewindConflictError extends Error {
+export class HermesTurnRewindConflictError extends Error {
   constructor() {
     super("The Hermes Session can no longer be rewound to that message")
-    this.name = "HermesRunRewindConflictError"
+    this.name = "HermesTurnRewindConflictError"
   }
 }
 
-/** The names the run engine logs under; the only two lines it ever writes. */
-export const RUN_NATIVE_ERROR_LOG = "hermes.run.native_error"
-export const RUN_FAILED_LOG = "hermes.run.failed"
+/** The names the turn engine logs under; the only two lines it ever writes. */
+export const TURN_NATIVE_ERROR_LOG = "hermes.turn.native_error"
+export const TURN_FAILED_LOG = "hermes.turn.failed"
 
-/** Every public run failure the Hermes adapter can publish. */
-export const RUN_FAILURES = {
+/** Every public turn failure the Hermes adapter can publish. */
+export const TURN_FAILURES = {
   resetRequired: {
     code: "AOS_RESET_REQUIRED",
-    message: "Hermes history must be reconciled before this run can continue.",
+    message: "Hermes history must be reconciled before this turn can continue.",
   },
   connectionInterrupted: {
     code: "AOS_CONNECTION_INTERRUPTED",
     message:
-      "The Hermes connection was interrupted; reconnect to reconcile this run.",
+      "The Hermes connection was interrupted; reconnect to reconcile this turn.",
   },
   sendUncertain: {
     code: "AOS_SEND_UNCERTAIN",
@@ -145,23 +145,23 @@ export const RUN_FAILURES = {
     message:
       "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
   },
-  runFailed: {
+  turnFailed: {
     code: "AOS_PROVIDER_RUN_FAILED",
-    message: "Hermes could not complete this run.",
+    message: "Hermes could not complete this turn.",
   },
-} as const satisfies Record<string, RunFailure>
+} as const satisfies Record<string, TurnFailure>
 
 export function providerUnavailable() {
-  return new HermesRunPublicError(
+  return new HermesTurnPublicError(
     "AOS_PROVIDER_UNAVAILABLE",
     "Hermes is temporarily unavailable."
   )
 }
 
 export function stopUncertain() {
-  return new HermesRunPublicError(
-    RUN_FAILURES.stopUncertain.code,
-    RUN_FAILURES.stopUncertain.message
+  return new HermesTurnPublicError(
+    TURN_FAILURES.stopUncertain.code,
+    TURN_FAILURES.stopUncertain.message
   )
 }
 
@@ -223,26 +223,26 @@ export function loggedNativeMessage(failure: NativeFailure | undefined) {
  * to act on. The headline stays the first line, so a client that localizes by
  * code replaces exactly that line and keeps the provider's own words.
  */
-export function publicRunFailure(failure: NativeFailure): RunFailure {
-  return withDetail(runFailureHeadline(failure), failure.detail)
+export function publicTurnFailure(failure: NativeFailure): TurnFailure {
+  return withDetail(turnFailureHeadline(failure), failure.detail)
 }
 
 /** A headline followed by Hermes' own public detail as its second line. */
 export function withDetail(
-  headline: RunFailure,
+  headline: TurnFailure,
   detail: string | undefined
-): RunFailure {
+): TurnFailure {
   return detail === undefined
     ? headline
     : { code: headline.code, message: `${headline.message}\n${detail}` }
 }
 
 /** Hermes' classification, mapped to the one catalogue entry that explains it. */
-function runFailureHeadline(failure: NativeFailure): RunFailure {
+function turnFailureHeadline(failure: NativeFailure): TurnFailure {
   const code = failure.code?.toLowerCase() ?? ""
-  if (code === "agent_init_failed") return RUN_FAILURES.agentUnavailable
+  if (code === "agent_init_failed") return TURN_FAILURES.agentUnavailable
   if (failure.layer === "billing" || /billing|quota|insufficient/u.test(code))
-    return RUN_FAILURES.billingFailed
-  if (failure.retryable === true) return RUN_FAILURES.retryableFailure
-  return RUN_FAILURES.runFailed
+    return TURN_FAILURES.billingFailed
+  if (failure.retryable === true) return TURN_FAILURES.retryableFailure
+  return TURN_FAILURES.turnFailed
 }

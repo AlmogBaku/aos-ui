@@ -33,8 +33,8 @@ import {
 } from "../../../packages/proxy/core/events"
 import type {
   RuntimeInstance,
-  ServerRunEngine,
-  ServerRunHandle,
+  ServerTurnEngine,
+  ServerTurnHandle,
   ServerRuntime,
   SessionScope,
 } from "../../../packages/proxy/core/runtime"
@@ -92,7 +92,7 @@ const RUNTIME_INFO: RuntimeInfo = {
     sessionArchival: AVAILABLE,
     sessionPin: AVAILABLE,
     sessionDeletion: AVAILABLE,
-    sessionRun: AVAILABLE,
+    sessionTurn: AVAILABLE,
     sessionStop: AVAILABLE,
     sessionSteer: AVAILABLE,
     sessionReadState: AVAILABLE,
@@ -137,7 +137,7 @@ const CAPABILITIES = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -145,14 +145,14 @@ const CAPABILITIES = {
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       choices: [{ value: "once", scope: "request" }],
       maxPending: 1,
     },
     questions: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-cancel",
       maxQuestions: 1,
@@ -175,7 +175,7 @@ const unsupported = () => {
 }
 
 /** One provider run segment the test drives event by event. */
-class RunSegment implements ServerRunHandle {
+class TurnSegment implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
   readonly stop = vi.fn(async () => "stopping" as const)
@@ -252,21 +252,21 @@ const STORED_MESSAGES: readonly SessionMessage[] = [
 ]
 
 /** The fake native runtime, wired into the real coordinator and ACP agent. */
-type StartInput = Parameters<ServerRunEngine["start"]>[1]
+type StartInput = Parameters<ServerTurnEngine["start"]>[1]
 
 function createProxyAgentApp(stored: readonly SessionMessage[]) {
-  const segments: RunSegment[] = []
+  const segments: TurnSegment[] = []
   const scopes: SessionScope[] = []
   const inputs: StartInput[] = []
   const created: string[] = []
   const start = vi.fn(async (scope: SessionScope, input: StartInput) => {
     scopes.push(scope)
     inputs.push(input)
-    const segment = new RunSegment()
+    const segment = new TurnSegment()
     segments.push(segment)
     return segment
   })
-  const engine: ServerRunEngine = {
+  const engine: ServerTurnEngine = {
     start,
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
@@ -299,7 +299,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     offset,
   })
   const runtime: ServerRuntime = {
-    runs: engine,
+    turns: engine,
     resolveInvitedSession: unsupported,
     resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
     publicError: () => undefined,

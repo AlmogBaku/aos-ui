@@ -120,7 +120,7 @@ export function createActivityFeed({
     }
     if (row.status === "failed") {
       const turnId =
-        execution && "runId" in execution ? execution.runId : undefined
+        execution && "turnId" in execution ? execution.turnId : undefined
       push({ ...base, type: "turn-failed", turnId: turnId ?? row.id })
       return
     }

@@ -35,7 +35,7 @@ function runtimeInfo() {
       sessionArchival: { status: "available" },
       sessionPin: { status: "available" },
       sessionDeletion: { status: "available" },
-      sessionRun: { status: "available" },
+      sessionTurn: { status: "available" },
       sessionStop: { status: "available" },
       sessionSteer: { status: "available" },
       sessionReadState: { status: "available" },

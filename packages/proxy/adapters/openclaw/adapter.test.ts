@@ -1,7 +1,7 @@
 import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
-import type { ServerRunEngine, ServerRunHandle } from "../../core/runtime"
+import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
   OpenClawAdapterUnavailableError,
@@ -16,7 +16,7 @@ import { OpenClawWorkspaceUnavailableError } from "./workspace"
 
 const sessionKey = "agent:research:main"
 
-function idleHandle(): ServerRunHandle {
+function idleHandle(): ServerTurnHandle {
   return {
     events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),
@@ -25,7 +25,7 @@ function idleHandle(): ServerRunHandle {
   }
 }
 
-function engine(): ServerRunEngine {
+function engine(): ServerTurnEngine {
   return {
     start: async () => idleHandle(),
     recover: async () => idleHandle(),
@@ -92,7 +92,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const subscribe = vi.fn(async () => () => undefined)
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: subscribe,
     })
 
@@ -140,7 +140,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
 
@@ -161,7 +161,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
 
@@ -208,7 +208,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
 
@@ -252,7 +252,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client()
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
 
@@ -272,7 +272,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client({ negotiatedPolicy: () => policy })
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
 
@@ -306,7 +306,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
       client: client({
         negotiatedPolicy: () => ({ maxPayload: policy.maxPayload }),
       }),
-      runs: engine(),
+      turns: engine(),
       subscribeSession: async () => () => undefined,
     })
     await expect(

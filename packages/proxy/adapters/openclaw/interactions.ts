@@ -24,11 +24,11 @@ export type OpenClawInteractionScope = Readonly<{
   threadId: string
   runId: string
 }>
-export type OpenClawResumeScope = Pick<
+export type OpenClawRepliesScope = Pick<
   OpenClawInteractionScope,
   "agentId" | "sessionId" | "threadId"
 >
-export type OpenClawInteractionDiscoveryScope = OpenClawResumeScope &
+export type OpenClawInteractionDiscoveryScope = OpenClawRepliesScope &
   Readonly<{
     /** Caller-proven unique active native run from authoritative history. */
     nativeRunId: string
@@ -113,11 +113,11 @@ const encoder = new TextEncoder(),
   },
   scopeKey = (s: OpenClawInteractionScope) =>
     `${s.agentId}\0${s.sessionId}\0${s.threadId}\0${s.runId}`,
-  resumeScopeKey = (s: OpenClawResumeScope) =>
+  repliesScopeKey = (s: OpenClawRepliesScope) =>
     `${s.agentId}\0${s.sessionId}\0${s.threadId}`,
   key = (s: OpenClawInteractionScope, i: string) => `${scopeKey(s)}\0${i}`,
-  bindingKey = (s: OpenClawResumeScope, i: string) =>
-    `${resumeScopeKey(s)}\0${i}`
+  bindingKey = (s: OpenClawRepliesScope, i: string) =>
+    `${repliesScopeKey(s)}\0${i}`
 function invalid(): never {
   throw new OpenClawInteractionPublicError("AOS_INVALID_INTERACTION")
 }
@@ -218,7 +218,7 @@ function jsonFingerprint(value: unknown) {
   }
   return JSON.stringify(normalize(value))
 }
-function resume(raw: unknown): { entry: RequestReply; fingerprint: string } {
+function parseReply(raw: unknown): { entry: RequestReply; fingerprint: string } {
   if (!Array.isArray(raw) || raw.length !== 1) invalid()
   const parsed = RequestReplySchema.safeParse((raw as unknown[])[0])
   if (!parsed.success) invalid()
@@ -269,7 +269,7 @@ function approvalDecisions(values: readonly string[]): ApprovalDecision[] {
   return decisions
 }
 
-/** Maps exact pinned V4 records; pending interactions are rediscovered before resume. */
+/** Maps exact pinned V4 records; pending interactions are rediscovered before a reply. */
 export class OpenClawInteractions {
   readonly #pending = new Map<string, Pending>()
   readonly #done = new Map<string, Done>()
@@ -426,10 +426,10 @@ export class OpenClawInteractions {
     return requests
   }
   async validate(
-    scope: OpenClawResumeScope,
+    scope: OpenClawRepliesScope,
     raw: readonly RequestReply[]
   ): Promise<{ runId: string }> {
-    const { entry, fingerprint } = resume(raw),
+    const { entry, fingerprint } = parseReply(raw),
       boundKey = bindingKey(scope, entry.requestId),
       bound = this.#bindings.get(boundKey)
     if (bound) {
@@ -455,10 +455,10 @@ export class OpenClawInteractions {
     return { runId: match.pending.scope.runId }
   }
   async dispatch(
-    scope: OpenClawResumeScope,
+    scope: OpenClawRepliesScope,
     raw: readonly RequestReply[]
   ): Promise<OpenClawInteractionResult> {
-    const { entry, fingerprint } = resume(raw),
+    const { entry, fingerprint } = parseReply(raw),
       boundKey = bindingKey(scope, entry.requestId),
       bound = this.#bindings.get(boundKey)
     if (!bound)
@@ -477,7 +477,7 @@ export class OpenClawInteractions {
     scope: OpenClawInteractionScope,
     raw: unknown
   ): Promise<OpenClawInteractionResult> {
-    const { entry: r, fingerprint } = resume(raw),
+    const { entry: r, fingerprint } = parseReply(raw),
       k = key(scope, r.requestId),
       done = this.#done.get(k)
     if (done) {
@@ -509,7 +509,7 @@ export class OpenClawInteractions {
       return this.complete(k, p, fingerprint, { status: "uncertain" })
     }
   }
-  private find(scope: OpenClawResumeScope, requestId: string) {
+  private find(scope: OpenClawRepliesScope, requestId: string) {
     const candidates: Array<{
       key: string
       pending: Pending
@@ -517,13 +517,13 @@ export class OpenClawInteractions {
     }> = []
     for (const [candidateKey, pending] of this.#pending)
       if (
-        resumeScopeKey(pending.scope) === resumeScopeKey(scope) &&
+        repliesScopeKey(pending.scope) === repliesScopeKey(scope) &&
         pending.id === requestId
       )
         candidates.push({ key: candidateKey, pending })
     for (const [candidateKey, done] of this.#done)
       if (
-        resumeScopeKey(done.pending.scope) === resumeScopeKey(scope) &&
+        repliesScopeKey(done.pending.scope) === repliesScopeKey(scope) &&
         done.pending.id === requestId
       )
         candidates.push({ key: candidateKey, pending: done.pending, done })

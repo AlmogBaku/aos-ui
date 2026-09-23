@@ -10,7 +10,7 @@
 import type { PendingRequest } from "../../core/events"
 
 import { boundedNativeBytes, sessionKey } from "./native"
-import { providerUnavailable, RUN_FAILURES } from "./run-failures"
+import { providerUnavailable, TURN_FAILURES } from "./run-failures"
 import {
   bufferNativeEvent,
   drainBufferedEvents,
@@ -28,8 +28,8 @@ import { settleFrom } from "./run-settlement"
 import {
   safelyUnsubscribe,
   settledStatus,
-  type ActiveRun,
-  type RunEngineHost,
+  type ActiveTurn,
+  type TurnEngineHost,
 } from "./run-state"
 
 const MAX_RECOVERY_EVENTS = 4_096
@@ -64,9 +64,9 @@ type LostReason = "disconnected" | "rebound" | "restart"
  * The one path that binds a run to a live Hermes Session: a new turn, a
  * reconnect, discovery and an in-place reattach differ only in `mode`.
  */
-export async function attachRun(
-  host: RunEngineHost,
-  active: ActiveRun,
+export async function attachTurn(
+  host: TurnEngineHost,
+  active: ActiveTurn,
   mode: AttachMode
 ) {
   const buffered = nativeEventBuffer()
@@ -102,7 +102,7 @@ export async function attachRun(
       }
       if (signal.kind !== "lost") return
       lost = signal.reason
-      if (accepting) lostRun(host, active, signal.reason)
+      if (accepting) lostTurn(host, active, signal.reason)
     })
     cursor = await attachCursor(host, liveSessionId, mode)
   } catch {
@@ -122,18 +122,18 @@ export async function attachRun(
   active.lastSeen = cursor.barrier
   active.catchUp = undefined
   active.deferredEdge = undefined
-  host.runs.set(sessionKey(active.scope), active)
+  host.turns.set(sessionKey(active.scope), active)
   if (cursor.reconcile || buffered.overflow) {
     drainBufferedEvents(buffered)
-    return host.fail(active, RUN_FAILURES.resetRequired)
+    return host.fail(active, TURN_FAILURES.resetRequired)
   }
   if (lost) {
     drainBufferedEvents(buffered)
-    return lostRun(host, active, lost)
+    return lostTurn(host, active, lost)
   }
   if (cursor.replayed && !acceptReplayed(host, active, cursor.replayed)) {
     drainBufferedEvents(buffered)
-    return host.fail(active, RUN_FAILURES.resetRequired)
+    return host.fail(active, TURN_FAILURES.resetRequired)
   }
   // A watermark past the last frame this page carried means the sequences
   // in between are missing rather than delivered: read the ring once more.
@@ -148,7 +148,7 @@ export async function attachRun(
 
 /** The cursor each attach mode derives from Hermes' own ring. */
 async function attachCursor(
-  host: RunEngineHost,
+  host: TurnEngineHost,
   liveSessionId: string,
   mode: AttachMode
 ): Promise<AttachCursor> {
@@ -259,8 +259,8 @@ function openTurnFrames(events: readonly HermesNativeEvent[]) {
  * dropped frames only authoritative history can now reconcile.
  */
 function acceptReplayed(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   events: readonly HermesNativeEvent[]
 ) {
   for (const event of events) {
@@ -278,8 +278,8 @@ function acceptReplayed(
 
 /** Hold a live frame behind the single in-flight catch-up for this run. */
 export function scheduleCatchUp(
-  host: RunEngineHost,
-  active: ActiveRun,
+  host: TurnEngineHost,
+  active: ActiveTurn,
   value?: unknown
 ) {
   if (active.terminal) return
@@ -293,14 +293,14 @@ export function scheduleCatchUp(
  * A catch-up page belongs to the attachment it was read for: after a detach or
  * a later attach it may neither advance the frozen watermark nor fail the run.
  */
-function ownsCatchUp(active: ActiveRun, buffer: BufferedNativeEvents) {
+function ownsCatchUp(active: ActiveTurn, buffer: BufferedNativeEvents) {
   if (active.catchUp !== buffer) return false
   if (!active.terminal && !active.detached) return true
   active.catchUp = undefined
   return false
 }
 
-async function catchUp(host: RunEngineHost, active: ActiveRun) {
+async function catchUp(host: TurnEngineHost, active: ActiveTurn) {
   const buffer = active.catchUp
   if (!buffer || active.terminal) return
   let recovery: HermesRecovery
@@ -311,7 +311,7 @@ async function catchUp(host: RunEngineHost, active: ActiveRun) {
     active.catchUp = undefined
     // The run cannot be made contiguous while Hermes is unreachable; the
     // browser reconnects and replays from the frozen cursor.
-    host.detach(active, RUN_FAILURES.connectionInterrupted)
+    host.detach(active, TURN_FAILURES.connectionInterrupted)
     return
   }
   if (!ownsCatchUp(active, buffer)) return
@@ -332,7 +332,7 @@ async function catchUp(host: RunEngineHost, active: ActiveRun) {
     // the gap; an empty page with nothing held is a heal that missed nothing.
     (!active.terminal && firstBufferedSeq(held) > active.lastSeen + 1)
   ) {
-    host.fail(active, RUN_FAILURES.resetRequired)
+    host.fail(active, TURN_FAILURES.resetRequired)
     return
   }
   for (const event of held) host.accept(active, event, true)
@@ -342,9 +342,9 @@ async function catchUp(host: RunEngineHost, active: ActiveRun) {
 }
 
 /** The observed frame stream ended; how it ended decides what the run does. */
-function lostRun(host: RunEngineHost, active: ActiveRun, reason: LostReason) {
+function lostTurn(host: TurnEngineHost, active: ActiveTurn, reason: LostReason) {
   if (reason === "disconnected")
-    host.detach(active, RUN_FAILURES.connectionInterrupted)
+    host.detach(active, TURN_FAILURES.connectionInterrupted)
   // A rebound or restarted live Session cannot answer for this run's cursor.
-  else host.fail(active, RUN_FAILURES.resetRequired)
+  else host.fail(active, TURN_FAILURES.resetRequired)
 }

@@ -2,8 +2,8 @@ import { expect, it, vi } from "vitest"
 import { TurnEventKind } from "../../core/events"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
-import { HermesRunEngine } from "./run"
-import type { HermesRunNative } from "./run-native"
+import { HermesTurnEngine } from "./run"
+import type { HermesTurnNative } from "./run-native"
 import { HermesNativeRuntime } from "./run-native"
 import {
   HermesRpcRejectedError,
@@ -113,7 +113,7 @@ it("reports a malformed catalog as an outage instead of a refused command", asyn
     nativeFor(request).submit("live", {
       scope,
       text: "/help",
-      runId: "run",
+      turnId: "run",
     })
   ).rejects.toBeInstanceOf(HermesUnavailableError)
   expect(request).toHaveBeenCalledOnce()
@@ -129,7 +129,7 @@ it("routes an exact native command to slash.exec and exposes synchronous text", 
     nativeFor(request).submit("live", {
       scope,
       text: "/help details",
-      runId: "run",
+      turnId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
@@ -162,7 +162,7 @@ it("preserves native prefill results for commands such as undo", async () => {
     nativeFor(request).submit("live", {
       scope,
       text: "/undo",
-      runId: "run",
+      turnId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
@@ -189,7 +189,7 @@ it("recognizes typed commands from the full native catalog", async () => {
     nativeFor(request).submit("live", {
       scope,
       text: "/command-256",
-      runId: "run",
+      turnId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
@@ -227,7 +227,7 @@ it.each([
     await nativeFor(request).submit("live", {
       scope,
       text,
-      runId: "run",
+      turnId: "run",
     })
 
     expect(request).toHaveBeenCalledWith(
@@ -260,7 +260,7 @@ it.each(["/unknown", "/constructor", " /help", "/helpful", "normal text"])(
         ? { pairs: [["/help", "Help"]], canon: { "/help": "/help" } }
         : { status: "streaming" }
     )
-    await nativeFor(request).submit("live", { scope, text, runId: "run" })
+    await nativeFor(request).submit("live", { scope, text, turnId: "run" })
     expect(request).toHaveBeenCalledWith("prompt.submit", {
       session_id: "live",
       text,
@@ -285,7 +285,7 @@ it.each([-32601, 4018])(
       nativeFor(request).submit("live", {
         scope,
         text: "/skill arguments",
-        runId: "run",
+        turnId: "run",
       })
     ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
     expect(request).toHaveBeenCalledWith(
@@ -313,7 +313,7 @@ it.each([
     const submission = nativeFor(request).submit("live", {
       scope,
       text: "/help",
-      runId: "run",
+      turnId: "run",
     })
     if (outcome === "rejected")
       await expect(submission).resolves.toEqual({
@@ -341,7 +341,7 @@ it("follows native aliases and completes outputless synchronous commands", async
     nativeFor(request).submit("live", {
       scope,
       text: "/help info",
-      runId: "run",
+      turnId: "run",
     })
   ).resolves.toEqual({
     acknowledgement: "accepted",
@@ -366,7 +366,7 @@ it("rejects recognized commands with attachments and sends unknown ones normally
     native.submit("live", {
       scope: { ...scope, hasAttachments: true },
       text: "/help",
-      runId: "one",
+      turnId: "one",
     })
   ).resolves.toEqual({
     acknowledgement: "rejected",
@@ -375,7 +375,7 @@ it("rejects recognized commands with attachments and sends unknown ones normally
   await native.submit("live", {
     scope: { ...scope, hasAttachments: true },
     text: "/unknown",
-    runId: "two",
+    turnId: "two",
   })
   expect(request.mock.calls.map(([method]) => method)).toEqual([
     "commands.catalog",
@@ -385,7 +385,7 @@ it("rejects recognized commands with attachments and sends unknown ones normally
 })
 
 it("finishes a synchronous command run without waiting for native conversational events", async () => {
-  const native: HermesRunNative = {
+  const native: HermesTurnNative = {
     resume: async () => ({ liveSessionId: "live", running: false }),
     observe: async () => () => {},
     cursor: async () => ({ epoch: "epoch", latestSeq: 0 }),
@@ -403,7 +403,7 @@ it("finishes a synchronous command run without waiting for native conversational
       completion: { output: "Help output" },
     }),
   }
-  const engine = new HermesRunEngine(native)
+  const engine = new HermesTurnEngine(native)
   const handle = await engine.start(
     { agentId: "writer", sessionId: "stored", threadId: "thread" },
     { turnId: "run", messageId: "user", prompt: "/help" }
@@ -447,7 +447,7 @@ it("re-sends only the expansion when Hermes rejects the command's own submit as 
   })
   const adapter = new HermesServerAdapter(router)
 
-  await adapter.runs.start(scope, {
+  await adapter.turns.start(scope, {
     turnId: "run-1",
     messageId: "user",
     prompt: "/skill arguments",

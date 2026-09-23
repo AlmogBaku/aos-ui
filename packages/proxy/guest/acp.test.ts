@@ -29,8 +29,8 @@ import {
 } from "../core/events"
 import type {
   RuntimeInstance,
-  ServerRunEngine,
-  ServerRunHandle,
+  ServerTurnEngine,
+  ServerTurnHandle,
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -81,7 +81,7 @@ const CAPABILITIES = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -89,7 +89,7 @@ const CAPABILITIES = {
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       choices: [
         { value: "once", scope: "request" },
         { value: "session", scope: "session" },
@@ -100,7 +100,7 @@ const CAPABILITIES = {
     questions: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-empty-answer",
       maxQuestions: 10,
@@ -175,7 +175,7 @@ async function invite(service: GuestInvitationService) {
   ).token
 }
 
-function terminalHandle(events: readonly TurnEvent[]): ServerRunHandle {
+function terminalHandle(events: readonly TurnEvent[]): ServerTurnHandle {
   return {
     events: (async function* () {
       yield* events
@@ -187,7 +187,7 @@ function terminalHandle(events: readonly TurnEvent[]): ServerRunHandle {
 }
 
 /** A run the provider keeps open until Stop releases it. */
-function openHandle(events: readonly TurnEvent[]): ServerRunHandle {
+function openHandle(events: readonly TurnEvent[]): ServerTurnHandle {
   let release = () => undefined as void
   const settled = new Promise<void>((resolve) => {
     release = () => resolve()
@@ -270,20 +270,20 @@ const unsupported = () => {
 type HarnessOptions = {
   /** The invited Session already exists; a fresh invitation creates nothing. */
   existing?: boolean
-  handle?: () => ServerRunHandle
+  handle?: () => ServerTurnHandle
   permission?: (params: unknown) => Promise<RequestPermissionResponse>
 }
 
 function harness(options: HarnessOptions = {}) {
-  const handles: ServerRunHandle[] = []
-  const start = vi.fn(async (): Promise<ServerRunHandle> => {
+  const handles: ServerTurnHandle[] = []
+  const start = vi.fn(async (): Promise<ServerTurnHandle> => {
     const handle = options.handle
       ? options.handle()
       : terminalHandle(RUN_EVENTS)
     handles.push(handle)
     return handle
   })
-  const engine: ServerRunEngine = {
+  const engine: ServerTurnEngine = {
     start,
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
@@ -308,7 +308,7 @@ function harness(options: HarnessOptions = {}) {
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(async () => HISTORY)
   const runtime: ServerRuntime = {
-    runs: engine,
+    turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
     resolveSessionId: () => undefined,
@@ -674,7 +674,7 @@ describe("guest ACP lane", () => {
       sessionId: REF,
       code: "invalid_request",
     })
-    // The refused answer starts no resume segment.
+    // The refused answer starts no reply segment.
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })

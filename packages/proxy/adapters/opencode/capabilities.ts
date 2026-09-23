@@ -8,7 +8,7 @@ export function openCodeCapabilities() {
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         choices: [
           { value: "once", scope: "request" },
           { value: "always", scope: "agent" },
@@ -19,7 +19,7 @@ export function openCodeCapabilities() {
       questions: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-reject",
         maxQuestions: 32,

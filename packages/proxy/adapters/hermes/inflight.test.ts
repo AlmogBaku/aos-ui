@@ -54,7 +54,7 @@ describe("Hermes retained turn", () => {
         type: "incomplete",
         reason: "error",
         error:
-          "Hermes could not complete this run.\nProvider rejected the request",
+          "Hermes could not complete this turn.\nProvider rejected the request",
       },
     })
   })
@@ -84,7 +84,7 @@ describe("Hermes retained turn", () => {
           "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException)",
       },
       metadata: {
-        custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+        custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
       },
     })
   })
@@ -101,7 +101,7 @@ describe("Hermes retained turn", () => {
     expect(restored?.status).toEqual({
       type: "incomplete",
       reason: "error",
-      error: "Hermes could not complete this run.",
+      error: "Hermes could not complete this turn.",
     })
   })
 

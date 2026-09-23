@@ -17,8 +17,8 @@ import {
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 import { PendingRequestKind } from "../../core/events"
-import { ServerRunSteerUncertainError } from "../../core/runtime"
-import { HermesRunPublicError, HermesRunRewindConflictError } from "./run"
+import { ServerTurnSteerUncertainError } from "../../core/runtime"
+import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
 import { HermesInteractionPublicError } from "./interactions"
 import {
   HermesContentScopeError,
@@ -529,7 +529,7 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.pendingInteractions("researcher", "stored")
     ).resolves.toMatchObject({
-      runId: "aos-hermes-restored-interaction",
+      turnId: "aos-hermes-restored-interaction",
       running: true,
       status: "waiting-for-input",
       requests: [
@@ -628,7 +628,7 @@ describe("Hermes server adapter", () => {
       adapter.native.submit("live-secret", {
         scope,
         text: "Hello",
-        runId: "run-1",
+        turnId: "run-1",
       })
     ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
     await expect(
@@ -690,7 +690,7 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       uncertain.native.redirect("live-secret", "Correction")
-    ).rejects.toBeInstanceOf(ServerRunSteerUncertainError)
+    ).rejects.toBeInstanceOf(ServerTurnSteerUncertainError)
   })
 
   it("rewinds Edit or Retry at the authoritative durable user row", async () => {
@@ -722,7 +722,7 @@ describe("Hermes server adapter", () => {
       adapter.native.submit("live-secret", {
         scope,
         text: "Edited",
-        runId: "edit-run",
+        turnId: "edit-run",
         rewindSourceId: "hermes-row-12",
       })
     ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
@@ -758,7 +758,7 @@ describe("Hermes server adapter", () => {
     await adapter.native.submit("live-secret", {
       scope,
       text: "Retry",
-      runId: "retry-run",
+      turnId: "retry-run",
       rewindSourceId: "hermes-row-10",
     })
     expect(request).toHaveBeenLastCalledWith("prompt.submit", {
@@ -775,10 +775,10 @@ describe("Hermes server adapter", () => {
       adapter.native.submit("live-secret", {
         scope,
         text: "Retry",
-        runId: "stale-retry-run",
+        turnId: "stale-retry-run",
         rewindSourceId: "hermes-row-10",
       })
-    ).rejects.toBeInstanceOf(HermesRunRewindConflictError)
+    ).rejects.toBeInstanceOf(HermesTurnRewindConflictError)
     expect(request).not.toHaveBeenCalled()
   })
 
@@ -2323,7 +2323,7 @@ describe("Hermes server adapter", () => {
     // An unconfirmed Stop may have been accepted: the browser reconciles.
     expect(
       adapter.publicError(
-        new HermesRunPublicError(
+        new HermesTurnPublicError(
           "AOS_STOP_UNCERTAIN",
           "Stop was not confirmed."
         )
@@ -2333,7 +2333,7 @@ describe("Hermes server adapter", () => {
       new HermesUnavailableError(),
       new HermesWorkspaceUnavailableError(),
       new HermesContentUnavailableError(),
-      new HermesRunPublicError(
+      new HermesTurnPublicError(
         "AOS_PROVIDER_UNAVAILABLE",
         "Hermes is unavailable."
       ),
@@ -2387,7 +2387,7 @@ describe("Hermes server adapter", () => {
         agentId: "researcher",
         sessionId: "stored",
         threadId: "stored",
-        runId: "run-1",
+        turnId: "run-1",
       }
 
       expect(await adapter.native.inspectExecution(scope)).toMatchObject({
@@ -2493,7 +2493,7 @@ describe("Hermes server adapter", () => {
             "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
         },
         metadata: {
-          custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+          custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
         },
       })
       // This retained cause names a credential and an internal host, so the
@@ -2522,7 +2522,7 @@ describe("Hermes server adapter", () => {
             "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
         },
         metadata: {
-          custom: { aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
+          custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
         },
       })
     })

@@ -61,7 +61,7 @@ export async function createHermesRuntime(
     log,
   })
   const sessions = new SessionCoordinator({
-    engine: runtime.runs,
+    engine: runtime.turns,
     maxActiveExecutions: limits.activeExecutions,
     maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,

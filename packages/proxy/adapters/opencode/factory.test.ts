@@ -5,10 +5,10 @@ import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
 
 import type { RuntimeLimits } from "../../config"
-import type { ServerRunEngine } from "../../core/runtime"
+import type { ServerTurnEngine } from "../../core/runtime"
 import type { OpenCodeAdapterClient } from "./adapter"
 import { createOpenCodeRuntime } from "./factory"
-import { OpenCodeRunEngine } from "./run"
+import { OpenCodeTurnEngine } from "./run"
 
 const limits: RuntimeLimits = {
   activeExecutions: 4,
@@ -18,12 +18,12 @@ const limits: RuntimeLimits = {
   subscriberBytes: 65_536,
 }
 
-const runs: ServerRunEngine = {
+const turns: ServerTurnEngine = {
   async start() {
-    throw new Error("factory test does not start runs")
+    throw new Error("factory test does not start turns")
   },
   async recover() {
-    throw new Error("factory test does not recover runs")
+    throw new Error("factory test does not recover turns")
   },
 }
 
@@ -67,7 +67,7 @@ describe("OpenCode runtime factory", () => {
         { clientFactory: () => client() }
       )
 
-      expect(runtime.runtime.runs).toBeInstanceOf(OpenCodeRunEngine)
+      expect(runtime.runtime.turns).toBeInstanceOf(OpenCodeTurnEngine)
       await runtime.close()
     } finally {
       await rm(directory, { recursive: true, force: true })
@@ -93,11 +93,11 @@ describe("OpenCode runtime factory", () => {
           passwordFile,
         },
         limits,
-        { clientFactory, runs }
+        { clientFactory, turns }
       )
 
       expect(runtime.id).toBe("opencode-local")
-      expect(runtime.runtime.runs).toBe(runs)
+      expect(runtime.runtime.turns).toBe(turns)
       expect(clientFactory).toHaveBeenCalledWith({
         baseUrl: "http://127.0.0.1:4096",
         directory: "/workspace/runtime",

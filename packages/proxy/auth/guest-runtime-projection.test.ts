@@ -12,7 +12,7 @@ import {
 import { guestErrorDescription } from "./guest-projection"
 import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
-  createGuestRunAccess,
+  createGuestTurnAccess,
   projectGuestCapabilities,
   projectGuestError,
   projectGuestHistory,
@@ -47,7 +47,7 @@ const authorization: VerifiedGuestAuthorization = {
 
 /** One turn event, validated the way the projector validates it. */
 const project = (event: TurnEvent) =>
-  createGuestRunAccess(
+  createGuestTurnAccess(
     authorization,
     { ...authorization, operation: "errors:read" },
     { agentId: "agent", sessionId: "stored", threadId: "ref" },
@@ -98,7 +98,7 @@ describe("guest turn projection", () => {
         limit: 200,
         offset: 0,
         nextOffset: 1,
-        execution: { status: "running", runId: "run-1" },
+        execution: { status: "running", turnId: "run-1" },
       },
       {
         ...authorization,
@@ -108,7 +108,7 @@ describe("guest turn projection", () => {
     )
 
     expect(projected.messages).toEqual([])
-    expect(projected.execution).toEqual({ status: "running", runId: "run-1" })
+    expect(projected.execution).toEqual({ status: "running", turnId: "run-1" })
   })
 
   it("does not hide an ordinary user message that resembles a private seed", () => {
@@ -211,7 +211,7 @@ describe("guest turn projection", () => {
             },
             metadata: {
               custom: {
-                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+                aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
               },
             },
           },
@@ -252,7 +252,7 @@ describe("guest turn projection", () => {
             status: {
               type: "incomplete",
               reason: "error",
-              error: "Hermes could not complete this run.",
+              error: "Hermes could not complete this turn.",
             },
           },
         ],
@@ -294,7 +294,7 @@ describe("guest turn projection", () => {
             },
             metadata: {
               custom: {
-                aos: { runErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
+                aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
               },
             },
           },
@@ -384,7 +384,7 @@ describe("guest turn projection", () => {
       interactions: {
         steering: {
           status: "available",
-          scope: "active-run",
+          scope: "active-turn",
           semantics: "visible-user-message",
           input: "text",
           fallback: "provider-queue",
@@ -392,7 +392,7 @@ describe("guest turn projection", () => {
         approvals: {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
-          scope: "run",
+          scope: "turn",
           choices: [
             { value: "once", scope: "request" },
             { value: "session", scope: "session" },
@@ -404,7 +404,7 @@ describe("guest turn projection", () => {
         questions: {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
-          scope: "run",
+          scope: "turn",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-empty-answer",
           maxQuestions: 10,
@@ -437,7 +437,7 @@ describe("guest turn projection", () => {
     expect(projected?.interactions.approvals.status).toBe("available")
     expect(projected?.interactions.steering).toEqual({
       status: "unavailable",
-      reason: "operator-run-control-required",
+      reason: "operator-turn-control-required",
     })
     if (projected?.interactions.approvals.status === "available")
       expect(projected.interactions.approvals.choices).toEqual([

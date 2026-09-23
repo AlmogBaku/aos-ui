@@ -9,7 +9,7 @@ const scope = {
   agentId: "research",
   sessionId: "native-session-1",
   threadId: "session-public-1",
-  runId: "run-1",
+  turnId: "run-1",
 }
 
 describe("OpenCodeInteractions", () => {
@@ -86,7 +86,7 @@ describe("OpenCodeInteractions", () => {
         },
       ],
     })
-    const resume = [
+    const replies = [
       {
         requestId: "question-1",
         status: "resolved" as const,
@@ -94,11 +94,11 @@ describe("OpenCodeInteractions", () => {
       },
     ]
 
-    await interactions.validate(scope, resume)
+    await interactions.validate(scope, replies)
     expect(reply).not.toHaveBeenCalled()
-    await interactions.dispatch(scope, resume)
+    await interactions.dispatch(scope, replies)
     expect(reply).toHaveBeenCalledOnce()
-    await expect(interactions.dispatch(scope, resume)).rejects.toMatchObject({
+    await expect(interactions.dispatch(scope, replies)).rejects.toMatchObject({
       code: "AOS_INTERACTION_NOT_FOUND",
     })
   })
@@ -231,7 +231,7 @@ describe("OpenCodeInteractions", () => {
     )[0]!.items.enum[0]!
 
     await expect(
-      interactions.respond({ ...scope, runId: "resume-segment" }, [
+      interactions.respond({ ...scope, turnId: "reply-segment" }, [
         {
           requestId: "question-1",
           status: "resolved",
@@ -269,7 +269,7 @@ describe("OpenCodeInteractions", () => {
     })
     interactions.reconcile(scope, { questions: [], permissions: [] })
     await expect(
-      interactions.respond({ ...scope, runId: "resume-segment" }, [
+      interactions.respond({ ...scope, turnId: "reply-segment" }, [
         {
           requestId: "question-1",
           status: "resolved",

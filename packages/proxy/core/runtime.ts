@@ -22,13 +22,11 @@ export type SessionScope = {
   hasAttachments?: boolean
 }
 
-export type ServerRunScope = SessionScope
-
-export type ServerRunHandle = {
+export type ServerTurnHandle = {
   events: AsyncIterable<TurnEvent>
   /** Resolves only when the provider segment is terminal. */
   settled: Promise<void>
-  /** Idempotently requests Stop or rechecks an already-stopping native run. */
+  /** Idempotently requests Stop or rechecks an already-stopping native turn. */
   stop(): Promise<"stopping" | "idle">
   steer?(
     request: Readonly<{ requestId: string; text: string }>
@@ -43,29 +41,27 @@ export type ServerRunHandle = {
 
 export type RecoveryRequest = {
   threadId: string
-  runId: string
+  turnId: string
   position?: { epoch: string; lastSeen: number }
 }
 
-export type ServerReconnectRequest = RecoveryRequest
-
-export type ServerRunEngine = {
+export type ServerTurnEngine = {
   start(
     scope: SessionScope,
     input: TurnInput,
     /** One-shot server-owned content staged for this native admission. */
     attachments?: ServerAttachmentStage
-  ): Promise<ServerRunHandle>
+  ): Promise<ServerTurnHandle>
   /**
-   * Reattaches to a run this process already admitted. The returned handle must
-   * speak for that run: it either publishes at least one event or ends its
+   * Reattaches to a turn this process already admitted. The returned handle must
+   * speak for that turn: it either publishes at least one event or ends its
    * stream. Coordination of an uncertain turn waits on that signal, so a handle
    * that attaches silently and stays silent leaves the turn unanswered.
    */
   recover(
     scope: SessionScope,
     request: RecoveryRequest
-  ): Promise<ServerRunHandle>
+  ): Promise<ServerTurnHandle>
   /**
    * Reconstructs provider-authoritative execution state after process loss.
    * A repeated call refreshes an existing waiting execution; `undefined`
@@ -73,10 +69,10 @@ export type ServerRunEngine = {
    */
   discover?(
     scope: SessionScope,
-    runId: string
+    turnId: string
   ): Promise<
     | {
-        handle: ServerRunHandle
+        handle: ServerTurnHandle
         state: "running" | "waiting-for-input"
         requests?: PendingRequest[]
       }
@@ -91,46 +87,46 @@ export type RuntimeInstance = {
   close(): Promise<void>
 }
 
-export class ServerRunConflictError extends Error {
+export class ServerTurnConflictError extends Error {
   constructor() {
-    super("An AOS run is already active for this Session")
-    this.name = "ServerRunConflictError"
+    super("An AOS turn is already active for this Session")
+    this.name = "ServerTurnConflictError"
   }
 }
 
-export class ServerRunCapacityError extends Error {
+export class ServerTurnCapacityError extends Error {
   constructor(readonly lane: "global" | "guest" = "global") {
     super("AOS execution capacity exceeded")
-    this.name = "ServerRunCapacityError"
+    this.name = "ServerTurnCapacityError"
   }
 }
 
-export class ServerRunControlError extends Error {
+export class ServerTurnControlError extends Error {
   constructor() {
-    super("Run control is not authorized")
-    this.name = "ServerRunControlError"
+    super("Turn control is not authorized")
+    this.name = "ServerTurnControlError"
   }
 }
 
-export class ServerRunSteerUnavailableError extends Error {
+export class ServerTurnSteerUnavailableError extends Error {
   constructor() {
     super("Active-turn steering is unavailable")
-    this.name = "ServerRunSteerUnavailableError"
+    this.name = "ServerTurnSteerUnavailableError"
   }
 }
 
-export class ServerRunSteerUncertainError extends Error {
+export class ServerTurnSteerUncertainError extends Error {
   constructor() {
     super("The steering request may have been accepted")
-    this.name = "ServerRunSteerUncertainError"
+    this.name = "ServerTurnSteerUncertainError"
   }
 }
 
 /** Signals that Stop failed before native dispatch and may be attempted again. */
-export class ServerRunStopNotDispatchedError extends Error {
+export class ServerTurnStopNotDispatchedError extends Error {
   constructor(readonly failure: unknown) {
     super("Stop was not dispatched")
-    this.name = "ServerRunStopNotDispatchedError"
+    this.name = "ServerTurnStopNotDispatchedError"
   }
 }
 
@@ -175,7 +171,7 @@ export type ServerRuntimePublicError = {
 
 /** Provider-neutral operations consumed by normalized HTTP and event routes. */
 export interface ServerRuntime {
-  readonly runs: ServerRunEngine
+  readonly turns: ServerTurnEngine
   resolveInvitedSession(
     agentId: string,
     ref: string,

@@ -16,7 +16,7 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
-  ServerRunEngine,
+  ServerTurnEngine,
   ServerRuntime,
 } from "../../core/runtime"
 import { projectTodos } from "../todos"
@@ -83,8 +83,8 @@ export type OpenCodeAdapterClient = Readonly<{
 
 export type OpenCodeServerAdapterOptions = Readonly<{
   client: OpenCodeAdapterClient
-  /** Created by the native runs leaf; coordinator admission remains central. */
-  runs: ServerRunEngine
+  /** Created by the native turns leaf; coordinator admission remains central. */
+  turns: ServerTurnEngine
   /** Factory supplies the one shared native-interaction authority. */
   interactions?: OpenCodeInteractions
   creatorAgentId?: string
@@ -143,7 +143,7 @@ function unavailableRuntimeInfo(): RuntimeInfo {
         status: "unavailable",
         reason: "temporarily-unavailable",
       },
-      sessionRun: { status: "unavailable", reason: "temporarily-unavailable" },
+      sessionTurn: { status: "unavailable", reason: "temporarily-unavailable" },
       sessionStop: { status: "unavailable", reason: "temporarily-unavailable" },
       sessionSteer: {
         status: "unavailable",
@@ -189,7 +189,7 @@ function readyRuntimeInfo(): RuntimeInfo {
       sessionArchival: { status: "available" },
       sessionPin: { status: "available" },
       sessionDeletion: { status: "available" },
-      sessionRun: { status: "available" },
+      sessionTurn: { status: "available" },
       sessionStop: { status: "available" },
       sessionSteer: {
         status: "unavailable",
@@ -204,7 +204,7 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
-  readonly runs: ServerRunEngine
+  readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
@@ -212,7 +212,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   #closePromise: Promise<void> | undefined
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
-    this.runs = options.runs
+    this.turns = options.turns
     this.#workspace = createOpenCodeWorkspaceOperations({
       client: options.client,
       creatorAgentId: options.creatorAgentId,

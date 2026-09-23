@@ -185,7 +185,7 @@ type ActivitySubscription = {
   onError?: (error: Error) => void
 }
 
-type FixtureRunActivity = {
+type FixtureTurnActivity = {
   agentId: string
   threadId: string
   turnId: string
@@ -441,12 +441,12 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   beginRunActivity(
     threadId: string,
-    providerRunId?: string
-  ): FixtureRunActivity | undefined {
+    providerTurnId?: string
+  ): FixtureTurnActivity | undefined {
     const session = this.#sessions.find((item) => item.threadId === threadId)
     if (!session) return undefined
-    const runId = providerRunId || this.#activityIdFactory()
-    const turnId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(runId)}`
+    const turnKey = providerTurnId || this.#activityIdFactory()
+    const turnId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(turnKey)}`
     const activity = { agentId: session.agentId, threadId, turnId }
     this.#publishActivity({
       id: `${turnId}:started`,
@@ -460,14 +460,14 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   createAttentionRequestId(
     threadId: string,
     kind: "question" | "permission",
-    providerRunId?: string
+    providerTurnId?: string
   ) {
-    const requestId = providerRunId || this.#activityIdFactory()
+    const requestId = providerTurnId || this.#activityIdFactory()
     return `fixture:${kind}:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`
   }
 
   finishRunActivity(
-    activity: FixtureRunActivity | undefined,
+    activity: FixtureTurnActivity | undefined,
     result: "finished" | "failed"
   ) {
     if (!activity) return

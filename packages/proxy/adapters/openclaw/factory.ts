@@ -19,7 +19,7 @@ import {
   type OpenClawGatewayClient,
 } from "./client"
 import { OpenClawInteractions } from "./interactions"
-import { OpenClawRunEngine } from "./run"
+import { OpenClawTurnEngine } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
 
 export type OpenClawRuntimeConfig = Readonly<{
@@ -171,15 +171,15 @@ export async function createOpenClawRuntime(
   const subscriptions = new OpenClawSessionSubscriptions(client)
   state.subscriptions = subscriptions
   const interactions = new OpenClawInteractions(client)
-  const runs = new OpenClawRunEngine({
+  const turns = new OpenClawTurnEngine({
     client,
     subscriptions,
     toolEvents: true,
-    resume: interactions,
+    replies: interactions,
   })
   const adapter = new OpenClawServerAdapter({
     client,
-    runs,
+    turns,
     subscribeSession: async (agentId, sessionKey, onInvalidate) => {
       const lease = await subscriptions!.acquire(
         { agentId, sessionKey },
@@ -189,7 +189,7 @@ export async function createOpenClawRuntime(
     },
   })
   const sessions = new SessionCoordinator({
-    engine: adapter.runs,
+    engine: adapter.turns,
     maxActiveExecutions: limits.activeExecutions,
     maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,

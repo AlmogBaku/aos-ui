@@ -1266,7 +1266,7 @@ describe("HermesInteractions server requests", () => {
       approvals: {
         status: "available",
         protocol: "acp-request",
-        scope: "run",
+        scope: "turn",
         choices: [
           { value: "once", scope: "request" },
           { value: "session", scope: "session" },
@@ -1278,7 +1278,7 @@ describe("HermesInteractions server requests", () => {
       questions: {
         status: "available",
         protocol: "acp-request",
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",
         maxQuestions: 32,

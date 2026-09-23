@@ -18,12 +18,12 @@ import {
 import { Check } from "typebox/value"
 
 import {
-  ServerRunConflictError,
-  ServerRunStopNotDispatchedError,
+  ServerTurnConflictError,
+  ServerTurnStopNotDispatchedError,
   type RecoveryRequest,
   type ServerAttachmentStage,
-  type ServerRunEngine,
-  type ServerRunHandle,
+  type ServerTurnEngine,
+  type ServerTurnHandle,
   type SessionScope,
 } from "../../core/runtime"
 import { OpenClawClientRequestError } from "./client"
@@ -60,12 +60,12 @@ export interface OpenClawRunRequestClient {
   ): Promise<T>
 }
 
-export type OpenClawBoundResumeResult = Readonly<{
+export type OpenClawBoundRepliesResult = Readonly<{
   status:
     "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
 }>
 
-export type OpenClawBoundResume = Readonly<{
+export type OpenClawBoundReplies = Readonly<{
   /** Proves the response belongs to one pending native run before observation. */
   validate(
     scope: SessionScope,
@@ -75,7 +75,7 @@ export type OpenClawBoundResume = Readonly<{
   dispatch(
     scope: SessionScope,
     replies: readonly RequestReply[]
-  ): Promise<OpenClawBoundResumeResult>
+  ): Promise<OpenClawBoundRepliesResult>
   /** Reconstructs one exact native wait from current Gateway authority. */
   discover?(
     scope: SessionScope & { nativeRunId: string },
@@ -83,7 +83,7 @@ export type OpenClawBoundResume = Readonly<{
   ): Promise<{ requests: PendingRequest[] } | undefined>
 }>
 
-export class OpenClawRunPublicError extends Error {
+export class OpenClawTurnPublicError extends Error {
   constructor(
     readonly code:
       "AOS_PROVIDER_UNAVAILABLE" | "AOS_SEND_UNCERTAIN" | "AOS_STOP_UNCERTAIN",
@@ -201,7 +201,7 @@ type OpenTool = { name: string; messageId: string; ended: boolean }
 
 type ActiveRun = {
   scope: SessionScope
-  runId: string
+  turnId: string
   nativeRunId: string
   nativeSessionKey: string
   nativeSessionId: string
@@ -254,7 +254,7 @@ type NativeAgentEvent = {
 
 type WaitingRun = {
   scope: SessionScope
-  runId: string
+  turnId: string
   nativeRunId: string
   nativeInteractionSessionKey: string
   nativeSessionId: string
@@ -582,17 +582,17 @@ function requestWasSent(error: unknown, callbackObserved: boolean) {
 }
 
 function providerUnavailable() {
-  return new OpenClawRunPublicError(
+  return new OpenClawTurnPublicError(
     "AOS_PROVIDER_UNAVAILABLE",
     "OpenClaw is temporarily unavailable."
   )
 }
 
-export class OpenClawRunEngine implements ServerRunEngine {
+export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #client: OpenClawRunRequestClient
   readonly #subscriptions: OpenClawSessionSubscriptions
   readonly #toolEvents: boolean
-  readonly #resume?: OpenClawBoundResume
+  readonly #replies?: OpenClawBoundReplies
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
 
@@ -600,19 +600,19 @@ export class OpenClawRunEngine implements ServerRunEngine {
     client: OpenClawRunRequestClient
     subscriptions: OpenClawSessionSubscriptions
     toolEvents?: boolean
-    resume?: OpenClawBoundResume
+    replies?: OpenClawBoundReplies
   }) {
     this.#client = options.client
     this.#subscriptions = options.subscriptions
     this.#toolEvents = options.toolEvents === true
-    this.#resume = options.resume
+    this.#replies = options.replies
   }
 
   async start(
     scope: SessionScope,
-    candidate: Parameters<ServerRunEngine["start"]>[1],
+    candidate: Parameters<ServerTurnEngine["start"]>[1],
     attachmentStage?: ServerAttachmentStage
-  ): Promise<ServerRunHandle> {
+  ): Promise<ServerTurnHandle> {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
     const text = isRepliesTurn(input) ? undefined : input.prompt
@@ -626,9 +626,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
         "OpenClaw request replies cannot include staged attachments"
       )
     if (!validId(scope.agentId) || !validId(scope.sessionId))
-      throw new Error("AOS run scope does not match this Session")
+      throw new Error("AOS turn scope does not match this Session")
     if (replies) {
-      if (!this.#resume)
+      if (!this.#replies)
         throw new Error(
           "OpenClaw request replies require one bound native interaction"
         )
@@ -636,7 +636,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       !text?.trim() ||
       ("rewindSourceId" in input && input.rewindSourceId !== undefined)
     )
-      throw new Error("AOS runs require exactly one authorized plain-text turn")
+      throw new Error("AOS turns require exactly one authorized plain-text turn")
     if (text !== undefined && encoder.encode(text).byteLength > MAX_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
@@ -645,15 +645,15 @@ export class OpenClawRunEngine implements ServerRunEngine {
     const interactionScope = waiting
       ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
       : scope
-    const resumeBinding = replies
-      ? await this.#resume!.validate(interactionScope, replies)
+    const repliesBinding = replies
+      ? await this.#replies!.validate(interactionScope, replies)
       : undefined
-    if (resumeBinding && !validId(resumeBinding.runId))
+    if (repliesBinding && !validId(repliesBinding.runId))
       throw new Error("OpenClaw returned an invalid interaction binding")
 
-    if (this.#active.has(key)) throw new ServerRunConflictError()
-    if (waiting && resumeBinding?.runId !== waiting.nativeRunId)
-      throw new ServerRunConflictError()
+    if (this.#active.has(key)) throw new ServerTurnConflictError()
+    if (waiting && repliesBinding?.runId !== waiting.nativeRunId)
+      throw new ServerTurnConflictError()
 
     let lease: OpenClawSessionLease | undefined
     try {
@@ -690,16 +690,16 @@ export class OpenClawRunEngine implements ServerRunEngine {
         if (generation !== this.#subscriptions.generation) admissionDirty = true
       } while (admissionDirty)
       const boundRunActive =
-        resumeBinding !== undefined &&
-        (baseline.inFlightRun?.runId === resumeBinding.runId ||
-          baseline.activeRunIds?.includes(resumeBinding.runId) === true)
+        repliesBinding !== undefined &&
+        (baseline.inFlightRun?.runId === repliesBinding.runId ||
+          baseline.activeRunIds?.includes(repliesBinding.runId) === true)
       if (
         (!replies && !this.#authoritativelyIdle(baseline)) ||
         (replies && !boundRunActive && !this.#authoritativelyIdle(baseline))
       )
-        throw new ServerRunConflictError()
-      const resumeSnapshot =
-        replies && baseline.inFlightRun?.runId === resumeBinding?.runId
+        throw new ServerTurnConflictError()
+      const repliesSnapshot =
+        replies && baseline.inFlightRun?.runId === repliesBinding?.runId
           ? baseline.inFlightRun
           : undefined
       const sendParams = replies
@@ -735,8 +735,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
       queue.push({ kind: TurnEventKind.TurnStarted })
       const active: ActiveRun = {
         scope,
-        runId: input.turnId,
-        nativeRunId: resumeBinding?.runId ?? input.turnId,
+        turnId: input.turnId,
+        nativeRunId: repliesBinding?.runId ?? input.turnId,
         nativeSessionKey: baseline.sessionKey,
         nativeSessionId: baseline.sessionId,
         queue,
@@ -745,15 +745,15 @@ export class OpenClawRunEngine implements ServerRunEngine {
         stopping: false,
         uncertain: false,
         lastSeen: 0,
-        lastAgentSeq: resumeSnapshot
-          ? baselineAgentSequence(baseline, resumeSnapshot.runId)
+        lastAgentSeq: repliesSnapshot
+          ? baselineAgentSequence(baseline, repliesSnapshot.runId)
           : -1,
         lastChatSeq: -1,
         gapPending: false,
         reconciling: false,
         reconciliationDirty: false,
-        text: resumeSnapshot?.text ?? "",
-        ...(replies ? { textBaseline: resumeSnapshot?.text ?? "" } : {}),
+        text: repliesSnapshot?.text ?? "",
+        ...(replies ? { textBaseline: repliesSnapshot?.text ?? "" } : {}),
         projectedText: "",
         textGeneration: 0,
         textStarted: false,
@@ -771,9 +771,9 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
       if (replies) {
         if (active.terminal) return this.#handle(active)
-        let result: OpenClawBoundResumeResult
+        let result: OpenClawBoundRepliesResult
         try {
-          result = await this.#resume!.dispatch(interactionScope, replies)
+          result = await this.#replies!.dispatch(interactionScope, replies)
         } catch {
           this.#fail(
             active,
@@ -822,7 +822,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
             const runId = acceptedRunId(payload)
             if (runId !== active?.nativeRunId) {
               rejectAdmission(
-                new OpenClawRunPublicError(
+                new OpenClawTurnPublicError(
                   "AOS_SEND_UNCERTAIN",
                   "OpenClaw may have accepted this turn."
                 )
@@ -878,8 +878,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
       return this.#handle(active)
     } catch (error) {
       if (lease && !this.#active.has(key)) await lease.release().catch(() => {})
-      if (error instanceof ServerRunConflictError) throw error
-      if (error instanceof OpenClawRunPublicError) throw error
+      if (error instanceof ServerTurnConflictError) throw error
+      if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
       throw providerUnavailable()
     }
@@ -888,18 +888,18 @@ export class OpenClawRunEngine implements ServerRunEngine {
   async recover(
     scope: SessionScope,
     request: RecoveryRequest
-  ): Promise<ServerRunHandle> {
+  ): Promise<ServerTurnHandle> {
     if (
       !validId(scope.agentId) ||
       !validId(scope.sessionId) ||
       request.threadId !== scope.threadId ||
-      !validId(request.runId)
+      !validId(request.turnId)
     )
       throw new Error("AOS recovery scope does not match this Session")
     const key = scopeKey(scope)
     const existing = this.#active.get(key)
     if (existing) {
-      if (existing.runId !== request.runId) throw new ServerRunConflictError()
+      if (existing.turnId !== request.turnId) throw new ServerTurnConflictError()
       existing.queue.close()
       existing.queue = new EventQueue(() =>
         this.#fail(
@@ -948,10 +948,10 @@ export class OpenClawRunEngine implements ServerRunEngine {
         baseline = await this.#history(scope, lease)
         if (generation !== this.#subscriptions.generation) recoveryDirty = true
       } while (recoveryDirty)
-      const nativeRunId = authoritativeRecoveryRunId(baseline, request.runId)
-      const resumedSnapshot =
+      const nativeRunId = authoritativeRecoveryRunId(baseline, request.turnId)
+      const inFlightSnapshot =
         nativeRunId !== undefined &&
-        nativeRunId !== request.runId &&
+        nativeRunId !== request.turnId &&
         baseline.inFlightRun?.runId === nativeRunId
           ? baseline.inFlightRun
           : undefined
@@ -966,7 +966,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       queue.push({ kind: TurnEventKind.TurnStarted })
       const active: ActiveRun = {
         scope,
-        runId: request.runId,
+        turnId: request.turnId,
         nativeRunId: nativeRunId ?? "",
         nativeSessionKey: baseline.sessionKey,
         nativeSessionId: baseline.sessionId,
@@ -976,15 +976,15 @@ export class OpenClawRunEngine implements ServerRunEngine {
         stopping: false,
         uncertain: false,
         lastSeen: request.position?.lastSeen ?? 0,
-        lastAgentSeq: resumedSnapshot
-          ? baselineAgentSequence(baseline, resumedSnapshot.runId)
+        lastAgentSeq: inFlightSnapshot
+          ? baselineAgentSequence(baseline, inFlightSnapshot.runId)
           : -1,
         lastChatSeq: -1,
         gapPending: false,
         reconciling: false,
         reconciliationDirty: false,
-        text: resumedSnapshot?.text ?? "",
-        ...(resumedSnapshot ? { textBaseline: resumedSnapshot.text } : {}),
+        text: inFlightSnapshot?.text ?? "",
+        ...(inFlightSnapshot ? { textBaseline: inFlightSnapshot.text } : {}),
         projectedText: "",
         textGeneration: 0,
         textStarted: false,
@@ -1005,24 +1005,24 @@ export class OpenClawRunEngine implements ServerRunEngine {
     } catch (error) {
       this.#active.delete(key)
       await lease?.release().catch(() => {})
-      if (error instanceof ServerRunConflictError) throw error
+      if (error instanceof ServerTurnConflictError) throw error
       throw providerUnavailable()
     }
   }
 
-  async discover(scope: SessionScope, runId: string) {
+  async discover(scope: SessionScope, turnId: string) {
     const key = scopeKey(scope)
     const existingWaiting = this.#waiting.get(key)
     if (
-      !this.#resume?.discover ||
+      !this.#replies?.discover ||
       !validId(scope.agentId) ||
       !validId(scope.sessionId) ||
-      !validId(runId) ||
+      !validId(turnId) ||
       this.#active.has(key)
     )
       return undefined
-    if (existingWaiting && existingWaiting.runId !== runId)
-      throw new ServerRunConflictError()
+    if (existingWaiting && existingWaiting.turnId !== turnId)
+      throw new ServerTurnConflictError()
     let lease: OpenClawSessionLease | undefined
     let discoveryDirty = false
     try {
@@ -1075,7 +1075,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         }
         const nativeRunId = uniqueActiveRunId(history)
         if (!nativeRunId) return notDiscovered()
-        const discovered = await this.#resume.discover(
+        const discovered = await this.#replies.discover(
           {
             ...scope,
             sessionId: approvalReplayKey,
@@ -1100,7 +1100,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         if (!discovered) return notDiscovered()
         const waiting: WaitingRun = {
           scope,
-          runId,
+          turnId,
           nativeRunId,
           nativeInteractionSessionKey: approvalReplayKey,
           nativeSessionId: history.sessionId,
@@ -1137,7 +1137,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       }
     } catch (error) {
       await lease?.release().catch(() => {})
-      if (error instanceof OpenClawRunPublicError) throw error
+      if (error instanceof OpenClawTurnPublicError) throw error
       throw providerUnavailable()
     }
   }
@@ -1169,7 +1169,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
     return authoritativelyIdle(history)
   }
 
-  #handle(active: ActiveRun): ServerRunHandle {
+  #handle(active: ActiveRun): ServerTurnHandle {
     return {
       events: active.queue,
       settled: active.settled,
@@ -1261,12 +1261,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
       }
     } catch (error) {
       if (requestWasSent(error, sent))
-        throw new OpenClawRunPublicError(
+        throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
           "OpenClaw may have accepted the Stop request."
         )
       waiting.stopping = false
-      throw new ServerRunStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
     }
     return this.#waitingStatus(waiting)
   }
@@ -1337,7 +1337,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
       this.#fail(
         active,
         "AOS_PROVIDER_RUN_FAILED",
-        "OpenClaw could not complete this run."
+        "OpenClaw could not complete this turn."
       )
     }
   }
@@ -1444,8 +1444,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
 
   #messageId(active: ActiveRun) {
     return active.textGeneration === 0
-      ? `${active.runId}:assistant`
-      : `${active.runId}:assistant:${active.textGeneration + 1}`
+      ? `${active.turnId}:assistant`
+      : `${active.turnId}:assistant:${active.textGeneration + 1}`
   }
 
   #acceptTool(active: ActiveRun, data: Record<string, unknown>) {
@@ -1619,14 +1619,14 @@ export class OpenClawRunEngine implements ServerRunEngine {
     this.#fail(
       active,
       "AOS_RESET_REQUIRED",
-      "OpenClaw history could not authoritatively reconcile this run."
+      "OpenClaw history could not authoritatively reconcile this turn."
     )
   }
 
   async #stop(active: ActiveRun): Promise<"stopping" | "idle"> {
     if (active.terminal) return "idle"
     if (active.uncertain)
-      throw new OpenClawRunPublicError(
+      throw new OpenClawTurnPublicError(
         "AOS_STOP_UNCERTAIN",
         "OpenClaw may have accepted the Stop request."
       )
@@ -1674,13 +1674,13 @@ export class OpenClawRunEngine implements ServerRunEngine {
     } catch (error) {
       if (requestWasSent(error, sent)) {
         active.uncertain = true
-        throw new OpenClawRunPublicError(
+        throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
           "OpenClaw may have accepted the Stop request."
         )
       }
       active.stopping = false
-      throw new ServerRunStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
     }
     if (active.terminal) return "idle"
     if (status === "no-active-run") {

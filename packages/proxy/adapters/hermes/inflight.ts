@@ -6,7 +6,7 @@
  * Session's inflight snapshot. Only `session.resume` returns that snapshot; the
  * authoritative history route does not carry it. Hermes Desktop rebuilds the
  * failed turn from it, so an AOS history load does the same here, publishing the
- * very failure the live run engine would have published: the same headline and
+ * very failure the live turn engine would have published: the same headline and
  * the same bounded native cause.
  *
  * Upstream `InflightTurn` (contract commit in UPSTREAM.md) carries `assistant`,
@@ -19,7 +19,7 @@ import type { SessionMessage } from "../../../protocol"
 import { projectHermesMediaText } from "./media-artifacts"
 import { isRecord, nativeId } from "./native"
 import { boundedText } from "./run-frames"
-import { nativeFailure, publicRunFailure } from "./run-failures"
+import { nativeFailure, publicTurnFailure } from "./run-failures"
 
 /** The only `error_surface` fields AOS reads, as strings or booleans. */
 const SURFACE_FIELDS = [
@@ -115,7 +115,7 @@ function answersPrompt(native: string | undefined, publicText: string) {
 /**
  * The assistant message a history load appends for a retained failed turn, or
  * nothing when the snapshot describes no failure of that prompt. The failure is
- * the run-failure catalogue's own, so a restored turn reads exactly as the live
+ * the turn-failure catalogue's own, so a restored turn reads exactly as the live
  * turn read before the reload.
  */
 export function restoredHermesFailedTurn(
@@ -124,7 +124,7 @@ export function restoredHermesFailedTurn(
 ): SessionMessage | undefined {
   if (!inflightTurnFailed(inflight)) return undefined
   if (!answersPrompt(inflight.user, turn.userText)) return undefined
-  const { code, message } = publicRunFailure(
+  const { code, message } = publicTurnFailure(
     nativeFailure({
       ...(inflight.errorSurface
         ? { error_surface: inflight.errorSurface }
@@ -149,6 +149,6 @@ export function restoredHermesFailedTurn(
     content: text ? [{ type: "text", text }] : [],
     createdAt: turn.createdAt,
     status: { type: "incomplete", reason: "error", error: message },
-    metadata: { custom: { aos: { runErrorCode: code } } },
+    metadata: { custom: { aos: { turnErrorCode: code } } },
   }
 }

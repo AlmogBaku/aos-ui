@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
-import type { ServerRunEngine } from "../../core/runtime"
+import type { ServerTurnEngine } from "../../core/runtime"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 
-const runEngine: ServerRunEngine = {
+const turnEngine: ServerTurnEngine = {
   async start() {
     throw new Error("run engine is not exercised by this adapter test")
   },
@@ -107,7 +107,7 @@ describe("OpenCode server adapter", () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await expect(adapter.models("research", "session-1")).resolves.toEqual({
@@ -139,7 +139,7 @@ describe("OpenCode server adapter", () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await expect(
@@ -194,7 +194,7 @@ describe("OpenCode server adapter", () => {
       native.sessions.todos = todos
       const adapter = new OpenCodeServerAdapter({
         client: native,
-        runs: runEngine,
+        turns: turnEngine,
       })
 
       const history = await adapter.history("research", "session-1", 1, 1)
@@ -222,7 +222,7 @@ describe("OpenCode server adapter", () => {
     })
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await adapter.mutateSession("research", "session-1", "PATCH", {
@@ -276,7 +276,7 @@ describe("OpenCode server adapter", () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     for (const body of [
@@ -324,7 +324,7 @@ describe("OpenCode server adapter", () => {
     }
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await expect(adapter.runtimeInfo()).resolves.toMatchObject({
@@ -353,7 +353,7 @@ describe("OpenCode server adapter", () => {
   it("returns OpenCode capabilities accepted by the canonical workspace schema", async () => {
     const adapter = new OpenCodeServerAdapter({
       client: client(),
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     const value = await adapter.workspaceCapabilities("research", "session-1")
@@ -393,7 +393,7 @@ describe("OpenCode server adapter", () => {
     const listener = vi.fn()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     const unsubscribe = await adapter.subscribeSessionInvalidation(
@@ -435,7 +435,7 @@ describe("OpenCode server adapter", () => {
     const reset = vi.fn()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await adapter.subscribeSessionInvalidation(
@@ -450,7 +450,7 @@ describe("OpenCode server adapter", () => {
   it("refuses attachment staging for a foreign Agent before accepting file data", async () => {
     const adapter = new OpenCodeServerAdapter({
       client: client(),
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await expect(
@@ -464,7 +464,7 @@ describe("OpenCode server adapter", () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
       client: native,
-      runs: runEngine,
+      turns: turnEngine,
     })
 
     await Promise.all([adapter.close(), adapter.close()])

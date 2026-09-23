@@ -29,14 +29,14 @@ state. The browser works only with the normalized surface.
 
 **Legend used in this document:**
 
-| Term        | Meaning                                                                  |
-| ----------- | ------------------------------------------------------------------------ |
-| ACP         | Agent Client Protocol v2 (`@agentclientprotocol/sdk/experimental/v2`)    |
-| Session     | One conversation, identified by a public `threadId` the browser supplies |
-| Run segment | One continuous provider execution between starts and stops               |
-| Coordinator | `SessionCoordinator` — the process-local run admission and journal       |
-| Attachment  | Per-connection view of one Session on the coordinator                    |
-| Lane        | `operator` or `guest` — the ACP connection kind                          |
+| Term         | Meaning                                                                  |
+| ------------ | ------------------------------------------------------------------------ |
+| ACP          | Agent Client Protocol v2 (`@agentclientprotocol/sdk/experimental/v2`)    |
+| Session      | One conversation, identified by a public `threadId` the browser supplies |
+| Turn segment | One continuous provider execution between starts and stops               |
+| Coordinator  | `SessionCoordinator` — the process-local turn admission and journal      |
+| Attachment   | Per-connection view of one Session on the coordinator                    |
+| Lane         | `operator` or `guest` — the ACP connection kind                          |
 
 ---
 
@@ -62,9 +62,9 @@ AcpConnectionContext  (acp/types.ts:53-67)
         v
 SessionCoordinator  (core/session-coordinator.ts:378)
         |
-        | ServerRunEngine
+        | ServerTurnEngine
         v
-ServerRuntime / ServerRunEngine  (core/runtime.ts:67-100, 192-280)
+ServerRuntime / ServerTurnEngine  (core/runtime.ts:67-100, 192-280)
         |
         | one adapter  (adapters/create-runtime.ts:12-21)
         v
@@ -171,28 +171,27 @@ For the full method table see [`docs/runtimes/acp.md`](../runtimes/acp.md).
 
 ---
 
-## 6. Run vocabulary and ACP translation {#6-run-vocabulary-and-acp-translation}
+## 6. Turn vocabulary and ACP translation {#6-turn-vocabulary-and-acp-translation}
 
 **Status: Implemented**
 
-The proxy owns a closed run vocabulary defined in `core/events.ts:14-33`
-(`RunEventKind`). Native adapters emit these event kinds; the ACP layer
+The proxy owns a closed turn vocabulary defined in `core/events.ts`
+(`TurnEventKind`). Native adapters emit these event kinds; the ACP layer
 translates them to browser-facing ACP payloads. Neither end depends on the
 other's wire format.
 
-Every `session/update` on a run segment carries `_meta.aos.sequence` and
+Every `session/update` on a turn segment carries `_meta.aos.sequence` and
 `_meta.aos.turnId` (`protocol/acp.ts`), so the browser can position
 cursor-bearing reconnects.
 
-**Internal CUSTOM events** emitted by the coordinator publish under internal
-names the ACP translator maps to wire notifications:
+**AOS extension events** map to vendor wire notifications:
 
-| Internal name        | Wire notification     |
+| Turn event kind      | Wire notification     |
 | -------------------- | --------------------- |
-| `aos.steer.accepted` | `_aos/steer_accepted` |
-| `aos.artifact`       | `_aos/artifact`       |
+| `steer-accepted`     | `_aos/steer_accepted` |
+| `artifact-published` | `_aos/artifact`       |
 
-Mapping source: `acp/translate/run-events.ts:133,145-148`.
+Mapping source: `acp/translate/turn-events.ts`.
 
 History replay runs through the same translators, so the browser receives
 identical shapes whether an event is live or replayed.
@@ -208,16 +207,16 @@ For adapter obligations and the five lifetimes see
 
 **Coordinator key facts** (`core/session-coordinator.ts`):
 
-| Fact                                                                  | Location                                |
-| --------------------------------------------------------------------- | --------------------------------------- |
-| Scope key: `agentId + "\0" + sessionId`                               | `:218`                                  |
-| Idempotent re-admission (duplicate `runId` replays from journal)      | `:511-528`                              |
-| Conflict (different run on non-idle scope → `ServerRunConflictError`) | `:543-549`                              |
-| Single-flight (`#admissions` set blocks concurrent starts)            | `:551-552,578-580`                      |
-| Per-lane capacity: `maxActiveExecutions` / `maxGuestActiveExecutions` | `:1193-1206`; limits `config.ts:95-105` |
-| Controllers set; `#withControl` serialises stop+steer                 | `:514,565,746,797`                      |
-| Steer dedup: 256 per execution, oldest evicted                        | `:216,821-824`                          |
-| Stop states: `running` → `stopping` → terminal                        | `:740-769`                              |
+| Fact                                                                    | Location                                |
+| ----------------------------------------------------------------------- | --------------------------------------- |
+| Scope key: `agentId + "\0" + sessionId`                                 | `:218`                                  |
+| Idempotent re-admission (duplicate `turnId` replays from journal)       | `:511-528`                              |
+| Conflict (different turn on non-idle scope → `ServerTurnConflictError`) | `:543-549`                              |
+| Single-flight (`#admissions` set blocks concurrent starts)              | `:551-552,578-580`                      |
+| Per-lane capacity: `maxActiveExecutions` / `maxGuestActiveExecutions`   | `:1193-1206`; limits `config.ts:95-105` |
+| Controllers set; `#withControl` serialises stop+steer                   | `:514,565,746,797`                      |
+| Steer dedup: 256 per execution, oldest evicted                          | `:216,821-824`                          |
+| Stop states: `running` → `stopping` → terminal                          | `:740-769`                              |
 
 **Adapter engine** (`core/runtime.ts:67-100`): `start`, `recover`, `discover?`
 (post-process-loss), `stop`/`steer?` on handle, and adapter-private
@@ -227,23 +226,23 @@ For adapter obligations and the five lifetimes see
 
 ---
 
-## 8. Interrupts {#8-interrupts}
+## 8. Requests {#8-requests}
 
 **Status: Implemented**
 
-A run segment ends in either a success or an interrupt. An interrupt carries
-one or more `PendingRequest` items (`core/events.ts:65-75`). The coordinator
+A turn segment ends in either a success or a `turn-requires-action` outcome,
+which carries one or more `PendingRequest` items (`core/events.ts`). The coordinator
 retains the execution in `waiting-for-input`.
 
 Delivery: each pending request is sent as a server→client `requestPermission`
 or `elicitation.create` call with a `requestId` in `_meta.aos`
 (`protocol/acp.ts:315-341`; `acp/session-attachment.ts:460-511`).
 
-Answering all interrupts starts a new run segment via `session/resume` with
-the `resume[]` reply array (`acp/session-attachment.ts:522-554`;
-`session-coordinator.ts:530-541`).
+Answering every request starts a new turn segment whose `TurnInput` carries
+the `replies` array (`acp/session-attachment.ts`, `#settle`;
+`session-coordinator.ts`).
 
-A stale interrupt (the execution has moved on) returns JSON-RPC error
+A stale request (the execution has moved on) returns JSON-RPC error
 `-32003 staleRequest` (`acp/validation.ts:58-59`).
 
 On reconnect, pending requests are re-issued via `reissuePending`
@@ -257,7 +256,7 @@ On reconnect, pending requests are re-issued via `reissuePending`
 
 All write REST routes require the correct `Origin` header. Default JSON body
 cap 16 KiB (`routes/http.ts:61`). Stage registry: 256 entries, 300 s TTL
-(`core/attachment-stages.ts:13-22`); full → HTTP 503 `run_capacity_exceeded`.
+(`core/attachment-stages.ts:13-22`); full → HTTP 503 `turn_capacity_exceeded`.
 
 | Route                                | Limit                            |
 | ------------------------------------ | -------------------------------- |
@@ -325,14 +324,14 @@ via `session/resume` with `_meta.aos.after` (last sequence) and `turnId`
 `replayFrom:{type:"start"}` (`connection.ts:329-338`). Guest re-logins before
 resuming (`connection.ts:374-377`).
 
-**Proxy**: coordinator journal holds every event of a run segment, bounded by
+**Proxy**: coordinator journal holds every event of a turn segment, bounded by
 `maxReplayEvents`/`maxReplayBytes` (`hermes/factory.ts:63-71`). Adjacent text
 deltas merge on read to save replay size while keeping cursors exact
 (`session-coordinator.ts:73-77,141-145,310-320`). `resync` is set when the
 journal cannot answer the cursor (`acp/agent.ts:419-428`).
 
 The `discover` preamble reconstructs authoritative state before replay
-(`acp/agent.ts:411-418`). `reissuePending` re-delivers pending interrupts after
+(`acp/agent.ts:411-418`). `reissuePending` re-delivers pending requests after
 reconnect (`acp/session-attachment.ts:249-256`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
@@ -425,12 +424,12 @@ The fixture adapter is browser-only and has no server-side counterpart.
 
 **REST `ErrorCode` values** (`routes/http.ts:3-34`): `unauthenticated`,
 `forbidden`, `invalid_request`, `not_found`, `revision_conflict`,
-`run_conflict`, `run_capacity_exceeded`, `runtime_authentication_required`,
+`turn_conflict`, `turn_capacity_exceeded`, `runtime_authentication_required`,
 `temporarily_unavailable`, `connection_interrupted`, `uncertain_mutation`,
 `internal_error`.
 
 **`ServerRuntimePublicError` codes** (`core/runtime.ts:179-189`): same names
-except `run_conflict` and `internal_error`; maps to JSON-RPC via
+except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 `acp/validation.ts:60-92`.
 
 **JSON-RPC extension codes** (`protocol/acp.ts:69-79`): `-32001`
@@ -476,7 +475,7 @@ stack traces never cross either listener.
 | 5   | No synthetic fallback; fixture is browser-only                                                       | runtime-mode validation at startup                                |
 | 6   | Guest lane fails closed; extensions `steer`,`agents`,`invalidation`,`activity`,`readState` = `false` | `acp/agent.test.ts`                                               |
 | 7   | `guestActiveExecutions` ≤ `activeExecutions`                                                         | `config.ts:166-172` (`superRefine`)                               |
-| 8   | Run control requires registered `controllerId`                                                       | `session-coordinator.ts:746-748`                                  |
+| 8   | Turn control requires registered `controllerId`                                                      | `session-coordinator.ts:746-748`                                  |
 | 9   | Steer dedup: same `requestId`+fingerprint → same result; different fingerprint → conflict            | `session-coordinator.ts:786-795,821-824`                          |
 
 ---
@@ -494,7 +493,7 @@ implementation:
   OIDC/SAML login before reaching the ACP socket.
 - **Principal-specific upstream identities.** Per-user credentials forwarded
   to the native runtime.
-- **Multi-worker run ownership.** Distributing coordinator state across
+- **Multi-worker turn ownership.** Distributing coordinator state across
   processes or machines.
 - **Operator authentication cookies.** Server-side cookie jars or trusted
   identity assertions for the operator lane.

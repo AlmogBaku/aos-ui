@@ -83,7 +83,7 @@ export const RuntimeInfoSchema = z.strictObject({
     sessionArchival: OperationCapabilitySchema,
     sessionPin: OperationCapabilitySchema,
     sessionDeletion: OperationCapabilitySchema,
-    sessionRun: OperationCapabilitySchema,
+    sessionTurn: OperationCapabilitySchema,
     sessionStop: OperationCapabilitySchema,
     sessionSteer: OperationCapabilitySchema,
     sessionReadState: OperationCapabilitySchema,
@@ -221,7 +221,7 @@ const SessionMessageAttachmentSchema = z.strictObject({
 
 /**
  * The failure a durable message carries when the provider failed its turn. The
- * run stream reports the same failure live, so a reload reads identically.
+ * turn stream reports the same failure live, so a reload reads identically.
  */
 export const SessionMessageErrorStatusSchema = z.strictObject({
   type: z.literal("incomplete"),
@@ -239,7 +239,7 @@ export const SessionMessageSchema = z.strictObject({
   completedAt: z.string().datetime().optional(),
   // The two states a durable message may carry besides a plain completion: a
   // turn still waiting on the user, and a turn the provider failed. Both shapes
-  // are the ones the workspace already renders for a live run.
+  // are the ones the workspace already renders for a live turn.
   status: z
     .union([
       z.strictObject({
@@ -290,7 +290,7 @@ export const SessionHistoryResponseSchema = z.strictObject({
   execution: z
     .strictObject({
       status: SessionStatusSchema,
-      runId: IdentifierSchema.optional(),
+      turnId: IdentifierSchema.optional(),
     })
     .optional(),
 })
@@ -318,22 +318,24 @@ export const SessionPatchRequestSchema = z
     "Exactly one of title, archived, unread, pinned"
   )
 
-export const RunStopResponseSchema = z.strictObject({
+export const TurnStopResponseSchema = z.strictObject({
   status: z.enum(["stopping", "idle"]),
 })
-export type RunStopResponse = z.infer<typeof RunStopResponseSchema>
+export type TurnStopResponse = z.infer<typeof TurnStopResponseSchema>
 
-export const RunSteerRequestSchema = z.strictObject({
+export const TurnSteerRequestSchema = z.strictObject({
   requestId: IdentifierSchema,
-  expectedRunId: IdentifierSchema,
+  expectedTurnId: IdentifierSchema,
   text: Utf8MiBTextSchema,
 })
-export type RunSteerRequest = z.infer<typeof RunSteerRequestSchema>
+export type TurnSteerRequest = z.infer<typeof TurnSteerRequestSchema>
 
-export const RunSteerResponseSchema = z.strictObject({
+export const TurnSteerResponseSchema = z.strictObject({
   status: z.enum(["steered", "queued"]),
 })
-export type RunSteerResponse = z.infer<typeof RunSteerResponseSchema>
+export type TurnSteerResponse = z.infer<typeof TurnSteerResponseSchema>
+/** @deprecated Transitional alias for `acp.ts` and `core/events.ts`; import `TurnSteerResponseSchema`. */
+export const RunSteerResponseSchema = TurnSteerResponseSchema
 
 const CapabilityUnavailableSchema = z.strictObject({
   status: z.literal("unavailable"),
@@ -411,7 +413,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     steering: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("active-run"),
+        scope: z.literal("active-turn"),
         semantics: z.literal("visible-user-message"),
         input: z.literal("text"),
         fallback: z.literal("provider-queue"),
@@ -421,7 +423,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     approvals: z.strictObject({
       status: z.literal("available"),
       protocol: z.literal(INTERACTION_PROTOCOL),
-      scope: z.literal("run"),
+      scope: z.literal("turn"),
       choices: z
         .array(
           z.discriminatedUnion("value", [
@@ -455,7 +457,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     questions: z.strictObject({
       status: z.literal("available"),
       protocol: z.literal(INTERACTION_PROTOCOL),
-      scope: z.literal("run"),
+      scope: z.literal("turn"),
       answerModes: z.tuple([
         z.literal("single"),
         z.literal("multiple"),
@@ -690,35 +692,6 @@ export type SessionActivityResponse = z.infer<
   typeof SessionActivityResponseSchema
 >
 
-export const SessionInteractionSnapshotResponseSchema = z.strictObject({
-  runId: IdentifierSchema,
-  running: z.boolean(),
-  status: z.enum(["waiting-for-input", "running", "idle", "unknown"]),
-  outcome: z
-    .strictObject({
-      type: z.literal("interrupt"),
-      interrupts: z
-        .array(
-          z.strictObject({
-            id: IdentifierSchema,
-            reason: z.string().min(1).max(256),
-            message: z.string().max(65_536).optional(),
-            toolCallId: IdentifierSchema.optional(),
-            responseSchema: z.record(z.string(), z.unknown()).optional(),
-            expiresAt: z.string().max(256).optional(),
-            metadata: z.record(z.string(), z.unknown()).optional(),
-            subagentRunId: IdentifierSchema.optional(),
-          })
-        )
-        .min(1)
-        .max(64),
-    })
-    .optional(),
-})
-export type SessionInteractionSnapshotResponse = z.infer<
-  typeof SessionInteractionSnapshotResponseSchema
->
-
 const SessionAttachmentSchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("image"),
@@ -792,8 +765,8 @@ export const ErrorResponseSchema = z.strictObject({
       "invalid_request",
       "not_found",
       "revision_conflict",
-      "run_conflict",
-      "run_capacity_exceeded",
+      "turn_conflict",
+      "turn_capacity_exceeded",
       "registration_limit_exceeded",
       "runtime_authentication_required",
       "temporarily_unavailable",

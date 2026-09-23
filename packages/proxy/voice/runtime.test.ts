@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { AgentCatalogResponse } from "../../protocol"
-import type { ServerRunEngine, ServerRuntime } from "../core/runtime"
+import type { ServerTurnEngine, ServerRuntime } from "../core/runtime"
 import type {
   SpeechCapability,
   TranscriptionCapability,
@@ -34,7 +34,7 @@ const CAPABILITIES = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -42,7 +42,7 @@ const CAPABILITIES = {
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       choices: [
         { value: "once", scope: "request" },
         { value: "deny", scope: "request" },
@@ -52,7 +52,7 @@ const CAPABILITIES = {
     questions: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-cancel",
       maxQuestions: 1,
@@ -110,7 +110,7 @@ class NativeFailure extends Error {}
 
 /** A native runtime whose state is private, so a lost `this` cannot read it. */
 class FakeNative {
-  readonly runs = { engine: "native" } as unknown as ServerRunEngine
+  readonly turns = { engine: "native" } as unknown as ServerTurnEngine
   readonly transcribeCalls: string[] = []
   readonly speakCalls: string[] = []
   #agents = [{ id: "agent-one" }]
@@ -203,7 +203,7 @@ describe("withVoiceProviders", () => {
     await expect(wrapped.listAgents()).resolves.toEqual({
       agents: [{ id: "agent-one" }],
     })
-    expect(wrapped.runs).toBe(instance.runs)
+    expect(wrapped.turns).toBe(instance.turns)
     expect(wrapped.subscribeCatalogChanges).toBeUndefined()
   })
 

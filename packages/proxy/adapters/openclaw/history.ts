@@ -136,10 +136,10 @@ function verifyRowOwnership(
 
 function execution(history: ReturnType<typeof parseOpenClawHistory>) {
   if (history.inFlightRun?.runId)
-    return { status: "running" as const, runId: history.inFlightRun.runId }
+    return { status: "running" as const, turnId: history.inFlightRun.runId }
   const active = history.sessionInfo?.activeRunIds ?? []
   if (active.length === 1)
-    return { status: "running" as const, runId: active[0] }
+    return { status: "running" as const, turnId: active[0] }
   if (history.sessionInfo?.hasActiveRun || active.length > 0)
     return { status: "running" as const }
   return { status: "idle" as const }

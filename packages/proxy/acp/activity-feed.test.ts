@@ -12,7 +12,7 @@ const AT = "2026-09-19T10:00:00.000Z"
 
 type Execution = {
   state: string
-  runId?: string
+  turnId?: string
   requests: PendingRequest[]
 }
 
@@ -90,7 +90,7 @@ function lifecycle(
 }
 
 describe("createActivityFeed", () => {
-  it("hydrates unread rows, pending attention, and failed runs", async () => {
+  it("hydrates unread rows, pending attention, and failed turns", async () => {
     const { feed, sessionRows } = harness({
       sessions: [
         session({ id: "session-1", unread: true }),
@@ -102,13 +102,13 @@ describe("createActivityFeed", () => {
       executions: {
         "stored-session-2": {
           state: "waiting-for-input",
-          runId: "run-2",
+          turnId: "run-2",
           requests: [
             { requestId: "approval-1", kind: "permission" },
             { requestId: "question-1", kind: "elicitation" },
           ],
         },
-        "stored-session-3": { state: "idle", runId: "run-3", requests: [] },
+        "stored-session-3": { state: "idle", turnId: "run-3", requests: [] },
       },
     })
 

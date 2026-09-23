@@ -73,7 +73,7 @@ export function registerContentRoutes(
     const stageId = attachmentStages.create(agentId, sessionId, stage)
     if (!stageId) {
       await stage.cleanup().catch(() => undefined)
-      return errorResponse("run_capacity_exceeded", 503)
+      return errorResponse("turn_capacity_exceeded", 503)
     }
     return context.json(
       SessionAttachmentStageResponseSchema.parse({

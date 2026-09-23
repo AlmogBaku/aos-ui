@@ -35,14 +35,14 @@ V1 delivered one working Hermes-backed AOS workspace:
 
 ## Exclusions
 
-| Item | Status |
-|---|---|
-| OpenClaw server adapter | Later delivered |
-| OpenCode server adapter | Later delivered |
-| Multiple concurrent runtimes | Still target |
-| Multi-tenant operator authentication | Still target |
-| OIDC / SAML | Still target |
-| Distributed multi-worker ownership | Still target |
+| Item                                 | Status          |
+| ------------------------------------ | --------------- |
+| OpenClaw server adapter              | Later delivered |
+| OpenCode server adapter              | Later delivered |
+| Multiple concurrent runtimes         | Still target    |
+| Multi-tenant operator authentication | Still target    |
+| OIDC / SAML                          | Still target    |
+| Distributed multi-worker ownership   | Still target    |
 
 ## Acceptance evidence
 
@@ -63,26 +63,26 @@ The following test files exist and cover the V1 acceptance criteria:
 
 ## Where each V1 rule now lives
 
-| V1 rule | Current location |
-|---|---|
-| System shape and module layout | [Architecture §2](aos-runtime-gateway-architecture.md#2-system-shape), [§15](aos-runtime-gateway-architecture.md#15-adapter-kinds-and-selection) |
-| Trust model, Origin checks, redaction | [Architecture §3](aos-runtime-gateway-architecture.md#3-trust-boundaries) |
-| Operator and guest listeners, JWT, extensions | [Architecture §4](aos-runtime-gateway-architecture.md#4-listeners-and-lanes) |
-| ACP handshake, socket, methods | [Architecture §5](aos-runtime-gateway-architecture.md#5-the-single-acp-socket) |
-| Run vocabulary, translation, `_meta.aos` | [Architecture §6](aos-runtime-gateway-architecture.md#6-run-vocabulary-and-acp-translation) |
-| Coordinator, engine, steer | [Architecture §7](aos-runtime-gateway-architecture.md#7-sessioncoordinator-and-adapter-ownership-split) |
-| Interrupts, questions, approvals | [Architecture §8](aos-runtime-gateway-architecture.md#8-interrupts) |
-| REST byte planes, limits | [Architecture §9](aos-runtime-gateway-architecture.md#9-rest-byte-planes) |
-| Read state, activity | [Architecture §10](aos-runtime-gateway-architecture.md#10-read-state-focus-and-activity) |
-| Invalidation signals | [Architecture §11](aos-runtime-gateway-architecture.md#11-invalidation-and-session-change-signals) |
-| Reconnect and replay | [Architecture §12](aos-runtime-gateway-architecture.md#12-reconnect-and-replay) |
-| Limits and backpressure | [Architecture §13](aos-runtime-gateway-architecture.md#13-limits-and-backpressure) |
-| Configuration and secrets | [Architecture §14](aos-runtime-gateway-architecture.md#14-configuration-and-secrets) |
-| Errors | [Architecture §16](aos-runtime-gateway-architecture.md#16-errors) |
-| Tests and invariants | [Architecture §17–18](aos-runtime-gateway-architecture.md#17-tests-that-enforce-the-boundaries) |
-| Hermes lifecycle detail | [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md), [`TURN-LIFECYCLE.md`](../../packages/proxy/adapters/hermes/TURN-LIFECYCLE.md) |
-| Adapter obligations, five lifetimes | [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md) |
-| Full wire table | [`docs/runtimes/acp.md`](../runtimes/acp.md) |
+| V1 rule                                       | Current location                                                                                                                                                            |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| System shape and module layout                | [Architecture §2](aos-runtime-gateway-architecture.md#2-system-shape), [§15](aos-runtime-gateway-architecture.md#15-adapter-kinds-and-selection)                            |
+| Trust model, Origin checks, redaction         | [Architecture §3](aos-runtime-gateway-architecture.md#3-trust-boundaries)                                                                                                   |
+| Operator and guest listeners, JWT, extensions | [Architecture §4](aos-runtime-gateway-architecture.md#4-listeners-and-lanes)                                                                                                |
+| ACP handshake, socket, methods                | [Architecture §5](aos-runtime-gateway-architecture.md#5-the-single-acp-socket)                                                                                              |
+| Turn vocabulary, translation, `_meta.aos`     | [Architecture §6](aos-runtime-gateway-architecture.md#6-turn-vocabulary-and-acp-translation)                                                                                |
+| Coordinator, engine, steer                    | [Architecture §7](aos-runtime-gateway-architecture.md#7-sessioncoordinator-and-adapter-ownership-split)                                                                     |
+| Requests, questions, approvals                | [Architecture §8](aos-runtime-gateway-architecture.md#8-requests)                                                                                                           |
+| REST byte planes, limits                      | [Architecture §9](aos-runtime-gateway-architecture.md#9-rest-byte-planes)                                                                                                   |
+| Read state, activity                          | [Architecture §10](aos-runtime-gateway-architecture.md#10-read-state-focus-and-activity)                                                                                    |
+| Invalidation signals                          | [Architecture §11](aos-runtime-gateway-architecture.md#11-invalidation-and-session-change-signals)                                                                          |
+| Reconnect and replay                          | [Architecture §12](aos-runtime-gateway-architecture.md#12-reconnect-and-replay)                                                                                             |
+| Limits and backpressure                       | [Architecture §13](aos-runtime-gateway-architecture.md#13-limits-and-backpressure)                                                                                          |
+| Configuration and secrets                     | [Architecture §14](aos-runtime-gateway-architecture.md#14-configuration-and-secrets)                                                                                        |
+| Errors                                        | [Architecture §16](aos-runtime-gateway-architecture.md#16-errors)                                                                                                           |
+| Tests and invariants                          | [Architecture §17–18](aos-runtime-gateway-architecture.md#17-tests-that-enforce-the-boundaries)                                                                             |
+| Hermes lifecycle detail                       | [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md), [`TURN-LIFECYCLE.md`](../../packages/proxy/adapters/hermes/TURN-LIFECYCLE.md) |
+| Adapter obligations, five lifetimes           | [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md)                                                                              |
+| Full wire table                               | [`docs/runtimes/acp.md`](../runtimes/acp.md)                                                                                                                                |
 
 ## Research basis
 

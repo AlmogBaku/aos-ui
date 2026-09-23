@@ -11,7 +11,7 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
-  ServerRunEngine,
+  ServerTurnEngine,
   ServerRuntime,
 } from "../../core/runtime"
 import {
@@ -46,17 +46,17 @@ export class OpenClawAdapterUnavailableError extends Error {
 
 type OpenClawServerAdapterOptions = Readonly<{
   client: OpenClawGatewayClient
-  runs: ServerRunEngine
+  turns: ServerTurnEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
 }>
 
 /**
  * Provider composition only: native identity, subscriptions, and validation
- * remain in the OpenClaw leaves; the coordinator retains admission and runs.
+ * remain in the OpenClaw leaves; the coordinator retains admission and turns.
  */
 export class OpenClawServerAdapter implements ServerRuntime {
-  readonly runs: ServerRunEngine
+  readonly turns: ServerTurnEngine
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
@@ -65,7 +65,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
-    this.runs = options.runs
+    this.turns = options.turns
     this.#client = options.client
     this.#subscribeSession = options.subscribeSession
     this.#workspace = createOpenClawWorkspace({
@@ -378,7 +378,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
         sessionArchival: operation,
         sessionPin: operation,
         sessionDeletion: operation,
-        sessionRun: operation,
+        sessionTurn: operation,
         sessionStop: operation,
         sessionSteer: unavailable("native-active-turn-steering-unavailable"),
         sessionReadState: unavailable("native-session-read-state-unavailable"),

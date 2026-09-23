@@ -1,11 +1,11 @@
 import { SessionCoordinator } from "../../core/session-coordinator"
-import type { RuntimeInstance, ServerRunEngine } from "../../core/runtime"
+import type { RuntimeInstance, ServerTurnEngine } from "../../core/runtime"
 import type { RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
 import { createOpenCodeClient, type OpenCodeClientOptions } from "./client"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 import { OpenCodeInteractions } from "./interactions"
-import { OpenCodeRunEngine } from "./run"
+import { OpenCodeTurnEngine } from "./run"
 
 /**
  * Provider-local configuration until the central runtime union admits OpenCode.
@@ -22,8 +22,8 @@ export type OpenCodeRuntimeConfig = Readonly<{
 
 export type OpenCodeRuntimeFactoryDependencies = Readonly<{
   clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
-  /** Test-only override; production builds exactly one native run engine. */
-  runs?: ServerRunEngine
+  /** Test-only override; production builds exactly one native turn engine. */
+  turns?: ServerTurnEngine
   creatorAgentId?: string
 }>
 
@@ -43,17 +43,17 @@ export async function createOpenCodeRuntime(
     questions: client.sessions.questions,
     permissions: client.sessions.permissions,
   })
-  const runs =
-    dependencies.runs ??
-    new OpenCodeRunEngine(client, { replies: interactions })
+  const turns =
+    dependencies.turns ??
+    new OpenCodeTurnEngine(client, { replies: interactions })
   const runtime = new OpenCodeServerAdapter({
     client,
-    runs,
+    turns,
     interactions,
     creatorAgentId: dependencies.creatorAgentId,
   })
   const sessions = new SessionCoordinator({
-    engine: runtime.runs,
+    engine: runtime.turns,
     maxActiveExecutions: limits.activeExecutions,
     maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,

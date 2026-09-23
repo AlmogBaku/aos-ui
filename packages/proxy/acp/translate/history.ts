@@ -79,7 +79,7 @@ function artifactOutbound(messageId: string, part: MessagePart): AcpOutbound[] {
 }
 
 /**
- * A settled call, as the single update the live stream arrives at: the live run
+ * A settled call, as the single update the live stream arrives at: the live turn
  * opens it, streams its arguments, then settles it, and a replay knows only
  * where that ended.
  */
@@ -104,7 +104,7 @@ function toolCallOutbound(
 }
 
 /**
- * How the turn ended, as the live run reports it. The provider's own failure
+ * How the turn ended, as the live turn reports it. The provider's own failure
  * carries the stored message; every other stored turn ended its turn, including
  * one still waiting on an answer, because the request the attachment reissues is
  * what reopens it.
@@ -131,7 +131,7 @@ function settledOutbound(
 
 /**
  * One stored turn's parts, in the order the provider produced them, which is the
- * order the run stream sent: a whole-message upsert cannot say that this
+ * order the turn stream sent: a whole-message upsert cannot say that this
  * paragraph came after that tool call, because it replaces one source's content
  * as one block. Execution history is the operator's; a published artifact is the
  * turn's outcome, so it replays on both lanes and the guest history projection
@@ -167,7 +167,7 @@ function partsOutbound(
 
 /**
  * Assistant and system turns; ACP v2 has no system role of its own. An assistant
- * turn replays between the two state updates its run sent, because that is what
+ * turn replays between the two state updates its stream sent, because that is what
  * opens the turn, dates it, and settles it on the browser's one code path.
  */
 function agentOutbound(
@@ -176,7 +176,7 @@ function agentOutbound(
   startedAt: string
 ): AcpOutbound[] {
   const parts = partsOutbound(message, context)
-  // A notice the provider wrote is no turn: no run produced it, so no run state
+  // A notice the provider wrote is no turn: no turn produced it, so no turn state
   // brackets it.
   if (message.role !== "assistant") return parts
   // A turn this lane shows nothing of is no turn either. Only a failure the
@@ -225,10 +225,10 @@ function isCorrection(message: SessionHistoryResponse["messages"][number]) {
 }
 
 /**
- * How many of the live run's steer acknowledgements this history already carried
+ * How many of the live turn's steer acknowledgements this history already carried
  * as user turns. Only the corrections after the running turn's prompt count: the
  * provider cannot persist another prompt while a turn runs, so every flagged
- * user turn beyond the last plain one belongs to the run the journal replays.
+ * user turn beyond the last plain one belongs to the turn the journal replays.
  */
 export const persistedCorrections = ((history) => {
   const users = history.messages.filter((message) => message.role === "user")

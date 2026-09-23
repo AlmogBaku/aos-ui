@@ -8,10 +8,10 @@ import {
 } from "./gateway"
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
-import type { HermesRunScope } from "./run"
+import type { HermesTurnScope } from "./run"
 import { PendingRequestKind, type PendingRequest } from "../../core/events"
 
-const scope: HermesRunScope = {
+const scope: HermesTurnScope = {
   agentId: "researcher",
   sessionId: "stored",
   threadId: "stored",
@@ -23,7 +23,7 @@ function stubInteractions() {
   const listeners = new Set<(request: PendingRequest) => void>()
   return {
     onPendingRequest: vi.fn(
-      (_scope: HermesRunScope, listener: (request: PendingRequest) => void) => {
+      (_scope: HermesTurnScope, listener: (request: PendingRequest) => void) => {
         listeners.add(listener)
         return () => listeners.delete(listener)
       }
@@ -74,7 +74,7 @@ describe("Hermes native submit outcomes", () => {
       })
 
       await expect(
-        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
       ).resolves.toEqual({ acknowledgement: "accepted", status })
       expect(router.calls("prompt.submit")[0]?.params).toEqual({
         session_id: "live-secret",
@@ -105,7 +105,7 @@ describe("Hermes native submit outcomes", () => {
       })
 
       await expect(
-        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
       ).resolves.toEqual({
         acknowledgement: "rejected",
         reason,
@@ -140,7 +140,7 @@ describe("Hermes native submit outcomes", () => {
       })
 
       await expect(
-        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
       ).resolves.toEqual({
         acknowledgement: "rejected",
         reason,
@@ -162,7 +162,7 @@ describe("Hermes native submit outcomes", () => {
     })
 
     await expect(
-      native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).resolves.toMatchObject({ reason: "busy", detail: message })
   })
 
@@ -179,7 +179,7 @@ describe("Hermes native submit outcomes", () => {
     const outcome = await native.submit("live-secret", {
       scope,
       text: "Hello",
-      runId: "run-1",
+      turnId: "run-1",
     })
 
     expect(outcome).toMatchObject({ reason: "busy" })
@@ -206,7 +206,7 @@ describe("Hermes native submit outcomes", () => {
       })
 
       await expect(
-        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
       ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
       expect(router.calls("prompt.submit")).toHaveLength(3)
       expect(wait).toHaveBeenCalledTimes(2)
@@ -230,7 +230,7 @@ describe("Hermes native submit outcomes", () => {
       })
 
       await expect(
-        native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
       ).rejects.toBeInstanceOf(HermesUnavailableError)
       expect(router.calls("prompt.submit")).toHaveLength(4)
     }
@@ -246,7 +246,7 @@ describe("Hermes native submit outcomes", () => {
     await native.submit("live-secret", {
       scope,
       text: "Hello",
-      runId: "run-1",
+      turnId: "run-1",
     })
 
     expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.native.rejected", {
@@ -263,7 +263,7 @@ describe("Hermes native submit outcomes", () => {
     })
 
     await expect(
-      native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).resolves.toEqual({ acknowledgement: "uncertain" })
   })
 
@@ -278,7 +278,7 @@ describe("Hermes native submit outcomes", () => {
       native.submit("live-secret", {
         scope,
         text: "/etc hosts is missing",
-        runId: "run-1",
+        turnId: "run-1",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
     expect(router.calls("prompt.submit")).toHaveLength(0)
@@ -304,7 +304,7 @@ describe("Hermes native submit outcomes", () => {
       native.submit("live-secret", {
         scope,
         text: "Edited",
-        runId: "run-1",
+        turnId: "run-1",
         rewindSourceId: "hermes-row-12",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
@@ -324,7 +324,7 @@ describe("Hermes native submit outcomes", () => {
     await native.submit("live-secret", {
       scope,
       text: "Edited",
-      runId: "edit-run",
+      turnId: "edit-run",
       rewindSourceId: "hermes-row-12",
     })
 
@@ -344,7 +344,7 @@ describe("Hermes native submit outcomes", () => {
     // Hermes took the write, so the turn may be running: the acknowledgement is
     // lost rather than an outage, and the prompt is never sent again.
     await expect(
-      native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).resolves.toEqual({ acknowledgement: "uncertain" })
     expect(router.calls("prompt.submit")).toHaveLength(1)
   })
@@ -364,7 +364,7 @@ describe("Hermes native submit outcomes", () => {
       native.submit("live-secret", {
         scope,
         text: "/summarize",
-        runId: "run-1",
+        turnId: "run-1",
       })
     ).resolves.toEqual({ acknowledgement: "uncertain" })
     expect(router.calls("prompt.submit")).toHaveLength(1)
@@ -378,7 +378,7 @@ describe("Hermes native submit outcomes", () => {
     })
 
     await expect(
-      native.submit("live-secret", { scope, text: "Hello", runId: "run-1" })
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).rejects.toBeInstanceOf(HermesAuthenticationError)
   })
 
@@ -391,7 +391,7 @@ describe("Hermes native submit outcomes", () => {
       native.submit("live-secret", {
         scope: { ...scope, hasAttachments: true },
         text: "/help",
-        runId: "run-1",
+        turnId: "run-1",
       })
     ).resolves.toEqual({
       acknowledgement: "rejected",

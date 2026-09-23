@@ -1,10 +1,10 @@
 /**
- * The bounded turn event stream one run publishes.
+ * The bounded turn event stream one turn publishes.
  *
  * A consumer that stops reading must not be able to grow the queue without
  * bound, and a terminal event must always be deliverable: reaching the bound is
  * therefore refused at the push, and a terminal event replaces whatever is
- * still queued behind the run's own TurnStarted.
+ * still queued behind the turn's own TurnStarted.
  */
 import { TurnEventKind, type TurnEvent } from "../../core/events"
 import { boundedNativeBytes } from "./native"
@@ -90,7 +90,7 @@ export class EventQueue implements AsyncIterable<TurnEvent> {
   }
 }
 
-/** Every run's stream opens with its own TurnStarted. */
+/** Every turn's stream opens with its own TurnStarted. */
 export function startedTurnQueue() {
   const queue = new EventQueue()
   queue.push({ kind: TurnEventKind.TurnStarted })

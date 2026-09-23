@@ -58,7 +58,7 @@ function capabilities(): AcpCapabilities {
     interactions: {
       steering: {
         status: "available",
-        scope: "active-run",
+        scope: "active-turn",
         semantics: "visible-user-message",
         input: "text",
         fallback: "provider-queue",
@@ -66,14 +66,14 @@ function capabilities(): AcpCapabilities {
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         choices: [{ value: "once", scope: "request" }],
         maxPending: 8,
       },
       questions: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         answerModes: ["single", "multiple", "free-text"],
         cancellation: "native-empty-answer",
         maxQuestions: 8,
@@ -109,7 +109,7 @@ function runtimeInfo(
       sessionArchival: unavailable,
       sessionPin: unavailable,
       sessionDeletion: unavailable,
-      sessionRun: unavailable,
+      sessionTurn: unavailable,
       sessionStop: unavailable,
       sessionSteer: unavailable,
       sessionReadState: unavailable,

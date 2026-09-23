@@ -11,10 +11,10 @@ import {
 } from "../../core/events"
 
 import {
-  ServerRunConflictError,
+  ServerTurnConflictError,
   type RecoveryRequest,
-  type ServerRunEngine,
-  type ServerRunHandle,
+  type ServerTurnEngine,
+  type ServerTurnHandle,
   type ServerAttachmentStage,
   type SessionScope,
 } from "../../core/runtime"
@@ -48,21 +48,21 @@ export type OpenCodeBoundReplies = Readonly<{
   dispatch(scope: SessionScope, replies: readonly RequestReply[]): Promise<void>
 }>
 
-type OpenCodeRunClient = Readonly<{
+type OpenCodeTurnClient = Readonly<{
   sessions: Pick<
     OpenCodeClient["sessions"],
     "get" | "active" | "history" | "events" | "prompt" | "interrupt" | "wait"
   >
 }>
 
-export type OpenCodeRunEngineOptions = Readonly<{
+export type OpenCodeTurnEngineOptions = Readonly<{
   replies?: OpenCodeBoundReplies
   maxQueueEvents?: number
   maxBufferedEvents?: number
   waitRetryMs?: number
 }>
 
-type ActiveRun = {
+type ActiveTurn = {
   key: string
   scope: SessionScope
   projector: OpenCodeEventProjector
@@ -170,7 +170,7 @@ function validateInput(scope: SessionScope, candidate: TurnInput) {
   if (isRepliesTurn(input)) return { input, replies: input.replies }
   if (input.rewindSourceId !== undefined)
     throw new Error(
-      "OpenCode Edit and Retry are not handled by this run engine"
+      "OpenCode Edit and Retry are not handled by this turn engine"
     )
   const text = input.prompt
   if (!text) throw new Error("AOS turns require exactly one user prompt")
@@ -179,11 +179,11 @@ function validateInput(scope: SessionScope, candidate: TurnInput) {
   return { input, text }
 }
 
-function admissionId(scope: SessionScope, runId: string) {
+function admissionId(scope: SessionScope, turnId: string) {
   const digest = createHash("sha256")
     .update(scope.sessionId)
     .update("\0")
-    .update(runId)
+    .update(turnId)
     .digest("hex")
   return `aos_${digest}`
 }
@@ -263,22 +263,22 @@ function settlement(): Settlement {
   }
 }
 
-function runKey(scope: SessionScope) {
+function turnKey(scope: SessionScope) {
   return `${scope.agentId}\0${scope.sessionId}`
 }
 
-export class OpenCodeRunEngine implements ServerRunEngine {
-  readonly #client: OpenCodeRunClient
-  readonly #options: OpenCodeRunEngineOptions
-  readonly #runs = new Map<string, ActiveRun>()
+export class OpenCodeTurnEngine implements ServerTurnEngine {
+  readonly #client: OpenCodeTurnClient
+  readonly #options: OpenCodeTurnEngineOptions
+  readonly #turns = new Map<string, ActiveTurn>()
   readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
   readonly #maxQueueEvents: number
   readonly #maxBufferedEvents: number
   readonly #waitRetryMs: number
 
   constructor(
-    client: OpenCodeRunClient,
-    options: OpenCodeRunEngineOptions = {}
+    client: OpenCodeTurnClient,
+    options: OpenCodeTurnEngineOptions = {}
   ) {
     this.#client = client
     this.#options = options
@@ -370,7 +370,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     scope: SessionScope,
     candidate: TurnInput,
     stage?: ServerAttachmentStage
-  ): Promise<ServerRunHandle> {
+  ): Promise<ServerTurnHandle> {
     const { input, replies, text } = validateInput(scope, candidate)
     let files: readonly { uri: string; name?: string }[] | undefined
     if (stage) {
@@ -389,7 +389,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     } else if (await this.#active(scope.sessionId)) {
       // The native Session owns a turn AOS did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
-      throw new ServerRunConflictError()
+      throw new ServerTurnConflictError()
     }
 
     const before = await this.#readHistory(scope.sessionId)
@@ -413,7 +413,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         this.#discardBufferedThrough(run, next)
       }
       if (run.segmentClosed)
-        throw new Error("OpenCode observation failed before run mutation")
+        throw new Error("OpenCode observation failed before turn mutation")
 
       const after = run.projector.recoveryPosition().lastSeen
       if (replies) {
@@ -447,7 +447,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   async recover(
     scope: SessionScope,
     request: RecoveryRequest
-  ): Promise<ServerRunHandle> {
+  ): Promise<ServerTurnHandle> {
     if (request.threadId !== scope.threadId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
@@ -462,7 +462,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       throw new Error("The reconnect position is invalid")
 
     const requestedAfter = request.position?.lastSeen ?? -1
-    const expectedAdmission = admissionId(scope, request.runId)
+    const expectedAdmission = admissionId(scope, request.turnId)
     const run = this.#createRun(scope, requestedAfter, expectedAdmission)
 
     try {
@@ -530,10 +530,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     scope: SessionScope,
     after: number,
     expectedAdmission?: string
-  ): ActiveRun {
+  ): ActiveTurn {
     const queue = new EventQueue(this.#maxQueueEvents)
     const segmentSettlement = settlement()
-    const key = runKey(scope)
+    const key = turnKey(scope)
     let nativeSettlement = this.#nativeSettlements.get(key)
     if (!nativeSettlement) {
       const pending = settlement()
@@ -580,7 +580,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
   }
 
-  #projector(run: ActiveRun, after: number, expectedAdmission?: string) {
+  #projector(run: ActiveTurn, after: number, expectedAdmission?: string) {
     const projector = new OpenCodeEventProjector(run.scope.sessionId, after, {
       admissionId: expectedAdmission,
     })
@@ -588,8 +588,8 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     return projector
   }
 
-  async #attach(run: ActiveRun, after: number) {
-    const prior = this.#runs.get(run.key)
+  async #attach(run: ActiveTurn, after: number) {
+    const prior = this.#turns.get(run.key)
     if (prior && prior !== run) {
       prior.abandoned = true
       prior.controller.abort()
@@ -600,7 +600,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         "This OpenCode observation was replaced by a newer scoped connection."
       )
     }
-    this.#runs.set(run.key, run)
+    this.#turns.set(run.key, run)
     run.source = await this.#client.sessions.events(
       run.scope.sessionId,
       after < 0 ? {} : { after: String(after) }
@@ -608,7 +608,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     this.#pump(run)
   }
 
-  #pump(run: ActiveRun) {
+  #pump(run: ActiveTurn) {
     void (async () => {
       try {
         for await (const value of run.source!) {
@@ -626,7 +626,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
           this.#segmentFail(
             run,
             "AOS_CONNECTION_INTERRUPTED",
-            "The OpenCode connection was interrupted; reconnect to reconcile this run."
+            "The OpenCode connection was interrupted; reconnect to reconcile this turn."
           )
       } catch (error) {
         if (run.sourceAborted || run.abandoned || run.nativeTerminal) return
@@ -636,14 +636,14 @@ export class OpenCodeRunEngine implements ServerRunEngine {
             ? "AOS_RESET_REQUIRED"
             : "AOS_CONNECTION_INTERRUPTED",
           error instanceof OpenCodeEventValidationError
-            ? "OpenCode history must be reconciled before this run can continue."
-            : "The OpenCode connection was interrupted; reconnect to reconcile this run."
+            ? "OpenCode history must be reconciled before this turn can continue."
+            : "The OpenCode connection was interrupted; reconnect to reconcile this turn."
         )
       }
     })()
   }
 
-  #scheduleReconcile(run: ActiveRun) {
+  #scheduleReconcile(run: ActiveTurn) {
     if (run.reconciling) {
       run.reconcileAgain = true
       return
@@ -653,7 +653,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     )
   }
 
-  async #reconcile(run: ActiveRun) {
+  async #reconcile(run: ActiveTurn) {
     if (run.abandoned || run.nativeTerminal || !run.ready) return
     if (run.reconciling) {
       run.reconcileAgain = true
@@ -687,7 +687,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
   }
 
-  async #mergeAuthoritative(run: ActiveRun) {
+  async #mergeAuthoritative(run: ActiveTurn) {
     const after = run.projector.recoveryPosition().lastSeen
     const history = await this.#readHistory(
       run.scope.sessionId,
@@ -734,7 +734,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     throw new OpenCodeClientError("invalid_response")
   }
 
-  #watchWait(run: ActiveRun) {
+  #watchWait(run: ActiveTurn) {
     if (run.waiting || run.nativeTerminal || run.abandoned) return
     run.waiting = true
     void this.#client.sessions
@@ -759,7 +759,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       })
   }
 
-  #scheduleWaitRetry(run: ActiveRun) {
+  #scheduleWaitRetry(run: ActiveTurn) {
     const multiplier = Math.min(2 ** run.waitFailures, 16)
     const timer = setTimeout(() => {
       void this.#reconcile(run)
@@ -769,19 +769,19 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     timer.unref?.()
   }
 
-  #reconciliationFailed(run: ActiveRun, error: unknown) {
+  #reconciliationFailed(run: ActiveTurn, error: unknown) {
     this.#segmentFail(
       run,
       error instanceof OpenCodeEventValidationError
         ? "AOS_RESET_REQUIRED"
         : "AOS_CONNECTION_INTERRUPTED",
       error instanceof OpenCodeEventValidationError
-        ? "OpenCode history must be reconciled before this run can continue."
-        : "The OpenCode connection was interrupted; reconnect to reconcile this run."
+        ? "OpenCode history must be reconciled before this turn can continue."
+        : "The OpenCode connection was interrupted; reconnect to reconcile this turn."
     )
   }
 
-  #handle(run: ActiveRun): ServerRunHandle {
+  #handle(run: ActiveTurn): ServerTurnHandle {
     return {
       events: run.queue,
       settled: run.settled,
@@ -791,7 +791,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
   }
 
   #publish(
-    run: ActiveRun,
+    run: ActiveTurn,
     projection: ReturnType<OpenCodeEventProjector["acceptValidated"]>
   ) {
     if (run.segmentClosed) return
@@ -813,7 +813,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         this.#segmentFail(
           run,
           "AOS_RESET_REQUIRED",
-          "The OpenCode event buffer was exceeded; reconnect to reconcile this run.",
+          "The OpenCode event buffer was exceeded; reconnect to reconcile this turn.",
           true
         )
         return
@@ -827,7 +827,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     }
   }
 
-  #finish(run: ActiveRun, authoritativeNativeIdle = true) {
+  #finish(run: ActiveTurn, authoritativeNativeIdle = true) {
     if (run.nativeTerminal) return
     run.nativeTerminal = true
     if (authoritativeNativeIdle) this.#settleNative(run.nativeSettlement)
@@ -839,7 +839,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         "AOS_RESET_REQUIRED",
         "OpenCode became idle before its stable prompt admission could be reconciled."
       )
-      if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+      if (this.#turns.get(run.key) === run) this.#turns.delete(run.key)
       return
     }
     if (!run.segmentClosed) {
@@ -848,10 +848,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
       run.segmentClosed = true
     }
     run.settle()
-    if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+    if (this.#turns.get(run.key) === run) this.#turns.delete(run.key)
   }
 
-  #segmentFail(run: ActiveRun, code: string, message: string, reset = false) {
+  #segmentFail(run: ActiveTurn, code: string, message: string, reset = false) {
     if (run.segmentClosed) return
     this.#abortSource(run)
     const events = run.projector.fail(code, message).events
@@ -870,13 +870,13 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     run.settle()
   }
 
-  #abortSource(run: ActiveRun) {
+  #abortSource(run: ActiveTurn) {
     if (run.sourceAborted) return
     run.sourceAborted = true
     run.source?.abort()
   }
 
-  #abandon(run: ActiveRun) {
+  #abandon(run: ActiveTurn) {
     run.abandoned = true
     run.controller.abort()
     this.#abortSource(run)
@@ -884,21 +884,21 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     run.settle()
     if (run.nativeSettlement.stopRequested)
       this.#monitorNativeSettlement(run.nativeSettlement)
-    if (this.#runs.get(run.key) === run) this.#runs.delete(run.key)
+    if (this.#turns.get(run.key) === run) this.#turns.delete(run.key)
   }
 
-  #discardBufferedThrough(run: ActiveRun, seq: number) {
+  #discardBufferedThrough(run: ActiveTurn, seq: number) {
     for (const value of run.buffer.keys())
       if (value <= seq) run.buffer.delete(value)
   }
 
-  async #stop(run: ActiveRun): Promise<"stopping" | "idle"> {
+  async #stop(run: ActiveTurn): Promise<"stopping" | "idle"> {
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     if (run.nativeSettlement.stopRequested) return this.#recheckStop(run)
     await this.#client.sessions.interrupt(run.scope.sessionId)
     run.nativeSettlement.stopRequested = true
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
-    const current = this.#runs.get(run.key)
+    const current = this.#turns.get(run.key)
     if (current?.nativeSettlement === run.nativeSettlement)
       current.projector.markStopping()
     else run.projector.markStopping()
@@ -913,11 +913,11 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     return "stopping"
   }
 
-  async #recheckStop(run: ActiveRun): Promise<"stopping" | "idle"> {
+  async #recheckStop(run: ActiveTurn): Promise<"stopping" | "idle"> {
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     try {
       if (!(await this.#active(run.scope.sessionId))) {
-        const current = this.#runs.get(run.key)
+        const current = this.#turns.get(run.key)
         if (current && !current.abandoned) this.#finish(current)
         else this.#settleNative(run.nativeSettlement)
         return "idle"
@@ -956,7 +956,7 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     const reconcile = async () => {
       if (settlement.done) return
       try {
-        const current = this.#runs.get(settlement.key)
+        const current = this.#turns.get(settlement.key)
         if (current && !current.abandoned) {
           await this.#reconcile(current)
         } else if (!(await this.#active(settlement.scope.sessionId))) {

@@ -61,7 +61,7 @@ import {
 /**
  * The per-connection ACP v2 agent that fronts the coordinator and the runtime.
  * One handler per method: it validates `_meta.aos`, calls the same normalized
- * operations the HTTP routes call, and leaves the run stream itself to the
+ * operations the HTTP routes call, and leaves the turn stream itself to the
  * Session attachment.
  */
 
@@ -97,7 +97,7 @@ const GUEST_METHODS = new Set<string>([
 
 /**
  * The guest lane streams one invited conversation and manages no workspace: it
- * owns no roster, no read state, no catalog, and no run control beyond Stop.
+ * owns no roster, no read state, no catalog, and no turn control beyond Stop.
  */
 const GUEST_EXTENSIONS = {
   steer: false,
@@ -246,7 +246,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   ) {
     const positioned =
       meta.turnId === undefined ||
-      meta.turnId === coordinator.snapshot(scope).runId
+      meta.turnId === coordinator.snapshot(scope).turnId
     try {
       await attachment.attach(
         positioned ? meta.after : undefined,
@@ -326,7 +326,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * The invited Session one guest turn runs in. Rewind stays operator-only,
-   * exactly as the guest run route refuses one, and the invitation's setup text
+   * exactly as the guest turn route refuses one, and the invitation's setup text
    * reaches the runtime only when this Send creates the Session.
    */
   async function promptInvited(
@@ -611,11 +611,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params }) => {
       guestFor(AOS_METHODS.session.steer)
       const scope = sessions.scope(params.sessionId)
-      const { runId } = coordinator.snapshot(scope)
-      if (runId === undefined) throw turnInProgress()
+      const { turnId } = coordinator.snapshot(scope)
+      if (turnId === undefined) throw turnInProgress()
       return await workspace.steer(scope, {
         requestId: params.requestId,
-        expectedRunId: runId,
+        expectedTurnId: turnId,
         text: params.text,
       })
     }

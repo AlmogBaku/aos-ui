@@ -6,13 +6,12 @@ import {
   INTERACTION_PROTOCOL,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
-  RunSteerRequestSchema,
-  RunSteerResponseSchema,
-  RunStopResponseSchema,
+  TurnSteerRequestSchema,
+  TurnSteerResponseSchema,
+  TurnStopResponseSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
-  SessionInteractionSnapshotResponseSchema,
   SessionActivityResponseSchema,
   SessionAudioResponseSchema,
   SessionAttachmentStageRequestSchema,
@@ -47,7 +46,7 @@ describe("AOS v1 normalized protocol", () => {
         approvals: {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
-          scope: "run",
+          scope: "turn",
           choices: [
             { value: "once", scope: "request" },
             { value: "always", scope: "agent" },
@@ -58,7 +57,7 @@ describe("AOS v1 normalized protocol", () => {
         questions: {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
-          scope: "run",
+          scope: "turn",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-reject",
           maxQuestions: 32,
@@ -89,7 +88,7 @@ describe("AOS v1 normalized protocol", () => {
         {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
-          scope: "run",
+          scope: "turn",
           answerModes: ["single", "multiple", "free-text"],
           cancellation: "native-cancel",
           maxQuestions: 3,
@@ -203,7 +202,7 @@ describe("AOS v1 normalized protocol", () => {
         interactions: {
           steering: {
             status: "available",
-            scope: "active-run",
+            scope: "active-turn",
             semantics: "visible-user-message",
             input: "text",
             fallback: "provider-queue",
@@ -211,7 +210,7 @@ describe("AOS v1 normalized protocol", () => {
           approvals: {
             status: "available",
             protocol: INTERACTION_PROTOCOL,
-            scope: "run",
+            scope: "turn",
             choices: [
               { value: "once", scope: "request" },
               { value: "session", scope: "session" },
@@ -223,7 +222,7 @@ describe("AOS v1 normalized protocol", () => {
           questions: {
             status: "available",
             protocol: INTERACTION_PROTOCOL,
-            scope: "run",
+            scope: "turn",
             answerModes: ["single", "multiple", "free-text"],
             cancellation: "native-empty-answer",
             maxQuestions: 32,
@@ -309,27 +308,6 @@ describe("AOS v1 normalized protocol", () => {
       })
     ).toMatchObject({ state: "waiting-for-input" })
     expect(
-      SessionInteractionSnapshotResponseSchema.parse({
-        runId: "aos-hermes-restored-interaction",
-        running: true,
-        status: "waiting-for-input",
-        outcome: {
-          type: "interrupt",
-          interrupts: [
-            {
-              id: "approval-1",
-              reason: "approval",
-              message: "Allow this action?",
-              responseSchema: { type: "string", enum: ["once", "deny"] },
-            },
-          ],
-        },
-      })
-    ).toMatchObject({
-      status: "waiting-for-input",
-      outcome: { type: "interrupt" },
-    })
-    expect(
       SessionAudioResponseSchema.parse({
         transcription: { status: "ready" },
         speech: { status: "unavailable", reason: "not-configured" },
@@ -360,11 +338,11 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
   it("exposes only the normalized Stop settlement state", () => {
-    expect(RunStopResponseSchema.parse({ status: "stopping" })).toEqual({
+    expect(TurnStopResponseSchema.parse({ status: "stopping" })).toEqual({
       status: "stopping",
     })
     expect(() =>
-      RunStopResponseSchema.parse({
+      TurnStopResponseSchema.parse({
         status: "stopping",
         liveSessionId: "native-secret",
       })
@@ -373,40 +351,40 @@ describe("AOS v1 normalized protocol", () => {
 
   it("validates strict active-turn steering envelopes and their UTF-8 limit", () => {
     expect(
-      RunSteerRequestSchema.parse({
+      TurnSteerRequestSchema.parse({
         requestId: "queue-item-1",
-        expectedRunId: "run-1",
+        expectedTurnId: "run-1",
         text: "Please use the newer API",
       })
     ).toEqual({
       requestId: "queue-item-1",
-      expectedRunId: "run-1",
+      expectedTurnId: "run-1",
       text: "Please use the newer API",
     })
-    expect(RunSteerResponseSchema.parse({ status: "steered" })).toEqual({
+    expect(TurnSteerResponseSchema.parse({ status: "steered" })).toEqual({
       status: "steered",
     })
-    expect(RunSteerResponseSchema.parse({ status: "queued" })).toEqual({
+    expect(TurnSteerResponseSchema.parse({ status: "queued" })).toEqual({
       status: "queued",
     })
     expect(() =>
-      RunSteerRequestSchema.parse({
+      TurnSteerRequestSchema.parse({
         requestId: "queue-item-1",
-        expectedRunId: "run-1",
+        expectedTurnId: "run-1",
         text: "",
       })
     ).toThrow()
     expect(() =>
-      RunSteerRequestSchema.parse({
+      TurnSteerRequestSchema.parse({
         requestId: "queue-item-1",
-        expectedRunId: "run-1",
+        expectedTurnId: "run-1",
         text: "😀".repeat(262_145),
       })
     ).toThrow()
     expect(() =>
-      RunSteerRequestSchema.parse({
+      TurnSteerRequestSchema.parse({
         requestId: "queue-item-1",
-        expectedRunId: "run-1",
+        expectedTurnId: "run-1",
         text: "valid",
         nativeSessionId: "private",
       })
@@ -463,7 +441,7 @@ describe("AOS v1 normalized protocol", () => {
           sessionArchival: { status: "available" },
           sessionPin: { status: "available" },
           sessionDeletion: { status: "available" },
-          sessionRun: { status: "available" },
+          sessionTurn: { status: "available" },
           sessionStop: { status: "available" },
           sessionSteer: { status: "available" },
           sessionReadState: { status: "available" },
@@ -483,26 +461,26 @@ describe("AOS v1 normalized protocol", () => {
     expect(
       ErrorResponseSchema.parse({
         error: {
-          code: "run_conflict",
-          description: "A run is already active for this session.",
+          code: "turn_conflict",
+          description: "A turn is already active for this session.",
         },
       })
     ).toEqual({
       error: {
-        code: "run_conflict",
-        description: "A run is already active for this session.",
+        code: "turn_conflict",
+        description: "A turn is already active for this session.",
       },
     })
     expect(
       ErrorResponseSchema.parse({
         error: {
-          code: "run_capacity_exceeded",
+          code: "turn_capacity_exceeded",
           description: "AOS is at capacity. Please try again shortly.",
         },
       })
     ).toEqual({
       error: {
-        code: "run_capacity_exceeded",
+        code: "turn_capacity_exceeded",
         description: "AOS is at capacity. Please try again shortly.",
       },
     })

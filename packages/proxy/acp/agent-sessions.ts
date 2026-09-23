@@ -9,7 +9,7 @@ import {
   SessionCreateResponseSchema,
   SessionModelsResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
-  type RunSteerRequest,
+  type TurnSteerRequest,
   type Session,
   type SessionModelUpdateRequest,
 } from "../../protocol"
@@ -102,13 +102,13 @@ export function commandsUpdate(
 /** `ResumeSessionResponse._meta.aos.execution`, as the history route reports it. */
 export function executionMeta(execution: {
   state: SessionExecutionState
-  runId?: string
+  turnId?: string
 }) {
   return {
     status: overlaidStatus(execution.state, "idle"),
-    ...(execution.state === "idle" || execution.runId === undefined
+    ...(execution.state === "idle" || execution.turnId === undefined
       ? {}
-      : { turnId: execution.runId }),
+      : { turnId: execution.turnId }),
   }
 }
 
@@ -207,7 +207,7 @@ export function createWorkspace(context: AcpConnectionContext) {
       ),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
-    steer: (scope: SessionScope, request: RunSteerRequest) =>
+    steer: (scope: SessionScope, request: TurnSteerRequest) =>
       call(() => coordinator.steer(scope, request, context.principalId)),
   }
 }

@@ -1106,7 +1106,7 @@ const Composer: FC<{
           if (
             error &&
             typeof error === "object" &&
-            (error as { code?: unknown }).code === "run_conflict"
+            (error as { code?: unknown }).code === "turn_conflict"
           ) {
             submitOrdinary()
             return

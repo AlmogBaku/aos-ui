@@ -46,7 +46,7 @@ function capabilities() {
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
-        scope: "run",
+        scope: "turn",
         choices: [{ value: "once", scope: "request" }],
         maxPending: 1,
       },

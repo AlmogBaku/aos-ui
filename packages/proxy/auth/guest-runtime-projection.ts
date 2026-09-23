@@ -72,9 +72,9 @@ export function projectGuestError(
           error: {
             code:
               projected.payload.code === "rate_limited"
-                ? "run_capacity_exceeded"
+                ? "turn_capacity_exceeded"
                 : projected.payload.code === "request_failed"
-                  ? "run_conflict"
+                  ? "turn_conflict"
                   : projected.payload.code,
             description:
               projected.payload.description ??
@@ -89,12 +89,12 @@ export function projectGuestError(
     : new Response(null, { status })
 }
 
-/** The normalized run failure code a restored failed turn carries, if any. */
-function restoredRunErrorCode(metadata: SessionMessage["metadata"]) {
+/** The normalized turn failure code a restored failed turn carries, if any. */
+function restoredTurnErrorCode(metadata: SessionMessage["metadata"]) {
   const aos = metadata?.custom.aos
   if (typeof aos !== "object" || aos === null || Array.isArray(aos))
     return undefined
-  const code = (aos as Record<string, unknown>).runErrorCode
+  const code = (aos as Record<string, unknown>).turnErrorCode
   return typeof code === "string" ? code : undefined
 }
 
@@ -143,7 +143,7 @@ export function projectGuestHistory(
     // status carries the guest catalogue's description of the mapped failure.
     const failure =
       message.role === "assistant" && message.status?.type === "incomplete"
-        ? publicRunError(restoredRunErrorCode(message.metadata))
+        ? publicTurnError(restoredTurnErrorCode(message.metadata))
         : undefined
     if (
       content.length === 0 &&
@@ -182,9 +182,9 @@ export function projectGuestHistory(
       : {
           execution: {
             status: history.execution.status,
-            ...(history.execution.runId === undefined
+            ...(history.execution.turnId === undefined
               ? {}
-              : { runId: history.execution.runId }),
+              : { turnId: history.execution.turnId }),
           },
         }),
   })
@@ -201,7 +201,7 @@ export function projectGuestCapabilities(value: unknown) {
       ...interactions,
       steering: {
         status: "unavailable",
-        reason: "operator-run-control-required",
+        reason: "operator-turn-control-required",
       },
       approvals: {
         ...interactions.approvals,
@@ -214,10 +214,10 @@ export function projectGuestCapabilities(value: unknown) {
 }
 
 /**
- * Guest-visible run failures. Only a code a guest client can act on keeps its
+ * Guest-visible turn failures. Only a code a guest client can act on keeps its
  * identity; every other normalized failure collapses into a generic one.
  */
-const guestRunErrors: Readonly<
+const guestTurnErrors: Readonly<
   Record<string, { code: GuestPublicErrorCode; retryable: boolean }>
 > = {
   AOS_CONNECTION_INTERRUPTED: {
@@ -248,12 +248,12 @@ const guestRunErrors: Readonly<
   AOS_SESSION_LIMIT: { code: "rate_limited", retryable: true },
 }
 
-function publicRunError(code: string | undefined) {
+function publicTurnError(code: string | undefined) {
   // Only an own entry names a guest-visible failure: an inherited object key
   // must collapse into the generic one like any unknown code.
   return (
-    (code !== undefined && Object.hasOwn(guestRunErrors, code)
-      ? guestRunErrors[code]
+    (code !== undefined && Object.hasOwn(guestTurnErrors, code)
+      ? guestTurnErrors[code]
       : undefined) ?? {
       code: "request_failed" as const,
       retryable: false,
@@ -293,7 +293,7 @@ function projectArtifact(
   }
 }
 
-function createRunProjector(
+function createTurnProjector(
   scope: SessionScope,
   read: VerifiedGuestAuthorization,
   errors: VerifiedGuestAuthorization,
@@ -362,7 +362,7 @@ function createRunProjector(
           : undefined
       }
       case TurnEventKind.TurnFailed: {
-        const error = publicRunError(candidate.code)
+        const error = publicTurnError(candidate.code)
         const projected = projectGuestOutbound(
           {
             transport: "error",
@@ -400,7 +400,7 @@ function createRunProjector(
   }
 }
 
-export function createGuestRunAccess(
+export function createGuestTurnAccess(
   read: VerifiedGuestAuthorization,
   errors: VerifiedGuestAuthorization,
   scope: SessionScope,
@@ -412,6 +412,6 @@ export function createGuestRunAccess(
     controllerId: guestControllerId(read),
     lane: "guest",
     canControl: true,
-    project: createRunProjector(scope, read, errors, now),
+    project: createTurnProjector(scope, read, errors, now),
   }
 }

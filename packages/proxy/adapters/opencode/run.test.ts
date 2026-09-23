@@ -12,11 +12,11 @@ import type {
   OpenCodeDurableEvent,
   OpenCodeSessionEvents,
 } from "./client"
-import { ServerRunConflictError } from "../../core/runtime"
+import { ServerTurnConflictError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeContent } from "./content"
-import { OpenCodeRunEngine } from "./run"
+import { OpenCodeTurnEngine } from "./run"
 
 const scope = {
   agentId: "writer",
@@ -189,7 +189,7 @@ describe("OpenCodeRunEngine", () => {
       },
     ])
 
-    await new OpenCodeRunEngine(state.native).start(scope, input(), stage)
+    await new OpenCodeTurnEngine(state.native).start(scope, input(), stage)
 
     expect(state.sessions.prompt).toHaveBeenCalledWith(
       scope.sessionId,
@@ -217,7 +217,7 @@ describe("OpenCodeRunEngine", () => {
     }
 
     await expect(
-      new OpenCodeRunEngine(state.native).start(scope, input(), foreign)
+      new OpenCodeTurnEngine(state.native).start(scope, input(), foreign)
     ).rejects.toThrow("attachment stage")
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
@@ -230,7 +230,7 @@ describe("OpenCodeRunEngine", () => {
     })
 
     await expect(
-      new OpenCodeRunEngine(state.native).start(scope, input())
+      new OpenCodeTurnEngine(state.native).start(scope, input())
     ).rejects.toThrow("Session does not belong to this Agent")
     expect(state.sessions.events).not.toHaveBeenCalled()
     expect(state.sessions.prompt).not.toHaveBeenCalled()
@@ -274,7 +274,7 @@ describe("OpenCodeRunEngine", () => {
         return sources.shift()!
       }),
     })
-    const engine = new OpenCodeRunEngine(state.native, {
+    const engine = new OpenCodeTurnEngine(state.native, {
       replies: {
         discover,
         validate: vi.fn(async () => undefined),
@@ -316,7 +316,7 @@ describe("OpenCodeRunEngine", () => {
   it("releases discovery observation when the interaction read fails", async () => {
     const failure = new Error("interaction authority unavailable")
     const state = client()
-    const engine = new OpenCodeRunEngine(state.native, {
+    const engine = new OpenCodeTurnEngine(state.native, {
       replies: {
         discover: vi.fn(async () => Promise.reject(failure)),
         validate: vi.fn(async () => undefined),
@@ -350,7 +350,7 @@ describe("OpenCodeRunEngine", () => {
         ]
       })
     const state = client()
-    const engine = new OpenCodeRunEngine(state.native, {
+    const engine = new OpenCodeTurnEngine(state.native, {
       replies: {
         discover,
         validate: vi.fn(async () => undefined),
@@ -405,7 +405,7 @@ describe("OpenCodeRunEngine", () => {
       }
     )
 
-    const handle = await new OpenCodeRunEngine(state.native).start(
+    const handle = await new OpenCodeTurnEngine(state.native).start(
       scope,
       input()
     )
@@ -470,7 +470,7 @@ describe("OpenCodeRunEngine", () => {
         throw new Error("operation unavailable")
       }),
     })
-    const handle = await new OpenCodeRunEngine(state.native, {
+    const handle = await new OpenCodeTurnEngine(state.native, {
       waitRetryMs: 1,
     }).start(scope, input())
     state.observation.publish(
@@ -499,8 +499,8 @@ describe("OpenCodeRunEngine", () => {
     // The browser owns this answer: a Session OpenCode is still running is a
     // conflict the workspace resolves by reloading, not a provider failure.
     await expect(
-      new OpenCodeRunEngine(state.native).start(scope, input())
-    ).rejects.toBeInstanceOf(ServerRunConflictError)
+      new OpenCodeTurnEngine(state.native).start(scope, input())
+    ).rejects.toBeInstanceOf(ServerTurnConflictError)
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
@@ -516,7 +516,7 @@ describe("OpenCodeRunEngine", () => {
       }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const engine = new OpenCodeRunEngine(state.native, {
+    const engine = new OpenCodeTurnEngine(state.native, {
       replies: {
         validate: vi.fn(async () => {
           order.push("validate")
@@ -528,7 +528,7 @@ describe("OpenCodeRunEngine", () => {
     })
 
     const handle = await engine.start(scope, {
-      turnId: "run-resume",
+      turnId: "turn-replies",
       replies: [
         { requestId: "approval-1", status: "resolved", payload: "once" },
       ],
@@ -556,9 +556,9 @@ describe("OpenCodeRunEngine", () => {
       })),
     })
 
-    const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+    const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
       threadId: scope.threadId,
-      runId: "run-recovered",
+      turnId: "run-recovered",
     })
     const events = await collect(handle)
 
@@ -663,9 +663,9 @@ describe("OpenCodeRunEngine", () => {
         })),
       })
 
-      const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+      const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
         threadId: scope.threadId,
-        runId: "run-recovered",
+        turnId: "run-recovered",
         position: {
           epoch: `opencode:${scope.sessionId}`,
           lastSeen: 1,
@@ -702,9 +702,9 @@ describe("OpenCodeRunEngine", () => {
       })),
     })
 
-    const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+    const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
       threadId: scope.threadId,
-      runId: "run-recovered",
+      turnId: "run-recovered",
       position: {
         epoch: `opencode:${scope.sessionId}`,
         lastSeen: 1,
@@ -731,9 +731,9 @@ describe("OpenCodeRunEngine", () => {
     })
 
     await expect(
-      new OpenCodeRunEngine(state.native).recover(scope, {
+      new OpenCodeTurnEngine(state.native).recover(scope, {
         threadId: scope.threadId,
-        runId: "run-recovered",
+        turnId: "run-recovered",
       })
     ).rejects.toThrow("stable prompt admission")
     expect(state.sessions.prompt).not.toHaveBeenCalled()
@@ -776,9 +776,9 @@ describe("OpenCodeRunEngine", () => {
       }
     )
 
-    const handle = await new OpenCodeRunEngine(state.native).recover(scope, {
+    const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
       threadId: scope.threadId,
-      runId: "run-recovered",
+      turnId: "run-recovered",
     })
     expect(JSON.stringify(await collect(handle))).toContain("Won the race")
   })
@@ -795,7 +795,7 @@ describe("OpenCodeRunEngine", () => {
           data: running ? { [scope.sessionId]: { type: "running" } } : {},
         })),
     })
-    const handle = await new OpenCodeRunEngine(state.native).start(
+    const handle = await new OpenCodeTurnEngine(state.native).start(
       scope,
       input()
     )
@@ -823,7 +823,7 @@ describe("OpenCodeRunEngine", () => {
         }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const handle = await new OpenCodeRunEngine(state.native).start(
+    const handle = await new OpenCodeTurnEngine(state.native).start(
       scope,
       input()
     )
@@ -881,7 +881,7 @@ describe("OpenCodeRunEngine", () => {
       ),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const handle = await new OpenCodeRunEngine(state.native, {
+    const handle = await new OpenCodeTurnEngine(state.native, {
       waitRetryMs: 1,
     }).start(scope, input())
     state.observation.publish(
@@ -941,7 +941,7 @@ describe("OpenCodeRunEngine", () => {
       }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const handle = await new OpenCodeRunEngine(state.native).start(
+    const handle = await new OpenCodeTurnEngine(state.native).start(
       scope,
       input()
     )
@@ -997,7 +997,7 @@ describe("OpenCodeRunEngine", () => {
       ),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
     const started = vi.spyOn(engine, "start")
     const sessions = new SessionCoordinator({
       engine,
@@ -1048,7 +1048,7 @@ describe("OpenCodeRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       { kind: TurnEventKind.TurnEnded },
     ])
-    expect(next.runId).toBe("run-2")
+    expect(next.turnId).toBe("run-2")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
   })
 
@@ -1073,11 +1073,11 @@ describe("OpenCodeRunEngine", () => {
           data: { [scope.sessionId]: { type: "running" } },
         }),
     })
-    const engine = new OpenCodeRunEngine(state.native, { maxQueueEvents: 2 })
+    const engine = new OpenCodeTurnEngine(state.native, { maxQueueEvents: 2 })
     const prior = await engine.start(scope, input())
     await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-recovered",
+      turnId: "run-recovered",
     })
 
     expect(first.abort).toHaveBeenCalledOnce()
@@ -1124,7 +1124,7 @@ describe("OpenCodeRunEngine", () => {
       })),
       wait: vi.fn(async () => wait.promise),
     })
-    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
     const prior = await engine.start(scope, input())
     first.publish(
       liveEvent(0, "session.next.prompt.admitted", {
@@ -1142,7 +1142,7 @@ describe("OpenCodeRunEngine", () => {
     await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
     const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-1",
+      turnId: "run-1",
       position: {
         epoch: `opencode:${scope.sessionId}`,
         lastSeen: 0,
@@ -1203,7 +1203,7 @@ describe("OpenCodeRunEngine", () => {
       })),
       wait: vi.fn(async () => wait.promise),
     })
-    const engine = new OpenCodeRunEngine(state.native, { waitRetryMs: 1 })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
     const prior = await engine.start(scope, input())
     first.publish(
       liveEvent(0, "session.next.prompt.admitted", {
@@ -1221,7 +1221,7 @@ describe("OpenCodeRunEngine", () => {
     await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
     const recovered = await engine.recover(scope, {
       threadId: scope.threadId,
-      runId: "run-1",
+      turnId: "run-1",
       position: {
         epoch: `opencode:${scope.sessionId}`,
         lastSeen: 0,
@@ -1252,7 +1252,7 @@ describe("OpenCodeRunEngine", () => {
         }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
-    const handle = await new OpenCodeRunEngine(state.native, {
+    const handle = await new OpenCodeTurnEngine(state.native, {
       maxQueueEvents: 2,
     }).start(scope, input())
 
@@ -1294,7 +1294,7 @@ describe("OpenCodeRunEngine", () => {
       { type: "file", dataUrl: "data:text/plain;base64,SGVsbG8=" },
     ])
     await expect(
-      new OpenCodeRunEngine(promptCase.native).start(scope, input(), stage)
+      new OpenCodeTurnEngine(promptCase.native).start(scope, input(), stage)
     ).rejects.toBe(promptUncertain)
     expect(promptCase.sessions.prompt).toHaveBeenCalledOnce()
     expect(promptCase.sessions.prompt).toHaveBeenCalledWith(
@@ -1317,7 +1317,7 @@ describe("OpenCodeRunEngine", () => {
           data: { [scope.sessionId]: { type: "running" } },
         }),
     })
-    const handle = await new OpenCodeRunEngine(stopCase.native).start(
+    const handle = await new OpenCodeTurnEngine(stopCase.native).start(
       scope,
       input()
     )

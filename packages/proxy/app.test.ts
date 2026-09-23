@@ -37,7 +37,7 @@ function nativeProfile() {
 
 function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
   const sessions = new SessionCoordinator({
-    engine: runtime.runs,
+    engine: runtime.turns,
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 32,

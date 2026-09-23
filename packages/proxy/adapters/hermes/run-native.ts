@@ -28,7 +28,7 @@ import {
   nativeSlashInvocation,
   type HermesSlashExecution,
 } from "./slash-commands"
-import { HermesRunRewindConflictError, publicDetail } from "./run-failures"
+import { HermesTurnRewindConflictError, publicDetail } from "./run-failures"
 import {
   DEFAULT_RETRY_SCHEDULE,
   isTransientRejection,
@@ -36,17 +36,17 @@ import {
   type HermesRetrySchedule,
 } from "./transient-rejections"
 import type { HermesRecovery } from "./run-frames"
-import type { HermesRunScope } from "./run-state"
-import { ServerRunSteerUncertainError } from "../../core/runtime"
+import type { HermesTurnScope } from "./run-state"
+import { ServerTurnSteerUncertainError } from "../../core/runtime"
 
 /** Hermes' own five native turn states; `absent` means Hermes does not list it. */
 export type HermesNativeStatus =
   "starting" | "working" | "waiting" | "idle" | "absent"
 
 export type HermesSubmitPrompt = {
-  scope: HermesRunScope
+  scope: HermesTurnScope
   text: string
-  runId: string
+  turnId: string
   rewindSourceId?: string
   /**
    * Re-send exactly the write Hermes refused, as that refusal reported it. Only
@@ -113,9 +113,9 @@ export type HermesInteractionSnapshot = {
   requests?: PendingRequest[]
 }
 
-export interface HermesRunNative {
+export interface HermesTurnNative {
   resume(
-    scope: HermesRunScope
+    scope: HermesTurnScope
   ): Promise<{ liveSessionId: string; running: boolean }>
   observe(
     liveSessionId: string,
@@ -133,16 +133,16 @@ export interface HermesRunNative {
     text: string
   ): Promise<"redirected" | "queued">
   status(liveSessionId: string): Promise<HermesNativeStatus>
-  retain(scope: HermesRunScope, reason: string): Promise<() => void>
+  retain(scope: HermesTurnScope, reason: string): Promise<() => void>
   inspectExecution(
-    scope: HermesRunScope & { runId: string }
+    scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
   onPendingRequest(
-    scope: HermesRunScope,
+    scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
   respondInteractions(
-    scope: HermesRunScope & { runId: string },
+    scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
 }
@@ -150,9 +150,9 @@ export interface HermesRunNative {
 /** The durable-to-live binding surface `run-native.ts` depends on. */
 export type HermesNativeAttachments = {
   ensure(
-    scope: HermesRunScope
+    scope: HermesTurnScope
   ): Promise<{ liveSessionId: string; running: boolean }>
-  retain(scope: HermesRunScope, reason: string): Promise<() => void>
+  retain(scope: HermesTurnScope, reason: string): Promise<() => void>
   subscribeLive(
     liveSessionId: string,
     observer: AttachmentObserver
@@ -163,15 +163,15 @@ export type HermesNativeAttachments = {
 /** The interaction surface `run-native.ts` depends on (`HermesInteractions`). */
 export type HermesNativeInteractions = {
   onPendingRequest(
-    scope: HermesRunScope,
+    scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
   respond(
-    scope: HermesRunScope & { runId: string },
+    scope: HermesTurnScope & { turnId: string },
     entry: RequestReply
   ): Promise<{ status: string }>
   resume(
-    scope: HermesRunScope & { runId: string }
+    scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
 }
 
@@ -180,7 +180,7 @@ export type HermesNativeOptions = {
   attachments: HermesNativeAttachments
   interactions: HermesNativeInteractions
   /** Authoritative durable history, used only for rewind addressing. */
-  history(scope: HermesRunScope): Promise<readonly unknown[]>
+  history(scope: HermesTurnScope): Promise<readonly unknown[]>
   log?: HermesLog
   /** When a transient `prompt.submit` refusal is tried again. */
   retry?: HermesRetrySchedule
@@ -274,7 +274,7 @@ function rewindSubmitParams(
     ({ id, role }) => id === rewindSourceId && role === "user"
   )
   const target = targetIndex < 0 ? undefined : history[targetIndex]
-  if (!target) throw new HermesRunRewindConflictError()
+  if (!target) throw new HermesTurnRewindConflictError()
 
   const row = /^hermes-row-(\d+)$/u.exec(target.id)?.[1]
   const rowId = row === undefined ? undefined : Number(row)
@@ -284,7 +284,7 @@ function rewindSubmitParams(
       : !target.id.startsWith("hermes-history-")
         ? { truncate_before_message_id: target.id }
         : undefined
-  if (!address) throw new HermesRunRewindConflictError()
+  if (!address) throw new HermesTurnRewindConflictError()
 
   return {
     confirm_truncate: true,
@@ -295,11 +295,11 @@ function rewindSubmitParams(
   }
 }
 
-export class HermesNativeRuntime implements HermesRunNative {
+export class HermesNativeRuntime implements HermesTurnNative {
   readonly #transport: HermesRpcTransport
   readonly #attachments: HermesNativeAttachments
   readonly #interactions: HermesNativeInteractions
-  readonly #history: (scope: HermesRunScope) => Promise<readonly unknown[]>
+  readonly #history: (scope: HermesTurnScope) => Promise<readonly unknown[]>
   readonly #log: HermesLog | undefined
   readonly #retry: HermesRetrySchedule
 
@@ -312,7 +312,7 @@ export class HermesNativeRuntime implements HermesRunNative {
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
   }
 
-  resume(scope: HermesRunScope) {
+  resume(scope: HermesTurnScope) {
     return this.#attachments.ensure(scope)
   }
 
@@ -378,7 +378,7 @@ export class HermesNativeRuntime implements HermesRunNative {
           prompt.rewindSourceId
         )
       } catch (error) {
-        if (error instanceof HermesRunRewindConflictError) throw error
+        if (error instanceof HermesTurnRewindConflictError) throw error
         throwUnavailable(error)
       }
       // A rewind is the one submit that destroys durable rows, so the address it
@@ -473,7 +473,7 @@ export class HermesNativeRuntime implements HermesRunNative {
       })
     } catch (error) {
       if (error instanceof HermesRpcUncertainError)
-        throw new ServerRunSteerUncertainError()
+        throw new ServerTurnSteerUncertainError()
       if (error instanceof HermesRpcRejectedError) {
         this.#logRejection("session.redirect", error)
         if (error.code !== undefined && GONE_CODES.has(error.code))
@@ -517,11 +517,11 @@ export class HermesNativeRuntime implements HermesRunNative {
     throw new HermesUnavailableError()
   }
 
-  retain(scope: HermesRunScope, reason: string) {
+  retain(scope: HermesTurnScope, reason: string) {
     return this.#attachments.retain(scope, reason)
   }
 
-  inspectExecution(scope: HermesRunScope & { runId: string }) {
+  inspectExecution(scope: HermesTurnScope & { turnId: string }) {
     return this.#interactions.resume(scope)
   }
 
@@ -531,14 +531,14 @@ export class HermesNativeRuntime implements HermesRunNative {
    * when one is raised on its Session.
    */
   onPendingRequest(
-    scope: HermesRunScope,
+    scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ) {
     return this.#interactions.onPendingRequest(scope, listener)
   }
 
   async respondInteractions(
-    scope: HermesRunScope & { runId: string },
+    scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ) {
     await this.#interactions.resume(scope)

@@ -64,8 +64,8 @@ describe("errorResponse", () => {
     ["invalid_request", "The request could not be processed."],
     ["not_found", "The requested item was not found."],
     ["revision_conflict", "This item changed. Refresh and try again."],
-    ["run_conflict", "A run is already active for this session."],
-    ["run_capacity_exceeded", "AOS is at capacity. Please try again shortly."],
+    ["turn_conflict", "A turn is already active for this session."],
+    ["turn_capacity_exceeded", "AOS is at capacity. Please try again shortly."],
     [
       "runtime_authentication_required",
       "The configured runtime credentials were rejected. Check the gateway configuration.",

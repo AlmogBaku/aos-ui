@@ -13,11 +13,11 @@ import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
 import { EventQueue, startedTurnQueue } from "./event-queue"
-import type { NativeFailure, RunFailure } from "./run-failures"
+import type { NativeFailure, TurnFailure } from "./run-failures"
 import type { BufferedNativeEvents } from "./run-frames"
-import type { HermesNativeStatus, HermesRunNative } from "./run-native"
+import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
 
-export type HermesRunScope = SessionScope
+export type HermesTurnScope = SessionScope
 
 /** The native turn outcome; `open` means Hermes has not ended the turn yet. */
 export type TurnOutcome = "open" | "complete" | "failed" | "interrupted"
@@ -33,15 +33,15 @@ export type SettlementEdge = "idle" | "status" | "unstarted"
  * thread finishes bookkeeping, so the next Send waits here, not on "busy".
  */
 export type SettlingWatcher = {
-  readonly active: ActiveRun
+  readonly active: ActiveTurn
   readonly done: Promise<void>
   settled: boolean
   settle(): void
 }
 
-export type ActiveRun = {
-  scope: HermesRunScope
-  runId: string
+export type ActiveTurn = {
+  scope: HermesTurnScope
+  turnId: string
   liveSessionId: string
   queue: EventQueue
   unsubscribe: () => void
@@ -85,7 +85,7 @@ export type ActiveRun = {
 }
 
 /** How a cleanly finished run ended, beyond the fact that it did. */
-export type RunEnding = {
+export type TurnEnding = {
   /** The turn was stopped, so calls it left open end as stopped. */
   stopped?: true
   /** Text Hermes asks the composer to start the next prompt with. */
@@ -97,19 +97,19 @@ export type RunEnding = {
  * the runs and settling watchers it fences per Session, and the publication
  * steps only the shell may take.
  */
-export type RunEngineHost = {
-  readonly native: HermesRunNative
+export type TurnEngineHost = {
+  readonly native: HermesTurnNative
   readonly log: HermesLog
   /** The one run currently fencing each Session. */
-  readonly runs: Map<string, ActiveRun>
+  readonly turns: Map<string, ActiveTurn>
   readonly settling: Map<string, SettlingWatcher>
-  accept(active: ActiveRun, value: unknown, replayed?: boolean): void
-  sealGeneration(active: ActiveRun): void
-  finish(active: ActiveRun, ending?: RunEnding, confirmedIdle?: boolean): void
-  requireAction(active: ActiveRun, requests: PendingRequest[]): void
-  fail(active: ActiveRun, failure: RunFailure): void
-  detach(active: ActiveRun, failure: RunFailure): void
-  settle(active: ActiveRun): void
+  accept(active: ActiveTurn, value: unknown, replayed?: boolean): void
+  sealGeneration(active: ActiveTurn): void
+  finish(active: ActiveTurn, ending?: TurnEnding, confirmedIdle?: boolean): void
+  requireAction(active: ActiveTurn, requests: PendingRequest[]): void
+  fail(active: ActiveTurn, failure: TurnFailure): void
+  detach(active: ActiveTurn, failure: TurnFailure): void
+  settle(active: ActiveTurn): void
 }
 
 /** A promise and its resolver: the one shape for AOS' own settlement edges. */
@@ -121,7 +121,7 @@ export function deferred() {
   return { promise, resolve }
 }
 
-function runSettlement() {
+function turnSettlement() {
   const { promise, resolve } = deferred()
   return { settled: promise, resolveSettled: resolve }
 }
@@ -136,13 +136,13 @@ export function generationState() {
   }
 }
 
-export function createActiveRun(
-  scope: HermesRunScope,
-  runId: string
-): ActiveRun {
+export function createActiveTurn(
+  scope: HermesTurnScope,
+  turnId: string
+): ActiveTurn {
   return {
     scope,
-    runId,
+    turnId,
     liveSessionId: "",
     queue: startedTurnQueue(),
     unsubscribe: () => undefined,
@@ -161,7 +161,7 @@ export function createActiveRun(
     terminal: false,
     awaitingStart: false,
     resumedInteraction: false,
-    ...runSettlement(),
+    ...turnSettlement(),
   }
 }
 
@@ -175,7 +175,7 @@ export function safelyUnsubscribe(unsubscribe: (() => void) | undefined) {
 
 /** Hermes' status, or `undefined` when the read itself failed. */
 export async function readStatus(
-  host: RunEngineHost,
+  host: TurnEngineHost,
   liveSessionId: string
 ): Promise<HermesNativeStatus | undefined> {
   try {
