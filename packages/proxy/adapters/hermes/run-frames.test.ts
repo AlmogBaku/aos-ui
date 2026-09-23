@@ -89,7 +89,7 @@ describe("the bounded native frame buffer", () => {
 })
 
 describe("reading native token usage", () => {
-  it("projects Hermes' counters into AG-UI usage", () => {
+  it("projects Hermes' counters into AOS token usage", () => {
     expect(
       tokenUsage({ model: "claude", input: 3, output: 5, total: 8 })
     ).toEqual([

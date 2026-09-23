@@ -338,7 +338,7 @@ export function projectHermesArtifactReceipt(raw: unknown) {
       name: "aos.artifact",
       data: {
         ...descriptor,
-        source: { type: "provider", reference: id },
+        source: { type: "provider" as const, reference: id },
       },
     },
   }

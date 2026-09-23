@@ -3,8 +3,8 @@
  * writes one `clarify` / `approval` frame and parks the agent until the
  * renderer answers that very frame (`tui_gateway/server_requests.py`). AOS is
  * that renderer, so this module owns exactly one `onRequest` handler and one
- * `request.cancel` subscription, projects a recognized request into the AG-UI
- * interrupt the browser already renders, and answers through the request handle
+ * `request.cancel` subscription, projects a recognized request into the pending
+ * request the browser already renders, and answers through the request handle
  * the vendored channel hands it.
  *
  * A request whose method AOS cannot render is claimed and never answered: the
@@ -17,7 +17,11 @@
  * reach public output.
  */
 import { INTERACTION_PROTOCOL } from "../../../protocol"
-import type { RunInterruptOutcome } from "../../core/events"
+import {
+  PendingRequestKind,
+  ReplyStatus,
+  type PendingRequest,
+} from "../../core/events"
 
 import {
   HermesRpcRejectedError,
@@ -201,7 +205,7 @@ type PendingInteraction = {
   liveSessionId: string
   id: string
   sequence: number
-  outcome: RunInterruptOutcome
+  pendingRequest: PendingRequest
   /** The live handle Hermes waits on; a re-delivery replaces it. */
   request: ServerRequest
   /** The reconciliation Hermes last confirmed this request was open in. */
@@ -216,12 +220,12 @@ type ProjectedInteraction =
   | {
       kind: "approval"
       choices: ApprovalChoice[]
-      outcome: RunInterruptOutcome
+      pendingRequest: PendingRequest
     }
   | {
       kind: "questions"
       questions: Question[]
-      outcome: RunInterruptOutcome
+      pendingRequest: PendingRequest
     }
 
 export type HermesInteractionResult = {
@@ -236,10 +240,10 @@ export type HermesInteractionResult = {
 export type HermesInteractionResumeSnapshot = {
   running: boolean
   status: "waiting-for-input" | "running" | "idle"
-  outcome?: RunInterruptOutcome
+  requests?: PendingRequest[]
 }
 
-export type HermesInterruptListener = (outcome: RunInterruptOutcome) => void
+export type HermesPendingRequestListener = (request: PendingRequest) => void
 
 // ---------------------------------------------------------------------------
 // Native validation and public projection
@@ -476,7 +480,7 @@ function questionSchema(question: Question) {
   }
 }
 
-/** Project a validated `clarify` request as the existing question interrupt. */
+/** Project a validated `clarify` request as the existing question request. */
 function clarifyInteraction(
   id: string,
   params: ClarifyRequestParams
@@ -485,43 +489,26 @@ function clarifyInteraction(
   return {
     kind: "questions",
     questions,
-    outcome: {
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "question",
-          message:
-            questions.length === 1
-              ? questions[0]!.question
-              : `${questions.length} questions require answers`,
-          responseSchema: {
-            type: "object",
-            properties: {
-              answers: {
-                type: "array",
-                prefixItems: questions.map(questionSchema),
-                minItems: questions.length,
-                maxItems: questions.length,
-              },
-            },
-            required: ["answers"],
-            additionalProperties: false,
-          },
-          metadata: {
-            "aos.kind": "questions",
-            "aos.scope": "run",
-            "aos.questionCount": questions.length,
-            ...(questions.some(({ locked }) => locked)
-              ? {
-                  "aos.lockedAnswerIndexes": questions.flatMap(
-                    ({ locked }, index) => (locked ? [index] : [])
-                  ),
-                }
-              : {}),
+    pendingRequest: {
+      requestId: id,
+      kind: PendingRequestKind.Elicitation,
+      message:
+        questions.length === 1
+          ? questions[0]!.question
+          : `${questions.length} questions require answers`,
+      responseSchema: {
+        type: "object",
+        properties: {
+          answers: {
+            type: "array",
+            prefixItems: questions.map(questionSchema),
+            minItems: questions.length,
+            maxItems: questions.length,
           },
         },
-      ],
+        required: ["answers"],
+        additionalProperties: false,
+      },
     },
   }
 }
@@ -541,7 +528,7 @@ function approvalChoices(params: ApprovalRequestParams): ApprovalChoice[] {
   )
 }
 
-/** Project a validated `approval` request as the existing approval interrupt. */
+/** Project a validated `approval` request as the existing permission request. */
 function approvalInteraction(
   id: string,
   params: ApprovalRequestParams
@@ -557,34 +544,15 @@ function approvalInteraction(
   return {
     kind: "approval",
     choices,
-    outcome: {
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "approval",
-          message: publicText(message),
-          responseSchema: {
-            type: "string",
-            enum: choices,
-            ...(command && description ? { title: publicText(command) } : {}),
-          },
-          metadata: {
-            "aos.kind": "approval",
-            "aos.scope": "run",
-            "aos.choiceScopes": Object.fromEntries(
-              choices.map((choice) => [
-                choice,
-                choice === "session"
-                  ? "session"
-                  : choice === "always"
-                    ? "agent"
-                    : "request",
-              ])
-            ),
-          },
-        },
-      ],
+    pendingRequest: {
+      requestId: id,
+      kind: PendingRequestKind.Permission,
+      message: publicText(message),
+      responseSchema: {
+        type: "string",
+        enum: choices,
+        ...(command && description ? { title: publicText(command) } : {}),
+      },
     },
   }
 }
@@ -619,28 +587,30 @@ function interactionKey(scope: HermesInteractionScope, id: string) {
   return `${sessionKey(scope)}\u0000${id}`
 }
 
-function strictResume(value: unknown) {
+const REPLY_FIELDS = new Set(["requestId", "status", "payload"])
+
+function strictReply(value: unknown) {
   if (!isRecord(value))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-  const allowed = new Set(["interruptId", "status", "payload", "metadata"])
-  if (Object.keys(value).some((key) => !allowed.has(key)))
+  if (Object.keys(value).some((key) => !REPLY_FIELDS.has(key)))
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-  const interruptId = validString(value.interruptId, 256)
+  const requestId = validString(value.requestId, 256)
   if (
-    !interruptId ||
-    (value.status !== "resolved" && value.status !== "cancelled")
+    !requestId ||
+    (value.status !== ReplyStatus.Resolved &&
+      value.status !== ReplyStatus.Cancelled)
   )
     throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
   if (!boundedJson(value))
     throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
-  if (value.metadata !== undefined && !isRecord(value.metadata))
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
   return {
-    interruptId,
-    status: value.status as "resolved" | "cancelled",
+    requestId,
+    status: value.status as ReplyStatus,
     payload: value.payload,
   }
 }
+
+type ValidReply = ReturnType<typeof strictReply>
 
 /** The native values one ordered public answer set stands for. */
 function answerSets(value: unknown, questions: Question[]) {
@@ -705,13 +675,13 @@ function encodedAnswer(question: Question, values: string[] | undefined) {
 /** The `clarify` response for one validated public answer, in wire form. */
 function clarifyResult(
   interaction: Extract<PendingInteraction, { kind: "questions" }>,
-  resume: { status: "resolved" | "cancelled"; payload: unknown }
+  reply: ValidReply
 ): ClarifyResult {
   const batch = interaction.questions.every(({ id }) => id !== undefined)
   // Hermes' own cancellation: an empty answer skips a single question, and a
   // batch response without `answers` cancels every question in it.
-  if (resume.status === "cancelled") return batch ? {} : { answer: "" }
-  const answers = answerSets(resume.payload, interaction.questions)
+  if (reply.status === ReplyStatus.Cancelled) return batch ? {} : { answer: "" }
+  const answers = answerSets(reply.payload, interaction.questions)
   if (!batch)
     return { answer: encodedAnswer(interaction.questions[0]!, answers[0]) }
   return {
@@ -727,9 +697,9 @@ function clarifyResult(
 /** The `approval` response for one validated public choice, in wire form. */
 function approvalResult(
   interaction: Extract<PendingInteraction, { kind: "approval" }>,
-  resume: { status: "resolved" | "cancelled"; payload: unknown }
+  reply: ValidReply
 ): ApprovalResult {
-  const choice = resume.status === "cancelled" ? "deny" : resume.payload
+  const choice = reply.status === ReplyStatus.Cancelled ? "deny" : reply.payload
   if (
     typeof choice !== "string" ||
     !interaction.choices.includes(choice as ApprovalChoice)
@@ -753,7 +723,7 @@ export class HermesInteractions {
     string,
     { fingerprint?: string; result: HermesInteractionResult }
   >()
-  readonly #listeners = new Map<string, Set<HermesInterruptListener>>()
+  readonly #listeners = new Map<string, Set<HermesPendingRequestListener>>()
   /**
    * Requests whose live Session id was not bound yet. `open_requests` are
    * re-delivered before the `session.resume` that carried them resolves, so the
@@ -771,7 +741,7 @@ export class HermesInteractions {
   readonly #retainers = new Map<string, Promise<() => void>>()
   /**
    * Sessions with a `resume()` in flight, by depth. Its own re-deliveries ride
-   * the snapshot it returns to the caller, so they raise no interrupt; every
+   * the snapshot it returns to the caller, so they notify no listener; every
    * other re-delivery (a heal, a catch-up) is the first the run hears of that
    * request and must be notified.
    */
@@ -814,18 +784,18 @@ export class HermesInteractions {
     this.#retainers.clear()
   }
 
-  /** Every interrupt still waiting for this Session, oldest first. */
+  /** Every request still waiting for this Session, oldest first. */
   pending(scope: HermesInteractionScope) {
     return [...this.#pending.values()]
       .filter((interaction) => sameSession(interaction.scope, scope))
       .sort((left, right) => left.sequence - right.sequence)
-      .map(({ outcome }) => outcome)
+      .map(({ pendingRequest }) => pendingRequest)
   }
 
-  /** Notify the run observing this Session of every live interrupt. */
-  onInterrupt(
+  /** Notify the run observing this Session of every live request. */
+  onPendingRequest(
     scope: HermesInteractionScope,
-    listener: HermesInterruptListener
+    listener: HermesPendingRequestListener
   ) {
     const key = sessionKey(scope)
     const listeners = this.#listeners.get(key) ?? new Set()
@@ -841,9 +811,9 @@ export class HermesInteractions {
     scope: HermesInteractionScope,
     candidate: unknown
   ): Promise<HermesInteractionResult> {
-    const resume = strictResume(candidate)
-    const key = interactionKey(scope, resume.interruptId)
-    const fingerprint = JSON.stringify([resume.status, resume.payload ?? null])
+    const reply = strictReply(candidate)
+    const key = interactionKey(scope, reply.requestId)
+    const fingerprint = JSON.stringify([reply.status, reply.payload ?? null])
     const completed = this.#completed.get(key)
     if (completed) {
       if (
@@ -858,8 +828,8 @@ export class HermesInteractions {
       throw new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
     const result: ClarifyResult | ApprovalResult =
       interaction.kind === "approval"
-        ? approvalResult(interaction, resume)
-        : clarifyResult(interaction, resume)
+        ? approvalResult(interaction, reply)
+        : clarifyResult(interaction, reply)
     // The handle writes synchronously and swallows a dead socket, so an answer
     // written now would be lost silently. Keep the card: a reconnect
     // re-delivers the request and the user can answer it again.
@@ -948,19 +918,15 @@ export class HermesInteractions {
       }
       this.#settleDeferred()
       this.#expireUnconfirmed(scope, reconciliation)
-      const interrupts = this.pending(scope).flatMap(
-        ({ interrupts: pending }) => pending
-      )
+      const requests = this.pending(scope)
       return {
         running: attachment.running,
-        status: interrupts.length
+        status: requests.length
           ? ("waiting-for-input" as const)
           : attachment.running
             ? ("running" as const)
             : ("idle" as const),
-        ...(interrupts.length
-          ? { outcome: { type: "interrupt" as const, interrupts } }
-          : {}),
+        ...(requests.length ? { requests } : {}),
       }
     } finally {
       const depth = (this.#resuming.get(key) ?? 1) - 1
@@ -1028,7 +994,7 @@ export class HermesInteractions {
     return this.#present(scope, liveSessionId, method, request)
   }
 
-  /** Remember one recognized request and raise its interrupt exactly once. */
+  /** Remember one recognized request and raise it exactly once. */
   #present(
     scope: HermesInteractionScope,
     liveSessionId: string,
@@ -1084,11 +1050,11 @@ export class HermesInteractions {
     })
     this.#retain(scope)
     // A request written while the socket was down reaches AOS only as a
-    // re-delivery, so a first delivery raises the interrupt however it arrived.
+    // re-delivery, so a first delivery raises the request however it arrived.
     // Only this Session's own `resume()` stays quiet: it hands the same
-    // interrupt straight back to its caller.
+    // request straight back to its caller.
     if (!this.#resuming.has(sessionKey(scope)))
-      this.#notify(scope, projected.outcome)
+      this.#notify(scope, projected.pendingRequest)
     return true
   }
 
@@ -1201,10 +1167,10 @@ export class HermesInteractions {
     void held.then((release) => release())
   }
 
-  #notify(scope: HermesInteractionScope, outcome: RunInterruptOutcome) {
+  #notify(scope: HermesInteractionScope, request: PendingRequest) {
     for (const listener of [...(this.#listeners.get(sessionKey(scope)) ?? [])])
       try {
-        listener(outcome)
+        listener(request)
       } catch (error) {
         this.#log?.warn("hermes.interactions.listener_failed", {
           reason: publicReason(error),

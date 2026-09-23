@@ -5,9 +5,7 @@
  * answers with a value the run may act on or with nothing at all. Nothing in
  * this module knows what a run does with a frame, and nothing in it can emit.
  */
-import type {
-  TokenUsage,
-} from "../../core/events"
+import type { TokenUsage } from "../../core/events"
 
 import {
   boundedNativeBytes,
@@ -88,7 +86,7 @@ export function boundedText(value: unknown) {
     : undefined
 }
 
-/** Hermes' token counter names, in AG-UI terms. */
+/** Hermes' token counter names, as AOS token usage fields. */
 const TOKEN_USAGE_FIELDS = {
   input: "inputTokens",
   output: "outputTokens",

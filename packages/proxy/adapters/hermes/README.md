@@ -38,7 +38,7 @@ The ACP layer translates that vocabulary to the browser.
   envelopes and filesystem details.
 - `interactions.ts` answers Hermes' server-to-client `clarify` and `approval`
   JSON-RPC requests: it validates them, re-delivers `open_requests` on
-  reattach, presents normalized interrupts, and responds on the request handle
+  reattach, presents normalized pending requests, and responds on the request handle
   Hermes is waiting on. A `request.cancel` subscription expires pending
   requests.
 - `slash-commands.ts` validates and bounds the native command catalog.
@@ -69,7 +69,7 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   therefore drops the journal acknowledgements that history already carried,
   counted in acceptance order, so the correction is announced once.
 - A redirect can close one assistant generation and begin another without a
-  second logical run or `RUN_STARTED`.
+  second logical run or `TurnStarted`.
 - `session.interrupt` requests Stop; the coordinator remains `stopping` until a
   terminal event or authoritative idle result.
 - A recognized slash command may return output, prefill, alias, or submit work.
@@ -86,7 +86,7 @@ semantics; adapter tests protect Hermes mapping and transport mechanics.
   request too: that limit is AOS', and the next resume re-delivers whatever is
   still open.
 - A pending question or approval retains the Session. Its answer is a complete
-  run resume, not a new Hermes prompt.
+  replies turn, not a new Hermes prompt.
 - Native attachment/context envelopes and paths are parsed before normalized
   history is returned.
 - Any lost native mutation acknowledgement is uncertain and is never retried

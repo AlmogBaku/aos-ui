@@ -16,6 +16,7 @@ import {
   HermesRpcUncertainError,
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
+import { PendingRequestKind } from "../../core/events"
 import { ServerRunSteerUncertainError } from "../../core/runtime"
 import { HermesRunPublicError, HermesRunRewindConflictError } from "./run"
 import { HermesInteractionPublicError } from "./interactions"
@@ -531,10 +532,9 @@ describe("Hermes server adapter", () => {
       runId: "aos-hermes-restored-interaction",
       running: true,
       status: "waiting-for-input",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "srq-00000000000b", reason: "approval" }],
-      },
+      requests: [
+        { requestId: "srq-00000000000b", kind: PendingRequestKind.Permission },
+      ],
     })
     expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored",
@@ -576,10 +576,9 @@ describe("Hermes server adapter", () => {
     expect(router.calls("session.resume")).toHaveLength(2)
     expect(reconciled).toMatchObject({
       status: "waiting-for-input",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "srq-00000000000c", reason: "question" }],
-      },
+      requests: [
+        { requestId: "srq-00000000000c", kind: PendingRequestKind.Elicitation },
+      ],
     })
     expect(router.requests.refusal("srq-00000000000c")).toBeUndefined()
   })
@@ -2393,9 +2392,12 @@ describe("Hermes server adapter", () => {
 
       expect(await adapter.native.inspectExecution(scope)).toMatchObject({
         status: "waiting-for-input",
-        outcome: {
-          interrupts: [{ id: "srq-00000000000c", reason: "approval" }],
-        },
+        requests: [
+          {
+            requestId: "srq-00000000000c",
+            kind: PendingRequestKind.Permission,
+          },
+        ],
       })
       // A live request for the same Session keeps the attachment retained.
       router.requests.deliver(

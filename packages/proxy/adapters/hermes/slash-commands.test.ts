@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest"
-import { RunEventKind } from "../../core/events"
+import { TurnEventKind } from "../../core/events"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesRunEngine } from "./run"
@@ -32,7 +32,7 @@ function nativeFor(request: HermesRpcTransport["request"]) {
       invalidate: () => {},
     },
     interactions: {
-      onInterrupt: () => () => undefined,
+      onPendingRequest: () => () => undefined,
       respond: async () => ({ status: "resolved" }),
       resume: async () => ({ running: false, status: "idle" }),
     },
@@ -395,7 +395,7 @@ it("finishes a synchronous command run without waiting for native conversational
     redirect: async () => "redirected",
     retain: async () => () => {},
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    onInterrupt: () => () => undefined,
+    onPendingRequest: () => () => undefined,
     respondInteractions: async () => [],
     submit: async () => ({
       acknowledgement: "accepted",
@@ -406,27 +406,16 @@ it("finishes a synchronous command run without waiting for native conversational
   const engine = new HermesRunEngine(native)
   const handle = await engine.start(
     { agentId: "writer", sessionId: "stored", threadId: "thread" },
-    {
-      threadId: "thread",
-      runId: "run",
-      state: {},
-      messages: [{ id: "user", role: "user", content: "/help" }],
-      tools: [],
-      context: [],
-      forwardedProps: {},
-    }
+    { turnId: "run", messageId: "user", prompt: "/help" }
   )
   const events = []
   for await (const event of handle.events) events.push(event)
-  expect(events.map((event) => event.type)).toEqual([
-    RunEventKind.RUN_STARTED,
-    RunEventKind.TEXT_MESSAGE_START,
-    RunEventKind.TEXT_MESSAGE_CONTENT,
-    RunEventKind.TEXT_MESSAGE_END,
-    RunEventKind.RUN_FINISHED,
+  expect(events.map((event) => event.kind)).toEqual([
+    TurnEventKind.TurnStarted,
+    TurnEventKind.MessageChunk,
+    TurnEventKind.TurnEnded,
   ])
-  expect(events[2]).toMatchObject({ delta: "Help output" })
-  expect(events[4]).toMatchObject({ threadId: "thread", runId: "run" })
+  expect(events[1]).toMatchObject({ text: "Help output" })
 })
 
 it("re-sends only the expansion when Hermes rejects the command's own submit as gone", async () => {
@@ -459,13 +448,9 @@ it("re-sends only the expansion when Hermes rejects the command's own submit as 
   const adapter = new HermesServerAdapter(router)
 
   await adapter.runs.start(scope, {
-    threadId: "stored",
-    runId: "run-1",
-    state: {},
-    messages: [{ id: "user", role: "user", content: "/skill arguments" }],
-    tools: [],
-    context: [],
-    forwardedProps: {},
+    turnId: "run-1",
+    messageId: "user",
+    prompt: "/skill arguments",
   })
 
   // The command ran once; only the write Hermes refused is repeated, against

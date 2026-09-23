@@ -75,7 +75,7 @@ Desktop or authoritative history.
 The Session `default/20260915_194141_f06b78` exposed this failure mode: one
 tool failed, Hermes continued with two successful tools, and the native turn
 finished with assistant text. The adapter must not translate the failed tool
-into `RUN_ERROR` or `RUN_FINISHED`.
+into `TurnFailed` or `TurnEnded`.
 
 ## Incident findings
 
@@ -102,24 +102,24 @@ A later native-producer audit found that `error` is not itself a terminal
 contract. Hermes emits it when applying a pending model switch fails, while the
 source explicitly keeps the current model and allows the turn to continue. AOS
 therefore reconciles Session status instead of translating the frame directly
-to `RUN_ERROR`.
+to `TurnFailed`.
 
-## Run vocabulary mapping rules
+## Turn vocabulary mapping rules
 
 The Hermes adapter applies these rules (the ACP layer translates the
 proxy-owned vocabulary for the browser):
 
-- `message.interim` closes only the current text message in the proxy-owned vocabulary. It does not emit
-  `RUN_FINISHED` or `RUN_ERROR`. The adapter rotates its own message id at that
-  boundary, but the ACP translation pins every chunk and tool call of the run to
+- `message.interim` ends only the current text segment in the proxy-owned
+  vocabulary. It emits neither `TurnEnded` nor `TurnFailed`. The adapter
+  rotates its own message id at that boundary, but the ACP translation pins every chunk and tool call of the run to
   the segment's first id, so the browser streams the one assistant turn that
   history later replays.
-- When `already_streamed` is false, the adapter emits the interim text before
-  closing that text message. When it is true, the adapter closes the text
-  already received through `message.delta` without duplicating it.
+- When `already_streamed` is false, the adapter emits the interim text as that
+  segment's last chunk. When it is true, the text already arrived through
+  `message.delta` and is not duplicated.
 - Tool failure terminates that tool call, not the run.
-- A successful `message.complete` closes outstanding message/tool structures
-  and emits exactly one `RUN_FINISHED`.
+- A successful `message.complete` settles outstanding tool calls and emits
+  exactly one `TurnEnded`.
 - A terminal native error becomes a localized AOS run error, never an assistant
   message: a failed completion's `text` is published as assistant text only when
   `partial` is true, so Hermes' own failure copy never reads as a reply. The run

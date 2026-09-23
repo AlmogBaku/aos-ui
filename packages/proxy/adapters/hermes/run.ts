@@ -2,18 +2,18 @@
  * The Hermes run engine.
  *
  * This shell owns the public run surface (start, recover, discover, the handle
- * it returns) and the projection of native frames into AG-UI events. Everything
+ * it returns) and the projection of native frames into turn events. Everything
  * a frame may then decide lives beside it: `run-attach` binds a run to a live
  * Session and keeps its frames contiguous, `run-settlement` decides when and how
  * a run ends, `run-failures` holds every public failure, `run-frames` reads
  * native frames and `event-queue` bounds what the run publishes.
  */
 import {
-  RunEventKind,
+  isRepliesTurn,
+  TurnEventKind,
   TurnInputSchema,
-  type RunEvent,
-  type TurnInput,
-  type RunInterruptOutcome,
+  type PendingRequest,
+  type TurnEvent,
 } from "../../core/events"
 import {
   ServerRunConflictError,
@@ -22,8 +22,8 @@ import {
 } from "../../core/runtime"
 import { projectTodos, type Todo } from "../todos"
 import { projectHermesToolCall, projectHermesToolOutcome } from "./tool-data"
-import { boundedNativeBytes, isRecord, sessionKey } from "./native"
-import { startedQueue } from "./event-queue"
+import { boundedNativeBytes, sessionKey } from "./native"
+import { startedTurnQueue } from "./event-queue"
 import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { attachRun, scheduleCatchUp } from "./run-attach"
 import {
@@ -62,6 +62,7 @@ import {
   safelyUnsubscribe,
   type ActiveRun,
   type HermesRunScope,
+  type RunEnding,
   type RunEngineHost,
   type SettlingWatcher,
 } from "./run-state"
@@ -103,37 +104,7 @@ const REFUSAL_FAILURES: Record<
 const LOST_INTERACTION_GRACE_MS = 2_000
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
-const RUN_INPUT_FIELDS = new Set([
-  "threadId",
-  "runId",
-  "parentRunId",
-  "state",
-  "messages",
-  "tools",
-  "context",
-  "forwardedProps",
-  "resume",
-  "rewindSourceId",
-])
-
-function userText(input: TurnInput) {
-  const message = input.messages[0]
-  if (!message || message.role !== "user") return undefined
-  if (typeof message.content === "string") return message.content.trim()
-  const text = message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim()
-  return text || undefined
-}
-
-function isEmptyAuthority(value: unknown) {
-  if (value === undefined || value === null) return true
-  if (Array.isArray(value)) return value.length === 0
-  if (typeof value !== "object") return false
-  return Object.keys(value).length === 0
-}
+const MAX_REWIND_SOURCE_LENGTH = 256
 
 export class HermesRunEngine {
   readonly #native: HermesRunNative
@@ -141,7 +112,7 @@ export class HermesRunEngine {
   readonly #active = new Map<string, ActiveRun>()
   readonly #admissions = new Set<string>()
   readonly #settling = new Map<string, SettlingWatcher>()
-  readonly #plans = new Map<string, { messageId: string; todos: Todo[] }>()
+  readonly #plans = new Map<string, Todo[]>()
   readonly #host: RunEngineHost
   readonly #lostInteractionGraceMs: number
 
@@ -161,10 +132,10 @@ export class HermesRunEngine {
       accept: (active, value, replayed) =>
         this.#accept(active, value, replayed),
       sealGeneration: (active) => this.#sealGeneration(active),
-      finish: (active, result, confirmedIdle) =>
-        this.#finish(active, result, confirmedIdle),
-      finishInterrupt: (active, outcome) =>
-        this.#finishInterrupt(active, outcome),
+      finish: (active, ending, confirmedIdle) =>
+        this.#finish(active, ending, confirmedIdle),
+      requireAction: (active, requests) =>
+        this.#requireAction(active, requests),
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
@@ -175,49 +146,20 @@ export class HermesRunEngine {
     scope: HermesRunScope,
     candidate: unknown
   ): Promise<HermesRunHandle> {
-    if (
-      typeof candidate === "object" &&
-      candidate !== null &&
-      Object.keys(candidate).some((key) => !RUN_INPUT_FIELDS.has(key))
-    )
-      throw new Error("AOS received unsupported run fields")
     const input = TurnInputSchema.parse(candidate)
-    const rewindSourceId = (candidate as { rewindSourceId?: unknown })
-      .rewindSourceId
+    const replies = isRepliesTurn(input) ? input.replies : undefined
+    const prompt = isRepliesTurn(input) ? undefined : input
+    // Staged content arrives already appended to the prompt as text.
+    const text = prompt?.prompt.trim()
+    const rewindSourceId = prompt?.rewindSourceId
     if (
       rewindSourceId !== undefined &&
-      (typeof rewindSourceId !== "string" ||
-        rewindSourceId.length === 0 ||
-        rewindSourceId.length > 256)
+      (rewindSourceId.length === 0 ||
+        rewindSourceId.length > MAX_REWIND_SOURCE_LENGTH)
     )
       throw new Error("AOS received an invalid rewind source")
-    if (!isEmptyAuthority(input.state))
-      throw new Error("AOS does not accept browser state as Hermes input")
-    if (input.tools.length > 0)
-      throw new Error("AOS does not accept browser tools as Hermes input")
-    if (input.context.length > 0)
-      throw new Error("AOS does not accept browser context as Hermes input")
-    if (!isEmptyAuthority(input.forwardedProps))
-      throw new Error(
-        "AOS does not accept browser forwarded properties as Hermes input"
-      )
-    const interactionResume =
-      input.resume && input.resume.length > 0 ? input.resume : undefined
-    // Unstaged multimodal content never reaches an adapter: the turn input
-    // schema admits text parts only, so staged media arrives appended as text.
-    const text = userText(input)
-    if (input.threadId !== scope.threadId)
-      throw new Error("AOS run scope does not match this Session")
-    if (
-      interactionResume
-        ? input.messages.length !== 0
-        : input.messages.length !== 1 || !text
-    )
-      throw new Error(
-        interactionResume
-          ? "AOS interrupt responses require one bound native interaction"
-          : "AOS runs require exactly one authorized user turn"
-      )
+    if (!replies && !text)
+      throw new Error("AOS runs require exactly one authorized user turn")
     if (text && new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
@@ -231,21 +173,21 @@ export class HermesRunEngine {
     try {
       // An uncertain run holds the Session until Hermes says its turn is over.
       if (stale) await settleStale(this.#host, stale)
-      active = createActiveRun(scope, input.runId)
+      active = createActiveRun(scope, input.turnId)
       await attachRun(this.#host, active, { kind: "barrier" })
     } finally {
       this.#admissions.delete(key)
     }
     if (active.terminal) return this.#handle(active)
-    if (interactionResume) {
+    if (replies) {
       // The answer resumes a native turn whose completion frame already passed,
       // so settlement may end this run on Hermes' own idle edge.
       active.resumedInteraction = true
       let results: readonly { status: string }[]
       try {
         results = await this.#native.respondInteractions(
-          { ...scope, runId: input.runId },
-          interactionResume
+          { ...scope, runId: input.turnId },
+          replies
         )
       } catch {
         this.#fail(active, RUN_FAILURES.interactionFailed)
@@ -277,10 +219,8 @@ export class HermesRunEngine {
       {
         scope,
         text: text!,
-        runId: input.runId,
-        ...(rewindSourceId === undefined
-          ? {}
-          : { rewindSourceId: rewindSourceId as string }),
+        runId: input.turnId,
+        ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
       },
       false
     )
@@ -337,20 +277,15 @@ export class HermesRunEngine {
 
   async discover(scope: HermesRunScope, runId: string) {
     const snapshot = await this.#native.inspectExecution({ ...scope, runId })
-    const outcome = snapshot.outcome
-    if (snapshot.status === "waiting-for-input" && outcome) {
-      const events: RunEvent[] = [
-        { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
-        {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId,
-          outcome,
-        },
+    const requests = snapshot.requests
+    if (snapshot.status === "waiting-for-input" && requests?.length) {
+      const events: TurnEvent[] = [
+        { kind: TurnEventKind.TurnStarted },
+        { kind: TurnEventKind.TurnRequiresAction, requests },
       ]
       return {
         state: "waiting-for-input" as const,
-        interrupts: outcome.interrupts,
+        requests,
         handle: {
           events: (async function* () {
             yield* events
@@ -397,7 +332,7 @@ export class HermesRunEngine {
       const { code, message } = RUN_FAILURES.interactionLost
       this.#log.warn(RUN_FAILED_LOG, { publicCode: code })
       this.#emit(active, {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message,
         code,
         awaitingStop: true,
@@ -412,7 +347,7 @@ export class HermesRunEngine {
     active: ActiveRun,
     position: { epoch: string; lastSeen: number }
   ): Promise<HermesRunHandle> {
-    active.queue = startedQueue(active.scope, active.runId)
+    active.queue = startedTurnQueue()
     active.uncertain = false
     active.detached = false
     await attachRun(this.#host, active, {
@@ -462,18 +397,17 @@ export class HermesRunEngine {
       if (!outcome.completion) return
       if (outcome.completion.output) {
         active.messageId = `aos-command:${prompt.runId}`
-        this.#startText(active)
+        active.textStarted = true
         this.#emit(active, {
-          type: RunEventKind.TEXT_MESSAGE_CONTENT,
+          kind: TurnEventKind.MessageChunk,
           messageId: active.messageId,
-          delta: outcome.completion.output,
+          text: outcome.completion.output,
         })
       }
+      const { composerPrefill } = outcome.completion
       this.#finish(
         active,
-        outcome.completion.composerPrefill === undefined
-          ? undefined
-          : { "aos.composerPrefill": outcome.completion.composerPrefill }
+        composerPrefill === undefined ? undefined : { composerPrefill }
       )
       return
     }
@@ -634,7 +568,7 @@ export class HermesRunEngine {
         return this.#acceptToolComplete(active, payload)
       case "error": {
         // Hermes also uses `error` for advisory failures (a rejected pending
-        // model switch): reconcile liveness before any terminal AG-UI state.
+        // model switch): reconcile liveness before any terminal turn event.
         active.errorObserved = true
         const failure = nativeFailure(payload)
         active.failure ??= failure
@@ -658,13 +592,12 @@ export class HermesRunEngine {
       payload.result,
       payload.is_error === true
     )
-    this.#emit(active, { type: RunEventKind.TOOL_CALL_END, toolCallId })
+    this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
     this.#emit(active, {
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: `${tool.messageId}:tool:${toolCallId}`,
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId,
-      content: JSON.stringify(outcome.result),
-      role: "tool",
+      output: JSON.stringify(outcome.result),
+      failed: outcome.isError,
     })
     if (tool.name === "todo") {
       const todos = projectTodos(payload.result, HERMES_TODO_STATUS_ALIASES)
@@ -672,11 +605,10 @@ export class HermesRunEngine {
     }
     for (const reference of outcome.trustedMedia)
       active.mediaFilter.trust(reference)
-    for (const artifact of outcome.parts)
+    for (const part of outcome.parts)
       this.#emit(active, {
-        type: RunEventKind.CUSTOM,
-        name: artifact.name,
-        value: artifact.data,
+        kind: TurnEventKind.ArtifactPublished,
+        artifact: part.data,
       })
   }
 
@@ -748,18 +680,18 @@ export class HermesRunEngine {
   #emitMediaFilteredText(active: ActiveRun, delta: string) {
     if (!delta) return
     const messageId = this.#ensureMessageId(active)
-    this.#endReasoning(active)
-    this.#startText(active)
+    active.textStarted = true
     this.#emit(active, {
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId,
-      delta,
+      text: delta,
     })
   }
 
   /**
-   * Close whatever the current generation opened, in publication order. `tools`
-   * is what a call Hermes never finished reports; without it it is only ended.
+   * Close whatever the current generation left open, in publication order.
+   * `tools` is what a call Hermes never finished reports; without it its input
+   * is only ended.
    */
   #closeGeneration(
     active: ActiveRun,
@@ -770,56 +702,20 @@ export class HermesRunEngine {
   ) {
     if (options.media)
       this.#emitMediaFilteredText(active, active.mediaFilter.finish())
-    this.#endReasoning(active)
     if (options.tools)
       this.#settleOpenTools(
         active,
         options.tools === "unresolved" ? undefined : options.tools
       )
-    this.#endText(active)
   }
 
+  /** Publish the Session's whole Todo list whenever it changed. */
   #emitPlan(active: ActiveRun, todos: Todo[]) {
     const key = sessionKey(active.scope)
-    const messageId = `aos-plan:${active.scope.threadId}`
     const previous = this.#plans.get(key)
-    if (previous && JSON.stringify(previous.todos) === JSON.stringify(todos))
-      return
-    const emitted = previous
-      ? this.#emit(active, {
-          type: RunEventKind.ACTIVITY_DELTA,
-          messageId,
-          activityType: "PLAN",
-          patch: [{ op: "replace", path: "/todos", value: todos }],
-        })
-      : this.#emit(active, {
-          type: RunEventKind.ACTIVITY_SNAPSHOT,
-          messageId,
-          activityType: "PLAN",
-          content: { todos },
-          replace: true,
-        })
-    if (emitted)
-      this.#plans.set(key, { messageId, todos: structuredClone(todos) })
-  }
-
-  #startText(active: ActiveRun) {
-    if (active.textStarted || !active.messageId) return
-    active.textStarted = true
-    this.#emit(active, {
-      type: RunEventKind.TEXT_MESSAGE_START,
-      messageId: active.messageId,
-      role: "assistant",
-    })
-  }
-
-  /** Close the assistant text message this generation opened, if any. */
-  #endText(active: ActiveRun) {
-    if (!active.textStarted || !active.messageId) return
-    this.#emit(active, {
-      type: RunEventKind.TEXT_MESSAGE_END,
-      messageId: active.messageId,
-    })
+    if (previous && JSON.stringify(previous) === JSON.stringify(todos)) return
+    if (this.#emit(active, { kind: TurnEventKind.PlanUpdated, todos }))
+      this.#plans.set(key, structuredClone(todos))
   }
 
   #ensureMessageId(active: ActiveRun) {
@@ -842,16 +738,16 @@ export class HermesRunEngine {
     const nativeName = stableNativeId(payload.name)
     if (!nativeName) return undefined
     const projected = projectHermesToolCall(nativeName, payload.args)
-    const tool = { name: projected.toolName, ended: false, messageId }
+    const tool = { name: projected.toolName, ended: false }
     active.tools.set(toolCallId, tool)
     this.#emit(active, {
-      type: RunEventKind.TOOL_CALL_START,
+      kind: TurnEventKind.ToolCallStarted,
       toolCallId,
-      toolCallName: tool.name,
+      title: tool.name,
       parentMessageId: messageId,
     })
     this.#emit(active, {
-      type: RunEventKind.TOOL_CALL_ARGS,
+      kind: TurnEventKind.ToolCallInputChunk,
       toolCallId,
       delta: JSON.stringify(projected.args),
     })
@@ -859,21 +755,12 @@ export class HermesRunEngine {
   }
 
   #appendReasoning(active: ActiveRun, delta: string) {
-    if (delta.length === 0 || !active.messageId || active.reasoningEnded) return
-    const reasoningId = `${active.messageId}:reasoning`
-    if (!active.reasoningStarted) {
-      active.reasoningStarted = true
-      this.#emit(active, {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: reasoningId,
-        role: "reasoning",
-      })
-    }
+    if (delta.length === 0 || !active.messageId) return
     if (
       this.#emit(active, {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: reasoningId,
-        delta,
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: active.messageId,
+        text: delta,
       })
     )
       active.streamedReasoning += delta
@@ -883,26 +770,15 @@ export class HermesRunEngine {
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
-      this.#emit(active, { type: RunEventKind.TOOL_CALL_END, toolCallId })
+      this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
       if (status)
         this.#emit(active, {
-          type: RunEventKind.TOOL_CALL_RESULT,
-          messageId: `${tool.messageId}:tool:${toolCallId}`,
+          kind: TurnEventKind.ToolCallFinished,
           toolCallId,
-          content: JSON.stringify({ status }),
-          role: "tool",
+          output: JSON.stringify({ status }),
+          failed: false,
         })
     }
-  }
-
-  #endReasoning(active: ActiveRun) {
-    if (!active.reasoningStarted || active.reasoningEnded || !active.messageId)
-      return
-    active.reasoningEnded = true
-    this.#emit(active, {
-      type: RunEventKind.REASONING_MESSAGE_END,
-      messageId: `${active.messageId}:reasoning`,
-    })
   }
 
   #sealGeneration(active: ActiveRun) {
@@ -917,34 +793,27 @@ export class HermesRunEngine {
    * `confirmedIdle` records that Hermes already reported the Session settled, so
    * the next Send needs no settling watcher.
    */
-  #finish(active: ActiveRun, result?: unknown, confirmedIdle = false) {
+  #finish(active: ActiveRun, ending: RunEnding = {}, confirmedIdle = false) {
     if (active.terminal) return
     this.#closeGeneration(active, {
       media: true,
-      tools:
-        isRecord(result) && result.stopped === true ? "stopped" : "completed",
+      tools: ending.stopped ? "stopped" : "completed",
     })
     this.#emit(active, {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: active.scope.threadId,
-      runId: active.runId,
-      ...(result === undefined ? {} : { result }),
+      kind: TurnEventKind.TurnEnded,
       ...(active.usage ? { usage: active.usage } : {}),
-      outcome: { type: "success" },
+      ...(ending.composerPrefill === undefined
+        ? {}
+        : { composerPrefill: ending.composerPrefill }),
     })
     if (!confirmedIdle) watchSettling(this.#host, active)
     this.#settle(active)
   }
 
-  #finishInterrupt(active: ActiveRun, outcome: RunInterruptOutcome) {
+  #requireAction(active: ActiveRun, requests: PendingRequest[]) {
     if (active.terminal) return
     this.#closeGeneration(active, { tools: "unresolved" })
-    this.#emit(active, {
-      type: RunEventKind.RUN_FINISHED,
-      threadId: active.scope.threadId,
-      runId: active.runId,
-      outcome,
-    })
+    this.#emit(active, { kind: TurnEventKind.TurnRequiresAction, requests })
     this.#settle(active)
   }
 
@@ -952,7 +821,7 @@ export class HermesRunEngine {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#emit(active, {
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: failure.message,
       code: failure.code,
     })
@@ -967,7 +836,7 @@ export class HermesRunEngine {
   #detach(active: ActiveRun, failure: RunFailure) {
     if (active.terminal || active.detached) return
     this.#emit(active, {
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: failure.message,
       code: failure.code,
     })
@@ -978,7 +847,7 @@ export class HermesRunEngine {
     safelyUnsubscribe(active.unsubscribe)
   }
 
-  #emit(active: ActiveRun, event: RunEvent) {
+  #emit(active: ActiveRun, event: TurnEvent) {
     if (active.terminal) return false
     // An uncertain run's stream is no longer authoritative: publishing fills a
     // queue nobody reads, and an overflow there would settle it unreconciled.
@@ -991,7 +860,7 @@ export class HermesRunEngine {
   #overflow(active: ActiveRun) {
     if (active.terminal) return
     active.queue.terminal({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: RUN_FAILURES.streamOverflow.message,
       code: RUN_FAILURES.streamOverflow.code,
     })

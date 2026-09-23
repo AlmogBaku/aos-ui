@@ -7,9 +7,7 @@
  * turn. Whenever a sequence is missing, one bounded read of Hermes' ring decides
  * whether the run can continue or the browser has to reconcile.
  */
-import type {
-  RunInterruptOutcome,
-} from "../../core/events"
+import type { PendingRequest } from "../../core/events"
 
 import { boundedNativeBytes, sessionKey } from "./native"
 import { providerUnavailable, RUN_FAILURES } from "./run-failures"
@@ -75,16 +73,16 @@ export async function attachRun(
   let accepting = false
   let reattached = false
   let lost: LostReason | undefined
-  let interrupted: RunInterruptOutcome | undefined
+  let asked: PendingRequest | undefined
   let unsubscribe: (() => void) | undefined
   let liveSessionId: string
   let cursor: AttachCursor
   safelyUnsubscribe(active.unsubscribe)
   // Hermes asks the user through server→client requests, not through the
-  // event stream: an interrupt ends this segment wherever the request landed.
-  const stopInterrupts = host.native.onInterrupt(active.scope, (outcome) => {
-    if (accepting) host.finishInterrupt(active, outcome)
-    else interrupted = outcome
+  // event stream: a request ends this segment wherever it landed.
+  const stopRequests = host.native.onPendingRequest(active.scope, (request) => {
+    if (accepting) host.requireAction(active, [request])
+    else asked = request
   })
   try {
     ;({ liveSessionId } = await host.native.resume(active.scope))
@@ -109,7 +107,7 @@ export async function attachRun(
     cursor = await attachCursor(host, liveSessionId, mode)
   } catch {
     safelyUnsubscribe(unsubscribe)
-    stopInterrupts()
+    stopRequests()
     active.uncertain = true
     active.detached = true
     active.queue.close()
@@ -117,7 +115,7 @@ export async function attachRun(
   }
   active.liveSessionId = liveSessionId
   active.unsubscribe = () => {
-    stopInterrupts()
+    stopRequests()
     unsubscribe?.()
   }
   active.epoch = cursor.epoch
@@ -145,7 +143,7 @@ export async function attachRun(
   for (const event of drainBufferedEvents(buffered))
     host.accept(active, event, true)
   if (reattached) scheduleCatchUp(host, active)
-  if (interrupted) host.finishInterrupt(active, interrupted)
+  if (asked) host.requireAction(active, [asked])
 }
 
 /** The cursor each attach mode derives from Hermes' own ring. */

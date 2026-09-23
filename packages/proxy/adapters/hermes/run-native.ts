@@ -10,7 +10,7 @@
  * part of that vocabulary: when one fails Hermes never saw the user's text, so
  * the failure is an outage and the caller must not present it as a refusal.
  */
-import type { RequestReply, RunInterruptOutcome } from "../../core/events"
+import type { PendingRequest, RequestReply } from "../../core/events"
 
 import {
   HermesRpcRejectedError,
@@ -110,7 +110,7 @@ export type HermesSubmitOutcome =
 export type HermesInteractionSnapshot = {
   running: boolean
   status: "waiting-for-input" | "running" | "idle" | "unknown"
-  outcome?: RunInterruptOutcome
+  requests?: PendingRequest[]
 }
 
 export interface HermesRunNative {
@@ -137,13 +137,13 @@ export interface HermesRunNative {
   inspectExecution(
     scope: HermesRunScope & { runId: string }
   ): Promise<HermesInteractionSnapshot>
-  onInterrupt(
+  onPendingRequest(
     scope: HermesRunScope,
-    listener: (outcome: RunInterruptOutcome) => void
+    listener: (request: PendingRequest) => void
   ): () => void
   respondInteractions(
     scope: HermesRunScope & { runId: string },
-    resume: readonly RequestReply[]
+    replies: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
 }
 
@@ -162,9 +162,9 @@ export type HermesNativeAttachments = {
 
 /** The interaction surface `run-native.ts` depends on (`HermesInteractions`). */
 export type HermesNativeInteractions = {
-  onInterrupt(
+  onPendingRequest(
     scope: HermesRunScope,
-    listener: (outcome: RunInterruptOutcome) => void
+    listener: (request: PendingRequest) => void
   ): () => void
   respond(
     scope: HermesRunScope & { runId: string },
@@ -528,22 +528,22 @@ export class HermesNativeRuntime implements HermesRunNative {
   /**
    * Interactions own the native request stream and the retainer that keeps a
    * Session with a pending request addressable, so a run only asks to be told
-   * when one interrupts its Session.
+   * when one is raised on its Session.
    */
-  onInterrupt(
+  onPendingRequest(
     scope: HermesRunScope,
-    listener: (outcome: RunInterruptOutcome) => void
+    listener: (request: PendingRequest) => void
   ) {
-    return this.#interactions.onInterrupt(scope, listener)
+    return this.#interactions.onPendingRequest(scope, listener)
   }
 
   async respondInteractions(
     scope: HermesRunScope & { runId: string },
-    resume: readonly RequestReply[]
+    replies: readonly RequestReply[]
   ) {
     await this.#interactions.resume(scope)
     return Promise.all(
-      resume.map((entry) => this.#interactions.respond(scope, entry))
+      replies.map((entry) => this.#interactions.respond(scope, entry))
     )
   }
 

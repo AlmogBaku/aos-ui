@@ -7,15 +7,12 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type {
-  RunInterruptOutcome,
-  TokenUsage,
-} from "../../core/events"
+import type { PendingRequest, TokenUsage } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
-import { EventQueue, startedQueue } from "./event-queue"
+import { EventQueue, startedTurnQueue } from "./event-queue"
 import type { NativeFailure, RunFailure } from "./run-failures"
 import type { BufferedNativeEvents } from "./run-frames"
 import type { HermesNativeStatus, HermesRunNative } from "./run-native"
@@ -56,10 +53,8 @@ export type ActiveRun = {
   textStarted: boolean
   streamedText?: string
   mediaFilter: HermesMediaTextFilter
-  reasoningStarted: boolean
-  reasoningEnded: boolean
   streamedReasoning: string
-  tools: Map<string, { name: string; ended: boolean; messageId: string }>
+  tools: Map<string, { name: string; ended: boolean }>
   /** How the native turn this run follows ended, as Hermes reported it. */
   turn: TurnOutcome
   /** Hermes' own client-safe classification of a terminal failure. */
@@ -89,6 +84,14 @@ export type ActiveRun = {
   resolveSettled(): void
 }
 
+/** How a cleanly finished run ended, beyond the fact that it did. */
+export type RunEnding = {
+  /** The turn was stopped, so calls it left open end as stopped. */
+  stopped?: true
+  /** Text Hermes asks the composer to start the next prompt with. */
+  composerPrefill?: string
+}
+
 /**
  * What the engine shell owns on behalf of every handler: the native boundary,
  * the runs and settling watchers it fences per Session, and the publication
@@ -102,8 +105,8 @@ export type RunEngineHost = {
   readonly settling: Map<string, SettlingWatcher>
   accept(active: ActiveRun, value: unknown, replayed?: boolean): void
   sealGeneration(active: ActiveRun): void
-  finish(active: ActiveRun, result?: unknown, confirmedIdle?: boolean): void
-  finishInterrupt(active: ActiveRun, outcome: RunInterruptOutcome): void
+  finish(active: ActiveRun, ending?: RunEnding, confirmedIdle?: boolean): void
+  requireAction(active: ActiveRun, requests: PendingRequest[]): void
   fail(active: ActiveRun, failure: RunFailure): void
   detach(active: ActiveRun, failure: RunFailure): void
   settle(active: ActiveRun): void
@@ -129,8 +132,6 @@ export function generationState() {
     textStarted: false,
     streamedText: "" as string | undefined,
     mediaFilter: new HermesMediaTextFilter(),
-    reasoningStarted: false,
-    reasoningEnded: false,
     streamedReasoning: "",
   }
 }
@@ -143,7 +144,7 @@ export function createActiveRun(
     scope,
     runId,
     liveSessionId: "",
-    queue: startedQueue(scope, runId),
+    queue: startedTurnQueue(),
     unsubscribe: () => undefined,
     epoch: "",
     lastSeen: 0,

@@ -148,7 +148,7 @@ export function boundedJsonShape(value: unknown) {
 /**
  * The serialised byte length of a decoded native payload, or `undefined` when it
  * exceeds `maximum` bytes or the shared shape bound above. Unlike
- * `boundedGraphBytes` it counts no entries: a native frame and the AG-UI events
+ * `boundedGraphBytes` it counts no entries: a native frame and the turn events
  * projected from it are bounded by size and shape only, so an ordinary wide tool
  * result is never refused for how many keys or items it carries.
  */

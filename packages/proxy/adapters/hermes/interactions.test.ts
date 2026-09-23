@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { PendingRequestKind } from "../../core/events"
 import { HermesInteractions, type HermesInteractionScope } from "./interactions"
 import { serverRequests } from "./test-utils/server-requests"
 
@@ -68,44 +69,34 @@ describe("HermesInteractions server requests", () => {
       choices: ["eu", "us"],
     })
 
-    const [outcome] = interactions.pending(scope)
-    expect(outcome).toEqual({
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "question",
-          message: "Which region?",
-          responseSchema: {
-            type: "object",
-            properties: {
-              answers: {
+    const [request] = interactions.pending(scope)
+    expect(request).toEqual({
+      requestId: id,
+      kind: PendingRequestKind.Elicitation,
+      message: "Which region?",
+      responseSchema: {
+        type: "object",
+        properties: {
+          answers: {
+            type: "array",
+            prefixItems: [
+              {
                 type: "array",
-                prefixItems: [
-                  {
-                    type: "array",
-                    description: "Which region?",
-                    items: { type: "string", enum: ["eu", "us"] },
-                    minItems: 0,
-                    maxItems: 1,
-                  },
-                ],
-                minItems: 1,
+                description: "Which region?",
+                items: { type: "string", enum: ["eu", "us"] },
+                minItems: 0,
                 maxItems: 1,
               },
-            },
-            required: ["answers"],
-            additionalProperties: false,
-          },
-          metadata: {
-            "aos.kind": "questions",
-            "aos.scope": "run",
-            "aos.questionCount": 1,
+            ],
+            minItems: 1,
+            maxItems: 1,
           },
         },
-      ],
+        required: ["answers"],
+        additionalProperties: false,
+      },
     })
-    expect(JSON.stringify(outcome)).not.toContain(LIVE)
+    expect(JSON.stringify(request)).not.toContain(LIVE)
     expect(requests.frames()).toEqual([])
   })
 
@@ -120,7 +111,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -144,7 +135,7 @@ describe("HermesInteractions server requests", () => {
     // The interrupt offers the whole selection, so the answer must carry it:
     // Hermes parses a single multi-select answer as a JSON array
     // (`tools/clarify_tool.py` `_parse_multi_select_response`).
-    expect(interactions.pending(scope)[0]?.interrupts[0]).toMatchObject({
+    expect(interactions.pending(scope)[0]).toMatchObject({
       responseSchema: {
         properties: {
           answers: {
@@ -156,7 +147,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["smoke", "e2e"]] },
       })
@@ -187,19 +178,21 @@ describe("HermesInteractions server requests", () => {
       ],
     })
 
-    const [outcome] = interactions.pending(scope)
-    expect(outcome?.interrupts).toHaveLength(1)
-    expect(outcome?.interrupts[0]).toMatchObject({
-      id,
-      reason: "question",
+    const pending = interactions.pending(scope)
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({
+      requestId: id,
+      kind: PendingRequestKind.Elicitation,
       message: "2 questions require answers",
-      metadata: { "aos.questionCount": 2 },
+      responseSchema: {
+        properties: { answers: { minItems: 2, maxItems: 2 } },
+      },
     })
-    expect(JSON.stringify(outcome)).not.toContain("q0")
+    expect(JSON.stringify(pending)).not.toContain("q0")
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"], ["smoke", "e2e"]] },
       })
@@ -237,10 +230,7 @@ describe("HermesInteractions server requests", () => {
       { replayed: false }
     )
 
-    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
-    expect(interrupt?.metadata).toMatchObject({
-      "aos.lockedAnswerIndexes": [0],
-    })
+    const interrupt = interactions.pending(scope)[0]
     const schema = interrupt?.responseSchema as {
       properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
     }
@@ -249,7 +239,7 @@ describe("HermesInteractions server requests", () => {
 
     // A locked free-text answer is echoed back as its native value.
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: { answers: [locked, ["eu"]] },
     })
@@ -268,7 +258,7 @@ describe("HermesInteractions server requests", () => {
     })
     await expect(
       single.interactions.respond(scope, {
-        interruptId: singleId,
+        requestId: singleId,
         status: "cancelled",
       })
     ).resolves.toEqual({ status: "resolved" })
@@ -284,7 +274,7 @@ describe("HermesInteractions server requests", () => {
       ],
     })
     await batch.interactions.respond(scope, {
-      interruptId: batchId,
+      requestId: batchId,
       status: "cancelled",
     })
     expect(batch.requests.answer(batchId)).toEqual({})
@@ -302,25 +292,15 @@ describe("HermesInteractions server requests", () => {
     })
 
     expect(interactions.pending(scope)[0]).toEqual({
-      type: "interrupt",
-      interrupts: [
-        {
-          id,
-          reason: "approval",
-          message: "deploy production",
-          responseSchema: { type: "string", enum: ["once", "deny"] },
-          metadata: {
-            "aos.kind": "approval",
-            "aos.scope": "run",
-            "aos.choiceScopes": { once: "request", deny: "request" },
-          },
-        },
-      ],
+      requestId: id,
+      kind: PendingRequestKind.Permission,
+      message: "deploy production",
+      responseSchema: { type: "string", enum: ["once", "deny"] },
     })
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: "once",
       })
@@ -340,12 +320,8 @@ describe("HermesInteractions server requests", () => {
     })
 
     expect(interactions.pending(scope)[0]).toMatchObject({
-      interrupts: [
-        {
-          message: "Write to protected agent-instruction file(s): AGENTS.md.",
-          responseSchema: { title: "<write to AGENTS.md>" },
-        },
-      ],
+      message: "Write to protected agent-instruction file(s): AGENTS.md.",
+      responseSchema: { title: "<write to AGENTS.md>" },
     })
   })
 
@@ -359,19 +335,12 @@ describe("HermesInteractions server requests", () => {
         description: "Write to the repository",
       })
 
-      expect(
-        interactions.pending(scope)[0]?.interrupts[0]?.metadata?.[
-          "aos.choiceScopes"
-        ]
-      ).toEqual({
-        once: "request",
-        session: "session",
-        always: "agent",
-        deny: "request",
+      expect(interactions.pending(scope)[0]?.responseSchema).toMatchObject({
+        enum: ["once", "session", "always", "deny"],
       })
 
       await interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: choice,
       })
@@ -388,7 +357,7 @@ describe("HermesInteractions server requests", () => {
       command: "rm -rf /",
     })
 
-    await interactions.respond(scope, { interruptId: id, status: "cancelled" })
+    await interactions.respond(scope, { requestId: id, status: "cancelled" })
 
     expect(requests.answer(id)).toEqual({ choice: "deny" })
   })
@@ -533,7 +502,7 @@ describe("HermesInteractions server requests", () => {
     expect(interactions.pending(scope)).toEqual([])
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -580,17 +549,16 @@ describe("HermesInteractions server requests", () => {
       resumeResult,
     })
     const notified = vi.fn()
-    interactions.onInterrupt(scope, notified)
+    interactions.onPendingRequest(scope, notified)
 
     const snapshot = await interactions.resume(scope)
 
     expect(snapshot).toMatchObject({
       running: true,
       status: "waiting-for-input",
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "srq-00000000000a", reason: "approval" }],
-      },
+      requests: [
+        { requestId: "srq-00000000000a", kind: PendingRequestKind.Permission },
+      ],
     })
     expect(JSON.stringify(snapshot)).not.toContain(LIVE)
     expect(notified).not.toHaveBeenCalled()
@@ -602,7 +570,7 @@ describe("HermesInteractions server requests", () => {
     expect(notified).not.toHaveBeenCalled()
 
     await interactions.respond(scope, {
-      interruptId: "srq-00000000000a",
+      requestId: "srq-00000000000a",
       status: "resolved",
       payload: "once",
     })
@@ -613,7 +581,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    interactions.onInterrupt(scope, notified)
+    interactions.onPendingRequest(scope, notified)
 
     // A `clarify` frame written while the socket was detached reaches AOS only
     // as an `open_requests` re-delivery of the heal that rebound the Session.
@@ -642,7 +610,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    const stop = interactions.onInterrupt(scope, notified)
+    const stop = interactions.onPendingRequest(scope, notified)
 
     const id = requests.deliver("clarify", {
       session_id: LIVE,
@@ -651,8 +619,8 @@ describe("HermesInteractions server requests", () => {
 
     expect(notified).toHaveBeenCalledTimes(1)
     expect(notified.mock.calls[0]?.[0]).toMatchObject({
-      type: "interrupt",
-      interrupts: [{ id, reason: "question" }],
+      requestId: id,
+      kind: PendingRequestKind.Elicitation,
     })
 
     stop()
@@ -667,8 +635,8 @@ describe("HermesInteractions server requests", () => {
     bind("live-other", other)
     const notified = vi.fn()
     const otherNotified = vi.fn()
-    interactions.onInterrupt(scope, notified)
-    interactions.onInterrupt(other, otherNotified)
+    interactions.onPendingRequest(scope, notified)
+    interactions.onPendingRequest(other, otherNotified)
 
     requests.deliver("clarify", { session_id: "live-other", question: "?" })
 
@@ -689,7 +657,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -701,7 +669,7 @@ describe("HermesInteractions server requests", () => {
     requests.reconnect()
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -718,7 +686,7 @@ describe("HermesInteractions server requests", () => {
       command: "deploy",
     })
     const response = {
-      interruptId: id,
+      requestId: id,
       status: "resolved" as const,
       payload: "once",
     }
@@ -744,7 +712,7 @@ describe("HermesInteractions server requests", () => {
       command: "deploy",
     })
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: "once",
     })
@@ -776,7 +744,7 @@ describe("HermesInteractions server requests", () => {
     ])
       await expect(
         interactions.respond(foreign, {
-          interruptId: id,
+          requestId: id,
           status: "resolved",
           payload: "once",
         })
@@ -803,14 +771,14 @@ describe("HermesInteractions server requests", () => {
     ])
       await expect(
         interactions.respond(scope, {
-          interruptId: id,
+          requestId: id,
           status: "resolved",
           payload,
         })
       ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
         extra: true,
@@ -836,7 +804,7 @@ describe("HermesInteractions server requests", () => {
     })
 
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: { answers: [["  eu-west  "], ["  keep  spacing  "]] },
     })
@@ -857,7 +825,7 @@ describe("HermesInteractions server requests", () => {
       choices: ["/home/operator/run.sh", "skip"],
     })
 
-    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
+    const interrupt = interactions.pending(scope)[0]
     expect(interrupt?.message).toBe(
       "Use https://hermes.internal with [credential redacted]"
     )
@@ -873,7 +841,7 @@ describe("HermesInteractions server requests", () => {
     expect(choices).toEqual(["/home/operator/run.sh", "skip"])
 
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: { answers: [[choices[0]!]] },
     })
@@ -899,9 +867,7 @@ describe("HermesInteractions server requests", () => {
 
     requests.deliver("clarify", { session_id: LIVE, question })
 
-    expect(interactions.pending(scope)[0]?.interrupts[0]?.message).toBe(
-      question
-    )
+    expect(interactions.pending(scope)[0]?.message).toBe(question)
   })
 
   it("answers a displayed choice natively and free text as the user typed it", async () => {
@@ -925,7 +891,7 @@ describe("HermesInteractions server requests", () => {
       ],
     })
     const prefixItems = (
-      interactions.pending(scope)[0]?.interrupts[0]?.responseSchema as {
+      interactions.pending(scope)[0]?.responseSchema as {
         properties: {
           answers: { prefixItems: Array<{ items: { enum?: string[] } }> }
         }
@@ -938,7 +904,7 @@ describe("HermesInteractions server requests", () => {
     // none of them is the user's own text and is answered verbatim.
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [[displayed], ["ap-southeast"]] },
       })
@@ -962,7 +928,7 @@ describe("HermesInteractions server requests", () => {
     for (const answers of [[["smoke", "smoke"]], [["smoke", "e2e", "soak"]]])
       await expect(
         interactions.respond(scope, {
-          interruptId: id,
+          requestId: id,
           status: "resolved",
           payload: { answers },
         })
@@ -970,7 +936,7 @@ describe("HermesInteractions server requests", () => {
     expect(requests.frames()).toEqual([])
 
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: { answers: [["smoke", "soak"]] },
     })
@@ -994,10 +960,7 @@ describe("HermesInteractions server requests", () => {
       answers: { q0: "ap-southeast" },
     })
 
-    const interrupt = interactions.pending(scope)[0]?.interrupts[0]
-    expect(interrupt?.metadata).toMatchObject({
-      "aos.lockedAnswerIndexes": [0],
-    })
+    const interrupt = interactions.pending(scope)[0]
     const schema = interrupt?.responseSchema as {
       properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
     }
@@ -1006,7 +969,7 @@ describe("HermesInteractions server requests", () => {
     ])
 
     await interactions.respond(scope, {
-      interruptId: id,
+      requestId: id,
       status: "resolved",
       payload: { answers: [["ap-southeast"]] },
     })
@@ -1034,14 +997,14 @@ describe("HermesInteractions server requests", () => {
     })
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["x".repeat(4_097)]] },
       })
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["x".repeat(70_000)]] },
       })
@@ -1067,7 +1030,7 @@ describe("HermesInteractions server requests", () => {
     expect(interactions.pending(scope)).toEqual([])
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: "once",
       })
@@ -1087,7 +1050,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1114,7 +1077,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1133,7 +1096,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1153,7 +1116,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1163,7 +1126,7 @@ describe("HermesInteractions server requests", () => {
     expect(interactions.pending(scope)).toHaveLength(1)
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1180,7 +1143,7 @@ describe("HermesInteractions server requests", () => {
     })
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1194,7 +1157,7 @@ describe("HermesInteractions server requests", () => {
 
     await expect(
       interactions.respond(scope, {
-        interruptId: id,
+        requestId: id,
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
@@ -1281,7 +1244,7 @@ describe("HermesInteractions server requests", () => {
     expect(retain).toHaveBeenCalledExactlyOnceWith(scope, "interaction")
 
     await interactions.respond(scope, {
-      interruptId: first,
+      requestId: first,
       status: "resolved",
       payload: { answers: [["eu"]] },
     })
@@ -1289,7 +1252,7 @@ describe("HermesInteractions server requests", () => {
     expect(release).not.toHaveBeenCalled()
 
     await interactions.respond(scope, {
-      interruptId: second,
+      requestId: second,
       status: "resolved",
       payload: "once",
     })

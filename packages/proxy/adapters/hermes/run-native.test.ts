@@ -9,7 +9,7 @@ import {
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesRunScope } from "./run"
-import type { RunInterruptOutcome } from "../../core/events"
+import { PendingRequestKind, type PendingRequest } from "../../core/events"
 
 const scope: HermesRunScope = {
   agentId: "researcher",
@@ -20,21 +20,18 @@ const scope: HermesRunScope = {
 const MAX_REPLAY_RESPONSE_BYTES = 6_291_456
 
 function stubInteractions() {
-  const listeners = new Set<(outcome: RunInterruptOutcome) => void>()
+  const listeners = new Set<(request: PendingRequest) => void>()
   return {
-    onInterrupt: vi.fn(
-      (
-        _scope: HermesRunScope,
-        listener: (outcome: RunInterruptOutcome) => void
-      ) => {
+    onPendingRequest: vi.fn(
+      (_scope: HermesRunScope, listener: (request: PendingRequest) => void) => {
         listeners.add(listener)
         return () => listeners.delete(listener)
       }
     ),
     respond: vi.fn(async () => ({ status: "resolved" })),
     resume: vi.fn(async () => ({ running: false, status: "idle" as const })),
-    raise(outcome: RunInterruptOutcome) {
-      for (const listener of [...listeners]) listener(outcome)
+    raise(request: PendingRequest) {
+      for (const listener of [...listeners]) listener(request)
     },
   }
 }
@@ -589,25 +586,26 @@ describe("Hermes native retention", () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
-  it("passes interrupts through from the interaction surface", () => {
+  it("passes pending requests through from the interaction surface", () => {
     const { native, interactions } = runtime()
     const observed = vi.fn()
 
-    const stop = native.onInterrupt(scope, observed)
-    const outcome = {
-      type: "interrupt" as const,
-      interrupts: [{ id: "srq-1", reason: "approval", message: "Continue?" }],
+    const stop = native.onPendingRequest(scope, observed)
+    const request = {
+      requestId: "srq-1",
+      kind: PendingRequestKind.Permission,
+      message: "Continue?",
     }
-    interactions.raise(outcome)
+    interactions.raise(request)
 
-    expect(observed).toHaveBeenCalledWith(outcome)
-    expect(interactions.onInterrupt).toHaveBeenCalledWith(
+    expect(observed).toHaveBeenCalledWith(request)
+    expect(interactions.onPendingRequest).toHaveBeenCalledWith(
       scope,
       expect.any(Function)
     )
 
     stop()
-    interactions.raise(outcome)
+    interactions.raise(request)
     expect(observed).toHaveBeenCalledTimes(1)
   })
 

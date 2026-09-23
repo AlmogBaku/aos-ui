@@ -1,8 +1,12 @@
 import {
-  RunEventSchema,
-  RunEventKind,
-  type TurnInput,
-  type RunInterruptOutcome,
+  PendingRequestKind,
+  ReplyStatus,
+  TurnEventKind,
+  TurnEventSchema,
+  type PendingRequest,
+  type PromptTurnInput,
+  type RepliesTurnInput,
+  type RequestReply,
 } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
@@ -37,17 +41,21 @@ const scope = {
   threadId: "hermes:research:stored-session",
 }
 
-function input(overrides: Partial<TurnInput> = {}): TurnInput {
+function input(overrides: Partial<PromptTurnInput> = {}): PromptTurnInput {
   return {
-    threadId: scope.threadId,
-    runId: "run-1",
-    state: {},
-    messages: [{ id: "user-1", role: "user", content: "Hello Hermes" }],
-    tools: [],
-    context: [],
-    forwardedProps: {},
+    turnId: "run-1",
+    messageId: "user-1",
+    prompt: "Hello Hermes",
     ...overrides,
   }
+}
+
+/** A turn that only answers pending requests. */
+function replies(
+  turnId: string,
+  ...answers: [RequestReply, ...RequestReply[]]
+): RepliesTurnInput {
+  return { turnId, replies: answers }
 }
 
 /**
@@ -68,7 +76,7 @@ function runtime(overrides: Partial<HermesRunNative> = {}): HermesRunNative {
     status: async () => "idle",
     retain: async () => () => undefined,
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    onInterrupt: () => () => undefined,
+    onPendingRequest: () => () => undefined,
     respondInteractions: async () => [],
     ...overrides,
     // Hermes answers `session.events.since` with -32602 unless the cursor is an
@@ -109,16 +117,16 @@ function observation() {
 }
 
 /**
- * The interrupt stream `interactions.ts` owns: Hermes asks the user through a
- * server→client request, so a test raises one directly instead of publishing a
- * native event.
+ * The pending request stream `interactions.ts` owns: Hermes asks the user
+ * through a server→client request, so a test raises one directly instead of
+ * publishing a native event.
  */
-function interrupts() {
-  const listeners = new Set<(outcome: RunInterruptOutcome) => void>()
+function pendingRequests() {
+  const listeners = new Set<(request: PendingRequest) => void>()
   return {
-    onInterrupt: (
+    onPendingRequest: (
       _scope: HermesRunScope,
-      listener: (outcome: RunInterruptOutcome) => void
+      listener: (request: PendingRequest) => void
     ) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -126,14 +134,29 @@ function interrupts() {
     subscribed() {
       return listeners.size
     },
-    raise(outcome: RunInterruptOutcome) {
-      for (const listener of [...listeners]) listener(outcome)
+    raise(request: PendingRequest) {
+      for (const listener of [...listeners]) listener(request)
     },
   }
 }
 
-function ofType(events: readonly unknown[], type: RunEventKind) {
-  return events.filter((event) => (event as { type?: unknown }).type === type)
+function ofKind(events: readonly unknown[], kind: TurnEventKind) {
+  return events.filter((event) => (event as { kind?: unknown }).kind === kind)
+}
+
+function eventKinds(events: readonly unknown[]) {
+  return events.map((event) => (event as { kind?: unknown }).kind)
+}
+
+/** The assistant messages a turn streamed text into, in order. */
+function messageIds(events: readonly unknown[]) {
+  return [
+    ...new Set(
+      ofKind(events, TurnEventKind.MessageChunk).map(
+        (event) => (event as { messageId: string }).messageId
+      )
+    ),
+  ]
 }
 
 async function collect(handle: { events: AsyncIterable<unknown> }) {
@@ -187,36 +210,15 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
-    expect(
-      events.filter(
-        (event) =>
-          (event as { type?: unknown }).type === RunEventKind.RUN_STARTED
-      )
-    ).toHaveLength(1)
-    expect(
-      events.filter(
-        (event) =>
-          (event as { type?: unknown }).type === RunEventKind.RUN_FINISHED
-      )
-    ).toHaveLength(1)
-    expect(
-      events
-        .filter(
-          (event) =>
-            (event as { type?: unknown }).type ===
-            RunEventKind.TEXT_MESSAGE_START
-        )
-        .map((event) => (event as { messageId: string }).messageId)
-    ).toEqual(["reply-before", "reply-after"])
-    expect(
-      events.find(
-        (event) =>
-          (event as { type?: unknown }).type === RunEventKind.TOOL_CALL_RESULT
-      )
-    ).toMatchObject({
-      messageId: "reply-before:tool:tool-1",
-      toolCallId: "tool-1",
-    })
+    expect(ofKind(events, TurnEventKind.TurnStarted)).toHaveLength(1)
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toHaveLength(1)
+    expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
+    expect(ofKind(events, TurnEventKind.ToolCallStarted)).toMatchObject([
+      { toolCallId: "tool-1", parentMessageId: "reply-before" },
+    ])
+    expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
+      { toolCallId: "tool-1" },
+    ])
   })
   it("holds an early native idle boundary until redirect acknowledgement", async () => {
     const attachment = observation()
@@ -259,7 +261,7 @@ describe("HermesRunEngine", () => {
     expect(settled).toBe(false)
 
     const events = await collect(handle)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("settles a run when its native turn later completes", async () => {
@@ -275,7 +277,7 @@ describe("HermesRunEngine", () => {
 
     await first.settled
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -293,7 +295,7 @@ describe("HermesRunEngine", () => {
 
     await first.settled
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -344,29 +346,16 @@ describe("HermesRunEngine", () => {
       const events = await collect(await engine.start(scope, input()))
 
       expect(
-        events
-          .filter(
-            (event): event is { type: string; delta: string } =>
-              !!event &&
-              typeof event === "object" &&
-              (event as { type?: unknown }).type ===
-                RunEventKind.TEXT_MESSAGE_CONTENT
-          )
-          .map(({ delta }) => delta)
+        ofKind(events, TurnEventKind.MessageChunk).map(
+          (event) => (event as { text: string }).text
+        )
       ).toEqual(["Final answer"])
-      const types = events.map((event) =>
-        event && typeof event === "object"
-          ? (event as { type?: unknown }).type
-          : undefined
+      const kinds = eventKinds(events)
+      expect(kinds.lastIndexOf(TurnEventKind.ThoughtChunk)).toBeLessThan(
+        kinds.indexOf(TurnEventKind.MessageChunk)
       )
-      expect(types.indexOf(RunEventKind.REASONING_MESSAGE_END)).toBeLessThan(
-        types.indexOf(RunEventKind.TEXT_MESSAGE_CONTENT)
-      )
-      expect(types.indexOf(RunEventKind.TEXT_MESSAGE_CONTENT)).toBeLessThan(
-        types.indexOf(RunEventKind.TEXT_MESSAGE_END)
-      )
-      expect(types.indexOf(RunEventKind.TEXT_MESSAGE_END)).toBeLessThan(
-        types.indexOf(RunEventKind.RUN_FINISHED)
+      expect(kinds.lastIndexOf(TurnEventKind.MessageChunk)).toBeLessThan(
+        kinds.indexOf(TurnEventKind.TurnEnded)
       )
     }
   )
@@ -404,36 +393,18 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-1:assistant",
-        role: "assistant",
+        text: "Final",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-1:assistant",
-        delta: "Final",
+        text: " answer",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "run-1:assistant",
-        delta: " answer",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "run-1:assistant",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -461,31 +432,13 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "message-42",
+        text: "Checked the evidence.",
       },
-      {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "message-42:reasoning",
-        role: "reasoning",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "message-42:reasoning",
-        delta: "Checked the evidence.",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_END,
-        messageId: "message-42:reasoning",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -515,37 +468,22 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
 
-    expect(
-      events.filter(
-        (event) =>
-          typeof event === "object" &&
-          event !== null &&
-          "type" in event &&
-          event.type === RunEventKind.REASONING_MESSAGE_CONTENT
-      )
-    ).toEqual([
+    expect(ofKind(events, TurnEventKind.ThoughtChunk)).toEqual([
       {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "message-42:reasoning",
-        delta: "Checked the evidence.",
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "message-42",
+        text: "Checked the evidence.",
       },
     ])
-    const types = events.map((event) =>
-      event && typeof event === "object" && "type" in event
-        ? event.type
-        : undefined
+    const kinds = eventKinds(events)
+    expect(kinds.lastIndexOf(TurnEventKind.ThoughtChunk)).toBeLessThan(
+      kinds.indexOf(TurnEventKind.MessageChunk)
     )
-    expect(types.indexOf(RunEventKind.REASONING_MESSAGE_END)).toBeLessThan(
-      types.indexOf(RunEventKind.TEXT_MESSAGE_CONTENT)
-    )
-    expect(events.at(-2)).toEqual({
-      type: RunEventKind.TEXT_MESSAGE_END,
-      messageId: "message-42",
-    })
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-2)).toMatchObject({ kind: TurnEventKind.MessageChunk })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
-  it("streams one authorized user turn as standard AG-UI lifecycle and text events", async () => {
+  it("streams one authorized user turn as turn lifecycle and text events", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
@@ -582,81 +520,48 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     for (const event of events)
-      expect(RunEventSchema.safeParse(event).success).toBe(true)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "native-message-secret",
-        role: "assistant",
+        text: "Hi",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "native-message-secret",
-        delta: "Hi",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: "native-message-secret",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
-  it("rejects browser-owned state instead of forwarding it to Hermes", async () => {
-    const engine = new HermesRunEngine(runtime())
-
-    await expect(
-      engine.start(scope, input({ state: { hiddenInstruction: "trust me" } }))
-    ).rejects.toThrow("browser state")
-    await expect(
-      engine.start(scope, input({ state: "hidden instruction" }))
-    ).rejects.toThrow("browser state")
-  })
-
-  it("rejects browser-supplied tools and context", async () => {
-    const engine = new HermesRunEngine(runtime())
+  it("rejects browser-owned state, tools, context, and forwarded properties instead of forwarding them to Hermes", async () => {
+    const submit = vi.fn(async () => ({
+      acknowledgement: "accepted" as const,
+      status: "streaming" as const,
+    }))
+    const engine = new HermesRunEngine(runtime({ submit }))
     const tool = {
       name: "unsafe",
       description: "browser-selected tool",
       parameters: { type: "object", properties: {} },
     }
 
-    await expect(engine.start(scope, input({ tools: [tool] }))).rejects.toThrow(
-      "browser tools"
-    )
-    await expect(
-      engine.start(
-        scope,
-        input({ context: [{ description: "role", value: "admin" }] })
-      )
-    ).rejects.toThrow("browser context")
+    for (const field of [
+      { state: { hiddenInstruction: "trust me" } },
+      { state: "hidden instruction" },
+      { tools: [tool] },
+      { context: [{ description: "role", value: "admin" }] },
+      { forwardedProps: { provider: "hermes" } },
+      { forwardedProps: "native override" },
+    ])
+      await expect(
+        engine.start(scope, { ...input(), ...field })
+      ).rejects.toThrow()
+    expect(submit).not.toHaveBeenCalled()
   })
 
-  it("rejects browser-owned forwarded properties", async () => {
-    const engine = new HermesRunEngine(runtime())
-
-    await expect(
-      engine.start(scope, input({ forwardedProps: { provider: "hermes" } }))
-    ).rejects.toThrow("forwarded properties")
-    await expect(
-      engine.start(scope, input({ forwardedProps: "native override" }))
-    ).rejects.toThrow("forwarded properties")
-  })
-
-  it("finishes with a native AG-UI interrupt and resumes it without submitting a prompt", async () => {
+  it("pauses on a native Hermes request and resumes it without submitting a prompt", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const interrupt = interrupts()
+    const interrupt = pendingRequests()
     let submits = 0
     // Hermes' own watermark: the resumed run attaches after the first turn's
     // frames and continues their sequence.
@@ -664,20 +569,15 @@ describe("HermesRunEngine", () => {
     const engine = new HermesRunEngine(
       runtime({
         observe: attachment.observe,
-        onInterrupt: interrupt.onInterrupt,
+        onPendingRequest: interrupt.onPendingRequest,
         cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         submit: async () => {
           submits += 1
           interrupt.raise({
-            type: "interrupt",
-            interrupts: [
-              {
-                id: "approval-1",
-                reason: "approval",
-                message: "Continue?",
-                responseSchema: { type: "string", enum: ["once", "deny"] },
-              },
-            ],
+            requestId: "approval-1",
+            kind: PendingRequestKind.Permission,
+            message: "Continue?",
+            responseSchema: { type: "string", enum: ["once", "deny"] },
           })
           return {
             acknowledgement: "accepted" as const,
@@ -687,7 +587,7 @@ describe("HermesRunEngine", () => {
         respondInteractions: async (_scope, resume) => {
           expect(resume).toEqual([
             {
-              interruptId: "approval-1",
+              requestId: "approval-1",
               status: "resolved",
               payload: "once",
             },
@@ -716,26 +616,17 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: {
-          type: "interrupt",
-          interrupts: [
-            {
-              id: "approval-1",
-              reason: "approval",
-              message: "Continue?",
-              responseSchema: { type: "string", enum: ["once", "deny"] },
-            },
-          ],
-        },
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          {
+            requestId: "approval-1",
+            kind: PendingRequestKind.Permission,
+            message: "Continue?",
+            responseSchema: { type: "string", enum: ["once", "deny"] },
+          },
+        ],
       },
     ])
 
@@ -744,54 +635,33 @@ describe("HermesRunEngine", () => {
       collect(
         await engine.start(
           scope,
-          input({
-            runId: "run-2",
-            messages: [],
-            resume: [
-              {
-                interruptId: "approval-1",
-                status: "resolved",
-                payload: "once",
-              },
-            ],
+          replies("run-2", {
+            requestId: "approval-1",
+            status: ReplyStatus.Resolved,
+            payload: "once",
           })
         )
       )
     ).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-2",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "continued",
-        role: "assistant",
+        text: "Done",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "continued",
-        delta: "Done",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "continued" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-2",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(submits).toBe(1)
   })
 
   it("observes interrupts only while the run is attached to its Session", async () => {
     const attachment = observation()
-    const interrupt = interrupts()
+    const interrupt = pendingRequests()
     const turn = nativeTurn()
     const engine = new HermesRunEngine(
       runtime({
         observe: attachment.observe,
-        onInterrupt: interrupt.onInterrupt,
+        onPendingRequest: interrupt.onPendingRequest,
       })
     )
 
@@ -811,7 +681,7 @@ describe("HermesRunEngine", () => {
   it("streams a resumed interaction when Hermes continues without another message start", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const interrupt = interrupts()
+    const interrupt = pendingRequests()
     // Hermes' own watermark: the resumed run attaches after the first turn's
     // frames and continues their sequence.
     let watermark = 0
@@ -819,17 +689,12 @@ describe("HermesRunEngine", () => {
       runtime({
         observe: attachment.observe,
         cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
-        onInterrupt: interrupt.onInterrupt,
+        onPendingRequest: interrupt.onPendingRequest,
         submit: async () => {
           interrupt.raise({
-            type: "interrupt",
-            interrupts: [
-              {
-                id: "question-1",
-                reason: "question",
-                message: "Answer whichever apply.",
-              },
-            ],
+            requestId: "question-1",
+            kind: PendingRequestKind.Elicitation,
+            message: "Answer whichever apply.",
           })
           return {
             acknowledgement: "accepted" as const,
@@ -886,28 +751,23 @@ describe("HermesRunEngine", () => {
     const resumed = await collect(
       await engine.start(
         scope,
-        input({
-          runId: "run-2",
-          messages: [],
-          resume: [{ interruptId: "question-1", status: "cancelled" }],
+        replies("run-2", {
+          requestId: "question-1",
+          status: ReplyStatus.Cancelled,
         })
       )
     )
 
     expect(resumed).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-2",
-      },
-      {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "clarify-call",
-        toolCallName: "question",
+        title: "question",
         parentMessageId: "run-2:assistant",
       },
       {
-        type: RunEventKind.TOOL_CALL_ARGS,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "clarify-call",
         delta: JSON.stringify({
           question: "1 question",
@@ -922,34 +782,22 @@ describe("HermesRunEngine", () => {
           allowFreeform: true,
         }),
       },
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "clarify-call" },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "clarify-call" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "run-2:assistant:tool:clarify-call",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "clarify-call",
-        content: JSON.stringify({
+        output: JSON.stringify({
           status: "cancelled",
           responses: [{ question: "Answer whichever apply.", answers: [] }],
         }),
-        role: "tool",
+        failed: false,
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-2:assistant",
-        role: "assistant",
+        text: "No answers selected.",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "run-2:assistant",
-        delta: "No answers selected.",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "run-2:assistant" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-2",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -963,23 +811,18 @@ describe("HermesRunEngine", () => {
     options: { log?: HermesLog } = {}
   ) {
     const attachment = observation()
-    const interrupt = interrupts()
+    const interrupt = pendingRequests()
     let watermark = 0
     const engine = new HermesRunEngine(
       runtime({
         observe: attachment.observe,
-        onInterrupt: interrupt.onInterrupt,
+        onPendingRequest: interrupt.onPendingRequest,
         cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         submit: async () => {
           interrupt.raise({
-            type: "interrupt",
-            interrupts: [
-              {
-                id: "question-1",
-                reason: "question",
-                message: "Which screenshot?",
-              },
-            ],
+            requestId: "question-1",
+            kind: PendingRequestKind.Elicitation,
+            message: "Which screenshot?",
           })
           return {
             acknowledgement: "accepted" as const,
@@ -995,16 +838,10 @@ describe("HermesRunEngine", () => {
     watermark = 1
     const handle = await engine.start(
       scope,
-      input({
-        runId: "run-2",
-        messages: [],
-        resume: [
-          {
-            interruptId: "question-1",
-            status: "resolved",
-            payload: { answers: [["the first one"]] },
-          },
-        ],
+      replies("run-2", {
+        requestId: "question-1",
+        status: ReplyStatus.Resolved,
+        payload: { answers: [["the first one"]] },
       })
     )
     return {
@@ -1026,21 +863,16 @@ describe("HermesRunEngine", () => {
 
     await expect(settledWithin(handle, 250)).resolves.toBe("settled")
     const events = await collect(handle)
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
-    expect(ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)).toEqual([
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+    expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-2:assistant",
-        delta: "It is a bar chart.",
+        text: "It is a bar chart.",
       },
     ])
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-2",
-        outcome: { type: "success" },
-      },
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -1058,14 +890,9 @@ describe("HermesRunEngine", () => {
 
     await expect(settledWithin(handle, 250)).resolves.toBe("settled")
     const events = await collect(handle)
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-2",
-        outcome: { type: "success" },
-      },
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -1080,10 +907,10 @@ describe("HermesRunEngine", () => {
     // The verdict waits for the bounded re-read, not for the next Send.
     await expect(settledWithin(handle, 2_000)).resolves.toBe("settled")
     const events = await collect(handle)
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
       {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         code: "AOS_PROVIDER_RUN_FAILED",
         message: "Hermes could not complete this run.",
       },
@@ -1100,10 +927,10 @@ describe("HermesRunEngine", () => {
     })
 
     const events = await collect(handle)
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
       {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         code: "AOS_INTERACTION_EXPIRED",
         message: "This Hermes interaction is no longer pending.",
       },
@@ -1115,7 +942,7 @@ describe("HermesRunEngine", () => {
 
     await expect(
       engine.start(scope, { ...input(), native: { method: "prompt.submit" } })
-    ).rejects.toThrow("unsupported run fields")
+    ).rejects.toThrow()
   })
 
   it("terminalizes an uncertain acknowledgement without retrying or releasing admission", async () => {
@@ -1134,20 +961,16 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
         code: "AOS_SEND_UNCERTAIN",
       },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).rejects.toThrow("already active")
     expect(submissions).toBe(1)
   })
@@ -1165,19 +988,15 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes rejected this command.",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -1194,13 +1013,9 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Slash commands cannot be sent with attachments.",
         code: "AOS_COMMAND_WITH_ATTACHMENTS",
       },
@@ -1224,20 +1039,17 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toContainEqual({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      result: { "aos.composerPrefill": "Earlier question" },
-      outcome: { type: "success" },
+      kind: TurnEventKind.TurnEnded,
+      composerPrefill: "Earlier question",
     })
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "aos-command:run-1",
-      delta: "Undid 1 turn.",
+      text: "Undid 1 turn.",
     })
   })
 
-  it("normalizes reasoning and complete tool calls as standard AG-UI events", async () => {
+  it("normalizes reasoning and complete tool calls as turn events", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
@@ -1285,63 +1097,38 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: "message-42",
+        text: "Consider",
       },
       {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "message-42:reasoning",
-        role: "reasoning",
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "message-42:reasoning",
-        delta: "Consider",
-      },
-      {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "call-7",
-        toolCallName: "delegate_subagent",
+        title: "delegate_subagent",
         parentMessageId: "message-42",
       },
       {
-        type: RunEventKind.TOOL_CALL_ARGS,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "call-7",
         // A delegated subagent always carries a description, exactly as the
         // authoritative history projection records it.
         delta: '{"goal":"Inspect","description":"Inspect"}',
       },
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-7" },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-7" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "message-42:tool:call-7",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "call-7",
-        content: '{"ok":true}',
-        role: "tool",
+        output: '{"ok":true}',
+        failed: false,
       },
       {
-        type: RunEventKind.REASONING_MESSAGE_END,
-        messageId: "message-42:reasoning",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Done",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Done",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -1400,40 +1187,20 @@ describe("HermesRunEngine", () => {
     )
 
     const events = await collect(await engine.start(scope, input()))
-    const activities = events.filter(
-      (event) =>
-        !!event &&
-        typeof event === "object" &&
-        "type" in event &&
-        (event.type === RunEventKind.ACTIVITY_SNAPSHOT ||
-          event.type === RunEventKind.ACTIVITY_DELTA)
-    )
+    const activities = ofKind(events, TurnEventKind.PlanUpdated)
 
     expect(activities).toEqual([
       {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: `aos-plan:${scope.threadId}`,
-        activityType: "PLAN",
-        content: {
-          todos: [{ id: "ship", label: "Ship", status: "active" }],
-        },
-        replace: true,
+        kind: TurnEventKind.PlanUpdated,
+        todos: [{ id: "ship", label: "Ship", status: "active" }],
       },
       {
-        type: RunEventKind.ACTIVITY_DELTA,
-        messageId: `aos-plan:${scope.threadId}`,
-        activityType: "PLAN",
-        patch: [
-          {
-            op: "replace",
-            path: "/todos",
-            value: [{ id: "ship", label: "Ship", status: "completed" }],
-          },
-        ],
+        kind: TurnEventKind.PlanUpdated,
+        todos: [{ id: "ship", label: "Ship", status: "completed" }],
       },
     ])
     for (const event of activities)
-      expect(RunEventSchema.safeParse(event).success).toBe(true)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
   })
 
   it("streams a published artifact as the same safe AOS data part used by history", async () => {
@@ -1487,10 +1254,9 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "message-artifact:tool:artifact-call",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "artifact-call",
-      content: JSON.stringify({
+      output: JSON.stringify({
         ok: true,
         type: "aos.artifact",
         artifact: {
@@ -1500,12 +1266,11 @@ describe("HermesRunEngine", () => {
           sizeBytes: 42,
         },
       }),
-      role: "tool",
+      failed: false,
     })
     expect(events).toContainEqual({
-      type: RunEventKind.CUSTOM,
-      name: "aos.artifact",
-      value: {
+      kind: TurnEventKind.ArtifactPublished,
+      artifact: {
         id: "report-1",
         filename: "report.md",
         mimeType: "text/markdown",
@@ -1566,28 +1331,19 @@ describe("HermesRunEngine", () => {
     )
 
     const events = await collect(await engine.start(scope, input()))
-    const artifact = events.find(
-      (event) =>
-        !!event &&
-        typeof event === "object" &&
-        "type" in event &&
-        event.type === RunEventKind.CUSTOM &&
-        "name" in event &&
-        event.name === "aos.artifact"
-    )
+    const [artifact] = ofKind(events, TurnEventKind.ArtifactPublished)
 
     expect(artifact).toMatchObject({
-      type: RunEventKind.CUSTOM,
-      name: "aos.artifact",
-      value: {
+      kind: TurnEventKind.ArtifactPublished,
+      artifact: {
         filename: "quick-brief.mp3",
         mimeType: "audio/mpeg",
       },
     })
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "message-media",
-      delta: "Your brief is ready.\n",
+      text: "Your brief is ready.\n",
     })
     expect(JSON.stringify(events)).not.toContain("MEDIA:")
     expect(JSON.stringify(events)).not.toContain(audioPath)
@@ -1627,23 +1383,20 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events.slice(-3)).toEqual([
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "call-lost-complete" },
       {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "message-42:tool:call-lost-complete",
+        kind: TurnEventKind.ToolCallInputEnded,
         toolCallId: "call-lost-complete",
-        content: '{"status":"completed"}',
-        role: "tool",
       },
       {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "call-lost-complete",
+        output: '{"status":"completed"}',
+        failed: false,
       },
+      { kind: TurnEventKind.TurnEnded },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-after-tool-recovery" }))
+      engine.start(scope, input({ turnId: "run-after-tool-recovery" }))
     ).resolves.toBeDefined()
   })
 
@@ -1662,21 +1415,11 @@ describe("HermesRunEngine", () => {
 
     await expect(handle.stop()).resolves.toBe("idle")
     await expect(collect(handle)).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        result: { stopped: true },
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
     expect(interrupted).toBe(1)
   })
@@ -1706,18 +1449,8 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        result: { stopped: true },
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -1765,20 +1498,20 @@ describe("HermesRunEngine", () => {
 
     expect(status).toHaveBeenCalledTimes(2)
     expect(events).not.toContainEqual(
-      expect.objectContaining({ type: RunEventKind.RUN_ERROR })
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
     )
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: RunEventKind.TOOL_CALL_RESULT,
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "recovery-tool",
       })
     )
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "message-42",
-      delta: "Recovered response",
+      text: "Recovered response",
     })
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(log.warn.mock.calls).toEqual([
       [
         "hermes.run.native_error",
@@ -1805,7 +1538,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this run.\nterminal provider crash",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
@@ -1850,13 +1583,9 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this run.\nprovider stream closed before the first token",
         code: "AOS_PROVIDER_RUN_FAILED",
@@ -1891,13 +1620,9 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -1941,28 +1666,13 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-43",
-        role: "assistant",
+        text: "Current",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-43",
-        delta: "Current",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-43" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -2025,28 +1735,13 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-43",
-        role: "assistant",
+        text: "Current",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-43",
-        delta: "Current",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-43" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -2091,7 +1786,7 @@ describe("HermesRunEngine", () => {
     )
 
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes history must be reconciled before this run can continue.",
       code: "AOS_RESET_REQUIRED",
@@ -2142,28 +1837,13 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Recovered",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Recovered",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -2201,17 +1881,8 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -2219,18 +1890,7 @@ describe("HermesRunEngine", () => {
     const engine = new HermesRunEngine(runtime())
 
     await expect(
-      engine.start(
-        scope,
-        input({
-          messages: [
-            {
-              id: "user-1",
-              role: "user",
-              content: "x".repeat(1_048_577),
-            },
-          ],
-        })
-      )
+      engine.start(scope, input({ prompt: "x".repeat(1_048_577) }))
     ).rejects.toThrow("user turn is too large")
   })
 
@@ -2249,7 +1909,7 @@ describe("HermesRunEngine", () => {
     )
 
     const first = engine.start(scope, input())
-    const second = engine.start(scope, input({ runId: "run-2" }))
+    const second = engine.start(scope, input({ turnId: "run-2" }))
     releaseResume?.()
 
     await expect(first).resolves.toBeDefined()
@@ -2273,7 +1933,7 @@ describe("HermesRunEngine", () => {
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -2291,13 +1951,9 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
         code: "AOS_SEND_UNCERTAIN",
@@ -2333,20 +1989,16 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "The Hermes connection was interrupted; reconnect to reconcile this run.",
         code: "AOS_CONNECTION_INTERRUPTED",
       },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).rejects.toThrow("already active")
     expect(interrupts).toBe(0)
   })
@@ -2427,28 +2079,13 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Recovered",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Recovered",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(submissions).toBe(1)
   })
@@ -2500,11 +2137,9 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toMatchObject([
-      { type: RunEventKind.RUN_STARTED, runId: "restored-run" },
-      { type: RunEventKind.TEXT_MESSAGE_START, messageId: "message-42" },
-      { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: "Recovered" },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      { type: RunEventKind.RUN_FINISHED, runId: "restored-run" },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.MessageChunk, text: "Recovered" },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(submissions).toBe(0)
   })
@@ -2558,11 +2193,10 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "message-42:tool:call-7",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "call-7",
-      content: '"contents"',
-      role: "tool",
+      output: '"contents"',
+      failed: false,
     })
   })
 
@@ -2613,7 +2247,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_ARGS,
+      kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: JSON.stringify({
         query: "[REDACTED]",
@@ -2624,17 +2258,16 @@ describe("HermesRunEngine", () => {
       }),
     })
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "message-42:tool:call-7",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "call-7",
-      content: JSON.stringify({
+      output: JSON.stringify({
         status: "ok",
         sourceUrl: "https://provider.invalid/private",
         filesystem_path: "/srv/private/result.txt",
         access_token: "[REDACTED]",
         summary: "[REDACTED]",
       }),
-      role: "tool",
+      failed: false,
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
     expect(JSON.stringify(events)).not.toContain("bearer-secret")
@@ -2696,15 +2329,8 @@ describe("HermesRunEngine", () => {
     )
 
     const events = await collect(await engine.start(scope, input()))
-    const argumentDeltas = events.flatMap((event) =>
-      typeof event === "object" &&
-      event !== null &&
-      "type" in event &&
-      event.type === RunEventKind.TOOL_CALL_ARGS &&
-      "delta" in event &&
-      typeof event.delta === "string"
-        ? [event.delta]
-        : []
+    const argumentDeltas = ofKind(events, TurnEventKind.ToolCallInputChunk).map(
+      (event) => (event as { delta: string }).delta
     )
 
     expect(argumentDeltas).toEqual([
@@ -2759,19 +2385,19 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
     const args = events.find(
-      (event) => event.type === RunEventKind.TOOL_CALL_ARGS
+      (event) => event.kind === TurnEventKind.ToolCallInputChunk
     )
     const result = events.find(
-      (event) => event.type === RunEventKind.TOOL_CALL_RESULT
+      (event) => event.kind === TurnEventKind.ToolCallFinished
     )
 
-    expect(args?.type).toBe(RunEventKind.TOOL_CALL_ARGS)
-    if (args?.type !== RunEventKind.TOOL_CALL_ARGS)
+    expect(args?.kind).toBe(TurnEventKind.ToolCallInputChunk)
+    if (args?.kind !== TurnEventKind.ToolCallInputChunk)
       throw new Error("missing args")
     expect(args.delta).toContain("[Truncated]")
     expect(args.delta).not.toContain("\\ud83d")
     expect(result).toMatchObject({
-      content: expect.stringContaining("[Truncated]"),
+      output: expect.stringContaining("[Truncated]"),
     })
   })
 
@@ -2806,13 +2432,9 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
@@ -2855,24 +2477,14 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "partial-reply",
-        role: "assistant",
+        text: "The completed response retained by Hermes",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "partial-reply",
-        delta: "The completed response retained by Hermes",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "partial-reply" },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
@@ -2926,29 +2538,19 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "partial-reply",
-        role: "assistant",
+        text: "Retained while streaming",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "partial-reply",
-        delta: "Retained while streaming",
+        text: " and at completion",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "partial-reply",
-        delta: " and at completion",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "partial-reply" },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this run.\nprovider rejected the request",
         code: "AOS_PROVIDER_RUN_FAILED",
@@ -3032,35 +2634,33 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(
-      events.filter((event) => event.type === RunEventKind.TOOL_CALL_RESULT)
+      events.filter((event) => event.kind === TurnEventKind.ToolCallFinished)
     ).toHaveLength(3)
     expect(events).not.toContainEqual(
-      expect.objectContaining({
-        type: RunEventKind.RUN_ERROR,
-      })
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
     )
     const failedTool = events.findIndex(
       (event) =>
-        event.type === RunEventKind.TOOL_CALL_RESULT &&
+        event.kind === TurnEventKind.ToolCallFinished &&
         event.toolCallId === "failed-tool"
     )
     const interim = events.findIndex(
       (event) =>
-        event.type === RunEventKind.TEXT_MESSAGE_CONTENT &&
-        event.delta === "The first call failed. I will split the work."
+        event.kind === TurnEventKind.MessageChunk &&
+        event.text === "The first call failed. I will split the work."
     )
     const recoveredTool = events.findIndex(
       (event) =>
-        event.type === RunEventKind.TOOL_CALL_START &&
+        event.kind === TurnEventKind.ToolCallStarted &&
         event.toolCallId === "recovery-tool-1"
     )
     const finalText = events.findIndex(
       (event) =>
-        event.type === RunEventKind.TEXT_MESSAGE_CONTENT &&
-        event.delta === "Recovered after splitting the work."
+        event.kind === TurnEventKind.MessageChunk &&
+        event.text === "Recovered after splitting the work."
     )
     const finished = events.findIndex(
-      (event) => event.type === RunEventKind.RUN_FINISHED
+      (event) => event.kind === TurnEventKind.TurnEnded
     )
 
     expect(failedTool).toBeGreaterThan(-1)
@@ -3068,9 +2668,9 @@ describe("HermesRunEngine", () => {
     expect(recoveredTool).toBeGreaterThan(interim)
     expect(finalText).toBeGreaterThan(recoveredTool)
     expect(finished).toBeGreaterThan(finalText)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(
-      events.filter((event) => event.type === RunEventKind.RUN_FINISHED)
+      events.filter((event) => event.kind === TurnEventKind.TurnEnded)
     ).toHaveLength(1)
   })
 
@@ -3129,25 +2729,29 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
     expect(
-      events.filter((event) => event.type === RunEventKind.TEXT_MESSAGE_CONTENT)
+      events.filter((event) => event.kind === TurnEventKind.MessageChunk)
     ).toEqual([
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "reply",
-        delta: "Checking the next boundary.",
+        text: "Checking the next boundary.",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-1:assistant:2",
-        delta: "Final answer",
+        text: "Final answer",
       },
     ])
     expect(
-      events.findIndex((event) => event.type === RunEventKind.TEXT_MESSAGE_END)
+      events.findIndex(
+        (event) =>
+          event.kind === TurnEventKind.MessageChunk &&
+          event.text === "Checking the next boundary."
+      )
     ).toBeLessThan(
       events.findIndex(
         (event) =>
-          event.type === RunEventKind.TOOL_CALL_START &&
+          event.kind === TurnEventKind.ToolCallStarted &&
           event.toolCallId === "tool-after-interim"
       )
     )
@@ -3159,28 +2763,20 @@ describe("HermesRunEngine", () => {
     // The turn input schema admits text parts only, so the engine refuses the
     // turn before any native submission: staged media arrives as text instead.
     await expect(
-      engine.start(
-        scope,
-        input({
-          messages: [
-            {
-              id: "user-1",
-              role: "user",
-              content: [
-                { type: "text", text: "Look" },
-                {
-                  type: "image",
-                  source: {
-                    type: "data",
-                    mimeType: "image/png",
-                    value: "aGVsbG8=",
-                  },
-                },
-              ],
+      engine.start(scope, {
+        ...input(),
+        prompt: [
+          { type: "text", text: "Look" },
+          {
+            type: "image",
+            source: {
+              type: "data",
+              mimeType: "image/png",
+              value: "aGVsbG8=",
             },
-          ],
-        })
-      )
+          },
+        ],
+      })
     ).rejects.toThrow()
   })
 
@@ -3200,13 +2796,9 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes is already running this Session.",
         code: "AOS_SESSION_BUSY",
       },
@@ -3261,10 +2853,10 @@ describe("HermesRunEngine", () => {
     expect(observations).toBe(1)
   })
 
-  it("discovers a pending Hermes interaction as a standard AG-UI interrupt", async () => {
+  it("discovers a pending Hermes interaction as a pending request", async () => {
     const interrupt = {
-      id: "question-1",
-      reason: "question",
+      requestId: "question-1",
+      kind: PendingRequestKind.Elicitation,
       message: "Choose",
       responseSchema: { type: "string", enum: ["yes", "no"] },
     }
@@ -3273,7 +2865,7 @@ describe("HermesRunEngine", () => {
         inspectExecution: async () => ({
           running: false,
           status: "waiting-for-input" as const,
-          outcome: { type: "interrupt" as const, interrupts: [interrupt] },
+          requests: [interrupt],
         }),
       })
     )
@@ -3281,22 +2873,13 @@ describe("HermesRunEngine", () => {
     const discovered = await engine.discover(scope, "recovered-question")
 
     expect(discovered?.state).toBe("waiting-for-input")
-    expect(discovered?.interrupts).toEqual([interrupt])
+    expect(discovered?.requests).toEqual([interrupt])
     // A restored wait was never streamed, so it names no position: a fabricated
     // one would force the next recovery to reset.
     expect(discovered?.handle.recoveryPosition()).toBeUndefined()
     await expect(collect(discovered!.handle)).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "recovered-question",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "recovered-question",
-        outcome: { type: "interrupt", interrupts: [interrupt] },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnRequiresAction, requests: [interrupt] },
     ])
   })
 
@@ -3314,7 +2897,7 @@ describe("HermesRunEngine", () => {
     const native: { status: HermesNativeStatus } = { status: "waiting" }
     const interrupted: string[] = []
     const submitted: string[] = []
-    const questions = interrupts()
+    const questions = pendingRequests()
     const engine = new HermesRunEngine(
       runtime({
         inspectExecution: async () => ({ running: true, status: "running" }),
@@ -3334,7 +2917,7 @@ describe("HermesRunEngine", () => {
           submitted.push(prompt.text)
           return { acknowledgement: "accepted", status: "streaming" }
         },
-        onInterrupt: questions.onInterrupt,
+        onPendingRequest: questions.onPendingRequest,
         ...overrides,
       }),
       options
@@ -3354,27 +2937,24 @@ describe("HermesRunEngine", () => {
       })()
 
       await vi.advanceTimersByTimeAsync(2_000)
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
         {
-          type: RunEventKind.RUN_ERROR,
+          kind: TurnEventKind.TurnFailed,
           code: "AOS_INTERACTION_LOST",
           message:
             "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
           awaitingStop: true,
         },
       ])
-      expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([])
+      expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([])
 
       await expect(discovered!.handle.stop()).resolves.toBe("idle")
       await reading
       expect(interrupted).toEqual(["live-secret"])
-      expect(events.at(-1)).toMatchObject({
-        type: RunEventKind.RUN_FINISHED,
-        result: { stopped: true },
-      })
+      expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
 
       // Stop settled the native turn, so the Session takes the next prompt.
-      await engine.start(scope, input({ runId: "run-2" }))
+      await engine.start(scope, input({ turnId: "run-2" }))
       expect(submitted).toEqual(["Hello Hermes"])
     } finally {
       vi.useRealTimers()
@@ -3391,23 +2971,21 @@ describe("HermesRunEngine", () => {
         for await (const event of discovered!.handle.events) events.push(event)
       })()
       const question = {
-        id: "question-1",
-        reason: "question",
+        requestId: "question-1",
+        kind: PendingRequestKind.Elicitation,
         message: "Which branch?",
         responseSchema: { type: "string" },
       }
 
       await vi.advanceTimersByTimeAsync(1_000)
-      questions.raise({ type: "interrupt", interrupts: [question] })
+      questions.raise(question)
       await vi.advanceTimersByTimeAsync(2_000)
       await reading
 
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
       expect(events.at(-1)).toEqual({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "recovered-run",
-        outcome: { type: "interrupt", interrupts: [question] },
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [question],
       })
     } finally {
       vi.useRealTimers()
@@ -3426,7 +3004,7 @@ describe("HermesRunEngine", () => {
 
       await vi.advanceTimersByTimeAsync(2_000)
 
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
     } finally {
       vi.useRealTimers()
     }
@@ -3450,13 +3028,9 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -3501,28 +3075,13 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(cursors).toEqual([0])
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Hello",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Hello",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -3562,13 +3121,13 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_START,
+      kind: TurnEventKind.ToolCallStarted,
       toolCallId: "call-7",
-      toolCallName: "read_file",
+      title: "read_file",
       parentMessageId: "message-42",
     })
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_ARGS,
+      kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: '{"path":"report.txt"}',
     })
@@ -3647,7 +3206,7 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -3672,13 +3231,9 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -3707,7 +3262,7 @@ describe("HermesRunEngine", () => {
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
     expect(unsubscribes).toBe(1)
   })
@@ -3788,13 +3343,9 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -3832,7 +3383,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_RESET_REQUIRED",
     })
     expect(submissions).toBe(0)
@@ -3872,13 +3423,9 @@ describe("HermesRunEngine", () => {
         })
       )
     ).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -3909,13 +3456,9 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await preActive.start(scope, input()))).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -3936,9 +3479,8 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
     const iterator = handle.events[Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toMatchObject({
-      value: { type: RunEventKind.RUN_STARTED },
+      value: { kind: TurnEventKind.TurnStarted },
     })
-    const messageStart = iterator.next()
     publish({
       type: "message.start",
       session_id: "live-secret",
@@ -3951,12 +3493,9 @@ describe("HermesRunEngine", () => {
       seq: 2,
       payload: { text: chunk },
     })
-    await expect(messageStart).resolves.toMatchObject({
-      value: { type: RunEventKind.TEXT_MESSAGE_START },
-    })
     const content = iterator.next()
     await expect(content).resolves.toMatchObject({
-      value: { type: RunEventKind.TEXT_MESSAGE_CONTENT, delta: chunk },
+      value: { kind: TurnEventKind.MessageChunk, text: chunk },
     })
     const unreadAttachment = observation()
     const publishUnread = (event: unknown) =>
@@ -3993,13 +3532,9 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await unread.start(scope, input()))).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
         code: "AOS_STREAM_OVERFLOW",
       },
@@ -4050,7 +3585,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(payloadReads).toBe(0)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("ignores unrelated pre-active events without consuming the Session buffer", async () => {
@@ -4107,10 +3642,10 @@ describe("HermesRunEngine", () => {
 
     expect(payloadReads).toBe(0)
     expect(submissions).toBe(1)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
-  it("bounds unread AG-UI events and terminalizes overflow", async () => {
+  it("bounds unread turn events and terminalizes overflow", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesRunEngine(
@@ -4140,19 +3675,15 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
 
-    expect(events[0]).toEqual({
-      type: RunEventKind.RUN_STARTED,
-      threadId: scope.threadId,
-      runId: "run-1",
-    })
+    expect(events[0]).toEqual({ kind: TurnEventKind.TurnStarted })
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
       code: "AOS_STREAM_OVERFLOW",
     })
     expect(events).toHaveLength(2)
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
   })
 
@@ -4205,16 +3736,13 @@ describe("HermesRunEngine", () => {
       seq: 1,
       payload: {},
     })
-    const second = await engine.start(scope, input({ runId: "run-2" }))
+    const second = await engine.start(scope, input({ turnId: "run-2" }))
     releaseFirstStatus?.()
     const first = await firstStart
 
     expect(submitted).toEqual(["live-2"])
     await expect(collect(first)).resolves.toContainEqual({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
+      kind: TurnEventKind.TurnEnded,
     })
     attachment.publish("live-2", {
       type: "message.complete",
@@ -4287,7 +3815,7 @@ describe("HermesRunEngine", () => {
     }
   )
 
-  it("enforces cumulative byte budgets for recovery and unread AG-UI events", async () => {
+  it("enforces cumulative byte budgets for recovery and unread turn events", async () => {
     const chunk = "🙂".repeat(250_000)
     const recovery = new HermesRunEngine(
       runtime({
@@ -4319,13 +3847,9 @@ describe("HermesRunEngine", () => {
       })
     )
     expect(recovered).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -4366,13 +3890,9 @@ describe("HermesRunEngine", () => {
     )
     const streamed = await collect(await live.start(scope, input()))
     expect(streamed).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
         code: "AOS_STREAM_OVERFLOW",
       },
@@ -4410,8 +3930,8 @@ describe("HermesRunEngine", () => {
 
     // An ordinary wide result is far below the 4 MiB frame bound: the run
     // projects it (the projection truncates for public output) and finishes.
-    expect(ofType(events, RunEventKind.TOOL_CALL_RESULT)).toHaveLength(1)
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(ofKind(events, TurnEventKind.ToolCallFinished)).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("refuses a native frame past the frame byte bound", async () => {
@@ -4433,13 +3953,9 @@ describe("HermesRunEngine", () => {
     )
 
     expect(await collect(await engine.start(scope, input()))).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
         code: "AOS_STREAM_OVERFLOW",
       },
@@ -4453,7 +3969,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
     const iterator = handle.events[Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toMatchObject({
-      value: { type: RunEventKind.RUN_STARTED },
+      value: { kind: TurnEventKind.TurnStarted },
     })
     // The coordinator's normal state: parked in `next()` with nothing queued.
     const parked = iterator.next()
@@ -4465,7 +3981,7 @@ describe("HermesRunEngine", () => {
     await expect(parked).resolves.toEqual({
       done: false,
       value: {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
         code: "AOS_STREAM_OVERFLOW",
       },
@@ -4520,12 +4036,9 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
     for (const event of events)
-      expect(RunEventSchema.safeParse(event).success).toBe(true)
+      expect(TurnEventSchema.safeParse(event).success).toBe(true)
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      outcome: { type: "success" },
+      kind: TurnEventKind.TurnEnded,
       usage: [
         {
           model: "claude-safe",
@@ -4579,7 +4092,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(await engine.start(scope, input()))
 
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
+      kind: TurnEventKind.TurnEnded,
       usage: [
         {
           model: "final-model",
@@ -4625,28 +4138,13 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-secret", ring.idle())
 
     await expect(collect(discovered!.handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "recovered-run",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "new-message",
-        role: "assistant",
+        text: "new",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "new-message",
-        delta: "new",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "new-message" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "recovered-run",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(cursors).toEqual([0])
   })
@@ -4672,13 +4170,9 @@ describe("HermesRunEngine", () => {
     const discovered = await engine.discover(scope, "recovered-run")
 
     await expect(collect(discovered!.handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "recovered-run",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -4715,11 +4209,11 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(discovered!.handle)
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "new-message",
-      delta: "new",
+      text: "new",
     })
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(JSON.stringify(events)).not.toContain("old")
   })
 
@@ -4757,29 +4251,29 @@ describe("HermesRunEngine", () => {
     expect(
       events.filter(
         (event) =>
-          (event as { type?: unknown }).type === RunEventKind.TOOL_CALL_END
+          (event as { kind?: unknown }).kind ===
+          TurnEventKind.ToolCallInputEnded
       )
     ).toHaveLength(1)
     expect(
       events.filter(
         (event) =>
-          (event as { type?: unknown }).type === RunEventKind.TOOL_CALL_START
+          (event as { kind?: unknown }).kind === TurnEventKind.ToolCallStarted
       )
     ).toHaveLength(1)
     expect(
       events.filter(
         (event) =>
-          (event as { type?: unknown }).type ===
-          RunEventKind.TEXT_MESSAGE_CONTENT
+          (event as { kind?: unknown }).kind === TurnEventKind.MessageChunk
       )
     ).toEqual([
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        delta: "Hello",
+        text: "Hello",
       },
     ])
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("keeps a run streaming when the healed socket missed no frame", async () => {
@@ -4810,28 +4304,13 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(cursors).toEqual([2])
     expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Hello",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Hello",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -4863,15 +4342,11 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(cursors).toEqual([5])
     expect(
-      events
-        .filter(
-          (event) =>
-            (event as { type?: unknown }).type ===
-            RunEventKind.TEXT_MESSAGE_CONTENT
-        )
-        .map((event) => (event as { delta: string }).delta)
+      ofKind(events, TurnEventKind.MessageChunk).map(
+        (event) => (event as { text: string }).text
+      )
     ).toEqual(["one", "two", "three"])
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("requires reconciliation when a catch-up page is truncated", async () => {
@@ -4898,13 +4373,9 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -4935,7 +4406,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes history must be reconciled before this run can continue.",
       code: "AOS_RESET_REQUIRED",
@@ -4966,23 +4437,14 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Hello",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Hello",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "The Hermes connection was interrupted; reconnect to reconcile this run.",
         code: "AOS_CONNECTION_INTERRUPTED",
@@ -4997,23 +4459,13 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        delta: " world",
+        text: " world",
       },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -5025,13 +4477,9 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "rebound" })
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -5077,24 +4525,21 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(
-      events.filter(
-        (event) =>
-          (event as { name?: unknown }).name === "aos.artifact" &&
-          (event as { type?: unknown }).type === RunEventKind.CUSTOM
-      )
+      ofKind(events, TurnEventKind.ArtifactPublished)
     ).toMatchObject([
-      { value: { filename: "quick-brief.mp3", mimeType: "audio/mpeg" } },
+      { artifact: { filename: "quick-brief.mp3", mimeType: "audio/mpeg" } },
     ])
     expect(
       events.filter(
         (event) =>
-          (event as { type?: unknown }).type === RunEventKind.TOOL_CALL_END
+          (event as { kind?: unknown }).kind ===
+          TurnEventKind.ToolCallInputEnded
       )
     ).toHaveLength(1)
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "message-media",
-      delta: "Your brief is ready.\n",
+      text: "Your brief is ready.\n",
     })
     expect(JSON.stringify(events)).not.toContain("Media unavailable")
     expect(JSON.stringify(events)).not.toContain(audioPath)
@@ -5135,63 +4580,30 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const runA = await engine.start(scope, input({ runId: "run-a" }))
-    const runB = await engine.start(
-      other,
-      input({ threadId: other.threadId, runId: "run-b" })
-    )
+    const runA = await engine.start(scope, input({ turnId: "run-a" }))
+    const runB = await engine.start(other, input({ turnId: "run-b" }))
     attachment.publish("live-a", firstStart)
     attachment.publish("live-b", secondStart)
     attachment.publish("live-a", firstHeld)
     attachment.publish("live-b", secondHeld)
 
     await expect(collect(runA)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-a",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-a",
-        role: "assistant",
+        text: "alpha",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-a",
-        delta: "alpha",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-a" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-a",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     await expect(collect(runB)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: other.threadId,
-        runId: "run-b",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-b",
-        role: "assistant",
+        text: "beta",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-b",
-        delta: "beta",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-b" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: other.threadId,
-        runId: "run-b",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(cursors).toEqual([
       { liveSessionId: "live-a", after: 1 },
@@ -5229,13 +4641,9 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-secret", delta)
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
         code: "AOS_SEND_UNCERTAIN",
@@ -5251,28 +4659,13 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(collect(resumed)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "Hello",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "Hello",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -5326,13 +4719,9 @@ describe("HermesRunEngine", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
         code: "AOS_SEND_UNCERTAIN",
@@ -5400,33 +4789,18 @@ describe("HermesRunEngine", () => {
     attachment.publish("live-secret", complete)
 
     await expect(collect(resumed)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        role: "assistant",
+        text: "missed ",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "message-42",
-        delta: "missed ",
+        text: "held",
       },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        messageId: "message-42",
-        delta: "held",
-      },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "message-42" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -5444,19 +4818,15 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(collect(handle)).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes is already running this Session.",
         code: "AOS_SESSION_BUSY",
       },
     ])
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
     expect(submissions).toBe(2)
   })
@@ -5501,9 +4871,9 @@ describe("HermesRunEngine", () => {
 
       const events = await collect(await engine.start(scope, input()))
 
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
         {
-          type: RunEventKind.RUN_ERROR,
+          kind: TurnEventKind.TurnFailed,
           code,
           message: `${headline}\n${detail}`,
         },
@@ -5540,17 +4910,8 @@ describe("HermesRunEngine", () => {
     expect(resumes).toBe(2)
     expect(attachment.attached("live-1")).toBe(false)
     await expect(collect(handle)).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -5571,13 +4932,9 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+      { kind: TurnEventKind.TurnStarted },
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this run can continue.",
         code: "AOS_RESET_REQUIRED",
@@ -5599,11 +4956,11 @@ describe("HermesRunEngine", () => {
     status = "working"
 
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).rejects.toThrow("already active")
     status = "idle"
     await expect(
-      engine.start(scope, input({ runId: "run-3" }))
+      engine.start(scope, input({ turnId: "run-3" }))
     ).resolves.toBeDefined()
   })
 
@@ -5624,7 +4981,7 @@ describe("HermesRunEngine", () => {
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
-      engine.start(scope, input({ runId: "run-2" }))
+      engine.start(scope, input({ turnId: "run-2" }))
     ).resolves.toBeDefined()
     expect(submissions).toBe(2)
   })
@@ -5702,7 +5059,7 @@ describe("HermesRunEngine", () => {
       publish(turn.complete("reply", "Done"))
       await first.settled
 
-      const second = engine.start(scope, input({ runId: "run-2" }))
+      const second = engine.start(scope, input({ turnId: "run-2" }))
       await vi.advanceTimersByTimeAsync(1_000)
 
       await expect(second).resolves.toBeDefined()
@@ -5726,7 +5083,7 @@ describe("HermesRunEngine", () => {
       publish(turn.complete("reply", "Done"))
       await first.settled
 
-      const second = engine.start(scope, input({ runId: "run-2" }))
+      const second = engine.start(scope, input({ turnId: "run-2" }))
       await vi.advanceTimersByTimeAsync(5_000)
 
       await expect(second).resolves.toBeDefined()
@@ -5755,7 +5112,7 @@ describe("HermesRunEngine", () => {
       publish(turn.complete("reply", "Done"))
       await first.settled
 
-      const second = engine.start(scope, input({ runId: "run-2" }))
+      const second = engine.start(scope, input({ turnId: "run-2" }))
       await vi.advanceTimersByTimeAsync(5_000)
 
       await expect(second).resolves.toBeDefined()
@@ -5773,7 +5130,7 @@ describe("HermesRunEngine", () => {
     publish(turn.complete("reply", "Done"))
     await first.settled
 
-    const second = await engine.start(scope, input({ runId: "run-2" }))
+    const second = await engine.start(scope, input({ turnId: "run-2" }))
     const drained = nativeTurn("live-secret", 1)
     publish(drained.messageStart("reply-again"))
     publish(drained.complete("reply-again", "Done again"))
@@ -5781,7 +5138,7 @@ describe("HermesRunEngine", () => {
     expect(retained).toContain("settling")
     expect(submitted).toEqual(["run-1", "run-2"])
     await expect(collect(second)).resolves.not.toContainEqual(
-      expect.objectContaining({ type: RunEventKind.RUN_ERROR })
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
     )
   })
 
@@ -5798,16 +5155,12 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "reply:tool:tool-1",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "tool-1",
-      content: '{"status":"stopped"}',
-      role: "tool",
+      output: '{"status":"stopped"}',
+      failed: false,
     })
-    expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
-      result: { stopped: true },
-    })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("reports a native interruption AOS never requested as stopped", async () => {
@@ -5823,16 +5176,12 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "reply:tool:tool-1",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "tool-1",
-      content: '{"status":"stopped"}',
-      role: "tool",
+      output: '{"status":"stopped"}',
+      failed: false,
     })
-    expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
-      result: { stopped: true },
-    })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("keeps Stop pending while Hermes is starting and settles the cancelled build as stopped", async () => {
@@ -5846,18 +5195,8 @@ describe("HermesRunEngine", () => {
     publish(turn.error("Turn cancelled before the agent was ready"))
 
     await expect(collect(handle)).resolves.toEqual([
-      {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-1",
-      },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        result: { stopped: true },
-        outcome: { type: "success" },
-      },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -5871,11 +5210,7 @@ describe("HermesRunEngine", () => {
 
     await expect(handle.stop()).resolves.toBe("idle")
     await expect(collect(handle)).resolves.toContainEqual({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: scope.threadId,
-      runId: "run-1",
-      result: { stopped: true },
-      outcome: { type: "success" },
+      kind: TurnEventKind.TurnEnded,
     })
   })
 
@@ -5900,7 +5235,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not complete this run.\nprovider rejected the request",
       code: "AOS_PROVIDER_RUN_FAILED",
@@ -5935,7 +5270,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not start the agent for this Session.\nagent build timed out",
       code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
@@ -5970,21 +5305,10 @@ describe("HermesRunEngine", () => {
 
       const events = await collect(handle)
       expect([
-        ...ofType(events, RunEventKind.RUN_FINISHED),
-        ...ofType(events, RunEventKind.RUN_ERROR),
-      ]).toEqual([
-        {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId: "run-1",
-          outcome: { type: "success" },
-        },
-      ])
-      expect(
-        ofType(events, RunEventKind.TEXT_MESSAGE_START).map(
-          (event) => (event as { messageId: string }).messageId
-        )
-      ).toEqual(["reply-before", "reply-after"])
+        ...ofKind(events, TurnEventKind.TurnEnded),
+        ...ofKind(events, TurnEventKind.TurnFailed),
+      ]).toEqual([{ kind: TurnEventKind.TurnEnded }])
+      expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
     } finally {
       vi.useRealTimers()
     }
@@ -6017,23 +5341,12 @@ describe("HermesRunEngine", () => {
       publish(turn.idle())
 
       const events = await collect(handle)
-      expect(
-        ofType(events, RunEventKind.TEXT_MESSAGE_START).map(
-          (event) => (event as { messageId: string }).messageId
-        )
-      ).toEqual(["queued-reply"])
+      expect(messageIds(events)).toEqual(["queued-reply"])
       expect(JSON.stringify(events)).not.toContain("Previous answer")
       expect([
-        ...ofType(events, RunEventKind.RUN_FINISHED),
-        ...ofType(events, RunEventKind.RUN_ERROR),
-      ]).toEqual([
-        {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId: "run-1",
-          outcome: { type: "success" },
-        },
-      ])
+        ...ofKind(events, TurnEventKind.TurnEnded),
+        ...ofKind(events, TurnEventKind.TurnFailed),
+      ]).toEqual([{ kind: TurnEventKind.TurnEnded }])
     } finally {
       vi.useRealTimers()
     }
@@ -6056,13 +5369,9 @@ describe("HermesRunEngine", () => {
       const events = await collect(handle)
       expect(JSON.stringify(events)).not.toContain("Previous answer")
       expect(events).toEqual([
+        { kind: TurnEventKind.TurnStarted },
         {
-          type: RunEventKind.RUN_STARTED,
-          threadId: scope.threadId,
-          runId: "run-1",
-        },
-        {
-          type: RunEventKind.RUN_ERROR,
+          kind: TurnEventKind.TurnFailed,
           message: "Hermes could not complete this run.",
           code: "AOS_PROVIDER_RUN_FAILED",
         },
@@ -6095,7 +5404,7 @@ describe("HermesRunEngine", () => {
 
       const events = await collect(handle)
       expect(events.at(-1)).toEqual({
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes could not complete this run.",
         code: "AOS_PROVIDER_RUN_FAILED",
       })
@@ -6112,7 +5421,7 @@ describe("HermesRunEngine", () => {
         error_surface: { layer: "agent", code: "agent_init_failed" },
       })
     ).resolves.toContainEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not start the agent for this Session.\nagent build timed out",
       code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
@@ -6123,14 +5432,14 @@ describe("HermesRunEngine", () => {
     await expect(
       failedTurn({ error_surface: { layer: "billing", code: "wall_reached" } })
     ).resolves.toContainEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes reported a billing or quota problem.",
       code: "AOS_PROVIDER_BILLING_FAILED",
     })
     await expect(
       failedTurn({ error_surface: { code: "insufficient_quota" } })
     ).resolves.toContainEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes reported a billing or quota problem.",
       code: "AOS_PROVIDER_BILLING_FAILED",
     })
@@ -6146,7 +5455,7 @@ describe("HermesRunEngine", () => {
         },
       })
     ).resolves.toContainEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
       code: "AOS_PROVIDER_RETRYABLE_FAILURE",
@@ -6168,10 +5477,10 @@ describe("HermesRunEngine", () => {
       },
     })
 
-    expect(ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)).toEqual([])
+    expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([])
     expect(JSON.stringify(events)).not.toContain("AWS Bedrock")
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message:
         "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
       code: "AOS_PROVIDER_RETRYABLE_FAILURE",
@@ -6185,15 +5494,15 @@ describe("HermesRunEngine", () => {
       error: "connection reset by peer",
     })
 
-    expect(ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)).toEqual([
+    expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "reply",
-        delta: "I read the filing and then",
+        text: "I read the filing and then",
       },
     ])
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this run.\nconnection reset by peer",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
@@ -6201,12 +5510,12 @@ describe("HermesRunEngine", () => {
 
   it("bounds the native cause a failed run publishes", async () => {
     const events = (await failedTurn({ error: "boom ".repeat(200) })) as Array<{
-      type: string
+      kind: string
       message?: string
     }>
 
     expect(
-      events.find((event) => event.type === RunEventKind.RUN_ERROR)?.message
+      events.find((event) => event.kind === TurnEventKind.TurnFailed)?.message
     ).toBe(`Hermes could not complete this run.\n${"boom ".repeat(100).trim()}`)
   })
 
@@ -6217,7 +5526,7 @@ describe("HermesRunEngine", () => {
 
     expect(JSON.stringify(events)).not.toContain("sk-live-native-secret")
     expect(events.at(-1)).toEqual({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this run.",
       code: "AOS_PROVIDER_RUN_FAILED",
     })
@@ -6239,17 +5548,17 @@ describe("HermesRunEngine", () => {
       error: nativeError,
       error_surface: errorSurface,
     })) as Array<{
-      type: string
-      delta?: string
+      kind: string
+      text?: string
       message?: string
       code?: string
     }>
     const liveText = events
-      .filter((event) => event.type === RunEventKind.TEXT_MESSAGE_CONTENT)
-      .map((event) => event.delta ?? "")
+      .filter((event) => event.kind === TurnEventKind.MessageChunk)
+      .map((event) => event.text ?? "")
       .join("")
     const liveFailure = events.find(
-      (event) => event.type === RunEventKind.RUN_ERROR
+      (event) => event.kind === TurnEventKind.TurnFailed
     )
 
     const inflight = hermesInflightTurn({
@@ -6295,9 +5604,9 @@ describe("HermesRunEngine", () => {
       text: `AWS Bedrock didn't answer after 3 attempts. Provider said: ${nativeError}`,
       error: nativeError,
       error_surface: errorSurface,
-    })) as Array<{ type: string; message?: string; code?: string }>
+    })) as Array<{ kind: string; message?: string; code?: string }>
     const liveFailure = events.find(
-      (event) => event.type === RunEventKind.RUN_ERROR
+      (event) => event.kind === TurnEventKind.TurnFailed
     )
 
     const inflight = hermesInflightTurn({
@@ -6315,7 +5624,7 @@ describe("HermesRunEngine", () => {
       createdAt: "2026-09-15T19:41:41.000Z",
     })
 
-    expect(ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT)).toEqual([])
+    expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([])
     expect(JSON.stringify(events)).not.toContain("AWS Bedrock")
     expect(restored?.content).toEqual([])
     expect(restored?.status).toEqual({
@@ -6374,20 +5683,21 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events).not.toContainEqual(
-      expect.objectContaining({ type: RunEventKind.RUN_ERROR })
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
     )
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toHaveLength(1)
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toHaveLength(1)
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: RunEventKind.TOOL_CALL_RESULT,
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "tool-fail",
-        content: '{"error":"not found"}',
+        output: '{"error":"not found"}',
+        failed: true,
       })
     )
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "msg-ftr",
-      delta: "I will try another approach.",
+      text: "I will try another approach.",
     })
   })
 
@@ -6405,9 +5715,9 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events).not.toContainEqual(
-      expect.objectContaining({ type: RunEventKind.RUN_ERROR })
+      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
     )
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(log.warn.mock.calls).toEqual([
       [
         "hermes.run.native_error",
@@ -6423,13 +5733,13 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(handle)
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "msg-tei",
-      delta: "Partial response before",
+      text: "Partial response before",
     })
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
       {
-        type: RunEventKind.RUN_ERROR,
+        kind: TurnEventKind.TurnFailed,
         message: "Hermes could not complete this run.",
         code: "AOS_PROVIDER_RUN_FAILED",
       },
@@ -6460,9 +5770,9 @@ describe("HermesRunEngine", () => {
       await vi.advanceTimersByTimeAsync(1_000)
 
       const events = await collect(handle)
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
         {
-          type: RunEventKind.RUN_ERROR,
+          kind: TurnEventKind.TurnFailed,
           message: "Hermes could not complete this run.",
           code: "AOS_PROVIDER_RUN_FAILED",
         },
@@ -6473,7 +5783,7 @@ describe("HermesRunEngine", () => {
       )
       // The Session fence is released, so the next Send is admitted.
       await expect(
-        engine.start(scope, input({ runId: "run-2" }))
+        engine.start(scope, input({ turnId: "run-2" }))
       ).resolves.toBeDefined()
     } finally {
       vi.useRealTimers()
@@ -6517,19 +5827,14 @@ describe("HermesRunEngine", () => {
       publish(previous.idle())
 
       const events = await collect(handle)
-      expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
-      expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
-        {
-          type: RunEventKind.RUN_FINISHED,
-          threadId: scope.threadId,
-          runId: "run-1",
-          outcome: { type: "success" },
-        },
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+      expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
+        { kind: TurnEventKind.TurnEnded },
       ])
       expect(events).toContainEqual({
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "reply-after",
-        delta: "After",
+        text: "After",
       })
     } finally {
       vi.useRealTimers()
@@ -6583,14 +5888,9 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
 
     expect(cursors).toEqual([2])
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
-    expect(ofType(events, RunEventKind.RUN_FINISHED)).toEqual([
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-1",
-        outcome: { type: "success" },
-      },
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
+      { kind: TurnEventKind.TurnEnded },
     ])
   })
 
@@ -6673,14 +5973,10 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    expect(
-      recovered.map((event) => (event as { type: RunEventKind }).type)
-    ).toEqual([
-      RunEventKind.RUN_STARTED,
-      RunEventKind.TEXT_MESSAGE_START,
-      RunEventKind.TEXT_MESSAGE_CONTENT,
-      RunEventKind.TEXT_MESSAGE_END,
-      RunEventKind.RUN_FINISHED,
+    expect(eventKinds(recovered)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.MessageChunk,
+      TurnEventKind.TurnEnded,
     ])
   })
 
@@ -6721,11 +6017,11 @@ describe("HermesRunEngine", () => {
     // read rather than silently skipped.
     expect(cursors).toEqual([5, start.seq])
     expect(
-      ofType(events, RunEventKind.TEXT_MESSAGE_CONTENT).map(
-        (event) => (event as { delta: string }).delta
+      ofKind(events, TurnEventKind.MessageChunk).map(
+        (event) => (event as { text: string }).text
       )
     ).toEqual(["Hello", " there"])
-    expect(ofType(events, RunEventKind.RUN_ERROR)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
   })
 })
 
@@ -6758,6 +6054,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
     result: unknown
     resultText: string
     artifacts: unknown[]
+    isError: boolean
   }
 
   async function liveProjection(call: ParityCall): Promise<ToolProjection> {
@@ -6788,34 +6085,31 @@ describe("live and refreshed Hermes tool projection agree", () => {
       })
     )
     const events = await collect(await engine.start(scope, input()))
-    const forCall = (type: RunEventKind) =>
-      ofType(events, type).find(
+    const forCall = (kind: TurnEventKind) =>
+      ofKind(events, kind).find(
         (event) =>
           (event as { toolCallId?: unknown }).toolCallId === call.toolCallId
       ) as Record<string, unknown> | undefined
-    const argsText = String(forCall(RunEventKind.TOOL_CALL_ARGS)?.delta ?? "")
+    const argsText = String(
+      forCall(TurnEventKind.ToolCallInputChunk)?.delta ?? ""
+    )
     const resultText = String(
-      forCall(RunEventKind.TOOL_CALL_RESULT)?.content ?? ""
+      forCall(TurnEventKind.ToolCallFinished)?.output ?? ""
     )
     return {
-      toolName: String(
-        forCall(RunEventKind.TOOL_CALL_START)?.toolCallName ?? ""
-      ),
+      toolName: String(forCall(TurnEventKind.ToolCallStarted)?.title ?? ""),
       args: JSON.parse(argsText || "null"),
       argsText,
       result: JSON.parse(resultText || "null"),
       resultText,
-      artifacts: ofType(events, RunEventKind.CUSTOM)
-        .filter(
-          (event) => (event as { name?: unknown }).name === "aos.artifact"
-        )
-        .map((event) => (event as { value: unknown }).value),
+      artifacts: ofKind(events, TurnEventKind.ArtifactPublished).map(
+        (event) => (event as { artifact: unknown }).artifact
+      ),
+      isError: forCall(TurnEventKind.ToolCallFinished)?.failed === true,
     }
   }
 
-  function refreshedProjection(
-    call: ParityCall
-  ): ToolProjection & { isError: boolean } {
+  function refreshedProjection(call: ParityCall): ToolProjection {
     const messages = projectHermesHistory([
       assistantToolCall("assistant-parity", [
         { toolCallId: call.toolCallId, name: call.name, args: call.args },
@@ -6853,9 +6147,8 @@ describe("live and refreshed Hermes tool projection agree", () => {
   }
 
   async function parity(call: ParityCall) {
-    const live = await liveProjection(call)
-    const { isError, ...refreshed } = refreshedProjection(call)
-    expect(live).toEqual(refreshed)
+    const { isError, ...live } = await liveProjection(call)
+    expect({ isError, ...live }).toEqual(refreshedProjection(call))
     return { projection: live, isError }
   }
 
