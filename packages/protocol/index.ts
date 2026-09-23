@@ -334,8 +334,6 @@ export const TurnSteerResponseSchema = z.strictObject({
   status: z.enum(["steered", "queued"]),
 })
 export type TurnSteerResponse = z.infer<typeof TurnSteerResponseSchema>
-/** @deprecated Transitional alias for `acp.ts` and `core/events.ts`; import `TurnSteerResponseSchema`. */
-export const RunSteerResponseSchema = TurnSteerResponseSchema
 
 const CapabilityUnavailableSchema = z.strictObject({
   status: z.literal("unavailable"),

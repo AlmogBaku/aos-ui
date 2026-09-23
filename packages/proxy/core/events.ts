@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import {
   ArtifactDescriptorSchema,
-  RunSteerResponseSchema,
+  TurnSteerResponseSchema,
   SessionTodosResponseSchema,
 } from "../../protocol"
 
@@ -284,7 +284,7 @@ export const RepliesTurnInputSchema = z.strictObject({
 })
 export type RepliesTurnInput = z.infer<typeof RepliesTurnInputSchema>
 
-/** What starts a turn segment: a prompt, or the replies that resume one. */
+/** What starts a turn segment: a prompt, or the replies that continue one. */
 export const TurnInputSchema = z.union([
   PromptTurnInputSchema,
   RepliesTurnInputSchema,
@@ -426,7 +426,7 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.SteerAccepted, {
     requestId: z.string(),
     text: z.string(),
-    delivery: RunSteerResponseSchema.shape.status,
+    delivery: TurnSteerResponseSchema.shape.status,
   }),
 ])
 export type TurnEvent = z.infer<typeof TurnEventSchema>

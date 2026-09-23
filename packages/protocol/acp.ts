@@ -4,7 +4,7 @@ import {
   AgentCatalogResponseSchema,
   ArtifactDescriptorSchema,
   type ArtifactDescriptor,
-  RunSteerResponseSchema,
+  TurnSteerResponseSchema,
   SessionContextResponseSchema,
   SessionStatusSchema,
   SessionTodosResponseSchema,
@@ -239,7 +239,7 @@ export const AosSteerRequestSchema = z.strictObject({
   requestId: IdentifierSchema,
   text: z.string().min(1),
 })
-export const AosSteerResponseSchema = RunSteerResponseSchema
+export const AosSteerResponseSchema = TurnSteerResponseSchema
 
 /**
  * `_aos/session/focus` notification: the exposed Session, or none, plus the
@@ -475,7 +475,7 @@ export const AosSteerAcceptedNotificationSchema = readObject({
   ...TurnMetaBase,
   requestId: IdentifierSchema,
   text: z.string(),
-  delivery: RunSteerResponseSchema.shape.status,
+  delivery: TurnSteerResponseSchema.shape.status,
 })
 
 /** `_aos/composer_prefill` */
