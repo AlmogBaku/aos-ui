@@ -412,6 +412,17 @@ export class SessionCoordinator {
   }
 
   /**
+   * Whether a cursorless follow of the live segment replays its turn from the
+   * first event, which is what lets a view rebuilt from history read it again.
+   */
+  replaysFromStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+    const execution = this.#executions.get(scopeKey(scope))
+    return execution
+      ? replayPlan(execution.segment, undefined) === "history"
+      : false
+  }
+
+  /**
    * Workspace-wide execution feed: one listener sees the lifecycle of every
    * Session this coordinator drives, independent of the per-segment turn
    * subscriptions and their replay.

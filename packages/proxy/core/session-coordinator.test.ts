@@ -1051,6 +1051,35 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
+  it("says whether a cursorless reload still replays the live turn from its start", async () => {
+    const pruned = new EventSource()
+    const whole = new EventSource()
+    const sources = [pruned, whole]
+    const engine: ServerTurnEngine = {
+      start: vi.fn(async () => sources.shift() ?? new EventSource()),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    expect(sessions.replaysFromStart(scope)).toBe(false)
+
+    await deltaFlood(sessions, pruned, 400)
+    expect(sessions.replaysFromStart(scope)).toBe(false)
+
+    const running = await sessions.start(
+      otherScope,
+      input("run-2"),
+      access("other")
+    )
+    whole.emit(turnStarted)
+    await reader(running)()
+    expect(sessions.replaysFromStart(otherScope)).toBe(true)
+
+    whole.emit(turnEnded)
+    await vi.waitFor(() => expect(sessions.state(otherScope)).toBe("idle"))
+    expect(sessions.replaysFromStart(otherScope)).toBe(false)
+    running.close()
+  })
+
   it("serves the redial after a reset from the live segment of a pruned run", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {

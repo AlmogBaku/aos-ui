@@ -251,6 +251,17 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   }
 
+  /**
+   * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
+   * from history reads the live turn again from its start, so the stream the
+   * member held stops before the page is read. A turn whose start is gone
+   * keeps it, because a cursorless follow could only reset that turn.
+   */
+  async function replayPage(member: SessionMember, scope: SessionScope) {
+    if (coordinator.replaysFromStart(scope)) await member.restartStream()
+    return await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+  }
+
   /** Subscribes to the live turn, reporting a cursor that cannot position it. */
   async function followPositioned(
     member: SessionMember,
@@ -311,7 +322,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     let history: SessionHistoryResponse | undefined
     if (params.replayFrom?.type === "start") {
       history = SessionHistoryResponseSchema.parse(
-        await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+        await replayPage(member, scope)
       )
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(
@@ -326,7 +337,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       showsPrompt(context.rooms.current(scope), meta, history),
       history !== undefined
     )
-    const resync = await followPositioned(member, scope, meta, corrections)
+    const resync = await followPositioned(
+      member,
+      scope,
+      history === undefined ? meta : {},
+      corrections
+    )
     const execution = coordinator.snapshot(scope)
     afterResponse(member, async () => {
       await member.reportExecution()
@@ -475,7 +491,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     let corrections = 0
     let history: SessionHistoryResponse | undefined
     if (params.replayFrom?.type === "start") {
-      history = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+      history = await replayPage(member, scope)
       corrections = translators.persistedCorrections(history)
       for (const outbound of translators.translateHistory(history, lane))
         await member.send(outbound)
@@ -487,8 +503,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       history !== undefined
     )
     // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload.
-    const resync = await followPositioned(member, scope, meta, corrections)
+    // bounded replay cannot be served: both need a full reload. A view rebuilt
+    // from history owns nothing of the turn, so it follows without a cursor.
+    const resync = await followPositioned(
+      member,
+      scope,
+      history === undefined ? meta : {},
+      corrections
+    )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is
     // scheduled: `afterResponse` fires on the next task, so a read awaited

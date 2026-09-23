@@ -150,6 +150,8 @@ class SessionMember {
   readonly #readUsage: () => Promise<SessionContextResponse>
   readonly #readModels: () => Promise<SessionModelsResponse>
   #subscription: CoordinatedTurnSubscription | undefined
+  /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
+  readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
   #pending: { requestId: string; promise: Promise<void> } | undefined
   readonly #replies = new Map<string, RequestReply>()
   #sequence = 0
@@ -199,6 +201,21 @@ class SessionMember {
    */
   async follow(after?: number, replayedCorrections = 0) {
     await this.#follow(true, after, replayedCorrections)
+  }
+
+  /**
+   * Drops the stream this member is reading, so its next follow replays the
+   * turn from the start to a view about to be rebuilt from history. The turn
+   * stays followed, so the room does not subscribe this member meanwhile.
+   */
+  async restartStream() {
+    await this.#exclusive(async () => {
+      const subscription = this.#subscription
+      if (!subscription) return
+      this.#subscription = undefined
+      this.#dropped.add(subscription)
+      subscription.close()
+    })
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */
@@ -316,11 +333,8 @@ class SessionMember {
   /** Re-issues the requests a recovered wait is still holding. */
   async reissuePending() {
     const { pendingRequestToOutbound } = this.#context.translators
-    for (const request of this.#coordinator.snapshot(this.#scope).requests) {
-      if (this.#pending?.requestId === request.requestId) continue
-      if (this.#replies.has(request.requestId)) continue
+    for (const request of this.#coordinator.snapshot(this.#scope).requests)
       this.#ask(pendingRequestToOutbound(request, this.#context.lane))
-    }
   }
 
   /**
@@ -554,8 +568,9 @@ class SessionMember {
       return
     }
     this.#subscription = subscription
+    // A restarted stream is the same segment, whose Stop stays acknowledged.
+    if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
-    this.#stopRequested = false
     void this.#pump(subscription, replayedCorrections)
   }
 
@@ -572,6 +587,7 @@ class SessionMember {
     let overflow: FanoutOverflowError | undefined
     try {
       for await (const { sequence, event } of subscription.events) {
+        if (this.#dropped.has(subscription)) break
         this.#sequence = sequence
         const translated = translateTurnEvent(state, event, {
           turnId: subscription.turnId,
@@ -580,8 +596,10 @@ class SessionMember {
           stopping: this.#stopping,
         })
         state = translated.state
-        for (const outbound of translated.outbound)
+        for (const outbound of translated.outbound) {
+          if (this.#dropped.has(subscription)) break
           await this.#send(outbound, sequence)
+        }
       }
     } catch (cause) {
       if (cause instanceof FanoutOverflowError) overflow = cause
@@ -589,6 +607,8 @@ class SessionMember {
     } finally {
       if (this.#subscription === subscription) this.#subscription = undefined
     }
+    // The stream that replaced a dropped one settles the segment instead.
+    if (this.#dropped.has(subscription)) return
     if (overflow) return this.#resync(subscription.turnId, overflow)
     // The turn this segment carried has settled, so the window it grew is now
     // readable. A failed or cancelled turn still consumed context, so this
@@ -644,7 +664,6 @@ class SessionMember {
     }
   }
 
-  /** Issues one server→client request and settles it as a request reply. */
   /**
    * ACP restates the whole option set on a model switch, so the catalog is
    * read and the model the provider reported is selected in it. An unreadable
@@ -662,7 +681,17 @@ class SessionMember {
     })
   }
 
+  /**
+   * Issues one server→client request and settles it as a request reply. A
+   * request already open or already answered here is not asked again, however
+   * a replay or a reissue reaches it.
+   */
   #ask(outbound: RequestOutbound) {
+    if (
+      this.#pending?.requestId === outbound.requestId ||
+      this.#replies.has(outbound.requestId)
+    )
+      return
     const promise = (
       outbound.kind === "request-permission"
         ? this.#askPermission(outbound)

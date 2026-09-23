@@ -455,6 +455,10 @@ type HarnessOptions = {
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
   beforeModels?: () => Promise<void>
+  /** Runs before each history read; a held one stands for a slow page. */
+  beforeHistory?: () => Promise<void>
+  /** Bounds each turn's journal; a small one stands for a long turn. */
+  maxReplayEvents?: number
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
   /**
@@ -485,7 +489,7 @@ async function harness(options: HarnessOptions = {}) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
+    maxReplayEvents: options.maxReplayEvents ?? 64,
     maxReplayBytes: 256 * 1024,
   })
 
@@ -526,21 +530,24 @@ async function harness(options: HarnessOptions = {}) {
       return { selectedId: models.selectedId }
     }
   )
-  const history = vi.fn(async (_agentId: string, sessionId: string) => ({
-    sessionId,
-    messages: options.history ?? [
-      {
-        id: "message-1",
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: "Earlier" }],
-        createdAt: NOW,
-      },
-    ],
-    total: (options.history ?? [undefined]).length,
-    limit: 500,
-    offset: 0,
-    nextOffset: 0,
-  }))
+  const history = vi.fn(async (_agentId: string, sessionId: string) => {
+    await options.beforeHistory?.()
+    return {
+      sessionId,
+      messages: options.history ?? [
+        {
+          id: "message-1",
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "Earlier" }],
+          createdAt: NOW,
+        },
+      ],
+      total: (options.history ?? [undefined]).length,
+      limit: 500,
+      offset: 0,
+      nextOffset: 0,
+    }
+  })
 
   const runtime: ServerRuntime = {
     turns: engine,
@@ -1944,6 +1951,38 @@ async function replyWhileWatched(
 const endedTurn = (entry: Recorded) =>
   JSON.stringify(entry.params).includes("end_turn")
 
+/** Matches the first entry whose params carry `text`. */
+const said = (text: string) => (entry: Recorded) =>
+  JSON.stringify(entry.params).includes(text)
+
+const isPromptOrChunk = (item: string) =>
+  item.startsWith("prompt") || item.startsWith("chunk")
+
+/** Streams one assistant chunk on a provider segment. */
+function chunk(
+  source: EventSource | undefined,
+  text: string,
+  messageId = "assistant-1"
+) {
+  source?.emit({ kind: TurnEventKind.MessageChunk, messageId, text })
+}
+
+/**
+ * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * has seen it. Returns the prompt's message id.
+ */
+async function liveTurn(
+  test: Awaited<ReturnType<typeof harness>>,
+  watchers: readonly Browser[]
+) {
+  const messageId = await prompt(test, "Summarize")
+  await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  test.sources[0]?.emit(turnStarted())
+  chunk(test.sources[0], "Live")
+  for (const { recorder } of watchers) await recorder.wait(said("Live"))
+  return messageId
+}
+
 /** A held step a test releases when the scenario needs it to go on. */
 function gate() {
   const { promise, resolve } = Promise.withResolvers<void>()
@@ -2391,42 +2430,148 @@ describe("Session rooms", () => {
       const other = await test.connect("connection-2")
       await other.list()
       await open(other)
-      const messageId = await prompt(test, "Summarize")
-      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-      test.sources[0]?.emit(turnStarted())
-      test.sources[0]?.emit({
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "Live",
-      })
       const reopening = who === "test" ? test : other
-      await reopening.recorder.wait((entry) =>
-        JSON.stringify(entry.params).includes("Live")
-      )
+      const messageId = await liveTurn(test, [reopening])
 
       // The browser drops its transcript and replays a page that has not
       // persisted the in-flight prompt yet.
       const from = reopening.recorder.entries.length
       await open(reopening, { replayFrom: { type: "start" } })
-      test.sources[0]?.emit({
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "More",
-      })
+      chunk(test.sources[0], "More")
       test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
       await reopening.recorder.wait(endedTurn)
 
-      expect(flow(reopening.recorder, SESSION, from)).toEqual([
+      const seen = flow(reopening.recorder, SESSION, from)
+      expect(seen.slice(0, 3)).toEqual([
         "history message-1",
         `prompt ${messageId}`,
         "state running",
-        "chunk More",
-        "state idle",
       ])
+      expect(seen.filter(isPromptOrChunk)).toEqual([
+        `prompt ${messageId}`,
+        "chunk Live",
+        "chunk More",
+      ])
+      expect(seen.filter((item) => item === "state idle")).toHaveLength(1)
+      expect(seen.at(-1)).toBe("state idle")
       test.close()
       other.close()
     }
   )
+
+  it("shows a chunk streamed while a reopen reads history once, after it", async () => {
+    const reading = gate()
+    const page = gate()
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: () => {
+        reading.release()
+        return page.held
+      },
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const from = test.recorder.entries.length
+    const reopened = open(test, { replayFrom: { type: "start" } })
+    await reading.held
+    chunk(test.sources[0], "During")
+    // The chunk reaches every live subscriber before the page returns.
+    await settled()
+    page.release()
+    await reopened
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await test.recorder.wait(endedTurn)
+
+    const seen = flow(test.recorder, SESSION, from)
+    const during = seen.filter((item) => item.includes("During"))
+    expect(during).toHaveLength(1)
+    expect(seen.indexOf(during[0] ?? "")).toBeGreaterThan(
+      seen.indexOf("history message-1")
+    )
+    test.close()
+  })
+
+  it("still ends a turn cancelled when it is reopened after an acknowledged Stop", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+    await test.agent.notify(methods.agent.session.cancel, {
+      sessionId: SESSION,
+    })
+    await test.recorder.wait(said('"execution":"stopping"'))
+
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    const ended = await test.recorder.wait(
+      (entry) =>
+        test.recorder.entries.indexOf(entry) >= from &&
+        JSON.stringify(entry.params).includes('"state":"idle"')
+    )
+
+    expect(ended.params).toMatchObject({
+      update: { state: "idle", stopReason: "cancelled" },
+    })
+    test.close()
+  })
+
+  it("streams each chunk once to a browser that reopens twice in a row", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await liveTurn(test, [other])
+
+    const first = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    await other.recorder.wait(
+      (entry) =>
+        other.recorder.entries.indexOf(entry) >= first && said("Live")(entry)
+    )
+    const from = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    expect(
+      flow(other.recorder, SESSION, from).filter((item) =>
+        item.startsWith("chunk")
+      )
+    ).toEqual(["chunk Live", "chunk More"])
+    test.close()
+    other.close()
+  })
+
+  it("keeps streaming a reopen whose turn outgrew its journal", async () => {
+    const test = await harness({ providerIds: true, maxReplayEvents: 2 })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await liveTurn(test, [other])
+    // A third event outgrows the journal, so the turn's start is gone.
+    chunk(test.sources[0], "Aside", "assistant-2")
+    await other.recorder.wait(said("Aside"))
+
+    const from = other.recorder.entries.length
+    await open(other, { replayFrom: { type: "start" } })
+    chunk(test.sources[0], "More", "assistant-2")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn)
+
+    const seen = other.recorder.entries.slice(from)
+    expect(JSON.stringify(seen)).not.toContain("AOS_RESET_REQUIRED")
+    expect(
+      flow(other.recorder, SESSION, from).filter((item) =>
+        item.startsWith("chunk")
+      )
+    ).toEqual(["chunk More"])
+    test.close()
+    other.close()
+  })
 
   it("replays only history to a browser that joins after the turn ended", async () => {
     const test = await harness({ providerIds: true })
