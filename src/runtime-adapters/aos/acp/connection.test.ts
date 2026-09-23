@@ -18,7 +18,10 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
+  AOS_REPLAY_BEFORE,
   AOS_STOP_REASONS,
+  AosReplayBeforeSchema,
+  type AosHistoryCursor,
   type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
@@ -127,9 +130,24 @@ function catalogEntry() {
 
 type AgentCall = { method: string; params: unknown }
 
+/** Recorded once the fake has answered a plain resume, for ordering checks. */
+const RESUME_REPLIED = "session/resume:replied"
+
 /** An in-process proxy: the AOS agent side of the connection under test. */
 function createProxyAgent(
-  options: { resyncOnResume?: number; refuseLoginAfter?: number } = {}
+  options: {
+    resyncOnResume?: number
+    refuseLoginAfter?: number
+    /** `_meta.aos.history` on every resume that replays from the start. */
+    history?: AosHistoryCursor
+    /** What a `_aos/before` page read streams, and the cursor it replies with. */
+    page?: {
+      updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
+      history?: AosHistoryCursor
+    }
+    /** Holds each plain resume open briefly, as a real reattach takes time. */
+    slowResume?: boolean
+  } = {}
 ) {
   const calls: AgentCall[] = []
   let peer: AgentContext | undefined
@@ -203,9 +221,31 @@ function createProxyAgent(
         nextCursor: "cursor-2",
       }
     })
-    .onRequest(methods.agent.session.resume, ({ params }) => {
+    .onRequest(methods.agent.session.resume, async ({ params }) => {
       record(methods.agent.session.resume, params)
+      const replayFrom = params.replayFrom
+      if (replayFrom?.type === AOS_REPLAY_BEFORE) {
+        const { cursor } = AosReplayBeforeSchema.parse(replayFrom)
+        for (const [update, meta] of options.page?.updates ?? [])
+          await peer?.notify(methods.client.session.update, {
+            sessionId: params.sessionId,
+            update: {
+              ...update,
+              _meta: {
+                [AOS_META_KEY]: { ...meta, historyPage: { cursor } },
+              },
+            },
+          })
+        const history = options.page?.history
+        return {
+          _meta: { [AOS_META_KEY]: history === undefined ? {} : { history } },
+        }
+      }
       resumes += 1
+      if (options.slowResume)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      record(RESUME_REPLIED, params)
+      const replayed = replayFrom?.type === "start"
       return {
         configOptions: [modelOption("opus")],
         _meta: {
@@ -214,6 +254,9 @@ function createProxyAgent(
             execution: { status: "running", turnId: "run-1" },
             capabilities: capabilities(),
             ...(resumes === options.resyncOnResume ? { resync: true } : {}),
+            ...(replayed && options.history
+              ? { history: options.history }
+              : {}),
           },
         },
       }
@@ -744,6 +787,148 @@ describe("ACP connection", () => {
       outcome: { outcome: "selected", optionId: "allow" },
     })
     connection.close()
+  })
+
+  describe("older history pages", () => {
+    const olderPage = {
+      updates: [
+        [
+          {
+            sessionUpdate: "user_message",
+            messageId: "u0",
+            content: [{ type: "text", text: "Earlier question" }],
+          },
+          { sequence: 1, turnId: "run-0" },
+        ],
+        [
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+          },
+          { sequence: 2, turnId: "run-0" },
+        ],
+      ] as const satisfies readonly (readonly [
+        SessionUpdate,
+        Record<string, unknown>,
+      ])[],
+      history: { nextCursor: "cursor-older" },
+    }
+
+    it("keeps the latest history a resume reports, and an attach without one leaves it", async () => {
+      const proxy = createProxyAgent({ history: { nextCursor: "cursor-1" } })
+      const connection = connectInProcess(proxy)
+
+      expect(connection.history(SESSION_ID)).toBeUndefined()
+      await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+      expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
+
+      // A resume that replays nothing reports no history: the cursor stands.
+      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+      expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
+      connection.close()
+    })
+
+    it("reads a page as tagged updates that reach no live listener or position", async () => {
+      const proxy = createProxyAgent({ page: olderPage })
+      const connection = connectInProcess(proxy)
+      await connection.initialized
+      const live: SessionUpdate[] = []
+      connection.onSessionUpdate(SESSION_ID, (update) => live.push(update))
+      await proxy.pushUpdate(
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: 4, turnId: "run-1" }
+      )
+      await vi.waitFor(() => expect(live).toHaveLength(1))
+
+      const page = await connection.resumePage(SESSION_ID, "cursor-1")
+
+      expect(proxy.callsOf(methods.agent.session.resume)).toEqual([
+        {
+          sessionId: SESSION_ID,
+          cwd: "/",
+          replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
+        },
+      ])
+      expect(page.history).toEqual({ nextCursor: "cursor-older" })
+      expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
+        "user_message",
+        "state_update",
+      ])
+      expect(page.updates[1]?.meta).toMatchObject({
+        sequence: 2,
+        turnId: "run-0",
+      })
+      // The page's idle marker belongs to an old turn: the running turn's
+      // listeners never see it, and a reconnect still resumes the live turn.
+      expect(live).toHaveLength(1)
+      expect(connection.lastSequence(SESSION_ID)).toEqual({
+        turnId: "run-1",
+        after: 4,
+      })
+      // A page read is not an attach, so the attach cursor is untouched.
+      expect(connection.history(SESSION_ID)).toBeUndefined()
+
+      // The live stream is unaffected once the page is in.
+      await proxy.pushUpdate(
+        { sessionUpdate: "state_update", state: "idle" },
+        { sequence: 5, turnId: "run-1" }
+      )
+      await vi.waitFor(() => expect(live).toHaveLength(2))
+      connection.close()
+    })
+
+    it("fails a page whose reply carries no history", async () => {
+      const proxy = createProxyAgent({ page: { updates: olderPage.updates } })
+      const connection = connectInProcess(proxy)
+
+      await expect(
+        connection.resumePage(SESSION_ID, "cursor-1")
+      ).rejects.toThrow()
+      connection.close()
+    })
+
+    it("waits for a recovering transport to reattach before reading a page", async () => {
+      const proxy = createProxyAgent({ page: olderPage, slowResume: true })
+      const sockets: { close: () => void }[] = []
+      const socketConstructor = pipedSocketConstructor(proxy.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://proxy.test/api/aos/v1/acp",
+        socketConstructor: class extends socketConstructor {
+          constructor(url: string) {
+            super(url)
+            sockets.push(this)
+          }
+        },
+        schedule: (_delayMs, task) => task(),
+      })
+      connection.start()
+      await connection.initialized
+      connection.onSessionUpdate(SESSION_ID, () => {})
+      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+
+      const recovering = new Promise<void>((resolve) =>
+        connection.subscribeStatus((status) => {
+          if (status === "reconnecting") resolve()
+        })
+      )
+      sockets[0]?.close()
+      await recovering
+      await connection.resumePage(SESSION_ID, "cursor-1")
+
+      const order = proxy.calls.flatMap(({ method, params }) =>
+        method === RESUME_REPLIED
+          ? ["reattached"]
+          : method === methods.agent.session.resume &&
+              z.object({ replayFrom: AosReplayBeforeSchema }).safeParse(params)
+                .success
+            ? ["page"]
+            : []
+      )
+      expect(order).toEqual(["reattached", "reattached", "page"])
+      connection.close()
+    })
   })
 
   it("reconnects a dropped transport and resumes every attached Session", async () => {

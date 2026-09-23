@@ -36,10 +36,15 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
+  type AosHistoryCursor,
   type AosPromptMetaSchema,
 } from "@aos/protocol/acp"
 
 import type { TodoItem } from "@/runtime-adapters/contracts"
+import {
+  threadHistoryExtras,
+  type ThreadHistoryState,
+} from "@/runtime-adapters/thread-history"
 
 import type { AcpConnection } from "./types"
 import {
@@ -50,6 +55,7 @@ import {
   initialProjectorState,
   LOCAL_PROMPT_PREFIX,
   messageBlocks,
+  prependMessages,
   renameMessage,
   retainMessages,
   toThreadMessages,
@@ -72,6 +78,8 @@ export type AcpRuntimeExtras = {
   readonly todos: readonly TodoItem[]
   readonly configOptions?: readonly SessionConfigOption[]
   readonly commands?: readonly AvailableCommand[]
+  /** The Session's older history, once a replay has said where it stands. */
+  readonly history?: ThreadHistoryState
 }
 
 /** One attachment of a staged batch, as the prompt links it. */
@@ -254,6 +262,25 @@ function createAcpController({
   let repositoryOf: ProjectorState | undefined
   const listeners = new Set<() => void>()
 
+  /**
+   * Older history. The cursor is what the latest replay reported, then what
+   * each page after it did; `undefined` means no replay has said yet. A page
+   * belongs to the transcript it was asked for: every replay start and settle,
+   * binding, and accepted rewind bumps `transcripts`, and a page that lands
+   * under another one is dropped.
+   */
+  let pagesEnabled = false
+  let cursor: AosHistoryCursor | undefined
+  /** An accepted rewind moved the provider's history under the cursor. */
+  let cursorStale = false
+  let olderLoading = false
+  let olderFailed = false
+  let transcripts = 0
+  /** Replays under way; a page waits for the transcript they refill. */
+  let replaysOpen = 0
+  /** The load that owns `olderLoading`, so a rebinding can release it. */
+  let loads = 0
+
   const notify = () => {
     version += 1
     for (const listener of listeners) listener()
@@ -375,6 +402,11 @@ function createAcpController({
     unsubscribe?.()
     bound = next
     bindings += 1
+    transcripts += 1
+    cursor = undefined
+    cursorStale = false
+    olderLoading = false
+    olderFailed = false
     const generation = bindings
     const { steerAccepted, composerPrefill, sessionInvalidated } =
       AOS_METHODS.notify
@@ -383,9 +415,21 @@ function createAcpController({
         commit(applyUpdate(state, update, meta))
       }),
       // The replay that follows carries the Session whole, so the transcript it
-      // replaces goes first.
+      // replaces goes first, and a fresh cursor comes with it.
       connection.onSessionReplay(next, () => {
         commit(clearTranscript(state))
+        const before = connection.history(next)
+        replaysOpen += 1
+        transcripts += 1
+        return () => {
+          replaysOpen -= 1
+          transcripts += 1
+          const after = connection.history(next)
+          if (bound !== next || after === before) return
+          cursor = after
+          cursorStale = false
+          notify()
+        }
       }),
       connection.onNotification(steerAccepted, (params) => {
         observe(params, steerAccepted)
@@ -463,6 +507,12 @@ function createAcpController({
       commit(
         renameMessage(rewound(state, rewoundFrom, localId), localId, messageId)
       )
+      // The provider's positions moved under the cursor: the next page first
+      // rebuilds the newest one, and a page still in flight is dropped.
+      if (rewoundFrom !== undefined) {
+        cursorStale = true
+        transcripts += 1
+      }
     } catch (error) {
       const kept = state.messages
         .filter((message) => message.id !== localId)
@@ -472,7 +522,77 @@ function createAcpController({
     }
   }
 
+  /** Replays the Session from the start, after any replay already queued. */
+  const rebuild = (session: string) => {
+    const run = () => whileReplaying(() => resume(session))
+    resumes = resumes.then(run, run)
+    return resumes
+  }
+
+  /**
+   * Reads the page before the cursor into a scratch projection and places its
+   * messages first. Its turns are long over, so none of their state reaches
+   * the live execution. One read at a time; a failure waits to be asked again.
+   */
+  const loadOlder = async () => {
+    const session = bound
+    if (
+      !pagesEnabled ||
+      session === undefined ||
+      olderLoading ||
+      replaysOpen > 0 ||
+      cursor?.nextCursor === undefined
+    )
+      return
+    const load = (loads += 1)
+    olderLoading = true
+    olderFailed = false
+    notify()
+    try {
+      if (cursorStale) await rebuild(session)
+      const from = cursor?.nextCursor
+      if (bound !== session || cursorStale || from === undefined) return
+      const transcript = transcripts
+      try {
+        const page = await connection.resumePage(session, from)
+        if (transcript !== transcripts) return
+        const older = page.updates.reduce(
+          (scratch, { update, meta }) => applyUpdate(scratch, update, meta),
+          initialProjectorState
+        )
+        cursor = page.history
+        commit(prependMessages(state, older.messages))
+      } catch {
+        if (transcript === transcripts) olderFailed = true
+      }
+    } finally {
+      if (load === loads) {
+        olderLoading = false
+        notify()
+      }
+    }
+  }
+
+  void connection.initialized.then(
+    ({ extensions }) => {
+      pagesEnabled = extensions.historyPages
+      notify()
+    },
+    // A failed handshake surfaces through the connection's status.
+    () => {}
+  )
+
   return {
+    getHistory: (): ThreadHistoryState | undefined =>
+      pagesEnabled && cursor !== undefined
+        ? {
+            hasOlder: cursor.nextCursor !== undefined,
+            truncated: cursor.truncated === true,
+            loading: olderLoading,
+            failed: olderFailed,
+            loadOlder,
+          }
+        : undefined,
     setCallbacks: (next: ControllerCallbacks) => {
       callbacks = next
     },
@@ -675,19 +795,24 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     void queueItems
     void steerItems
     const state = controller.getState()
+    const history = controller.getHistory()
     return {
       messageRepository: controller.getRepository(),
       isRunning: state.execution.status === "running",
       isLoading: controller.isLoading(),
       isDisabled: isDisabled ?? false,
-      extras: acpExtras.provide({
-        execution: state.execution,
-        todos: state.todos,
-        ...(state.configOptions === undefined
-          ? {}
-          : { configOptions: state.configOptions }),
-        ...(state.commands === undefined ? {} : { commands: state.commands }),
-      }),
+      // The thread reads older history through the provider-neutral channel.
+      extras: threadHistoryExtras.provide(
+        acpExtras.provide({
+          execution: state.execution,
+          todos: state.todos,
+          ...(state.configOptions === undefined
+            ? {}
+            : { configOptions: state.configOptions }),
+          ...(state.commands === undefined ? {} : { commands: state.commands }),
+          ...(history === undefined ? {} : { history }),
+        })
+      ),
       onNew: (message) => controller.send(message),
       onEdit: (message) => {
         queue?.clear()

@@ -975,6 +975,22 @@ export function clearTranscript(state: ProjectorState): ProjectorState {
   }
 }
 
+/**
+ * Puts an older page's turns ahead of the transcript. A turn that landed
+ * between two reads can sit on both pages, so a turn the thread already holds
+ * keeps its current copy and the page's is skipped.
+ */
+export function prependMessages(
+  state: ProjectorState,
+  older: readonly ProjectedMessage[]
+): ProjectorState {
+  const known = new Set(state.messages.map((message) => message.id))
+  const unseen = older.filter((message) => !known.has(message.id))
+  return unseen.length === 0
+    ? state
+    : withMessages(state, [...unseen, ...state.messages])
+}
+
 /** Keeps the listed turns in order; the runtime's removals flow back here. */
 export function retainMessages(
   state: ProjectorState,

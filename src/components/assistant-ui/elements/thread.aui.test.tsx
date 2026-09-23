@@ -6,6 +6,7 @@ import {
   type ThreadMessage,
   type ThreadMessageLike,
   useAuiState,
+  useExternalStoreRuntime,
   useLocalRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react"
@@ -19,6 +20,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useMemo, useState } from "react"
 import { createPortal } from "react-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
@@ -48,6 +50,11 @@ import type {
 } from "@/runtime-adapters/contracts"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+import { threadLabels } from "@/components/assistant-ui/thread-labels"
+import {
+  threadHistoryExtras,
+  type ThreadHistoryState,
+} from "@/runtime-adapters/thread-history"
 
 // The sandboxed frame needs a real browser; a titled stand-in marks where it mounts.
 vi.mock("@/components/mcp-apps/mcp-app-frame", () => ({
@@ -444,13 +451,90 @@ describe("virtualized thread", () => {
   // and spacing, so the virtualizer has real sizes to work with.
   const VIEWPORT_HEIGHT = 600
   const MESSAGE_HEIGHT = 100
+  /** The older-history row above the list, whatever it shows. */
+  const TOP_ROW_HEIGHT = 40
   const LONG_THREAD_LENGTH = 200
+  const VIEWPORT_SELECTOR = '[data-slot="aui_thread-viewport"]'
   const descriptors = new Map<string, PropertyDescriptor | undefined>()
   const scrollTops = new WeakMap<HTMLElement, number>()
   const resizeCallbacks = new Set<() => void>()
+  /** Whether the emulated browser anchors scroll (`overflow-anchor`). */
+  let anchoring = true
+  /** The row the emulated browser keeps in place, with its content top. */
+  let anchor: { row: HTMLElement; top: number } | undefined
+  let adjusting = false
 
   function isViewport(element: HTMLElement) {
     return element.dataset.slot === "aui_thread-viewport"
+  }
+
+  function rows(viewport: Element) {
+    return Array.from(viewport.querySelectorAll<HTMLElement>("[data-index]"))
+  }
+
+  function isList(element: HTMLElement) {
+    return element.querySelector(":scope > [data-index]") !== null
+  }
+
+  /** The top row sits right before the list; the sr-only heading does not count. */
+  function topRowHeight(viewport: Element) {
+    const list = rows(viewport)[0]?.parentElement
+    return list?.previousElementSibling instanceof HTMLDivElement
+      ? TOP_ROW_HEIGHT
+      : 0
+  }
+
+  /** A row's top within the viewport's scrolled content. */
+  function rowTop(viewport: Element, row: HTMLElement) {
+    let top = topRowHeight(viewport)
+    for (const other of rows(viewport)) {
+      top += Number.parseFloat(other.style.marginTop) || 0
+      if (other === row) return top
+      top += messageHeight(other)
+    }
+    return top
+  }
+
+  function rect(top: number, height: number) {
+    return {
+      x: 0,
+      y: top,
+      top,
+      bottom: top + height,
+      left: 0,
+      right: 800,
+      width: 800,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect
+  }
+
+  /** The first row still in view, as the browser picks its anchor node. */
+  function selectAnchor(viewport: HTMLElement) {
+    const row = rows(viewport).find(
+      (candidate) =>
+        rowTop(viewport, candidate) + messageHeight(candidate) >
+        viewport.scrollTop
+    )
+    anchor = row && { row, top: rowTop(viewport, row) }
+  }
+
+  /**
+   * Native scroll anchoring, applied whenever layout is read: a moved anchor
+   * shifts the scroll position by as much, then the anchor is picked again.
+   */
+  function anchorScroll(viewport: HTMLElement) {
+    if (!anchoring || adjusting) return
+    adjusting = true
+    try {
+      if (anchor?.row.isConnected && viewport.contains(anchor.row)) {
+        const shift = rowTop(viewport, anchor.row) - anchor.top
+        if (shift !== 0) viewport.scrollTop += shift
+      }
+      selectAnchor(viewport)
+    } finally {
+      adjusting = false
+    }
   }
 
   /** One line per 40 characters, so a streaming message grows. */
@@ -461,18 +545,18 @@ describe("virtualized thread", () => {
 
   /** Laid out like a real page: the mounted rows plus the spacing around them. */
   function contentHeight(viewport: HTMLElement) {
-    const rows = Array.from(
-      viewport.querySelectorAll<HTMLElement>("[data-index]")
-    )
-    const list = rows[0]?.parentElement
+    const mounted = rows(viewport)
+    const list = mounted[0]?.parentElement
     return (
-      rows.reduce(
+      topRowHeight(viewport) +
+      mounted.reduce(
         (total, row) =>
           total +
           messageHeight(row) +
           (Number.parseFloat(row.style.marginTop) || 0),
         0
-      ) + (Number.parseFloat(list?.style.paddingBottom ?? "") || 0)
+      ) +
+      (Number.parseFloat(list?.style.paddingBottom ?? "") || 0)
     )
   }
 
@@ -492,6 +576,32 @@ describe("virtualized thread", () => {
   }
 
   beforeEach(() => {
+    anchoring = true
+    anchor = undefined
+    const escape = CSS.escape.bind(CSS)
+    vi.stubGlobal("CSS", {
+      escape,
+      supports: (property: string) =>
+        anchoring && property === "overflow-anchor",
+    })
+    define("offsetTop", {
+      get(this: HTMLElement) {
+        const viewport = this.closest(VIEWPORT_SELECTOR)
+        return viewport && isList(this) ? topRowHeight(viewport) : 0
+      },
+    })
+    define("getBoundingClientRect", {
+      value(this: HTMLElement) {
+        const viewport = this.closest<HTMLElement>(VIEWPORT_SELECTOR)
+        if (!viewport) return Element.prototype.getBoundingClientRect.call(this)
+        anchorScroll(viewport)
+        if (this === viewport) return rect(0, VIEWPORT_HEIGHT)
+        const row = this.closest<HTMLElement>("[data-index]")
+        return row
+          ? rect(rowTop(viewport, row) - viewport.scrollTop, messageHeight(row))
+          : rect(0, 0)
+      },
+    })
     define("offsetHeight", {
       get(this: HTMLElement) {
         if (isViewport(this)) return VIEWPORT_HEIGHT
@@ -519,6 +629,7 @@ describe("virtualized thread", () => {
           : 0
         if (next === (scrollTops.get(this) ?? 0)) return
         scrollTops.set(this, next)
+        if (anchoring && !adjusting && isViewport(this)) selectAnchor(this)
         this.dispatchEvent(new Event("scroll"))
       },
     })
@@ -591,6 +702,8 @@ describe("virtualized thread", () => {
   async function settle(rounds = 6) {
     for (let round = 0; round < rounds; round += 1) {
       await act(async () => {
+        const mounted = document.querySelector<HTMLElement>(VIEWPORT_SELECTOR)
+        if (mounted) anchorScroll(mounted)
         for (const notify of resizeCallbacks) notify()
         await new Promise<void>((resolve) =>
           requestAnimationFrame(() => resolve())
@@ -600,9 +713,7 @@ describe("virtualized thread", () => {
   }
 
   function viewport() {
-    const element = document.querySelector<HTMLElement>(
-      '[data-slot="aui_thread-viewport"]'
-    )
+    const element = document.querySelector<HTMLElement>(VIEWPORT_SELECTOR)
     if (!element) throw new Error("Thread viewport is not mounted")
     return element
   }
@@ -752,6 +863,254 @@ describe("virtualized thread", () => {
     expect(viewport().scrollTop).toBe(readingTop)
     expect(viewport().scrollTop).toBeLessThan(maximumScrollTop(viewport()))
   })
+
+  /** The text of the first message the reader can see. */
+  function firstVisibleText() {
+    const message = Array.from(
+      viewport().querySelectorAll<HTMLElement>("[data-message-id]")
+    ).find((element) => element.getBoundingClientRect().bottom > 0)
+    const text = /Long thread message \d+/.exec(message?.textContent ?? "")
+    if (!text) throw new Error("No message is in view")
+    return text[0]
+  }
+
+  const topOf = (text: string) =>
+    screen.getByText(text).getBoundingClientRect().top
+
+  describe.each([
+    ["anchors scroll", true],
+    ["does not anchor scroll", false],
+  ])("where the browser %s", (_, browserAnchors) => {
+    beforeEach(() => {
+      anchoring = browserAnchors
+    })
+
+    it("keeps the reader's place in a long thread as older messages land above", async () => {
+      const thread: PagedThreadHandle = {}
+      render(
+        <PagedThread
+          initialMessages={longThread()}
+          history={historyState()}
+          handle={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = maximumScrollTop(viewport()) - 4000
+      await settle()
+      const reading = firstVisibleText()
+      const top = topOf(reading)
+
+      act(() => thread.prepend?.(olderMessages(20)))
+
+      // Already in place as the page commits, before any frame runs.
+      expect(topOf(reading)).toBe(top)
+      await settle()
+      expect(topOf(reading)).toBe(top)
+    })
+
+    it("keeps the reader's place at the top of a short thread as older messages land above", async () => {
+      const thread: PagedThreadHandle = {}
+      render(
+        <PagedThread
+          initialMessages={longThread().slice(0, 20)}
+          history={historyState()}
+          handle={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 0
+      await settle()
+      const top = topOf("Long thread message 0")
+
+      act(() => thread.prepend?.(olderMessages(8)))
+
+      expect(topOf("Long thread message 0")).toBe(top)
+      await settle()
+      expect(topOf("Long thread message 0")).toBe(top)
+      expect(screen.getByText("Older message 7")).toBeInTheDocument()
+    })
+  })
+})
+
+describe("thread older history", () => {
+  it("offers earlier messages as a button that keeps focus and reports progress while the page loads", async () => {
+    const user = userEvent.setup()
+    const history = historyState()
+    const { rerender } = render(
+      <PagedThread initialMessages={INITIAL_MESSAGES} history={history} />
+    )
+
+    await user.click(
+      await screen.findByRole("button", { name: "Load earlier messages" })
+    )
+    expect(history.loadOlder).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={{ ...history, loading: true }}
+      />
+    )
+    const loading = screen.getByRole("button", {
+      name: "Loading earlier messages",
+    })
+    expect(loading).toHaveFocus()
+    expect(
+      screen.getByText("Loading earlier messages", {
+        selector: '[role="status"]',
+      })
+    ).toBeInTheDocument()
+    await user.click(loading)
+    expect(history.loadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it("marks the beginning, or that earlier messages can't be loaded, in place of the button", () => {
+    const { rerender } = render(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={historyState({ hasOlder: false })}
+      />
+    )
+    expect(screen.getByText("Beginning of conversation")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /earlier messages/i })
+    ).not.toBeInTheDocument()
+
+    rerender(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={historyState({ hasOlder: false, truncated: true })}
+      />
+    )
+    expect(
+      screen.getByText("Earlier messages can't be loaded")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("Beginning of conversation")
+    ).not.toBeInTheDocument()
+  })
+
+  it("speaks Hebrew in the Hebrew thread", () => {
+    const { rerender } = render(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={historyState()}
+        labels={threadLabels.he}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: "טעינת הודעות קודמות" })
+    ).toBeInTheDocument()
+
+    rerender(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={historyState({ hasOlder: false })}
+        labels={threadLabels.he}
+      />
+    )
+    expect(screen.getByText("תחילת השיחה")).toBeInTheDocument()
+
+    rerender(
+      <PagedThread
+        initialMessages={INITIAL_MESSAGES}
+        history={historyState({ hasOlder: false, truncated: true })}
+        labels={threadLabels.he}
+      />
+    )
+    expect(screen.getByText("אי אפשר לטעון הודעות קודמות")).toBeInTheDocument()
+  })
+
+  it("shows nothing until the history is known, nor on a thread with no messages", () => {
+    render(<PagedThread initialMessages={INITIAL_MESSAGES} />)
+    const noTopRow = () => {
+      expect(
+        screen.queryByRole("button", { name: /earlier messages/i })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText("Beginning of conversation")
+      ).not.toBeInTheDocument()
+    }
+    noTopRow()
+
+    cleanup()
+    render(<PagedThread initialMessages={[]} history={historyState()} />)
+    expect(
+      screen.getByRole("heading", { name: "How can I help you today?" })
+    ).toBeInTheDocument()
+    noTopRow()
+  })
+
+  describe("as the top nears", () => {
+    const observers: {
+      callback: IntersectionObserverCallback
+      options: IntersectionObserverInit | undefined
+    }[] = []
+
+    beforeEach(() => {
+      observers.length = 0
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          constructor(
+            callback: IntersectionObserverCallback,
+            options?: IntersectionObserverInit
+          ) {
+            observers.push({ callback, options })
+          }
+          observe() {}
+          disconnect() {}
+        }
+      )
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    const intersect = () =>
+      act(() => {
+        const observer = observers.at(-1)
+        observer?.callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver
+        )
+      })
+
+    it("reads the next page a viewport before the top is reached", async () => {
+      const history = historyState()
+      render(
+        <PagedThread initialMessages={INITIAL_MESSAGES} history={history} />
+      )
+      await screen.findByRole("button", { name: "Load earlier messages" })
+
+      const { options } = observers.at(-1) ?? {}
+      expect(options?.root).toBe(
+        document.querySelector('[data-slot="aui_thread-viewport"]')
+      )
+      expect(options?.rootMargin).toBe("100% 0px 0px 0px")
+      intersect()
+      expect(history.loadOlder).toHaveBeenCalledTimes(1)
+    })
+
+    it("waits for the button after a failed read instead of reading again", async () => {
+      const user = userEvent.setup()
+      const history = historyState({ failed: true })
+      render(
+        <PagedThread initialMessages={INITIAL_MESSAGES} history={history} />
+      )
+      await screen.findByRole("button", { name: "Load earlier messages" })
+
+      intersect()
+      expect(history.loadOlder).not.toHaveBeenCalled()
+      await user.click(
+        screen.getByRole("button", { name: "Load earlier messages" })
+      )
+      expect(history.loadOlder).toHaveBeenCalledTimes(1)
+    })
+  })
 })
 
 const INITIAL_MESSAGES = [
@@ -887,6 +1246,71 @@ function LocalThread({
           messageRewind={messageRewind}
         />
       </ToolUiLocaleProvider>
+    </AssistantRuntimeProvider>
+  )
+}
+
+type PagedThreadHandle = {
+  prepend?: (older: readonly ThreadMessageLike[]) => void
+}
+
+function historyState(
+  overrides: Partial<ThreadHistoryState> = {}
+): ThreadHistoryState & { loadOlder: ReturnType<typeof vi.fn> } {
+  return {
+    hasOlder: true,
+    truncated: false,
+    loading: false,
+    failed: false,
+    loadOlder: vi.fn(async () => {}),
+    ...overrides,
+  } as ThreadHistoryState & { loadOlder: ReturnType<typeof vi.fn> }
+}
+
+function olderMessages(count: number): ThreadMessageLike[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `older-${index}`,
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: [{ type: "text", text: `Older message ${index}` }],
+  }))
+}
+
+const asMessage = (message: ThreadMessageLike) => message
+
+/**
+ * An external-store thread whose older history the test controls: it offers
+ * the given history state and prepends the pages the test hands it.
+ */
+function PagedThread({
+  initialMessages,
+  history,
+  labels,
+  handle,
+}: {
+  initialMessages: readonly ThreadMessageLike[]
+  history?: ThreadHistoryState
+  labels?: Partial<ThreadLabels>
+  handle?: PagedThreadHandle
+}) {
+  const [messages, setMessages] = useState(initialMessages)
+  const extras = useMemo(
+    () =>
+      history === undefined
+        ? undefined
+        : threadHistoryExtras.provide({ history }),
+    [history]
+  )
+  const runtime = useExternalStoreRuntime({
+    messages,
+    convertMessage: asMessage,
+    onNew: async () => {},
+    extras,
+  })
+  if (handle)
+    handle.prepend = (older) => setMessages((current) => [...older, ...current])
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread autoFocus={false} labels={labels} />
     </AssistantRuntimeProvider>
   )
 }

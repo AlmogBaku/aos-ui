@@ -20,6 +20,7 @@ import {
   initialProjectorState,
   LOCAL_PROMPT_PREFIX,
   messageBlocks,
+  prependMessages,
   renameMessage,
   retainBefore,
   retainMessages,
@@ -1398,6 +1399,37 @@ describe("from-start replay", () => {
         (message) => message.id
       )
     ).toEqual(["u2"])
+  })
+})
+
+describe("prependMessages", () => {
+  const ids = (state: ProjectorState) =>
+    toThreadMessages(state).map((message) => message.id)
+
+  it("places an older page's unseen messages first and skips ids already present", () => {
+    const current = fold([
+      userChunk("u2", "Newer question"),
+      agentChunk("a2", "Newer answer"),
+    ])
+    // A turn landed between the two reads, so the older page overlaps the
+    // newest one by a turn the thread already shows.
+    const older = fold([
+      userChunk("u1", "First question"),
+      agentChunk("a1", "First answer"),
+      userChunk("u2", "Stale copy"),
+    ])
+
+    const prepended = prependMessages(current, older.messages)
+
+    expect(ids(prepended)).toEqual(["u1", "a1", "u2", "a2"])
+    expect(prepended.messages[2]).toBe(current.messages[0])
+  })
+
+  it("keeps the state it has when the page holds nothing new", () => {
+    const current = fold([userChunk("u1", "Ship it")])
+
+    expect(prependMessages(current, current.messages)).toBe(current)
+    expect(prependMessages(current, [])).toBe(current)
   })
 })
 
