@@ -91,6 +91,31 @@ Treat the vocabulary as an event grammar, not a bag of JSON:
 - restored Todo activity is presentation state and is never forwarded as
   native prompt history.
 
+Carry every native fact the operator can use, and leave out one the provider
+does not report rather than guessing it. The translator maps each to a
+standard ACP field or to `_meta.aos`:
+
+- `ToolCallStarted.name` is always the canonical tool name, and live turns and
+  history agree on it; `toolKind` comes from that name.
+- Tool `locations` and `diffs` use absolute paths, with the patch as `git diff`
+  text. Never emit a path the adapter's privacy rule hides.
+- Timestamps are UTC ISO strings (`toISOString()`), and `durationMs` is whole
+  milliseconds.
+- `TurnEnded` carries `stopReason` when the provider reports one, its token
+  `usage` with cache reads and writes, and the turn's `cost`. `TurnFailed`
+  names the `provider` and `model` that failed.
+- Partial tool output is `ToolCallOutputChunk`; command output is
+  `TerminalOutput`, after its owning `ToolCallStarted`.
+- Compaction is `CompactionUpdated` with a stable id: started, then completed
+  with a summary, or failed with an error.
+- `ModelChanged.modelId` is the same id `session/set_config_option` uses for
+  the model option.
+- Subagent work names its `subagentId`. The spawning call carries `subagent`,
+  and `SubagentUpdated` reports its progress.
+- Stored history carries the same tool kind, locations, diffs, timing, and
+  stop reason where the provider's stored rows have them, so a reload reads
+  like the live turn.
+
 Validate native events before conversion. Reject malformed, oversized,
 unknown, and wrong-Session events without disturbing other Sessions. Route by
 the exact Agent and Session attachment before publishing normalized output.

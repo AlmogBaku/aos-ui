@@ -25,6 +25,10 @@ and `TURN-LIFECYCLE.md` for a worked example.
 | --- | --- | --- |
 | `session/update` text / reasoning / tool chunks | `TurnEvent` kinds (`message-chunk`, `thought-chunk`, `tool-call-*`) | Emit the correct kinds from `run.ts` |
 | `plan_update` `_meta.aos.todos` | `plan-updated` carrying Todos | Populate the plan payload |
+| `tool_call_update` `kind` / `locations` / `diff` content, `_meta.aos` timing and subagent | `tool-call-started` `name`, `toolKind`, `locations`, `startedAt`, `subagent`; `tool-call-finished` `diffs`, `completedAt`, `durationMs` | Canonical name always; kind from it; absolute paths; the same facts in history |
+| `tool_call_content_chunk`, `terminal_update` / `terminal_output_chunk` | `tool-call-output-chunk`, `terminal-output` | Partial output and command output after the owning call |
+| `compaction_update`, `config_option_update` | `compaction-updated`, `model-changed` | Stable compaction id; model id from the Session catalog |
+| `state_update` idle `stopReason` / `usage`, `_meta.aos.cost`, failure `provider` / `model` | `turn-ended` `stopReason`, `usage`, `cost`; `turn-failed` `provider`, `model` | Fill when the provider reports them; never guess |
 | `usage_update` | `SessionContextResponse` (`session-attachment.ts:85-91, 245, 305-323`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
 | `session/request_permission` / `elicitation/create` | `PendingRequest` (`translate/requests.ts`, incl. `_allow_session`, multi-select `items.enum`) | Emit `PendingRequest` from `interactions.ts` |
 | `_aos/artifact` | `artifact-published` event with `AosArtifactDescriptor` (`translate/turn-events.ts`) | Emit from `run.ts` on trusted tool receipt |
