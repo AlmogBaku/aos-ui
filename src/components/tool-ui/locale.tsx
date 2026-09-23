@@ -35,12 +35,7 @@ export type ToolUiActionKind =
   | "generic"
 /** How a settled turn's collapsed work is headlined. */
 export type TurnFoldKind =
-  | "worked"
-  | "working"
-  | "stopped"
-  | "failed"
-  | "truncated"
-  | "refused"
+  "worked" | "working" | "stopped" | "failed" | "truncated" | "refused"
 /** What a run of tool calls did, counted per kind. */
 export type ToolRunKind =
   | "readFiles"
@@ -488,9 +483,7 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       stopped: (duration) => (duration ? `עצרת אחרי ${duration}` : "עצרת"),
       failed: (duration) => (duration ? `נכשל אחרי ${duration}` : "נכשל"),
       truncated: (duration) =>
-        duration
-          ? `נעצר במגבלת האורך אחרי ${duration}`
-          : "נעצר במגבלת האורך",
+        duration ? `נעצר במגבלת האורך אחרי ${duration}` : "נעצר במגבלת האורך",
       refused: (duration) => (duration ? `סירב אחרי ${duration}` : "סירב"),
     },
     duration: {

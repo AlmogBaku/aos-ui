@@ -42,7 +42,7 @@ const runtime = {
     sessionArchival: { status: "available" },
     sessionPin: { status: "available" },
     sessionDeletion: { status: "available" },
-    sessionRun: { status: "available" },
+    sessionTurn: { status: "available" },
     sessionStop: { status: "available" },
     sessionSteer: { status: "available" },
     sessionReadState: { status: "available" },
@@ -91,7 +91,7 @@ const sessionCapabilities = {
   interactions: {
     steering: {
       status: "available",
-      scope: "active-run",
+      scope: "active-turn",
       semantics: "visible-user-message",
       input: "text",
       fallback: "provider-queue",
@@ -99,7 +99,7 @@ const sessionCapabilities = {
     approvals: {
       status: "available",
       protocol: "acp-request",
-      scope: "run",
+      scope: "turn",
       choices: [
         { value: "once", scope: "request" },
         { value: "session", scope: "session" },
@@ -111,7 +111,7 @@ const sessionCapabilities = {
     questions: {
       status: "available",
       protocol: "acp-request",
-      scope: "run",
+      scope: "turn",
       answerModes: ["single", "multiple", "free-text"],
       cancellation: "native-empty-answer",
       maxQuestions: 32,
@@ -542,7 +542,7 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.fill("/")
   const commandMenu = page.getByRole("listbox")
-  await expect(commandMenu.getByRole("option")).toHaveCount(30)
+  await expect(commandMenu.getByRole("option")).toHaveCount(31)
   for (let index = 0; index < 15; index += 1) await input.press("ArrowDown")
   await expect
     .poll(() => commandMenu.evaluate((element) => element.scrollTop))

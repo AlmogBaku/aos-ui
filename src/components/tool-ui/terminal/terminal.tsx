@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useLayoutEffect, useRef, type RefObject } from "react"
-import Ansi from "ansi-to-react"
+import AnsiModule from "ansi-to-react"
 import { Copy, Check, Terminal as TerminalIcon } from "lucide-react"
 
 import type { ToolTerminalLabels } from "../locale"
@@ -20,6 +20,12 @@ import type { AosTerminal } from "../tool-artifact"
 import { stripAnsi } from "../strip-ansi"
 import { terminalStatus } from "./terminal-status"
 import { Button, cn } from "./_adapter"
+
+// ansi-to-react is CommonJS with `exports.default` but no `__esModule` flag,
+// so bundlers hand the default import the whole exports object.
+const Ansi =
+  (AnsiModule as unknown as { default?: typeof AnsiModule }).default ??
+  AnsiModule
 
 const COPY_ID = "terminal-output"
 /** How close to the end, in pixels, still counts as reading the live tail. */
