@@ -31,6 +31,7 @@ export function SystemNotice({
   tone,
   title,
   detail,
+  attribution,
   locale,
   children,
   className = "",
@@ -38,6 +39,11 @@ export function SystemNotice({
   tone: SystemNoticeTone
   title: string
   detail?: string
+  /**
+   * Who answered, such as "Provider · Model". Provider-named, so it keeps its
+   * own direction inside the notice.
+   */
+  attribution?: string
   locale: Locale
   children?: ReactNode
   className?: string
@@ -68,6 +74,11 @@ export function SystemNotice({
         {detail && (
           <p className="mt-1 max-w-prose text-xs text-muted-foreground">
             {detail}
+          </p>
+        )}
+        {attribution && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            <bdi>{attribution}</bdi>
           </p>
         )}
         {children && (

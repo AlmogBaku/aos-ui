@@ -210,6 +210,15 @@ export const en = {
     request_failed: "The request could not be completed.",
   },
   turnFailed: "This turn did not complete.",
+  turnStopped: {
+    length: "The answer stopped at the length limit.",
+    contentFilter: "The model declined to answer.",
+  },
+  compaction: {
+    running: "Compacting context…",
+    completed: "Context compacted",
+    failed: "Context compaction failed.",
+  },
   empty: {
     addAgentTitle: "Add an Agent to your workspace.",
     addAgentDescription:

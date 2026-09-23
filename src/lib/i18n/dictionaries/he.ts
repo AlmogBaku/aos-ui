@@ -200,6 +200,15 @@ export const he = {
     request_failed: "לא ניתן היה להשלים את הבקשה.",
   },
   turnFailed: "התור הזה לא הושלם.",
+  turnStopped: {
+    length: "התשובה נעצרה במגבלת האורך.",
+    contentFilter: "המודל סירב לענות.",
+  },
+  compaction: {
+    running: "דוחס את ההקשר…",
+    completed: "ההקשר נדחס",
+    failed: "דחיסת ההקשר נכשלה.",
+  },
   empty: {
     addAgentTitle: "הוסיפו סוכן לסביבת העבודה.",
     addAgentDescription: "צרו סוכן עם תפקיד, הנחיות וכלים משלו.",

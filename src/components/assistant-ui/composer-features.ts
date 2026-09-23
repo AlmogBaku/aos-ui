@@ -24,6 +24,42 @@ export type ComposerModelSelectionState =
       readonly error: string
     }
 
+/**
+ * What the last settled turn used, in raw tokens, as the provider reported it.
+ * Every count is optional: a provider reports only what it measures.
+ */
+export type ComposerTurnUsage = {
+  readonly inputTokens?: number | undefined
+  readonly outputTokens?: number | undefined
+  readonly thoughtTokens?: number | undefined
+  readonly cachedReadTokens?: number | undefined
+  readonly cachedWriteTokens?: number | undefined
+  readonly totalTokens?: number | undefined
+}
+
+/** The Session's accumulated cost; `currency` is an ISO 4217 code. */
+export type ComposerSessionCost = {
+  readonly amount: number
+  readonly currency: string
+}
+
+/** The model and reasoning effort the provider says the Session is on. */
+export type ComposerModelCurrent = {
+  readonly selectedId: string
+  readonly effortId?: string | undefined
+}
+
+/**
+ * A provider-side model change the composer follows as it happens, for
+ * example after a slash command or another client switched the Session.
+ * `current` returns the same reference until the next change replaces it,
+ * which is what `useSyncExternalStore` requires.
+ */
+export type ComposerModelFeed = {
+  readonly current: () => ComposerModelCurrent | undefined
+  readonly subscribe: (listener: () => void) => () => void
+}
+
 export function composerUsageFromTokens({
   systemTokens,
   toolTokens,
@@ -121,6 +157,11 @@ export type ComposerFeatureViewModel = {
         readonly update: (patch: ComposerModelUpdate) => Promise<void>
         /** Repeats only the failed patch; a settled selection has no retry. */
         readonly retry?: (() => Promise<void>) | undefined
+        /**
+         * The provider's own reports of the Session's model. While no write is
+         * pending, its newest reading wins over `selectedId` and `effortId`.
+         */
+        readonly follow?: ComposerModelFeed | undefined
       }
     | undefined
   readonly context?:
@@ -128,6 +169,8 @@ export type ComposerFeatureViewModel = {
         readonly usage: ComposerUsage
         readonly segments?:
           readonly ("system" | "tools" | "messages")[] | undefined
+        readonly lastTurn?: ComposerTurnUsage | undefined
+        readonly cost?: ComposerSessionCost | undefined
       }
     | undefined
 }

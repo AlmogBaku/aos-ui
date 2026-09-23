@@ -24,6 +24,11 @@ describe("deterministic fixture scenarios", () => {
       ["show oversized mermaid", "mermaid-oversized"],
       ["return a malformed tool", "malformed-tool"],
       ["simulate provider outage", "provider-outage"],
+      ["stop at the length limit", "stop-length"],
+      ["show a refusal", "stop-refusal"],
+      ["show a provider error", "provider-error-detail"],
+      ["compact the context", "compaction"],
+      ["show a failed compaction", "compaction-failed"],
     ]
     const scenarios = cases.map(([prompt, expected]) => {
       expect(buildFixtureScenario(prompt).name).toBe(expected)
@@ -117,6 +122,43 @@ describe("deterministic fixture scenarios", () => {
     expect(
       oversizedText?.type === "text" ? oversizedText.text.length : Infinity
     ).toBeLessThan(2_000)
+  })
+
+  it("settles the stop and failure scenarios the way a provider would", () => {
+    expect(buildFixtureScenario("stop at the length limit").status).toEqual({
+      type: "incomplete",
+      reason: "length",
+    })
+    expect(buildFixtureScenario("show a refusal").status).toEqual({
+      type: "incomplete",
+      reason: "content-filter",
+    })
+    expect(buildFixtureScenario("show a provider error").status).toMatchObject({
+      type: "incomplete",
+      reason: "error",
+      error: { provider: "Fixture Cloud", model: "fixture-balanced" },
+    })
+  })
+
+  it("compacts mid-turn, between the turn's edits and its final answer", () => {
+    const { parts } = buildFixtureScenario("compact the context")
+    const compaction = parts.findIndex((part) => part.type === "data")
+
+    expect(parts[compaction]).toMatchObject({
+      name: "aos-compaction",
+      data: { status: "completed", summary: expect.any(String) },
+    })
+    expect(parts.slice(0, compaction).some((p) => p.type === "tool-call")).toBe(
+      true
+    )
+    expect(
+      parts.slice(compaction + 1).some((p) => p.type === "tool-call")
+    ).toBe(true)
+    expect(
+      buildFixtureScenario("show a failed compaction").parts.find(
+        (part) => part.type === "data"
+      )
+    ).toMatchObject({ data: { status: "failed", error: expect.any(String) } })
   })
 
   it("returns an unknown tool for the malformed scenario", () => {

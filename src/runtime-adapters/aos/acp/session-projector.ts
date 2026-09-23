@@ -60,6 +60,9 @@ import {
 export type TurnFailure = {
   readonly code?: string
   readonly message?: string
+  /** The provider and model that failed, shown as the notice's attribution. */
+  readonly provider?: string
+  readonly model?: string
 }
 
 export type ProjectorExecution = {

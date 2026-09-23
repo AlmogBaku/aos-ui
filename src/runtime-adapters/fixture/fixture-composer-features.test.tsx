@@ -47,9 +47,16 @@ describe("fixture composer features", () => {
       },
       { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
     ])
-    expect(features.context).toEqual({
+    expect(features.context).toMatchObject({
       usage: { system: 2, tools: 1, messages: 9, total: 66 },
     })
+    expect(features.context?.lastTurn).toEqual({
+      inputTokens: 12_480,
+      outputTokens: 1_236,
+      cachedReadTokens: 8_192,
+      totalTokens: 13_716,
+    })
+    expect(features.context?.cost).toEqual({ amount: 0.42, currency: "USD" })
     expect(features.slashCommands).toEqual([
       { name: "help", description: "Show fixture runtime help" },
       { name: "status", description: "Show fixture Session status" },
@@ -63,14 +70,14 @@ describe("fixture composer features", () => {
       })
     })
     await waitFor(() =>
-      expect(features.context).toEqual({
+      expect(features.context).toMatchObject({
         usage: { system: 2, tools: 1, messages: 10, total: 66 },
       })
     )
 
     await act(() => features.model!.update({ selectedId: "fixture-fast" }))
     expect(features.model?.selectedId).toBe("fixture-fast")
-    expect(features.context).toEqual({
+    expect(features.context).toMatchObject({
       usage: { system: 2, tools: 1, messages: 10, total: 33 },
     })
 
@@ -81,7 +88,7 @@ describe("fixture composer features", () => {
       )
     )
     expect(features.model?.selectedId).toBe("fixture-balanced")
-    expect(features.context).toEqual({
+    expect(features.context).toMatchObject({
       usage: { system: 2, tools: 1, messages: 1, total: 66 },
     })
 
@@ -92,9 +99,44 @@ describe("fixture composer features", () => {
       )
     )
     expect(features.model?.selectedId).toBe("fixture-fast")
-    expect(features.context).toEqual({
+    expect(features.context).toMatchObject({
       usage: { system: 2, tools: 1, messages: 10, total: 33 },
     })
+  })
+
+  it("reports each pick through the model feed the composer follows", async () => {
+    const { result } = renderHook(() => {
+      const bundle = useFixtureRuntimeBundle({
+        threadId: "thread-aster-market",
+        streamDelayMs: 0,
+      })
+      return useFixtureComposerFeatures({
+        threadId: "thread-aster-market",
+        config: allEnabled,
+        runtime: bundle.assistantRuntime,
+      })
+    })
+    const follow = result.current.model?.follow
+    expect(follow?.current()).toEqual({
+      selectedId: "fixture-balanced",
+      effortId: "medium",
+    })
+    const first = follow?.current()
+    expect(follow?.current()).toBe(first)
+
+    let notified = 0
+    const unsubscribe = follow!.subscribe(() => notified++)
+    await act(() =>
+      result.current.model!.update({ selectedId: "fixture-fast" })
+    )
+    unsubscribe()
+
+    expect(notified).toBe(1)
+    expect(follow?.current()).toEqual({
+      selectedId: "fixture-fast",
+      effortId: "medium",
+    })
+    expect(result.current.model?.selectedId).toBe("fixture-fast")
   })
 
   it("omits each disabled feature independently", () => {

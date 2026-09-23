@@ -199,6 +199,17 @@ export type Dictionary = {
    * normalized code nor provider text named the failure.
    */
   turnFailed: string
+  /** The warning System Notice under a turn the model ended early. */
+  turnStopped: {
+    length: string
+    contentFilter: string
+  }
+  /** The quiet divider a context compaction leaves in the conversation. */
+  compaction: {
+    running: string
+    completed: string
+    failed: string
+  }
   empty: {
     addAgentTitle: string
     addAgentDescription: string

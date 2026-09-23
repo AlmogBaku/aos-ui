@@ -2,6 +2,10 @@
 
 import type { ComponentProps } from "react"
 
+import type {
+  ComposerSessionCost,
+  ComposerTurnUsage,
+} from "@/components/assistant-ui/composer-features"
 import { cn } from "@/lib/utils"
 import { ghostButton, mono, paper, pct } from "./voice-surfaces"
 
@@ -19,6 +23,12 @@ export interface ComposerContextLabels {
   tools: string
   messages: string
   total: string
+  lastTurn: string
+  sessionCost: string
+  /** Each receives an already locale-formatted token count. */
+  inputTokens: (count: string) => string
+  outputTokens: (count: string) => string
+  cachedTokens: (count: string) => string
 }
 
 const DEFAULT_LABELS: ComposerContextLabels = {
@@ -28,6 +38,50 @@ const DEFAULT_LABELS: ComposerContextLabels = {
   tools: "Tools",
   messages: "Messages",
   total: "Total",
+  lastTurn: "Last turn",
+  sessionCost: "Session cost",
+  inputTokens: (count) => `${count} in`,
+  outputTokens: (count) => `${count} out`,
+  cachedTokens: (count) => `${count} cached`,
+}
+
+/** The last turn's tokens as one line: input · output · cached, as reported. */
+export function formatTurnUsage(
+  usage: ComposerTurnUsage,
+  labels: Pick<
+    ComposerContextLabels,
+    "inputTokens" | "outputTokens" | "cachedTokens"
+  >,
+  locale: string
+): string {
+  const compact = new Intl.NumberFormat(locale, { notation: "compact" })
+  const format = (
+    count: number | undefined,
+    label: (value: string) => string
+  ) => (count === undefined ? [] : [label(compact.format(count))])
+  const parts = [
+    ...format(usage.inputTokens, labels.inputTokens),
+    ...format(usage.outputTokens, labels.outputTokens),
+    ...format(usage.cachedReadTokens, labels.cachedTokens),
+  ]
+  if (parts.length === 0 && usage.totalTokens !== undefined)
+    return compact.format(usage.totalTokens)
+  return parts.join(" · ")
+}
+
+/** A cost in its own currency; an unknown code keeps the amount readable. */
+export function formatSessionCost(
+  cost: ComposerSessionCost,
+  locale: string
+): string {
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: cost.currency,
+    }).format(cost.amount)
+  } catch {
+    return `${new Intl.NumberFormat(locale).format(cost.amount)} ${cost.currency}`
+  }
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -40,14 +94,33 @@ function clamp(value: number, min: number, max: number) {
 export function ComposerContext({
   usage,
   visibleSegments = ["system", "tools", "messages"],
+  lastTurn,
+  cost,
+  locale = "en",
   labels = DEFAULT_LABELS,
   className,
   ...props
 }: Omit<ComponentProps<"div">, "children"> & {
   usage: ComposerUsage
   visibleSegments?: readonly ("system" | "tools" | "messages")[]
+  lastTurn?: ComposerTurnUsage | undefined
+  cost?: ComposerSessionCost | undefined
+  /** Formats token counts and the cost; the popover copy comes from `labels`. */
+  locale?: string
   labels?: ComposerContextLabels
 }) {
+  const turnUsage = lastTurn ? formatTurnUsage(lastTurn, labels, locale) : ""
+  const accounting = [
+    ...(turnUsage ? [{ label: labels.lastTurn, value: turnUsage }] : []),
+    ...(cost
+      ? [
+          {
+            label: labels.sessionCost,
+            value: formatSessionCost(cost, locale),
+          },
+        ]
+      : []),
+  ]
   const used = usage.system + usage.tools + usage.messages
   const fraction = usage.total === 0 ? 0 : used / usage.total
   const warn = fraction > 0.85
@@ -82,7 +155,8 @@ export function ComposerContext({
       <div
         className={cn(
           paper,
-          "absolute end-0 bottom-full z-10 mb-1.5 flex w-48 origin-bottom-right flex-col gap-2 rounded-lg p-2",
+          "absolute end-0 bottom-full z-10 mb-1.5 flex origin-bottom-right flex-col gap-2 rounded-lg p-2",
+          accounting.length ? "w-64" : "w-48",
           "transition-[opacity,scale] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none",
           "pointer-events-none scale-[0.97] opacity-0",
           "group-hover/ctx:pointer-events-auto group-hover/ctx:scale-100 group-hover/ctx:opacity-100",
@@ -153,6 +227,22 @@ export function ComposerContext({
             {used}k / {usage.total}k
           </span>
         </div>
+        {accounting.map((row) => (
+          <div
+            key={row.label}
+            className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs leading-4 text-foreground/55"
+          >
+            <span>{row.label}</span>
+            <span
+              className={cn(
+                mono,
+                "ms-auto whitespace-nowrap text-foreground/40 tabular-nums"
+              )}
+            >
+              {row.value}
+            </span>
+          </div>
+        ))}
       </div>
       <button
         type="button"

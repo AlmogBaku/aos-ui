@@ -29,7 +29,13 @@ export type ToolUiActionKind =
   | "subagent"
   | "generic"
 /** How a settled turn's collapsed work is headlined. */
-export type TurnFoldKind = "worked" | "working" | "stopped" | "failed"
+export type TurnFoldKind =
+  | "worked"
+  | "working"
+  | "stopped"
+  | "failed"
+  | "truncated"
+  | "refused"
 /** What a run of tool calls did, counted per kind. */
 export type ToolRunKind =
   | "readFiles"
@@ -221,6 +227,12 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       stopped: (duration) =>
         duration ? `You stopped after ${duration}` : "You stopped",
       failed: (duration) => (duration ? `Failed after ${duration}` : "Failed"),
+      truncated: (duration) =>
+        duration
+          ? `Stopped at the length limit after ${duration}`
+          : "Stopped at the length limit",
+      refused: (duration) =>
+        duration ? `Declined after ${duration}` : "Declined",
     },
     duration: {
       seconds: (seconds) => `${seconds} s`,
@@ -432,6 +444,11 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       working: (duration) => (duration ? `עובד ${duration}` : "עובד"),
       stopped: (duration) => (duration ? `עצרת אחרי ${duration}` : "עצרת"),
       failed: (duration) => (duration ? `נכשל אחרי ${duration}` : "נכשל"),
+      truncated: (duration) =>
+        duration
+          ? `נעצר במגבלת האורך אחרי ${duration}`
+          : "נעצר במגבלת האורך",
+      refused: (duration) => (duration ? `סירב אחרי ${duration}` : "סירב"),
     },
     duration: {
       seconds: (seconds) => `${seconds} שנ׳`,

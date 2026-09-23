@@ -5,7 +5,9 @@ import {
   createTurnGroupBy,
   describeToolRun,
   formatTurnDuration,
+  turnDiffStats,
   turnLayout,
+  turnOutcome,
   type TurnPart,
 } from "./turn-fold"
 
@@ -222,5 +224,61 @@ describe("formatTurnDuration", () => {
     expect(formatTurnDuration(65_000, en)).toBe("1 min 5 s")
     expect(formatTurnDuration(65_000, he)).toBe("1 דק׳ 5 שנ׳")
     expect(formatTurnDuration(120_000, en)).toBe("2 min")
+  })
+})
+
+describe("turnOutcome", () => {
+  it("names who ended the turn, keeping the existing outcomes", () => {
+    expect(turnOutcome({ type: "complete", reason: "stop" })).toBe("worked")
+    expect(turnOutcome({ type: "incomplete", reason: "cancelled" })).toBe(
+      "stopped"
+    )
+    expect(turnOutcome({ type: "incomplete", reason: "error" })).toBe("failed")
+    expect(turnOutcome({ type: "incomplete", reason: "length" })).toBe(
+      "truncated"
+    )
+    expect(turnOutcome({ type: "incomplete", reason: "content-filter" })).toBe(
+      "refused"
+    )
+  })
+})
+
+describe("turnDiffStats", () => {
+  const edit = (patch: string, paths: readonly string[]): TurnPart => ({
+    type: "tool-call",
+    toolName: "edit_file",
+    artifact: {
+      aos: {
+        diffs: [
+          {
+            changes: paths.map((path) => ({ kind: "modify", path })),
+            patch,
+          },
+        ],
+      },
+    },
+  })
+
+  it("sums every tool's reported diffs across the turn", () => {
+    const parts = [
+      edit("--- a/a\n+++ b/a\n+one\n+two\n-old", ["a", "b"]),
+      tool("read_file"),
+      text("Between the edits."),
+      edit("+three", ["c"]),
+    ]
+
+    expect(turnDiffStats(parts)).toEqual({
+      files: 3,
+      additions: 3,
+      deletions: 1,
+    })
+  })
+
+  it("reports nothing for a turn whose tools carry no diffs", () => {
+    expect(turnDiffStats([tool("read_file"), text("Done.")])).toEqual({
+      files: 0,
+      additions: 0,
+      deletions: 0,
+    })
   })
 })

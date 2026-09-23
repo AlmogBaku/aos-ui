@@ -1,9 +1,13 @@
 import type { TodoItem } from "../contracts"
 import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
+import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
 // Assistant UI's public type lives in @assistant-ui/react. Re-exporting a local
 // alias keeps all fixture-only provider payloads inside this adapter directory.
-import type { ThreadAssistantMessagePart as AssistantPart } from "@assistant-ui/react"
+import type {
+  ThreadAssistantMessagePart as AssistantPart,
+  MessageStatus,
+} from "@assistant-ui/react"
 
 export const fixtureScenarioNames = [
   "default",
@@ -25,6 +29,11 @@ export const fixtureScenarioNames = [
   "mermaid-oversized",
   "malformed-tool",
   "provider-outage",
+  "stop-length",
+  "stop-refusal",
+  "provider-error-detail",
+  "compaction",
+  "compaction-failed",
 ] as const
 
 export type FixtureScenarioName = (typeof fixtureScenarioNames)[number]
@@ -42,6 +51,8 @@ export type FixtureScenario = {
   parts: AssistantPart[]
   todoEvent?: TodoItem[]
   outage?: Error
+  /** How the turn settles when it is not an ordinary completion. */
+  status?: MessageStatus
   /** Present on the question scenario; drives the RuntimeInteractionAdapter registration. */
   questionTemplate?: FixtureQuestionTemplate
 }
@@ -63,8 +74,107 @@ function toolPart(
   }
 }
 
+const FIXTURE_README_PATCH = [
+  "--- a/README.md",
+  "+++ b/README.md",
+  "@@ -1,3 +1,4 @@",
+  " # Market brief",
+  "-Draft",
+  "+Reviewed",
+  "+Sources are listed below.",
+].join("\n")
+
+/** A turn that edits a file, compacts its context, and keeps going. */
+function compactionParts(compaction: Record<string, unknown>): AssistantPart[] {
+  return [
+    toolPart("read_file", { path: "README.md" }, "# Market brief\nDraft", {
+      artifact: withAosToolArtifact(undefined, { kind: "read" }),
+    }),
+    toolPart("edit_file", { path: "README.md" }, "updated", {
+      artifact: withAosToolArtifact(undefined, {
+        kind: "edit",
+        locations: [{ path: "README.md" }],
+        diffs: [
+          {
+            changes: [{ kind: "modify", path: "README.md" }],
+            patch: FIXTURE_README_PATCH,
+          },
+        ],
+      }),
+    }),
+    { type: "data", name: "aos-compaction", data: compaction } as AssistantPart,
+    toolPart("run_command", { command: "bun run test" }, "12 passed", {
+      artifact: withAosToolArtifact(undefined, { kind: "execute" }),
+    }),
+    { type: "text", text: "The brief is reviewed and its tests pass." },
+  ]
+}
+
 export function buildFixtureScenario(prompt: string): FixtureScenario {
   const input = prompt.toLocaleLowerCase("en")
+
+  if (input.includes("compaction") || input.includes("compact")) {
+    return input.includes("fail")
+      ? {
+          name: "compaction-failed",
+          parts: compactionParts({
+            compactionId: "fixture-compaction-failed",
+            status: "failed",
+            error: "The summarizer timed out after 30 s.",
+          }),
+        }
+      : {
+          name: "compaction",
+          parts: compactionParts({
+            compactionId: "fixture-compaction",
+            status: "completed",
+            summary:
+              "The operator asked for a reviewed market brief. README.md now reads Reviewed and lists its sources; the test run is next.",
+          }),
+        }
+  }
+
+  if (input.includes("length limit") || input.includes("truncat")) {
+    return {
+      name: "stop-length",
+      parts: [
+        toolPart("read_file", { path: "notes/interviews.md" }, "contents"),
+        {
+          type: "text",
+          text: "The interviews agree on three themes. First, buyers want governance before scale. Second, pilots stall without an owner. Third,",
+        },
+      ],
+      status: { type: "incomplete", reason: "length" },
+    }
+  }
+
+  if (input.includes("refus") || input.includes("declin")) {
+    return {
+      name: "stop-refusal",
+      parts: [
+        toolPart("read_file", { path: "notes/request.md" }, "contents"),
+        { type: "text", text: "I can’t help with that part of the request." },
+      ],
+      status: { type: "incomplete", reason: "content-filter" },
+    }
+  }
+
+  if (input.includes("provider error")) {
+    return {
+      name: "provider-error-detail",
+      parts: [{ type: "text", text: "The partial response is preserved." }],
+      status: {
+        type: "incomplete",
+        reason: "error",
+        error: {
+          code: "AOS_PROVIDER_RUN_FAILED",
+          message: "The upstream model returned 529 (overloaded).",
+          provider: "Fixture Cloud",
+          model: "fixture-balanced",
+        },
+      },
+    }
+  }
 
   if (input.includes("outage") || input.includes("disconnect")) {
     return {

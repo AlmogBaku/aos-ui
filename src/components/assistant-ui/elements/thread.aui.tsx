@@ -41,6 +41,7 @@ import {
   ModelSelectorTrigger,
 } from "@/components/assistant-ui/elements/model-selector"
 import { ComposerContext } from "@/components/assistant-ui/elements/composer-context"
+import { CompactionDataUI } from "@/components/assistant-ui/elements/compaction-divider"
 import { ComposerSlashCommands } from "@/components/assistant-ui/elements/composer-slash-commands"
 import {
   ConversationSearch,
@@ -135,6 +136,7 @@ import {
   useCallback,
   useRef,
   useState,
+  useSyncExternalStore,
   type ComponentType,
   type FC,
   type KeyboardEvent,
@@ -235,6 +237,12 @@ export type ThreadLabels = {
   contextTools: string
   contextMessages: string
   contextTotal: string
+  contextLastTurn: string
+  contextSessionCost: string
+  /** Each receives an already locale-formatted token count. */
+  contextInputTokens: (count: string) => string
+  contextOutputTokens: (count: string) => string
+  contextCachedTokens: (count: string) => string
   openSource: string
   documentSource: string
   conversationSearch?: Partial<ConversationSearchLabels> | undefined
@@ -306,6 +314,11 @@ const DEFAULT_LABELS: ThreadLabels = {
   contextTools: "Tools",
   contextMessages: "Messages",
   contextTotal: "Total",
+  contextLastTurn: "Last turn",
+  contextSessionCost: "Session cost",
+  contextInputTokens: (count) => `${count} in`,
+  contextOutputTokens: (count) => `${count} out`,
+  contextCachedTokens: (count) => `${count} cached`,
   openSource: "Open source",
   documentSource: "Source document",
   conversationSearch: DEFAULT_CONVERSATION_SEARCH_LABELS,
@@ -406,6 +419,7 @@ export const Thread: FC<ThreadProps> = ({
           <MessageRewindContext.Provider value={messageRewind}>
             <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
               <ThreadComponentsContext.Provider value={components}>
+                <CompactionDataUI />
                 <ThreadRoot
                   isEmpty={isEmpty}
                   autoFocus={autoFocus}
@@ -1322,6 +1336,23 @@ const ThreadSlashCommands: FC = () => {
   )
 }
 
+const NO_MODEL_FEED = () => () => undefined
+const NO_MODEL_READING = () => undefined
+
+/**
+ * The provider's newest report of the Session's model, which the selector
+ * follows unless a pick of the operator's own is still being written.
+ */
+function useFollowedModel(model: ComposerFeatureViewModel["model"]) {
+  const follow = model?.follow
+  const current = useSyncExternalStore(
+    follow?.subscribe ?? NO_MODEL_FEED,
+    follow?.current ?? NO_MODEL_READING,
+    follow?.current ?? NO_MODEL_READING
+  )
+  return model?.selection?.status === "pending" ? undefined : current
+}
+
 const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
   direction,
 }) => {
@@ -1338,11 +1369,13 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
       })),
     [modelOptions]
   )
+  const { locale } = useToolUiLocale()
+  const followed = useFollowedModel(features.model)
   if (!features.model && !features.context) return null
 
-  const selectedModel = modelOptions?.find(
-    (option) => option.id === features.model?.selectedId
-  )
+  const selectedId = followed?.selectedId ?? features.model?.selectedId
+  const effortId = followed ? followed.effortId : features.model?.effortId
+  const selectedModel = modelOptions?.find((option) => option.id === selectedId)
   const efforts = selectedModel?.efforts
   const update = features.model?.update
 
@@ -1366,7 +1399,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             effortUnset: labels.effortUnset,
           }}
           models={models}
-          value={features.model.selectedId}
+          value={selectedId ?? features.model.selectedId}
           selection={
             features.model.selection?.status === "error"
               ? {
@@ -1382,7 +1415,7 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           {...(update && efforts?.length
             ? {
                 efforts,
-                effortValue: features.model.effortId,
+                effortValue: effortId,
                 onEffortChange: (effortId: string) => {
                   void update({ effortId })
                 },
@@ -1400,6 +1433,9 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
           className="ms-auto shrink-0"
           usage={features.context.usage}
           visibleSegments={features.context.segments}
+          lastTurn={features.context.lastTurn}
+          cost={features.context.cost}
+          locale={locale}
           labels={{
             trigger: labels.contextUsage,
             title: labels.contextTitle,
@@ -1407,6 +1443,11 @@ const ComposerFeatureBar: FC<{ direction: LocaleDirection }> = ({
             tools: labels.contextTools,
             messages: labels.contextMessages,
             total: labels.contextTotal,
+            lastTurn: labels.contextLastTurn,
+            sessionCost: labels.contextSessionCost,
+            inputTokens: labels.contextInputTokens,
+            outputTokens: labels.contextOutputTokens,
+            cachedTokens: labels.contextCachedTokens,
           }}
         />
       ) : null}
@@ -1500,20 +1541,27 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 function turnFailure(state: AssistantState): {
   code?: string
   message?: string
+  attribution?: string
 } {
   const status = state.message.status
   if (status?.type !== "incomplete" || status.reason !== "error") return {}
   const error: unknown = status.error
   if (typeof error === "string") return { message: error }
   if (!isRecord(error)) return {}
+  const attribution = [error.provider, error.model]
+    .filter((value): value is string => typeof value === "string" && !!value)
+    .join(" · ")
   return {
     ...(typeof error.code === "string" ? { code: error.code } : {}),
     ...(typeof error.message === "string" ? { message: error.message } : {}),
+    ...(attribution ? { attribution } : {}),
   }
 }
 
 const turnFailureCode = (state: AssistantState) => turnFailure(state).code
 const turnFailureMessage = (state: AssistantState) => turnFailure(state).message
+const turnFailureAttribution = (state: AssistantState) =>
+  turnFailure(state).attribution
 
 /**
  * A failed turn is AOS reporting on the run, never the Agent's own words, so it
@@ -1524,6 +1572,7 @@ const MessageErrorNotice: FC = () => {
   const { locale } = useToolUiLocale()
   const code = useAuiState(turnFailureCode)
   const message = useAuiState(turnFailureMessage)
+  const attribution = useAuiState(turnFailureAttribution)
   const dictionary = RUN_FAILURE_DICTIONARIES[locale]
   const title = runErrorMessage(
     dictionary,
@@ -1537,6 +1586,35 @@ const MessageErrorNotice: FC = () => {
       {...(message !== undefined && message !== title
         ? { detail: message }
         : {})}
+      {...(attribution ? { attribution } : {})}
+      locale={locale}
+      className="mt-2"
+    />
+  )
+}
+
+/** The incomplete reasons where the model, not the run, ended the answer. */
+const turnStopKind = (
+  state: AssistantState
+): keyof Dictionary["turnStopped"] | undefined => {
+  const status = state.message.status
+  if (status?.type !== "incomplete") return undefined
+  if (status.reason === "length") return "length"
+  return status.reason === "content-filter" ? "contentFilter" : undefined
+}
+
+/**
+ * An answer the model cut short or declined is still the Agent's, so its text
+ * stays; AOS only says, under it, why it ends where it does.
+ */
+const MessageStopNotice: FC = () => {
+  const { locale } = useToolUiLocale()
+  const kind = useAuiState(turnStopKind)
+  if (!kind) return null
+  return (
+    <SystemNotice
+      tone="warning"
+      title={RUN_FAILURE_DICTIONARIES[locale].turnStopped[kind]}
       locale={locale}
       className="mt-2"
     />
@@ -1727,6 +1805,7 @@ const AssistantMessage: FC = () => {
             }}
           </MessagePrimitive.Parts>
           <MessageError />
+          <MessageStopNotice />
         </div>
 
         <div

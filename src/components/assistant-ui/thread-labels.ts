@@ -64,6 +64,11 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     contextTools: "Tools",
     contextMessages: "Messages",
     contextTotal: "Total",
+    contextLastTurn: "Last turn",
+    contextSessionCost: "Session cost",
+    contextInputTokens: (count) => `${count} in`,
+    contextOutputTokens: (count) => `${count} out`,
+    contextCachedTokens: (count) => `${count} cached`,
     conversationSearch: {
       search: "Search in conversation",
       placeholder: "Find in conversation…",
@@ -148,6 +153,11 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     contextTools: "כלים",
     contextMessages: "הודעות",
     contextTotal: "סה״כ",
+    contextLastTurn: "התור האחרון",
+    contextSessionCost: "עלות השיחה",
+    contextInputTokens: (count) => `${count} קלט`,
+    contextOutputTokens: (count) => `${count} פלט`,
+    contextCachedTokens: (count) => `${count} במטמון`,
     conversationSearch: {
       search: "חיפוש בשיחה",
       placeholder: "חיפוש בשיחה…",

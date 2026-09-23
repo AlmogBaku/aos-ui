@@ -10,6 +10,11 @@ import type {
   ToolRunKind,
 } from "@/components/tool-ui/locale"
 import { toolIconKind } from "@/components/tool-ui/tool-call-presentation"
+import {
+  diffStats,
+  readAosToolArtifact,
+  type AosDiffStats,
+} from "@/components/tool-ui/tool-artifact"
 import type { RichToolPart } from "@/components/tool-ui/types"
 
 /**
@@ -21,6 +26,7 @@ export type TurnPart = {
   readonly type: string
   readonly toolName?: string
   readonly toolUI?: unknown
+  readonly artifact?: unknown
 }
 
 /** The tool-UI registry `MessagePrimitive.GroupedParts` hands to a `groupBy`. */
@@ -186,14 +192,42 @@ export function createTurnGroupBy(
   })
 }
 
-export type TurnOutcome = "worked" | "stopped" | "failed"
+export type TurnOutcome =
+  | "worked"
+  | "stopped"
+  | "failed"
+  | "truncated"
+  | "refused"
 
-/** Which headline a settled turn earns: it finished, you stopped it, it broke. */
+/**
+ * Which headline a settled turn earns: it finished, you stopped it, the model
+ * hit its length limit or declined, or it broke.
+ */
 export function turnOutcome(
   status: { readonly type: string; readonly reason?: string } | undefined
 ): TurnOutcome {
   if (status?.type !== "incomplete") return "worked"
-  return status.reason === "cancelled" ? "stopped" : "failed"
+  switch (status.reason) {
+    case "cancelled":
+      return "stopped"
+    case "length":
+      return "truncated"
+    case "content-filter":
+      return "refused"
+    default:
+      return "failed"
+  }
+}
+
+/** What every tool call in the turn changed, summed over its reported diffs. */
+export function turnDiffStats(parts: readonly TurnPart[]): AosDiffStats {
+  return diffStats(
+    parts.flatMap((part) =>
+      part.type === "tool-call"
+        ? (readAosToolArtifact(part.artifact)?.diffs ?? [])
+        : []
+    )
+  )
 }
 
 function toolRunKind(toolName: string): ToolRunKind {

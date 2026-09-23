@@ -639,8 +639,15 @@ export function createFixtureChatModel(
         }
 
         if (options.abortSignal.aborted) return
+        if (scenario.status) yield { status: scenario.status }
         if (scenario.outage) throw scenario.outage
-        workspace.finishRunActivity(activity, "finished")
+        workspace.finishRunActivity(
+          activity,
+          scenario.status?.type === "incomplete" &&
+            scenario.status.reason === "error"
+            ? "failed"
+            : "finished"
+        )
       } catch (reason) {
         workspace.finishRunActivity(activity, "failed")
         throw reason
