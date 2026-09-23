@@ -32,6 +32,9 @@ the native runtime. If it is missing, `curl` is unavailable, or the request
 fails, report setup-needed with that exact cause. Send one POST only; never
 retry an uncertain response.
 
+This is a plain HTTP call from the shell. It needs no browser, UI session, or
+cookie. Never mint an invitation through a browser tool.
+
 ```bash
 curl --fail-with-body --silent --show-error \
   --header "origin: ${AOS_RUNTIME_PROXY_URL%/}" \
@@ -40,11 +43,27 @@ curl --fail-with-body --silent --show-error \
   "${AOS_RUNTIME_PROXY_URL%/}/api/aos/v1/guest-invitations"
 ```
 
+The `origin` header is the endpoint's only gate: it must equal the proxy's
+configured public origin exactly. Responses:
+
+- `201` — `{"url": ...}`.
+- `403` — the `origin` header is missing or differs from the public origin. If
+  `AOS_RUNTIME_PROXY_URL` is a loopback or internal address, it will not match;
+  report setup-needed and name both values.
+- `400` — the body is not a valid invitation request.
+- `404` — the `agent` is not in the catalog.
+
 Set `request_json` to a strict JSON object containing `agent`. The endpoint
 uses the same fields as the local CLI: optional `ref`, `expiresIn`, `prefill`,
 `instruction`, `lang`, `name`, `logo`, `accent`, `title`, and `message`. Omit
 `ref` to generate one and omit `expiresIn` for the 72-hour default.
 
-Read `url` from the JSON response and return it unchanged. State that it is a
-reusable bearer credential until expiry. The JWT is signed but not encrypted,
-so its holder can read every claim. Never put secrets in `ui` or `firstTurn`.
+Read `url` from the JSON response. State that it is a reusable bearer credential
+until expiry. The JWT is signed but not encrypted, so its holder can read every
+claim. Never put secrets in `ui` or `firstTurn`.
+
+By default, return `url` unchanged. When a calling workflow transforms it (for
+example, shortening it or putting it in a draft), do the POST and the transform
+in one shell process. Keep the URL in a variable or pipe, and print only the
+derived result. Never write the raw URL to disk, log it, or pass it between
+tools. A calling skill should invoke this skill rather than copy its request.
