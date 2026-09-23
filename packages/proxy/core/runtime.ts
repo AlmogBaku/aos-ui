@@ -91,6 +91,11 @@ export type ServerTurnEngine = {
         requests?: PendingRequest[]
         /** The handle's events begin at the native turn's first event. */
         fromStart?: boolean
+        /**
+         * Epoch ms the native turn began. With `fromStart`, a reload cuts its
+         * history page there; without it, that reload can only be reset.
+         */
+        startedAt?: number
       }
     | undefined
   >

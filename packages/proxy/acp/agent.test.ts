@@ -3555,9 +3555,12 @@ describe("Session rooms", () => {
   })
 })
 
-/** A turn the runtime started by itself, adopted as it is read from its start. */
-function adopted(handle: EventSource) {
-  return { handle, state: "running" as const, fromStart: true }
+/**
+ * A turn the runtime started by itself at `startedAt`, adopted as it is read
+ * from its start.
+ */
+function adopted(handle: EventSource, startedAt = Date.now()) {
+  return { handle, state: "running" as const, fromStart: true, startedAt }
 }
 
 /** One stored row of a turn, dated `createdAt`. */
@@ -3603,10 +3606,12 @@ describe("Reloading a running turn", () => {
   it("shows a reload a turn the runtime started by itself once", async () => {
     const watchers: ServerTurnWatcher[] = []
     const background = new EventSource()
-    const turns = [adopted(background)]
+    // The turn stored rows before this proxy adopted it.
+    const startedAt = Date.now() - 60_000
+    const turns = [adopted(background, startedAt)]
     const test = await harness({
       providerIds: true,
-      history: storedLiveTurn(),
+      history: storedLiveTurn(new Date(startedAt + 1_000).toISOString()),
       watch: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
@@ -3629,6 +3634,39 @@ describe("Reloading a running turn", () => {
       "history user-1",
       "chunk Live",
       "chunk More",
+    ])
+    reloaded.close()
+  })
+
+  it("resets a reload of a turn the runtime started at a time it does not report", async () => {
+    const watchers: ServerTurnWatcher[] = []
+    const background = new EventSource()
+    const turns = [
+      { handle: background, state: "running" as const, fromStart: true },
+    ]
+    const test = await harness({
+      providerIds: true,
+      history: storedLiveTurn(),
+      watch: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      discover: async () => turns.shift(),
+    })
+    await test.list()
+    await open(test)
+    background.emit(turnStarted())
+    chunk(background, "Live")
+    watchers[0]!.onTurn()
+    await test.recorder.wait(said("Live"))
+
+    const reloaded = await reloadAlone(test)
+    await reloaded.recorder.wait(said("AOS_RESET_REQUIRED"))
+    await settled()
+
+    expect(withoutStates(flow(reloaded.recorder))).toEqual([
+      "history user-1",
+      "history assistant-0",
     ])
     reloaded.close()
   })

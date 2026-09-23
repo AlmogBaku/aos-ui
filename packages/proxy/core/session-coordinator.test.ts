@@ -2213,6 +2213,33 @@ describe("SessionCoordinator", () => {
       member.close()
     })
 
+    it("starts the replay where the runtime says the adopted turn began", async () => {
+      const startedAt = Date.now() - 60_000
+      const reported = await afterOneTurn(async () => ({
+        handle: new EventSource(),
+        state: "running",
+        fromStart: true,
+        startedAt,
+      }))
+      const unreported = await afterOneTurn(async () => ({
+        handle: new EventSource(),
+        state: "running",
+        fromStart: true,
+      }))
+
+      await reported.sessions.discover(scope)
+      await unreported.sessions.discover(scope)
+
+      expect(reported.sessions.replayStart(scope)).toEqual({
+        turnId: reported.sessions.snapshot(scope).turnId,
+        at: startedAt,
+      })
+      expect(unreported.sessions.replayStart(scope)).toEqual({
+        turnId: unreported.sessions.snapshot(scope).turnId,
+        at: undefined,
+      })
+    })
+
     it("leaves the finished record alone when the runtime is idle", async () => {
       const { engine, sessions } = await afterOneTurn(async () => undefined)
 

@@ -264,8 +264,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * the coordinator replays from its start is shown by that replay alone: the
    * stream the member held stops before the page is read, and the page is cut
    * where the turn began, so `restarted` names the turn the view then shows
-   * only while its follow streams it. A page that cannot be cut there is kept
-   * whole and its follow `reset`. Any other turn keeps the page: its start is
+   * only while its follow streams it. A page that cannot be cut there, or a
+   * turn adopted without its native start, is kept whole and its follow
+   * `reset`. Any other turn keeps the page: its start is
    * gone and a cursorless follow could only reset it. A turn that starts during
    * the read waits for the page and is replayed the same way. The guest lane
    * validates its authoritative page before anything reads it.
@@ -297,7 +298,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const shown =
       restarted ?? (held ? coordinator.replayStart(scope) : undefined)
     if (!shown) return { history, held }
-    const cut = beforeLiveTurn(history, shown.at)
+    const cut =
+      shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
     return {
       history: cut ?? history,
       held,

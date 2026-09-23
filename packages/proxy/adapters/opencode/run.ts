@@ -34,6 +34,7 @@ import {
   type ValidatedOpenCodeEvent,
 } from "./events"
 import { openCodePromptFiles } from "./content"
+import { openCodeTimestamp } from "./native-schemas"
 
 const MAX_HISTORY_PAGES = 1_000
 const MAX_USER_TURN_BYTES = 1024 * 1024
@@ -336,11 +337,18 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     const key = turnKey(scope)
     const admission = latestAdmission(await this.#readHistory(scope.sessionId))
     const id = admission?.data.messageID as string | undefined
-    if (id === undefined || id === this.#ownAdmissions.get(key))
+    if (!admission || id === undefined || id === this.#ownAdmissions.get(key))
       return undefined
     this.#adoptedAdmissions.set(key, { turnId, admissionId: id })
     const handle = await this.#recoverRun(scope, undefined, id)
-    return { handle, state: "running" as const, fromStart: true }
+    return {
+      handle,
+      state: "running" as const,
+      fromStart: true,
+      startedAt: Date.parse(
+        openCodeTimestamp(admission.data.timestamp as number)
+      ),
+    }
   }
 
   /**

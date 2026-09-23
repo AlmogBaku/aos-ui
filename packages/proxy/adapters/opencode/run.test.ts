@@ -66,9 +66,9 @@ function liveEvent(
   }
 }
 
-function admitted(seq: number, id: string) {
+function admitted(seq: number, id: string, timestamp = seq) {
   return historyEvent(seq, "session.next.prompt.admitted", {
-    timestamp: seq,
+    timestamp,
     messageID: id,
     prompt: { text: "prompt" },
     delivery: "queue",
@@ -1499,8 +1499,9 @@ describe("OpenCodeRunEngine foreign turns", () => {
   })
 
   it("adopts a running foreign turn from its first event, and recovers the same admission later", async () => {
+    const admittedAt = Date.parse("2026-09-24T08:00:00.000Z")
     const log = nativeLog([
-      admitted(0, "msg-tui"),
+      admitted(0, "msg-tui", admittedAt),
       textEnded(1, "From the TUI"),
     ])
     let running = true
@@ -1516,7 +1517,11 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const discovered = await engine.discover(scope, "aos-recovered-1")
     running = false
 
-    expect(discovered).toMatchObject({ state: "running", fromStart: true })
+    expect(discovered).toMatchObject({
+      state: "running",
+      fromStart: true,
+      startedAt: admittedAt,
+    })
     const events = await collect(discovered!.handle)
     expect(events).toEqual([
       { kind: TurnEventKind.TurnStarted },

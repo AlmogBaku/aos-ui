@@ -718,6 +718,22 @@ describe("useAcpRuntime", () => {
       expect(fake.resumeSession).toHaveBeenCalledTimes(1)
     })
 
+    it("does not reload an uncertain state restated after the replay", async () => {
+      const { fake } = await mountWithHistory()
+      await act(async () => {
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.uncertain,
+          },
+          TURN_META
+        )
+      })
+      await act(async () => {})
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    })
+
     it("does not reload a failure its reply already shows", async () => {
       const { fake, result } = await mountWithHistory()
       await act(async () => {

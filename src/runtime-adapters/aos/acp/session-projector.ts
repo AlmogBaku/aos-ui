@@ -1073,14 +1073,17 @@ export function failLatestTurn(
 }
 
 /**
- * Whether the update between the two states ended the run in a failure before
- * it wrote a reply, so no turn of its own shows the failure.
+ * Whether the update between the two states ended a live run in a failure
+ * before it wrote a reply, so no turn of its own shows the failure. A settled
+ * state the proxy restates, such as an uncertain one, ends no run.
  */
 export function failedWithoutReply(
   before: ProjectorState,
   after: ProjectorState
 ): boolean {
   return (
+    (before.execution.status === "running" ||
+      before.execution.status === "waiting-for-input") &&
     after.execution !== before.execution &&
     after.execution.status === "failed" &&
     activeAssistantId(before) === undefined

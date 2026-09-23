@@ -115,7 +115,8 @@ type Segment = {
   onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
    * Epoch ms the turn's replay starts from: its admission, the answer that
-   * continued it, or when it was adopted. Absent for a turn joined midway.
+   * continued it, or the native start an adopted turn reported. Absent for a
+   * turn joined midway, or adopted without a start.
    */
   startedAt?: number
   /**
@@ -129,8 +130,11 @@ type Segment = {
 
 /** How a segment relates to the replayable history of its turn. */
 type SegmentHistory =
-  /** First segment of a turn, which began at `at`: its own journal and sequence. */
-  | { journal: "start"; at: number }
+  /**
+   * First segment of a turn, which began at `at` when that is known: its own
+   * journal and sequence.
+   */
+  | { journal: "start"; at: number | undefined }
   /** Later segment of the same turn: continues the replaced segment's journal. */
   | { journal: "continue"; previous?: Segment }
   /** A provider turn AOS never streamed from its beginning. */
@@ -423,11 +427,12 @@ export class SessionCoordinator {
 
   /**
    * The live turn a cursorless follow replays from its first event, and when
-   * that start was: a view rebuilt from history reads the turn from there.
+   * that start was if it is known: a view rebuilt from history reads the turn
+   * from there.
    */
   replayStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
-    if (!segment?.startedAt || replayPlan(segment, undefined) !== "history")
+    if (!segment || replayPlan(segment, undefined) !== "history")
       return undefined
     return { turnId: segment.turnId, at: segment.startedAt }
   }
@@ -529,7 +534,7 @@ export class SessionCoordinator {
         // Only a stream that begins at the native turn's start can replay it;
         // any other joined the turn midway and has nothing a reload can trust.
         history: discovered.fromStart
-          ? { journal: "start", at: Date.now() }
+          ? { journal: "start", at: discovered.startedAt }
           : { journal: "none" },
       })
       this.#trackJournal(segment)
@@ -994,7 +999,9 @@ export class SessionCoordinator {
       }),
       journal: segmentJournal(init.history),
       ...(init.history.journal === "start"
-        ? { startedAt: init.history.at }
+        ? init.history.at === undefined
+          ? {}
+          : { startedAt: init.history.at }
         : previous?.startedAt === undefined
           ? {}
           : { startedAt: previous.startedAt }),
