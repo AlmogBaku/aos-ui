@@ -16,7 +16,7 @@ import {
   startSelectedRun,
 } from "./notifications"
 
-test("the first watched run offers the ask, and turning it on delivers one alert", async ({
+test("the first watched turn offers the ask, and turning it on delivers one alert", async ({
   page,
 }) => {
   await prepare(page)

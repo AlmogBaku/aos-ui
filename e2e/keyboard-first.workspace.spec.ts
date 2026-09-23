@@ -276,7 +276,7 @@ test("Escape closes only the active overlay and leaves the composer draft intact
   await expect(commandsTrigger(page)).toBeFocused()
 })
 
-test("Escape cancels a busy run without dropping queued work, which re-arms on an explicit send", async ({
+test("Escape cancels a busy turn without dropping queued work, which re-arms on an explicit send", async ({
   page,
 }) => {
   await page.clock.install()

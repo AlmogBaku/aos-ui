@@ -450,7 +450,7 @@ test("Hebrew names a length stop in its notice and its fold", async ({
   ).toBeVisible()
 })
 
-test("a failed run names the provider and model it ran on", async ({
+test("a failed turn names the provider and model it ran on", async ({
   page,
 }) => {
   await openWorkspace(page)
