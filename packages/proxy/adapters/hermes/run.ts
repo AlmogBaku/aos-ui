@@ -21,7 +21,9 @@ import {
   ServerTurnConflictError,
   type RecoveryRequest,
   type ServerTurnHandle,
+  type ServerTurnWatcher,
 } from "../../core/runtime"
+import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import {
@@ -119,6 +121,8 @@ const REFUSAL_FAILURES: Record<
  * to be re-delivered before AOS reports the question lost.
  */
 const LOST_INTERACTION_GRACE_MS = 2_000
+/** How long a watch waits before each retry; the last delay repeats. */
+const WATCH_RETRY_MS = [1_000, 5_000, 30_000]
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_REWIND_SOURCE_LENGTH = 256
@@ -200,6 +204,10 @@ export class HermesTurnEngine {
     try {
       // An uncertain run holds the Session until Hermes says its turn is over.
       if (stale) await settleStale(this.#host, stale)
+      // The Session stays busy for AOS while Hermes finishes the previous turn,
+      // and only the barrier makes it this run's: a turn Hermes starts by
+      // itself meanwhile is not.
+      await this.#settling.get(key)?.done
       active = createActiveTurn(scope, input.turnId)
       await attachTurn(this.#host, active, { kind: "barrier" })
     } finally {
@@ -227,8 +235,6 @@ export class HermesTurnEngine {
         this.#fail(active, TURN_FAILURES.interactionExpired)
       return this.#handle(active)
     }
-    // The Session stays busy for AOS while Hermes finishes the previous turn.
-    await this.#settling.get(key)?.done
     const status = await readStatus(this.#host, active.liveSessionId)
     if (!this.#isSubmitEligible(active)) return this.#handle(active)
     if (status === undefined) {
@@ -258,6 +264,14 @@ export class HermesTurnEngine {
     scope: HermesTurnScope,
     request: HermesReconnectRequest
   ): Promise<HermesTurnHandle> {
+    return (await this.#recover(scope, request)).handle
+  }
+
+  /** `fromStart`: the handle's frames begin at the native turn's first one. */
+  async #recover(
+    scope: HermesTurnScope,
+    request: HermesReconnectRequest
+  ): Promise<{ handle: HermesTurnHandle; fromStart: boolean }> {
     if (request.threadId !== scope.threadId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
@@ -270,20 +284,22 @@ export class HermesTurnEngine {
         (!existing.uncertain && !existing.detached)
       )
         throw new ServerTurnConflictError()
-      return this.#reattach(
+      const handle = await this.#reattach(
         existing,
         request.position ?? {
           epoch: existing.epoch,
           lastSeen: existing.lastSeen,
         }
       )
+      return { handle, fromStart: false }
     }
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
 
     const active = createActiveTurn(scope, request.turnId)
+    let fromStart: boolean
     try {
-      await attachTurn(
+      fromStart = await attachTurn(
         this.#host,
         active,
         request.position
@@ -299,11 +315,14 @@ export class HermesTurnEngine {
     } finally {
       this.#admissions.delete(key)
     }
-    return this.#handle(active)
+    return { handle: this.#handle(active), fromStart }
   }
 
   async discover(scope: HermesTurnScope, turnId: string) {
     const snapshot = await this.#native.inspectExecution({ ...scope, turnId })
+    // Read after the snapshot: a turn Hermes started once this engine's own
+    // one ended has settled that turn by now, and is discoverable.
+    if (this.#ownsTurn(sessionKey(scope))) return undefined
     const requests = snapshot.requests
     if (snapshot.status === "waiting-for-input" && requests?.length) {
       const events: TurnEvent[] = [
@@ -326,12 +345,101 @@ export class HermesTurnEngine {
       }
     }
     if (snapshot.status !== "running") return undefined
-    const handle = await this.recover(scope, {
+    const { handle, fromStart } = await this.#recover(scope, {
       threadId: scope.threadId,
       turnId,
     })
     this.#watchLostInteraction(scope)
-    return { state: "running" as const, handle }
+    return { state: "running" as const, handle, fromStart }
+  }
+
+  /**
+   * Announces the turns Hermes runs on this Session without this engine: the
+   * edge opens on a turn's `message.start`, or on a subscription that finds one
+   * running, and closes on that turn's end. Every lost stream is re-resumed,
+   * because a restarted or rebound live Session is only reachable that way.
+   */
+  watch(scope: HermesTurnScope, watcher: ServerTurnWatcher): () => void {
+    const key = sessionKey(scope)
+    let stopped = false
+    let open = false
+    let failures = 0
+    let liveSessionId: string | undefined
+    let unsubscribe: (() => void) | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const announce = (own: boolean) => {
+      if (open || stopped) return
+      open = true
+      if (!own) watcher.onTurn()
+    }
+    const recheck = async (id: string) => {
+      const own = this.#ownsTurn(key)
+      const status = await readStatus(this.#host, id)
+      if (status === "working" || status === "waiting") announce(own)
+    }
+    const release = () => {
+      safelyUnsubscribe(unsubscribe)
+      unsubscribe = undefined
+      liveSessionId = undefined
+    }
+    const observer = (signal: AttachmentSignal) => {
+      if (stopped) return
+      if (signal.kind === "reattached") {
+        // Hermes kept the live Session, but the socket may have missed the
+        // turn's start or end.
+        open = false
+        if (liveSessionId) void recheck(liveSessionId)
+        return
+      }
+      if (signal.kind === "lost") {
+        release()
+        void subscribe()
+        return
+      }
+      const event = nativeEvent(signal.event)
+      if (!event || event.session_id !== liveSessionId) return
+      if (event.type === "message.start") announce(this.#active.has(key))
+      else if (
+        event.type === "message.complete" ||
+        (event.type === "session.info" && payloadOf(event).running === false)
+      )
+        open = false
+    }
+    const subscribe = async () => {
+      try {
+        const resumed = await this.#native.resume(scope)
+        if (stopped) return
+        open = false
+        liveSessionId = resumed.liveSessionId
+        const stop = await this.#native.observe(liveSessionId, observer)
+        if (stopped) return safelyUnsubscribe(stop)
+        unsubscribe = stop
+        failures = 0
+        await recheck(liveSessionId)
+      } catch (cause) {
+        if (stopped) return
+        release()
+        // One report per outage; the retries continue silently.
+        if (failures === 0) watcher.onError(cause)
+        const delay =
+          WATCH_RETRY_MS[Math.min(failures, WATCH_RETRY_MS.length - 1)]
+        failures += 1
+        timer = setTimeout(() => void subscribe(), delay)
+        // Retrying is reconciliation, never a reason to keep the process alive.
+        if (typeof timer !== "number") timer.unref()
+      }
+    }
+    void subscribe()
+    return () => {
+      stopped = true
+      clearTimeout(timer)
+      release()
+    }
+  }
+
+  /** Whether this engine runs, or still settles, the Session's current turn. */
+  #ownsTurn(key: string) {
+    return this.#active.has(key) || this.#settling.get(key)?.settled === false
   }
 
   /**

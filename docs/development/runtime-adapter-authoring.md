@@ -302,6 +302,32 @@ The method returns a `Promise<() => void>` (the unsubscribe function;
 `sessions.changed` WebSocket event. The ACP layer calls this method to wake
 the activity feed on connect; adapters that omit it simply receive no wake.
 
+### Turns the runtime starts by itself
+
+Implement the optional `watch(scope, { onTurn, onError })` method on
+`ServerTurnEngine` when the native runtime can start a turn in a Session
+without the proxy: a subagent result, a loop tick, a heartbeat, cron, or
+another native client. A Session's room watches it while any browser has it
+open. The adapter only signals; the shared core adopts the turn through
+`discover` and streams it to every member, who can Stop it like any other.
+
+- Fire `onTurn` when a turn this adapter did not start begins, and again
+  whenever the watch (re)subscribes, at setup or after a reconnect or rebind,
+  while such a turn is running.
+- Stay silent for the adapter's own turns. A foreign turn that starts during
+  one is found by the `discover` the room runs after every turn's end.
+- Fire at most once per native turn, however often the runtime announces it.
+- Own reconnect retries and report failures through `onError`; never throw.
+  The returned stop function may be called more than once and ends retries.
+
+Because the room calls `discover` after every turn's end, `discover` must
+return `undefined` for a turn the adapter admitted, including one still
+settling. It returns a running foreign turn with its events, and sets
+`fromStart` only when those events begin at the native turn's first event, so
+a browser following it replays the whole turn instead of receiving a reset.
+Adapters that omit `watch` behave as before: only turns the proxy started
+reach other browsers.
+
 ### Session read state and `unread`
 
 Project `unread` in `AosSessionInfoMeta` only when the native payload proves the

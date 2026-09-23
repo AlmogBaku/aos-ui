@@ -282,7 +282,7 @@ describe("OpenCodeRunEngine", () => {
       },
     })
 
-    const waiting = await engine.discover(scope)
+    const waiting = await engine.discover(scope, "aos-recovered-1")
 
     expect(waiting?.state).toBe("waiting-for-input")
     expect(waiting?.requests).toEqual([request])
@@ -298,7 +298,9 @@ describe("OpenCodeRunEngine", () => {
       waitingEvents.every((event) => TurnEventSchema.safeParse(event).success)
     ).toBe(true)
 
-    await expect(engine.discover(scope)).resolves.toBe(undefined)
+    await expect(engine.discover(scope, "aos-recovered-1")).resolves.toBe(
+      undefined
+    )
     expect(order).toEqual([
       "ownership",
       "history",
@@ -324,7 +326,9 @@ describe("OpenCodeRunEngine", () => {
       },
     })
 
-    await expect(engine.discover(scope)).rejects.toBe(failure)
+    await expect(engine.discover(scope, "aos-recovered-1")).rejects.toBe(
+      failure
+    )
     expect(state.observation.abort).toHaveBeenCalledOnce()
   })
 
@@ -358,7 +362,7 @@ describe("OpenCodeRunEngine", () => {
       },
     })
 
-    const discovered = engine.discover(scope)
+    const discovered = engine.discover(scope, "aos-recovered-1")
     await until(() => expect(discover).toHaveBeenCalledOnce())
     state.observation.publish(
       liveEvent(0, "session.next.prompt.admitted", {
@@ -1323,5 +1327,245 @@ describe("OpenCodeRunEngine", () => {
     )
     await expect(handle.stop()).rejects.toBe(stopUncertain)
     expect(stopCase.sessions.interrupt).toHaveBeenCalledOnce()
+  })
+})
+
+function live(event: ReturnType<typeof historyEvent>): OpenCodeDurableEvent {
+  return { id: String(event.durable.seq), event: "session", data: event }
+}
+
+function watcher() {
+  return { onTurn: vi.fn(), onError: vi.fn() }
+}
+
+/** A native log the test appends to, served from any requested cursor. */
+function nativeLog(events: ReturnType<typeof historyEvent>[] = []) {
+  return {
+    events,
+    history: vi.fn(async (_id: string, options?: { after?: number }) => ({
+      data: events.filter(
+        (event) => event.durable.seq > (options?.after ?? -1)
+      ),
+      hasMore: false,
+    })),
+  }
+}
+
+describe("OpenCodeRunEngine foreign turns", () => {
+  it("stays silent for its own start, including the submit window and a resubscribe during it", async () => {
+    const log = nativeLog()
+    const watchStreams = [controlledStream(), controlledStream()]
+    const run = controlledStream()
+    const streams = [
+      watchStreams[0]!.source,
+      run.source,
+      watchStreams[1]!.source,
+    ]
+    let running = false
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => streams.shift()!),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
+    const observer = watcher()
+    const stop = engine.watch(scope, observer)
+    await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
+    state.sessions.prompt = vi.fn(
+      async (_id: string, request: { id: string; prompt: unknown }) => {
+        // OpenCode announces the admission before it acknowledges the submit.
+        watchStreams[0]!.publish(live(admitted(0, request.id)))
+        await until(() => expect(watchStreams[0]!.delivered).toBe(1))
+        log.events.push(admitted(0, request.id))
+        running = true
+        return {
+          data: {
+            admittedSeq: 0,
+            id: request.id,
+            sessionID: scope.sessionId,
+            prompt: request.prompt,
+            delivery: "queue",
+            timeCreated: 1,
+          },
+        }
+      }
+    )
+
+    const handle = await engine.start(scope, input())
+    watchStreams[0]!.fail()
+    await until(() => expect(state.sessions.events).toHaveBeenCalledTimes(3))
+    // The resubscribed watch reads its stream only after its running check.
+    watchStreams[1]!.publish(live(textEnded(1, "Working")))
+    await until(() => expect(watchStreams[1]!.delivered).toBe(1))
+
+    expect(observer.onError).toHaveBeenCalledOnce()
+    expect(observer.onTurn).not.toHaveBeenCalled()
+    stop()
+    running = false
+    await handle.stop()
+  })
+
+  it("announces a foreign start once however often it is delivered", async () => {
+    const state = client()
+    const observer = watcher()
+    const stop = new OpenCodeTurnEngine(state.native).watch(scope, observer)
+    await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
+
+    state.observation.publish(live(admitted(0, "msg-tui")))
+    state.observation.publish(live(admitted(0, "msg-tui")))
+    state.observation.publish(live(textEnded(1, "From the TUI")))
+    await until(() => expect(state.observation.delivered).toBe(3))
+
+    expect(observer.onTurn).toHaveBeenCalledOnce()
+    expect(observer.onError).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it("announces once a foreign turn already running at setup", async () => {
+    const log = nativeLog([admitted(0, "msg-tui"), textEnded(1, "Working")])
+    const state = client({
+      history: log.history,
+      active: vi.fn(async () => ({
+        data: { [scope.sessionId]: { type: "running" } },
+      })),
+    })
+    const observer = watcher()
+    const stop = new OpenCodeTurnEngine(state.native).watch(scope, observer)
+
+    await until(() => expect(observer.onTurn).toHaveBeenCalledOnce())
+    expect(state.sessions.events).toHaveBeenCalledWith(
+      scope.sessionId,
+      expect.objectContaining({ after: "1" })
+    )
+    state.observation.publish(live(textEnded(2, "Still working")))
+    await until(() => expect(state.observation.delivered).toBe(1))
+    expect(observer.onTurn).toHaveBeenCalledOnce()
+    stop()
+  })
+
+  it("reconnects after a stream failure and announces a foreign turn found running", async () => {
+    const log = nativeLog()
+    const first = controlledStream()
+    const second = controlledStream()
+    const streams = [first.source, second.source]
+    let running = false
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => streams.shift()!),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+    })
+    const observer = watcher()
+    const stop = new OpenCodeTurnEngine(state.native, {
+      waitRetryMs: 1,
+    }).watch(scope, observer)
+    await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
+
+    // The foreign turn starts while the stream is down.
+    log.events.push(admitted(0, "msg-tui"))
+    running = true
+    first.fail()
+
+    await until(() => expect(observer.onTurn).toHaveBeenCalledOnce())
+    expect(observer.onError).toHaveBeenCalledOnce()
+    expect(state.sessions.events).toHaveBeenCalledTimes(2)
+    stop()
+  })
+
+  it("stops once, ending its stream and every retry", async () => {
+    const state = client()
+    const observer = watcher()
+    const stop = new OpenCodeTurnEngine(state.native, {
+      waitRetryMs: 20,
+    }).watch(scope, observer)
+    await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
+
+    state.observation.fail()
+    await until(() => expect(observer.onError).toHaveBeenCalledOnce())
+    stop()
+    stop()
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    expect(state.sessions.events).toHaveBeenCalledOnce()
+    expect(observer.onError).toHaveBeenCalledOnce()
+    expect(observer.onTurn).not.toHaveBeenCalled()
+  })
+
+  it("adopts a running foreign turn from its first event, and recovers the same admission later", async () => {
+    const log = nativeLog([
+      admitted(0, "msg-tui"),
+      textEnded(1, "From the TUI"),
+    ])
+    let running = true
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => controlledStream().source),
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
+
+    const discovered = await engine.discover(scope, "aos-recovered-1")
+    running = false
+
+    expect(discovered).toMatchObject({ state: "running", fromStart: true })
+    const events = await collect(discovered!.handle)
+    expect(events).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "From the TUI",
+      },
+      { kind: TurnEventKind.TurnEnded },
+    ])
+
+    const recovered = await engine.recover(scope, {
+      threadId: scope.threadId,
+      turnId: "aos-recovered-1",
+    })
+    expect(JSON.stringify(await collect(recovered))).toContain("From the TUI")
+    expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
+  it("never discovers its own running turn", async () => {
+    const log = nativeLog()
+    let running = false
+    const state = client({
+      history: log.history,
+      active: vi.fn(async () => ({
+        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+      })),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          log.events.push(admitted(0, request.id))
+          running = true
+          return {
+            data: {
+              admittedSeq: 0,
+              id: request.id,
+              sessionID: scope.sessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
+    })
+    const engine = new OpenCodeTurnEngine(state.native)
+    const handle = await engine.start(scope, input())
+
+    await expect(
+      engine.discover(scope, "aos-recovered-1")
+    ).resolves.toBeUndefined()
+    running = false
+    await handle.stop()
   })
 })

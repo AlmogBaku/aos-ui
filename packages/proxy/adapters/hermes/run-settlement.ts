@@ -385,7 +385,10 @@ async function awaitSettled(
   safelyUnsubscribe(active.unsubscribe)
 }
 
-/** After the turn ended, the only frame left that matters is Hermes idling. */
+/**
+ * After the turn ended, the only frames left that matter are Hermes idling or
+ * starting its next turn, which it does only once this one is over.
+ */
 export function observeSettling(
   host: TurnEngineHost,
   active: ActiveTurn,
@@ -395,6 +398,9 @@ export function observeSettling(
   if (watcher?.active !== active) return
   const event = nativeEvent(value)
   if (event?.session_id !== active.liveSessionId) return
-  if (event.type === "session.info" && payloadOf(event).running === false)
+  if (
+    event.type === "message.start" ||
+    (event.type === "session.info" && payloadOf(event).running === false)
+  )
     watcher.settle()
 }
