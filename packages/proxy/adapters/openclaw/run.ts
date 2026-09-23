@@ -1,7 +1,9 @@
 import {
   isRepliesTurn,
+  StopReason,
   TurnEventKind,
   TurnInputSchema,
+  type Cost,
   type PendingRequest,
   type RequestReply,
   type TokenUsage,
@@ -37,6 +39,8 @@ import {
   type OpenClawReconciliationFence,
   type OpenClawSessionLease,
 } from "./subscriptions"
+import { openClawToolKind } from "./tool-kinds"
+import { projectTodos, type Todo } from "../todos"
 
 const MAX_TURN_BYTES = 1_048_576
 const MAX_TEXT_BYTES = 2_000_000
@@ -197,7 +201,15 @@ class EventQueue implements AsyncIterable<TurnEvent> {
   }
 }
 
-type OpenTool = { name: string; messageId: string; ended: boolean }
+type OpenTool = {
+  name: string
+  messageId: string
+  ended: boolean
+  /** When the native start event was stamped, in epoch milliseconds. */
+  startedAt?: number
+  /** The partial output already streamed as `ToolCallOutputChunk`s. */
+  output: string
+}
 
 type ActiveRun = {
   scope: SessionScope
@@ -224,7 +236,10 @@ type ActiveRun = {
   textStarted: boolean
   reasoning: string
   tools: Map<string, OpenTool>
+  /** The last Todo list published, so an unchanged plan is not restated. */
+  planFingerprint?: string
   usage?: TokenUsage[]
+  cost?: Cost
   settled: Promise<void>
   resolveSettled(): void
 }
@@ -238,6 +253,7 @@ type HistorySnapshot = {
   inFlightRun?: {
     runId: string
     text: string
+    todos?: Todo[]
     events?: NativeAgentEvent[]
   }
 }
@@ -312,20 +328,96 @@ function nonnegativeInteger(value: unknown) {
     : undefined
 }
 
-function tokenUsage(value: unknown): TokenUsage[] | undefined {
-  if (!value || typeof value !== "object") return undefined
-  const record = value as Record<string, unknown>
-  const outputTokens = nonnegativeInteger(record.outputTokens)
-  const inputTokens = nonnegativeInteger(record.inputTokens)
-  const totalTokens = nonnegativeInteger(record.totalTokens)
-  const reasoningTokens = nonnegativeInteger(record.reasoningTokens)
-  const usage = {
-    ...(inputTokens === undefined ? {} : { inputTokens }),
-    ...(outputTokens === undefined ? {} : { outputTokens }),
-    ...(totalTokens === undefined ? {} : { totalTokens }),
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+/**
+ * Usage as either native report spells it: the `usage` agent stream counts
+ * `inputTokens`, while a chat event carries the transcript's `input`, `output`,
+ * `cacheRead`, `cacheWrite`, and a priced `cost.total` in US dollars.
+ */
+function nativeUsage(value: unknown): { usage?: TokenUsage[]; cost?: Cost } {
+  const native = record(value)
+  if (!native) return {}
+  const counts = {
+    inputTokens: nonnegativeInteger(native.inputTokens ?? native.input),
+    outputTokens: nonnegativeInteger(native.outputTokens ?? native.output),
+    totalTokens: nonnegativeInteger(native.totalTokens),
+    reasoningTokens: nonnegativeInteger(native.reasoningTokens),
+    cachedInputTokens: nonnegativeInteger(native.cacheRead),
+    cachedWriteTokens: nonnegativeInteger(native.cacheWrite),
   }
-  return Object.keys(usage).length === 0 ? undefined : [usage]
+  const usage = Object.fromEntries(
+    Object.entries(counts).filter(([, count]) => count !== undefined)
+  ) as TokenUsage
+  const amount = record(native.cost)?.total
+  return {
+    ...(Object.keys(usage).length === 0 ? {} : { usage: [usage] }),
+    ...(typeof amount === "number" && Number.isFinite(amount) && amount >= 0
+      ? { cost: { amount, currency: "USD" } }
+      : {}),
+  }
+}
+
+/** The native stop reasons with a clean-end meaning; the rest stay unsaid. */
+const NATIVE_STOP_REASONS: Readonly<Record<string, StopReason>> = {
+  stop: StopReason.EndTurn,
+  length: StopReason.MaxTokens,
+  aborted: StopReason.Cancelled,
+}
+
+function nativeStopReason(value: unknown) {
+  return typeof value === "string" && Object.hasOwn(NATIVE_STOP_REASONS, value)
+    ? NATIVE_STOP_REASONS[value]
+    : undefined
+}
+
+/** The failure a chat error's `errorKind` names, in the public vocabulary. */
+const NATIVE_FAILURES: Readonly<
+  Record<string, { code: string; message: string }>
+> = {
+  timeout: {
+    code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    message: "OpenClaw's model provider timed out on this turn.",
+  },
+  rate_limit: {
+    code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    message: "OpenClaw's model provider is rate limiting this turn.",
+  },
+  context_length: {
+    code: "AOS_PROVIDER_RUN_FAILED",
+    message: "This conversation no longer fits the model's context window.",
+  },
+}
+
+/** A native event's epoch-millisecond stamp, when it is a valid date. */
+function epochMs(value: unknown) {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 8_640_000_000_000_000
+    ? value
+    : undefined
+}
+
+function isoTime(ms: number | undefined) {
+  return ms === undefined ? undefined : new Date(ms).toISOString()
+}
+
+/**
+ * A tool result as text: the text parts of OpenClaw's `{ content }` result
+ * envelope, or the JSON of anything else.
+ */
+function toolText(value: unknown) {
+  if (typeof value === "string") return boundedText(value)
+  const content = record(value)?.content
+  if (!Array.isArray(content)) return safeJson(value, "") || undefined
+  const text = content
+    .map((part) => {
+      const item = record(part)
+      return item?.type === "text" && typeof item.text === "string"
+        ? item.text
+        : ""
+    })
+    .join("")
+  return boundedText(text)
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -415,17 +507,20 @@ function baselineAgentSequence(history: HistorySnapshot, nativeRunId: string) {
 }
 
 /**
- * An in-flight plan is validated so malformed history is still rejected; no
- * plan is projected onto the turn yet.
+ * A native plan's steps as the Session's Todo list, or `undefined` for a
+ * malformed plan. OpenClaw numbers nothing, so a step's position is its id.
  */
-function validPlan(value: unknown) {
+function planTodos(value: unknown): Todo[] | undefined {
   const candidate = record(value)
   if (
     !candidate ||
     !Array.isArray(candidate.steps) ||
-    candidate.steps.length > 100
+    candidate.steps.length > 100 ||
+    (candidate.explanation !== undefined &&
+      boundedText(candidate.explanation) === undefined)
   )
-    return false
+    return undefined
+  const todos: Array<{ content: string; status: string }> = []
   for (const entry of candidate.steps) {
     const item = record(entry)
     const step = boundedText(item?.step)
@@ -436,12 +531,10 @@ function validPlan(value: unknown) {
         status !== "in_progress" &&
         status !== "completed")
     )
-      return false
+      return undefined
+    todos.push({ content: step, status })
   }
-  return (
-    candidate.explanation === undefined ||
-    boundedText(candidate.explanation) !== undefined
-  )
+  return projectTodos({ todos }, { in_progress: "active" })
 }
 
 function validatedProgressEvent(
@@ -515,7 +608,8 @@ function validateHistory(
     if (!validId(native.runId)) return undefined
     const text = boundedText(native.text)
     if (text === undefined) return undefined
-    if (native.plan !== undefined && !validPlan(native.plan)) return undefined
+    const todos = native.plan === undefined ? undefined : planTodos(native.plan)
+    if (native.plan !== undefined && todos === undefined) return undefined
     let events: NativeAgentEvent[] | undefined
     if (native.events !== undefined) {
       if (!Array.isArray(native.events) || native.events.length > 200)
@@ -534,6 +628,7 @@ function validateHistory(
     inFlightRun = {
       runId: native.runId,
       text,
+      ...(todos ? { todos } : {}),
       ...(events ? { events } : {}),
     }
   }
@@ -636,7 +731,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       !text?.trim() ||
       ("rewindSourceId" in input && input.rewindSourceId !== undefined)
     )
-      throw new Error("AOS turns require exactly one authorized plain-text turn")
+      throw new Error(
+        "AOS turns require exactly one authorized plain-text turn"
+      )
     if (text !== undefined && encoder.encode(text).byteLength > MAX_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 
@@ -754,6 +851,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         reconciliationDirty: false,
         text: repliesSnapshot?.text ?? "",
         ...(replies ? { textBaseline: repliesSnapshot?.text ?? "" } : {}),
+        ...(repliesSnapshot?.todos
+          ? { planFingerprint: JSON.stringify(repliesSnapshot.todos) }
+          : {}),
         projectedText: "",
         textGeneration: 0,
         textStarted: false,
@@ -899,7 +999,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const key = scopeKey(scope)
     const existing = this.#active.get(key)
     if (existing) {
-      if (existing.turnId !== request.turnId) throw new ServerTurnConflictError()
+      if (existing.turnId !== request.turnId)
+        throw new ServerTurnConflictError()
       existing.queue.close()
       existing.queue = new EventQueue(() =>
         this.#fail(
@@ -985,6 +1086,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         reconciliationDirty: false,
         text: inFlightSnapshot?.text ?? "",
         ...(inFlightSnapshot ? { textBaseline: inFlightSnapshot.text } : {}),
+        ...(inFlightSnapshot?.todos
+          ? { planFingerprint: JSON.stringify(inFlightSnapshot.todos) }
+          : {}),
         projectedText: "",
         textGeneration: 0,
         textStarted: false,
@@ -1312,8 +1416,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   }
 
   #acceptChat(active: ActiveRun, payload: Record<string, unknown>) {
-    const usage = tokenUsage(payload.usage)
-    if (usage) active.usage = usage
+    this.#acceptUsage(active, payload.usage)
     if (payload.state === "delta") {
       const delta = boundedText(payload.deltaText)
       if (delta) {
@@ -1324,22 +1427,42 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
     if (payload.state === "final") {
       this.#flushTerminalText(active, payload.message)
-      this.#finish(active)
+      this.#finish(active, nativeStopReason(payload.stopReason))
       return
     }
     if (payload.state === "aborted") {
       this.#flushTerminalText(active, payload.message)
-      this.#finish(active)
+      this.#finish(active, StopReason.Cancelled)
       return
     }
     if (payload.state === "error") {
       this.#flushTerminalText(active, payload.message)
-      this.#fail(
-        active,
-        "AOS_PROVIDER_RUN_FAILED",
-        "OpenClaw could not complete this turn."
-      )
+      // A refusal is the model's answer, not a failure of the turn.
+      if (payload.errorKind === "refusal") {
+        this.#finish(active, StopReason.Refusal)
+        return
+      }
+      const failure = (typeof payload.errorKind === "string" &&
+        Object.hasOwn(NATIVE_FAILURES, payload.errorKind) &&
+        NATIVE_FAILURES[payload.errorKind]) || {
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "OpenClaw could not complete this turn.",
+      }
+      const detail = record(payload.errorDetail)
+      const message = record(payload.message)
+      const provider = detail?.provider ?? message?.provider
+      const model = detail?.model ?? message?.model
+      this.#fail(active, failure.code, failure.message, {
+        ...(validId(provider) ? { provider } : {}),
+        ...(validId(model) ? { model } : {}),
+      })
     }
+  }
+
+  #acceptUsage(active: ActiveRun, value: unknown) {
+    const { usage, cost } = nativeUsage(value)
+    if (usage) active.usage = usage
+    if (cost) active.cost = cost
   }
 
   #flushTerminalText(active: ActiveRun, message: unknown) {
@@ -1373,11 +1496,23 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       return
     }
     if (stream === "usage") {
-      const usage = tokenUsage(data)
-      if (usage) active.usage = usage
+      this.#acceptUsage(active, data)
       return
     }
-    if (stream === "tool") this.#acceptTool(active, data)
+    if (stream === "plan") {
+      if (data.steps === undefined) return
+      const todos = planTodos(data)
+      if (todos) this.#emitPlan(active, todos)
+      return
+    }
+    if (stream === "tool") this.#acceptTool(active, data, payload.ts)
+  }
+
+  #emitPlan(active: ActiveRun, todos: Todo[]) {
+    const fingerprint = JSON.stringify(todos)
+    if (fingerprint === active.planFingerprint) return
+    active.planFingerprint = fingerprint
+    active.queue.push({ kind: TurnEventKind.PlanUpdated, todos })
   }
 
   #remaining(previous: string, cumulative: string | undefined) {
@@ -1448,38 +1583,40 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       : `${active.turnId}:assistant:${active.textGeneration + 1}`
   }
 
-  #acceptTool(active: ActiveRun, data: Record<string, unknown>) {
+  #acceptTool(active: ActiveRun, data: Record<string, unknown>, ts: unknown) {
     const toolCallId = validId(data.toolCallId) ? data.toolCallId : undefined
     if (!toolCallId) return
     if (data.phase === "start") {
       if (active.tools.has(toolCallId)) return
-      const name = validId(data.name) ? data.name : "tool"
-      const tool = {
-        name,
-        messageId: this.#messageId(active),
-        ended: false,
-      }
-      active.tools.set(toolCallId, tool)
       this.#startTool(
         active,
         toolCallId,
-        tool,
-        this.#toolEvents ? safeJson(data.args) : "{}"
+        data.name,
+        this.#toolEvents ? safeJson(data.args) : "{}",
+        epochMs(ts)
       )
       return
     }
-    if (data.phase !== "result") return
-    let tool = active.tools.get(toolCallId)
-    if (!tool) {
-      const name = validId(data.name) ? data.name : "tool"
-      tool = {
-        name,
-        messageId: this.#messageId(active),
-        ended: false,
-      }
-      active.tools.set(toolCallId, tool)
-      this.#startTool(active, toolCallId, tool, "{}")
+    if (data.phase === "update") {
+      const tool = active.tools.get(toolCallId)
+      const text = this.#toolEvents ? toolText(data.partialResult) : undefined
+      // Each native update restates the whole partial result; only its growth
+      // is new output.
+      if (!tool || tool.ended || !text?.startsWith(tool.output)) return
+      const delta = text.slice(tool.output.length)
+      if (!delta) return
+      tool.output = text
+      active.queue.push({
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId,
+        text: delta,
+      })
+      return
     }
+    if (data.phase !== "result") return
+    const tool =
+      active.tools.get(toolCallId) ??
+      this.#startTool(active, toolCallId, data.name, "{}")
     if (tool.ended) return
     const failed = data.isError === true
     this.#endTool(
@@ -1489,20 +1626,35 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       this.#toolEvents
         ? safeJson(data.result)
         : safeJson({ status: "completed", isError: failed }),
-      failed
+      failed,
+      epochMs(ts)
     )
   }
 
   #startTool(
     active: ActiveRun,
     toolCallId: string,
-    tool: OpenTool,
-    input: string
+    nativeName: unknown,
+    input: string,
+    startedMs?: number
   ) {
+    const name = validId(nativeName) ? nativeName : "tool"
+    const startedAt = isoTime(startedMs)
+    const tool: OpenTool = {
+      name,
+      messageId: this.#messageId(active),
+      ended: false,
+      ...(startedMs === undefined ? {} : { startedAt: startedMs }),
+      output: "",
+    }
+    active.tools.set(toolCallId, tool)
     active.queue.push({
       kind: TurnEventKind.ToolCallStarted,
       toolCallId,
-      title: tool.name,
+      title: name,
+      name,
+      toolKind: openClawToolKind(name),
+      ...(startedAt ? { startedAt } : {}),
       parentMessageId: tool.messageId,
     })
     active.queue.push({
@@ -1510,6 +1662,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       toolCallId,
       delta: input,
     })
+    return tool
   }
 
   #endTool(
@@ -1517,15 +1670,23 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     toolCallId: string,
     tool: OpenTool,
     output: string,
-    failed: boolean
+    failed: boolean,
+    completedMs?: number
   ) {
     tool.ended = true
+    const completedAt = isoTime(completedMs)
+    const durationMs =
+      completedMs !== undefined && tool.startedAt !== undefined
+        ? completedMs - tool.startedAt
+        : undefined
     active.queue.push({ kind: TurnEventKind.ToolCallInputEnded, toolCallId })
     active.queue.push({
       kind: TurnEventKind.ToolCallFinished,
       toolCallId,
       output,
       failed,
+      ...(completedAt ? { completedAt } : {}),
+      ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
     })
   }
 
@@ -1593,6 +1754,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active.lastAgentSeq = event.seq
         this.#acceptAgent(active, event)
       }
+      const todos = history.inFlightRun?.todos
+      if (todos) this.#emitPlan(active, todos)
       this.#appendText(
         active,
         this.#remaining(active.text, history.inFlightRun?.text)
@@ -1707,7 +1870,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     active.queue.close()
   }
 
-  #finish(active: ActiveRun) {
+  #finish(active: ActiveRun, stopReason?: StopReason) {
     if (active.terminal) return
     active.terminal = true
     this.#endOpenTools(
@@ -1717,18 +1880,30 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     )
     active.queue.terminal({
       kind: TurnEventKind.TurnEnded,
+      ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
+      ...(active.cost ? { cost: active.cost } : {}),
     })
     this.#active.delete(scopeKey(active.scope))
     void active.lease.release().catch(() => {})
     active.resolveSettled()
   }
 
-  #fail(active: ActiveRun, code: string, message: string) {
+  #fail(
+    active: ActiveRun,
+    code: string,
+    message: string,
+    origin: { provider?: string; model?: string } = {}
+  ) {
     if (active.terminal) return
     active.terminal = true
     this.#endOpenTools(active, safeJson({ status: "error" }), true)
-    active.queue.terminal({ kind: TurnEventKind.TurnFailed, code, message })
+    active.queue.terminal({
+      kind: TurnEventKind.TurnFailed,
+      code,
+      message,
+      ...origin,
+    })
     this.#active.delete(scopeKey(active.scope))
     void active.lease.release().catch(() => {})
     active.resolveSettled()

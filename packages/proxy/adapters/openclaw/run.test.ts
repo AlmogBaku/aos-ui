@@ -1,5 +1,7 @@
 import {
   PendingRequestKind,
+  StopReason,
+  ToolKind,
   TurnEventKind,
   type RepliesTurnInput,
   type RequestReply,
@@ -1294,11 +1296,21 @@ describe("OpenClaw run engine", () => {
         toolCallId: "new-tool",
       })
     )
-    // OpenClaw plans are not projected onto the turn yet.
-    expect(serialized).not.toContain(TurnEventKind.PlanUpdated)
+    // Only the plan the answer changed is new; the baseline plan stays unsaid.
+    expect(
+      events.filter(
+        (event) =>
+          (event as { kind: string }).kind === TurnEventKind.PlanUpdated
+      )
+    ).toEqual([
+      {
+        kind: TurnEventKind.PlanUpdated,
+        todos: [{ id: "0", label: "New plan", status: "active" }],
+      },
+    ])
   })
 
-  it("maps validated native reasoning, text, usage, and tools in order and drops progress", async () => {
+  it("maps validated native reasoning, text, plans, usage, timed tools, and partial output in order", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const engine = new OpenClawTurnEngine({
@@ -1331,6 +1343,20 @@ describe("OpenClaw run engine", () => {
 
     emit("thinking", { text: "checking", delta: "checking" })
     emit("run_status", { phase: "preparing_context" })
+    emit("plan", {
+      phase: "update",
+      steps: [
+        { step: "Search", status: "in_progress" },
+        { step: "Report", status: "pending" },
+      ],
+    })
+    emit("plan", {
+      phase: "update",
+      steps: [
+        { step: "Search", status: "in_progress" },
+        { step: "Report", status: "pending" },
+      ],
+    })
     emit("assistant", { text: "Answer", delta: "Answer" })
     emit("tool", {
       phase: "start",
@@ -1342,7 +1368,15 @@ describe("OpenClaw run engine", () => {
       phase: "update",
       name: "search",
       toolCallId: "tool-1",
-      partialResult: { matches: 1 },
+      partialResult: { content: [{ type: "text", text: "match 1" }] },
+    })
+    emit("tool", {
+      phase: "update",
+      name: "search",
+      toolCallId: "tool-1",
+      partialResult: {
+        content: [{ type: "text", text: "match 1\nmatch 2" }],
+      },
     })
     emit("tool", {
       phase: "result",
@@ -1383,7 +1417,15 @@ describe("OpenClaw run engine", () => {
           message: {
             content: [{ type: "text", text: "Answer tail" }],
           },
-          usage: { outputTokens: 17 },
+          stopReason: "length",
+          usage: {
+            input: 5,
+            output: 17,
+            cacheRead: 3,
+            cacheWrite: 2,
+            totalTokens: 27,
+            cost: { total: 0.0123 },
+          },
         },
       },
       subscriptions.generation
@@ -1401,6 +1443,13 @@ describe("OpenClaw run engine", () => {
         text: "checking",
       },
       {
+        kind: TurnEventKind.PlanUpdated,
+        todos: [
+          { id: "0", label: "Search", status: "active" },
+          { id: "1", label: "Report", status: "pending" },
+        ],
+      },
+      {
         kind: TurnEventKind.MessageChunk,
         messageId: "run-a:assistant",
         text: "Answer",
@@ -1409,6 +1458,9 @@ describe("OpenClaw run engine", () => {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "tool-1",
         title: "search",
+        name: "search",
+        toolKind: ToolKind.Other,
+        startedAt: "1970-01-01T00:00:01.006Z",
         parentMessageId: "run-a:assistant",
       },
       {
@@ -1416,19 +1468,44 @@ describe("OpenClaw run engine", () => {
         toolCallId: "tool-1",
         delta: '{"query":"public"}',
       },
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "tool-1",
+        text: "match 1",
+      },
+      {
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId: "tool-1",
+        text: "\nmatch 2",
+      },
       { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "tool-1" },
       {
         kind: TurnEventKind.ToolCallFinished,
         toolCallId: "tool-1",
         output: '{"matches":2}',
         failed: false,
+        completedAt: "1970-01-01T00:00:01.009Z",
+        durationMs: 3,
       },
       {
         kind: TurnEventKind.MessageChunk,
         messageId: "run-a:assistant",
         text: " tail",
       },
-      { kind: TurnEventKind.TurnEnded, usage: [{ outputTokens: 17 }] },
+      {
+        kind: TurnEventKind.TurnEnded,
+        stopReason: StopReason.MaxTokens,
+        usage: [
+          {
+            inputTokens: 5,
+            outputTokens: 17,
+            totalTokens: 27,
+            cachedInputTokens: 3,
+            cachedWriteTokens: 2,
+          },
+        ],
+        cost: { amount: 0.0123, currency: "USD" },
+      },
     ])
   })
 
@@ -1706,6 +1783,8 @@ describe("OpenClaw run engine", () => {
       toolCallId: "tool-1",
       output: '{"status":"completed","isError":false}',
       failed: false,
+      completedAt: "1970-01-01T00:00:01.001Z",
+      durationMs: 1,
     })
     expect(JSON.stringify(events)).not.toContain("foreign-tool")
   })
@@ -1741,6 +1820,157 @@ describe("OpenClaw run engine", () => {
       text: "Final only",
     })
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
+  })
+
+  it.each([
+    [
+      "a clean final",
+      { state: "final", stopReason: "stop" },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
+    ],
+    [
+      "a final with an unmapped stop reason",
+      { state: "final", stopReason: "toolUse" },
+      { kind: TurnEventKind.TurnEnded },
+    ],
+    [
+      "an abort",
+      { state: "aborted" },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.Cancelled },
+    ],
+    [
+      "a refusal",
+      { state: "error", errorKind: "refusal" },
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.Refusal },
+    ],
+    [
+      "a context overflow",
+      {
+        state: "error",
+        errorKind: "context_length",
+        errorMessage: "provider-private detail",
+        errorDetail: { provider: "anthropic", model: "claude-sonnet" },
+      },
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "This conversation no longer fits the model's context window.",
+        provider: "anthropic",
+        model: "claude-sonnet",
+      },
+    ],
+    [
+      "a rate limit named only by the failed message",
+      {
+        state: "error",
+        errorKind: "rate_limit",
+        message: { role: "assistant", provider: "openai", model: "gpt-5" },
+      },
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+        message: "OpenClaw's model provider is rate limiting this turn.",
+        provider: "openai",
+        model: "gpt-5",
+      },
+    ],
+    [
+      "an unclassified error",
+      { state: "error" },
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "OpenClaw could not complete this turn.",
+      },
+    ],
+  ])("ends the turn as the native chat reports %s", async (_, chat, ended) => {
+    const native = new ControlledNative()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
+    const handle = await engine.start(scope, input())
+
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 30,
+        payload: {
+          runId: "run-a",
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq: 0,
+          ...chat,
+        },
+      },
+      subscriptions.generation
+    )
+
+    const events: unknown[] = []
+    for await (const event of handle.events) events.push(event)
+    expect(events.at(-1)).toEqual(ended)
+  })
+
+  it("streams no partial tool output when tool events were not negotiated", async () => {
+    const native = new ControlledNative()
+    const subscriptions = new OpenClawSessionSubscriptions(native)
+    const engine = new OpenClawTurnEngine({ client: native, subscriptions })
+    const handle = await engine.start(scope, input())
+    const phases = [
+      { phase: "start", name: "exec", toolCallId: "tool-1", args: {} },
+      {
+        phase: "update",
+        name: "exec",
+        toolCallId: "tool-1",
+        partialResult: "partial-secret",
+      },
+    ]
+    for (const [seq, data] of phases.entries())
+      subscriptions.accept(
+        {
+          type: "event",
+          event: "agent",
+          seq,
+          payload: {
+            runId: "run-a",
+            sessionKey: scope.sessionId,
+            agentId: scope.agentId,
+            seq,
+            stream: "tool",
+            ts: 1_000 + seq,
+            data,
+          },
+        },
+        subscriptions.generation
+      )
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 30,
+        payload: {
+          runId: "run-a",
+          sessionKey: scope.sessionId,
+          agentId: scope.agentId,
+          seq: 0,
+          state: "final",
+        },
+      },
+      subscriptions.generation
+    )
+
+    const events: unknown[] = []
+    for await (const event of handle.events) events.push(event)
+    expect(JSON.stringify(events)).not.toContain("partial-secret")
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: TurnEventKind.ToolCallStarted,
+        name: "exec",
+        toolKind: ToolKind.Execute,
+      })
+    )
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ kind: TurnEventKind.ToolCallOutputChunk })
+    )
   })
 
   it("resubscribes and reconciles active-run identity without resending the prompt", async () => {
@@ -1960,13 +2190,17 @@ describe("OpenClaw run engine", () => {
     expect(serialized).not.toContain("history-result")
     expect(serialized).not.toContain("live-secret")
     expect(serialized).not.toContain("live-result")
-    // OpenClaw plans are not projected onto the turn yet.
-    expect(serialized).not.toContain(TurnEventKind.PlanUpdated)
     expect(events).toEqual(
       expect.arrayContaining([
+        {
+          kind: TurnEventKind.PlanUpdated,
+          todos: [{ id: "0", label: "Inspect", status: "active" }],
+        },
         expect.objectContaining({
           kind: TurnEventKind.ToolCallStarted,
           toolCallId: "recovered-tool",
+          name: "read",
+          toolKind: ToolKind.Read,
         }),
         expect.objectContaining({
           kind: TurnEventKind.ToolCallFinished,
