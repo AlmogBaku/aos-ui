@@ -1,11 +1,11 @@
 import {
-  RunEventKind,
+  isRepliesTurn,
+  TurnEventKind,
   TurnInputSchema,
+  type PendingRequest,
   type RequestReply,
-  type RunEvent,
-  type RunInterruptOutcome,
   type TokenUsage,
-  type TurnInput,
+  type TurnEvent,
 } from "../../core/events"
 import { readSessionMessageIdentity } from "@openclaw/gateway-client"
 import {
@@ -69,18 +69,18 @@ export type OpenClawBoundResume = Readonly<{
   /** Proves the response belongs to one pending native run before observation. */
   validate(
     scope: SessionScope,
-    resume: readonly RequestReply[]
+    replies: readonly RequestReply[]
   ): Promise<{ runId: string }>
   /** Rechecks native state and performs at most one response mutation. */
   dispatch(
     scope: SessionScope,
-    resume: readonly RequestReply[]
+    replies: readonly RequestReply[]
   ): Promise<OpenClawBoundResumeResult>
   /** Reconstructs one exact native wait from current Gateway authority. */
   discover?(
     scope: SessionScope & { nativeRunId: string },
     approvalReplay: unknown
-  ): Promise<{ outcome: RunInterruptOutcome } | undefined>
+  ): Promise<{ requests: PendingRequest[] } | undefined>
 }>
 
 export class OpenClawRunPublicError extends Error {
@@ -94,10 +94,10 @@ export class OpenClawRunPublicError extends Error {
   }
 }
 
-type QueueWaiter = (value: IteratorResult<RunEvent>) => void
+type QueueWaiter = (value: IteratorResult<TurnEvent>) => void
 
-class EventQueue implements AsyncIterable<RunEvent> {
-  readonly #events: Array<{ event: RunEvent; bytes: number }> = []
+class EventQueue implements AsyncIterable<TurnEvent> {
+  readonly #events: Array<{ event: TurnEvent; bytes: number }> = []
   readonly #waiters: QueueWaiter[] = []
   readonly #onOverflow?: () => void
   #bytes = 0
@@ -107,7 +107,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
     this.#onOverflow = onOverflow
   }
 
-  push(event: RunEvent) {
+  push(event: TurnEvent) {
     if (this.#closed) return false
     let bytes: number
     try {
@@ -132,7 +132,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
     return true
   }
 
-  terminal(event: RunEvent) {
+  terminal(event: TurnEvent) {
     if (this.#closed) return
     const waiter = this.#waiters.shift()
     if (waiter) {
@@ -152,7 +152,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
         this.#bytes += bytes
       } else {
         const started =
-          this.#events[0]?.event.type === RunEventKind.RUN_STARTED
+          this.#events[0]?.event.kind === TurnEventKind.TurnStarted
             ? this.#events[0]
             : undefined
         this.#events.splice(0)
@@ -181,7 +181,7 @@ class EventQueue implements AsyncIterable<RunEvent> {
       waiter({ done: true, value: undefined })
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<RunEvent> {
+  [Symbol.asyncIterator](): AsyncIterator<TurnEvent> {
     return {
       next: () => {
         const entry = this.#events.shift()
@@ -223,10 +223,7 @@ type ActiveRun = {
   textGeneration: number
   textStarted: boolean
   reasoning: string
-  reasoningStarted: boolean
-  reasoningEnded: boolean
   tools: Map<string, OpenTool>
-  planFingerprint?: string
   usage?: TokenUsage[]
   settled: Promise<void>
   resolveSettled(): void
@@ -241,10 +238,6 @@ type HistorySnapshot = {
   inFlightRun?: {
     runId: string
     text: string
-    plan?: {
-      steps: Array<{ step: string; status: string }>
-      explanation?: string
-    }
     events?: NativeAgentEvent[]
   }
 }
@@ -258,8 +251,6 @@ type NativeAgentEvent = {
   isHeartbeat?: boolean
   data: Record<string, unknown>
 }
-
-type NativePlan = NonNullable<HistorySnapshot["inFlightRun"]>["plan"]
 
 type WaitingRun = {
   scope: SessionScope
@@ -286,19 +277,6 @@ function validId(value: unknown): value is string {
 
 function scopeKey(scope: SessionScope) {
   return `${scope.agentId}\u0000${scope.sessionId}`
-}
-
-function userText(input: TurnInput) {
-  const message = input.messages[0]
-  if (!message || message.role !== "user") return undefined
-  if (typeof message.content === "string") return message.content
-  if (!Array.isArray(message.content)) return undefined
-  let text = ""
-  for (const part of message.content) {
-    if (part.type !== "text") return undefined
-    text += part.text
-  }
-  return text
 }
 
 function boundedText(value: unknown) {
@@ -436,19 +414,18 @@ function baselineAgentSequence(history: HistorySnapshot, nativeRunId: string) {
   )
 }
 
-function planFingerprint(plan: NativePlan) {
-  return plan === undefined ? undefined : safeJson(plan, "") || undefined
-}
-
-function validatedPlan(value: unknown) {
+/**
+ * An in-flight plan is validated so malformed history is still rejected; no
+ * plan is projected onto the turn yet.
+ */
+function validPlan(value: unknown) {
   const candidate = record(value)
   if (
     !candidate ||
     !Array.isArray(candidate.steps) ||
     candidate.steps.length > 100
   )
-    return undefined
-  const steps: Array<{ step: string; status: string }> = []
+    return false
   for (const entry of candidate.steps) {
     const item = record(entry)
     const step = boundedText(item?.step)
@@ -459,16 +436,12 @@ function validatedPlan(value: unknown) {
         status !== "in_progress" &&
         status !== "completed")
     )
-      return undefined
-    steps.push({ step, status })
+      return false
   }
-  const explanation =
-    candidate.explanation === undefined
-      ? undefined
-      : boundedText(candidate.explanation)
-  if (candidate.explanation !== undefined && explanation === undefined)
-    return undefined
-  return { steps, ...(explanation ? { explanation } : {}) }
+  return (
+    candidate.explanation === undefined ||
+    boundedText(candidate.explanation) !== undefined
+  )
 }
 
 function validatedProgressEvent(
@@ -542,9 +515,7 @@ function validateHistory(
     if (!validId(native.runId)) return undefined
     const text = boundedText(native.text)
     if (text === undefined) return undefined
-    const plan =
-      native.plan === undefined ? undefined : validatedPlan(native.plan)
-    if (native.plan !== undefined && plan === undefined) return undefined
+    if (native.plan !== undefined && !validPlan(native.plan)) return undefined
     let events: NativeAgentEvent[] | undefined
     if (native.events !== undefined) {
       if (!Array.isArray(native.events) || native.events.length > 200)
@@ -563,7 +534,6 @@ function validateHistory(
     inFlightRun = {
       runId: native.runId,
       text,
-      ...(plan ? { plan } : {}),
       ...(events ? { events } : {}),
     }
   }
@@ -644,40 +614,27 @@ export class OpenClawRunEngine implements ServerRunEngine {
     attachmentStage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
     const input = TurnInputSchema.parse(candidate)
-    const text = userText(input)
-    const resume = input.resume?.length ? input.resume : undefined
+    const replies = isRepliesTurn(input) ? input.replies : undefined
+    const text = isRepliesTurn(input) ? undefined : input.prompt
     const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
     if (attachmentStage && !stagedAttachments)
       throw new Error(
         "The staged attachment payload does not belong to OpenClaw"
       )
-    if (resume && stagedAttachments)
+    if (replies && stagedAttachments)
       throw new Error(
-        "OpenClaw interrupt responses cannot include staged attachments"
+        "OpenClaw request replies cannot include staged attachments"
       )
-    if (
-      !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
-      input.threadId !== scope.threadId
-    )
+    if (!validId(scope.agentId) || !validId(scope.sessionId))
       throw new Error("AOS run scope does not match this Session")
-    if (
-      input.tools.length > 0 ||
-      input.context.length > 0 ||
-      Object.keys(input.state).length > 0 ||
-      Object.keys(input.forwardedProps).length > 0 ||
-      ("rewindSourceId" in candidate && candidate.rewindSourceId !== undefined)
-    )
-      throw new Error("AOS runs require exactly one authorized plain-text turn")
-    if (resume) {
-      if (input.messages.length !== 0 || !this.#resume)
+    if (replies) {
+      if (!this.#resume)
         throw new Error(
-          "OpenClaw interrupt responses require one bound native interaction"
+          "OpenClaw request replies require one bound native interaction"
         )
     } else if (
-      input.messages.length !== 1 ||
-      text === undefined ||
-      !text.trim()
+      !text?.trim() ||
+      ("rewindSourceId" in input && input.rewindSourceId !== undefined)
     )
       throw new Error("AOS runs require exactly one authorized plain-text turn")
     if (text !== undefined && encoder.encode(text).byteLength > MAX_TURN_BYTES)
@@ -688,8 +645,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
     const interactionScope = waiting
       ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
       : scope
-    const resumeBinding = resume
-      ? await this.#resume!.validate(interactionScope, resume)
+    const resumeBinding = replies
+      ? await this.#resume!.validate(interactionScope, replies)
       : undefined
     if (resumeBinding && !validId(resumeBinding.runId))
       throw new Error("OpenClaw returned an invalid interaction binding")
@@ -737,15 +694,15 @@ export class OpenClawRunEngine implements ServerRunEngine {
         (baseline.inFlightRun?.runId === resumeBinding.runId ||
           baseline.activeRunIds?.includes(resumeBinding.runId) === true)
       if (
-        (!resume && !this.#authoritativelyIdle(baseline)) ||
-        (resume && !boundRunActive && !this.#authoritativelyIdle(baseline))
+        (!replies && !this.#authoritativelyIdle(baseline)) ||
+        (replies && !boundRunActive && !this.#authoritativelyIdle(baseline))
       )
         throw new ServerRunConflictError()
       const resumeSnapshot =
-        resume && baseline.inFlightRun?.runId === resumeBinding?.runId
+        replies && baseline.inFlightRun?.runId === resumeBinding?.runId
           ? baseline.inFlightRun
           : undefined
-      const sendParams = resume
+      const sendParams = replies
         ? undefined
         : stagedAttachments
           ? prepareOpenClawChatAttachments(
@@ -753,7 +710,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
                 sessionKey: baseline.sessionKey,
                 agentId: scope.agentId,
                 message: text!,
-                idempotencyKey: input.runId,
+                idempotencyKey: input.turnId,
                 attachments: stagedAttachments.attachments,
               },
               stagedAttachments.policy
@@ -762,7 +719,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
               sessionKey: baseline.sessionKey,
               agentId: scope.agentId,
               message: text!,
-              idempotencyKey: input.runId,
+              idempotencyKey: input.turnId,
             }
       if (sendParams && !validateChatSendParams(sendParams))
         throw new Error("Invalid OpenClaw chat.send request")
@@ -775,15 +732,11 @@ export class OpenClawRunEngine implements ServerRunEngine {
             "OpenClaw produced more live output than AOS can safely buffer."
           )
       })
-      queue.push({
-        type: RunEventKind.RUN_STARTED,
-        threadId: input.threadId,
-        runId: input.runId,
-      })
+      queue.push({ kind: TurnEventKind.TurnStarted })
       const active: ActiveRun = {
         scope,
-        runId: input.runId,
-        nativeRunId: resumeBinding?.runId ?? input.runId,
+        runId: input.turnId,
+        nativeRunId: resumeBinding?.runId ?? input.turnId,
         nativeSessionKey: baseline.sessionKey,
         nativeSessionId: baseline.sessionId,
         queue,
@@ -800,17 +753,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
         reconciling: false,
         reconciliationDirty: false,
         text: resumeSnapshot?.text ?? "",
-        ...(resume ? { textBaseline: resumeSnapshot?.text ?? "" } : {}),
+        ...(replies ? { textBaseline: resumeSnapshot?.text ?? "" } : {}),
         projectedText: "",
         textGeneration: 0,
         textStarted: false,
         reasoning: "",
-        reasoningStarted: false,
-        reasoningEnded: false,
         tools: new Map(),
-        ...(resumeSnapshot?.plan
-          ? { planFingerprint: planFingerprint(resumeSnapshot.plan) }
-          : {}),
         ...settlement(),
       }
       holder.active = active
@@ -821,11 +769,11 @@ export class OpenClawRunEngine implements ServerRunEngine {
         void waiting.lease.release().catch(() => {})
       }
 
-      if (resume) {
+      if (replies) {
         if (active.terminal) return this.#handle(active)
         let result: OpenClawBoundResumeResult
         try {
-          result = await this.#resume!.dispatch(interactionScope, resume)
+          result = await this.#resume!.dispatch(interactionScope, replies)
         } catch {
           this.#fail(
             active,
@@ -960,11 +908,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
           "OpenClaw produced more live output than AOS can safely buffer."
         )
       )
-      existing.queue.push({
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: request.runId,
-      })
+      existing.queue.push({ kind: TurnEventKind.TurnStarted })
       await this.#reconcile(existing).catch(() =>
         this.#markInterrupted(existing)
       )
@@ -1019,11 +963,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
             "OpenClaw produced more live output than AOS can safely buffer."
           )
       })
-      queue.push({
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: request.runId,
-      })
+      queue.push({ kind: TurnEventKind.TurnStarted })
       const active: ActiveRun = {
         scope,
         runId: request.runId,
@@ -1049,12 +989,7 @@ export class OpenClawRunEngine implements ServerRunEngine {
         textGeneration: 0,
         textStarted: false,
         reasoning: "",
-        reasoningStarted: false,
-        reasoningEnded: false,
         tools: new Map(),
-        ...(resumedSnapshot?.plan
-          ? { planFingerprint: planFingerprint(resumedSnapshot.plan) }
-          : {}),
         ...settlement(),
       }
       holder.active = active
@@ -1177,18 +1112,16 @@ export class OpenClawRunEngine implements ServerRunEngine {
         this.#waiting.set(key, waiting)
         await retireExisting()
         lease = undefined
-        const events: RunEvent[] = [
-          { type: RunEventKind.RUN_STARTED, threadId: scope.threadId, runId },
+        const events: TurnEvent[] = [
+          { kind: TurnEventKind.TurnStarted },
           {
-            type: RunEventKind.RUN_FINISHED,
-            threadId: scope.threadId,
-            runId,
-            outcome: discovered.outcome,
+            kind: TurnEventKind.TurnRequiresAction,
+            requests: discovered.requests,
           },
         ]
         return {
           state: "waiting-for-input" as const,
-          interrupts: discovered.outcome.interrupts,
+          requests: discovered.requests,
           handle: {
             events: (async function* () {
               yield* events
@@ -1381,17 +1314,6 @@ export class OpenClawRunEngine implements ServerRunEngine {
   #acceptChat(active: ActiveRun, payload: Record<string, unknown>) {
     const usage = tokenUsage(payload.usage)
     if (usage) active.usage = usage
-    if (payload.state === "status") {
-      const phase = boundedText(payload.phase)
-      if (phase)
-        this.#emitProgress(active, {
-          phase,
-          ...(safeClone(payload.retry) === undefined
-            ? {}
-            : { retry: safeClone(payload.retry) }),
-        })
-      return
-    }
     if (payload.state === "delta") {
       const delta = boundedText(payload.deltaText)
       if (delta) {
@@ -1450,44 +1372,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
       )
       return
     }
-    if (stream === "run_status") {
-      const phase = boundedText(data.phase)
-      if (phase)
-        this.#emitProgress(active, {
-          phase,
-          ...(safeClone(data.retry) === undefined
-            ? {}
-            : { retry: safeClone(data.retry) }),
-        })
-      return
-    }
-    if (stream === "plan") {
-      const phase = boundedText(data.phase)
-      if (!phase) return
-      if (data.steps === undefined) this.#emitPlan(active, phase)
-      else {
-        const plan = validatedPlan(data)
-        if (plan) this.#emitPlan(active, phase, plan)
-      }
-      return
-    }
-    if (stream === "item") {
-      const progressText = boundedText(data.progressText)
-      if (progressText) this.#emitProgress(active, { text: progressText })
-      return
-    }
     if (stream === "usage") {
       const usage = tokenUsage(data)
       if (usage) active.usage = usage
       return
     }
-    if (stream === "tool") {
-      this.#acceptTool(active, data)
-      return
-    }
-    if (stream !== "lifecycle") return
-    const phase = boundedText(data.phase)
-    if (phase) this.#emitProgress(active, { phase })
+    if (stream === "tool") this.#acceptTool(active, data)
   }
 
   #remaining(previous: string, cumulative: string | undefined) {
@@ -1506,30 +1396,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
       )
       return
     }
-    if (!active.reasoningStarted) {
-      active.reasoningStarted = true
-      const messageId = `${active.runId}:reasoning`
-      active.queue.push({ type: RunEventKind.REASONING_START, messageId })
-      active.queue.push({
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId,
-        role: "reasoning",
-      })
-    }
     active.reasoning += delta
     active.queue.push({
-      type: RunEventKind.REASONING_MESSAGE_CONTENT,
-      messageId: `${active.runId}:reasoning`,
-      delta,
+      kind: TurnEventKind.ThoughtChunk,
+      messageId: this.#messageId(active),
+      text: delta,
     })
-  }
-
-  #endReasoning(active: ActiveRun) {
-    if (!active.reasoningStarted || active.reasoningEnded) return
-    active.reasoningEnded = true
-    const messageId = `${active.runId}:reasoning`
-    active.queue.push({ type: RunEventKind.REASONING_MESSAGE_END, messageId })
-    active.queue.push({ type: RunEventKind.REASONING_END, messageId })
   }
 
   #appendText(active: ActiveRun, delta: string | undefined) {
@@ -1547,21 +1419,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
   }
 
   #appendProjectedText(active: ActiveRun, delta: string) {
-    this.#endReasoning(active)
-    const messageId = this.#messageId(active)
-    if (!active.textStarted) {
-      active.textStarted = true
-      active.queue.push({
-        type: RunEventKind.TEXT_MESSAGE_START,
-        messageId,
-        role: "assistant",
-      })
-    }
+    active.textStarted = true
     active.projectedText += delta
     active.queue.push({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
-      messageId,
-      delta,
+      kind: TurnEventKind.MessageChunk,
+      messageId: this.#messageId(active),
+      text: delta,
     })
   }
 
@@ -1573,11 +1436,6 @@ export class OpenClawRunEngine implements ServerRunEngine {
         : text
     active.text = text
     if (projected === active.projectedText) return
-    if (active.textStarted)
-      active.queue.push({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: this.#messageId(active),
-      })
     if (active.textStarted) active.textGeneration += 1
     active.textStarted = false
     active.projectedText = ""
@@ -1588,39 +1446,6 @@ export class OpenClawRunEngine implements ServerRunEngine {
     return active.textGeneration === 0
       ? `${active.runId}:assistant`
       : `${active.runId}:assistant:${active.textGeneration + 1}`
-  }
-
-  #emitProgress(active: ActiveRun, content: Record<string, unknown>) {
-    active.queue.push({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: `${active.runId}:progress`,
-      activityType: "OPENCLAW_PROGRESS",
-      content,
-      replace: true,
-    })
-  }
-
-  #emitPlan(
-    active: ActiveRun,
-    phase: string,
-    plan?: NonNullable<HistorySnapshot["inFlightRun"]>["plan"]
-  ) {
-    if (plan) {
-      const fingerprint = planFingerprint(plan)
-      if (fingerprint !== undefined && fingerprint === active.planFingerprint)
-        return
-      active.planFingerprint = fingerprint
-    }
-    active.queue.push({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: `${active.runId}:plan`,
-      activityType: "PLAN",
-      content: {
-        phase,
-        ...(plan ? plan : {}),
-      },
-      replace: true,
-    })
   }
 
   #acceptTool(active: ActiveRun, data: Record<string, unknown>) {
@@ -1635,45 +1460,12 @@ export class OpenClawRunEngine implements ServerRunEngine {
         ended: false,
       }
       active.tools.set(toolCallId, tool)
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_START,
+      this.#startTool(
+        active,
         toolCallId,
-        toolCallName: name,
-        parentMessageId: tool.messageId,
-      })
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_ARGS,
-        toolCallId,
-        delta: this.#toolEvents ? safeJson(data.args) : "{}",
-      })
-      return
-    }
-    if (
-      data.phase === "input_delta" ||
-      data.phase === "update" ||
-      data.phase === "review"
-    ) {
-      const detail = this.#toolEvents
-        ? safeClone(
-            data.phase === "input_delta"
-              ? data.diff
-              : data.phase === "update"
-                ? data.partialResult
-                : data.review
-          )
-        : undefined
-      active.queue.push({
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: `${active.runId}:tool-progress:${toolCallId}`,
-        activityType: "OPENCLAW_TOOL_PROGRESS",
-        content: {
-          phase: data.phase,
-          toolCallId,
-          ...(validId(data.name) ? { name: data.name } : {}),
-          ...(detail === undefined ? {} : { detail }),
-        },
-        replace: true,
-      })
+        tool,
+        this.#toolEvents ? safeJson(data.args) : "{}"
+      )
       return
     }
     if (data.phase !== "result") return
@@ -1686,30 +1478,61 @@ export class OpenClawRunEngine implements ServerRunEngine {
         ended: false,
       }
       active.tools.set(toolCallId, tool)
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_START,
-        toolCallId,
-        toolCallName: name,
-        parentMessageId: tool.messageId,
-      })
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_ARGS,
-        toolCallId,
-        delta: "{}",
-      })
+      this.#startTool(active, toolCallId, tool, "{}")
     }
     if (tool.ended) return
-    tool.ended = true
-    active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
-    active.queue.push({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: `${active.runId}:tool:${toolCallId}`,
+    const failed = data.isError === true
+    this.#endTool(
+      active,
       toolCallId,
-      content: this.#toolEvents
+      tool,
+      this.#toolEvents
         ? safeJson(data.result)
-        : safeJson({ status: "completed", isError: data.isError === true }),
-      role: "tool",
+        : safeJson({ status: "completed", isError: failed }),
+      failed
+    )
+  }
+
+  #startTool(
+    active: ActiveRun,
+    toolCallId: string,
+    tool: OpenTool,
+    input: string
+  ) {
+    active.queue.push({
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId,
+      title: tool.name,
+      parentMessageId: tool.messageId,
     })
+    active.queue.push({
+      kind: TurnEventKind.ToolCallInputChunk,
+      toolCallId,
+      delta: input,
+    })
+  }
+
+  #endTool(
+    active: ActiveRun,
+    toolCallId: string,
+    tool: OpenTool,
+    output: string,
+    failed: boolean
+  ) {
+    tool.ended = true
+    active.queue.push({ kind: TurnEventKind.ToolCallInputEnded, toolCallId })
+    active.queue.push({
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId,
+      output,
+      failed,
+    })
+  }
+
+  /** Settles every tool the native run left open when the turn ends. */
+  #endOpenTools(active: ActiveRun, output: string, failed: boolean) {
+    for (const [toolCallId, tool] of active.tools)
+      if (!tool.ended) this.#endTool(active, toolCallId, tool, output, failed)
   }
 
   async #reconcile(
@@ -1770,8 +1593,6 @@ export class OpenClawRunEngine implements ServerRunEngine {
         active.lastAgentSeq = event.seq
         this.#acceptAgent(active, event)
       }
-      if (history.inFlightRun?.plan)
-        this.#emitPlan(active, "update", history.inFlightRun.plan)
       this.#appendText(
         active,
         this.#remaining(active.text, history.inFlightRun?.text)
@@ -1882,39 +1703,20 @@ export class OpenClawRunEngine implements ServerRunEngine {
   #markUncertain(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     active.uncertain = true
-    active.queue.push({ type: RunEventKind.RUN_ERROR, code, message })
+    active.queue.push({ kind: TurnEventKind.TurnFailed, code, message })
     active.queue.close()
   }
 
   #finish(active: ActiveRun) {
     if (active.terminal) return
     active.terminal = true
-    this.#endReasoning(active)
-    for (const [toolCallId, tool] of active.tools) {
-      if (tool.ended) continue
-      tool.ended = true
-      active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: `${active.runId}:tool:${toolCallId}`,
-        toolCallId,
-        content: safeJson({
-          status: active.stopping ? "stopped" : "completed",
-        }),
-        role: "tool",
-      })
-    }
-    if (active.textStarted)
-      active.queue.push({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: this.#messageId(active),
-      })
+    this.#endOpenTools(
+      active,
+      safeJson({ status: active.stopping ? "stopped" : "completed" }),
+      false
+    )
     active.queue.terminal({
-      type: RunEventKind.RUN_FINISHED,
-      threadId: active.scope.threadId,
-      runId: active.runId,
-      outcome: { type: "success" },
-      ...(active.stopping ? { result: { stopped: true } } : {}),
+      kind: TurnEventKind.TurnEnded,
       ...(active.usage ? { usage: active.usage } : {}),
     })
     this.#active.delete(scopeKey(active.scope))
@@ -1925,30 +1727,8 @@ export class OpenClawRunEngine implements ServerRunEngine {
   #fail(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     active.terminal = true
-    this.#endReasoning(active)
-    for (const [toolCallId, tool] of active.tools) {
-      if (tool.ended) continue
-      tool.ended = true
-      active.queue.push({ type: RunEventKind.TOOL_CALL_END, toolCallId })
-      active.queue.push({
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: `${active.runId}:tool:${toolCallId}`,
-        toolCallId,
-        content: safeJson({ status: "error" }),
-        role: "tool",
-      })
-    }
-    if (active.textStarted)
-      active.queue.push({
-        type: RunEventKind.TEXT_MESSAGE_END,
-        messageId: this.#messageId(active),
-      })
-    active.queue.terminal({
-      type: RunEventKind.RUN_ERROR,
-      code,
-      message,
-      ...(active.usage ? { usage: active.usage } : {}),
-    })
+    this.#endOpenTools(active, safeJson({ status: "error" }), true)
+    active.queue.terminal({ kind: TurnEventKind.TurnFailed, code, message })
     this.#active.delete(scopeKey(active.scope))
     void active.lease.release().catch(() => {})
     active.resolveSettled()

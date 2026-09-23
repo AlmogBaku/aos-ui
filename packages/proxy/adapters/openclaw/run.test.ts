@@ -1,4 +1,10 @@
-import { RunEventKind, type TurnInput } from "../../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  type RepliesTurnInput,
+  type RequestReply,
+  type TurnInput,
+} from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
 import { ServerRunStopNotDispatchedError } from "../../core/runtime"
@@ -136,23 +142,15 @@ function approvalReplay(approvals: unknown[] = [], truncated = false) {
   }
 }
 
-function input(runId = "run-a"): TurnInput {
-  return {
-    threadId: scope.threadId,
-    runId,
-    state: {},
-    messages: [{ id: "user-a", role: "user", content: "Investigate this" }],
-    tools: [],
-    context: [],
-    forwardedProps: {},
-  }
+function input(turnId = "run-a"): TurnInput {
+  return { turnId, messageId: "user-a", prompt: "Investigate this" }
 }
 
 function resumeInput(
-  resume: TurnInput["resume"],
-  runId = "run-resume"
-): TurnInput {
-  return { ...input(runId), messages: [], resume }
+  replies: RequestReply[],
+  turnId = "run-resume"
+): RepliesTurnInput {
+  return { turnId, replies }
 }
 
 function deferred<T>() {
@@ -194,9 +192,7 @@ describe("OpenClaw run engine", () => {
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-a",
+        kind: TurnEventKind.TurnStarted,
       },
     })
     expect(
@@ -280,7 +276,7 @@ describe("OpenClaw run engine", () => {
         scope,
         resumeInput([
           {
-            interruptId: "question-a",
+            requestId: "question-a",
             status: "resolved",
             payload: { answers: { choice: ["yes"] } },
           },
@@ -320,7 +316,7 @@ describe("OpenClaw run engine", () => {
     for await (const event of handle.events) events.push(event)
 
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_SEND_UNCERTAIN",
     })
     expect(
@@ -445,7 +441,7 @@ describe("OpenClaw run engine", () => {
     [
       "question",
       {
-        interruptId: "question-a",
+        requestId: "question-a",
         status: "resolved" as const,
         payload: { answers: { choice: ["yes"] } },
       },
@@ -453,7 +449,7 @@ describe("OpenClaw run engine", () => {
     [
       "approval",
       {
-        interruptId: "approval-a",
+        requestId: "approval-a",
         status: "resolved" as const,
         payload: "once",
       },
@@ -490,8 +486,8 @@ describe("OpenClaw run engine", () => {
       const candidate = resumeInput([response])
 
       await expect(engine.start(scope, candidate)).resolves.toBeDefined()
-      expect(validate).toHaveBeenCalledExactlyOnceWith(scope, candidate.resume)
-      expect(dispatch).toHaveBeenCalledExactlyOnceWith(scope, candidate.resume)
+      expect(validate).toHaveBeenCalledExactlyOnceWith(scope, candidate.replies)
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(scope, candidate.replies)
       expect(
         native.calls.filter(({ method }) => method === "chat.send")
       ).toHaveLength(0)
@@ -518,7 +514,7 @@ describe("OpenClaw run engine", () => {
         scope,
         resumeInput([
           {
-            interruptId: "foreign-question",
+            requestId: "foreign-question",
             status: "cancelled",
           },
         ])
@@ -559,7 +555,7 @@ describe("OpenClaw run engine", () => {
       scope,
       resumeInput([
         {
-          interruptId: "question-a",
+          requestId: "question-a",
           status: "resolved",
           payload: { answers: { choice: ["yes"] } },
         },
@@ -568,7 +564,7 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_INTERACTION_UNCERTAIN",
     })
 
@@ -579,7 +575,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       recovered.events[Symbol.asyncIterator]().next()
     ).resolves.toMatchObject({
-      value: { type: RunEventKind.RUN_STARTED, runId: "run-resume" },
+      value: { kind: TurnEventKind.TurnStarted },
     })
     expect(dispatch).toHaveBeenCalledTimes(1)
   })
@@ -619,19 +615,17 @@ describe("OpenClaw run engine", () => {
       restoredEvents.push(event)
     expect(restoredEvents).toEqual([
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "restored-question",
+        kind: TurnEventKind.TurnStarted,
       },
-      expect.objectContaining({
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "restored-question",
-        outcome: expect.objectContaining({
-          type: "interrupt",
-          interrupts: [expect.objectContaining({ id: "question-restored" })],
-        }),
-      }),
+      {
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          expect.objectContaining({
+            requestId: "question-restored",
+            kind: PendingRequestKind.Elicitation,
+          }),
+        ],
+      },
     ])
 
     const resumed = await engine.start(
@@ -639,7 +633,7 @@ describe("OpenClaw run engine", () => {
       resumeInput(
         [
           {
-            interruptId: "question-restored",
+            requestId: "question-restored",
             status: "resolved",
             payload: { answers: { choice: ["yes"] } },
           },
@@ -667,14 +661,11 @@ describe("OpenClaw run engine", () => {
     for await (const event of resumed.events) resumedEvents.push(event)
 
     expect(resumedEvents).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "question-continuation:assistant",
-      delta: " after",
+      text: " after",
     })
-    expect(resumedEvents.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_FINISHED,
-      runId: "question-continuation",
-    })
+    expect(resumedEvents.at(-1)).toEqual({ kind: TurnEventKind.TurnEnded })
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "question.list",
       "question.get",
@@ -727,7 +718,9 @@ describe("OpenClaw run engine", () => {
     const discovered = await engine.discover(scope, "restored-approval")
     expect(discovered).toMatchObject({
       state: "waiting-for-input",
-      interrupts: [{ id: "approval-restored", reason: "approval" }],
+      requests: [
+        { requestId: "approval-restored", kind: PendingRequestKind.Permission },
+      ],
     })
     await expect(
       engine.start(
@@ -735,7 +728,7 @@ describe("OpenClaw run engine", () => {
         resumeInput(
           [
             {
-              interruptId: "approval-restored",
+              requestId: "approval-restored",
               status: "resolved",
               payload: "once",
             },
@@ -838,7 +831,9 @@ describe("OpenClaw run engine", () => {
 
     await expect(discovering).resolves.toMatchObject({
       state: "waiting-for-input",
-      interrupts: [{ id: approval.id, reason: "approval" }],
+      requests: [
+        { requestId: approval.id, kind: PendingRequestKind.Permission },
+      ],
     })
     await expect(
       engine.start(
@@ -846,7 +841,7 @@ describe("OpenClaw run engine", () => {
         resumeInput(
           [
             {
-              interruptId: approval.id,
+              requestId: approval.id,
               status: "resolved",
               payload: "once",
             },
@@ -906,7 +901,7 @@ describe("OpenClaw run engine", () => {
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
     }
     await expect(sessions.discover(scope)).resolves.toBeUndefined()
-    expect(sessions.snapshot(scope)).toEqual({ state: "idle", interrupts: [] })
+    expect(sessions.snapshot(scope)).toEqual({ state: "idle", requests: [] })
 
     await expect(
       sessions.start(scope, input("after-external-resolution"), operatorAccess)
@@ -1257,7 +1252,7 @@ describe("OpenClaw run engine", () => {
       scope,
       resumeInput([
         {
-          interruptId: "question-a",
+          requestId: "question-a",
           status: "resolved",
           payload: { answers: { choice: ["yes"] } },
         },
@@ -1289,29 +1284,21 @@ describe("OpenClaw run engine", () => {
     expect(serialized).not.toContain("Old plan")
     expect(serialized).not.toContain("old-tool")
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "run-resume:assistant",
-      delta: " after answer",
+      text: " after answer",
     })
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "new-tool",
       })
     )
-    expect(events).toContainEqual({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: "run-resume:plan",
-      activityType: "PLAN",
-      content: {
-        phase: "update",
-        steps: [{ step: "New plan", status: "in_progress" }],
-      },
-      replace: true,
-    })
+    // OpenClaw plans are not projected onto the turn yet.
+    expect(serialized).not.toContain(TurnEventKind.PlanUpdated)
   })
 
-  it("maps validated native reasoning, text, progress, usage, tools, and lifecycle in order", async () => {
+  it("maps validated native reasoning, text, usage, and tools in order and drops progress", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const engine = new OpenClawRunEngine({
@@ -1406,94 +1393,42 @@ describe("OpenClaw run engine", () => {
     for await (const event of handle.events) events.push(event)
     expect(events).toEqual([
       {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-a",
-      },
-      { type: RunEventKind.REASONING_START, messageId: "run-a:reasoning" },
-      {
-        type: RunEventKind.REASONING_MESSAGE_START,
-        messageId: "run-a:reasoning",
-        role: "reasoning",
+        kind: TurnEventKind.TurnStarted,
       },
       {
-        type: RunEventKind.REASONING_MESSAGE_CONTENT,
-        messageId: "run-a:reasoning",
-        delta: "checking",
-      },
-      {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "run-a:progress",
-        activityType: "OPENCLAW_PROGRESS",
-        content: { phase: "preparing_context" },
-        replace: true,
-      },
-      {
-        type: RunEventKind.REASONING_MESSAGE_END,
-        messageId: "run-a:reasoning",
-      },
-      { type: RunEventKind.REASONING_END, messageId: "run-a:reasoning" },
-      {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.ThoughtChunk,
         messageId: "run-a:assistant",
-        role: "assistant",
+        text: "checking",
       },
       {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-a:assistant",
-        delta: "Answer",
+        text: "Answer",
       },
       {
-        type: RunEventKind.TOOL_CALL_START,
+        kind: TurnEventKind.ToolCallStarted,
         toolCallId: "tool-1",
-        toolCallName: "search",
+        title: "search",
         parentMessageId: "run-a:assistant",
       },
       {
-        type: RunEventKind.TOOL_CALL_ARGS,
+        kind: TurnEventKind.ToolCallInputChunk,
         toolCallId: "tool-1",
         delta: '{"query":"public"}',
       },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "tool-1" },
       {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "run-a:tool-progress:tool-1",
-        activityType: "OPENCLAW_TOOL_PROGRESS",
-        content: {
-          phase: "update",
-          toolCallId: "tool-1",
-          name: "search",
-          detail: { matches: 1 },
-        },
-        replace: true,
-      },
-      { type: RunEventKind.TOOL_CALL_END, toolCallId: "tool-1" },
-      {
-        type: RunEventKind.TOOL_CALL_RESULT,
-        messageId: "run-a:tool:tool-1",
+        kind: TurnEventKind.ToolCallFinished,
         toolCallId: "tool-1",
-        content: '{"matches":2}',
-        role: "tool",
+        output: '{"matches":2}',
+        failed: false,
       },
       {
-        type: RunEventKind.ACTIVITY_SNAPSHOT,
-        messageId: "run-a:progress",
-        activityType: "OPENCLAW_PROGRESS",
-        content: { phase: "end" },
-        replace: true,
-      },
-      {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-a:assistant",
-        delta: " tail",
+        text: " tail",
       },
-      { type: RunEventKind.TEXT_MESSAGE_END, messageId: "run-a:assistant" },
-      {
-        type: RunEventKind.RUN_FINISHED,
-        threadId: scope.threadId,
-        runId: "run-a",
-        outcome: { type: "success" },
-        usage: [{ outputTokens: 17 }],
-      },
+      { kind: TurnEventKind.TurnEnded, usage: [{ outputTokens: 17 }] },
     ])
   })
 
@@ -1559,7 +1494,7 @@ describe("OpenClaw run engine", () => {
     await expect(handle.settled).resolves.toBeUndefined()
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
-      value: { type: RunEventKind.RUN_FINISHED, runId: "run-a" },
+      value: { kind: TurnEventKind.TurnEnded },
     })
     await expect(handle.stop()).resolves.toBe("idle")
   })
@@ -1667,8 +1602,8 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events).toMatchObject([
-      { type: RunEventKind.RUN_STARTED, runId: "run-a" },
-      { type: RunEventKind.RUN_ERROR, code: "AOS_SEND_UNCERTAIN" },
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnFailed, code: "AOS_SEND_UNCERTAIN" },
     ])
     expect(
       native.calls.filter(({ method }) => method === "chat.send")
@@ -1688,7 +1623,7 @@ describe("OpenClaw run engine", () => {
     await expect(
       recovered.events[Symbol.asyncIterator]().next()
     ).resolves.toMatchObject({
-      value: { type: RunEventKind.RUN_STARTED, runId: "run-a" },
+      value: { kind: TurnEventKind.TurnStarted },
     })
     expect(
       native.calls.filter(
@@ -1762,16 +1697,15 @@ describe("OpenClaw run engine", () => {
     for await (const event of handle.events) events.push(event)
     expect(JSON.stringify(events)).not.toContain("must-not-cross")
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_ARGS,
+      kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "tool-1",
       delta: "{}",
     })
     expect(events).toContainEqual({
-      type: RunEventKind.TOOL_CALL_RESULT,
-      messageId: "run-a:tool:tool-1",
+      kind: TurnEventKind.ToolCallFinished,
       toolCallId: "tool-1",
-      content: '{"status":"completed","isError":false}',
-      role: "tool",
+      output: '{"status":"completed","isError":false}',
+      failed: false,
     })
     expect(JSON.stringify(events)).not.toContain("foreign-tool")
   })
@@ -1802,11 +1736,11 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "run-a:assistant",
-      delta: "Final only",
+      text: "Final only",
     })
-    expect(events.at(-1)).toMatchObject({ type: RunEventKind.RUN_FINISHED })
+    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
   it("resubscribes and reconciles active-run identity without resending the prompt", async () => {
@@ -1831,23 +1765,15 @@ describe("OpenClaw run engine", () => {
     await expect(iterator.next()).resolves.toEqual({
       done: false,
       value: {
-        type: RunEventKind.RUN_STARTED,
-        threadId: scope.threadId,
-        runId: "run-a",
+        kind: TurnEventKind.TurnStarted,
       },
     })
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
       value: {
-        type: RunEventKind.TEXT_MESSAGE_START,
+        kind: TurnEventKind.MessageChunk,
         messageId: "run-a:assistant",
-      },
-    })
-    await expect(iterator.next()).resolves.toMatchObject({
-      done: false,
-      value: {
-        type: RunEventKind.TEXT_MESSAGE_CONTENT,
-        delta: "Recovered",
+        text: "Recovered",
       },
     })
     expect(
@@ -1891,7 +1817,7 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events.at(-1)).toMatchObject({
-      type: RunEventKind.RUN_ERROR,
+      kind: TurnEventKind.TurnFailed,
       code: "AOS_CONNECTION_INTERRUPTED",
     })
   })
@@ -1920,9 +1846,9 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events).toContainEqual({
-      type: RunEventKind.TEXT_MESSAGE_CONTENT,
+      kind: TurnEventKind.MessageChunk,
       messageId: "run-a:assistant",
-      delta: "Already completed",
+      text: "Already completed",
     })
     expect(
       native.calls.filter(({ method }) => method === "chat.send")
@@ -2034,35 +1960,27 @@ describe("OpenClaw run engine", () => {
     expect(serialized).not.toContain("history-result")
     expect(serialized).not.toContain("live-secret")
     expect(serialized).not.toContain("live-result")
-    expect(events).toContainEqual({
-      type: RunEventKind.ACTIVITY_SNAPSHOT,
-      messageId: "run-a:plan",
-      activityType: "PLAN",
-      content: {
-        phase: "update",
-        steps: [{ step: "Inspect", status: "in_progress" }],
-      },
-      replace: true,
-    })
+    // OpenClaw plans are not projected onto the turn yet.
+    expect(serialized).not.toContain(TurnEventKind.PlanUpdated)
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: RunEventKind.TOOL_CALL_START,
+          kind: TurnEventKind.ToolCallStarted,
           toolCallId: "recovered-tool",
         }),
         expect.objectContaining({
-          type: RunEventKind.TOOL_CALL_RESULT,
+          kind: TurnEventKind.ToolCallFinished,
           toolCallId: "recovered-tool",
-          content: '{"status":"completed","isError":false}',
+          output: '{"status":"completed","isError":false}',
         }),
         expect.objectContaining({
-          type: RunEventKind.TOOL_CALL_START,
+          kind: TurnEventKind.ToolCallStarted,
           toolCallId: "live-tool",
         }),
         expect.objectContaining({
-          type: RunEventKind.TOOL_CALL_RESULT,
+          kind: TurnEventKind.ToolCallFinished,
           toolCallId: "live-tool",
-          content: '{"status":"completed","isError":false}',
+          output: '{"status":"completed","isError":false}',
         }),
       ])
     )

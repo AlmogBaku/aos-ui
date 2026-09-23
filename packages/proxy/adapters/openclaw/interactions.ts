@@ -1,7 +1,8 @@
 import {
+  PendingRequestKind,
   RequestReplySchema,
+  type PendingRequest,
   type RequestReply,
-  type RunInterruptOutcome,
 } from "../../core/events"
 import {
   QuestionGetResultSchema,
@@ -76,7 +77,7 @@ type Pending = {
   scope: OpenClawInteractionScope
   id: string
   expiresAtMs: number
-  outcome: RunInterruptOutcome
+  request: PendingRequest
 } & (
   | { kind: "question"; questions: Question[] }
   | {
@@ -218,28 +219,11 @@ function jsonFingerprint(value: unknown) {
   return JSON.stringify(normalize(value))
 }
 function resume(raw: unknown): { entry: RequestReply; fingerprint: string } {
-  if (
-    !Array.isArray(raw) ||
-    raw.length !== 1 ||
-    !raw[0] ||
-    typeof raw[0] !== "object"
-  )
-    invalid()
-  const value = (raw as unknown[])[0] as Record<string, unknown>
-  if (
-    Object.keys(value).some(
-      (name) =>
-        name !== "interruptId" &&
-        name !== "status" &&
-        name !== "payload" &&
-        name !== "metadata"
-    )
-  )
-    invalid()
-  const parsed = RequestReplySchema.safeParse(value)
+  if (!Array.isArray(raw) || raw.length !== 1) invalid()
+  const parsed = RequestReplySchema.safeParse((raw as unknown[])[0])
   if (!parsed.success) invalid()
   const entry = parsed.data
-  if (!entry || !id(entry.interruptId)) invalid()
+  if (!entry || !id(entry.requestId)) invalid()
   return { entry, fingerprint: jsonFingerprint(entry) }
 }
 function answerMap(value: unknown, questions: Question[]) {
@@ -294,7 +278,7 @@ export class OpenClawInteractions {
   async discover(
     scope: OpenClawInteractionDiscoveryScope,
     approvalReplay?: unknown
-  ): Promise<{ outcome: RunInterruptOutcome } | undefined> {
+  ): Promise<{ requests: PendingRequest[] } | undefined> {
     if (
       !Check(SessionApprovalReplaySchema, approvalReplay) ||
       approvalReplay.sessionKey !== scope.sessionId ||
@@ -334,45 +318,28 @@ export class OpenClawInteractions {
     if (candidates.length !== 1) return undefined
     const candidate = candidates[0]!
     return {
-      outcome:
+      requests: [
         candidate.kind === "question"
           ? this.acceptQuestion(fullScope, candidate.value)
           : this.acceptApproval(fullScope, candidate.value),
+      ],
     }
   }
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
     const r = record(scope, raw),
-      outcome: RunInterruptOutcome = {
-        type: "interrupt",
-        interrupts: [
-          {
-            id: r.id!,
-            reason: "question",
-            message:
-              r.questions.length === 1
-                ? r.questions[0]!.question
-                : `${r.questions.length} questions require answers`,
-            expiresAt: new Date(r.expiresAtMs).toISOString(),
-            responseSchema: {
-              type: "object",
-              properties: { answers: { type: "object" } },
-              required: ["answers"],
-            },
-            metadata: {
-              "aos.kind": "openclaw-question",
-              "aos.scope": "run",
-              "aos.answerModes": r.questions.map((q) =>
-                q.secret
-                  ? "secret"
-                  : q.other || !q.options.length
-                    ? "free-text"
-                    : q.multi
-                      ? "multiple"
-                      : "single"
-              ),
-            },
-          },
-        ],
+      request: PendingRequest = {
+        requestId: r.id!,
+        kind: PendingRequestKind.Elicitation,
+        message:
+          r.questions.length === 1
+            ? r.questions[0]!.question
+            : `${r.questions.length} questions require answers`,
+        expiresAt: new Date(r.expiresAtMs).toISOString(),
+        responseSchema: {
+          type: "object",
+          properties: { answers: { type: "object" } },
+          required: ["answers"],
+        },
       }
     return this.remember({
       kind: "question",
@@ -380,7 +347,7 @@ export class OpenClawInteractions {
       id: r.id!,
       questions: r.questions,
       expiresAtMs: r.expiresAtMs,
-      outcome,
+      request,
     })
   }
   acceptApproval(scope: OpenClawInteractionScope, raw: unknown) {
@@ -408,30 +375,20 @@ export class OpenClawInteractions {
       bad()
     const decisions = approvalDecisions(r.presentation.allowedDecisions),
       normalizedDecisions = decisions.map(({ normalized }) => normalized)
-    const outcome: RunInterruptOutcome = {
-      type: "interrupt",
-      interrupts: [
-        {
-          id: r.id,
-          reason: "approval",
-          message:
-            text(
-              r.presentation.commandText ??
-                r.presentation.title ??
-                r.presentation.description
-            ) ?? "OpenClaw requires approval to continue.",
-          expiresAt: new Date(r.expiresAtMs).toISOString(),
-          responseSchema: {
-            type: "string",
-            enum: normalizedDecisions,
-          },
-          metadata: {
-            "aos.kind": "openclaw-approval",
-            "aos.scope": "run",
-            "aos.allowedDecisions": normalizedDecisions,
-          },
-        },
-      ],
+    const request: PendingRequest = {
+      requestId: r.id,
+      kind: PendingRequestKind.Permission,
+      message:
+        text(
+          r.presentation.commandText ??
+            r.presentation.title ??
+            r.presentation.description
+        ) ?? "OpenClaw requires approval to continue.",
+      expiresAt: new Date(r.expiresAtMs).toISOString(),
+      responseSchema: {
+        type: "string",
+        enum: normalizedDecisions,
+      },
     }
     return this.remember({
       kind: "approval",
@@ -440,13 +397,13 @@ export class OpenClawInteractions {
       nativeKind: r.presentation.kind,
       decisions,
       expiresAtMs: r.expiresAtMs,
-      outcome,
+      request,
     })
   }
   async reconcile(scope: OpenClawInteractionScope) {
     const qs = await this.transport.request("question.list", {})
     if (!Check(QuestionListResultSchema, qs)) bad()
-    const outcomes: RunInterruptOutcome[] = []
+    const requests: PendingRequest[] = []
     for (const q of (qs as { questions: unknown[] }).questions) {
       if (!q || typeof q !== "object" || Array.isArray(q)) bad()
       const row = q as Record<string, unknown>
@@ -456,7 +413,7 @@ export class OpenClawInteractions {
         row.runId !== scope.runId
       )
         continue
-      outcomes.push(this.acceptQuestion(scope, row))
+      requests.push(this.acceptQuestion(scope, row))
     }
     for (const [k, pending] of this.#pending)
       if (
@@ -466,27 +423,27 @@ export class OpenClawInteractions {
         const current = await this.current(pending)
         if (current) this.complete(k, pending, undefined, current)
       }
-    return outcomes
+    return requests
   }
   async validate(
     scope: OpenClawResumeScope,
     raw: readonly RequestReply[]
   ): Promise<{ runId: string }> {
     const { entry, fingerprint } = resume(raw),
-      boundKey = bindingKey(scope, entry.interruptId),
+      boundKey = bindingKey(scope, entry.requestId),
       bound = this.#bindings.get(boundKey)
     if (bound) {
       if (bound.fingerprint !== fingerprint) invalid()
       return { runId: bound.scope.runId }
     }
-    const match = this.find(scope, entry.interruptId)
+    const match = this.find(scope, entry.requestId)
     this.resolution(match.pending, entry)
     if (match.done?.fingerprint && match.done.fingerprint !== fingerprint)
       invalid()
     if (!match.done) {
       const current = await this.current(match.pending)
       if (current) this.complete(match.key, match.pending, fingerprint, current)
-      const confirmed = this.find(scope, entry.interruptId)
+      const confirmed = this.find(scope, entry.requestId)
       if (confirmed.key !== match.key)
         throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
     } else if (!match.done.fingerprint) match.done.fingerprint = fingerprint
@@ -502,7 +459,7 @@ export class OpenClawInteractions {
     raw: readonly RequestReply[]
   ): Promise<OpenClawInteractionResult> {
     const { entry, fingerprint } = resume(raw),
-      boundKey = bindingKey(scope, entry.interruptId),
+      boundKey = bindingKey(scope, entry.requestId),
       bound = this.#bindings.get(boundKey)
     if (!bound)
       throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
@@ -521,7 +478,7 @@ export class OpenClawInteractions {
     raw: unknown
   ): Promise<OpenClawInteractionResult> {
     const { entry: r, fingerprint } = resume(raw),
-      k = key(scope, r.interruptId),
+      k = key(scope, r.requestId),
       done = this.#done.get(k)
     if (done) {
       if (done.fingerprint !== undefined && done.fingerprint !== fingerprint)
@@ -552,7 +509,7 @@ export class OpenClawInteractions {
       return this.complete(k, p, fingerprint, { status: "uncertain" })
     }
   }
-  private find(scope: OpenClawResumeScope, interruptId: string) {
+  private find(scope: OpenClawResumeScope, requestId: string) {
     const candidates: Array<{
       key: string
       pending: Pending
@@ -561,13 +518,13 @@ export class OpenClawInteractions {
     for (const [candidateKey, pending] of this.#pending)
       if (
         resumeScopeKey(pending.scope) === resumeScopeKey(scope) &&
-        pending.id === interruptId
+        pending.id === requestId
       )
         candidates.push({ key: candidateKey, pending })
     for (const [candidateKey, done] of this.#done)
       if (
         resumeScopeKey(done.pending.scope) === resumeScopeKey(scope) &&
-        done.pending.id === interruptId
+        done.pending.id === requestId
       )
         candidates.push({ key: candidateKey, pending: done.pending, done })
     if (candidates.length !== 1)
@@ -710,12 +667,12 @@ export class OpenClawInteractions {
   private remember(p: Pending) {
     const k = key(p.scope, p.id),
       old = this.#pending.get(k)
-    if (old) return old.outcome
+    if (old) return old.request
     let scopedPending = 0
     for (const pending of this.#pending.values())
       if (scopeKey(pending.scope) === scopeKey(p.scope)) scopedPending++
     if (scopedPending >= OPENCLAW_MAX_PENDING_INTERACTIONS) bad()
     this.#pending.set(k, p)
-    return p.outcome
+    return p.request
   }
 }

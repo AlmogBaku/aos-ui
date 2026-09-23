@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { PendingRequestKind } from "../../core/events"
 import * as GatewayProtocol from "@openclaw/gateway-protocol"
 import {
   OpenClawInteractions,
@@ -72,7 +73,7 @@ const resumeScope = {
 }
 const resolvedQuestion = [
   {
-    interruptId: "q",
+    requestId: "q",
     status: "resolved" as const,
     payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
   },
@@ -149,23 +150,17 @@ describe("OpenClaw interactions", () => {
   it("normalizes approval choices without exposing native decisions", () => {
     const interactions = new OpenClawInteractions({ request: vi.fn() })
 
-    const outcome = interactions.acceptApproval(scope, approval)
+    const request = interactions.acceptApproval(scope, approval)
 
-    expect(outcome).toMatchObject({
-      interrupts: [
-        {
-          responseSchema: {
-            type: "string",
-            enum: ["once", "always", "deny"],
-          },
-          metadata: {
-            "aos.allowedDecisions": ["once", "always", "deny"],
-          },
-        },
-      ],
+    expect(request).toMatchObject({
+      kind: PendingRequestKind.Permission,
+      responseSchema: {
+        type: "string",
+        enum: ["once", "always", "deny"],
+      },
     })
-    expect(JSON.stringify(outcome)).not.toContain("allow-once")
-    expect(JSON.stringify(outcome)).not.toContain("allow-always")
+    expect(JSON.stringify(request)).not.toContain("allow-once")
+    expect(JSON.stringify(request)).not.toContain("allow-always")
   })
 
   it("rediscovers and binds one exact pending question after restart", async () => {
@@ -185,10 +180,7 @@ describe("OpenClaw interactions", () => {
         { ...approvalReplay, approvals: [] }
       )
     ).resolves.toMatchObject({
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "q", reason: "question" }],
-      },
+      requests: [{ requestId: "q", kind: PendingRequestKind.Elicitation }],
     })
     await expect(
       interactions.validate(resumeScope, resolvedQuestion)
@@ -244,7 +236,7 @@ describe("OpenClaw interactions", () => {
     const interactions = new OpenClawInteractions({ request })
     const response = [
       {
-        interruptId: "approval-a",
+        requestId: "approval-a",
         status: "resolved" as const,
         payload: "once",
       },
@@ -256,10 +248,9 @@ describe("OpenClaw interactions", () => {
         approvalReplay
       )
     ).resolves.toMatchObject({
-      outcome: {
-        type: "interrupt",
-        interrupts: [{ id: "approval-a", reason: "approval" }],
-      },
+      requests: [
+        { requestId: "approval-a", kind: PendingRequestKind.Permission },
+      ],
     })
     await expect(interactions.validate(resumeScope, response)).resolves.toEqual(
       { runId: "native-recovered" }
@@ -290,7 +281,7 @@ describe("OpenClaw interactions", () => {
       await expect(
         interactions.respond(scope, [
           {
-            interruptId: "approval-a",
+            requestId: "approval-a",
             status: "resolved",
             payload: nativeDecision,
           },
@@ -328,7 +319,7 @@ describe("OpenClaw interactions", () => {
       await expect(
         interactions.respond(scope, [
           {
-            interruptId: "approval-a",
+            requestId: "approval-a",
             status: "resolved",
             payload: normalized,
           },
@@ -465,7 +456,7 @@ describe("OpenClaw interactions", () => {
     await expect(
       interactions.validate(resumeScope, [
         ...resolvedQuestion,
-        { interruptId: "other", status: "cancelled" },
+        { requestId: "other", status: "cancelled" },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
     await expect(
@@ -488,7 +479,7 @@ describe("OpenClaw interactions", () => {
     interactions.acceptApproval(scope, approval)
     const allowed = [
       {
-        interruptId: "approval-a",
+        requestId: "approval-a",
         status: "resolved" as const,
         payload: "once",
       },
@@ -607,16 +598,14 @@ describe("OpenClaw interactions", () => {
     })
     const interactions = new OpenClawInteractions({ request })
     for (let index = 0; index <= 256; index++) {
-      const interruptId = `question-${index}`
-      interactions.acceptQuestion(scope, { ...question, id: interruptId })
-      await interactions.respond(scope, [
-        { ...resolvedQuestion[0], interruptId },
-      ])
+      const requestId = `question-${index}`
+      interactions.acceptQuestion(scope, { ...question, id: requestId })
+      await interactions.respond(scope, [{ ...resolvedQuestion[0], requestId }])
     }
 
     await expect(
       interactions.respond(scope, [
-        { ...resolvedQuestion[0], interruptId: "question-0" },
+        { ...resolvedQuestion[0], requestId: "question-0" },
       ])
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
   })
@@ -634,12 +623,13 @@ describe("OpenClaw interactions", () => {
     )
     const x = new OpenClawInteractions({ request })
     expect(x.acceptQuestion(scope, question)).toMatchObject({
-      type: "interrupt",
+      requestId: "q",
+      kind: PendingRequestKind.Elicitation,
     })
     await expect(
       x.respond(scope, [
         {
-          interruptId: "q",
+          requestId: "q",
           status: "resolved",
           payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
         },
@@ -669,7 +659,7 @@ describe("OpenClaw interactions", () => {
     const x = new OpenClawInteractions({ request })
     x.acceptQuestion(scope, question)
     await expect(
-      x.respond(scope, [{ interruptId: "q", status: "cancelled" }])
+      x.respond(scope, [{ requestId: "q", status: "cancelled" }])
     ).resolves.toEqual({ status: "expired" })
     expect(request).toHaveBeenCalledTimes(1)
   })
@@ -733,7 +723,7 @@ describe("OpenClaw interactions", () => {
       await expect(
         x.respond(scope, [
           {
-            interruptId: "approval-a",
+            requestId: "approval-a",
             status: "resolved",
             payload: "once",
           },
@@ -756,7 +746,7 @@ describe("OpenClaw interactions", () => {
     await expect(
       x.respond(scope, [
         {
-          interruptId: "q",
+          requestId: "q",
           status: "resolved",
           payload: { answers: { choice: ["other"], secret: ["secret-value"] } },
         },

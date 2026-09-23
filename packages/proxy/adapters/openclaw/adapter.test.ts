@@ -1,4 +1,4 @@
-import type { RunEvent } from "../../core/events"
+import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
 import type { ServerRunEngine, ServerRunHandle } from "../../core/runtime"
@@ -18,7 +18,7 @@ const sessionKey = "agent:research:main"
 
 function idleHandle(): ServerRunHandle {
   return {
-    events: (async function* (): AsyncIterable<RunEvent> {})(),
+    events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),
     stop: async () => "idle",
     recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),
