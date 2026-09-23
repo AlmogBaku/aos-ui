@@ -183,6 +183,21 @@ const STOP_REASONS: Record<string, StopReason> = {
   content_filter: StopReason.Refusal,
 }
 
+/**
+ * The row Hermes appends when a stopped turn's tail is a tool result:
+ * `agent/message_sanitization.py` `close_interrupted_tool_sequence` writes the
+ * turn's interrupt text, or a bare "Operation interrupted.", as an assistant
+ * row with no model call behind it, so no `finish_reason`. It is Hermes'
+ * record that the turn was stopped, not assistant prose.
+ */
+function isInterruptMarker(value: JsonRecord, text: string): boolean {
+  return (
+    value.finish_reason == null &&
+    !(Array.isArray(value.tool_calls) && value.tool_calls.length > 0) &&
+    text.startsWith("Operation interrupted")
+  )
+}
+
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[]
@@ -283,10 +298,12 @@ export function projectHermesHistory(
     // transcript content. The artifact reader derives a row's text the same way,
     // so an attachment it resolves is the one the operator was shown.
     const text = rowText(value, rawContent)
+    const interrupted = role === "assistant" && isInterruptMarker(value, text)
     const userContent =
       role === "user" ? projectHermesUserContent(text, id) : undefined
-    const visibleText =
-      role === "assistant"
+    const visibleText = interrupted
+      ? ""
+      : role === "assistant"
         ? projectHermesMediaText(text, mediaReferences.get(messageIndex) ?? [])
         : (userContent?.text ?? text)
     const content = previousAssistant ? [...previousAssistant.content] : []
@@ -341,8 +358,9 @@ export function projectHermesHistory(
     // recording: every other role completed where it was created.
     if (role === "assistant") contributed(messageIndex, value)
     // A turn's newest row says how it stopped.
-    const stopReason =
-      role === "assistant"
+    const stopReason = interrupted
+      ? StopReason.Cancelled
+      : role === "assistant"
         ? STOP_REASONS[String(value.finish_reason)]
         : undefined
     if (previousAssistant) {

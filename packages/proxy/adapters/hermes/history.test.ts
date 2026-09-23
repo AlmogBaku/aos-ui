@@ -1044,4 +1044,22 @@ describe("server-side Hermes history projection", () => {
       undefined,
     ])
   })
+
+  it("replays a turn Hermes closed after a Stop as cancelled, without its marker", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Count slowly"),
+      {
+        ...assistantToolCall("a1", [
+          { toolCallId: "c1", name: "terminal", args: {} },
+        ]),
+        finish_reason: "tool_calls",
+      },
+      toolRow("c1", "terminal", { output: "1\n2\n\n[Command interrupted]" }),
+      { ...assistantText("a2", "Operation interrupted."), finish_reason: null },
+    ])
+
+    const turn = messages[1]
+    expect(turn?.stopReason).toBe(StopReason.Cancelled)
+    expect(turn?.content.map((part) => part.type)).toEqual(["tool-call"])
+  })
 })
