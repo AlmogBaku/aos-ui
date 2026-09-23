@@ -615,7 +615,6 @@ export class HermesTurnEngine {
       payload.result,
       payload.is_error === true
     )
-    this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
     if (tool.name === "terminal" && !outcome.isError)
       this.#announceTerminal(active, toolCallId, payload)
     const diffs = outcome.isError
@@ -924,6 +923,9 @@ export class HermesTurnEngine {
       toolCallId,
       delta: JSON.stringify(projected.args),
     })
+    // Hermes' tool.start carries the call's full arguments and nothing later
+    // adds to them, so they are final while the call still runs.
+    this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
     return tool
   }
 
@@ -943,7 +945,6 @@ export class HermesTurnEngine {
     for (const [toolCallId, tool] of active.tools) {
       if (tool.ended) continue
       tool.ended = true
-      this.#emit(active, { kind: TurnEventKind.ToolCallInputEnded, toolCallId })
       if (status)
         this.#emit(active, {
           kind: TurnEventKind.ToolCallFinished,
