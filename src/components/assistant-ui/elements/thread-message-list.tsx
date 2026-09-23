@@ -9,6 +9,7 @@ import {
   defaultRangeExtractor,
   useVirtualizer,
   type Range,
+  type Virtualizer,
 } from "@tanstack/react-virtual"
 import {
   useCallback,
@@ -75,6 +76,23 @@ function offsetWithin(viewport: HTMLElement, list: HTMLElement) {
   return top
 }
 
+/**
+ * The virtualizer re-applies its last known offset whenever it re-attaches,
+ * as a Session opens, and the viewport's smooth scrolling animated that stale
+ * offset before the reading position restored the thread. The virtualizer
+ * therefore moves the viewport only to correct a measured size change (where
+ * the browser does not anchor scroll), and instantly.
+ */
+function correctScrollOnly(
+  offset: number,
+  { adjustments }: { adjustments?: number },
+  instance: Virtualizer<HTMLElement, Element>
+) {
+  const viewport = instance.scrollElement
+  if (viewport && adjustments)
+    setScrollTopImmediately(viewport, offset + adjustments)
+}
+
 function setScrollTopImmediately(viewport: HTMLElement, scrollTop: number) {
   const previousScrollBehavior = viewport.style.scrollBehavior
   viewport.style.scrollBehavior = "auto"
@@ -139,6 +157,7 @@ export function ThreadMessageList({
     overscan: OVERSCAN,
     rangeExtractor,
     scrollMargin,
+    scrollToFn: correctScrollOnly,
   })
   // An instance field, not an option. Where the browser anchors scroll, the
   // reading-position controller and the browser keep the reader's place.
