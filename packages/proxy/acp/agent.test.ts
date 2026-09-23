@@ -853,6 +853,17 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("offers no cursor past the catalog window", async () => {
+    const test = await harness({ rows: [sessionRow()], total: 5_000 })
+
+    const page = await test.agent.request(methods.agent.session.list, {
+      cursor: Buffer.from("999").toString("base64url"),
+    })
+
+    expect(page).not.toHaveProperty("nextCursor")
+    test.close()
+  })
+
   it("replays history, attaches the live run, and reports its state", async () => {
     const test = await harness()
     await test.list()

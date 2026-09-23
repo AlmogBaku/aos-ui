@@ -12,6 +12,10 @@ import { cn } from "@/lib/utils"
 import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
 import {
+  SessionHistoryLoadMore,
+  type SessionHistoryLoadMoreCopy,
+} from "./session-history-load-more"
+import {
   SessionRowContextMenu,
   SessionRowMenuButton,
   type SessionRowMenuCopy,
@@ -27,7 +31,7 @@ import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
 import { RowIndicators } from "./status-dots"
 import styles from "./agent-session-history.module.css"
 
-export type AgentSessionHistoryCopy = {
+export type AgentSessionHistoryCopy = SessionHistoryLoadMoreCopy & {
   searchSessions: string
   newSession: string
   openSessions: string
@@ -433,6 +437,7 @@ export function AgentSessionHistory({
             ) : null}
           </div>
         ) : null}
+        {threadListRuntime ? <SessionHistoryLoadMore copy={copy} /> : null}
         {navigation.archivedSessions.length ? (
           <ArchivedSection
             {...sharedRow}

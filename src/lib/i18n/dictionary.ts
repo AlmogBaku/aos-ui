@@ -103,6 +103,8 @@ export type Dictionary = {
     history: string
     preferences: string
     clearSearch: string
+    loadMoreSessions: string
+    loadingMoreSessions: string
     noSearchResults: string
     removeOpenSession: string
     selected: string

@@ -13,6 +13,7 @@ import {
   type AgentCatalogResponse,
   type RuntimeAuthState,
   type RuntimeInfo,
+  type Session,
   type SessionMessage,
   type SessionModelUpdateRequest,
   type SessionPlanActivityMessage,
@@ -1155,7 +1156,17 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
-  async listSessions(profile: string, limit: number, offset: number) {
+  /**
+   * One native page, validated row by row. Hermes back-fills every pinned
+   * Session the page missed onto its tail (`include_pinned=True`, with no query
+   * parameter to turn it off), so a page can exceed `limit` and a pinned
+   * Session recurs on every page. Only the first `limit` rows are the page.
+   */
+  async #nativeSessionPage(
+    profile: string,
+    limit: number,
+    offset: number
+  ): Promise<{ sessions: Session[]; total: number }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
@@ -1192,12 +1203,54 @@ export class HermesServerAdapter implements ServerRuntime {
         ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
       }
     })
+    const total =
+      typeof payload.total === "number" && payload.total >= 0
+        ? payload.total
+        : sessions.length
+    return { sessions, total }
+  }
+
+  /**
+   * The newest `length` Sessions of one profile, each exactly once and in
+   * Hermes's order. Read contiguously from offset 0: every back-filled pin the
+   * `limit` cut misses is either already read or sits further down, where its
+   * own page carries it; on the short last page it is already read.
+   *
+   * Hermes counts `total` without the list's hidden-row filter, so once a short
+   * page proves the list exhausted, the rows read are the total.
+   */
+  async #sessionPrefix(
+    profile: string,
+    length: number
+  ): Promise<{ sessions: Session[]; total: number }> {
+    if (!Number.isSafeInteger(length) || length > SESSION_CATALOG_MAX_WINDOW)
+      throw new HermesUnavailableError()
+    const sessions: Session[] = []
+    const seen = new Set<string>()
+    let offset = 0
+    let total = 0
+    while (sessions.length < length) {
+      const limit = Math.min(100, length - sessions.length)
+      const page = await this.#nativeSessionPage(profile, limit, offset)
+      total = page.total
+      for (const session of page.sessions.slice(0, limit)) {
+        if (seen.has(session.id)) continue
+        seen.add(session.id)
+        sessions.push(session)
+      }
+      offset += limit
+      if (page.sessions.length < limit)
+        return { sessions, total: sessions.length }
+      if (offset >= total) break
+    }
+    return { sessions: sessions.slice(0, length), total }
+  }
+
+  async listSessions(profile: string, limit: number, offset: number) {
+    const prefix = await this.#sessionPrefix(profile, offset + limit)
     const result = SessionCatalogResponseSchema.safeParse({
-      sessions,
-      total:
-        typeof payload.total === "number" && payload.total >= 0
-          ? payload.total
-          : sessions.length,
+      sessions: prefix.sessions.slice(offset),
+      total: prefix.total,
       limit,
       offset,
     })
@@ -1206,42 +1259,20 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async listAllSessions(limit: number, offset: number) {
-    if (offset + limit > SESSION_CATALOG_MAX_WINDOW)
+    const prefixLength = offset + limit
+    if (prefixLength > SESSION_CATALOG_MAX_WINDOW)
       throw new HermesUnavailableError()
     const profiles = (await this.listAgents()).agents.map(
       ({ summary }) => summary.id
     )
-    const prefixLength = offset + limit
-    if (!Number.isSafeInteger(prefixLength)) throw new HermesUnavailableError()
-    const profilePages: Array<{
-      sessions: Awaited<
-        ReturnType<HermesServerAdapter["listSessions"]>
-      >["sessions"]
-      total: number
-    }> = []
+    const profilePages: Array<{ sessions: Session[]; total: number }> = []
     const fanout = 4
     for (let start = 0; start < profiles.length; start += fanout) {
       profilePages.push(
         ...(await Promise.all(
-          profiles.slice(start, start + fanout).map(async (profile) => {
-            const sessions: Awaited<
-              ReturnType<HermesServerAdapter["listSessions"]>
-            >["sessions"] = []
-            let profileOffset = 0
-            let total = 0
-            while (sessions.length < prefixLength) {
-              const page = await this.listSessions(
-                profile,
-                Math.min(100, prefixLength - sessions.length),
-                profileOffset
-              )
-              sessions.push(...page.sessions)
-              total = page.total
-              profileOffset += page.sessions.length
-              if (page.sessions.length === 0 || profileOffset >= total) break
-            }
-            return { sessions, total }
-          })
+          profiles
+            .slice(start, start + fanout)
+            .map((profile) => this.#sessionPrefix(profile, prefixLength))
         ))
       )
     }

@@ -829,6 +829,121 @@ describe("Hermes server adapter", () => {
     expect(second.total).toBe(120)
   })
 
+  describe("with Hermes back-filling pinned Sessions onto every page", () => {
+    // Hermes's dashboard list appends every pinned Session a page missed,
+    // after the `limit` rows, on every page; `total` counts each Session once.
+    const catalog = (counts: Record<string, number>, pinnedIndexes: number[]) =>
+      Object.fromEntries(
+        Object.entries(counts).map(([profileName, count], profileIndex) => [
+          profileName,
+          Array.from({ length: count }, (_, index) => ({
+            id: `${profileName}-${index}`,
+            profile: profileName,
+            title: `${profileName} ${index}`,
+            // Interleaved recency, newest first within each profile.
+            last_active: 10_000 - index * 10 - profileIndex,
+            pinned: pinnedIndexes.includes(index),
+          })),
+        ])
+      )
+    const hermesWithPins = (
+      rowsByProfile: Record<string, Array<{ id: string; pinned: boolean }>>,
+      /** Hermes counts hidden rows its list leaves out. */
+      hiddenByProfile: Record<string, number> = {}
+    ) => {
+      const request = vi.fn(async () => ({
+        profiles: Object.keys(rowsByProfile).map((name) => ({
+          name,
+          ui_meta: {},
+          ui_meta_revisions: {},
+        })),
+      }))
+      const http = vi.fn(async (path: string) => {
+        const url = new URL(path, "http://native.test")
+        const profileName = url.searchParams.get("profile")!
+        const rows = rowsByProfile[profileName]!
+        const limit = Number(url.searchParams.get("limit"))
+        const offset = Number(url.searchParams.get("offset"))
+        const page = rows.slice(offset, offset + limit)
+        const backfill = rows.filter((row) => row.pinned && !page.includes(row))
+        return {
+          sessions: [...page, ...backfill],
+          total: rows.length + (hiddenByProfile[profileName] ?? 0),
+        }
+      })
+      return new HermesServerAdapter({ request, http })
+    }
+    const ids = (sessions: Array<{ id: string }>) =>
+      sessions.map(({ id }) => id)
+    /** Pages the way ACP `session/list` does: the next offset is this one plus the rows served. */
+    const pageToEnd = async (
+      list: (
+        limit: number,
+        offset: number
+      ) => Promise<{
+        sessions: Array<{ id: string }>
+        total: number
+      }>
+    ) => {
+      const served: string[] = []
+      let offset = 0
+      let pages = 0
+      for (;;) {
+        const page = await list(50, offset)
+        pages += 1
+        served.push(...ids(page.sessions))
+        if (!page.sessions.length && offset < page.total)
+          throw new Error(`the cursor stalled at ${offset}`)
+        offset += page.sessions.length
+        if (offset >= page.total) return { served, pages }
+      }
+    }
+
+    it("serves the all-Agents page at offset 150 with each Session once", async () => {
+      const rows = catalog({ alpha: 120, beta: 90, gamma: 30 }, [2, 70, 110])
+      const adapter = hermesWithPins(rows)
+      const everything = Object.values(rows)
+        .flat()
+        .sort((left, right) => right.last_active - left.last_active)
+
+      const page = await adapter.listAllSessions(50, 150)
+
+      expect(ids(page.sessions)).toEqual(ids(everything.slice(150, 200)))
+      expect(page.total).toBe(240)
+    })
+
+    it("serves a per-Agent page past the first with only its own rows", async () => {
+      const rows = catalog({ alpha: 180 }, [1, 5, 170])
+      const adapter = hermesWithPins(rows)
+
+      const page = await adapter.listSessions("alpha", 50, 100)
+
+      expect(ids(page.sessions)).toEqual(ids(rows.alpha!.slice(100, 150)))
+      expect(page.total).toBe(180)
+    })
+
+    it("follows the cursor to the end of every catalog without skipping or repeating a Session", async () => {
+      const rows = catalog({ alpha: 223, beta: 101, gamma: 7 }, [0, 3, 99, 200])
+      const adapter = hermesWithPins(rows, { beta: 2, gamma: 1 })
+      const everything = Object.values(rows)
+        .flat()
+        .sort((left, right) => right.last_active - left.last_active)
+
+      const all = await pageToEnd((limit, offset) =>
+        adapter.listAllSessions(limit, offset)
+      )
+      expect(all.pages).toBe(7)
+      expect(all.served).toEqual(ids(everything))
+
+      for (const [profileName, profileRows] of Object.entries(rows)) {
+        const own = await pageToEnd((limit, offset) =>
+          adapter.listSessions(profileName, limit, offset)
+        )
+        expect(own.served).toEqual(ids(profileRows))
+      }
+    })
+  })
+
   it("catalogs creator-owned Sessions while keeping the creator unselectable", async () => {
     const request = vi.fn(async () => ({
       profiles: [
