@@ -446,6 +446,8 @@ type HarnessOptions = {
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
   beforeModels?: () => Promise<void>
+  /** Stands for a provider with no catalog change signal. */
+  withoutCatalogChanges?: boolean
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -547,7 +549,9 @@ async function harness(options: HarnessOptions = {}) {
     updateModel,
     context: options.context ?? (async () => USAGE),
     subscribeSessionInvalidation: unsupported,
-    subscribeCatalogChanges: async () => () => undefined,
+    ...(options.withoutCatalogChanges
+      ? {}
+      : { subscribeCatalogChanges: async () => () => undefined }),
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
@@ -741,7 +745,25 @@ describe("AOS ACP agent", () => {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
           lane: "operator",
-          extensions: { steer: true, focus: true, guestProjection: false },
+          extensions: {
+            steer: true,
+            focus: true,
+            invalidation: true,
+            guestProjection: false,
+          },
+        },
+      },
+    })
+    test.close()
+  })
+
+  it("advertises no catalog invalidation for a runtime that cannot signal one", async () => {
+    const test = await harness({ withoutCatalogChanges: true })
+
+    expect(test.initialize).toMatchObject({
+      _meta: {
+        [AOS_META_KEY]: {
+          extensions: { invalidation: false, steer: true, readState: true },
         },
       },
     })
