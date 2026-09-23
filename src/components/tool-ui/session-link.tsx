@@ -1,11 +1,21 @@
 "use client"
 
-import { createContext, useContext, type ReactNode } from "react"
+import {
+  createContext,
+  useContext,
+  type MouseEvent,
+  type ReactNode,
+} from "react"
 
-/** Where another Session opens, or nothing when this surface cannot open one. */
-export type ToolUiSessionHref = (sessionId: string) => string | undefined
+/** A Session this surface can open: its address, and the in-app way there. */
+export type ToolUiSessionLink = { href: string; open: () => void }
 
-const SessionHrefContext = createContext<ToolUiSessionHref | undefined>(
+/** How another Session opens, or nothing when this surface cannot open it. */
+export type ToolUiSessionLinkResolver = (
+  sessionId: string
+) => ToolUiSessionLink | undefined
+
+const SessionLinkContext = createContext<ToolUiSessionLinkResolver | undefined>(
   undefined
 )
 
@@ -15,20 +25,40 @@ const SessionHrefContext = createContext<ToolUiSessionHref | undefined>(
  * the link is not offered.
  */
 export function ToolUiSessionLinkProvider({
-  sessionHref,
+  sessionLink,
   children,
 }: {
-  sessionHref: ToolUiSessionHref
+  sessionLink: ToolUiSessionLinkResolver
   children: ReactNode
 }) {
   return (
-    <SessionHrefContext.Provider value={sessionHref}>
+    <SessionLinkContext.Provider value={sessionLink}>
       {children}
-    </SessionHrefContext.Provider>
+    </SessionLinkContext.Provider>
   )
 }
 
-export function useToolUiSessionHref(sessionId: string | undefined) {
-  const sessionHref = useContext(SessionHrefContext)
-  return sessionId ? sessionHref?.(sessionId) : undefined
+export function useToolUiSessionLink(sessionId: string | undefined) {
+  const sessionLink = useContext(SessionLinkContext)
+  return sessionId ? sessionLink?.(sessionId) : undefined
+}
+
+/**
+ * A plain click opens the Session in place; a modified or non-primary click
+ * keeps the browser's own link behavior, such as a new tab.
+ */
+export function openSessionLinkInPlace(
+  event: MouseEvent<HTMLAnchorElement>,
+  link: ToolUiSessionLink
+) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  )
+    return
+  event.preventDefault()
+  link.open()
 }

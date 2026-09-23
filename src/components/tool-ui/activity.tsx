@@ -16,7 +16,7 @@ import {
   type ToolUiActivityKind,
   type ToolUiActivityStatus,
 } from "./locale"
-import { useToolUiSessionHref } from "./session-link"
+import { openSessionLinkInPlace, useToolUiSessionLink } from "./session-link"
 import type { AosSubagent } from "./tool-artifact"
 import { formatToolDuration } from "./tool-call-presentation"
 import type { RichToolPart } from "./types"
@@ -89,7 +89,7 @@ export function ActivityTool({
 }) {
   const state = normalizeRichToolState(part)
   const { direction, labels, locale } = useToolUiLocale()
-  const sessionHref = useToolUiSessionHref(subagent?.childSessionId)
+  const sessionLink = useToolUiSessionLink(subagent?.childSessionId)
   const kindLabel = labels.activities[kind]
   const title =
     subagent?.goal ??
@@ -202,16 +202,17 @@ export function ActivityTool({
           ) : null}
         </div>
       ) : null}
-      {footerFacts.length > 0 || sessionHref ? (
+      {footerFacts.length > 0 || sessionLink ? (
         <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 py-2 text-xs text-muted-foreground">
           {footerFacts.map((fact) => (
             <span key={fact} className="tabular-nums">
               {fact}
             </span>
           ))}
-          {sessionHref ? (
+          {sessionLink ? (
             <a
-              href={sessionHref}
+              href={sessionLink.href}
+              onClick={(event) => openSessionLinkInPlace(event, sessionLink)}
               className="ms-auto inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline focus-visible:underline"
             >
               {labels.subagent.openSession}

@@ -5,11 +5,15 @@
 
 import { isAosRichTool } from "@/components/tool-ui"
 import type {
+  ToolUiActionKind,
   ToolUiLocale,
   ToolUiLocaleLabels,
   ToolRunKind,
 } from "@/components/tool-ui/locale"
-import { toolIconKind } from "@/components/tool-ui/tool-call-presentation"
+import {
+  toolActionKind,
+  type ToolPresentationPart,
+} from "@/components/tool-ui/tool-call-presentation"
 import {
   diffStats,
   readAosToolArtifact,
@@ -71,13 +75,18 @@ const WEB_SEARCH = /web|fetch|browse/
 const TOOL_RUN_KINDS = {
   read: "readFiles",
   edit: "changedFiles",
+  delete: "changedFiles",
+  move: "changedFiles",
   command: "ranCommands",
   search: "searchedCode",
+  fetch: "searchedWeb",
   skill: "loadedSkills",
   inspect: "inspected",
   subagent: "delegated",
+  think: "usedTools",
+  switchMode: "usedTools",
   generic: "usedTools",
-} as const satisfies Record<ReturnType<typeof toolIconKind>, ToolRunKind>
+} as const satisfies Record<ToolUiActionKind, ToolRunKind>
 
 /**
  * A tool call the execution trace owns. A question is answered beside the
@@ -193,11 +202,7 @@ export function createTurnGroupBy(
 }
 
 export type TurnOutcome =
-  | "worked"
-  | "stopped"
-  | "failed"
-  | "truncated"
-  | "refused"
+  "worked" | "stopped" | "failed" | "truncated" | "refused"
 
 /**
  * Which headline a settled turn earns: it finished, you stopped it, the model
@@ -230,9 +235,9 @@ export function turnDiffStats(parts: readonly TurnPart[]): AosDiffStats {
   )
 }
 
-function toolRunKind(toolName: string): ToolRunKind {
-  const kind = TOOL_RUN_KINDS[toolIconKind(toolName)]
-  return kind === "searchedCode" && WEB_SEARCH.test(toolName.toLowerCase())
+function toolRunKind(part: ToolPresentationPart): ToolRunKind {
+  const kind = TOOL_RUN_KINDS[toolActionKind(part)]
+  return kind === "searchedCode" && WEB_SEARCH.test(part.toolName.toLowerCase())
     ? "searchedWeb"
     : kind
 }
@@ -242,13 +247,13 @@ function toolRunKind(toolName: string): ToolRunKind {
  * order it first appeared, joined the way the locale joins a list.
  */
 export function describeToolRun(
-  toolNames: readonly string[],
+  parts: readonly ToolPresentationPart[],
   labels: ToolUiLocaleLabels["assistant"]["toolRun"],
   locale: ToolUiLocale
 ): string {
   const counts = new Map<ToolRunKind, number>()
-  for (const toolName of toolNames) {
-    const kind = toolRunKind(toolName)
+  for (const part of parts) {
+    const kind = toolRunKind(part)
     counts.set(kind, (counts.get(kind) ?? 0) + 1)
   }
   if (counts.size === 0) return ""

@@ -1,5 +1,6 @@
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -314,14 +315,20 @@ describe("subagents", () => {
   })
 
   it("links to the child Session where the surface can open one", async () => {
+    const open = vi.fn()
     render(
-      <ToolUiSessionLinkProvider sessionHref={(id) => `/agents/a/${id}`}>
+      <ToolUiSessionLinkProvider
+        sessionLink={(id) => ({ href: `/agents/a/${id}`, open })}
+      >
         <AosToolPresentation {...subagentPart} />
       </ToolUiSessionLinkProvider>
     )
-    expect(
-      await screen.findByRole("link", { name: "Open session" })
-    ).toHaveAttribute("href", "/agents/a/session-child")
+    const link = await screen.findByRole("link", { name: "Open session" })
+    expect(link).toHaveAttribute("href", "/agents/a/session-child")
+    fireEvent.click(link)
+    expect(open).toHaveBeenCalledTimes(1)
+    fireEvent.click(link, { ctrlKey: true })
+    expect(open).toHaveBeenCalledTimes(1)
   })
 
   it("keeps a failed subagent's status rather than a bare error", async () => {
@@ -343,7 +350,9 @@ describe("subagents", () => {
   it("localizes the subagent facts in Hebrew", async () => {
     render(
       <ToolUiLocaleProvider locale="he">
-        <ToolUiSessionLinkProvider sessionHref={(id) => `/s/${id}`}>
+        <ToolUiSessionLinkProvider
+          sessionLink={(id) => ({ href: `/s/${id}`, open: () => {} })}
+        >
           <AosToolPresentation {...subagentPart} />
         </ToolUiSessionLinkProvider>
       </ToolUiLocaleProvider>

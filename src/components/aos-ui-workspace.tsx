@@ -32,7 +32,13 @@ import {
 import type { ComposerLocalCommand } from "@/components/assistant-ui/composer-features"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import { AssistantInstructions } from "@/components/assistant-instructions"
-import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
+import { workspaceHref } from "@/lib/workspace-routing"
+import {
+  AosToolPresentation,
+  ToolUiLocaleProvider,
+  ToolUiSessionLinkProvider,
+  type ToolUiSessionLinkResolver,
+} from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
 import { AgentGlyph, WorkspaceShell } from "@/components/workspace"
@@ -606,6 +612,23 @@ function WorkspaceContent({
     },
   })
 
+  // A subagent's child Session opens in place when the catalog knows its Agent.
+  const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
+    const agentId = sessions.find(
+      (session) => session.threadId === sessionId
+    )?.agentId
+    if (!agentId) return undefined
+    return {
+      href: workspaceHref(window.location.href, { agentId, sessionId }),
+      open: () => {
+        setPreferredAgentId(agentId)
+        openSession(sessionId, agentId).catch((reason: unknown) =>
+          setActionError(toError(reason))
+        )
+      },
+    }
+  }
+
   return (
     <AssistantRuntimeProvider runtime={runtime} config={assistantConfig}>
       <ArtifactWorkspaceBridge
@@ -684,14 +707,16 @@ function WorkspaceContent({
               </div>
             ) : selectedAgent && conversationThreadId ? (
               <WorkspaceThreadChromeContext.Provider value={threadChrome}>
-                <Thread
-                  autoFocus={false}
-                  direction={getLocaleDirection(locale)}
-                  labels={threadLabels[locale]}
-                  composerFeatures={threadComposerFeatures}
-                  messageRewind={bundle.messageRewind}
-                  components={activeThreadComponents}
-                />
+                <ToolUiSessionLinkProvider sessionLink={toolSessionLink}>
+                  <Thread
+                    autoFocus={false}
+                    direction={getLocaleDirection(locale)}
+                    labels={threadLabels[locale]}
+                    composerFeatures={threadComposerFeatures}
+                    messageRewind={bundle.messageRewind}
+                    components={activeThreadComponents}
+                  />
+                </ToolUiSessionLinkProvider>
               </WorkspaceThreadChromeContext.Provider>
             ) : (
               <NoAgentEmpty

@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import { enToolUiLabels, heToolUiLabels } from "@/components/tool-ui/locale"
 import {
+  withAosToolArtifact,
+  type AosToolKind,
+} from "@/components/tool-ui/tool-artifact"
+import {
   createTurnGroupBy,
   describeToolRun,
   formatTurnDuration,
@@ -162,10 +166,12 @@ describe("createTurnGroupBy", () => {
 describe("describeToolRun", () => {
   const en = enToolUiLabels.assistant.toolRun
   const he = heToolUiLabels.assistant.toolRun
+  const tools = (names: string[]) => names.map((toolName) => ({ toolName }))
+  const kind = (kind: AosToolKind) => withAosToolArtifact(undefined, { kind })
 
   it("counts one kind, singular and plural", () => {
-    expect(describeToolRun(["read_file"], en, "en")).toBe("Read 1 file")
-    expect(describeToolRun(["read_file", "read_doc"], en, "en")).toBe(
+    expect(describeToolRun(tools(["read_file"]), en, "en")).toBe("Read 1 file")
+    expect(describeToolRun(tools(["read_file", "read_doc"]), en, "en")).toBe(
       "Read 2 files"
     )
   })
@@ -173,7 +179,7 @@ describe("describeToolRun", () => {
   it("keeps the kinds in the order they first appeared", () => {
     expect(
       describeToolRun(
-        ["terminal", "read_file", "terminal", "apply_patch"],
+        tools(["terminal", "read_file", "terminal", "apply_patch"]),
         en,
         "en"
       )
@@ -181,8 +187,10 @@ describe("describeToolRun", () => {
   })
 
   it("separates a web search from a code search", () => {
-    expect(describeToolRun(["grep"], en, "en")).toBe("Searched code once")
-    expect(describeToolRun(["web_search", "web_search"], en, "en")).toBe(
+    expect(describeToolRun(tools(["grep"]), en, "en")).toBe(
+      "Searched code once"
+    )
+    expect(describeToolRun(tools(["web_search", "web_search"]), en, "en")).toBe(
       "Searched the web 2 times"
     )
   })
@@ -190,7 +198,12 @@ describe("describeToolRun", () => {
   it("names skills, delegation, inspection and unknown tools", () => {
     expect(
       describeToolRun(
-        ["use_skill", "delegate_subagent", "tool_describe", "provider_tool"],
+        tools([
+          "use_skill",
+          "delegate_subagent",
+          "tool_describe",
+          "provider_tool",
+        ]),
         en,
         "en"
       )
@@ -198,16 +211,30 @@ describe("describeToolRun", () => {
   })
 
   it("describes the same run in Hebrew", () => {
-    expect(describeToolRun(["read_file", "read_doc"], he, "he")).toBe(
+    expect(describeToolRun(tools(["read_file", "read_doc"]), he, "he")).toBe(
       "קרא 2 קבצים"
     )
-    expect(describeToolRun(["terminal", "web_search"], he, "he")).toBe(
+    expect(describeToolRun(tools(["terminal", "web_search"]), he, "he")).toBe(
       "הריץ פקודה אחת וחיפש ברשת פעם אחת"
     )
   })
 
+  it("counts by the provider's declared kind before the tool name", () => {
+    expect(
+      describeToolRun(
+        [
+          { toolName: "provider_tool", artifact: kind("edit") },
+          { toolName: "provider_tool", artifact: kind("fetch") },
+          { toolName: "read_file", artifact: kind("other") },
+        ],
+        en,
+        "en"
+      )
+    ).toBe("Changed 1 file, searched the web once, and read 1 file")
+  })
+
   it("says nothing about an empty run", () => {
-    expect(describeToolRun([], en, "en")).toBe("")
+    expect(describeToolRun(tools([]), en, "en")).toBe("")
   })
 })
 

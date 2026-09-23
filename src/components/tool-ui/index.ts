@@ -71,5 +71,7 @@ export {
   ToolRowMeta,
   useToolElapsedMs,
 } from "./tool-row-meta"
-export { ToolUiSessionLinkProvider, useToolUiSessionHref } from "./session-link"
-export type { ToolUiSessionHref } from "./session-link"
+export {
+  ToolUiSessionLinkProvider,
+  type ToolUiSessionLinkResolver,
+} from "./session-link"

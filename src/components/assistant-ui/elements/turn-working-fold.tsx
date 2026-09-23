@@ -69,8 +69,8 @@ export function TurnWorkingFold({
   const ran = useAuiState((state) =>
     continues
       ? describeToolRun(
-          partsAt(state.message.parts, indices).flatMap((part) =>
-            part.type === "tool-call" ? [part.toolName] : []
+          partsAt(state.message.parts, indices).filter(
+            (part) => part.type === "tool-call"
           ),
           labels.assistant.toolRun,
           locale

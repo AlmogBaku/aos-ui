@@ -197,11 +197,7 @@ export function ToolRunGroup({
         collapsible={!flat}
         open={open}
         onOpenChange={onOpenChange}
-        restingLabel={describeToolRun(
-          parts.map((part) => part.toolName),
-          labels.assistant.toolRun,
-          locale
-        )}
+        restingLabel={describeToolRun(parts, labels.assistant.toolRun, locale)}
         activeLabel={labels.states.running}
         state={timelineState}
         statusLabel={
