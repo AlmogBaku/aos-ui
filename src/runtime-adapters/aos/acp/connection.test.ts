@@ -298,6 +298,20 @@ function createProxyAgent(
         withdrawal ? { cancellationSignal: withdrawal } : undefined
       )
     },
+    /** Aborting `withdrawal` withdraws the question with `$/cancel_request`. */
+    askQuestion(withdrawal?: AbortSignal) {
+      return peer?.request(
+        methods.client.elicitation.create,
+        {
+          sessionId: SESSION_ID,
+          mode: "form",
+          message: "Which one?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: { [AOS_META_KEY]: { requestId: "interrupt-2" } },
+        },
+        withdrawal ? { cancellationSignal: withdrawal } : undefined
+      )
+    },
   }
 }
 
@@ -690,22 +704,25 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("releases a request the proxy withdraws as cancelled", async () => {
-    const proxy = createProxyAgent()
-    const connection = connectInProcess(proxy)
-    await connection.initialized
-    const pending: AcpPendingRequest[] = []
-    connection.onPendingRequest((request) => pending.push(request))
-    const withdrawal = new AbortController()
+  it.each(["askPermission", "askQuestion"] as const)(
+    "releases a request the proxy withdraws as cancelled (%s)",
+    async (ask) => {
+      const proxy = createProxyAgent()
+      const connection = connectInProcess(proxy)
+      await connection.initialized
+      const pending: AcpPendingRequest[] = []
+      connection.onPendingRequest((request) => pending.push(request))
+      const withdrawal = new AbortController()
 
-    const answered = proxy.askPermission(withdrawal.signal)
-    await vi.waitFor(() => expect(pending).toHaveLength(1))
-    withdrawal.abort()
+      const answered = proxy[ask](withdrawal.signal)
+      await vi.waitFor(() => expect(pending).toHaveLength(1))
+      withdrawal.abort()
 
-    await expect(answered).rejects.toMatchObject({ code: -32800 })
-    expect(pending[0]?.signal.aborted).toBe(true)
-    connection.close()
-  })
+      await expect(answered).rejects.toMatchObject({ code: -32800 })
+      expect(pending[0]?.signal.aborted).toBe(true)
+      connection.close()
+    }
+  )
 
   it("keeps a pending request answerable when one consumer cannot show it", async () => {
     const proxy = createProxyAgent()

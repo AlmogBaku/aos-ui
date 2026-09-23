@@ -943,7 +943,13 @@ describe("guest ACP lane", () => {
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))
     reply.close()
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // The guest follows the operator's reply to its end, past the withdrawal.
+    await test.recorder.wait(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        (entry.params as { update?: { state?: unknown } }).update?.state ===
+          "idle"
+    )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
     test.close()

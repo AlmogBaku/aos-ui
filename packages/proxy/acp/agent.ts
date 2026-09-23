@@ -309,6 +309,29 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
+   * Rebuilds the view from the page a from-start resume replays, projected for
+   * a guest. A page that cannot reach the view releases the hold, as a failed
+   * read does, so the room's later turns still reach it.
+   */
+  async function replayHistory(member: SessionMember, scope: SessionScope) {
+    const replay = await replayPage(member, scope)
+    try {
+      // Counted on the authoritative page, before the guest projection
+      // rebuilds its messages: that projection keeps no user-turn metadata.
+      const corrections = translators.persistedCorrections(replay.history)
+      const shown = context.guest
+        ? context.guest.project.history(replay.history)
+        : replay.history
+      for (const outbound of translators.translateHistory(shown, lane))
+        await member.send(outbound)
+      return { ...replay, corrections }
+    } catch (cause) {
+      member.releaseRoom()
+      throw cause
+    }
+  }
+
+  /**
    * Subscribes to the live turn, reporting a cursor that cannot position it.
    * A view whose stream `restarted` on a turn shows it only while this follow
    * streams that turn.
@@ -371,22 +394,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (coordinator.state(scope) === "waiting-for-input")
       await workspace.discover(scope)
     const member = sessions.join(client, scope)
-    // Counted on the authoritative page, before the guest projection rebuilds
-    // its messages: that projection keeps no user-turn metadata.
-    let corrections = 0
     const replay =
       params.replayFrom?.type === "start"
-        ? await replayPage(member, scope)
+        ? await replayHistory(member, scope)
         : undefined
     const history = replay?.history
-    if (history) {
-      corrections = translators.persistedCorrections(history)
-      for (const outbound of translators.translateHistory(
-        policy.project.history(history),
-        lane
-      ))
-        await member.send(outbound)
-    }
     // Seated after its history and before its follow, so the room's prompt
     // lands between them; checked on the authoritative page, as corrections are.
     member.enterRoom(
@@ -397,7 +409,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      corrections,
+      replay?.corrections ?? 0,
       replay?.restarted
     )
     const execution = coordinator.snapshot(scope)
@@ -548,17 +560,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const member = sessions.join(client, scope)
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
-    let corrections = 0
     const replay =
       params.replayFrom?.type === "start"
-        ? await replayPage(member, scope)
+        ? await replayHistory(member, scope)
         : undefined
     const history = replay?.history
-    if (history) {
-      corrections = translators.persistedCorrections(history)
-      for (const outbound of translators.translateHistory(history, lane))
-        await member.send(outbound)
-    }
     // Seated after its history and before any other provider read, so a turn
     // another browser starts meanwhile reaches it, prompt first.
     member.enterRoom(
@@ -572,7 +578,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       member,
       scope,
       history === undefined ? meta : {},
-      corrections,
+      replay?.corrections ?? 0,
       replay?.restarted
     )
     const execution = coordinator.snapshot(scope)

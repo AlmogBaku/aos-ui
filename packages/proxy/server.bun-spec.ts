@@ -4,7 +4,7 @@ import { request } from "node:http"
 
 import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
-import type { AcpConnectionContext } from "./acp/types"
+import type { AcpConnectionContext, ActivityFeed } from "./acp/types"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import { startProxyServer } from "./server"
 
@@ -30,7 +30,7 @@ function connectionContext(
     runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
     sessionRows: {} as AcpConnectionContext["sessionRows"],
     readState: {} as AcpConnectionContext["readState"],
-    activityFeed: {} as AcpConnectionContext["activityFeed"],
+    activityFeed: {} as ActivityFeed,
     translators: {} as AcpConnectionContext["translators"],
     rooms: {} as AcpConnectionContext["rooms"],
     attachmentStages: {} as AcpConnectionContext["attachmentStages"],

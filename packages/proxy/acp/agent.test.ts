@@ -2,6 +2,7 @@ import {
   client,
   methods,
   type ContentBlock,
+  type CreateElicitationResponse,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -253,6 +254,23 @@ function permissionOutbound(request: PendingRequest): RequestOutbound {
   }
 }
 
+function questionOutbound(request: PendingRequest): RequestOutbound {
+  return {
+    kind: "elicitation",
+    requestId: request.requestId,
+    request: {
+      mode: "form",
+      message: request.message ?? "",
+      requestedSchema: { type: "object", properties: {} },
+    },
+  }
+}
+
+const requestOutbound = (request: PendingRequest): RequestOutbound =>
+  request.kind === PendingRequestKind.Elicitation
+    ? questionOutbound(request)
+    : permissionOutbound(request)
+
 /** Deterministic stand-ins for the translator lane's pure projections. */
 const translators: Translators = {
   translateTurnEvent(state, event, context) {
@@ -314,7 +332,7 @@ const translators: Translators = {
         ],
       }
     if (event.kind === TurnEventKind.TurnRequiresAction)
-      return { state, outbound: event.requests.map(permissionOutbound) }
+      return { state, outbound: event.requests.map(requestOutbound) }
     if (event.kind === TurnEventKind.TurnEnded)
       return {
         state,
@@ -355,7 +373,7 @@ const translators: Translators = {
         content: [{ type: "text", text: `replay:${message.id}` }],
       },
     })),
-  pendingRequestToOutbound: (request) => permissionOutbound(request),
+  pendingRequestToOutbound: (request) => requestOutbound(request),
   replyFromPermission: (request, response) => ({
     requestId: request.requestId,
     status: "resolved",
@@ -454,6 +472,11 @@ type HarnessOptions = {
     params: unknown,
     signal: AbortSignal
   ) => Promise<RequestPermissionResponse>
+  /** This browser's answer to a question; `signal` aborts on withdrawal. */
+  question?: (
+    params: unknown,
+    signal: AbortSignal
+  ) => Promise<CreateElicitationResponse>
   discover?: ServerTurnEngine["discover"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
@@ -648,18 +671,19 @@ async function harness(options: HarnessOptions = {}) {
       guest?: GuestPolicy
       /** This browser's answer to a permission request, if not the harness's. */
       permission?: HarnessOptions["permission"]
+      /** This browser's answer to a question, if not the harness's. */
+      question?: HarnessOptions["question"]
     } = {}
   ) {
     const attachmentStages = new AttachmentStageRegistry()
     const permission = lane.permission ?? options.permission
+    const question = lane.question ?? options.question
     const context: AcpConnectionContext = {
       connectionId,
       principalId: PRINCIPAL,
-      lane: lane.guest ? "guest" : "operator",
       runtimeInstance,
       sessionRows,
       readState,
-      activityFeed,
       translators: {
         ...translators,
         translateHistory: (history, lane) => {
@@ -671,7 +695,10 @@ async function harness(options: HarnessOptions = {}) {
       rooms,
       presence,
       logger,
-      ...(lane.guest ? { guest: lane.guest } : {}),
+      // As the lanes do, only an operator reads the activity feed.
+      ...(lane.guest
+        ? { lane: "guest", guest: lane.guest }
+        : { lane: "operator", activityFeed }),
     }
 
     const recorder = createRecorder()
@@ -689,6 +716,18 @@ async function harness(options: HarnessOptions = {}) {
           return (
             (await permission?.(params, signal)) ?? {
               outcome: { outcome: "selected", optionId: "once" },
+            }
+          )
+        }
+      )
+      .onRequest(
+        methods.client.elicitation.create,
+        async ({ params, signal }) => {
+          recorder.add({ method: methods.client.elicitation.create, params })
+          return (
+            (await question?.(params, signal)) ?? {
+              action: "accept",
+              content: {},
             }
           )
         }
@@ -2067,6 +2106,12 @@ function invitedGuest(denied?: string): GuestPolicy {
   }
 }
 
+const QUESTION: PendingRequest = {
+  requestId: "question-1",
+  kind: PendingRequestKind.Elicitation,
+  message: "Which one?",
+}
+
 const APPROVAL: PendingRequest = {
   requestId: "approval-1",
   kind: PendingRequestKind.Permission,
@@ -2189,6 +2234,49 @@ describe("Session rooms", () => {
     await settled()
     expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+    other.close()
+  })
+
+  it("withdraws a question from the other browser once one answers it", async () => {
+    const answer = gate()
+    const withdrawal = Promise.withResolvers<AbortSignal>()
+    const test = await harness({
+      providerIds: true,
+      question: async () => {
+        await answer.held
+        return { action: "accept", content: {} }
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2", {
+      question: (_params, signal) => {
+        withdrawal.resolve(signal)
+        return heldUntilWithdrawn(signal)
+      },
+    })
+    await other.list()
+    await open(other)
+    await prompt(test, "Pick one")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [QUESTION],
+    })
+    test.sources[0]?.finish()
+    const asked = (entry: Recorded) =>
+      entry.method === methods.client.elicitation.create
+    await other.recorder.wait(asked)
+    await test.recorder.wait(asked)
+    answer.release()
+
+    const signal = await withdrawal.promise
+    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await replyWhileWatched(test.sources[1], "Resumed", [other])
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     test.close()
     other.close()
   })
@@ -2543,6 +2631,34 @@ describe("Session rooms", () => {
     page.release()
     await reopened
     await other.recorder.wait(said("Live"))
+
+    expect(flow(other.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual(
+      [`prompt ${messageId}`, "chunk Live"]
+    )
+    test.close()
+    other.close()
+  })
+
+  it("streams a later turn to a tab whose reopened page fails to replay", async () => {
+    let failing = false
+    const test = await harness({
+      providerIds: true,
+      onReplay: () => {
+        if (failing) throw new Error("unreadable page")
+      },
+    })
+    await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+
+    failing = true
+    await expect(
+      open(other, { replayFrom: { type: "start" } })
+    ).rejects.toThrow()
+    failing = false
+    const from = other.recorder.entries.length
+    const messageId = await liveTurn(test, [test, other])
 
     expect(flow(other.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual(
       [`prompt ${messageId}`, "chunk Live"]

@@ -49,15 +49,12 @@ export type WorkspaceCapabilities = z.infer<
 >
 
 /** What the proxy knows about one accepted WebSocket connection. */
-export type AcpConnectionContext = {
+type AcpConnectionBase = {
   connectionId: string
   principalId: string
-  lane: Lane
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
   readState: ReadState
-  /** Operator lane only: a guest learns nothing about the rest of the Agent. */
-  activityFeed?: ActivityFeed
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
@@ -66,8 +63,6 @@ export type AcpConnectionContext = {
    * operator and a guest on the same provider Session land in one room.
    */
   rooms: SessionRooms
-  /** Present only on the guest lane; absent means an operator connection. */
-  guest?: GuestPolicy
   /**
    * Where this connection reports the workspace it shows, shared across the
    * principal's connections. Absent means nothing observes presence, which is
@@ -76,6 +71,17 @@ export type AcpConnectionContext = {
   presence?: PresenceRegistry
   logger?: AcpLogger
 }
+
+/**
+ * One connection's context, typed by its lane: only an operator reads the
+ * activity feed, since a guest learns nothing about the rest of the Agent, and
+ * only a guest carries the policy that authorizes and projects it.
+ */
+export type AcpConnectionContext = AcpConnectionBase &
+  (
+    | { lane: "operator"; activityFeed: ActivityFeed; guest?: never }
+    | { lane: "guest"; guest: GuestPolicy; activityFeed?: never }
+  )
 
 /**
  * One redeemed invitation, shaped after the claims `GuestInvitationService`

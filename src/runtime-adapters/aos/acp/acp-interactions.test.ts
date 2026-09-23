@@ -108,14 +108,15 @@ function elicitation({
       },
     },
   }
+  const withdrawal = new AbortController()
   const pending: AcpPendingRequest = {
     kind: "elicitation",
     sessionId,
     request,
     respond,
-    signal: new AbortController().signal,
+    signal: withdrawal.signal,
   }
-  return { pending, respond }
+  return { pending, respond, withdraw: () => withdrawal.abort() }
 }
 
 describe("ACP runtime interactions", () => {
@@ -323,19 +324,25 @@ describe("ACP runtime interactions", () => {
     expect(interactions.getPending("session-1")).toBeUndefined()
   })
 
-  it("clears a question another UI answered without answering the runtime", () => {
-    const { interactions, emit } = harness()
-    const { pending, respond, withdraw } = permission()
-    emit(pending)
-    const listener = vi.fn()
-    interactions.subscribe("session-1", listener)
+  it.each([
+    ["permission", permission],
+    ["elicitation", elicitation],
+  ])(
+    "clears a %s another UI answered without answering the runtime",
+    (_kind, request) => {
+      const { interactions, emit } = harness()
+      const { pending, respond, withdraw } = request()
+      emit(pending)
+      const listener = vi.fn()
+      interactions.subscribe("session-1", listener)
 
-    withdraw()
+      withdraw()
 
-    expect(interactions.getPending("session-1")).toBeUndefined()
-    expect(listener).toHaveBeenCalledTimes(1)
-    expect(respond).not.toHaveBeenCalled()
-  })
+      expect(interactions.getPending("session-1")).toBeUndefined()
+      expect(listener).toHaveBeenCalledTimes(1)
+      expect(respond).not.toHaveBeenCalled()
+    }
+  )
 
   it("keeps another Session's question that shares the withdrawn request id", () => {
     const { interactions, emit } = harness()
