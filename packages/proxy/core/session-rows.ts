@@ -41,6 +41,11 @@ export interface SessionRows {
   rememberDetail(row: Session): SessionRow
   /** Optimistically settles `unread: false`, stamps `readAt`, and arms the guard. */
   markRead(agentId: string, sessionId: string): SessionRow | undefined
+  /**
+   * Ignores list rows that report this Session unread until the returned
+   * release runs, because an acknowledgement for it is already on its way.
+   */
+  holdRead(agentId: string, sessionId: string): () => void
   forget(agentId: string, sessionId: string): void
   subscribe(listener: SessionRowListener): () => void
 }
@@ -100,6 +105,8 @@ export function createSessionRows({
 }: { now?: () => number } = {}): SessionRows {
   const rows = new Map<string, SessionRow>()
   const guardedUntil = new Map<string, number>()
+  /** How many acknowledgements on their way hold each Session read. */
+  const held = new Map<string, number>()
   const listeners = new Set<SessionRowListener>()
 
   /** True while our own mark-read outranks what a list page may still report. */
@@ -125,7 +132,7 @@ export function createSessionRows({
       for (const row of incoming) {
         const key = rowKey(row.agentId, row.id)
         const previous = rows.get(key)
-        const stale = guarded(key) && row.unread === true
+        const stale = (guarded(key) || held.has(key)) && row.unread === true
         const unread = stale ? false : row.unread
         // The provider is the authority on *whether* this Session is read, and
         // nobody but our own acknowledgement knows *when*: a page reporting it
@@ -164,6 +171,19 @@ export function createSessionRows({
       rows.set(key, merged)
       publish(merged)
       return merged
+    },
+
+    holdRead(agentId, sessionId) {
+      const key = rowKey(agentId, sessionId)
+      held.set(key, (held.get(key) ?? 0) + 1)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        const remaining = (held.get(key) ?? 1) - 1
+        if (remaining > 0) held.set(key, remaining)
+        else held.delete(key)
+      }
     },
 
     forget(agentId, sessionId) {

@@ -51,7 +51,13 @@ export function createReadState({
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let pending:
-    { handle: TimerHandle; target: Target; forced: boolean } | undefined
+    | {
+        handle: TimerHandle
+        target: Target
+        forced: boolean
+        release: () => void
+      }
+    | undefined
   let tracked: Promise<boolean> | undefined
   let closed = false
 
@@ -71,7 +77,9 @@ export function createReadState({
   }
 
   const clearPending = () => {
-    if (pending) cancel(pending.handle)
+    if (!pending) return
+    cancel(pending.handle)
+    pending.release()
     pending = undefined
   }
 
@@ -96,7 +104,14 @@ export function createReadState({
     if (closed) return
     const key = keyOf(target)
     const last = writtenAt.get(key)
-    if (!forced && last !== undefined && now() - last < REACK_FLOOR_MS) return
+    if (!forced && last !== undefined && now() - last < REACK_FLOOR_MS) {
+      // The floor only spaces the writes out: a Session still in focus is
+      // acknowledged once it passes, or its re-lit row would stand until the
+      // next exposure.
+      if (focused && sameTarget(focused, target))
+        arm(target, false, last + REACK_FLOOR_MS - now())
+      return
+    }
     if (!(await tracks()) || closed) return
     writtenAt.set(key, now())
     await markRead(target.agentId, target.sessionId)
@@ -104,9 +119,11 @@ export function createReadState({
 
   /**
    * Restarts the debounce. A forced write survives a re-arm so an exposure
-   * never loses its acknowledgement to a floored re-ack.
+   * never loses its acknowledgement to a floored re-ack. Until the write
+   * settles, a list page that still reports the Session unread is not
+   * forwarded: the acknowledgement it is waiting for is already on its way.
    */
-  const arm = (target: Target, force: boolean) => {
+  function arm(target: Target, force: boolean, delayMs = FOCUS_DEBOUNCE_MS) {
     if (lane === "guest" || closed) return
     const forced =
       force ||
@@ -114,11 +131,12 @@ export function createReadState({
         sameTarget(pending.target, target) &&
         pending.forced)
     clearPending()
+    const release = sessionRows.holdRead(target.agentId, target.sessionId)
     const handle = schedule(() => {
       pending = undefined
-      void write(target, forced)
-    }, FOCUS_DEBOUNCE_MS)
-    pending = { handle, target, forced }
+      void write(target, forced).finally(release)
+    }, delayMs)
+    pending = { handle, target, forced, release }
   }
 
   /**

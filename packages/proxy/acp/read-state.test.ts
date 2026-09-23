@@ -127,7 +127,7 @@ describe("createReadState", () => {
     expect(mutateSession).toHaveBeenCalledTimes(2)
   })
 
-  it("re-acks a re-lit exposure behind the floor and ignores other Sessions", async () => {
+  it("defers a re-lit exposure's re-ack to the floor and ignores other Sessions", async () => {
     const { mutateSession, readState } = harness({ unread: true })
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
@@ -136,17 +136,66 @@ describe("createReadState", () => {
     await settle(FOCUS_DEBOUNCE_MS)
     expect(mutateSession).toHaveBeenCalledTimes(1)
 
+    // The floor spaces the writes out; it does not drop the one it held back.
+    await settle(REACK_FLOOR_MS - FOCUS_DEBOUNCE_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(2)
+
     await settle(REACK_FLOOR_MS)
     readState.onExecution(attention())
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(mutateSession).toHaveBeenCalledTimes(3)
 
     await settle(REACK_FLOOR_MS)
     readState.onExecution(lifecycle("turn-started"))
     readState.onExecution(lifecycle("turn-failed", "session-2"))
     readState.onExecution(attention("session-2"))
+    await settle(REACK_FLOOR_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(3)
+  })
+
+  it("drops a floored re-ack once the Session leaves focus", async () => {
+    const { mutateSession, readState } = harness()
+    readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    readState.onExecution(lifecycle("turn-finished"))
+    await settle(FOCUS_DEBOUNCE_MS)
+
+    readState.blur()
+    await settle(REACK_FLOOR_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(1)
+  })
+
+  it("forwards no unread the provider reports while an ack is on its way", async () => {
+    const { mutateSession, readState, sessionRows } = harness()
+    const published: (boolean | undefined)[] = []
+    sessionRows.subscribe((row) => published.push(row.unread))
+    const relight = () =>
+      sessionRows.rememberList([
+        {
+          id: SESSION,
+          agentId: AGENT,
+          title: "Weekly digest",
+          archived: false,
+          updatedAt: "2026-09-19T10:05:00.000Z",
+          status: "idle",
+          unread: true,
+        },
+      ])
+
+    readState.focus(AGENT, SESSION)
+    relight()
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(mutateSession).toHaveBeenCalledTimes(1)
+
+    // A re-ack the floor holds back still holds the row read until it lands.
+    await settle(READ_GUARD_MS)
+    readState.onExecution(lifecycle("turn-finished"))
+    await settle(FOCUS_DEBOUNCE_MS)
+    relight()
+    await settle(REACK_FLOOR_MS)
+    expect(published).not.toContain(true)
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
   })
 
   it("restarts the debounce on a new exposure and cancels it on blur or close", async () => {
