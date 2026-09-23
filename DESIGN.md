@@ -464,10 +464,10 @@ assistant's answer.
   `unstable_useThreadMessageIds` with `ThreadPrimitive.Unstable_MessageById`,
   windowed by `@tanstack/react-virtual`. Both Assistant UI APIs are marked
   unstable and experimental, so re-check them on every Assistant UI upgrade.
-  Where the browser anchors scroll, the virtualizer never moves the scroll
-  position; its `shouldAdjustScrollPositionOnItemSizeChange` guard is an
-  instance field, set to decline there and left to the virtualizer on WebKit,
-  which has no `overflow-anchor`. The reading-position controller keeps follow mode, bookmarks, and
+  The virtualizer never moves the scroll position for a resize: the browser's
+  scroll anchoring does (`overflow-anchor`; Safari 27 and later, so earlier
+  Safari is not supported), and its `shouldAdjustScrollPositionOnItemSizeChange`
+  guard is an instance field set to decline. The reading-position controller keeps follow mode, bookmarks, and
   re-anchoring. Conversation search matches the message data and brings an
   unmounted match into the window before highlighting it. The message that last
   held focus stays mounted. Only the newest message plays the entrance
@@ -475,6 +475,23 @@ assistant's answer.
   only the mounted messages of a long Session. Folds and disclosures the
   reader opened or closed stay that way while the thread is open, across a
   message's remount; a Mermaid diagram's zoom and pan reset.
+
+  Where the runtime advertises `historyPages`, a Session opens at its newest
+  page and older history loads as the reader scrolls up
+  (`thread-history-load-earlier.tsx`). The top row reads the page before once
+  it comes within one viewport height of the top, and offers the same read as
+  a "Load earlier messages" button; a failed read waits for that button. The
+  row is observed afresh after every page, so a page that lands never counts
+  as still in view. Past the last page the row reads "Beginning of
+  conversation", or "Earlier messages can't be loaded" where the proxy's bound
+  stops the reading. While a page lands, the message the reader is looking at
+  (their bookmark, else the first message in view) stays mounted, and a
+  correction measured from the DOM puts it back where the reader saw it before
+  paint. The correction repeats on the next commits until one moves nothing,
+  because the browser declines to anchor a message whose own spacing changed,
+  as it does when the window moves to the corrected place and mounts messages
+  never measured above it. A reader following the latest message is left
+  following.
 
 ### Motion
 

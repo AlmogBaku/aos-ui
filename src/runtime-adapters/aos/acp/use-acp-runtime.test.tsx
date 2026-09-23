@@ -21,15 +21,20 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
+  type AosHistoryCursor,
+  type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
 import { createAcpApprovals } from "./acp-approvals"
 import type {
   AcpConnection,
   AcpPendingRequest,
+  AcpHistoryPage,
   AcpResumeOptions,
+  AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
 import {
@@ -51,9 +56,33 @@ type ResumeReply = Awaited<ReturnType<AcpConnection["resumeSession"]>>
  */
 const resumeReply = (): ResumeReply => JSON.parse("{}")
 
-function createFakeConnection() {
+/** The handshake of a proxy that does, or does not, serve older pages. */
+const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
+  version: 1,
+  lane: "operator",
+  extensions: {
+    steer: true,
+    rewind: true,
+    composerPrefill: true,
+    agents: true,
+    invalidation: true,
+    activity: true,
+    readState: true,
+    focus: true,
+    guestProjection: false,
+    historyPages,
+  },
+})
+
+function createFakeConnection(
+  options: {
+    /** What each from-start replay reports as `_meta.aos.history`. */
+    history?: AosHistoryCursor
+    historyPages?: boolean
+  } = {}
+) {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
-  const replays = new Map<string, Set<() => void>>()
+  const replays = new Map<string, Set<AcpSessionReplayListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const pendingListeners = new Set<(pending: AcpPendingRequest) => void>()
   const unused = (): never => {
@@ -63,12 +92,31 @@ function createFakeConnection() {
   const resumed = new Promise<ResumeReply>((resolve) => {
     settle = () => resolve(resumeReply())
   })
-  const resumeSession = vi.fn((sessionId: string, resume: AcpResumeOptions) => {
+  const fake = { history: options.history }
+  const histories = new Map<string, AosHistoryCursor>()
+  /** A from-start replay: announced, recorded, then settled, as the connection does. */
+  const replay = async (sessionId: string, reply: Promise<ResumeReply>) => {
+    const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
+      listener()
+    )
+    try {
+      const resumed = await reply
+      if (fake.history) histories.set(sessionId, { ...fake.history })
+      return resumed
+    } finally {
+      for (const settle of settles) settle?.()
+    }
+  }
+  const resumeSession = vi.fn((sessionId: string, resume: AcpResumeOptions) =>
     // As the connection does: a from-start replay announces itself, so whoever
     // projects the Session drops what the replay is about to resend.
-    if (resume.replayFromStart)
-      for (const listener of replays.get(sessionId) ?? []) listener()
-    return resumed
+    resume.replayFromStart ? replay(sessionId, resumed) : resumed
+  )
+  const pages: PromiseWithResolvers<AcpHistoryPage>[] = []
+  const resumePage = vi.fn<AcpConnection["resumePage"]>(() => {
+    const page = Promise.withResolvers<AcpHistoryPage>()
+    pages.push(page)
+    return page.promise
   })
   const prompt = vi.fn(async () => ({ messageId: "u1" }))
   const cancel = vi.fn()
@@ -77,12 +125,14 @@ function createFakeConnection() {
     status: "ready",
     // Already connected: nothing here owns a transport to open.
     start: () => {},
-    initialized: new Promise<never>(() => {}),
+    initialized: Promise.resolve(initializeMeta(options.historyPages ?? true)),
     subscribeStatus: () => () => {},
     login: unused,
     newSession: unused,
     listSessions: unused,
     resumeSession,
+    resumePage,
+    history: (sessionId) => histories.get(sessionId),
     prompt,
     cancel,
     setConfigOption: unused,
@@ -122,8 +172,23 @@ function createFakeConnection() {
   return {
     connection,
     resumeSession,
+    resumePage,
     prompt,
     cancel,
+    /** The history the next from-start replay reports. */
+    set history(history: AosHistoryCursor | undefined) {
+      fake.history = history
+    },
+    /** Answers the `index`th page read. */
+    answerPage: (index: number, page: AcpHistoryPage) => {
+      pages[index]?.resolve(page)
+    },
+    failPage: (index: number) => {
+      pages[index]?.reject(new Error("page read failed"))
+    },
+    /** A resync the connection runs on its own: a from-start replay. */
+    resync: (reply = Promise.resolve(resumeReply())) =>
+      replay(SESSION_ID, reply),
     settleResume: () => {
       settle()
       return resumed
@@ -884,6 +949,464 @@ describe("useAcpRuntime approvals", () => {
 
     expect(callPart(result.current).getState()).toMatchObject({
       approval: { id: "interrupt-1" },
+    })
+  })
+})
+
+/** An older page as `resumePage` hands it over, tagged updates and all. */
+const pageOf = (
+  updates: readonly SessionUpdate[],
+  history: AosHistoryCursor
+): AcpHistoryPage => ({
+  updates: updates.map((update) => ({
+    update,
+    meta: { ...TURN_META, historyPage: { cursor: "tag" } },
+  })),
+  history,
+})
+
+const historyOf = (runtime: ReturnType<typeof useAcpRuntime>) =>
+  threadHistoryExtras.tryGet(runtime.thread.getState().extras)?.history
+
+const ids = (runtime: ReturnType<typeof useAcpRuntime>) =>
+  runtime.thread.getState().messages.map((message) => message.id)
+
+describe("useAcpRuntime older history", () => {
+  const newestPage = (fake: Fake) =>
+    act(() => {
+      fake.emit(textUpdate("user_message", "u2", "Newer question"))
+      fake.emit(textUpdate("agent_message", "a2", "Newer answer"))
+    })
+
+  const loadOlder = (runtime: ReturnType<typeof useAcpRuntime>) =>
+    act(async () => {
+      void historyOf(runtime)?.loadOlder()
+    })
+
+  it("offers the cursor the opening replay reported, without flipping isLoading", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    newestPage(fake)
+
+    expect(historyOf(result.current)).toMatchObject({
+      hasOlder: true,
+      truncated: false,
+      loading: false,
+      failed: false,
+    })
+    await loadOlder(result.current)
+    expect(fake.resumePage).toHaveBeenCalledWith(SESSION_ID, "cursor-1")
+    expect(historyOf(result.current)?.loading).toBe(true)
+    expect(result.current.thread.getState().isLoading).toBe(false)
+
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf(
+          [
+            textUpdate("user_message", "u1", "First question"),
+            textUpdate("agent_message", "a1", "First answer"),
+          ],
+          {}
+        )
+      )
+    })
+    expect(ids(result.current)).toEqual(["u1", "a1", "u2", "a2"])
+    expect(historyOf(result.current)).toMatchObject({
+      hasOlder: false,
+      truncated: false,
+      loading: false,
+    })
+  })
+
+  it("reports a bound it cannot read past as truncated", async () => {
+    const fake = createFakeConnection({ history: { truncated: true } })
+    const { result } = await mount(fake)
+
+    expect(historyOf(result.current)).toMatchObject({
+      hasOlder: false,
+      truncated: true,
+    })
+  })
+
+  it("offers nothing when the proxy does not serve older pages", async () => {
+    const fake = createFakeConnection({
+      history: { nextCursor: "cursor-1" },
+      historyPages: false,
+    })
+    const { result } = await mount(fake)
+
+    expect(historyOf(result.current)).toBeUndefined()
+  })
+
+  it("offers nothing until a replay reports where history stands", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+
+    expect(historyOf(result.current)).toBeUndefined()
+  })
+
+  it("keeps a live update at the end while a page lands ahead of it", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    newestPage(fake)
+
+    await loadOlder(result.current)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u3", "Live question"))
+    })
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf([textUpdate("user_message", "u1", "First question")], {})
+      )
+    })
+
+    expect(ids(result.current)).toEqual(["u1", "u2", "a2", "u3"])
+  })
+
+  it("leaves the running turn running when a page's finished turns land", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit(textUpdate("user_message", "u2", "Newer question"))
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+
+    await loadOlder(result.current)
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf(
+          [
+            { sessionUpdate: "state_update", state: "running" },
+            textUpdate("agent_message", "a1", "First answer"),
+            {
+              sessionUpdate: "state_update",
+              state: "idle",
+              stopReason: "end_turn",
+            },
+          ],
+          {}
+        )
+      )
+    })
+
+    // The running turn's own reply stays last, after the page and its question.
+    expect(ids(result.current).slice(0, 2)).toEqual(["a1", "u2"])
+    expect(ids(result.current)).toHaveLength(3)
+    expect(result.current.thread.getState().isRunning).toBe(true)
+  })
+
+  it("keeps a failed page failed until asked again, with no retry of its own", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    newestPage(fake)
+
+    await loadOlder(result.current)
+    await act(async () => {
+      fake.failPage(0)
+    })
+    expect(historyOf(result.current)).toMatchObject({
+      hasOlder: true,
+      loading: false,
+      failed: true,
+    })
+    expect(fake.resumePage).toHaveBeenCalledTimes(1)
+
+    await loadOlder(result.current)
+    expect(fake.resumePage).toHaveBeenCalledTimes(2)
+    expect(historyOf(result.current)?.failed).toBe(false)
+  })
+
+  it("asks for one page at a time", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+
+    await loadOlder(result.current)
+    await loadOlder(result.current)
+    expect(fake.resumePage).toHaveBeenCalledTimes(1)
+  })
+
+  it("drops a page that lands after a resync replaced the transcript", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    newestPage(fake)
+
+    await loadOlder(result.current)
+    fake.history = { nextCursor: "cursor-fresh" }
+    await act(async () => {
+      await fake.resync()
+      fake.emit(textUpdate("user_message", "u2", "Newer question"))
+    })
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf([textUpdate("user_message", "u1", "First question")], {})
+      )
+    })
+
+    expect(ids(result.current)).toEqual(["u2"])
+    expect(historyOf(result.current)).toMatchObject({
+      hasOlder: true,
+      loading: false,
+      failed: false,
+    })
+  })
+
+  it("drops a page that lands after the thread binds another Session", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result, rerender } = renderHook(
+      (props: { session: string }) =>
+        useAcpRuntime({
+          connection: fake.connection,
+          sessionId: props.session,
+          agentId: "agent-1",
+        }),
+      { initialProps: { session: SESSION_ID } }
+    )
+    await act(async () => {
+      await fake.settleResume()
+    })
+
+    await loadOlder(result.current)
+    await act(async () => {
+      rerender({ session: "session-2" })
+    })
+    await act(async () => {
+      fake.answerPage(
+        0,
+        pageOf([textUpdate("user_message", "u1", "First question")], {})
+      )
+    })
+
+    expect(ids(result.current)).toEqual([])
+  })
+
+  it("keeps the cursor across a reconnect, then takes the one a resync reports", async () => {
+    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+    const { result } = await mount(fake)
+    newestPage(fake)
+
+    // A reconnect that replays nothing reports no history.
+    await act(async () => {
+      await fake.connection.resumeSession(SESSION_ID, {
+        replayFromStart: false,
+      })
+    })
+    expect(historyOf(result.current)?.hasOlder).toBe(true)
+
+    fake.history = { nextCursor: "cursor-fresh" }
+    await act(async () => {
+      await fake.resync()
+    })
+    await loadOlder(result.current)
+    expect(fake.resumePage).toHaveBeenLastCalledWith(SESSION_ID, "cursor-fresh")
+  })
+
+  describe("after an accepted rewind", () => {
+    /** Retries the newest turn; the provider answers it with a new user turn. */
+    const retry = (fake: Fake, runtime: ReturnType<typeof useAcpRuntime>) => {
+      fake.prompt.mockResolvedValueOnce({ messageId: "u3" })
+      return act(async () => {
+        runtime.thread.startRun({ parentId: "u2" })
+      })
+    }
+
+    it("rebuilds from the newest page before the next page, so nothing is skipped", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await loadOlder(result.current)
+      await act(async () => {
+        fake.answerPage(
+          0,
+          pageOf([textUpdate("user_message", "u1", "First question")], {
+            nextCursor: "cursor-0",
+          })
+        )
+      })
+
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u1", "u3"]))
+      // The rewind itself sends no resume: the new turn streams as it does.
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+
+      fake.history = { nextCursor: "cursor-rebuilt" }
+      await loadOlder(result.current)
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
+        replayFromStart: true,
+      })
+      expect(fake.resumePage).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        "cursor-rebuilt"
+      )
+      // What the rebuild replayed: the newest page as the provider now holds it.
+      act(() => {
+        fake.emit(textUpdate("user_message", "u3", "Newer question"))
+        fake.emit(textUpdate("agent_message", "a3", "Retried answer"))
+      })
+      await act(async () => {
+        fake.answerPage(
+          1,
+          pageOf(
+            [
+              textUpdate("user_message", "u1", "First question"),
+              textUpdate("agent_message", "a1", "First answer"),
+            ],
+            {}
+          )
+        )
+      })
+
+      expect(ids(result.current)).toEqual(["u1", "a1", "u3", "a3"])
+    })
+
+    it("drops a page still in flight when the rewind is accepted", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await loadOlder(result.current)
+
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+      await act(async () => {
+        fake.answerPage(
+          0,
+          pageOf([textUpdate("user_message", "u1", "First question")], {})
+        )
+      })
+
+      expect(ids(result.current)).not.toContain("u1")
+      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(historyOf(result.current)).toMatchObject({
+        hasOlder: true,
+        loading: false,
+      })
+
+      // Asked again, it rebuilds first, then pages from the fresh cursor.
+      fake.history = { nextCursor: "cursor-rebuilt" }
+      await loadOlder(result.current)
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
+        replayFromStart: true,
+      })
+      expect(fake.resumePage).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        "cursor-rebuilt"
+      )
+      expect(fake.resumeSession.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        fake.resumePage.mock.invocationCallOrder.at(-1) ?? 0
+      )
+      act(() => {
+        fake.emit(textUpdate("user_message", "u3", "Newer question"))
+        fake.emit(textUpdate("agent_message", "a3", "Retried answer"))
+      })
+      await act(async () => {
+        fake.answerPage(
+          1,
+          pageOf(
+            [
+              textUpdate("user_message", "u1", "First question"),
+              textUpdate("agent_message", "a1", "First answer"),
+            ],
+            {}
+          )
+        )
+      })
+
+      expect(ids(result.current)).toEqual(["u1", "a1", "u3", "a3"])
+    })
+
+    it("keeps the cursor stale when the rewind lands during a replay", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+
+      const reply = Promise.withResolvers<ResumeReply>()
+      let replayed: Promise<unknown> = Promise.resolve()
+      act(() => {
+        replayed = fake.resync(reply.promise)
+      })
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+      // The replay read the provider's positions before the rewind moved them.
+      fake.history = { nextCursor: "cursor-before-rewind" }
+      await act(async () => {
+        reply.resolve(resumeReply())
+        await replayed
+      })
+
+      fake.history = { nextCursor: "cursor-rebuilt" }
+      await loadOlder(result.current)
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumePage).toHaveBeenCalledTimes(1)
+      expect(fake.resumePage).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        "cursor-rebuilt"
+      )
+    })
+
+    it("fails the load, and leaves the reader its button, when the rebuild is refused", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+
+      fake.resumeSession.mockRejectedValueOnce(
+        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+      )
+      let load: Promise<void> | undefined
+      await act(async () => {
+        load = historyOf(result.current)?.loadOlder()
+        await load
+      })
+      await expect(load).resolves.toBeUndefined()
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumePage).not.toHaveBeenCalled()
+      expect(historyOf(result.current)).toMatchObject({
+        hasOlder: true,
+        loading: false,
+        failed: true,
+      })
+      expect(ids(result.current)).toEqual(["u3"])
+    })
+
+    it("retries a rebuild the provider is still bringing up", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+
+      vi.useFakeTimers()
+      try {
+        fake.resumeSession.mockRejectedValueOnce(
+          new RequestError(
+            AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+            "temporarily_unavailable"
+          )
+        )
+        fake.history = { nextCursor: "cursor-rebuilt" }
+        await loadOlder(result.current)
+        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+        expect(fake.resumePage).not.toHaveBeenCalled()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500)
+        })
+        expect(fake.resumeSession).toHaveBeenCalledTimes(3)
+        expect(fake.resumePage).toHaveBeenLastCalledWith(
+          SESSION_ID,
+          "cursor-rebuilt"
+        )
+        expect(historyOf(result.current)?.failed).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

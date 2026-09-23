@@ -29,7 +29,11 @@ import {
   AOS_METHODS,
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
+  AosExtensionsSchema,
   AosFocusNotificationSchema,
+  AosHistoryPageTagSchema,
+  AosReplayBeforeSchema,
+  AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
   AosSessionUpdateRequestSchema,
   AosChunkMetaSchema,
@@ -865,6 +869,68 @@ describe("AOS v1 normalized protocol", () => {
     "aos-attachment:stage-1/att-1",
   ])("reads no artifact from %s", (uri) => {
     expect(parseArtifactUri(uri)).toBeUndefined()
+  })
+
+  it("reads an older history page only through a server-issued cursor", () => {
+    expect(
+      AosReplayBeforeSchema.parse({ type: "_aos/before", cursor: "500" })
+    ).toEqual({ type: "_aos/before", cursor: "500" })
+    expect(
+      AosReplayBeforeSchema.parse({
+        type: "_aos/before",
+        cursor: "500",
+        _meta: { client: {} },
+      })
+    ).toMatchObject({ cursor: "500" })
+    for (const invalid of [
+      { type: "_aos/before" },
+      { type: "_aos/before", cursor: 500 },
+      { type: "_aos/before", cursor: "" },
+      { type: "_aos/before", cursor: "500", limit: 10 },
+      { type: "_aos/after", cursor: "500" },
+    ]) {
+      expect(AosReplayBeforeSchema.safeParse(invalid).success).toBe(false)
+    }
+  })
+
+  it("reads the history cursor a replaying resume returns", () => {
+    const history = AosSessionResumeResponseMetaSchema.shape.history
+    expect(history.parse({ nextCursor: "500" })).toEqual({ nextCursor: "500" })
+    expect(history.parse({ truncated: true })).toEqual({ truncated: true })
+    expect(history.parse(undefined)).toBeUndefined()
+  })
+
+  it("tells an older page's updates apart from live ones", () => {
+    expect(
+      AosHistoryPageTagSchema.parse({
+        sequence: 0,
+        turnId: "history",
+        historyPage: { cursor: "500" },
+      }).historyPage
+    ).toEqual({ cursor: "500" })
+    expect(
+      AosHistoryPageTagSchema.parse({ sequence: 3, turnId: "turn-1" })
+        .historyPage
+    ).toBeUndefined()
+  })
+
+  it("reads an older proxy's extensions as offering no history pages", () => {
+    const extensions = {
+      steer: true,
+      rewind: true,
+      composerPrefill: true,
+      agents: true,
+      invalidation: true,
+      activity: true,
+      readState: true,
+      focus: true,
+      guestProjection: true,
+    }
+    expect(AosExtensionsSchema.parse(extensions).historyPages).toBe(false)
+    expect(
+      AosExtensionsSchema.parse({ ...extensions, historyPages: true })
+        .historyPages
+    ).toBe(true)
   })
 
   it("announces artifacts in the message stream, not as a notification", () => {

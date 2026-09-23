@@ -4,6 +4,10 @@ import type { Locale } from "@/lib/i18n/config"
 export const threadLabels: Record<Locale, ThreadLabels> = {
   en: {
     loadingConversation: "Loading conversation",
+    loadEarlierMessages: "Load earlier messages",
+    loadingEarlierMessages: "Loading earlier messages",
+    conversationBeginning: "Beginning of conversation",
+    earlierMessagesUnavailable: "Earlier messages can't be loaded",
     scrollToBottom: "Scroll to bottom",
     welcome: "What would you like to work on?",
     composerPlaceholder: "Message",
@@ -94,6 +98,10 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
   },
   he: {
     loadingConversation: "השיחה נטענת",
+    loadEarlierMessages: "טעינת הודעות קודמות",
+    loadingEarlierMessages: "הודעות קודמות נטענות",
+    conversationBeginning: "תחילת השיחה",
+    earlierMessagesUnavailable: "אי אפשר לטעון הודעות קודמות",
     scrollToBottom: "גלילה לתחתית",
     welcome: "על מה תרצו לעבוד?",
     composerPlaceholder: "הודעה",

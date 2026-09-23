@@ -48,6 +48,18 @@ function updateScrollTop(viewport: HTMLElement, scrollTop: number) {
   viewport.scrollTop = scrollTop
 }
 
+/** The first message at least partly inside the viewport. */
+export function firstVisibleMessage(viewport: HTMLElement) {
+  const viewportRect = viewport.getBoundingClientRect()
+  return messageElements(viewport).find((message) => {
+    const messageRect = message.getBoundingClientRect()
+    return (
+      messageRect.bottom > viewportRect.top &&
+      messageRect.top < viewportRect.bottom
+    )
+  })
+}
+
 export function captureThreadReadingBookmark(
   viewport: HTMLElement,
   bottomThresholdPx = DEFAULT_BOTTOM_THRESHOLD_PX
@@ -55,20 +67,13 @@ export function captureThreadReadingBookmark(
   const distanceFromBottom = maximumScrollTop(viewport) - viewport.scrollTop
   if (distanceFromBottom <= bottomThresholdPx) return { mode: "follow" }
 
-  const viewportRect = viewport.getBoundingClientRect()
-  const firstVisibleMessage = messageElements(viewport).find((message) => {
-    const messageRect = message.getBoundingClientRect()
-    return (
-      messageRect.bottom > viewportRect.top &&
-      messageRect.top < viewportRect.bottom
-    )
-  })
-
+  const message = firstVisibleMessage(viewport)
   return {
     mode: "reading",
-    messageId: firstVisibleMessage?.dataset.messageId ?? null,
-    offsetPx: firstVisibleMessage
-      ? firstVisibleMessage.getBoundingClientRect().top - viewportRect.top
+    messageId: message?.dataset.messageId ?? null,
+    offsetPx: message
+      ? message.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top
       : 0,
     scrollTop: viewport.scrollTop,
   }
@@ -153,6 +158,11 @@ export class ThreadReadingPositionController {
    */
   follow(threadId: string) {
     this.#bookmarks.set(threadId, { mode: "follow" })
+  }
+
+  /** The thread's last captured place, if the reader has one yet. */
+  bookmark(threadId: string): ThreadReadingBookmark | undefined {
+    return this.#bookmarks.get(threadId)
   }
 
   syncAfterContentChange(threadId: string, viewport: HTMLElement) {

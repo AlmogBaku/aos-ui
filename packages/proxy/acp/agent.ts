@@ -5,6 +5,7 @@ import {
   type AgentApp,
   type AgentContext,
   type ResumeSessionRequest,
+  type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
@@ -21,6 +22,8 @@ import {
   AosFocusNotificationSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
+  AosClientCapabilitiesMetaSchema,
+  AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
   AosSessionResumeMetaSchema,
@@ -47,7 +50,9 @@ import {
   sessionInfoOf,
   sessionInfoUpdate,
   decodeCursor,
+  decodeHistoryCursor,
   encodeCursor,
+  historyCursor,
 } from "./agent-sessions"
 import { isPromptBlock, promptText } from "./prompt-content"
 import type { SessionMember } from "./session-member"
@@ -97,6 +102,7 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
     readState: true,
     focus: true,
     guestProjection: false,
+    historyPages: true,
   }
 }
 
@@ -123,6 +129,7 @@ const GUEST_EXTENSIONS = {
   readState: false,
   focus: false,
   guestProjection: true,
+  historyPages: true,
 } satisfies AosExtensions
 
 const INVITE_AUTH_METHOD = {
@@ -171,6 +178,34 @@ function afterResponse(member: SessionMember, task: () => Promise<void>) {
   setTimeout(() => {
     void task().catch((cause: unknown) => member.report(cause))
   }, 0)
+}
+
+/**
+ * The `_aos/before` cursor a resume names, or `undefined` for no replay or
+ * `start`. ACP asks a receiver to refuse a cursor it does not understand
+ * rather than guess where to replay from, so every other one is refused.
+ */
+function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
+  if (!replayFrom || replayFrom.type === "start") return undefined
+  const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
+  if (!parsed.success) throw invalidRequest()
+  return parsed.data.cursor
+}
+
+/** One update of an older page, tagged with the cursor that asked for it. */
+function pageUpdate(update: SessionUpdate, cursor: string): SessionUpdate {
+  const meta = (update._meta ?? {}) as Record<string, unknown>
+  const aos = meta[AOS_META_KEY]
+  return {
+    ...update,
+    _meta: {
+      ...meta,
+      [AOS_META_KEY]: {
+        ...(typeof aos === "object" ? aos : {}),
+        historyPage: { cursor },
+      },
+    },
+  }
 }
 
 /** One authorized guest request: its connection policy and redeemed grant. */
@@ -260,6 +295,91 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
+   * One history page, `offset` rows back from the newest. The guest lane
+   * validates its authoritative page before anything reads it.
+   */
+  async function readHistory(scope: SessionScope, offset = 0) {
+    const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT, offset)
+    return context.guest ? SessionHistoryResponseSchema.parse(read) : read
+  }
+
+  /** Whether this client reads older pages itself (`initialize`). */
+  let clientPagesHistory = false
+
+  /**
+   * The history a from-start resume replays. ACP replays all retained
+   * history; a client that pages older history itself gets the newest page
+   * and the cursor before it. Either way the reach bounds the reading.
+   */
+  async function readReplay(scope: SessionScope) {
+    const newest = await readHistory(scope)
+    if (clientPagesHistory) return newest
+    const older: SessionHistoryResponse["messages"][] = []
+    // A turn stored between two reads shifts the offsets, so the same message
+    // can come back on the next older page.
+    const seen = new Set(newest.messages.map(({ id }) => id))
+    let page = newest
+    while (historyCursor(page).nextCursor !== undefined) {
+      page = await readHistory(scope, page.nextOffset)
+      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
+      for (const { id } of page.messages) seen.add(id)
+    }
+    return {
+      ...newest,
+      messages: [...older.flat(), ...newest.messages],
+      nextOffset: page.nextOffset,
+      truncated: page.truncated,
+    }
+  }
+
+  /** A page as this lane shows it: projected for a guest, then translated. */
+  function historyOutbounds(history: SessionHistoryResponse) {
+    const shown = context.guest
+      ? context.guest.project.history(history)
+      : history
+    return translators.translateHistory(shown, lane)
+  }
+
+  /** The Sessions this connection is reading an older page of. */
+  const paging = new Set<string>()
+
+  /**
+   * One older page of a Session this connection attached, however it did, as
+   * tagged updates ahead of the reply. A page re-attaches nothing: the view
+   * keeps its room, its follow, and its reports, and learns only where the
+   * next page starts. Only the newest page carries the plan.
+   */
+  async function replayOlder(publicSessionId: string, cursor: string) {
+    const member = sessions.member(publicSessionId)
+    if (!member) throw notFound()
+    const offset = decodeHistoryCursor(cursor)
+    if (paging.has(publicSessionId)) throw invalidRequest()
+    paging.add(publicSessionId)
+    try {
+      const history = await readHistory(member.scope, offset)
+      // A cursor past this Session's history was never issued for it. One at
+      // its end was: a runtime that estimates `total` learns the start only
+      // by reading an empty page there.
+      if (offset > history.total) throw invalidRequest()
+      const updates = historyOutbounds(history).flatMap((outbound) =>
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate !== "plan_update"
+          ? [pageUpdate(outbound.update, cursor)]
+          : []
+      )
+      for (const update of updates) await member.update(update)
+      log("acp.history.page", {
+        sessionId: publicSessionId,
+        offset,
+        count: updates.length,
+      })
+      return { _meta: { [AOS_META_KEY]: { history: historyCursor(history) } } }
+    } finally {
+      paging.delete(publicSessionId)
+    }
+  }
+
+  /**
    * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
    * from history reads a turn sent in this room again from its start, so the
    * stream the member held stops before the page is read, and the rows the
@@ -268,7 +388,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * both: its journal starts after rows the page already holds, or its start
    * is gone and a cursorless follow could only reset it. A turn the room
    * admits during the read waits for the page and is replayed the same way.
-   * The guest lane validates its authoritative page before anything reads it.
    */
   async function replayPage(member: SessionMember, scope: SessionScope) {
     const restartable = (turn: RoomTurn | undefined) =>
@@ -281,8 +400,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (restarted) await member.restartStream()
     let history: SessionHistoryResponse
     try {
-      const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
-      history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
+      history = await readReplay(scope)
     } catch (cause) {
       // A turn admitted during the read was held back, so it streams the same
       // way a restarted one does once its reload failed.
@@ -332,10 +450,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // Counted on the authoritative page, before the guest projection
       // rebuilds its messages: that projection keeps no user-turn metadata.
       const corrections = translators.persistedCorrections(replay.history)
-      const shown = context.guest
-        ? context.guest.project.history(replay.history)
-        : replay.history
-      for (const outbound of translators.translateHistory(shown, lane))
+      for (const outbound of historyOutbounds(replay.history))
         await member.send(outbound)
       return { ...replay, corrections }
     } catch (cause) {
@@ -386,6 +501,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     client: AgentContext
   ) {
     const { grant, policy } = guest
+    const cursor = olderPageCursor(params.replayFrom)
+    if (cursor !== undefined) {
+      if (params.sessionId !== grant.ref) throw notFound()
+      // A page is a read the expiry timer may not have caught up with.
+      if (!policy.active()) throw authenticationRequired()
+      return await replayOlder(params.sessionId, cursor)
+    }
     const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
     const scope = await invitedScope(grant, params.sessionId)
     const capabilities = policy.project.capabilities(
@@ -441,6 +563,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           execution: executionMeta(execution),
           capabilities,
           ...resync,
+          ...(history === undefined ? {} : { history: historyCursor(history) }),
         },
       },
     }
@@ -466,7 +589,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return scope
   }
 
-  app.onRequest(methods.agent.initialize, async () => {
+  app.onRequest(methods.agent.initialize, async ({ params }) => {
+    const client = AosClientCapabilitiesMetaSchema.safeParse(
+      params.capabilities?._meta?.[AOS_META_KEY] ?? {}
+    )
+    clientPagesHistory = client.success && client.data.historyPages
     // An unauthenticated guest learns nothing about the deployment it reached.
     const info = context.guest ? undefined : await workspace.info()
     return {
@@ -557,6 +684,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.resume, async ({ params, client }) => {
     const guest = guestFor(methods.agent.session.resume)
     if (guest) return await resumeInvited(guest, params, client)
+    const cursor = olderPageCursor(params.replayFrom)
+    if (cursor !== undefined) return await replayOlder(params.sessionId, cursor)
     const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
     if (meta.agentId !== undefined)
       sessions.adopt(params.sessionId, meta.agentId)
@@ -620,6 +749,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           execution: executionMeta(execution),
           capabilities,
           ...resync,
+          ...(history === undefined ? {} : { history: historyCursor(history) }),
         },
       },
     }

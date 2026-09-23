@@ -45,7 +45,8 @@ transport recovery before resuming sessions.
     "activity": true,
     "readState": true,
     "focus": true,
-    "guestProjection": true
+    "guestProjection": true,
+    "historyPages": true
   }
 }
 ```
@@ -77,6 +78,13 @@ Agent before listing. `after` is the last `sequence` the client observed for
 `turnId`. `resync: true` on the response means `after` was beyond bounded
 replay; resume again with `replayFrom: { type: "start" }`.
 
+`replayFrom` is absent (attach without replay), `{ type: "start" }`, or the
+`_aos/before` older-page variant described under
+[Older history pages](#older-history-pages). As ACP asks of a receiver that
+does not understand a cursor, the proxy rejects every other `replayFrom` type,
+and an `_aos/before` without a string `cursor`, with `-32602` invalid params
+rather than guessing where to replay from.
+
 **`session/prompt`** request (`AosPromptMetaSchema`, `acp.ts:198-203`):
 `{ rewindSourceId?, attachmentStageId? }`. The response carries the minted
 user-message id in `_meta.aos.messageId` (`AosPromptResponseMetaSchema`,
@@ -89,12 +97,53 @@ the `aos-attachment:` URI scheme (`AOS_ATTACHMENT_URI_SCHEME`, `acp.ts:30`).
 `{ session: AosSessionInfoMeta, capabilities }`.
 
 **`session/resume`** response (`AosSessionResumeResponseMetaSchema`, `acp.ts:190-195`):
-`{ session: AosSessionInfoMeta, execution: { status, turnId? }, capabilities, resync? }`.
+`{ session: AosSessionInfoMeta, execution: { status, turnId? }, capabilities, resync?, history? }`.
+Every resume that replays carries `history` (`AosHistoryCursorSchema`):
+`{ nextCursor?, truncated? }`.
 
 **`session_info_update`** `_meta.aos` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
 `{ agentId, status, archived, unread? }`. `unread` is absent when the runtime
 does not track read state or this read cannot know it; **absent never overwrites
 a known value** in the browser.
+
+### Older history pages
+
+A client that pages history advertises it in `initialize`'s
+`clientCapabilities._meta.aos.historyPages: true` (`AosClientCapabilitiesMetaSchema`,
+default `false`). To that client, a server that sets `extensions.historyPages`
+(default `false`) replays only the newest page on a `start` resume and serves
+older ones through
+`session/resume` with the reserved variant (`AOS_REPLAY_BEFORE`,
+`AosReplayBeforeSchema`):
+
+```json
+{ "type": "_aos/before", "cursor": "…", "_meta?": {} }
+```
+
+Any other client gets what ACP's `start` promises: every retained message,
+read page by page on the server, with no `nextCursor` in the reply. The reply
+still carries `truncated: true` when the reading stopped at a reach bound.
+
+- `cursor` is the opaque `history.nextCursor` of an earlier resume, 1 to 256
+  characters. The server picks the page size; offsets count back from the
+  newest message, and pages break at turn starts.
+- The page's messages arrive as `session/update`s before the response, each
+  tagged `_meta.aos.historyPage: { cursor }` (`AosHistoryPageTagSchema`). The
+  browser keeps them out of the turn position and every live listener. A page
+  never carries `plan_update`; the Todo plan and a restored failed turn come
+  only with the newest page.
+- The response carries only `_meta.aos.history`
+  (`AosHistoryPageResponseMetaSchema`). A missing `nextCursor` means the
+  beginning. `truncated: true` with no cursor means the proxy's bound stopped
+  the reading, or the runtime's own reach did, and the thread says earlier
+  messages can't be loaded.
+- A page is read only for a Session this connection is attached to, whether by
+  a resume, `session/new`, or a prompt, one at a time per Session. It never
+  re-attaches, restates configuration or usage, or reports execution. A cursor that does not decode, or points past the
+  history, is invalid params.
+- An accepted rewind deletes the newest rows, so it marks the browser's cursor
+  stale and drops a page still loading; the next load resumes from `start`
+  first. A resync likewise returns the thread to the newest page.
 
 ## Run stream
 

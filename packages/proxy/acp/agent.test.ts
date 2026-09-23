@@ -24,7 +24,9 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
+  AOS_REPLAY_BEFORE,
   AOS_STOP_REASONS,
+  AosHistoryCursorSchema,
   type AosActivityNotification,
 } from "../../protocol/acp"
 import {
@@ -46,7 +48,7 @@ import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createSessionRooms } from "./session-rooms"
-import { persistedCorrections } from "./translate/history"
+import { persistedCorrections, translateHistory } from "./translate/history"
 import type {
   AcpConnectionContext,
   AcpOutbound,
@@ -451,6 +453,7 @@ const ModelPatchSchema = z.object({
 const GUEST_POLICY: GuestPolicy = {
   authenticate: async () => undefined,
   grant: () => undefined,
+  active: () => false,
   project: {
     access: (base) => base,
     history: (value) => value,
@@ -497,8 +500,18 @@ type HarnessOptions = {
   onStart?: (source: EventSource) => void | Promise<void>
   /** The replayed page's messages; defaults to one earlier assistant reply. */
   history?: SessionHistoryResponse["messages"]
+  /**
+   * The Session's whole history, oldest first, paged newest first as every
+   * runtime pages it; `truncated` stands for older rows it cannot reach.
+   */
+  transcript?: SessionHistoryResponse["messages"]
+  truncated?: boolean
+  /** Replaces the harness's one-update-per-message history translation. */
+  translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
   providerIds?: boolean
+  /** Whether the client pages older history, as the AOS browser does. */
+  pagesHistory?: boolean
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -559,24 +572,48 @@ async function harness(options: HarnessOptions = {}) {
       return { selectedId: models.selectedId }
     }
   )
-  const history = vi.fn(async (_agentId: string, sessionId: string) => {
-    await options.beforeHistory?.()
-    return {
-      sessionId,
-      messages: options.history ?? [
-        {
-          id: "message-1",
-          role: "assistant" as const,
-          content: [{ type: "text" as const, text: "Earlier" }],
-          createdAt: NOW,
-        },
-      ],
-      total: (options.history ?? [undefined]).length,
-      limit: 500,
-      offset: 0,
-      nextOffset: 0,
+  const history = vi.fn(
+    async (
+      _agentId: string,
+      sessionId: string,
+      limit: number,
+      offset: number
+    ): Promise<SessionHistoryResponse> => {
+      await options.beforeHistory?.()
+      const { transcript } = options
+      if (transcript) {
+        const end = Math.max(0, transcript.length - offset)
+        const messages = transcript.slice(Math.max(0, end - limit), end)
+        const nextOffset = offset + messages.length
+        return {
+          sessionId,
+          messages,
+          total: transcript.length,
+          limit,
+          offset,
+          nextOffset,
+          ...(options.truncated && nextOffset >= transcript.length
+            ? { truncated: true }
+            : {}),
+        }
+      }
+      return {
+        sessionId,
+        messages: options.history ?? [
+          {
+            id: "message-1",
+            role: "assistant" as const,
+            content: [{ type: "text" as const, text: "Earlier" }],
+            createdAt: NOW,
+          },
+        ],
+        total: (options.history ?? [undefined]).length,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }
     }
-  })
+  )
 
   const runtime: ServerRuntime = {
     turns: engine,
@@ -688,7 +725,10 @@ async function harness(options: HarnessOptions = {}) {
         ...translators,
         translateHistory: (history, lane) => {
           options.onReplay?.()
-          return translators.translateHistory(history, lane)
+          return (options.translateHistory ?? translators.translateHistory)(
+            history,
+            lane
+          )
         },
       },
       attachmentStages,
@@ -747,7 +787,11 @@ async function harness(options: HarnessOptions = {}) {
       {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-browser", version: "1" },
-        capabilities: {},
+        capabilities: {
+          _meta: {
+            [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+          },
+        },
       }
     )
     return {
@@ -791,6 +835,7 @@ async function harness(options: HarnessOptions = {}) {
     deleteSession,
     updateModel,
     listAllSessions,
+    history,
     readState,
     presence,
     rows,
@@ -986,6 +1031,29 @@ describe("AOS ACP agent", () => {
     })
 
     expect(page).not.toHaveProperty("nextCursor")
+    test.close()
+  })
+
+  it("pages the Session list only by a cursor it could have issued", async () => {
+    const test = await harness({ rows: [sessionRow()], total: 5 })
+    const encoded = (text: string) => Buffer.from(text).toString("base64url")
+
+    await test.agent.request(methods.agent.session.list, {
+      cursor: encoded("2"),
+    })
+    expect(test.listAllSessions).toHaveBeenLastCalledWith(50, 2)
+    for (const cursor of [
+      encoded("1e3"),
+      encoded("0x10"),
+      encoded("-1"),
+      encoded(" 2"),
+      `${encoded("2")}==`,
+      `${encoded("2")}!`,
+      "",
+    ])
+      await expect(
+        test.agent.request(methods.agent.session.list, { cursor })
+      ).rejects.toMatchObject({ code: invalidRequest().code })
     test.close()
   })
 
@@ -2097,6 +2165,7 @@ function invitedGuest(denied?: string): GuestPolicy {
   return {
     ...GUEST_POLICY,
     grant: () => grant,
+    active: () => true,
     project: {
       ...GUEST_POLICY.project,
       // As the real guest projection does, a guest controls what it follows.
@@ -3467,5 +3536,465 @@ describe("Session rooms", () => {
     expect(other.recorder.entries.slice(from)).toEqual([])
     test.close()
     other.close()
+  })
+})
+
+/** A Session of `count` messages, oldest first, alternating prompt and reply. */
+function conversation(count: number): SessionHistoryResponse["messages"] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `message-${index}`,
+    role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+    content: [{ type: "text" as const, text: `Message ${index}` }],
+    createdAt: NOW,
+  }))
+}
+
+const cursorOf = (offset: number) =>
+  Buffer.from(String(offset)).toString("base64url")
+
+const HistoryReplySchema = z.object({
+  _meta: z.object({ aos: z.object({ history: AosHistoryCursorSchema }) }),
+})
+
+/** Reads the page older than `cursor`, as a browser scrolling back does. */
+function older(
+  browser: Browser,
+  cursor: string,
+  sessionId = SESSION,
+  replayFrom: Record<string, unknown> = { type: AOS_REPLAY_BEFORE, cursor }
+) {
+  return browser.agent.request(methods.agent.session.resume, {
+    sessionId,
+    cwd: "/",
+    replayFrom: replayFrom as ResumeSessionRequest["replayFrom"],
+  })
+}
+
+type SentUpdate = { messageId?: string; _meta?: Record<string, unknown> }
+
+/** Every update one browser received since `from`. */
+function pageUpdates(recorder: Recorder, from: number) {
+  return recorder.entries
+    .slice(from)
+    .filter(({ method }) => method === methods.client.session.update)
+    .map(({ params }) => (params as { update: SentUpdate }).update)
+}
+
+const pageTag = (update: SentUpdate) =>
+  (update._meta?.[AOS_META_KEY] as { historyPage?: unknown } | undefined)
+    ?.historyPage
+
+const invalidParams = { code: invalidRequest().code }
+
+describe("History pages", () => {
+  it("gives a replaying resume the cursor of the next older page", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+
+    const replayed = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+    const attached = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+
+    expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
+      nextCursor: cursorOf(500),
+    })
+    expect(attached._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
+    test.close()
+  })
+
+  it("replays the whole Session from the start to a client that does not page history", async () => {
+    const test = await harness({
+      transcript: conversation(1_200),
+      pagesHistory: false,
+    })
+    await test.list()
+    const from = test.recorder.entries.length
+
+    const replayed = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({})
+    expect(
+      pageUpdates(test.recorder, from).map((update) => update.messageId)
+    ).toEqual(conversation(1_200).map(({ id }) => id))
+    test.close()
+  })
+
+  it("replays a message once when a turn stored during the replay shifts its page", async () => {
+    const transcript = conversation(1_200)
+    let reads = 0
+    const test = await harness({
+      transcript,
+      pagesHistory: false,
+      beforeHistory: async () => {
+        // Two rows land between the newest page and the one before it.
+        reads += 1
+        if (reads === 2)
+          transcript.push(
+            ...conversation(1_202)
+              .slice(1_200)
+              .map((message) => ({ ...message, id: `late-${message.id}` }))
+          )
+      },
+    })
+    await test.list()
+    reads = 0
+    const from = test.recorder.entries.length
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      pageUpdates(test.recorder, from).map((update) => update.messageId)
+    ).toEqual(conversation(1_200).map(({ id }) => id))
+    test.close()
+  })
+
+  it("sends each older page as tagged updates before its reply, one per message", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = test.recorder.entries.length
+
+    const page = await older(test, cursorOf(500))
+
+    const sent = pageUpdates(test.recorder, from)
+    expect(page).toEqual({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    })
+    expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 500, 500)
+    expect(sent.map((update) => update.messageId)).toEqual(
+      conversation(1_200)
+        .slice(200, 700)
+        .map(({ id }) => id)
+    )
+    for (const update of sent)
+      expect(update._meta).toEqual({
+        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(500) } },
+      })
+    expect(test.logged()).toContainEqual(
+      expect.objectContaining({
+        event: "acp.history.page",
+        sessionId: SESSION,
+        offset: 500,
+        count: 500,
+      })
+    )
+
+    const last = test.recorder.entries.length
+    const oldest = await older(test, cursorOf(1_000))
+
+    expect(oldest).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    expect(pageUpdates(test.recorder, last)).toHaveLength(200)
+    test.close()
+  })
+
+  it("reads a page without rejoining, following, or reporting the Session", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(500))
+    await settled()
+
+    expect(test.recorder.entries.slice(from)).toHaveLength(500)
+    expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
+    await liveTurn(test, [test])
+    const live = await test.recorder.wait(said("Live"))
+    expect(pageTag((live.params as { update: SentUpdate }).update)).toBe(
+      undefined
+    )
+    expect(flow(test.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual([
+      expect.stringMatching(/^prompt /u),
+      "chunk Live",
+    ])
+    test.close()
+  })
+
+  it("replays a page as the start replay translates it, without its plan", async () => {
+    const special: SessionHistoryResponse["messages"] = [
+      {
+        id: "user-a",
+        role: "user",
+        content: [{ type: "text", text: "Try it" }],
+        createdAt: NOW,
+      },
+      {
+        id: "assistant-a",
+        role: "assistant",
+        content: [{ type: "text", text: "Partial" }],
+        createdAt: NOW,
+        status: {
+          type: "incomplete",
+          reason: "error",
+          error: "Provider failed",
+        },
+      },
+      {
+        id: "plan-a",
+        role: "activity",
+        activityType: "PLAN",
+        content: {
+          todos: [{ id: "todo-1", label: "Check", status: "pending" }],
+        },
+      },
+    ]
+    const transcript = [...special, ...conversation(500)]
+    const test = await harness({ transcript, translateHistory })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(500))
+
+    const expected = translateHistory(
+      {
+        sessionId: SESSION,
+        messages: special,
+        total: transcript.length,
+        limit: 500,
+        offset: 500,
+        nextOffset: transcript.length,
+      },
+      "operator"
+    ).flatMap((outbound) =>
+      outbound.kind === "update" &&
+      outbound.update.sessionUpdate !== "plan_update"
+        ? [outbound.update]
+        : []
+    )
+    const sent = pageUpdates(test.recorder, from)
+    expect(sent).toEqual(
+      expected.map((update) => ({
+        ...update,
+        _meta: {
+          ...update._meta,
+          [AOS_META_KEY]: {
+            ...(update._meta?.[AOS_META_KEY] as object | undefined),
+            historyPage: { cursor: cursorOf(500) },
+          },
+        },
+      }))
+    )
+    expect(JSON.stringify(sent)).toContain("Provider failed")
+    expect(JSON.stringify(sent)).not.toContain("plan_update")
+    test.close()
+  })
+
+  it("serves a page only to a connection that attached the Session", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+
+    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.notFound,
+    })
+    await test.create()
+    await expect(older(test, cursorOf(500), CREATED)).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    })
+    await open(test)
+    await test.agent.request(methods.agent.session.close, {
+      sessionId: SESSION,
+    })
+    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.notFound,
+    })
+    test.close()
+  })
+
+  it("serves a guest a page of its invited Session alone", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    const guest = await test.connect("guest-connection", {
+      guest: invitedGuest(),
+    })
+
+    await expect(older(guest, cursorOf(500), GUEST_REF)).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.notFound,
+    })
+    await open(guest, { sessionId: GUEST_REF })
+    await expect(older(guest, cursorOf(500))).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.notFound,
+    })
+    await expect(older(guest, cursorOf(500), GUEST_REF)).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    })
+    test.close()
+    guest.close()
+  })
+
+  it("asks an unauthenticated guest to authenticate for a page", async () => {
+    const test = await harness({ guest: true })
+
+    await expect(older(test, cursorOf(500), GUEST_REF)).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+    test.close()
+  })
+
+  it("refuses a replay cursor it does not understand", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    const cursor = cursorOf(500)
+
+    for (const replayFrom of [
+      { type: AOS_REPLAY_BEFORE },
+      { type: AOS_REPLAY_BEFORE, cursor: "" },
+      { type: AOS_REPLAY_BEFORE, cursor, after: 1 },
+      { type: AOS_REPLAY_BEFORE, cursor: 500 },
+      { type: "_aos/after", cursor },
+      { type: "future" },
+    ])
+      await expect(
+        older(test, cursor, SESSION, replayFrom)
+      ).rejects.toMatchObject(invalidParams)
+    test.close()
+  })
+
+  it("reports history past the proxy's or the runtime's reach as truncated", async () => {
+    const test = await harness({ transcript: conversation(100_600) })
+    await test.list()
+    await open(test)
+
+    await expect(older(test, cursorOf(99_800))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+    })
+    await expect(older(test, cursorOf(100_000))).rejects.toMatchObject(
+      invalidParams
+    )
+    test.close()
+
+    const cut = await harness({
+      transcript: conversation(1_200),
+      truncated: true,
+    })
+    await cut.list()
+    await open(cut)
+    await expect(older(cut, cursorOf(1_000))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+    })
+    // A runtime at its reach may still count rows past it; no cursor leads there.
+    cut.history.mockResolvedValueOnce({
+      sessionId: SESSION,
+      messages: conversation(100),
+      total: 601,
+      limit: 500,
+      offset: 500,
+      nextOffset: 600,
+      truncated: true,
+    })
+    await expect(older(cut, cursorOf(500))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+    })
+    cut.close()
+  })
+
+  it("reaches the beginning of a Session whose runtime estimated one more row", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test)
+    // The previous page was full, so the runtime counted a row past it.
+    test.history.mockResolvedValueOnce({
+      sessionId: SESSION,
+      messages: [],
+      total: 500,
+      limit: 500,
+      offset: 500,
+      nextOffset: 500,
+    })
+
+    await expect(older(test, cursorOf(500))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: {} } },
+    })
+    test.close()
+  })
+
+  it("sends a page of large messages one frame per message", async () => {
+    const large = "x".repeat(900_000)
+    const transcript = conversation(1_000).map((message, index) =>
+      index < 505
+        ? { ...message, content: [{ type: "text" as const, text: large }] }
+        : message
+    )
+    const test = await harness({ transcript, translateHistory })
+    await test.list()
+    await open(test)
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(500))
+
+    const frames = test.recorder.entries
+      .slice(from)
+      .filter(({ method }) => method === methods.client.session.update)
+      .map((entry) => Buffer.byteLength(JSON.stringify(entry)))
+    expect(frames.length).toBeGreaterThanOrEqual(500)
+    // The page as a whole is far past the socket's 4 MiB output limit.
+    expect(frames.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(
+      4 * 1_024 * 1_024
+    )
+    for (const bytes of frames) expect(bytes).toBeLessThan(1_000_000)
+    test.close()
+  })
+
+  it("refuses a cursor it could not have issued for this Session", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test)
+    const encoded = (text: string) => Buffer.from(text).toString("base64url")
+
+    for (const cursor of [
+      "not-a-cursor",
+      `${cursorOf(500)}==`,
+      encoded("5e2"),
+      encoded("-500"),
+      encoded("0"),
+      cursorOf(5_000),
+    ])
+      await expect(older(test, cursor)).rejects.toMatchObject(invalidParams)
+    test.close()
+  })
+
+  it("refuses a second page while one is in flight", async () => {
+    const pending = gate()
+    let hold = false
+    const test = await harness({
+      transcript: conversation(1_200),
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+    })
+    await test.list()
+    await open(test)
+    hold = true
+
+    const first = older(test, cursorOf(500))
+    await vi.waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+    await expect(older(test, cursorOf(500))).rejects.toMatchObject(
+      invalidParams
+    )
+    pending.release()
+
+    await expect(first).resolves.toMatchObject({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    })
+    hold = false
+    await expect(older(test, cursorOf(1_000))).resolves.toBeDefined()
+    test.close()
   })
 })

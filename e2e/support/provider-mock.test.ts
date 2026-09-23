@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { createProviderMock } from "./provider-mock"
+import {
+  createProviderMock,
+  LONG_SESSION_ID,
+  LONG_SESSION_LENGTH,
+} from "./provider-mock"
 
 describe("provider mock", () => {
   it("binds loopback, logs expected requests, and rejects unexpected traffic", async () => {
@@ -54,10 +58,16 @@ describe("provider mock", () => {
       ])
       expect(
         await (await fetch(`${provider.origin}/experimental/session`)).json()
-      ).toEqual([expect.objectContaining({ id: "session-research" })])
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "session-research" }),
+        ])
+      )
       expect(
         await (await fetch(`${provider.origin}/session/status`)).json()
-      ).toEqual({ "session-research": { type: "idle" } })
+      ).toEqual(
+        expect.objectContaining({ "session-research": { type: "idle" } })
+      )
       expect(await (await fetch(`${provider.origin}/question`)).json()).toEqual(
         [expect.objectContaining({ id: "question-1" })]
       )
@@ -84,6 +94,38 @@ describe("provider mock", () => {
       )
       expect(reply.status).toBe(200)
       expect(provider.pendingQuestions).toEqual([])
+    } finally {
+      await provider.stop()
+    }
+  })
+
+  it("pages a long Session newest first, following its cursor to the start", async () => {
+    const provider = createProviderMock({ port: 0 })
+    await provider.start()
+    type Page = { data: { id: string }[]; cursor: { next?: string } }
+    const read = async (query: string): Promise<Page> =>
+      (await (
+        await fetch(
+          `${provider.origin}/api/session/${LONG_SESSION_ID}/message?${query}`
+        )
+      ).json()) as Page
+    try {
+      const ids: string[] = []
+      let page = await read("limit=100&order=desc")
+      expect(page.data[0]?.id).toBe(`long-${LONG_SESSION_LENGTH - 1}`)
+      for (;;) {
+        ids.push(...page.data.map((message) => message.id))
+        if (!page.cursor.next) break
+        page = await read(`limit=100&cursor=${page.cursor.next}`)
+      }
+      expect(ids).toHaveLength(LONG_SESSION_LENGTH)
+      expect(ids.at(-1)).toBe("long-0000")
+
+      const oldest = await read("limit=2&order=asc")
+      expect(oldest.data.map((message) => message.id)).toEqual([
+        "long-0000",
+        "long-0001",
+      ])
     } finally {
       await provider.stop()
     }

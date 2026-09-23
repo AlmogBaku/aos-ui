@@ -159,6 +159,7 @@ describe("OpenClaw authoritative history", () => {
       client: {
         request: async () => ({
           messages: [
+            { id: "user-1", role: "user", content: "Read it" },
             {
               id: "assistant-1",
               role: "assistant",
@@ -176,7 +177,6 @@ describe("OpenClaw authoritative history", () => {
               toolCallId: "tool-1",
               content: "token=secret",
             },
-            { id: "user-2", role: "user", content: "Continue" },
           ],
         }),
       },
@@ -186,9 +186,93 @@ describe("OpenClaw authoritative history", () => {
     await expect(
       history.history("analyst", "agent:analyst:main", 3, 7)
     ).resolves.toMatchObject({
-      messages: [{ id: "assistant-1", content: [] }, { id: "user-2" }],
+      messages: [{ id: "user-1" }, { id: "assistant-1", content: [] }],
       total: 11,
       nextOffset: 10,
+    })
+  })
+
+  describe("turn-aligned pages", () => {
+    /** Serves a chronological transcript the way `chat.history` pages it. */
+    function transcript(rows: unknown[]) {
+      return createOpenClawHistory({
+        authority: authority(),
+        client: {
+          request: async (_method, params) => {
+            const { limit, offset } = params as {
+              limit: number
+              offset: number
+            }
+            const end = Math.max(0, rows.length - offset)
+            return { messages: rows.slice(Math.max(0, end - limit), end) }
+          },
+        },
+        subscribeSession: async () => () => undefined,
+      })
+    }
+    const user = (id: string) => ({ id, role: "user", content: id })
+    const assistant = (id: string) => ({
+      id,
+      role: "assistant",
+      content: [{ type: "toolCall", id: `${id}-call`, name: "read" }],
+    })
+    const toolResult = (id: string) => ({
+      role: "toolResult",
+      toolCallId: `${id}-call`,
+      content: "done",
+    })
+
+    it("snaps over tool results and assistant rows and re-reads them next", async () => {
+      const history = transcript([
+        user("u1"),
+        assistant("a1"),
+        toolResult("a1"),
+        assistant("a1b"),
+        user("u2"),
+        assistant("a2"),
+      ])
+
+      const newest = await history.history(
+        "analyst",
+        "agent:analyst:main",
+        4,
+        0
+      )
+      const older = await history.history(
+        "analyst",
+        "agent:analyst:main",
+        4,
+        newest.nextOffset
+      )
+
+      expect(newest.messages.map(({ id }) => id)).toEqual(["u2", "a2"])
+      expect(newest.nextOffset).toBe(2)
+      expect(older.messages.map(({ id }) => id)).toEqual(["u1", "a1", "a1b"])
+      expect(older.nextOffset).toBe(6)
+    })
+
+    it("keeps a page that reached the start or holds no turn start", async () => {
+      const opening = transcript([assistant("greeting"), user("u1")])
+      const longTurn = transcript([
+        user("u1"),
+        assistant("a1"),
+        toolResult("a1"),
+        assistant("a1b"),
+      ])
+
+      await expect(
+        opening.history("analyst", "agent:analyst:main", 4, 0)
+      ).resolves.toMatchObject({
+        messages: [{ id: "greeting" }, { id: "u1" }],
+        nextOffset: 2,
+        total: 2,
+      })
+      await expect(
+        longTurn.history("analyst", "agent:analyst:main", 3, 0)
+      ).resolves.toMatchObject({
+        messages: [{ id: "a1" }, { id: "a1b" }],
+        nextOffset: 3,
+      })
     })
   })
 

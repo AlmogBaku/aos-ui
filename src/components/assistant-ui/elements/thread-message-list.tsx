@@ -23,6 +23,12 @@ import {
   type RefObject,
 } from "react"
 
+import {
+  captureThreadReadingBookmark,
+  firstVisibleMessage,
+  type ThreadReadingBookmark,
+} from "./thread-reading-position"
+
 /** A first guess only; every mounted message is measured as it renders. */
 const ESTIMATED_MESSAGE_HEIGHT_PX = 160
 /** Messages mounted beyond each edge of the viewport. */
@@ -53,13 +59,42 @@ function messageElement(viewport: HTMLElement | null, messageId: string) {
 }
 
 /**
- * Where the browser keeps the reader's place across a resize above the
- * viewport itself (`overflow-anchor`), the virtualizer must not correct too.
- * WebKit has no scroll anchoring, so there the virtualizer's own correction
- * for messages above the viewport stands in for it.
+ * A page's correction repeats while it still moves the thread: each move can
+ * bring messages never measured into the window. This bounds that.
  */
-const BROWSER_ANCHORS_SCROLL =
-  typeof CSS !== "undefined" && CSS.supports?.("overflow-anchor", "auto")
+const PREPEND_CORRECTION_PASSES = 4
+
+/**
+ * A message the reader is looking at, its top within the viewport, and how
+ * many commits have corrected for it so far.
+ */
+type PrependAnchor = { messageId: string; top: number; passes: number }
+
+/**
+ * What must stay in place as older messages land above: the reader's
+ * bookmarked message, else the first one in view. Nothing while the reader
+ * follows the latest content, which the reading position already keeps.
+ */
+function readPrependAnchor(
+  viewport: HTMLElement,
+  bookmark: ThreadReadingBookmark | undefined
+): PrependAnchor | null {
+  const place = bookmark ?? captureThreadReadingBookmark(viewport)
+  if (place.mode === "follow") return null
+  const message =
+    (place.messageId && messageElement(viewport, place.messageId)) ||
+    firstVisibleMessage(viewport)
+  const messageId = message?.dataset.messageId
+  return message && messageId
+    ? { messageId, top: topWithin(viewport, message), passes: 0 }
+    : null
+}
+
+function topWithin(viewport: HTMLElement, element: HTMLElement) {
+  return (
+    element.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+  )
+}
 
 /**
  * The list's top within the viewport's scrolled content. The viewport is
@@ -114,11 +149,14 @@ function setScrollTopImmediately(viewport: HTMLElement, scrollTop: number) {
  */
 export function ThreadMessageList({
   viewportRef,
+  readingBookmark,
   components,
   className,
   ref,
 }: {
   viewportRef: RefObject<HTMLElement | null>
+  /** The reader's current place, which a page of older messages keeps. */
+  readingBookmark?: () => ThreadReadingBookmark | undefined
   components: MessageComponents
   className?: string
   ref?: Ref<ThreadMessageListHandle>
@@ -133,16 +171,36 @@ export function ThreadMessageList({
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null)
   const count = messageIds.length
 
+  // Older messages landed above when the first message changed and the old
+  // first one is still here. The reader's place is read now, before the page
+  // commits and moves it.
+  const firstMessageId = messageIds[0]
+  const [shownFirstMessageId, setShownFirstMessageId] = useState(firstMessageId)
+  const [prependAnchor, setPrependAnchor] = useState<PrependAnchor | null>(null)
+  if (firstMessageId !== shownFirstMessageId) {
+    setShownFirstMessageId(firstMessageId)
+    const viewport = viewportRef.current
+    if (
+      viewport &&
+      shownFirstMessageId !== undefined &&
+      messageIds.includes(shownFirstMessageId)
+    )
+      setPrependAnchor(readPrependAnchor(viewport, readingBookmark?.()))
+  }
+
   const rangeExtractor = useCallback(
     (range: Range) => {
       const indexes = defaultRangeExtractor(range)
-      const focusedIndex = focusedMessageId
-        ? messageIds.indexOf(focusedMessageId)
-        : -1
-      if (focusedIndex < 0 || indexes.includes(focusedIndex)) return indexes
-      return [...indexes, focusedIndex].sort((left, right) => left - right)
+      // The focused message, and the prepend anchor for the commit it moves.
+      const kept = [focusedMessageId, prependAnchor?.messageId]
+        .map((messageId) => (messageId ? messageIds.indexOf(messageId) : -1))
+        .filter((index) => index >= 0 && !indexes.includes(index))
+      if (kept.length === 0) return indexes
+      return [...new Set([...indexes, ...kept])].sort(
+        (left, right) => left - right
+      )
     },
-    [focusedMessageId, messageIds]
+    [focusedMessageId, messageIds, prependAnchor]
   )
 
   // The list re-renders with every virtualizer change by design, so the
@@ -159,10 +217,35 @@ export function ThreadMessageList({
     scrollMargin,
     scrollToFn: correctScrollOnly,
   })
-  // An instance field, not an option. Where the browser anchors scroll, the
-  // reading-position controller and the browser keep the reader's place.
-  if (BROWSER_ANCHORS_SCROLL)
-    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+  // An instance field, not an option. The reading-position controller and the
+  // browser's scroll anchoring keep the reader's place.
+  virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+
+  // Once the page is in, the anchor returns to where the reader saw it, in an
+  // instant move before paint. Where the browser already anchored it, nothing
+  // moves. The browser declines when the anchor's own spacing changes, as it
+  // does when the window moves to the corrected place and mounts messages
+  // never measured above it, so the correction repeats on the next commit
+  // until one moves nothing.
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!prependAnchor || !viewport) return
+    const message = messageElement(viewport, prependAnchor.messageId)
+    const shift = message ? topWithin(viewport, message) - prependAnchor.top : 0
+    if (shift !== 0)
+      setScrollTopImmediately(viewport, viewport.scrollTop + shift)
+    // The next window follows the corrected place, not the old offset, even
+    // before the browser reports the scroll.
+    virtualizer.scrollOffset = viewport.scrollTop
+    // The anchor stays mounted until a commit leaves it in place.
+    const passes = prependAnchor.passes + 1
+    setPrependAnchor(
+      (shift === 0 && prependAnchor.passes > 0) ||
+        passes >= PREPEND_CORRECTION_PASSES
+        ? null
+        : { ...prependAnchor, passes }
+    )
+  }, [prependAnchor, viewportRef, virtualizer])
 
   // The list re-renders on every scroll, so the margin follows what moves above
   // it; an unchanged value bails out of the update, so it cannot loop.
@@ -198,9 +281,11 @@ export function ThreadMessageList({
 
   // A short Session skips the window, so it also renders before layout.
   const whole = count <= WHOLE_THREAD_MESSAGE_LIMIT
+  // Read in both modes, so the virtualizer's measurements follow every commit.
+  const virtualItems = virtualizer.getVirtualItems()
   const items = whole
     ? messageIds.map((key, index) => ({ key, index, start: 0, end: 0 }))
-    : virtualizer.getVirtualItems()
+    : virtualItems
   const remainder = whole
     ? 0
     : virtualizer.getTotalSize() + scrollMargin - (items.at(-1)?.end ?? 0)

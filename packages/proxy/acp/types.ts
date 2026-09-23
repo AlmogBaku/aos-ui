@@ -108,6 +108,8 @@ export type GuestPolicy = {
   /** Redeems one invitation token; `undefined` means it is not usable. */
   authenticate(token: string): Promise<GuestGrant | undefined>
   grant(): GuestGrant | undefined
+  /** Whether the redeemed invitation still authorizes reading, by the clock. */
+  active(): boolean
   project: {
     /** Wraps one coordinator subscription in the guest run projection. */
     access(base: CoordinatorAccess, scope: SessionScope): CoordinatorAccess

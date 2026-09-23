@@ -25,6 +25,12 @@ export type ProviderMock = {
   enqueueQuestion(question: unknown): void
 }
 
+const SESSION_CREATED = 1_788_268_800_000
+
+/** A Session long enough that its history takes many pages to read. */
+export const LONG_SESSION_ID = "session-long"
+export const LONG_SESSION_LENGTH = 1_200
+
 const openCodeSessions = [
   {
     id: "session-research",
@@ -34,9 +40,61 @@ const openCodeSessions = [
     title: "Research history",
     agent: "build",
     version: "1",
-    time: { created: 1_788_268_800_000, updated: 1_788_268_800_000 },
+    time: { created: SESSION_CREATED, updated: SESSION_CREATED },
+  },
+  {
+    id: LONG_SESSION_ID,
+    slug: LONG_SESSION_ID,
+    projectID: "keyboard-first",
+    directory: "/workspace/keyboard-first",
+    title: "Long history",
+    agent: "build",
+    version: "1",
+    time: { created: SESSION_CREATED, updated: SESSION_CREATED },
   },
 ]
+
+/** Alternating synthetic turns, oldest first, in the v2 native shape. */
+const longSessionMessages = Array.from(
+  { length: LONG_SESSION_LENGTH },
+  (_, index) => {
+    const id = `long-${String(index).padStart(4, "0")}`
+    const created = SESSION_CREATED + index * 1_000
+    const text = `Long history message ${index}`
+    return index % 2 === 0
+      ? { id, type: "user", text, time: { created } }
+      : {
+          id,
+          type: "assistant",
+          agent: "build",
+          model: { providerID: "test", id: "test" },
+          content: [{ id: `${id}-text`, type: "text", text }],
+          finish: "stop",
+          time: { created, completed: created + 500 },
+        }
+  }
+)
+
+const DEFAULT_MESSAGE_PAGE = 100
+
+/**
+ * One page of `GET /api/session/:id/message`. As in OpenCode, the first read
+ * names an `order` and later reads pass only the opaque `cursor.next`, which
+ * keeps that order; `desc` reads newest first.
+ */
+function messagePage(sessionId: string, query: URLSearchParams) {
+  const cursor = /^(asc|desc)-(\d+)$/.exec(query.get("cursor") ?? "")
+  const order = cursor?.[1] ?? query.get("order") ?? "asc"
+  const start = cursor ? Number(cursor[2]) : 0
+  const limit = Number(query.get("limit") ?? DEFAULT_MESSAGE_PAGE)
+  const stored = sessionId === LONG_SESSION_ID ? longSessionMessages : []
+  const ordered = order === "desc" ? [...stored].reverse() : stored
+  const end = start + limit
+  return {
+    data: ordered.slice(start, end),
+    cursor: end < ordered.length ? { next: `${order}-${end}` } : {},
+  }
+}
 
 function json(response: ServerResponse, payload: unknown, status = 200) {
   response.writeHead(status, {
@@ -137,7 +195,10 @@ export function createProviderMock(
     )
       return json(response, openCodeSessions)
     if (request.method === "GET" && url.pathname === "/session/status")
-      return json(response, { "session-research": { type: "idle" } })
+      return json(response, {
+        "session-research": { type: "idle" },
+        [LONG_SESSION_ID]: { type: "idle" },
+      })
     if (url.pathname === "/permission") return json(response, [])
     if (url.pathname === "/question") return json(response, questions)
     const questionReply = url.pathname.match(/^\/question\/[^/]+\/reply$/)
@@ -155,6 +216,9 @@ export function createProviderMock(
       /^\/session\/[^/]+\/message$/.test(url.pathname)
     )
       return json(response, [])
+    const messages = url.pathname.match(/^\/api\/session\/([^/]+)\/message$/)
+    if (request.method === "GET" && messages?.[1])
+      return json(response, messagePage(messages[1], url.searchParams))
     if (
       request.method === "GET" &&
       /^\/session\/[^/]+\/todo$/.test(url.pathname)

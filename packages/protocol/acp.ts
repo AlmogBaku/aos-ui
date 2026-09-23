@@ -117,8 +117,22 @@ export const AosExtensionsSchema = readObject({
   readState: z.boolean(),
   focus: z.boolean(),
   guestProjection: z.boolean(),
+  /** `session/resume` accepts `replayFrom: { type: "_aos/before" }`. */
+  historyPages: z.boolean().default(false),
 })
 export type AosExtensions = z.infer<typeof AosExtensionsSchema>
+
+/**
+ * `ClientCapabilities._meta.aos` on `initialize`: the AOS extensions this
+ * client understands. Without `historyPages`, a from-start resume replays the
+ * whole Session, as ACP's `replayFrom: { type: "start" }` requires.
+ */
+export const AosClientCapabilitiesMetaSchema = readObject({
+  historyPages: z.boolean().default(false),
+})
+export type AosClientCapabilitiesMeta = z.infer<
+  typeof AosClientCapabilitiesMetaSchema
+>
 
 /** `InitializeResponse._meta.aos` */
 export const AosInitializeMetaSchema = readObject({
@@ -193,6 +207,50 @@ export const AosPromptResponseMetaSchema = readObject({
 })
 
 /**
+ * The reserved `replayFrom` extension variant that reads one older page of a
+ * Session this connection is already a member of. `cursor` is the opaque
+ * `history.nextCursor` a previous resume returned; the server picks the page
+ * size, so the client sends no limit. Like every ACP type it may carry `_meta`.
+ */
+export const AOS_REPLAY_BEFORE = "_aos/before" as const
+export const AosReplayBeforeSchema = z.strictObject({
+  type: z.literal(AOS_REPLAY_BEFORE),
+  cursor: z.string().min(1).max(256),
+  _meta: z.record(z.string(), z.unknown()).nullish(),
+})
+export type AosReplayBefore = z.infer<typeof AosReplayBeforeSchema>
+
+/**
+ * `_meta.aos.history` on a resume that replayed. It follows ACP v2
+ * `session/list` pagination: `nextCursor` is opaque and its absence means the
+ * replayed page reached the Session's beginning, unless `truncated` says older
+ * history exists but this server cannot reach it.
+ */
+export const AosHistoryCursorSchema = readObject({
+  nextCursor: z.string().min(1).max(256).optional(),
+  truncated: z.boolean().optional(),
+})
+export type AosHistoryCursor = z.infer<typeof AosHistoryCursorSchema>
+
+/**
+ * `ResumeSessionResponse._meta.aos` for a `_aos/before` page read: only the
+ * cursor, since a page read never re-attaches.
+ */
+export const AosHistoryPageResponseMetaSchema = readObject({
+  history: AosHistoryCursorSchema,
+})
+
+/**
+ * Read from the `_meta.aos` of any `session/update`: present only on an update
+ * that belongs to a `_aos/before` page, never on a live or start-replay one.
+ * ACP notifications carry no request id, so this tag is what keeps a page apart
+ * from live updates for the same Session.
+ */
+export const AosHistoryPageTagSchema = readObject({
+  historyPage: readObject({ cursor: z.string().min(1).max(256) }).optional(),
+})
+
+/**
  * `ResumeSessionResponse._meta.aos`. `resync: true` means `after` was beyond
  * bounded replay; the client must resume again with `replayFrom: { type:
  * "start" }`.
@@ -202,6 +260,8 @@ export const AosSessionResumeResponseMetaSchema = readObject({
   execution: AosExecutionSchema,
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
   resync: z.boolean().optional(),
+  /** Present whenever this resume replayed history. */
+  history: AosHistoryCursorSchema.optional(),
 })
 
 /** `PromptRequest._meta.aos` */

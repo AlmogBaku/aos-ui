@@ -15,6 +15,7 @@ import type {
   VisibilityUpdateResponseSchema,
 } from "@aos/protocol"
 import type {
+  AosHistoryCursor,
   AosInitializeMetaSchema,
   AosPromptMetaSchema,
   AosSessionListMetaSchema,
@@ -58,6 +59,17 @@ export type AcpSessionUpdateListener = (
   update: SessionUpdate,
   meta: Record<string, unknown> | undefined
 ) => void
+
+/** One older page of a Session, read without attaching it again. */
+export type AcpHistoryPage = {
+  /** The page's updates in arrival order, each with its `_meta.aos`. */
+  readonly updates: readonly {
+    readonly update: SessionUpdate
+    readonly meta: Record<string, unknown> | undefined
+  }[]
+  /** Where the page before this one starts, or that none can be read. */
+  readonly history: AosHistoryCursor
+}
 
 /** Told a from-start replay is starting; may return its settle callback. */
 export type AcpSessionReplayListener = () => (() => void) | void
@@ -105,6 +117,18 @@ export interface AcpConnection {
     configOptions: SessionConfigOption[]
     meta: z.infer<typeof AosSessionResumeResponseMetaSchema>
   }>
+  /**
+   * Reads the page before `cursor` of a Session this connection has attached.
+   * Its updates come back here and never reach `onSessionUpdate` or the
+   * resume position, so a page cannot disturb the live turn. A recovering
+   * transport reattaches its Sessions first.
+   */
+  resumePage(sessionId: string, cursor: string): Promise<AcpHistoryPage>
+  /**
+   * The history cursor the latest replaying resume of this Session reported;
+   * a resume that replays nothing leaves it as it was.
+   */
+  history(sessionId: string): AosHistoryCursor | undefined
   prompt(
     sessionId: string,
     blocks: ContentBlock[],
