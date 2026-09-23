@@ -135,16 +135,18 @@ function toolPartFailed(part: ToolOutcomePart) {
   )
 }
 
-/** One semantic state for a run of tool calls, collapsed or expanded. */
+/**
+ * One semantic state for a run of tool calls, collapsed or expanded. A run is
+ * running only while one of its own calls is; a live message's settled runs
+ * already read by what they did.
+ */
 export function toolRunState(
-  parts: readonly ToolOutcomePart[],
-  streaming: boolean
+  parts: readonly ToolOutcomePart[]
 ): ToolTimelineState {
   if (parts.some((part) => part.status.type === "requires-action"))
     return "attention"
   if (parts.some(toolPartFailed)) return "failed"
-  if (streaming || parts.some((part) => part.status.type === "running"))
-    return "running"
+  if (parts.some((part) => part.status.type === "running")) return "running"
   return "complete"
 }
 
@@ -198,7 +200,7 @@ export function ToolRunGroup({
       }),
     [labels.assistant.toolActions, labels.states, parts]
   )
-  const timelineState = toolRunState(parts, streaming)
+  const timelineState = toolRunState(parts)
   const [chosenOpen, onOpenChange] = useRememberedDisclosure(
     `tools:${indices[0] ?? 0}`
   )
@@ -209,7 +211,7 @@ export function ToolRunGroup({
       <ToolTimeline
         steps={model.steps}
         visibleSteps={model.steps.length}
-        streaming={streaming}
+        streaming={timelineState === "running"}
         collapsible={!flat}
         open={open}
         onOpenChange={onOpenChange}

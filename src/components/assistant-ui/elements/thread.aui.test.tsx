@@ -351,7 +351,9 @@ describe("settled turn fold", () => {
 
     expect(await screen.findByText("Working")).toBeVisible()
     expect(screen.queryByRole("button", { name: /worked/i })).toBeNull()
-    expect(screen.getByRole("button", { name: "Running" })).toHaveAttribute(
+    // A finished call in a live turn reads by what it did, not as running.
+    expect(screen.queryByRole("button", { name: "Running" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Read 1 file" })).toHaveAttribute(
       "aria-expanded",
       "false"
     )

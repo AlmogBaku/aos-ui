@@ -173,9 +173,42 @@ const ClaimsSchema = z.strictObject({
 })
 type InvitationClaims = z.infer<typeof ClaimsSchema>
 
+/**
+ * Field-level reasons for a rejected invitation request, named by the
+ * operator-facing input keys so a caller can fix the request it sent.
+ */
+const requestFieldNames: Record<string, string> = {
+  agentId: "agent",
+  expiresInSeconds: "expiresIn",
+  "firstTurn.instruction": "instruction",
+  "firstTurn.prefill": "prefill",
+  "ui.logoUrl": "logo",
+  firstTurn: "instruction/prefill",
+  ui: "lang/name/logo/accent/title/message",
+}
+
+export function describeIssues(issues: readonly z.core.$ZodIssue[]) {
+  return issues
+    .slice(0, 4)
+    .map((issue) => {
+      const path = issue.path.join(".")
+      const field =
+        requestFieldNames[path] ?? path.replace(/^(ui|firstTurn)\./u, "")
+      if (issue.code === "unrecognized_keys")
+        return `unknown field(s): ${issue.keys.join(", ")}`
+      if (issue.code === "too_big")
+        return `${field}: too long (max ${String(issue.maximum)})`
+      if (issue.code === "too_small") return `${field}: must not be empty`
+      if (issue.code === "custom" && path)
+        return `${field}: contains control characters or is invalid`
+      return `${field || "request"}: ${issue.message}`
+    })
+    .join("; ")
+}
+
 export class GuestInvitationError extends Error {
-  constructor() {
-    super("Invalid guest invitation")
+  constructor(message = "Invalid guest invitation") {
+    super(message)
     this.name = "GuestInvitationError"
   }
 }
@@ -254,10 +287,14 @@ export function createGuestInvitationService(
   return {
     async issue(candidate) {
       const parsed = RequestSchema.safeParse(candidate)
-      if (!parsed.success) throw new GuestInvitationError()
+      if (!parsed.success)
+        throw new GuestInvitationError(describeIssues(parsed.error.issues))
       const issuedAt = nowSeconds(clock)
       const expiresInSeconds = parsed.data.expiresInSeconds ?? ttlSeconds
-      if (expiresInSeconds > ttlSeconds) throw new GuestInvitationError()
+      if (expiresInSeconds > ttlSeconds)
+        throw new GuestInvitationError(
+          `expiresIn: exceeds the ${ttlSeconds}s maximum`
+        )
       const claims = ClaimsSchema.parse({
         v: 1,
         iss: TOKEN_ISSUER,
@@ -279,7 +316,9 @@ export function createGuestInvitationService(
         })
         .sign(keys[0].secret)
       if (Buffer.byteLength(token, "utf8") > MAX_TOKEN_BYTES)
-        throw new GuestInvitationError()
+        throw new GuestInvitationError(
+          `invitation: signed token exceeds ${MAX_TOKEN_BYTES} bytes; shorten instruction, prefill or message`
+        )
       return {
         token,
         grant: {

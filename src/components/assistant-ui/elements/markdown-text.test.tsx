@@ -94,3 +94,25 @@ describe("MarkdownText fenced diagrams", () => {
     expect(mermaid.render).not.toHaveBeenCalled()
   })
 })
+
+describe("MarkdownText links", () => {
+  it("opens external links in a new tab and keeps in-app links in place", async () => {
+    render(
+      <TestMarkdown
+        text={
+          "[Docs](https://example.com/docs) [Session](/?agent=a) [Top](#top)"
+        }
+      />
+    )
+
+    const external = await screen.findByRole("link", { name: "Docs" })
+    expect(external).toHaveAttribute("target", "_blank")
+    expect(external.getAttribute("rel")).toContain("noopener")
+    expect(screen.getByRole("link", { name: "Session" })).not.toHaveAttribute(
+      "target"
+    )
+    expect(screen.getByRole("link", { name: "Top" })).not.toHaveAttribute(
+      "target"
+    )
+  })
+})

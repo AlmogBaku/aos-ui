@@ -4,6 +4,7 @@ import ms from "ms"
 import { z } from "zod"
 
 import {
+  describeIssues,
   GuestInvitationError,
   type GuestInvitationService,
 } from "./guest-invitation"
@@ -34,10 +35,12 @@ export type InvitationLinkInput = z.input<typeof InvitationLinkInputSchema>
 function durationSeconds(value: string) {
   const milliseconds = ms(value as ms.StringValue)
   if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0)
-    throw new InvitationLinkError("expiresIn must be a positive duration")
+    throw new InvitationLinkError(
+      "expiresIn: must be a positive duration such as 72h"
+    )
   const seconds = milliseconds / 1_000
   if (!Number.isSafeInteger(seconds))
-    throw new InvitationLinkError("expiresIn must resolve to whole seconds")
+    throw new InvitationLinkError("expiresIn: must resolve to whole seconds")
   return seconds
 }
 
@@ -50,10 +53,11 @@ export async function issueInvitationLink(
   }
 ) {
   const parsed = InvitationLinkInputSchema.safeParse(input)
-  if (!parsed.success) throw new InvitationLinkError("Invalid invitation input")
+  if (!parsed.success)
+    throw new InvitationLinkError(describeIssues(parsed.error.issues))
   const flags = parsed.data
   const agentId = flags.agent.trim()
-  if (!agentId) throw new InvitationLinkError("agent is required")
+  if (!agentId) throw new InvitationLinkError("agent: required")
   const suppliedRef = flags.ref?.trim()
   const ref =
     suppliedRef ||
@@ -86,7 +90,7 @@ export async function issueInvitationLink(
     token = issued.token
   } catch (error) {
     if (error instanceof GuestInvitationError)
-      throw new InvitationLinkError("Invalid invitation input")
+      throw new InvitationLinkError(error.message)
     throw error
   }
   return {

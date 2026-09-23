@@ -116,6 +116,22 @@ export const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
   )
 }
 
+/**
+ * A link that leaves the workspace opens a new tab, which an installed app
+ * hands to the browser; same-origin links keep routing inside the app.
+ */
+function isExternalHref(href: string | undefined): boolean {
+  if (!href) return false
+  try {
+    const url = new URL(href, window.location.href)
+    return (
+      /^https?:$/u.test(url.protocol) && url.origin !== window.location.origin
+    )
+  } catch {
+    return false
+  }
+}
+
 const componentsByLanguage = {
   mermaid: {
     CodeHeader: MermaidCodeHeader,
@@ -202,6 +218,10 @@ const defaultComponents = memoizeMarkdownComponents({
         className
       )}
       {...props}
+      {...(isExternalHref(props.href) && {
+        target: "_blank",
+        rel: "noopener noreferrer",
+      })}
     />
   ),
   blockquote: ({ className, ...props }) => (
