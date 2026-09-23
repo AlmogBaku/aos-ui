@@ -127,11 +127,10 @@ export function projectGuestHistory(
   publicSessionId = history.sessionId
 ) {
   const messages: unknown[] = []
-  for (const [index, message] of history.messages.entries()) {
+  for (const message of history.messages) {
     if (message.role === "system") continue
+    // Pages count back from the newest, so the setup turn may open any page.
     if (
-      index === 0 &&
-      history.offset === 0 &&
       message.role === "user" &&
       authorization.firstTurn?.instruction &&
       isPrivateFirstTurn(message.content, authorization.firstTurn.instruction)

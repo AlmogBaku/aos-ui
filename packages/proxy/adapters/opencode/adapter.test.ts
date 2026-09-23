@@ -82,6 +82,13 @@ function client(): OpenCodeAdapterClient {
       messages: vi.fn(async (_sessionId, options) => {
         if (options?.cursor === "second")
           return { data: [message("message-2", 2_000)], cursor: {} }
+        if (options?.cursor === "older")
+          return { data: [message("message-1", 1_000)], cursor: {} }
+        if (options?.order === "desc")
+          return {
+            data: [message("message-2", 2_000)],
+            cursor: { next: "older" },
+          }
         return {
           data: [message("message-1", 1_000)],
           cursor: { next: "second" },
@@ -142,7 +149,7 @@ describe("OpenCode server adapter", () => {
     })
   })
 
-  it("uses ascending native message pages for exact-Agent authoritative history", async () => {
+  it("uses newest-first native message pages for exact-Agent authoritative history", async () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({
       client: native,
@@ -150,7 +157,7 @@ describe("OpenCode server adapter", () => {
     })
 
     await expect(
-      adapter.history("research", "session-1", 1, 1)
+      adapter.history("research", "session-1", 1, 0)
     ).resolves.toEqual({
       sessionId: "session-1",
       messages: [
@@ -174,16 +181,16 @@ describe("OpenCode server adapter", () => {
       ],
       total: 2,
       limit: 1,
-      offset: 1,
-      nextOffset: 2,
+      offset: 0,
+      nextOffset: 1,
     })
     expect(native.sessions.messages).toHaveBeenNthCalledWith(1, "session-1", {
       limit: 100,
-      order: "asc",
+      order: "desc",
     })
     expect(native.sessions.messages).toHaveBeenNthCalledWith(2, "session-1", {
       limit: 100,
-      cursor: "second",
+      cursor: "older",
     })
     // One authoritative native Todo read per history load, and no second one.
     expect(native.sessions.todos).toHaveBeenCalledTimes(1)
@@ -204,7 +211,7 @@ describe("OpenCode server adapter", () => {
         turns: turnEngine,
       })
 
-      const history = await adapter.history("research", "session-1", 1, 1)
+      const history = await adapter.history("research", "session-1", 1, 0)
 
       expect(history.messages).toEqual([
         {
@@ -216,6 +223,138 @@ describe("OpenCode server adapter", () => {
       ])
       expect(todos).toHaveBeenCalledTimes(1)
     }
+  })
+
+  describe("newest-first history pages", () => {
+    const assistant = (id: string, created: number) => ({
+      id,
+      type: "assistant" as const,
+      agent: "research",
+      model: { providerID: "openai", id: "gpt-5" },
+      time: { created },
+      content: [{ id: `${id}-text`, type: "text" as const, text: id }],
+    })
+
+    /** Serves a chronological store in either native order behind a cursor. */
+    function transcriptClient(store: readonly unknown[]) {
+      const native = client()
+      const messages = vi.fn(
+        async (
+          _sessionId: string,
+          options?: { limit?: number; order?: string; cursor?: string }
+        ) => {
+          const [order, from] = options?.cursor?.split(":") ?? [
+            options?.order ?? "asc",
+            "0",
+          ]
+          const ordered = order === "desc" ? [...store].reverse() : store
+          const start = Number(from)
+          const next = start + (options?.limit ?? 100)
+          return {
+            data: ordered.slice(start, next),
+            cursor: next < ordered.length ? { next: `${order}:${next}` } : {},
+          }
+        }
+      )
+      return { ...native, sessions: { ...native.sessions, messages } }
+    }
+
+    const conversation = [
+      message("u1", 1_000),
+      assistant("a1", 2_000),
+      message("u2", 3_000),
+      assistant("a2", 4_000),
+      message("u3", 5_000),
+      assistant("a3", 6_000),
+    ]
+
+    it("reads offset 0 as the newest messages and offset N as the ones before", async () => {
+      const native = transcriptClient(conversation)
+      const adapter = new OpenCodeServerAdapter({
+        client: native,
+        turns: turnEngine,
+      })
+      const ids = async (offset: number) => {
+        const page = await adapter.history("research", "session-1", 2, offset)
+        return [page.messages.map(({ id }) => id), page.nextOffset, page.total]
+      }
+
+      expect(await ids(0)).toEqual([["u3", "a3", "aos-plan:session-1"], 2, 6])
+      expect(await ids(2)).toEqual([["u2", "a2"], 4, 6])
+      expect(await ids(4)).toEqual([["u1", "a1"], 6, 6])
+      expect(native.sessions.messages).toHaveBeenCalledWith("session-1", {
+        limit: 100,
+        order: "desc",
+      })
+      // The plan is the Session's current one, read for the newest page alone.
+      expect(native.sessions.todos).toHaveBeenCalledTimes(1)
+    })
+
+    it("snaps a page to its first user message unless it reached the start or holds none", async () => {
+      const adapter = new OpenCodeServerAdapter({
+        client: transcriptClient([
+          message("u1", 1_000),
+          assistant("a1", 2_000),
+          assistant("a1b", 3_000),
+          message("u2", 4_000),
+          assistant("a2", 5_000),
+        ]),
+        turns: turnEngine,
+      })
+
+      const newest = await adapter.history("research", "session-1", 3, 0)
+      const oldest = await adapter.history("research", "session-1", 3, 2)
+      const longTurn = await adapter.history("research", "session-1", 2, 2)
+
+      expect(newest.messages.map(({ id }) => id)).toEqual([
+        "u2",
+        "a2",
+        "aos-plan:session-1",
+      ])
+      expect(newest.nextOffset).toBe(2)
+      expect(oldest.messages.map(({ id }) => id)).toEqual(["u1", "a1", "a1b"])
+      expect(oldest).toMatchObject({ nextOffset: 5, total: 5 })
+      expect(longTurn.messages.map(({ id }) => id)).toEqual(["a1", "a1b"])
+      expect(longTurn.nextOffset).toBe(4)
+    })
+
+    it("keeps its other history readers ascending", async () => {
+      const native = transcriptClient(conversation)
+      const adapter = new OpenCodeServerAdapter({
+        client: native,
+        turns: turnEngine,
+      })
+
+      await expect(
+        adapter.artifact("research", "session-1", "missing-artifact")
+      ).rejects.toThrow()
+      expect(native.sessions.messages).toHaveBeenCalledWith("session-1", {
+        limit: 100,
+        order: "asc",
+      })
+      expect(native.sessions.messages).not.toHaveBeenCalledWith("session-1", {
+        limit: 100,
+        order: "desc",
+      })
+    })
+
+    it("reports older history as truncated past the native read reach", async () => {
+      const adapter = new OpenCodeServerAdapter({
+        client: transcriptClient(
+          Array.from({ length: 10_100 }, (_, index) =>
+            message(`m${index}`, index + 1)
+          )
+        ),
+        turns: turnEngine,
+      })
+
+      const edge = await adapter.history("research", "session-1", 1, 9_999)
+      const beyond = await adapter.history("research", "session-1", 1, 10_000)
+
+      expect(edge.messages.map(({ id }) => id)).toEqual(["m100"])
+      expect(edge).toMatchObject({ nextOffset: 10_000, truncated: true })
+      expect(beyond).toMatchObject({ messages: [], truncated: true })
+    }, 30_000)
   })
 
   it("renames, archives, pins, and deletes an owned Session through the native routes", async () => {

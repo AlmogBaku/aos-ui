@@ -27,7 +27,11 @@ import {
   type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
-import { hermesHistoryToolNames, projectHermesHistory } from "./history"
+import {
+  hermesHistoryToolNames,
+  hermesTurnStart,
+  projectHermesHistory,
+} from "./history"
 import { createHermesMcpApps } from "./mcp-apps"
 import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
@@ -68,6 +72,7 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
+import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import type { McpAppClient } from "../../mcp-apps/client"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
@@ -1342,6 +1347,7 @@ export class HermesServerAdapter implements ServerRuntime {
     let rows: unknown[] = []
     let messages: Array<SessionMessage | SessionPlanActivityMessage> = []
     let pagination: { total: number; nextOffset: number } | undefined
+    let resolve: McpToolNameResolver | undefined
     let scanOffset = offset
     for (
       let fetches = 0;
@@ -1399,25 +1405,40 @@ export class HermesServerAdapter implements ServerRuntime {
       // on an older page. Every page but the last projects to nothing, and one
       // page holds at most `limit` rows, so the projection stays within `limit`.
       rows = [...page, ...rows]
-      messages = projectHermesHistory(
-        rows,
-        await this.#mcpToolNames?.load(profile, hermesHistoryToolNames(page))
+      resolve = await this.#mcpToolNames?.load(
+        profile,
+        hermesHistoryToolNames(page)
       )
+      messages = projectHermesHistory(rows, resolve)
       // A short page means Hermes has no older rows left; an empty page says the
       // same even if a caller passed a degenerate limit.
       if (messages.length > 0 || page.length === 0 || page.length < limit) break
     }
     if (!pagination) throw new HermesUnavailableError()
-    // Hermes keeps a turn that failed out of its transcript, so a last page
+    // The plan is the Session's current one, so only the newest page carries
+    // it, read before the page drops any row.
+    const todos = offset === 0 ? latestHermesTodos(rows) : undefined
+    // A page that stops short of the start begins at its oldest turn start, so
+    // no turn is split across two pages; the rows before it are re-read as the
+    // newest rows of the next page.
+    const turnStart = hermesTurnStart(rows)
+    if (pagination.nextOffset < pagination.total && turnStart > 0) {
+      rows = rows.slice(turnStart)
+      pagination = {
+        ...pagination,
+        nextOffset: pagination.nextOffset - turnStart,
+      }
+      messages = projectHermesHistory(rows, resolve)
+    }
+    // Hermes keeps a turn that failed out of its transcript, so the newest page
     // ending with an unanswered prompt is the one history load that asks Hermes
     // for the retained turn. Every other load leaves the Session alone.
     const trailing = messages.at(-1)
     const restored =
-      pagination.total === pagination.nextOffset && trailing?.role === "user"
+      offset === 0 && trailing?.role === "user"
         ? await this.#restoredFailedTurn(profile, storedId, trailing)
         : undefined
     if (restored) messages.push(restored)
-    const todos = latestHermesTodos(rows)
     if (todos !== undefined)
       messages.push({
         id: `aos-plan:${sessionId(profile, storedId)}`,

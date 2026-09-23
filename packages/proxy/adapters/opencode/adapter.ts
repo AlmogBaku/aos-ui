@@ -421,18 +421,30 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const required = offset + limit + 1
     if (!Number.isSafeInteger(required))
       throw new OpenCodeClientError("invalid_request")
-    const { messages, hasMore } = await this.#readHistory(
+    const { messages, hasMore, truncated } = await this.#readHistory(
       agentId,
       sessionId,
-      required
+      required,
+      "desc"
     )
+    // Offsets count back from the newest message, and a page that stops short
+    // of the start begins at its first user message so no turn is split across
+    // two pages; the messages before it are the next page's newest.
+    const end = Math.max(0, messages.length - offset)
+    const start = Math.max(0, end - limit)
+    const window = messages.slice(start, end)
+    const turnStart =
+      start > 0 || hasMore
+        ? window.findIndex((message) => message.role === "user")
+        : 0
     const page: Array<(typeof messages)[number] | SessionPlanActivityMessage> =
-      messages.slice(offset, offset + limit)
+      turnStart > 0 ? window.slice(turnStart) : window
     const nextOffset = offset + page.length
     const total = hasMore
       ? Math.max(messages.length, nextOffset + 1)
       : messages.length
-    const todos = await this.#todos(sessionId)
+    // The plan is the Session's current one, so only the newest page carries it.
+    const todos = offset === 0 ? await this.#todos(sessionId) : undefined
     if (todos)
       page.push({
         id: `aos-plan:${sessionId}`,
@@ -447,6 +459,9 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       limit,
       offset,
       nextOffset,
+      ...(truncated && nextOffset >= messages.length
+        ? { truncated: true }
+        : {}),
     })
   }
 
@@ -639,15 +654,27 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return this.#closePromise
   }
 
-  async #readHistory(agentId: string, sessionId: string, required: number) {
+  /**
+   * Reads native pages until `required` messages are projected. An ascending
+   * read must see the whole Session, so reaching the page cap fails it; a
+   * newest-first read already holds the newest messages, and reports the rest
+   * as `truncated` instead.
+   */
+  async #readHistory(
+    agentId: string,
+    sessionId: string,
+    required: number,
+    order: "asc" | "desc" = "asc"
+  ) {
     const raw: NativeMessage[] = []
     const seenMessages = new Set<string>()
     const seenCursors = new Set<string>()
     let cursor: string | undefined
+    let messages: ReturnType<typeof projectOpenCodeHistory> = []
     for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
       const options: OpenCodePageOptions = cursor
         ? { limit: MAX_HISTORY_PAGE_SIZE, cursor }
-        : { limit: MAX_HISTORY_PAGE_SIZE, order: "asc" }
+        : { limit: MAX_HISTORY_PAGE_SIZE, order }
       const parsed = parseOpenCodeMessageCatalog(
         await this.options.client.sessions.messages(sessionId, options)
       )
@@ -658,7 +685,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         seenMessages.add(message.id)
         raw.push(message)
       }
-      const messages = projectOpenCodeHistory({
+      messages = projectOpenCodeHistory({
         messages: raw,
         sessionId,
         resolve: await this.options.mcp?.names.load(
@@ -667,12 +694,15 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         ),
       })
       const next = parsed.data.cursor.next
-      if (!next) return { messages, raw, hasMore: false }
-      if (messages.length >= required) return { messages, raw, hasMore: true }
+      if (!next) return { messages, raw, hasMore: false, truncated: false }
+      if (messages.length >= required)
+        return { messages, raw, hasMore: true, truncated: false }
       if (seenCursors.has(next)) throw new OpenCodeWorkspaceUnavailableError()
       seenCursors.add(next)
       cursor = next
     }
+    if (order === "desc")
+      return { messages, raw, hasMore: true, truncated: true }
     throw new OpenCodeWorkspaceUnavailableError()
   }
 

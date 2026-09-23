@@ -199,6 +199,19 @@ function isInterruptMarker(value: JsonRecord, text: string): boolean {
   )
 }
 
+/**
+ * The index of the oldest row that opens a turn: the first user row the
+ * projection turns into a message. `-1` when the rows hold no turn start.
+ */
+export function hermesTurnStart(rows: readonly unknown[]) {
+  return rows.findIndex(
+    (value) =>
+      isRecord(value) &&
+      !trimmedText(value.display_kind) &&
+      trimmedText(value.role) === "user"
+  )
+}
+
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
   rows: readonly unknown[],

@@ -2140,7 +2140,8 @@ describe("Hermes server adapter", () => {
       const history = await adapter.history("researcher", "stored", 2, 0)
 
       expect(history.messages.map(({ id }) => id)).toEqual(["user-new"])
-      expect(history).toMatchObject({ nextOffset: 2, total: 3 })
+      // The chrome row older than the page's turn start is the next page's.
+      expect(history).toMatchObject({ nextOffset: 1, total: 3 })
       expect(offsets).toEqual([0])
     })
 
@@ -2225,6 +2226,170 @@ describe("Hermes server adapter", () => {
         },
       ])
       expect(offsets).toEqual([0, 2])
+    })
+  })
+
+  describe("turn-aligned history pages", () => {
+    const user = (id: string) => ({ id, role: "user", content: id })
+    const assistant = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      role: "assistant",
+      content: id,
+      ...extra,
+    })
+    const todoCall = assistant("a-todo", {
+      tool_calls: [{ id: "todo-call", function: { name: "todo" } }],
+    })
+    const todoResult = {
+      role: "tool",
+      tool_call_id: "todo-call",
+      content: JSON.stringify({
+        todos: [{ id: "one", content: "Inspect", status: "active" }],
+      }),
+    }
+
+    /** Serves a chronological transcript the way Hermes' `order=latest` pages it. */
+    const transcriptAdapter = (
+      store: readonly unknown[],
+      request = vi.fn(async (method: string): Promise<unknown> => {
+        throw new Error(`unexpected ${method}`)
+      })
+    ) => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher" }
+        const query = new URL(`http://hermes${path}`).searchParams
+        const limit = Number(query.get("limit"))
+        const offset = Number(query.get("offset"))
+        const end = Math.max(0, store.length - offset)
+        const rows = store.slice(Math.max(0, end - limit), end)
+        return {
+          session_id: "stored",
+          messages: rows,
+          pagination: {
+            limit,
+            offset,
+            returned: rows.length,
+            total: store.length,
+          },
+        }
+      })
+      return new HermesServerAdapter({ request, http })
+    }
+
+    it("snaps each page to a turn start and re-reads the dropped rows", async () => {
+      const adapter = transcriptAdapter([
+        user("u1"),
+        assistant("a1"),
+        user("u2"),
+        assistant("a2", {
+          tool_calls: [{ id: "call-2", function: { name: "terminal" } }],
+        }),
+        { role: "tool", tool_call_id: "call-2", content: "ok" },
+        assistant("a2b"),
+        user("u3"),
+        assistant("a3"),
+      ])
+
+      const newest = await adapter.history("researcher", "stored", 4, 0)
+      const middle = await adapter.history("researcher", "stored", 4, 2)
+      const oldest = await adapter.history("researcher", "stored", 4, 6)
+
+      expect(newest.messages.map(({ id }) => id)).toEqual(["u3", "a3"])
+      expect(newest).toMatchObject({ nextOffset: 2, total: 8 })
+      expect(middle.messages.map(({ id }) => id)).toEqual(["u2", "a2"])
+      expect(middle).toMatchObject({ nextOffset: 6, total: 8 })
+      expect(oldest.messages.map(({ id }) => id)).toEqual(["u1", "a1"])
+      expect(oldest).toMatchObject({ nextOffset: 8, total: 8 })
+    })
+
+    it("keeps the rows before the first prompt on a page that reached the start", async () => {
+      const adapter = transcriptAdapter([
+        assistant("greeting"),
+        user("u1"),
+        assistant("a1"),
+      ])
+
+      const history = await adapter.history("researcher", "stored", 3, 0)
+
+      expect(history.messages.map(({ id }) => id)).toEqual([
+        "greeting",
+        "u1",
+        "a1",
+      ])
+      expect(history).toMatchObject({ nextOffset: 3, total: 3 })
+    })
+
+    it("keeps a page whole when one turn is longer than the page", async () => {
+      const adapter = transcriptAdapter([
+        user("u1"),
+        assistant("a1", {
+          tool_calls: [{ id: "call-1", function: { name: "terminal" } }],
+        }),
+        { role: "tool", tool_call_id: "call-1", content: "ok" },
+        assistant("a1b"),
+        assistant("a1c"),
+      ])
+
+      const history = await adapter.history("researcher", "stored", 3, 0)
+
+      expect(history.messages.map(({ id }) => id)).toEqual(["a1b"])
+      expect(history).toMatchObject({ nextOffset: 3, total: 5 })
+    })
+
+    it("adds no plan and restores no turn on an older page", async () => {
+      const request = vi.fn(async (method: string): Promise<unknown> => {
+        throw new Error(`unexpected ${method}`)
+      })
+      const adapter = transcriptAdapter(
+        [user("u1"), todoCall, todoResult, user("u2"), user("u3")],
+        request
+      )
+
+      const history = await adapter.history("researcher", "stored", 4, 1)
+
+      expect(history.messages.map(({ role }) => role)).toEqual([
+        "user",
+        "assistant",
+        "user",
+      ])
+      expect(request).not.toHaveBeenCalled()
+    })
+
+    it("restores the failed turn on the newest page of a long Session", async () => {
+      const request = vi.fn(async (method: string): Promise<unknown> => {
+        if (method === "session.resume")
+          return {
+            session_id: "live-secret",
+            running: false,
+            status: "idle",
+            inflight: {
+              user: "u3",
+              assistant: "partial answer",
+              streaming: false,
+              status: "error",
+              recoverable: true,
+              error: "provider failed",
+            },
+          }
+        throw new Error(`unexpected ${method}`)
+      })
+      const adapter = transcriptAdapter(
+        [user("u1"), todoCall, todoResult, assistant("a1"), user("u3")],
+        request
+      )
+
+      const history = await adapter.history("researcher", "stored", 2, 0)
+
+      expect(history.messages.map(({ role }) => role)).toEqual([
+        "user",
+        "assistant",
+      ])
+      expect(history.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        status: { type: "incomplete", reason: "error" },
+      })
+      expect(history).toMatchObject({ nextOffset: 1, total: 5 })
     })
   })
 
