@@ -220,6 +220,20 @@ describe("createToolTimelineModel", () => {
     ).toBe("failed")
   })
 
+  it("reads a run as failed when a completed command exited non-zero", () => {
+    expect(
+      toolRunState(
+        [
+          {
+            status: { type: "complete" },
+            result: { output: "[Command interrupted]", exit_code: 130 },
+          },
+        ],
+        false
+      )
+    ).toBe("failed")
+  })
+
   it("opens a run only while one of its terminals is still running", () => {
     const terminalPart = (
       running: boolean,

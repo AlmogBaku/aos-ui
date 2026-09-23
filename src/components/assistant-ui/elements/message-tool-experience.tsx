@@ -18,6 +18,7 @@ import { ToolCall } from "./tool-call"
 import { describeToolRun, isOrdinaryToolPart, partsAt } from "./turn-fold"
 import { useInsideTurnFold } from "./turn-working-fold"
 import { useToolUiLocale } from "@/components/tool-ui"
+import { toolResultSignalsFailure } from "@/components/tool-ui/lifecycle"
 import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 import {
   DEFAULT_TOOL_ACTIONS,
@@ -115,19 +116,32 @@ export function createToolPartSelector() {
   }
 }
 
+type ToolOutcomePart = {
+  status: Pick<ToolCallMessagePartStatus, "type">
+  isError?: boolean | undefined
+  result?: unknown
+}
+
+/**
+ * A call that was stopped or failed. A result that reports an error or a
+ * non-zero exit failed too, even when the provider completed the part.
+ */
+function toolPartFailed(part: ToolOutcomePart) {
+  return (
+    part.status.type === "incomplete" ||
+    part.isError === true ||
+    toolResultSignalsFailure(part.result)
+  )
+}
+
 /** One semantic state for a run of tool calls, collapsed or expanded. */
 export function toolRunState(
-  parts: readonly {
-    status: Pick<ToolCallMessagePartStatus, "type">
-    isError?: boolean | undefined
-  }[],
+  parts: readonly ToolOutcomePart[],
   streaming: boolean
 ): ToolTimelineState {
   if (parts.some((part) => part.status.type === "requires-action"))
     return "attention"
-  // A call whose result is an error failed, even when the part completed.
-  if (parts.some((part) => part.status.type === "incomplete" || part.isError))
-    return "failed"
+  if (parts.some(toolPartFailed)) return "failed"
   if (streaming || parts.some((part) => part.status.type === "running"))
     return "running"
   return "complete"
@@ -236,7 +250,7 @@ export function ToolRunGroup({
                         ? "running"
                         : part.status.type === "requires-action"
                           ? "attention"
-                          : part.status.type === "incomplete"
+                          : toolPartFailed(part)
                             ? "failed"
                             : "complete"
                     }
