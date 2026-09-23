@@ -142,7 +142,9 @@ function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
   const text = prompt.content
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join("\n")
-  return text.trim() === promptText(turn.content).trim() ? index : -1
+  // A prompt without text matches any other, so it never names the live one.
+  const expected = promptText(turn.content).trim()
+  return expected && text.trim() === expected ? index : -1
 }
 
 /**
@@ -259,37 +261,49 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * The page a `replayFrom: { type: "start" }` resume replays. A view rebuilt
-   * from history reads the live turn again from its start, so the stream the
-   * member held stops before the page is read, and the rows the provider
-   * already stored of that turn are cut: `cut` names the turn the page then
-   * lacks. A turn whose start is gone keeps both, because a cursorless follow
-   * could only reset that turn. The guest lane validates its authoritative
-   * page before anything reads it.
+   * from history reads a turn sent in this room again from its start, so the
+   * stream the member held stops before the page is read, and the rows the
+   * provider already stored of that turn are cut: `restarted` names the turn
+   * the view then shows only while its follow streams it. Any other turn keeps
+   * both: its journal starts after rows the page already holds, or its start
+   * is gone and a cursorless follow could only reset it. The guest lane
+   * validates its authoritative page before anything reads it.
    */
   async function replayPage(member: SessionMember, scope: SessionScope) {
-    const fromStart = coordinator.replaysFromStart(scope)
-    if (fromStart) await member.restartStream()
-    const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
-    const history = context.guest
-      ? SessionHistoryResponseSchema.parse(read)
-      : read
     const turn = context.rooms.current(scope)
-    // An answered question's stream starts after what the page stored.
-    if (!fromStart || !turn || turn.continued) return { history }
-    const cut = throughLivePrompt(history, promptIndex(turn, history), turn.at)
-    return cut ? { history: cut, cut: turn.turnId } : { history }
+    const restarted =
+      turn && !turn.continued && coordinator.replaysFromStart(scope)
+        ? turn
+        : undefined
+    if (restarted) await member.restartStream()
+    let history: SessionHistoryResponse
+    try {
+      const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT)
+      history = context.guest ? SessionHistoryResponseSchema.parse(read) : read
+    } catch (cause) {
+      // The stream is gone and the view was never rebuilt: have it reload.
+      if (restarted) await member.invalidate()
+      throw cause
+    }
+    if (!restarted) return { history }
+    const index = promptIndex(restarted, history)
+    return {
+      history: throughLivePrompt(history, index, restarted.at) ?? history,
+      restarted: restarted.turnId,
+    }
   }
 
   /**
    * Subscribes to the live turn, reporting a cursor that cannot position it.
-   * A page `cut` from a turn shows it only while this follow streams it.
+   * A view whose stream `restarted` on a turn shows it only while this follow
+   * streams that turn.
    */
   async function followPositioned(
     member: SessionMember,
     scope: SessionScope,
     meta: { turnId?: string; after?: number },
     replayedCorrections = 0,
-    cut?: string
+    restarted?: string
   ) {
     const positioned =
       meta.turnId === undefined ||
@@ -299,7 +313,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         positioned ? meta.after : undefined,
         replayedCorrections
       )
-      return positioned && (cut === undefined || followed === cut)
+      return positioned && (restarted === undefined || followed === restarted)
         ? {}
         : { resync: true }
     } catch {
@@ -367,7 +381,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       scope,
       history === undefined ? meta : {},
       corrections,
-      replay?.cut
+      replay?.restarted
     )
     const execution = coordinator.snapshot(scope)
     afterResponse(member, async () => {
@@ -542,7 +556,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       scope,
       history === undefined ? meta : {},
       corrections,
-      replay?.cut
+      replay?.restarted
     )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is

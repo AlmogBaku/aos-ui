@@ -2427,6 +2427,79 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  it("keeps streaming a resumed turn to the tab that reopens it", async () => {
+    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    await test.list()
+    await liveTurn(test, [test])
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    test.sources[1]?.emit(turnStarted())
+    chunk(test.sources[1], "Resumed")
+    await test.recorder.wait(said("Resumed"))
+
+    // The page already stores the resumed segment's rows.
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    chunk(test.sources[1], "After")
+    test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
+    await vi.waitFor(() =>
+      expect(flow(test.recorder, SESSION, from)).toContain("state idle")
+    )
+
+    const seen = flow(test.recorder, SESSION, from)
+    expect(seen).not.toContain("chunk Resumed")
+    expect(seen.filter((item) => item === "chunk After")).toHaveLength(1)
+    test.close()
+  })
+
+  it("has a reopened tab reload when its page fails after its stream stopped", async () => {
+    let unreadable = false
+    const test = await harness({
+      providerIds: true,
+      beforeHistory: async () => {
+        if (unreadable) throw new Error("history unavailable")
+      },
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    unreadable = true
+    await expect(
+      open(test, { replayFrom: { type: "start" } })
+    ).rejects.toThrow()
+
+    expect(test.recorder.of(AOS_METHODS.notify.sessionInvalidated)).toHaveLength(
+      1
+    )
+    test.close()
+  })
+
+  it("asks a reopen to reload when its turn ends before it follows", async () => {
+    const test: Awaited<ReturnType<typeof harness>> = await harness({
+      providerIds: true,
+      onReplay: () => test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded }),
+    })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const resumed = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      z
+        .object({ _meta: z.object({ aos: z.object({ resync: z.boolean() }) }) })
+        .parse(resumed)._meta.aos.resync
+    ).toBe(true)
+    test.close()
+  })
+
   it("shows a guest a live turn history already stored once", async () => {
     const test = await harness({ providerIds: true, history: storedLiveTurn() })
     await test.list()

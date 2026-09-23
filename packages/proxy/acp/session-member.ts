@@ -224,6 +224,11 @@ class SessionMember {
     })
   }
 
+  /** Tells the client to rebuild this Session's view from history. */
+  invalidate() {
+    return this.#invalidate()
+  }
+
   /** Admits one user turn and subscribes to the segment it starts. */
   async startTurn(input: PromptTurnInput, stage?: ServerAttachmentStage) {
     await this.#exclusive(async () =>
@@ -405,6 +410,7 @@ class SessionMember {
     this.#subscription?.close()
     this.#subscription = undefined
     this.#replies.clear()
+    for (const requestId of [...this.#pending.keys()]) this.#withdraw(requestId)
   }
 
   /**
@@ -723,6 +729,8 @@ class SessionMember {
 
   /** Cancels a request the Session resolved, which is `$/cancel_request`. */
   #withdraw(requestId: string) {
+    // A partial answer to a resolved wait is owed to no one.
+    this.#replies.delete(requestId)
     const pending = this.#pending.get(requestId)
     if (!pending) return
     this.#pending.delete(requestId)
