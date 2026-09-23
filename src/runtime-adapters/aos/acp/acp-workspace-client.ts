@@ -99,16 +99,42 @@ export function createAcpWorkspaceClient({
     return response
   }
 
+  type SessionPage = Awaited<ReturnType<AcpConnection["listSessions"]>>
+  const pageReads = new Map<string, Promise<SessionPage>>()
+  let catalogScope: string | undefined
+
+  /**
+   * The one way a `session/list` page is read, by the thread list and the
+   * workspace alike, so every page lands in the row cache once. A read already
+   * in flight for the same page is shared rather than repeated.
+   */
+  function readSessionPage(
+    meta: Parameters<AcpConnection["listSessions"]>[0],
+    cursor?: string
+  ) {
+    const key = JSON.stringify([meta.agentId ?? null, cursor ?? null])
+    const inFlight = pageReads.get(key)
+    if (inFlight) return inFlight
+    const read = connection
+      .listSessions(meta, cursor)
+      .then((page) => {
+        for (const session of page.sessions) {
+          const row = rowOf(session)
+          remember(row.threadId, row.info, row.updatedAt)
+          if (row.title) store.setTitle(row.threadId, row.title)
+        }
+        return page
+      })
+      .finally(() => pageReads.delete(key))
+    pageReads.set(key, read)
+    return read
+  }
+
   async function listSessions(agentId?: string, cursor?: string) {
-    const page = await connection.listSessions(
+    const page = await readSessionPage(
       agentId === undefined ? {} : { agentId },
       cursor
     )
-    for (const session of page.sessions) {
-      const row = rowOf(session)
-      remember(row.threadId, row.info, row.updatedAt)
-      if (row.title) store.setTitle(row.threadId, row.title)
-    }
     return {
       sessions: store.rowsFor(page.sessions.map(({ sessionId }) => sessionId)),
       ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
@@ -116,38 +142,26 @@ export function createAcpWorkspaceClient({
   }
 
   /**
-   * Reads catalog pages until every named Session has a row. A reloaded deep
-   * link names a Session before any page was read, and it may sit past page one.
+   * Every page the thread list reads already lands in the row cache, a
+   * reloaded deep link included, so a Session still missing costs one read of
+   * page one, never a walk of every Agent's catalog.
    */
   async function readRows(threadIds: readonly string[]) {
-    let cursor: string | undefined
-    while (threadIds.some((threadId) => !store.knows(threadId))) {
-      const page = await listSessions(undefined, cursor)
-      // A cursor the provider does not advance cannot reach another page.
-      if (page.nextCursor === undefined || page.nextCursor === cursor) return
-      cursor = page.nextCursor
-    }
+    if (threadIds.some((threadId) => !store.knows(threadId)))
+      await listSessions()
   }
 
   let relistTimer: ReturnType<typeof setTimeout> | undefined
-  let relisting = false
 
   /**
-   * Re-reads page one once a burst of invalidations settles. One read is in
-   * flight at a time: the next invalidation schedules the next read, so a
-   * skipped one costs nothing and nothing here retries.
+   * Re-reads page one once a burst of invalidations settles. A read still in
+   * flight answers for the burst, so nothing here overlaps or retries.
    */
   function scheduleSessionRelist() {
     if (relistTimer !== undefined) clearTimeout(relistTimer)
     relistTimer = setTimeout(() => {
       relistTimer = undefined
-      if (relisting) return
-      relisting = true
-      void listSessions()
-        .catch(() => undefined)
-        .finally(() => {
-          relisting = false
-        })
+      void listSessions().catch(() => undefined)
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 
@@ -192,6 +206,12 @@ export function createAcpWorkspaceClient({
 
     // Sessions
     listSessions,
+    readSessionPage,
+    scopeSessionCatalog(agentId: string) {
+      catalogScope = agentId
+    },
+    /** The Agent the thread list pages History for, once one is selected. */
+    sessionCatalogScope: () => catalogScope,
     async getSessionMetadata(threadIds: string[]) {
       await readRows(threadIds)
       return store.rowsFor(threadIds)

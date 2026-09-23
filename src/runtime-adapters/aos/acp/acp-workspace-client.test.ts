@@ -391,6 +391,66 @@ describe("ACP workspace client", () => {
     )
   })
 
+  it("shares one in-flight read of a page across a refresh storm", async () => {
+    vi.useFakeTimers()
+    try {
+      const { client, connection, emitNotification } = createClient()
+      let inFlight = 0
+      let mostInFlight = 0
+      let answer = () => {}
+      connection.listSessions = vi.fn(async () => {
+        inFlight += 1
+        mostInFlight = Math.max(mostInFlight, inFlight)
+        await new Promise<void>((resolve) => {
+          answer = resolve
+        })
+        inFlight -= 1
+        return { sessions: [listEntry()] }
+      })
+
+      const reads = Promise.all([
+        client.readSessionPage({}),
+        client.readSessionPage({}),
+        client.getSessionMetadata([SESSION_ID]),
+        client.getSessionMetadata([UNLISTED_SESSION_ID]),
+      ])
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      await vi.advanceTimersByTimeAsync(300)
+      answer()
+      await reads
+
+      expect(mostInFlight).toBe(1)
+      expect(connection.listSessions).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("answers for Sessions of a page the thread list read without reading it again", async () => {
+    const { client, calls } = createClient()
+
+    await client.readSessionPage({ agentId: AGENT_ID }, "cursor-2")
+    const metadata = await client.getSessionMetadata([SESSION_ID])
+
+    expect(metadata.map(({ threadId }) => threadId)).toEqual([SESSION_ID])
+    expect(calls.filter((call) => call.method === "listSessions")).toEqual([
+      { method: "listSessions", args: [{ agentId: AGENT_ID }, "cursor-2"] },
+    ])
+  })
+
+  it("looks for an unlisted Session on page one only", async () => {
+    const { client, calls } = createClient()
+
+    await expect(
+      client.getSessionMetadata([UNLISTED_SESSION_ID])
+    ).resolves.toEqual([])
+
+    expect(calls.filter((call) => call.method === "listSessions")).toEqual([
+      { method: "listSessions", args: [{}, undefined] },
+    ])
+  })
+
   it("publishes row changes and never clobbers unread with an update that omits it", async () => {
     const { client, emitUpdate } = createClient()
     await client.getSessionMetadata([SESSION_ID])

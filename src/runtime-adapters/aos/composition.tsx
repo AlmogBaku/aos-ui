@@ -124,10 +124,18 @@ function ReadyAosRuntimeProvider({
   const threadList = useMemo(
     () =>
       createAcpThreadListAdapter({
-        connection,
+        // Pages go through the workspace client, which shares each read and
+        // keeps its rows, so no Session metadata read repeats a page.
+        connection: {
+          listSessions: client.readSessionPage,
+          newSession: connection.newSession,
+          updateSession: connection.updateSession,
+          deleteSession: connection.deleteSession,
+        },
         drafts,
         titleFor: client.sessionTitle,
         agentIdFor: client.knownAgentIdOf,
+        agentScope: client.sessionCatalogScope,
       }),
     [client, connection, drafts]
   )

@@ -672,6 +672,28 @@ export function useWorkspaceNavigation({
     }
   }, [runtimeThreadIds, sessionQueryKey, threadState.isLoading, workspace])
 
+  const scopedCatalogAgent = useRef<string | null>(null)
+  /**
+   * History pages one Agent's Sessions. Naming a different Agent reloads the
+   * thread list, so its cursor, and "Load more" with it, is that Agent's.
+   */
+  const scopeSessionCatalog = useCallback(
+    (agentId: string) => {
+      if (!workspace.scopeSessionCatalog) return
+      if (scopedCatalogAgent.current === agentId) return
+      scopedCatalogAgent.current = agentId
+      workspace.scopeSessionCatalog(agentId)
+      void runtime.threads.reload().catch((reason: unknown) => {
+        setActionError(toError(reason))
+      })
+    },
+    [runtime, workspace]
+  )
+
+  useEffect(() => {
+    if (selectedProviderAgentId) scopeSessionCatalog(selectedProviderAgentId)
+  }, [scopeSessionCatalog, selectedProviderAgentId])
+
   useEffect(() => {
     if (readBrowserPathname() !== pathname) return
     if (agentsLoading || threadState.isLoading || sessionsLoading) return
@@ -737,6 +759,8 @@ export function useWorkspaceNavigation({
         }))
       }
       lastSelected.current.set(agentId, threadId)
+      // The runtime looks for an unlisted Session in its Agent's own catalog.
+      if (unlistedSession) scopeSessionCatalog(agentId)
       const selection = { agentId, sessionId: threadId }
       const canonicalPathname = buildWorkspacePathname(selection)
       const select = threadId
@@ -850,6 +874,7 @@ export function useWorkspaceNavigation({
     threadState.isLoading,
     titles,
     runtime,
+    scopeSessionCatalog,
     switchToNewThread,
     pathname,
     updateRoute,

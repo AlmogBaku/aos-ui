@@ -38,6 +38,8 @@ export type AcpThreadListOptions = {
   titleFor: (remoteId: string) => string | undefined
   /** Resolves Agents for Sessions this adapter has not listed itself. */
   agentIdFor?: (remoteId: string) => string | undefined
+  /** The Agent whose History further pages read; absent, every Agent's. */
+  agentScope?: () => string | undefined
 }
 
 export type AcpThreadListAdapter = RemoteThreadListAdapter & {
@@ -55,6 +57,11 @@ function metadataOf(info: SessionInfo) {
     lastMessageAt: info.updatedAt ? new Date(info.updatedAt) : undefined,
   }
   return { metadata, agentId: meta.agentId }
+}
+
+/** `session/list` meta for one Agent's catalog, or every Agent's. */
+function listMeta(agentId: string | undefined) {
+  return agentId === undefined ? {} : { agentId }
 }
 
 function titleStream(title: string | undefined): TitleStream {
@@ -79,6 +86,7 @@ export function createAcpThreadListAdapter({
   drafts,
   titleFor,
   agentIdFor,
+  agentScope,
 }: AcpThreadListOptions): AcpThreadListAdapter {
   const listed = new Map<string, RemoteThreadMetadata>()
   const agents = new Map<string, string>()
@@ -116,29 +124,52 @@ export function createAcpThreadListAdapter({
   }
 
   return {
+    /**
+     * Pages the selected Agent's own catalog, so the cursor, and with it
+     * History's "Load more", ends where that Agent's Sessions do. Page one of
+     * every Agent still comes with the first page: other Agents' status and
+     * Open sessions read it.
+     */
     async list({ after } = {}) {
-      const page = await connection.listSessions({}, after)
-      const threads = page.sessions.map((info) => remember(metadataOf(info)))
-      return {
-        threads,
-        ...(page.nextCursor === undefined
-          ? {}
-          : { nextCursor: page.nextCursor }),
-      }
+      const agentId = agentScope?.()
+      const [page, everyAgent] = await Promise.all([
+        connection.listSessions(listMeta(agentId), after),
+        agentId === undefined || after !== undefined
+          ? undefined
+          : connection.listSessions({}),
+      ])
+      const sessions = new Map(
+        [...page.sessions, ...(everyAgent?.sessions ?? [])].map((info) => [
+          info.sessionId,
+          info,
+        ])
+      )
+      const threads = [...sessions.values()].map((info) =>
+        remember(metadataOf(info))
+      )
+      // A page that adds nothing, or a cursor that does not advance, cannot
+      // reach another Session.
+      const more =
+        page.sessions.length > 0 &&
+        page.nextCursor !== undefined &&
+        page.nextCursor !== after
+      return { threads, ...(more ? { nextCursor: page.nextCursor } : {}) }
     },
 
     /**
      * Resolves a Session this adapter has not listed, which is how Assistant UI
      * opens one named before any page was read — a reloaded deep link. The
-     * catalog is the only authority for it, and it may sit past page one, so the
-     * pages are read until it appears.
+     * catalog is the only authority for it and has no single-Session read, so
+     * the owning Agent's pages, or the selected Agent's, are read until it
+     * appears.
      */
     async fetch(threadId: string) {
       const metadata = listed.get(threadId)
       if (metadata) return metadata
+      const agentId = agentIdFor?.(threadId) ?? agentScope?.()
       let cursor: string | undefined
       for (;;) {
-        const page = await connection.listSessions({}, cursor)
+        const page = await connection.listSessions(listMeta(agentId), cursor)
         for (const info of page.sessions) remember(metadataOf(info))
         const found = listed.get(threadId)
         if (found) return found
