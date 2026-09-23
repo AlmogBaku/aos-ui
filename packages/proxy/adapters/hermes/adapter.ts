@@ -1203,10 +1203,14 @@ export class HermesServerAdapter implements ServerRuntime {
         ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
       }
     })
+    // A malformed count stays an error even where a short page replaces it.
+    if (
+      payload.total !== undefined &&
+      !(Number.isSafeInteger(payload.total) && (payload.total as number) >= 0)
+    )
+      throw new HermesUnavailableError()
     const total =
-      typeof payload.total === "number" && payload.total >= 0
-        ? payload.total
-        : sessions.length
+      typeof payload.total === "number" ? payload.total : sessions.length
     return { sessions, total }
   }
 
@@ -1458,10 +1462,7 @@ export class HermesServerAdapter implements ServerRuntime {
         return this.#unpersistedDraft(profile, storedId)
       throwUnavailable(error)
     }
-    if (
-      !isRecord(payload) ||
-      trimmedText(payload.id) !== storedId
-    )
+    if (!isRecord(payload) || trimmedText(payload.id) !== storedId)
       throw new HermesUnavailableError()
     if (trimmedText(payload.profile) !== profile)
       throw new HermesSessionNotFoundError()
