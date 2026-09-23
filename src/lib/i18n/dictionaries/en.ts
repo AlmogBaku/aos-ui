@@ -108,6 +108,8 @@ export const en = {
     history: "History",
     preferences: "Preferences",
     clearSearch: "Clear search",
+    loadMoreSessions: "Load more Sessions",
+    loadingMoreSessions: "Loading more Sessions…",
     noSearchResults: "No matching sessions",
     removeOpenSession: "Remove from open sessions",
     selected: "Current Session",

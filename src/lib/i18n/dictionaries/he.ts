@@ -102,6 +102,8 @@ export const he = {
     history: "היסטוריה",
     preferences: "העדפות",
     clearSearch: "ניקוי החיפוש",
+    loadMoreSessions: "טעינת שיחות נוספות",
+    loadingMoreSessions: "שיחות נוספות בטעינה…",
     noSearchResults: "לא נמצאו שיחות תואמות",
     removeOpenSession: "הסרה מהשיחות הפתוחות",
     selected: "השיחה הנוכחית",

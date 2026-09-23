@@ -10,9 +10,7 @@ import {
 } from "react"
 import { useLocation, useNavigate } from "react-router"
 import type { AssistantRuntime } from "@assistant-ui/react"
-import {
-  AgentVisibilityUpdateError,
-} from "@/runtime-adapters/contracts"
+import { AgentVisibilityUpdateError } from "@/runtime-adapters/contracts"
 import type {
   HarnessRuntime,
   SessionActionCapabilities,
@@ -315,9 +313,20 @@ export function useWorkspaceNavigation({
   )
   const sessionQueryKey = `${refreshKey}:${runtimeThreadIds.join("\u001f")}`
   const sessionSnapshotIsCurrent = sessionSnapshot.key === sessionQueryKey
-  const sessions = sessionSnapshotIsCurrent
-    ? draftProjection.sessions
-    : emptySessions
+  // Loading a further catalog page only adds thread ids. The previous
+  // snapshot still describes every Session it listed, so History keeps those
+  // rows, and its scroll position, while the new page's metadata loads.
+  const sessionSnapshotStillCovers = useMemo(() => {
+    if (!sessionSnapshot.key.startsWith(`${refreshKey}:`)) return false
+    const listed = new Set(runtimeThreadIds)
+    return sessionSnapshot.sessions.every(({ threadId }) =>
+      listed.has(threadId)
+    )
+  }, [refreshKey, runtimeThreadIds, sessionSnapshot])
+  const sessions =
+    sessionSnapshotIsCurrent || sessionSnapshotStillCovers
+      ? draftProjection.sessions
+      : emptySessions
   const sessionError = sessionSnapshotIsCurrent ? sessionSnapshot.error : null
   const sessionsLoading =
     threadState.isLoading ||

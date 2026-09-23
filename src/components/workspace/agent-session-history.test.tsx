@@ -22,6 +22,8 @@ const copy: AgentSessionHistoryCopy = {
   openSessions: "Open sessions",
   history: "History",
   clearSearch: "Clear search",
+  loadMoreSessions: "Load more Sessions",
+  loadingMoreSessions: "Loading more Sessions…",
   noSessions: "No Sessions yet",
   noSearchResults: "No matching Sessions",
   openSession: "Open Session",

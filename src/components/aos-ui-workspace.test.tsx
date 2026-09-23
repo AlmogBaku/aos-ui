@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useEffect, useMemo, useState } from "react"
 import {
+  type RemoteThreadListAdapter,
   useLocalRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react"
@@ -2730,5 +2731,132 @@ describe("artifact Session scope", () => {
     expect(
       reads.filter(({ threadId }) => threadId !== "thread-aster-market")
     ).toEqual([])
+  })
+})
+
+describe("paged Session History", () => {
+  const pinnedId = "thread-aster-pinned"
+  // Ten Aster Sessions, newest first, and an old pinned one.
+  const pagedSessions = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+      threadId: `thread-aster-${index}`,
+      agentId: "agent-aster",
+      updatedAt: new Date(Date.UTC(2026, 8, 3, 11 - index)).toISOString(),
+      status: "idle" as const,
+    })),
+    {
+      threadId: pinnedId,
+      agentId: "agent-aster",
+      updatedAt: "2026-08-01T12:00:00.000Z",
+      status: "idle" as const,
+      pinned: true,
+    },
+  ]
+  const sessionTitles = Object.fromEntries([
+    ...pagedSessions.map(({ threadId }) => [threadId, `Session ${threadId}`]),
+    [pinnedId, "Pinned plan"],
+  ])
+  let observed: IntersectionObserverCallback[] = []
+
+  beforeEach(() => {
+    observed = []
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          observed.push(callback)
+        }
+        observe() {}
+        disconnect() {}
+      }
+    )
+    const list = FixtureThreadListAdapter.prototype.list
+    // The provider pages the catalog and back-fills the pinned Session onto
+    // every page, the way Hermes does.
+    // The fixture lists everything at once, so the spy widens it to the paged
+    // adapter signature.
+    const pagedList: Pick<RemoteThreadListAdapter, "list"> =
+      FixtureThreadListAdapter.prototype
+    vi.spyOn(pagedList, "list").mockImplementation(async function (
+      this: FixtureThreadListAdapter,
+      params
+    ) {
+      const { threads } = await list.call(this)
+      const pinned = threads.filter(({ remoteId }) => remoteId === pinnedId)
+      const natural = threads.filter(({ remoteId }) => remoteId !== pinnedId)
+      return params?.after
+        ? { threads: [...natural.slice(5), ...pinned] }
+        : { threads: [...natural.slice(0, 5), ...pinned], nextCursor: "5" }
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  function PagedWorkspace() {
+    return (
+      <ControlledWorkspaceFixture
+        initialThreadId="thread-aster-0"
+        workspace={{ sessions: pagedSessions, sessionTitles }}
+      >
+        {(bundle) => (
+          <AosUiWorkspace
+            locale="en"
+            dictionary={en}
+            runtime={asHarnessRuntime(bundle)}
+            now={FIXTURE_NOW}
+          />
+        )}
+      </ControlledWorkspaceFixture>
+    )
+  }
+
+  const rowsIn = (section: string, title: string) =>
+    screen
+      .queryAllByRole("region", { name: section })
+      .flatMap((region) => within(region).queryAllByRole("button"))
+      .filter((button) => button.textContent?.includes(title)).length
+  const loadMoreButton = () =>
+    screen.queryByRole("button", {
+      name: en.mobileNavigation.loadMoreSessions,
+    })
+
+  it("appends the next page when the end of History scrolls into view", async () => {
+    render(<PagedWorkspace />)
+    await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+    expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(0)
+
+    act(() => {
+      for (const callback of observed)
+        callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver
+        )
+    })
+
+    await waitFor(() =>
+      expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(1)
+    )
+    expect(loadMoreButton()).toBeNull()
+    for (let index = 1; index < 10; index += 1)
+      expect(rowsIn(en.mobileNavigation.history, `thread-aster-${index}`)).toBe(
+        1
+      )
+    expect(rowsIn(en.mobileNavigation.history, "Pinned plan")).toBe(0)
+    expect(rowsIn(en.mobileNavigation.openSessions, "Pinned plan")).toBe(1)
+  })
+
+  it("loads the next page from the keyboard-reachable button", async () => {
+    const user = userEvent.setup()
+    render(<PagedWorkspace />)
+    await waitFor(() => expect(loadMoreButton()).not.toBeNull())
+
+    await user.click(loadMoreButton()!)
+
+    await waitFor(() =>
+      expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(1)
+    )
+    expect(loadMoreButton()).toBeNull()
   })
 })

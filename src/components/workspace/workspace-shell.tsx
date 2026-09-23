@@ -406,6 +406,8 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     preferences: dictionary.mobileNavigation.preferences,
     agentDetails: dictionary.workspace.agentDetails,
     clearSearch: dictionary.mobileNavigation.clearSearch,
+    loadMoreSessions: dictionary.mobileNavigation.loadMoreSessions,
+    loadingMoreSessions: dictionary.mobileNavigation.loadingMoreSessions,
     noAgents: dictionary.empty.noAgents,
     noSessions: dictionary.empty.noSessions,
     noSearchResults: dictionary.mobileNavigation.noSearchResults,

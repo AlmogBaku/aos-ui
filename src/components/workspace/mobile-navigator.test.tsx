@@ -65,6 +65,8 @@ const copy: MobileNavigatorCopy = {
   preferences: "Preferences",
   agentDetails: "Agent details",
   clearSearch: "Clear search",
+  loadMoreSessions: "Load more Sessions",
+  loadingMoreSessions: "Loading more Sessions…",
   noAgents: "No Agents found",
   noSessions: "No Sessions yet",
   noSearchResults: "No matching Sessions",
