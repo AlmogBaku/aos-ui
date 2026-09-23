@@ -67,7 +67,10 @@ type Pending = {
   state: "pending" | "dispatching"
   kind: "question" | "permission"
   questions?: Question[]
+  permission?: Permission
 }
+/** What a permission asks to do, and the tool call it guards when it names one. */
+type Permission = { action: string; resources: string[]; toolCallId?: string }
 type DispatchEntry = {
   p: Pending
   status: "resolved" | "cancelled"
@@ -84,6 +87,18 @@ const text = (v: unknown, max = MAX_TEXT_BYTES) =>
   new TextEncoder().encode(v).byteLength <= max
     ? v
     : undefined
+/**
+ * One line per value, keeping the leading whole values that fit the text bound
+ * and counting the rest on a last line of their own.
+ */
+function boundedLines(values: readonly string[]) {
+  for (let kept = values.length; kept >= 0; kept--) {
+    const left = values.length - kept
+    const lines = [...values.slice(0, kept), ...(left ? [`…(+${left})`] : [])]
+    const joined = text(lines.join("\n"))
+    if (joined) return joined
+  }
+}
 const identity = (s: Scope) =>
   JSON.stringify([s.agentId, s.sessionId, s.threadId])
 const key = (s: Scope, id: string) => `${identity(s)}:${id}`
@@ -238,11 +253,19 @@ export class OpenCodeInteractions {
         existing ? "AOS_PROVIDER_INVALID_RESPONSE" : "AOS_LIMIT_EXCEEDED"
       )
     if (existing) return this.snapshot(scope)!
+    const source = record(row.source)
+    const toolCallId =
+      source?.type === "tool" ? text(source.callID, 512) : undefined
     this.#pending.set(key(s, id), {
       id,
       scope: s,
       state: "pending",
       kind: "permission",
+      permission: {
+        action: row.action as string,
+        resources: row.resources as string[],
+        ...(toolCallId ? { toolCallId } : {}),
+      },
     })
     return this.snapshot(scope)!
   }
@@ -301,15 +324,21 @@ export class OpenCodeInteractions {
     )
     if (!pending.length) return
     return pending.map((p) => {
-      if (p.kind === "permission")
+      if (p.kind === "permission") {
+        const { action, resources, toolCallId } = p.permission!
+        const message = boundedLines(resources)
         return {
           requestId: p.id,
           kind: PendingRequestKind.Permission,
+          ...(toolCallId ? { toolCallId } : {}),
+          ...(message ? { message } : {}),
           responseSchema: {
             type: "string",
+            title: action,
             enum: ["once", "always", "deny"],
           },
         }
+      }
       return {
         requestId: p.id,
         kind: PendingRequestKind.Elicitation,

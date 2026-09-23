@@ -1319,7 +1319,7 @@ describe("Thread accessibility", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Answer the pending question before changing this conversation",
+        name: "Respond to the pending request before changing this conversation",
       })
     ).toBeDisabled()
 
@@ -3328,7 +3328,7 @@ describe("message context menu", () => {
     // Base UI keeps a disabled item focusable, so the state is the ARIA state.
     expect(
       within(menu).getByRole("menuitem", {
-        name: "Refresh, Answer the pending question before changing this conversation",
+        name: "Refresh, Respond to the pending request before changing this conversation",
       })
     ).toHaveAttribute("aria-disabled", "true")
   })

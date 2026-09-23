@@ -205,14 +205,24 @@ provider history.
 
 ACP delivers pending interactions as `session/request_permission` or
 `elicitation/create`. The AOS `_meta.aos` extensions carried on these are
-(`acp.ts:315-341`):
+(`acp.ts:409-440`):
 
-**Permission** (`AosPermissionMetaSchema`, `acp.ts:315-319`):
+**Permission** (`AosPermissionMetaSchema`, `acp.ts:409`):
 `{ requestId, expiresAt?, message? }`.
 The vendor permission kind `_allow_session` (`AOS_PERMISSION_KIND_SESSION`,
-`acp.ts:60`) represents Hermes' "allow for this session" scope.
+`acp.ts:67`) represents Hermes' "allow for this session" scope.
 
-**Elicitation** (`AosElicitationMetaSchema`, `acp.ts:337-341`):
+A permission names the call it guards in `subject.toolCall` when the adapter
+knows it: OpenCode from the native `source.callID`, Hermes from the one tool
+still running when the approval arrives. OpenClaw approvals name no call. The
+browser (`acp-approvals.ts`) holds each request for the connection's lifetime
+and projects it as Assistant UI's native `approval` on that tool part, or on a
+standalone `request_permission` part in the current turn, and answers through
+`onRespondToToolApproval`. The chosen option is kept only while the tab is
+open: after a reload the tool's own result shows the outcome, and a request
+still pending is re-sent by the proxy.
+
+**Elicitation** (`AosElicitationMetaSchema`, `acp.ts:436`):
 `{ requestId, expiresAt?, questions[] }`. Each question carries
 `{ id?, header, prompt, options[], multiple?, custom? }`. A multi-select
 question must declare `items.enum` in the ACP property schema
@@ -222,7 +232,7 @@ remains valid because the response schema does not constrain values to the enum.
 ## JSON-RPC error codes
 
 The proxy returns these vendor error codes beyond the standard JSON-RPC set
-(`AOS_JSONRPC_ERRORS`, `acp.ts:69-79`):
+(`AOS_JSONRPC_ERRORS`, `acp.ts:76`):
 
 | Code     | Name                     | Meaning                                      |
 | -------- | ------------------------ | -------------------------------------------- |
@@ -271,7 +281,8 @@ token, scoped to the invited Agent and Session):
 - `session-projector.ts` + `projector-messages.ts` — pure reducer to Assistant UI messages
 - `use-acp-runtime.ts` — `useExternalStoreRuntime`
 - `acp-thread-list.ts` — thread list integration
-- `acp-interactions.ts` — permission/elicitation → `RuntimeQuestion`
+- `acp-approvals.ts` — permission → Assistant UI tool approval
+- `acp-interactions.ts` — elicitation → `RuntimeQuestion`
 - `types.ts` — shared connection and subscription types
 
 ## Verify

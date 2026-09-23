@@ -308,7 +308,7 @@ const DEFAULT_LABELS: ThreadLabels = {
   edit: "Edit",
   selectText: "Select text",
   pendingInteractionAction:
-    "Answer the pending question before changing this conversation",
+    "Respond to the pending request before changing this conversation",
   cancel: "Cancel",
   update: "Update",
   historySearch: "Search conversation history",

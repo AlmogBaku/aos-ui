@@ -30,6 +30,7 @@ import {
 import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
+import { isSettledApproval, type AcpApproval } from "./acp-approvals"
 import {
   appendBlock,
   appendData,
@@ -118,6 +119,14 @@ export type ProjectorState = {
    * id, and applied the moment it appears.
    */
   readonly early?: ReadonlyMap<string, readonly EarlyUpdate[]>
+  /**
+   * The Session's permission requests, laid over the transcript when it is
+   * read rather than folded into it, so a replay that clears the transcript
+   * keeps them.
+   */
+  readonly approvals?: readonly AcpApproval[]
+  /** The turn each approval was first seen beside, by approval id. */
+  readonly approvalHosts?: ReadonlyMap<string, string>
 }
 
 type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
@@ -1029,6 +1038,55 @@ export function messageBlocks(
   )
 }
 
+/**
+ * Takes the Session's current permission requests. Each one is pinned to the
+ * turn it was first seen beside, so a request no call carries stays where it
+ * was asked while later turns arrive.
+ */
+export function applyApprovals(
+  state: ProjectorState,
+  approvals: readonly AcpApproval[]
+): ProjectorState {
+  if (approvals === state.approvals) return state
+  const beside = activeAssistantId(state) ?? latestAssistantId(state.messages)
+  const approvalHosts = new Map<string, string>()
+  for (const { id } of approvals) {
+    const host = state.approvalHosts?.get(id) ?? beside
+    if (host !== undefined) approvalHosts.set(id, host)
+  }
+  return { ...state, approvals, approvalHosts }
+}
+
+/**
+ * Each approval by the turn it reads on: the one holding the call it guards,
+ * else the turn it was pinned to while that turn is still projected, else, for
+ * a request still waiting, the turn it would be asked beside now. A settled one
+ * with neither never moves to a turn it was not asked on.
+ */
+function approvalsByTurn(state: ProjectorState) {
+  const byTurn = new Map<string, AcpApproval[]>()
+  const has = (id: string) =>
+    state.messages.some((message) => message.id === id)
+  const beside = activeAssistantId(state) ?? latestAssistantId(state.messages)
+  for (const approval of state.approvals ?? []) {
+    const { toolCallId } = approval
+    const owner =
+      toolCallId === undefined
+        ? undefined
+        : toolCallOwner(state.messages, toolCallId)?.id
+    const pinned = state.approvalHosts?.get(approval.id)
+    const host = pinned !== undefined && has(pinned) ? pinned : undefined
+    const turn =
+      owner ?? host ?? (isSettledApproval(approval) ? undefined : beside)
+    if (turn !== undefined)
+      byTurn.set(turn, [...(byTurn.get(turn) ?? []), approval])
+  }
+  return byTurn
+}
+
 export function toThreadMessages(state: ProjectorState): ThreadMessageLike[] {
-  return state.messages.map(toThreadMessage)
+  const approvals = approvalsByTurn(state)
+  return state.messages.map((message) =>
+    toThreadMessage(message, approvals.get(message.id))
+  )
 }

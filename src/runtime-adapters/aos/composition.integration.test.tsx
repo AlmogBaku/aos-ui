@@ -823,8 +823,13 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
       segment.finish()
     })
 
-    await user.click(await screen.findByRole("option", { name: "Allow once" }))
-    await user.click(screen.getByRole("button", { name: "Send answer" }))
+    // The tool approval is the one place to answer; this harness mounts no
+    // toolkit, so Assistant UI's own fallback card offers the choices.
+    expect(await screen.findByText("Run the tool?")).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Send answer" })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Allow" }))
 
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(2))
     expect(proxy.inputs[1]).toMatchObject({

@@ -1,5 +1,6 @@
 import {
   RequestError,
+  type RequestPermissionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
@@ -24,8 +25,10 @@ import {
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 
+import { createAcpApprovals } from "./acp-approvals"
 import type {
   AcpConnection,
+  AcpPendingRequest,
   AcpResumeOptions,
   AcpSessionUpdateListener,
 } from "./types"
@@ -52,6 +55,7 @@ function createFakeConnection() {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
   const replays = new Map<string, Set<() => void>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
+  const pendingListeners = new Set<(pending: AcpPendingRequest) => void>()
   const unused = (): never => {
     throw new Error("The ACP runtime does not use this connection method")
   }
@@ -107,7 +111,10 @@ function createFakeConnection() {
       notifications.set(method, listeners)
       return () => listeners.delete(listener)
     },
-    onPendingRequest: () => () => {},
+    onPendingRequest: (listener) => {
+      pendingListeners.add(listener)
+      return () => pendingListeners.delete(listener)
+    },
     lastSequence: () => undefined,
     close: () => {},
   }
@@ -130,6 +137,28 @@ function createFakeConnection() {
     },
     notify: (method: string, params: unknown) => {
       for (const listener of notifications.get(method) ?? []) listener(params)
+    },
+    /** The proxy asks to run the call `toolCallId` names. */
+    requestPermission: (toolCallId: string) => {
+      const respond = vi.fn<(response: RequestPermissionResponse) => void>()
+      const pending: AcpPendingRequest = {
+        kind: "permission",
+        sessionId: SESSION_ID,
+        request: {
+          sessionId: SESSION_ID,
+          title: "Run bash",
+          subject: { type: "tool_call", toolCall: { toolCallId } },
+          options: [
+            { optionId: "once", name: "Allow once", kind: "allow_once" },
+            { optionId: "deny", name: "Deny", kind: "reject_once" },
+          ],
+          _meta: { aos: { requestId: "interrupt-1" } },
+        },
+        respond,
+        signal: new AbortController().signal,
+      }
+      for (const listener of pendingListeners) listener(pending)
+      return respond
     },
   }
 }
@@ -160,7 +189,11 @@ async function mount(
   fake: Fake,
   options?: Pick<
     UseAcpRuntimeOptions,
-    "attach" | "enableMessageQueue" | "onComposerPrefill" | "stageAttachments"
+    | "approvals"
+    | "attach"
+    | "enableMessageQueue"
+    | "onComposerPrefill"
+    | "stageAttachments"
   >
 ) {
   const hook = renderHook(() =>
@@ -754,6 +787,103 @@ describe("useAcpRuntime", () => {
         [{ type: "text", text: "Also check the logs" }],
         {}
       )
+    })
+  })
+})
+
+describe("useAcpRuntime approvals", () => {
+  /** A run blocked on its `bash` call, as the proxy streams it. */
+  const blockOnCall = (fake: Fake) => {
+    fake.emit({ sessionUpdate: "state_update", state: "running" })
+    fake.emit(chunkUpdate("a1", "Deploying"))
+    fake.emit(
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t1",
+        title: "bash",
+        status: "in_progress",
+      },
+      { ...TURN_META, messageId: "a1" }
+    )
+    fake.emit({ sessionUpdate: "state_update", state: "requires_action" })
+  }
+
+  const callPart = (runtime: ReturnType<typeof useAcpRuntime>) =>
+    runtime.thread.getMessageByIndex(0).getMessagePartByToolCallId("t1")
+
+  it("answers a permission on the call it guards while sends queue", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    const { result } = await mount(fake, {
+      approvals,
+      enableMessageQueue: true,
+    })
+    let respond!: ReturnType<Fake["requestPermission"]>
+    act(() => {
+      blockOnCall(fake)
+      respond = fake.requestPermission("t1")
+    })
+    expect(callPart(result.current).getState()).toMatchObject({
+      approval: {
+        id: "interrupt-1",
+        options: [
+          { id: "once", kind: "allow-once" },
+          { id: "deny", kind: "reject-once" },
+        ],
+      },
+    })
+
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Also check the logs" }],
+      })
+    })
+    expect(fake.prompt).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await callPart(result.current).respondToToolApproval({
+        optionId: "once",
+      })
+    })
+    expect(respond).toHaveBeenCalledWith({
+      outcome: { outcome: "selected", optionId: "once" },
+    })
+    expect(callPart(result.current).getState()).toMatchObject({
+      approval: { optionId: "once", approved: true },
+    })
+  })
+
+  it("records the verdict Assistant UI settles on", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    const { result } = await mount(fake, { approvals })
+    act(() => {
+      blockOnCall(fake)
+      fake.requestPermission("t1")
+    })
+
+    // An explicit verdict wins over whatever the option's kind suggests.
+    await act(async () => {
+      await callPart(result.current).respondToToolApproval({
+        optionId: "once",
+        approved: false,
+      })
+    })
+    expect(callPart(result.current).getState()).toMatchObject({
+      approval: { optionId: "once", approved: false },
+    })
+  })
+
+  it("shows a permission raised before the thread mounted", async () => {
+    const fake = createFakeConnection()
+    const approvals = createAcpApprovals({ connection: fake.connection })
+    fake.requestPermission("t1")
+    const { result } = await mount(fake, { approvals })
+    act(() => blockOnCall(fake))
+
+    expect(callPart(result.current).getState()).toMatchObject({
+      approval: { id: "interrupt-1" },
     })
   })
 })

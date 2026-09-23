@@ -1,8 +1,4 @@
-import {
-  AOS_META_KEY,
-  AosElicitationMetaSchema,
-  AosPermissionMetaSchema,
-} from "@aos/protocol/acp"
+import { AOS_META_KEY, AosElicitationMetaSchema } from "@aos/protocol/acp"
 import type {
   RuntimeInteractionAdapter,
   RuntimeQuestion,
@@ -11,19 +7,22 @@ import type {
 import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
- * Projects ACP's server→client requests onto the shared question composer: a
- * permission becomes one single-select question over its options, and an
- * elicitation carries the lossless questions the proxy put in `_meta.aos`.
- * One pending request per Session, replaced by the next one the proxy sends.
+ * Projects ACP's elicitations onto the shared question composer, carrying the
+ * lossless questions the proxy put in `_meta.aos`. One pending request per
+ * Session, replaced by the next one the proxy sends. Permissions are tool
+ * approvals instead, answered on the card of the call they guard
+ * (`acp-approvals.ts`).
  *
  * Every UI with the Session open receives the same request. When another UI
  * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
  * `$/cancel_request`, which aborts the request's own signal.
  */
 
+type ElicitationRequest = Extract<AcpPendingRequest, { kind: "elicitation" }>
+
 type PendingEntry = {
   request: RuntimeQuestionRequest
-  pending: AcpPendingRequest
+  pending: ElicitationRequest
 }
 
 /**
@@ -50,53 +49,22 @@ export function createAcpInteractions({
 }): RuntimeInteractionAdapter {
   const entries = new Map<string, PendingEntry>()
   const listeners = new Map<string, Set<() => void>>()
-  let generated = 0
 
   function notify(sessionId: string) {
     listeners.get(sessionId)?.forEach((listener) => listener())
   }
 
   /**
-   * The composer's view of one native request, or `undefined` when the proxy's
-   * projection cannot be read. An elicitation carries its questions only in
-   * `_meta.aos`, so a payload this contract rejects has nothing to render;
-   * failing here instead would answer the runtime on the operator's behalf.
+   * The composer's view of one elicitation, or `undefined` when the proxy's
+   * projection cannot be read. It carries its questions only in `_meta.aos`,
+   * so a payload this contract rejects has nothing to render; failing here
+   * instead would answer the runtime on the operator's behalf.
    * The request stays pending for the re-issue a later resume performs.
    */
   function project(
-    pending: AcpPendingRequest,
+    pending: ElicitationRequest,
     sessionId: string
   ): RuntimeQuestionRequest | undefined {
-    if (pending.kind === "permission") {
-      const meta = AosPermissionMetaSchema.safeParse(
-        pending.request._meta?.[AOS_META_KEY]
-      )
-      const { title } = pending.request
-      const prompt =
-        pending.request.description ??
-        (meta.success ? meta.data.message : undefined) ??
-        title
-      return {
-        kind: "question",
-        requestId: meta.success
-          ? meta.data.requestId
-          : `acp-permission-${++generated}`,
-        sessionId,
-        questions: [
-          {
-            // A request that only names itself is said once, as the prompt.
-            ...(prompt === title ? {} : { header: title }),
-            prompt,
-            options: pending.request.options.map((option) => ({
-              label: option.name,
-              value: option.optionId,
-            })),
-            multiple: false,
-            custom: false,
-          },
-        ],
-      }
-    }
     const meta = AosElicitationMetaSchema.safeParse(
       pending.request._meta?.[AOS_META_KEY]
     )
@@ -122,6 +90,7 @@ export function createAcpInteractions({
   }
 
   connection.onPendingRequest((pending) => {
+    if (pending.kind !== "elicitation") return
     // Request-scoped elicitations belong to no Session the operator can see.
     const sessionId = pending.sessionId
     if (sessionId === undefined) return
@@ -144,13 +113,6 @@ export function createAcpInteractions({
     async respond(request, response) {
       const pending = take(request)
       if (!pending) return
-      if (pending.kind === "permission") {
-        const optionId = response.answers[0]?.[0]
-        if (optionId === undefined)
-          throw new Error("A permission answer must select an option")
-        pending.respond({ outcome: { outcome: "selected", optionId } })
-        return
-      }
       pending.respond({
         action: "accept",
         content: elicitationContent(request.questions, response.answers),
@@ -159,10 +121,7 @@ export function createAcpInteractions({
 
     async reject(request) {
       const pending = take(request)
-      if (!pending) return
-      if (pending.kind === "permission")
-        pending.respond({ outcome: { outcome: "cancelled" } })
-      else pending.respond({ action: "cancel" })
+      pending?.respond({ action: "cancel" })
     },
 
     dismiss(request) {

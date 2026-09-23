@@ -13,6 +13,7 @@ import {
 
 import type { AosSubagent } from "@aos/protocol/acp"
 
+import { permissionProviderMetadata } from "@/components/tool-ui/payloads/permission"
 import {
   readAosToolArtifact,
   withAosToolArtifact,
@@ -21,6 +22,7 @@ import {
   type AosToolArtifact,
 } from "@/components/tool-ui/tool-artifact"
 
+import type { AcpApproval } from "./acp-approvals"
 import type { ProjectedTerminal } from "./projector-terminals"
 
 /**
@@ -582,9 +584,33 @@ function appState(
   }
 }
 
+/**
+ * The approval as Assistant UI reads it, asking with the explanation when the
+ * provider gives one; the operation itself rides in the part's metadata.
+ */
+function approvalOf({
+  id,
+  action,
+  description,
+  options,
+  optionId,
+  approved,
+  resolution,
+}: AcpApproval): NonNullable<ToolCallPart["approval"]> {
+  return {
+    id,
+    prompt: description ?? action,
+    options,
+    ...(optionId === undefined ? {} : { optionId }),
+    ...(approved === undefined ? {} : { approved }),
+    ...(resolution === undefined ? {} : { resolution }),
+  }
+}
+
 function toolPart(
   call: ProjectedToolCall,
-  turn: MessageStatus | undefined
+  turn: MessageStatus | undefined,
+  approval?: AcpApproval
 ): ThreadMessagePart {
   const result = call.rawOutput ?? contentResult(call.content)
   const artifact = toolArtifact(call, result, turn)
@@ -605,16 +631,50 @@ function toolPart(
     ...(messages.length === 0
       ? {}
       : { messages: messages.map((message) => childMessage(message, call)) }),
+    ...(approval === undefined
+      ? {}
+      : {
+          approval: approvalOf(approval),
+          providerMetadata: permissionProviderMetadata(approval.action),
+        }),
   }
 }
 
+const STANDALONE_APPROVAL_PREFIX = "aos-permission-"
+
+/**
+ * A permission no call of the turn carries reads as the `request_permission`
+ * tool the permission card renders, so it is still answered in the transcript.
+ */
+function standaloneApprovalPart(
+  approval: AcpApproval,
+  turn: MessageStatus | undefined
+): ThreadMessagePart {
+  const call: ProjectedToolCall = {
+    toolCallId: `${STANDALONE_APPROVAL_PREFIX}${approval.id}`,
+    name: "request_permission",
+    rawInput: { action: approval.action },
+  }
+  return toolPart(call, turn, approval)
+}
+
+const isSettled = (call: ProjectedToolCall) =>
+  call.status === "completed" || call.status === "failed"
+
 function threadPart(
   part: ProjectedPart,
-  turn: MessageStatus | undefined
+  turn: MessageStatus | undefined,
+  approvals: readonly AcpApproval[] = []
 ): ThreadMessagePart[] {
   if (part.source === "data")
     return [{ type: "data", name: part.name, data: part.data }]
-  if (part.source === "tool") return [toolPart(part.call, turn)]
+  if (part.source === "tool") {
+    // A settled call shows its own outcome, so its approval has done its job.
+    const approval = isSettled(part.call)
+      ? undefined
+      : approvals.find(({ toolCallId }) => toolCallId === part.call.toolCallId)
+    return [toolPart(part.call, turn, approval)]
+  }
   if (part.source === "thought") {
     const text = blockText(part.block)
     return text === undefined ? [] : [{ type: "reasoning", text }]
@@ -641,20 +701,64 @@ function timingMetadata(message: ProjectedMessage): MessageTiming | undefined {
   }
 }
 
-const converted = new WeakMap<ProjectedMessage, ThreadMessageLike>()
-
-/** Memoized by message reference so an unchanged turn keeps its identity. */
-export function toThreadMessage(message: ProjectedMessage): ThreadMessageLike {
-  const cached = converted.get(message)
-  if (cached) return cached
+function convert(
+  message: ProjectedMessage,
+  approvals: readonly AcpApproval[]
+): ThreadMessageLike {
   const timing = timingMetadata(message)
-  const value: ThreadMessageLike = {
+  const guarded = new Set(
+    message.parts.flatMap((part) =>
+      part.source === "tool" ? [part.call.toolCallId] : []
+    )
+  )
+  const standalone = approvals.filter(
+    ({ toolCallId }) => toolCallId === undefined || !guarded.has(toolCallId)
+  )
+  return {
     id: message.id,
     role: message.role,
-    content: message.parts.flatMap((part) => threadPart(part, message.status)),
+    content: [
+      ...message.parts.flatMap((part) =>
+        threadPart(part, message.status, approvals)
+      ),
+      ...standalone.map((approval) =>
+        standaloneApprovalPart(approval, message.status)
+      ),
+    ],
     ...(message.status === undefined ? {} : { status: message.status }),
     ...(timing === undefined ? {} : { metadata: { timing } }),
   }
-  converted.set(message, value)
+}
+
+const converted = new WeakMap<ProjectedMessage, ThreadMessageLike>()
+const overlaid = new WeakMap<
+  ProjectedMessage,
+  { approvals: readonly AcpApproval[]; value: ThreadMessageLike }
+>()
+
+const sameItems = <T>(left: readonly T[], right: readonly T[]) =>
+  left.length === right.length &&
+  left.every((item, index) => item === right[index])
+
+/**
+ * Memoized by message reference, and by the approvals laid over it, so an
+ * unchanged turn keeps its identity. `approvals` are the turn's own: those on
+ * one of its calls and those it hosts on their own.
+ */
+export function toThreadMessage(
+  message: ProjectedMessage,
+  approvals: readonly AcpApproval[] = []
+): ThreadMessageLike {
+  if (approvals.length === 0) {
+    const cached = converted.get(message)
+    if (cached) return cached
+    const value = convert(message, approvals)
+    converted.set(message, value)
+    return value
+  }
+  const cached = overlaid.get(message)
+  if (cached && sameItems(cached.approvals, approvals)) return cached.value
+  const value = convert(message, approvals)
+  overlaid.set(message, { approvals, value })
   return value
 }

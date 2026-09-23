@@ -11,6 +11,7 @@
 import {
   CompactionStatus,
   isRepliesTurn,
+  PendingRequestKind,
   StopReason,
   TurnEventKind,
   TurnInputSchema,
@@ -1020,8 +1021,23 @@ export class HermesTurnEngine {
 
   #requireAction(active: ActiveTurn, requests: PendingRequest[]) {
     if (active.terminal) return
+    // Hermes names no tool call on an approval; the one call still running is
+    // the one waiting on it, and with none or several the approval stays
+    // unlinked.
+    const running = [...active.tools].filter(([, tool]) => !tool.ended)
+    const toolCallId = running.length === 1 ? running[0]![0] : undefined
+    const linked = requests.map((request) =>
+      toolCallId &&
+      request.kind === PendingRequestKind.Permission &&
+      !request.toolCallId
+        ? { ...request, toolCallId }
+        : request
+    )
     this.#closeGeneration(active, { tools: "unresolved" })
-    this.#emit(active, { kind: TurnEventKind.TurnRequiresAction, requests })
+    this.#emit(active, {
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: linked,
+    })
     this.#settle(active)
   }
 

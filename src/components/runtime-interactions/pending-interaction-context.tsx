@@ -38,11 +38,33 @@ export function useOutOfBandQuestions(): boolean {
   return useContext(PendingInteractionContext) !== undefined
 }
 
-/** Whether the mounted thread is waiting on the operator's answer. */
-export function usePendingInteractionGate(): boolean {
+/** Whether the runtime is asking the mounted thread a question out of band. */
+export function useHasPendingQuestion(): boolean {
   const interactions = useContext(PendingInteractionContext)
   const threadId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id
   )
   return useHasPendingInteraction(interactions, threadId)
+}
+
+/**
+ * Whether the mounted thread is waiting on the operator's answer: a question
+ * the runtime raised out of band, or a tool approval on any turn, since one
+ * that stands alone may sit on a turn before the latest prompt.
+ */
+export function usePendingInteractionGate(): boolean {
+  const pendingQuestion = useHasPendingQuestion()
+  const awaitingApproval = useAuiState((state) =>
+    state.thread.messages.some(({ content }) =>
+      content.some(
+        (part) =>
+          part.type === "tool-call" &&
+          part.approval !== undefined &&
+          part.approval.approved === undefined &&
+          part.approval.optionId === undefined &&
+          part.approval.resolution === undefined
+      )
+    )
+  )
+  return pendingQuestion || awaitingApproval
 }

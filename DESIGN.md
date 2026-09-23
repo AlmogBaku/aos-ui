@@ -443,6 +443,12 @@ assistant's answer.
   free-text row is always offered when options exist and freeform is allowed;
   the send button is disabled until at least one option or a non-empty free-text
   answer is present.
+- **Inline permissions:** a permission request is answered on the card of the
+  tool call it guards (`src/components/tool-ui/permission.tsx`), or on a
+  standalone permission card in the current turn when the runtime cannot name
+  that call. The composer stays in place; new messages queue and Edit and Retry
+  wait until the request is answered. "Allow always" asks for confirmation
+  first. Once the guarded call settles, its own view replaces the card.
 - **System notices:** anything AOS or a provider says about a failure or an
   unavailable output renders in the System Notice panel with the AOS source
   label, never as message prose. The operator cannot then mistake it for the

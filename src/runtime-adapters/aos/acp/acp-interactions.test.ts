@@ -6,7 +6,6 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
-import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
 import { createAcpInteractions } from "./acp-interactions"
 import type { AcpPendingRequest } from "./types"
 
@@ -25,54 +24,31 @@ function harness() {
   return { interactions, emit }
 }
 
-function permission({
-  sessionId = "session-1",
-  requestId = "interrupt-1",
-  description,
-  message,
-  meta,
-}: {
-  sessionId?: string
-  requestId?: string
-  description?: string
-  message?: string
-  meta?: Record<string, unknown>
-} = {}) {
+/** Permissions are tool approvals, answered on the card of their tool call. */
+function permission() {
   const respond = vi.fn<(response: RequestPermissionResponse) => void>()
   const request: RequestPermissionRequest = {
-    sessionId,
+    sessionId: "session-1",
     title: "Run the deploy script",
-    ...(description === undefined ? {} : { description }),
-    options: [
-      { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
-      {
-        optionId: "allow-session",
-        name: "Allow for this Session",
-        kind: AOS_PERMISSION_KIND_SESSION,
-      },
-      { optionId: "reject", name: "Reject", kind: "reject_once" },
-    ],
-    _meta: meta ?? {
-      aos: { requestId, ...(message === undefined ? {} : { message }) },
-    },
+    options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
+    _meta: { aos: { requestId: "interrupt-1" } },
   }
-  // The proxy withdraws a request by aborting its signal.
-  const withdrawal = new AbortController()
   const pending: AcpPendingRequest = {
     kind: "permission",
-    sessionId,
+    sessionId: "session-1",
     request,
     respond,
-    signal: withdrawal.signal,
+    signal: new AbortController().signal,
   }
-  return { pending, respond, withdraw: () => withdrawal.abort() }
+  return { pending, respond }
 }
 
 function elicitation({
+  sessionId: scoped = "session-1",
   requestId = "interrupt-2",
   requestScoped = false,
-}: { requestId?: string; requestScoped?: boolean } = {}) {
-  const sessionId = requestScoped ? undefined : "session-1"
+}: { sessionId?: string; requestId?: string; requestScoped?: boolean } = {}) {
+  const sessionId = requestScoped ? undefined : scoped
   const respond = vi.fn<(response: CreateElicitationResponse) => void>()
   const request: CreateElicitationRequest = {
     mode: "form",
@@ -120,45 +96,17 @@ function elicitation({
 }
 
 describe("ACP runtime interactions", () => {
-  it("projects a permission request into one single-select question", () => {
+  it("leaves permission requests to the tool approvals", () => {
     const { interactions, emit } = harness()
-    emit(permission({ description: "The script writes to production" }).pending)
+    const listener = vi.fn()
+    interactions.subscribe("session-1", listener)
+    const { pending, respond } = permission()
 
-    expect(interactions.getPending("session-1")).toEqual({
-      kind: "question",
-      requestId: "interrupt-1",
-      sessionId: "session-1",
-      questions: [
-        {
-          header: "Run the deploy script",
-          prompt: "The script writes to production",
-          options: [
-            { label: "Allow once", value: "allow-once" },
-            { label: "Allow for this Session", value: "allow-session" },
-            { label: "Reject", value: "reject" },
-          ],
-          multiple: false,
-          custom: false,
-        },
-      ],
-    })
-  })
+    emit(pending)
 
-  it("falls back to the AOS message and to a generated id", () => {
-    const { interactions, emit } = harness()
-    emit(permission({ message: "Hermes needs approval" }).pending)
-    expect(interactions.getPending("session-1")?.questions[0]?.prompt).toBe(
-      "Hermes needs approval"
-    )
-
-    emit(permission({ sessionId: "session-2", meta: {} }).pending)
-    const request = interactions.getPending("session-2")
-    expect(request?.requestId).toMatch(/^acp-permission-/u)
-    // A request that only names itself says so once, as the prompt.
-    expect(request?.questions[0]).toMatchObject({
-      prompt: "Run the deploy script",
-    })
-    expect(request?.questions[0]?.header).toBeUndefined()
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(listener).not.toHaveBeenCalled()
+    expect(respond).not.toHaveBeenCalled()
   })
 
   it("carries the proxy's elicitation questions losslessly", () => {
@@ -212,29 +160,6 @@ describe("ACP runtime interactions", () => {
     expect(interactions.getPending("session-1")?.requestId).toBe("interrupt-2")
   })
 
-  it("answers a permission with the selected option and clears the Session", async () => {
-    const { interactions, emit } = harness()
-    const { pending, respond } = permission()
-    emit(pending)
-    const request = interactions.getPending("session-1")!
-
-    await interactions.respond(request, {
-      kind: "question",
-      answers: [["allow-session"]],
-    })
-
-    expect(respond).toHaveBeenCalledWith({
-      outcome: { outcome: "selected", optionId: "allow-session" },
-    })
-    expect(interactions.getPending("session-1")).toBeUndefined()
-
-    await interactions.respond(request, {
-      kind: "question",
-      answers: [["allow-once"]],
-    })
-    expect(respond).toHaveBeenCalledTimes(1)
-  })
-
   it("accepts an elicitation with one content key per question", async () => {
     const { interactions, emit } = harness()
     const { pending, respond } = elicitation()
@@ -251,39 +176,33 @@ describe("ACP runtime interactions", () => {
       content: { q0: "Yes", q1: ["eu", "IL"] },
     })
     expect(interactions.getPending("session-1")).toBeUndefined()
+
+    await interactions.respond(request, {
+      kind: "question",
+      answers: [["No"], []],
+    })
+    expect(respond).toHaveBeenCalledTimes(1)
   })
 
   it("cancels the native request it rejects", async () => {
     const { interactions, emit } = harness()
-    const permissionRequest = permission()
-    emit(permissionRequest.pending)
+    const { pending, respond } = elicitation()
+    emit(pending)
     await interactions.reject(interactions.getPending("session-1")!)
-    expect(permissionRequest.respond).toHaveBeenCalledWith({
-      outcome: { outcome: "cancelled" },
-    })
 
-    const elicitationRequest = elicitation()
-    emit(elicitationRequest.pending)
-    await interactions.reject(interactions.getPending("session-1")!)
-    expect(elicitationRequest.respond).toHaveBeenCalledWith({
-      action: "cancel",
-    })
+    expect(respond).toHaveBeenCalledWith({ action: "cancel" })
     expect(interactions.getPending("session-1")).toBeUndefined()
   })
 
   it("keeps pending requests scoped to their own Session", () => {
     const { interactions, emit } = harness()
-    emit(permission({ sessionId: "session-1", requestId: "one" }).pending)
-    emit(permission({ sessionId: "session-2", requestId: "two" }).pending)
+    emit(elicitation({ sessionId: "session-1", requestId: "one" }).pending)
+    emit(elicitation({ sessionId: "session-2", requestId: "two" }).pending)
 
     expect(interactions.getPending("session-1")?.requestId).toBe("one")
     expect(interactions.getPending("session-2")?.requestId).toBe("two")
 
-    const superseded = permission({
-      sessionId: "session-1",
-      requestId: "three",
-    })
-    emit(superseded.pending)
+    emit(elicitation({ sessionId: "session-1", requestId: "three" }).pending)
     expect(interactions.getPending("session-1")?.requestId).toBe("three")
     expect(interactions.getPending("session-2")?.requestId).toBe("two")
   })
@@ -295,7 +214,7 @@ describe("ACP runtime interactions", () => {
     const unsubscribe = interactions.subscribe("session-1", selected)
     interactions.subscribe("session-2", other)
 
-    emit(permission().pending)
+    emit(elicitation().pending)
     expect(selected).toHaveBeenCalledTimes(1)
     expect(other).not.toHaveBeenCalled()
     expect(interactions.getPending("session-1")).toBe(
@@ -306,13 +225,13 @@ describe("ACP runtime interactions", () => {
     expect(selected).toHaveBeenCalledTimes(2)
 
     unsubscribe()
-    emit(permission().pending)
+    emit(elicitation().pending)
     expect(selected).toHaveBeenCalledTimes(2)
   })
 
   it("dismisses an unanswerable request without answering the runtime", () => {
     const { interactions, emit } = harness()
-    const { pending, respond } = permission()
+    const { pending, respond } = elicitation()
     emit(pending)
     const listener = vi.fn()
     interactions.subscribe("session-1", listener)
@@ -324,43 +243,37 @@ describe("ACP runtime interactions", () => {
     expect(interactions.getPending("session-1")).toBeUndefined()
   })
 
-  it.each([
-    ["permission", permission],
-    ["elicitation", elicitation],
-  ])(
-    "clears a %s another UI answered without answering the runtime",
-    (_kind, request) => {
-      const { interactions, emit } = harness()
-      const { pending, respond, withdraw } = request()
-      emit(pending)
-      const listener = vi.fn()
-      interactions.subscribe("session-1", listener)
+  it("clears a question another UI answered without answering the runtime", () => {
+    const { interactions, emit } = harness()
+    const { pending, respond, withdraw } = elicitation()
+    emit(pending)
+    const listener = vi.fn()
+    interactions.subscribe("session-1", listener)
 
-      withdraw()
+    withdraw()
 
-      expect(interactions.getPending("session-1")).toBeUndefined()
-      expect(listener).toHaveBeenCalledTimes(1)
-      expect(respond).not.toHaveBeenCalled()
-    }
-  )
+    expect(interactions.getPending("session-1")).toBeUndefined()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(respond).not.toHaveBeenCalled()
+  })
 
   it("keeps another Session's question that shares the withdrawn request id", () => {
     const { interactions, emit } = harness()
-    const withdrawn = permission({ sessionId: "session-1" })
+    const withdrawn = elicitation({ sessionId: "session-1" })
     emit(withdrawn.pending)
-    emit(permission({ sessionId: "session-2" }).pending)
+    emit(elicitation({ sessionId: "session-2" }).pending)
 
     withdrawn.withdraw()
 
     expect(interactions.getPending("session-1")).toBeUndefined()
-    expect(interactions.getPending("session-2")?.requestId).toBe("interrupt-1")
+    expect(interactions.getPending("session-2")?.requestId).toBe("interrupt-2")
   })
 
   it("keeps the newer question when a superseded one is withdrawn", () => {
     const { interactions, emit } = harness()
-    const superseded = permission({ requestId: "interrupt-1" })
+    const superseded = elicitation({ requestId: "interrupt-1" })
     emit(superseded.pending)
-    emit(permission({ requestId: "interrupt-2" }).pending)
+    emit(elicitation({ requestId: "interrupt-2" }).pending)
 
     superseded.withdraw()
 
