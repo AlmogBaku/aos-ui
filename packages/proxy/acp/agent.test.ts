@@ -510,6 +510,8 @@ type HarnessOptions = {
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
   providerIds?: boolean
+  /** Whether the client pages older history, as the AOS browser does. */
+  pagesHistory?: boolean
 }
 
 async function harness(options: HarnessOptions = {}) {
@@ -785,7 +787,11 @@ async function harness(options: HarnessOptions = {}) {
       {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-browser", version: "1" },
-        capabilities: {},
+        capabilities: {
+          _meta: {
+            [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+          },
+        },
       }
     )
     return {
@@ -3599,6 +3605,27 @@ describe("History pages", () => {
       nextCursor: cursorOf(500),
     })
     expect(attached._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
+    test.close()
+  })
+
+  it("replays the whole Session from the start to a client that does not page history", async () => {
+    const test = await harness({
+      transcript: conversation(1_200),
+      pagesHistory: false,
+    })
+    await test.list()
+    const from = test.recorder.entries.length
+
+    const replayed = await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({})
+    expect(
+      pageUpdates(test.recorder, from).map((update) => update.messageId)
+    ).toEqual(conversation(1_200).map(({ id }) => id))
     test.close()
   })
 

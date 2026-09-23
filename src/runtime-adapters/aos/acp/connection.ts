@@ -315,7 +315,9 @@ export function createAcpConnection(
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: { name: clientInfo.name, version: clientInfo.version },
-      capabilities: {},
+      // This client pages older history itself, so a from-start resume may
+      // replay only the newest page.
+      capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
     settleInitialized?.(meta)

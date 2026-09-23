@@ -122,6 +122,18 @@ export const AosExtensionsSchema = readObject({
 })
 export type AosExtensions = z.infer<typeof AosExtensionsSchema>
 
+/**
+ * `ClientCapabilities._meta.aos` on `initialize`: the AOS extensions this
+ * client understands. Without `historyPages`, a from-start resume replays the
+ * whole Session, as ACP's `replayFrom: { type: "start" }` requires.
+ */
+export const AosClientCapabilitiesMetaSchema = readObject({
+  historyPages: z.boolean().default(false),
+})
+export type AosClientCapabilitiesMeta = z.infer<
+  typeof AosClientCapabilitiesMetaSchema
+>
+
 /** `InitializeResponse._meta.aos` */
 export const AosInitializeMetaSchema = readObject({
   version: z.literal(AOS_EXTENSION_VERSION),

@@ -108,14 +108,20 @@ a known value** in the browser.
 
 ### Older history pages
 
-A server that sets `extensions.historyPages` (default `false`) replays only the
-newest page on a `start` resume and serves older ones through
+A client that pages history advertises it in `initialize`'s
+`clientCapabilities._meta.aos.historyPages: true` (`AosClientCapabilitiesMetaSchema`,
+default `false`). To that client, a server that sets `extensions.historyPages`
+(default `false`) replays only the newest page on a `start` resume and serves
+older ones through
 `session/resume` with the reserved variant (`AOS_REPLAY_BEFORE`,
 `AosReplayBeforeSchema`):
 
 ```json
 { "type": "_aos/before", "cursor": "…", "_meta?": {} }
 ```
+
+Any other client gets what ACP's `start` promises: every retained message,
+read page by page on the server, with no `nextCursor` in the reply.
 
 - `cursor` is the opaque `history.nextCursor` of an earlier resume, 1 to 256
   characters. The server picks the page size; offsets count back from the

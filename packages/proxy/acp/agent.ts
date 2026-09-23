@@ -22,6 +22,7 @@ import {
   AosFocusNotificationSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
+  AosClientCapabilitiesMetaSchema,
   AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
@@ -302,6 +303,31 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return context.guest ? SessionHistoryResponseSchema.parse(read) : read
   }
 
+  /** Whether this client reads older pages itself (`initialize`). */
+  let clientPagesHistory = false
+
+  /**
+   * The history a from-start resume replays. ACP replays all retained
+   * history; a client that pages older history itself gets the newest page
+   * and the cursor before it. Either way the reach bounds the reading.
+   */
+  async function readReplay(scope: SessionScope) {
+    const newest = await readHistory(scope)
+    if (clientPagesHistory) return newest
+    const older: SessionHistoryResponse["messages"][] = []
+    let page = newest
+    while (historyCursor(page).nextCursor !== undefined) {
+      page = await readHistory(scope, page.nextOffset)
+      older.unshift(page.messages)
+    }
+    return {
+      ...newest,
+      messages: [...older.flat(), ...newest.messages],
+      nextOffset: page.nextOffset,
+      truncated: page.truncated,
+    }
+  }
+
   /** A page as this lane shows it: projected for a guest, then translated. */
   function historyOutbounds(history: SessionHistoryResponse) {
     const shown = context.guest
@@ -368,7 +394,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (restarted) await member.restartStream()
     let history: SessionHistoryResponse
     try {
-      history = await readHistory(scope)
+      history = await readReplay(scope)
     } catch (cause) {
       // A turn admitted during the read was held back, so it streams the same
       // way a restarted one does once its reload failed.
@@ -557,7 +583,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return scope
   }
 
-  app.onRequest(methods.agent.initialize, async () => {
+  app.onRequest(methods.agent.initialize, async ({ params }) => {
+    const client = AosClientCapabilitiesMetaSchema.safeParse(
+      params.capabilities?._meta?.[AOS_META_KEY] ?? {}
+    )
+    clientPagesHistory = client.success && client.data.historyPages
     // An unauthenticated guest learns nothing about the deployment it reached.
     const info = context.guest ? undefined : await workspace.info()
     return {
