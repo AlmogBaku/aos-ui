@@ -492,6 +492,9 @@ function waitForChunk(delayMs: number, signal: AbortSignal) {
   })
 }
 
+/** Stream ticks between two frames of a streamed tool snapshot. */
+const FRAME_TICKS = 20
+
 export function createFixtureChatModel(
   workspace: FixtureWorkspace,
   {
@@ -613,6 +616,11 @@ export function createFixtureChatModel(
             await waitForChunk(streamDelayMs, options.abortSignal)
           }
         } else {
+          for (const frame of scenario.frames ?? []) {
+            if (options.abortSignal.aborted) return
+            yield { content: frame }
+            await waitForChunk(streamDelayMs * FRAME_TICKS, options.abortSignal)
+          }
           if (options.abortSignal.aborted) return
           const requiresAction = scenarioParts.some(
             (part) =>

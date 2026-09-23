@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { buildFixtureScenario, fixtureScenarioNames } from "./fixture-scenarios"
+import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
 describe("deterministic fixture scenarios", () => {
   it("routes representative prompts to every supported scenario", () => {
@@ -24,6 +25,11 @@ describe("deterministic fixture scenarios", () => {
       ["show oversized mermaid", "mermaid-oversized"],
       ["return a malformed tool", "malformed-tool"],
       ["simulate provider outage", "provider-outage"],
+      ["show the tool kinds", "tool-kinds"],
+      ["show a diff", "diff"],
+      ["stream a terminal live", "terminal-live"],
+      ["show a failed terminal", "terminal-failed"],
+      ["show a nested subagent", "subagent-nested"],
       ["stop at the length limit", "stop-length"],
       ["show a refusal", "stop-refusal"],
       ["show a provider error", "provider-error-detail"],
@@ -50,6 +56,29 @@ describe("deterministic fixture scenarios", () => {
           )
       )
     ).toBe(true)
+  })
+
+  it("streams the live terminal in frames that end with its exit", () => {
+    const scenario = buildFixtureScenario("Stream a terminal live")
+    const terminalOf = (part: unknown) =>
+      readAosToolArtifact((part as { artifact?: unknown }).artifact)
+        ?.terminals?.[0]
+
+    expect(scenario.frames?.length).toBeGreaterThan(1)
+    expect(terminalOf(scenario.frames?.[0]?.[0])?.running).toBe(true)
+    expect(terminalOf(scenario.parts[0])).toMatchObject({
+      running: false,
+      exitCode: 0,
+    })
+  })
+
+  it("reports a failed terminal's exit code", () => {
+    const scenario = buildFixtureScenario("Show a failed terminal")
+    const artifact = readAosToolArtifact(
+      (scenario.parts[0] as { artifact?: unknown }).artifact
+    )
+
+    expect(artifact?.terminals?.[0]?.exitCode).toBe(1)
   })
 
   it("keeps Question and Permission payloads distinct", () => {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 
+import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+
 import {
   createToolPartSelector,
   createToolTimelineModel,
+  hasRunningTerminal,
   shouldRenderToolDetails,
   toolIconKind,
   toolRunState,
@@ -189,5 +192,47 @@ describe("createToolTimelineModel", () => {
       "Inspected",
       "Used",
     ])
+  })
+
+  it("names a row by the provider's ACP kind and its first file location", () => {
+    const model = createToolTimelineModel([
+      {
+        toolCallId: "one",
+        toolName: "provider_tool",
+        args: {},
+        artifact: withAosToolArtifact(undefined, {
+          kind: "delete",
+          locations: [{ path: "notes/draft.md" }],
+        }),
+        status: { type: "complete" },
+      },
+    ])
+
+    expect(model.steps[0]).toMatchObject({
+      verb: "Deleted",
+      chip: "notes/draft.md",
+    })
+  })
+
+  it("reads a run as failed when a call's result is an error", () => {
+    expect(
+      toolRunState([{ status: { type: "complete" }, isError: true }], false)
+    ).toBe("failed")
+  })
+
+  it("opens a run only while one of its terminals is still running", () => {
+    const terminalPart = (
+      running: boolean,
+      status: "running" | "complete"
+    ) => ({
+      artifact: withAosToolArtifact(undefined, {
+        terminals: [{ terminalId: "t", output: "", running }],
+      }),
+      status: { type: status },
+    })
+
+    expect(hasRunningTerminal([terminalPart(true, "running")])).toBe(true)
+    expect(hasRunningTerminal([terminalPart(false, "running")])).toBe(false)
+    expect(hasRunningTerminal([terminalPart(true, "complete")])).toBe(false)
   })
 })

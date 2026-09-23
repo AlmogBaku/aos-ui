@@ -23,8 +23,13 @@ export type ToolUiActionKind =
   | "skill"
   | "read"
   | "edit"
+  | "delete"
+  | "move"
   | "command"
   | "search"
+  | "fetch"
+  | "think"
+  | "switchMode"
   | "inspect"
   | "subagent"
   | "generic"
@@ -99,7 +104,13 @@ export type ToolUiLocaleLabels = {
     duration: {
       seconds: (seconds: number) => string
       minutes: (minutes: number, seconds: number) => string
+      /** A tool call that took less than a second. */
+      underSecond: string
     }
+    /** Accessible name of a tool call's full list of locations. */
+    toolLocations: string
+    /** The locations a tool row does not name, e.g. "+2 more". */
+    moreLocations: (count: number) => string
     toolRun: Record<ToolRunKind, (count: number) => string>
     reasoning: string
     reasoningDuration: (seconds: number) => string
@@ -159,6 +170,15 @@ export type ToolUiLocaleLabels = {
     loading: string
     unavailable: string
   }
+  subagent: {
+    model: (model: string) => string
+    depth: (depth: number) => string
+    tokens: (tokens: string) => string
+    duration: (duration: string) => string
+    filesRead: (count: number) => string
+    filesWritten: (count: number) => string
+    openSession: string
+  }
   generic: {
     malformed: (displayName: string) => string
     malformedExplanation: string
@@ -215,8 +235,13 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       skill: { active: "Loading", complete: "Loaded" },
       read: { active: "Reading", complete: "Read" },
       edit: { active: "Editing", complete: "Edited" },
+      delete: { active: "Deleting", complete: "Deleted" },
+      move: { active: "Moving", complete: "Moved" },
       command: { active: "Running", complete: "Ran" },
       search: { active: "Searching", complete: "Searched" },
+      fetch: { active: "Fetching", complete: "Fetched" },
+      think: { active: "Thinking", complete: "Thought" },
+      switchMode: { active: "Switching mode", complete: "Switched mode" },
       inspect: { active: "Inspecting", complete: "Inspected" },
       subagent: { active: "Delegating", complete: "Delegated" },
       generic: { active: "Using", complete: "Used" },
@@ -238,7 +263,10 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
       seconds: (seconds) => `${seconds} s`,
       minutes: (minutes, seconds) =>
         seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`,
+      underSecond: "<1 s",
     },
+    toolLocations: "Locations",
+    moreLocations: (count) => `+${count} more`,
     toolRun: {
       readFiles: (count) =>
         count === 1 ? "read 1 file" : `read ${count} files`,
@@ -330,6 +358,16 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
     title: "Transcript",
     loading: "Transcript is loading…",
     unavailable: "Transcript unavailable.",
+  },
+  subagent: {
+    model: (model) => `Model ${model}`,
+    depth: (depth) => `Depth ${depth}`,
+    tokens: (tokens) => `${tokens} tokens`,
+    duration: (duration) => `Took ${duration}`,
+    filesRead: (count) => (count === 1 ? "Read 1 file" : `Read ${count} files`),
+    filesWritten: (count) =>
+      count === 1 ? "Wrote 1 file" : `Wrote ${count} files`,
+    openSession: "Open session",
   },
   generic: {
     malformed: (displayName) => `Could not safely render ${displayName}`,
@@ -433,8 +471,13 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       skill: { active: "בטעינה", complete: "נטענה" },
       read: { active: "בקריאה", complete: "נקרא" },
       edit: { active: "בעריכה", complete: "נערך" },
+      delete: { active: "במחיקה", complete: "נמחק" },
+      move: { active: "בהעברה", complete: "הועבר" },
       command: { active: "בהרצה", complete: "הורץ" },
       search: { active: "בחיפוש", complete: "בוצע חיפוש" },
+      fetch: { active: "באחזור", complete: "אוחזר" },
+      think: { active: "בחשיבה", complete: "נשקל" },
+      switchMode: { active: "בהחלפת מצב", complete: "המצב הוחלף" },
       inspect: { active: "בבדיקה", complete: "נבדק" },
       subagent: { active: "בהאצלה", complete: "הואצל" },
       generic: { active: "בשימוש", complete: "בוצע" },
@@ -454,7 +497,10 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       seconds: (seconds) => `${seconds} שנ׳`,
       minutes: (minutes, seconds) =>
         seconds === 0 ? `${minutes} דק׳` : `${minutes} דק׳ ${seconds} שנ׳`,
+      underSecond: "פחות משנייה",
     },
+    toolLocations: "מיקומים",
+    moreLocations: (count) => `ועוד ${count}`,
     toolRun: {
       readFiles: (count) =>
         count === 1 ? "קרא קובץ אחד" : `קרא ${count} קבצים`,
@@ -541,6 +587,16 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
     title: "תמליל",
     loading: "התמליל נטען…",
     unavailable: "התמליל אינו זמין.",
+  },
+  subagent: {
+    model: (model) => `מודל ${model}`,
+    depth: (depth) => `עומק ${depth}`,
+    tokens: (tokens) => `${tokens} אסימונים`,
+    duration: (duration) => `נמשך ${duration}`,
+    filesRead: (count) => (count === 1 ? "קרא קובץ אחד" : `קרא ${count} קבצים`),
+    filesWritten: (count) =>
+      count === 1 ? "כתב קובץ אחד" : `כתב ${count} קבצים`,
+    openSession: "פתיחת שיחה",
   },
   generic: {
     malformed: (displayName) => `לא ניתן להציג בבטחה: ${displayName}`,

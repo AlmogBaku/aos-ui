@@ -57,3 +57,19 @@ export type {
   AosToolKind,
   AosToolLocation,
 } from "./tool-artifact"
+export {
+  formatToolDuration,
+  formatToolLocation,
+  toolActionKind,
+  toolIconForKind,
+  toolSubject,
+} from "./tool-call-presentation"
+export type { ToolPresentationPart } from "./tool-call-presentation"
+export {
+  ToolDiffStat,
+  ToolLocationList,
+  ToolRowMeta,
+  useToolElapsedMs,
+} from "./tool-row-meta"
+export { ToolUiSessionLinkProvider, useToolUiSessionHref } from "./session-link"
+export type { ToolUiSessionHref } from "./session-link"

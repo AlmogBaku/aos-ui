@@ -3,12 +3,25 @@
 import { AosToolError, AosToolFallback } from "./aos-tool-fallback"
 import { normalizeRichToolState } from "./lifecycle"
 import { RichToolRenderer, richToolRegistry } from "./registry"
+import { readAosToolArtifact } from "./tool-artifact"
 import type { RichToolFallbackComponent, RichToolPart } from "./types"
 
 export function isAosRichTool(part: RichToolPart) {
   if (part.approval !== undefined) return true
+  if (readAosToolArtifact(part.artifact)?.subagent) return true
   const registration = richToolRegistry[part.toolName]
   return registration?.validate(part).valid === true
+}
+
+/**
+ * A failed call keeps its own view when that view explains the failure: a
+ * terminal's exit, a diff, or a subagent's status.
+ */
+function explainsItsFailure(part: RichToolPart) {
+  const artifact = readAosToolArtifact(part.artifact)
+  return Boolean(
+    artifact?.subagent || artifact?.terminals?.length || artifact?.diffs?.length
+  )
 }
 
 /**
@@ -17,7 +30,10 @@ export function isAosRichTool(part: RichToolPart) {
  * Provider-supplied `toolUI` remains preferred by the message surface.
  */
 export const AosToolPresentation: RichToolFallbackComponent = (part) => {
-  if (normalizeRichToolState(part).phase === "failed") {
+  if (
+    normalizeRichToolState(part).phase === "failed" &&
+    !explainsItsFailure(part)
+  ) {
     return <AosToolError {...part} />
   }
   if (isAosRichTool(part)) {

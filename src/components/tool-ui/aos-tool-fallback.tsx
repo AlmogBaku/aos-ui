@@ -7,17 +7,28 @@ import {
   type RunState,
 } from "@/components/assistant-ui/elements/code-runner"
 import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block"
-import { ToolCall } from "@/components/assistant-ui/elements/tool-call"
+import {
+  ToolCall,
+  ToolCallPayload,
+} from "@/components/assistant-ui/elements/tool-call"
 import { ToolError } from "@/components/assistant-ui/elements/tool-error"
 
+import { LazyToolDiff, LazyToolTerminal } from "./lazy-tool-views"
 import { normalizeRichToolState } from "./lifecycle"
 import { useToolUiLocale } from "./locale"
 import { safeToolDisplayValue, safeToolPresentation } from "./safe-presentation"
+import { diffStats, readAosToolArtifact } from "./tool-artifact"
 import {
-  toolIconForName,
-  toolIconKind,
-  toolPrimaryArgument,
+  formatToolLocation,
+  toolActionKind,
+  toolIconForKind,
+  toolSubject,
 } from "./tool-call-presentation"
+import {
+  ToolLocationList,
+  ToolRowMeta,
+  useToolElapsedMs,
+} from "./tool-row-meta"
 import type { RichToolFallbackComponent, RichToolPart } from "./types"
 
 function parsedResult(value: unknown): unknown {
@@ -94,7 +105,7 @@ export const AosToolError: RichToolFallbackComponent = (part) => {
   return (
     <ToolError
       name={part.toolName}
-      target={toolPrimaryArgument(part.toolName, part.args)}
+      target={toolSubject(part)}
       message={
         part.result === undefined
           ? locale === "he"
@@ -117,13 +128,28 @@ export const AosToolError: RichToolFallbackComponent = (part) => {
  * unknown, errored, interrupted, and provider-specific calls.
  */
 export const AosToolFallback: RichToolFallbackComponent = (part) => {
-  const [open, setOpen] = useState(false)
   const state = normalizeRichToolState(part)
   const { labels, locale } = useToolUiLocale()
+  const running = state.phase === "running" || state.phase === "submitting"
+  const artifact = readAosToolArtifact(part.artifact)
+  const locations = artifact?.locations ?? []
+  const diffs = artifact?.diffs ?? []
+  const terminals = artifact?.terminals ?? []
+  // A running terminal opens its call while the turn is live; once the reader
+  // opens or closes it themselves, their choice stands.
+  const [chosenOpen, setChosenOpen] = useState<boolean>()
+  const open =
+    chosenOpen ?? (running && terminals.some((terminal) => terminal.running))
+  const elapsedMs = useToolElapsedMs(part.timing, running)
+  const hasArtifactViews = diffs.length > 0 || terminals.length > 0
+
+  if (state.phase === "failed" && !hasArtifactViews)
+    return <AosToolError {...part} />
+
   const displayState =
     state.phase === "complete" || state.phase === "answered"
       ? "complete"
-      : state.phase === "running" || state.phase === "submitting"
+      : running
         ? "running"
         : state.phase === "pending"
           ? "attention"
@@ -132,14 +158,17 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
             : "failed"
   const request = safeToolPresentation(part.args).text
   const result = safeToolPresentation(part.result).text
-  const kind = toolIconKind(part.toolName)
+  const kind = toolActionKind(part)
   const action = labels.assistant.toolActions[kind]
   const query =
-    kind === "generic"
+    kind === "generic" && locations.length === 0
       ? part.toolName
-      : toolPrimaryArgument(part.toolName, part.args)
-
-  if (state.phase === "failed") return <AosToolError {...part} />
+      : toolSubject(part, kind)
+  const firstLocation = locations[0]
+  const namesFirstLocation =
+    firstLocation !== undefined && query === formatToolLocation(firstLocation)
+  const requestLabel = locale === "he" ? "בקשה" : "Request"
+  const resultLabel = locale === "he" ? "תוצאה" : "Result"
 
   // Any call that carries source code reads best as code, whatever the runtime
   // named it. The language is shown only when the call declares one.
@@ -153,42 +182,81 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
     state.phase !== "expired"
   const lines = useTerminalBlock ? terminalLines(part.result) : []
 
+  const body =
+    terminals.length > 0 ? (
+      <div className="mt-2 flex min-w-0 flex-col gap-2">
+        {terminals.map((terminal) => (
+          <LazyToolTerminal
+            key={terminal.terminalId}
+            terminal={terminal}
+            labels={labels.terminal}
+          />
+        ))}
+      </div>
+    ) : diffs.length > 0 ? (
+      <div className="mt-2 min-w-0">
+        <LazyToolDiff diffs={diffs} labels={labels.diff} />
+      </div>
+    ) : useCodeRunner ? (
+      <CodeRunner
+        {...(language ? { language } : {})}
+        code={code}
+        state={codeRunnerState(state.phase)}
+        output={terminalLines(part.result)}
+        durationMs={codeRunnerDuration(part.result)}
+        runLabel={locale === "he" ? "הרצת קטע הקוד" : "Run this snippet"}
+        outputLabel={locale === "he" ? "פלט" : "output"}
+        className="mt-2 max-w-none"
+      />
+    ) : useTerminalBlock ? (
+      <TerminalBlock
+        command={query}
+        lines={lines}
+        visibleCount={lines.length}
+        done={state.phase === "complete" || state.phase === "answered"}
+        className="mt-2 max-w-none"
+      />
+    ) : (
+      <ToolCallPayload
+        requestLabel={requestLabel}
+        resultLabel={resultLabel}
+        request={request}
+        result={result}
+      />
+    )
+
   return (
     <ToolCall
       label={action.complete}
       activeLabel={action.active}
-      requestLabel={locale === "he" ? "בקשה" : "Request"}
-      resultLabel={locale === "he" ? "תוצאה" : "Result"}
+      requestLabel={requestLabel}
+      resultLabel={resultLabel}
       query={query}
+      queryDir={namesFirstLocation ? "ltr" : "auto"}
+      meta={
+        <ToolRowMeta
+          moreLocations={namesFirstLocation ? locations.length - 1 : 0}
+          {...(diffs.length > 0 ? { stats: diffStats(diffs) } : {})}
+          {...(elapsedMs === undefined ? {} : { elapsedMs })}
+        />
+      }
       request={request}
       result={result}
       details={
-        useCodeRunner ? (
-          <CodeRunner
-            {...(language ? { language } : {})}
-            code={code}
-            state={codeRunnerState(state.phase)}
-            output={terminalLines(part.result)}
-            durationMs={codeRunnerDuration(part.result)}
-            runLabel={locale === "he" ? "הרצת קטע הקוד" : "Run this snippet"}
-            outputLabel={locale === "he" ? "פלט" : "output"}
-            className="mt-2 max-w-none"
-          />
-        ) : useTerminalBlock ? (
-          <TerminalBlock
-            command={query}
-            lines={lines}
-            visibleCount={lines.length}
-            done={state.phase === "complete" || state.phase === "answered"}
-            className="mt-2 max-w-none"
-          />
-        ) : undefined
+        <>
+          {/* A diff names every file it touched; the list would repeat it. */}
+          {diffs.length === 0 &&
+          (locations.length > 1 || (firstLocation && !namesFirstLocation)) ? (
+            <ToolLocationList locations={locations} />
+          ) : null}
+          {body}
+        </>
       }
-      running={state.phase === "running" || state.phase === "submitting"}
+      running={running}
       state={displayState}
       open={open}
-      onOpenChange={setOpen}
-      icon={toolIconForName(part.toolName)}
+      onOpenChange={setChosenOpen}
+      icon={toolIconForKind(kind)}
     />
   )
 }

@@ -28,6 +28,10 @@ export interface ToolCallProps {
   requestLabel?: string
   resultLabel?: string
   query: string
+  /** A path or other machine text reads left to right in either locale. */
+  queryDir?: "ltr" | "auto"
+  /** Quiet facts after the subject: diff stats, extra locations, duration. */
+  meta?: ReactNode
   request: string
   result: string
   details?: ReactNode
@@ -46,6 +50,8 @@ export function ToolCall({
   requestLabel = "Request",
   resultLabel = "Result",
   query,
+  queryDir = "auto",
+  meta,
   request,
   result,
   details,
@@ -69,14 +75,17 @@ export function ToolCall({
         </ShimmerLabel>
         <>{label}</>
       </SwapLabel>
-      <span
+      <bdi
+        dir={queryDir}
+        title={query}
         className={cn(
           mono,
           "max-w-[min(18rem,55vw)] min-w-0 truncate rounded-md bg-foreground/[0.06] px-1 py-px text-xs leading-4 text-foreground/70"
         )}
       >
         {query}
-      </span>
+      </bdi>
+      {meta}
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         {state === "complete" ? (
           <CheckIcon className="size-3.5 animate-in text-emerald-500 duration-200 zoom-in-90 fade-in" />
@@ -94,26 +103,12 @@ export function ToolCall({
     </>
   )
   const defaultDetails = (
-    <div
-      className={cn(
-        field,
-        "mt-2 max-w-full min-w-0 overflow-hidden rounded-2xl text-xs"
-      )}
-    >
-      <div className="px-3.5 pt-2.5 pb-2">
-        <p className={cn(mono, "mb-1 text-foreground/35")}>{requestLabel}</p>
-        <p className="max-w-full overflow-x-auto font-mono [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/55">
-          {request}
-        </p>
-      </div>
-      <div className="mx-3.5 h-px bg-foreground/[0.06]" />
-      <div className="px-3.5 pt-2 pb-2.5">
-        <p className={cn(mono, "mb-1 text-foreground/35")}>{resultLabel}</p>
-        <p className="max-w-full overflow-x-auto [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/90">
-          {result}
-        </p>
-      </div>
-    </div>
+    <ToolCallPayload
+      requestLabel={requestLabel}
+      resultLabel={resultLabel}
+      request={request}
+      result={result}
+    />
   )
 
   if (!collapsible)
@@ -144,5 +139,41 @@ export function ToolCall({
         {details ?? defaultDetails}
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+/** The call's request and result as inspectable text. */
+export function ToolCallPayload({
+  requestLabel,
+  resultLabel,
+  request,
+  result,
+}: {
+  requestLabel: string
+  resultLabel: string
+  request: string
+  result: string
+}) {
+  return (
+    <div
+      className={cn(
+        field,
+        "mt-2 max-w-full min-w-0 overflow-hidden rounded-2xl text-xs"
+      )}
+    >
+      <div className="px-3.5 pt-2.5 pb-2">
+        <p className={cn(mono, "mb-1 text-foreground/35")}>{requestLabel}</p>
+        <p className="max-w-full overflow-x-auto font-mono [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/55">
+          {request}
+        </p>
+      </div>
+      <div className="mx-3.5 h-px bg-foreground/[0.06]" />
+      <div className="px-3.5 pt-2 pb-2.5">
+        <p className={cn(mono, "mb-1 text-foreground/35")}>{resultLabel}</p>
+        <p className="max-w-full overflow-x-auto [overflow-wrap:anywhere] break-words whitespace-pre-wrap text-foreground/90">
+          {result}
+        </p>
+      </div>
+    </div>
   )
 }

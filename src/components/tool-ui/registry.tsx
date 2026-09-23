@@ -11,6 +11,7 @@ import {
 import {
   ActivityTool,
   activityPayloadSchema,
+  subagentActivityPayload,
   type ActivityPayload,
 } from "./activity"
 import { chartPayloadSchema, type ChartPayload } from "./payloads/chart"
@@ -27,6 +28,7 @@ import {
   type QuestionPayload,
 } from "./payloads/question-flow"
 import { useToolUiLocale, type ToolUiToolName } from "./locale"
+import { readAosToolArtifact } from "./tool-artifact"
 import type { RichToolPart, RichToolRendererComponent } from "./types"
 
 const QuestionFlowTool = lazy(() =>
@@ -252,6 +254,20 @@ export const RichToolRenderer: RichToolRendererComponent = (part) => {
         }
 
     return permission.render(part, payload)
+  }
+
+  // A provider that reports a subagent says so in the ACP artifact, whatever
+  // the tool is called; its goal, status, and counts lead the activity view.
+  const subagent = readAosToolArtifact(part.artifact)?.subagent
+  if (subagent) {
+    return (
+      <ActivityTool
+        part={part}
+        payload={subagentActivityPayload(part, subagent)}
+        kind="subagent"
+        subagent={subagent}
+      />
+    )
   }
 
   if (!registration) return <GenericJsonTool part={part} />

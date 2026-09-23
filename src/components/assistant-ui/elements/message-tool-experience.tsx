@@ -18,18 +18,19 @@ import { ToolCall } from "./tool-call"
 import { describeToolRun, isOrdinaryToolPart, partsAt } from "./turn-fold"
 import { useInsideTurnFold } from "./turn-working-fold"
 import { useToolUiLocale } from "@/components/tool-ui"
+import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 import {
   DEFAULT_TOOL_ACTIONS,
-  toolIconForName,
-  toolIconKind,
-  toolPrimaryArgument,
+  toolActionKind,
+  toolIconForKind,
+  toolSubject,
 } from "@/components/tool-ui/tool-call-presentation"
 
 export { toolIconKind } from "@/components/tool-ui/tool-call-presentation"
 
 type ToolPart = Pick<
   ToolCallMessagePart,
-  "toolCallId" | "toolName" | "args"
+  "toolCallId" | "toolName" | "args" | "artifact"
 > & {
   status: Pick<ToolCallMessagePartStatus, "type">
 }
@@ -66,7 +67,8 @@ export function createToolTimelineModel(
 ) {
   const actions = labels.actions ?? DEFAULT_TOOL_ACTIONS
   const steps: TimelineStep[] = parts.map((part) => {
-    const action = actions[toolIconKind(part.toolName)]
+    const kind = toolActionKind(part)
+    const action = actions[kind]
     return {
       verb:
         part.status.type === "running"
@@ -76,8 +78,8 @@ export function createToolTimelineModel(
             : part.status.type === "incomplete"
               ? labels.failed
               : action.complete,
-      chip: toolPrimaryArgument(part.toolName, part.args),
-      icon: toolIconForName(part.toolName),
+      chip: toolSubject(part, kind),
+      icon: toolIconForKind(kind),
     }
   })
   return {
@@ -115,15 +117,36 @@ export function createToolPartSelector() {
 
 /** One semantic state for a run of tool calls, collapsed or expanded. */
 export function toolRunState(
-  parts: readonly { status: Pick<ToolCallMessagePartStatus, "type"> }[],
+  parts: readonly {
+    status: Pick<ToolCallMessagePartStatus, "type">
+    isError?: boolean | undefined
+  }[],
   streaming: boolean
 ): ToolTimelineState {
   if (parts.some((part) => part.status.type === "requires-action"))
     return "attention"
-  if (parts.some((part) => part.status.type === "incomplete")) return "failed"
+  // A call whose result is an error failed, even when the part completed.
+  if (parts.some((part) => part.status.type === "incomplete" || part.isError))
+    return "failed"
   if (streaming || parts.some((part) => part.status.type === "running"))
     return "running"
   return "complete"
+}
+
+/**
+ * A running terminal opens its run while the turn is live, so its output is
+ * seen as it streams; the user's own open or close always wins.
+ */
+export function hasRunningTerminal(
+  parts: readonly Pick<ToolPart, "artifact" | "status">[]
+) {
+  return parts.some(
+    (part) =>
+      part.status.type === "running" &&
+      readAosToolArtifact(part.artifact)?.terminals?.some(
+        (terminal) => terminal.running
+      ) === true
+  )
 }
 
 /**
@@ -161,8 +184,9 @@ export function ToolRunGroup({
     [labels.assistant.toolActions, labels.states, parts]
   )
   const timelineState = toolRunState(parts, streaming)
-  const [open, setOpen] = useState(false)
-  const onOpenChange = useCallback((next: boolean) => setOpen(next), [])
+  const [chosenOpen, setChosenOpen] = useState<boolean>()
+  const open = chosenOpen ?? (streaming && hasRunningTerminal(parts))
+  const onOpenChange = useCallback((next: boolean) => setChosenOpen(next), [])
   if (!parts.length) return null
   return (
     <div data-slot="message-tool-experience" className="mt-0.5 mb-1.5">
@@ -199,15 +223,15 @@ export function ToolRunGroup({
               // Artifact data parts are the single canonical artifact card.
               // Keep the command in the timeline but do not mirror its payload.
               if (!shouldRenderToolDetails(part.toolName)) {
-                const action =
-                  labels.assistant.toolActions[toolIconKind(part.toolName)]
+                const kind = toolActionKind(part)
+                const action = labels.assistant.toolActions[kind]
                 const running = part.status.type === "running"
                 return (
                   <ToolCall
                     key={part.toolCallId}
                     label={action.complete}
                     activeLabel={action.active}
-                    query={toolPrimaryArgument(part.toolName, part.args)}
+                    query={toolSubject(part, kind)}
                     request=""
                     result=""
                     running={running}
@@ -223,7 +247,7 @@ export function ToolRunGroup({
                     collapsible={false}
                     open={false}
                     onOpenChange={() => undefined}
-                    icon={toolIconForName(part.toolName)}
+                    icon={toolIconForKind(kind)}
                   />
                 )
               }

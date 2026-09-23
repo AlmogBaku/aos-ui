@@ -1,5 +1,6 @@
 import type { TodoItem } from "../contracts"
 import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
+import type { ThreadMessage } from "@assistant-ui/react"
 import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
 
 // Assistant UI's public type lives in @assistant-ui/react. Re-exporting a local
@@ -29,6 +30,11 @@ export const fixtureScenarioNames = [
   "mermaid-oversized",
   "malformed-tool",
   "provider-outage",
+  "tool-kinds",
+  "diff",
+  "terminal-live",
+  "terminal-failed",
+  "subagent-nested",
   "stop-length",
   "stop-refusal",
   "provider-error-detail",
@@ -51,6 +57,8 @@ export type FixtureScenario = {
   parts: AssistantPart[]
   todoEvent?: TodoItem[]
   outage?: Error
+  /** Snapshots streamed before `parts`, one fixture tick apart. */
+  frames?: AssistantPart[][]
   /** How the turn settles when it is not an ordinary completion. */
   status?: MessageStatus
   /** Present on the question scenario; drives the RuntimeInteractionAdapter registration. */
@@ -107,6 +115,115 @@ function compactionParts(compaction: Record<string, unknown>): AssistantPart[] {
       artifact: withAosToolArtifact(undefined, { kind: "execute" }),
     }),
     { type: "text", text: "The brief is reviewed and its tests pass." },
+  ]
+}
+
+const FIXTURE_TOOL_STARTED_AT = Date.UTC(2026, 8, 1, 9, 0, 0)
+
+/** A call that ran `ms` from the fixture's fixed clock. */
+function fixtureTiming(ms: number) {
+  return {
+    startedAt: FIXTURE_TOOL_STARTED_AT,
+    completedAt: FIXTURE_TOOL_STARTED_AT + ms,
+  }
+}
+
+const FIXTURE_MULTI_FILE_PATCH = [
+  "diff --git a/src/pricing/tiers.ts b/src/pricing/tiers.ts",
+  "--- a/src/pricing/tiers.ts",
+  "+++ b/src/pricing/tiers.ts",
+  "@@ -1,3 +1,4 @@",
+  ' export const tiers = ["starter", "team"]',
+  "-export const trialDays = 14",
+  "+export const trialDays = 30",
+  '+export const enterprise = "contact sales"',
+  ' export const currency = "USD"',
+  "diff --git a/src/pricing/tiers.test.ts b/src/pricing/tiers.test.ts",
+  "--- a/src/pricing/tiers.test.ts",
+  "+++ b/src/pricing/tiers.test.ts",
+  "@@ -3,3 +3,4 @@",
+  ' it("offers a trial", () => {',
+  "-  expect(trialDays).toBe(14)",
+  "+  expect(trialDays).toBe(30)",
+  "+  expect(enterprise).toBeTruthy()",
+  " })",
+].join("\n")
+
+const FIXTURE_TEST_OUTPUT = [
+  "\u001b[1m$ bun run test src/pricing\u001b[0m",
+  " ✓ src/pricing/tiers.test.ts (3)",
+  " ✓ src/pricing/discounts.test.ts (5)",
+  " ✓ src/pricing/currency.test.ts (2)",
+  "",
+  " Test Files  3 passed (3)",
+  "      Tests  10 passed (10)",
+]
+
+/** The terminal-live call as its output arrives, line by line. */
+function liveTerminalPart(
+  lines: number
+): Extract<AssistantPart, { type: "tool-call" }> {
+  const done = lines >= FIXTURE_TEST_OUTPUT.length
+  return toolPart(
+    "run_command",
+    { command: "bun run test src/pricing" },
+    done ? "10 passed" : undefined,
+    {
+      artifact: withAosToolArtifact(undefined, {
+        kind: "execute",
+        terminals: [
+          {
+            terminalId: "fixture-terminal-live",
+            command: "bun run test src/pricing",
+            cwd: "/workspace/market-brief",
+            output: FIXTURE_TEST_OUTPUT.slice(0, lines).join("\n"),
+            running: !done,
+            ...(done ? { exitCode: 0 } : {}),
+          },
+        ],
+      }),
+      // A live frame carries no start: the fixed fixture clock is long past.
+      ...(done ? { timing: fixtureTiming(4200) } : {}),
+    }
+  )
+}
+
+/** A subagent's own conversation, as nested thread messages. */
+function nestedSubagentMessages(): ThreadMessage[] {
+  const createdAt = new Date(FIXTURE_TOOL_STARTED_AT)
+  return [
+    {
+      id: "fixture-subagent-user",
+      role: "user",
+      createdAt,
+      content: [
+        {
+          type: "text",
+          text: "Check the pricing tiers against the interview notes.",
+        },
+      ],
+      attachments: [],
+      metadata: { custom: {} },
+    },
+    {
+      id: "fixture-subagent-assistant",
+      role: "assistant",
+      createdAt,
+      status: { type: "complete", reason: "stop" },
+      content: [
+        {
+          type: "text",
+          text: "Two of three tiers match what buyers asked for; the team tier needs a longer trial.",
+        },
+      ],
+      metadata: {
+        unstable_state: null,
+        unstable_annotations: [],
+        unstable_data: [],
+        steps: [],
+        custom: {},
+      },
+    },
   ]
 }
 
@@ -227,6 +344,211 @@ export function buildFixtureScenario(prompt: string): FixtureScenario {
             },
           }
         ),
+      ],
+    }
+  }
+
+  if (input.includes("tool kinds") || input.includes("tool kind")) {
+    return {
+      name: "tool-kinds",
+      parts: [
+        toolPart("view_source", { path: "src/pricing/tiers.ts" }, "contents", {
+          artifact: withAosToolArtifact(undefined, {
+            kind: "read",
+            locations: [{ path: "src/pricing/tiers.ts", line: 12 }],
+          }),
+          timing: fixtureTiming(320),
+        }),
+        toolPart("grep_workspace", { pattern: "trialDays" }, "3 matches", {
+          artifact: withAosToolArtifact(undefined, {
+            kind: "search",
+            locations: [
+              { path: "src/pricing/tiers.ts", line: 2 },
+              { path: "src/pricing/tiers.test.ts", line: 4 },
+              { path: "docs/pricing.md", line: 18 },
+            ],
+          }),
+          timing: fixtureTiming(1400),
+        }),
+        toolPart("remove_path", { path: "notes/draft-pricing.md" }, "removed", {
+          artifact: withAosToolArtifact(undefined, {
+            kind: "delete",
+            locations: [{ path: "notes/draft-pricing.md" }],
+          }),
+        }),
+        toolPart(
+          "rename_path",
+          { source: "notes/brief.md", destination: "docs/brief.md" },
+          "moved",
+          {
+            artifact: withAosToolArtifact(undefined, {
+              kind: "move",
+              locations: [
+                { path: "notes/brief.md" },
+                { path: "docs/brief.md" },
+              ],
+            }),
+          }
+        ),
+        toolPart("http_get", { url: "https://example.com/pricing" }, "200 OK", {
+          artifact: withAosToolArtifact(undefined, { kind: "fetch" }),
+          timing: fixtureTiming(2600),
+        }),
+        toolPart("plan_step", { title: "Compare tiers" }, "noted", {
+          artifact: withAosToolArtifact(undefined, { kind: "think" }),
+        }),
+        toolPart("set_mode", { mode: "review" }, "review", {
+          artifact: withAosToolArtifact(undefined, { kind: "switch_mode" }),
+        }),
+        toolPart("lookup_currency", { name: "USD" }, "1.00", {
+          artifact: withAosToolArtifact(undefined, { kind: "other" }),
+        }),
+        { type: "text", text: "The pricing notes are reviewed." },
+      ],
+    }
+  }
+
+  if (input.includes("diff")) {
+    return {
+      name: "diff",
+      parts: [
+        toolPart(
+          "apply_patch",
+          { path: "src/pricing/tiers.ts" },
+          "2 files updated",
+          {
+            artifact: withAosToolArtifact(undefined, {
+              kind: "edit",
+              locations: [
+                { path: "src/pricing/tiers.ts" },
+                { path: "src/pricing/tiers.test.ts" },
+              ],
+              diffs: [
+                {
+                  changes: [
+                    { kind: "modify", path: "src/pricing/tiers.ts" },
+                    { kind: "modify", path: "src/pricing/tiers.test.ts" },
+                  ],
+                  patch: FIXTURE_MULTI_FILE_PATCH,
+                },
+              ],
+            }),
+            timing: fixtureTiming(900),
+          }
+        ),
+        toolPart(
+          "move_assets",
+          { source: "assets/old-logo.svg" },
+          "3 files changed",
+          {
+            artifact: withAosToolArtifact(undefined, {
+              kind: "edit",
+              locations: [{ path: "assets/logo.svg" }],
+              diffs: [
+                {
+                  changes: [
+                    {
+                      kind: "move",
+                      path: "assets/logo.svg",
+                      oldPath: "assets/old-logo.svg",
+                    },
+                    { kind: "add", path: "assets/logo-dark.svg" },
+                    { kind: "delete", path: "assets/logo-legacy.png" },
+                  ],
+                },
+              ],
+            }),
+          }
+        ),
+        {
+          type: "text",
+          text: "The trial is now 30 days and the logos are tidied.",
+        },
+      ],
+    }
+  }
+
+  if (input.includes("terminal") && input.includes("fail")) {
+    return {
+      name: "terminal-failed",
+      parts: [
+        toolPart("run_command", { command: "bun run lint" }, "exit 1", {
+          isError: true,
+          artifact: withAosToolArtifact(undefined, {
+            kind: "execute",
+            terminals: [
+              {
+                terminalId: "fixture-terminal-failed",
+                command: "bun run lint",
+                cwd: "/workspace/market-brief",
+                output: [
+                  "$ eslint src",
+                  "src/pricing/tiers.ts",
+                  "  4:14  error  'enterprise' is assigned a value but never used  no-unused-vars",
+                  "",
+                  "✖ 1 problem (1 error, 0 warnings)",
+                ].join("\n"),
+                running: false,
+                exitCode: 1,
+              },
+            ],
+          }),
+          timing: fixtureTiming(3100),
+        }),
+        {
+          type: "text",
+          text: "Lint found one unused export; I will remove it next.",
+        },
+      ],
+    }
+  }
+
+  if (input.includes("terminal")) {
+    const steps = FIXTURE_TEST_OUTPUT.length
+    return {
+      name: "terminal-live",
+      frames: Array.from({ length: steps }, (_, index) => [
+        liveTerminalPart(index + 1),
+      ]),
+      parts: [
+        liveTerminalPart(steps),
+        { type: "text", text: "All ten pricing tests pass." },
+      ],
+    }
+  }
+
+  if (input.includes("nested subagent") || input.includes("subagent nested")) {
+    return {
+      name: "subagent-nested",
+      parts: [
+        toolPart(
+          "spawn_agent",
+          { task: "Check the pricing tiers against the interviews" },
+          "Two of three tiers match.",
+          {
+            artifact: withAosToolArtifact(undefined, {
+              kind: "other",
+              subagent: {
+                id: "fixture-subagent",
+                goal: "Check the pricing tiers against the interviews",
+                model: "claude-opus-5.5",
+                depth: 1,
+                status: "completed",
+                tokens: 18_400,
+                durationMs: 72_000,
+                filesRead: [
+                  "src/pricing/tiers.ts",
+                  "notes/interviews.md",
+                  "docs/pricing.md",
+                ],
+                filesWritten: ["notes/pricing-review.md"],
+                childSessionId: "fixture-subagent-session",
+              },
+            }),
+            messages: nestedSubagentMessages(),
+          }
+        ),
+        { type: "text", text: "The team tier needs a longer trial." },
       ],
     }
   }

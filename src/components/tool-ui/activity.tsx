@@ -1,4 +1,10 @@
-import { Check, CircleAlert, Clock3, LoaderCircle } from "lucide-react"
+import {
+  Check,
+  CircleAlert,
+  Clock3,
+  ExternalLink,
+  LoaderCircle,
+} from "lucide-react"
 import { MessagePartPrimitive, MessagePrimitive } from "@assistant-ui/react"
 import { z } from "zod"
 
@@ -10,6 +16,9 @@ import {
   type ToolUiActivityKind,
   type ToolUiActivityStatus,
 } from "./locale"
+import { useToolUiSessionHref } from "./session-link"
+import type { AosSubagent } from "./tool-artifact"
+import { formatToolDuration } from "./tool-call-presentation"
 import type { RichToolPart } from "./types"
 
 const activityStatusSchema = z.enum([
@@ -49,19 +58,41 @@ export const activityPayloadSchema = z
 export type ActivityPayload = z.infer<typeof activityPayloadSchema>
 export type ActivityChildStatus = z.infer<typeof activityStatusSchema>
 
+/**
+ * The activity payload of a call known only by its subagent metadata: its
+ * validated args and result when they fit, and the subagent's goal otherwise.
+ */
+export function subagentActivityPayload(
+  part: RichToolPart,
+  subagent: AosSubagent
+): ActivityPayload {
+  const parsed = activityPayloadSchema.safeParse({
+    args: part.args,
+    result: part.result,
+  })
+  return parsed.success
+    ? parsed.data
+    : { args: { task: subagent.goal ?? part.toolName } }
+}
+
 export function ActivityTool({
   part,
   payload,
   kind,
+  subagent,
 }: {
   part: RichToolPart
   payload: ActivityPayload
   kind: ToolUiActivityKind
+  /** ACP subagent metadata; its goal, status, and counts lead when present. */
+  subagent?: AosSubagent
 }) {
   const state = normalizeRichToolState(part)
   const { direction, labels, locale } = useToolUiLocale()
+  const sessionHref = useToolUiSessionHref(subagent?.childSessionId)
   const kindLabel = labels.activities[kind]
   const title =
+    subagent?.goal ??
     payload.result?.name ??
     payload.args.name ??
     payload.args.skill ??
@@ -69,7 +100,38 @@ export function ActivityTool({
     payload.args.description ??
     kindLabel
   const summary = payload.result?.summary
-  const childStatus = getChildStatus(payload, state.phase)
+  const childStatus =
+    subagentStatus(subagent?.status) ?? getChildStatus(payload, state.phase)
+  const headerFacts = subagent
+    ? [
+        subagent.model ? labels.subagent.model(subagent.model) : undefined,
+        subagent.depth === undefined
+          ? undefined
+          : labels.subagent.depth(subagent.depth),
+      ].filter((fact): fact is string => fact !== undefined)
+    : []
+  const footerFacts = subagent
+    ? [
+        subagent.tokens === undefined
+          ? undefined
+          : labels.subagent.tokens(
+              new Intl.NumberFormat(locale, { notation: "compact" }).format(
+                subagent.tokens
+              )
+            ),
+        subagent.durationMs === undefined
+          ? undefined
+          : labels.subagent.duration(
+              formatToolDuration(subagent.durationMs, labels.assistant.duration)
+            ),
+        subagent.filesRead?.length
+          ? labels.subagent.filesRead(subagent.filesRead.length)
+          : undefined,
+        subagent.filesWritten?.length
+          ? labels.subagent.filesWritten(subagent.filesWritten.length)
+          : undefined,
+      ].filter((fact): fact is string => fact !== undefined)
+    : []
   const transcript = payload.result?.transcript
   const hasNestedMessages = Boolean(part.messages?.length)
   const transcriptIsLoading =
@@ -91,9 +153,22 @@ export function ActivityTool({
         <span className="text-xs font-medium text-muted-foreground">
           {kindLabel}
         </span>
-        <bdi className="min-w-0 flex-1 truncate font-medium" dir="auto">
+        <bdi
+          className="min-w-0 flex-1 truncate font-medium"
+          dir="auto"
+          title={title}
+        >
           {title}
         </bdi>
+        {headerFacts.map((fact) => (
+          <bdi
+            key={fact}
+            dir="auto"
+            className="shrink-0 text-xs text-muted-foreground"
+          >
+            {fact}
+          </bdi>
+        ))}
         <ActivityStatusLabel status={childStatus} />
       </header>
       {summary || showTranscript ? (
@@ -127,8 +202,54 @@ export function ActivityTool({
           ) : null}
         </div>
       ) : null}
+      {footerFacts.length > 0 || sessionHref ? (
+        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 py-2 text-xs text-muted-foreground">
+          {footerFacts.map((fact) => (
+            <span key={fact} className="tabular-nums">
+              {fact}
+            </span>
+          ))}
+          {sessionHref ? (
+            <a
+              href={sessionHref}
+              className="ms-auto inline-flex items-center gap-1 font-medium text-foreground underline-offset-4 hover:underline focus-visible:underline"
+            >
+              {labels.subagent.openSession}
+              <ExternalLink aria-hidden="true" className="size-3.5" />
+            </a>
+          ) : null}
+        </footer>
+      ) : null}
     </section>
   )
+}
+
+/** A provider's free-form subagent status, when it names one AOS shows. */
+function subagentStatus(
+  status: string | undefined
+): ActivityChildStatus | undefined {
+  switch (status?.toLowerCase()) {
+    case "running":
+    case "in_progress":
+    case "active":
+      return "running"
+    case "waiting":
+    case "pending":
+    case "queued":
+      return "waiting"
+    case "completed":
+    case "complete":
+    case "done":
+    case "succeeded":
+      return "completed"
+    case "failed":
+    case "error":
+    case "cancelled":
+    case "canceled":
+      return "failed"
+    default:
+      return undefined
+  }
 }
 
 function NestedActivityMessages() {
