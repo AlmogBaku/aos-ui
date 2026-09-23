@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "./test"
 import { exerciseAgentManagement } from "./agent-management"
+import { expandByKeyboard } from "./disclosure"
 import { exerciseMessageActions } from "./message-actions"
 import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
@@ -394,4 +395,126 @@ test("an in-flight response can be cancelled without losing the composer", async
   await expect(
     page.getByRole("button", { name: english.sendMessage })
   ).toBeVisible()
+})
+
+async function sendPrompt(
+  page: Page,
+  prompt: string,
+  labels: { messageInput: string; sendMessage: string } = english
+) {
+  await page.getByRole("textbox", { name: labels.messageInput }).fill(prompt)
+  await page.getByRole("button", { name: labels.sendMessage }).click()
+}
+
+function notice(page: Page, role: "status" | "alert", text: string) {
+  return page.getByRole(role).filter({ hasText: text })
+}
+
+test("a turn stopped at the length limit or declined says so beneath its answer", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  await sendPrompt(page, "Hit the length limit")
+  await expect(
+    notice(page, "status", "The answer stopped at the length limit.")
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Stopped at the length limit" })
+  ).toBeVisible()
+  await expect(
+    page.getByText(/Second, pilots stall without an owner/)
+  ).toBeVisible()
+
+  await sendPrompt(page, "Refuse this request")
+  await expect(
+    notice(page, "status", "The model declined to answer.")
+  ).toBeVisible()
+  await expect(page.getByRole("button", { name: "Declined" })).toBeVisible()
+})
+
+test("Hebrew names a length stop in its notice and its fold", async ({
+  page,
+}) => {
+  await openWorkspace(page, "he")
+  await sendPrompt(page, "Hit the length limit", {
+    messageInput: "שדה הודעה",
+    sendMessage: "שליחת הודעה",
+  })
+
+  await expect(
+    notice(page, "status", "התשובה נעצרה במגבלת האורך.")
+  ).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "נעצר במגבלת האורך" })
+  ).toBeVisible()
+})
+
+test("a failed run names the provider and model it ran on", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Show a provider error")
+
+  const failure = notice(
+    page,
+    "alert",
+    "The provider could not complete this run."
+  )
+  await expect(failure).toContainText(
+    "The upstream model returned 529 (overloaded)."
+  )
+  await expect(
+    failure.getByText("Fixture Cloud · fixture-balanced", { exact: true })
+  ).toBeVisible()
+  await expect(
+    page.getByText("The partial response is preserved.", { exact: true })
+  ).toBeVisible()
+})
+
+test("a compaction divides the trace where it happened and keeps its summary", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Run a compaction")
+  await expect(
+    page.getByText("The brief is reviewed and its tests pass.").last()
+  ).toBeVisible()
+
+  const fold = () =>
+    page.getByRole("button", { name: "Worked · Changed 1 file +2 −1" }).last()
+  await expandByKeyboard(fold())
+  // The divider folds its summary away until it is asked for.
+  const summary = page.getByText(
+    "The operator asked for a reviewed market brief. README.md now reads Reviewed and lists its sources; the test run is next."
+  )
+  await expect(summary).toHaveCount(0)
+  await expandByKeyboard(
+    page.getByRole("button", { name: "Context compacted" })
+  )
+  await expect(summary).toBeVisible()
+
+  await sendPrompt(page, "Run a failed compaction")
+  await expect(
+    page.getByText("The brief is reviewed and its tests pass.")
+  ).toHaveCount(2)
+  await expandByKeyboard(fold())
+  await expect(
+    notice(page, "status", "Context compaction failed.")
+  ).toContainText("The summarizer timed out after 30 s.")
+})
+
+test("the context popover reports the last turn's usage and the Session's cost", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+
+  await page.getByRole("button", { name: "Context usage" }).focus()
+  for (const shown of [
+    "Last turn",
+    "12K in · 1.2K out · 8.2K cached",
+    "Session cost",
+    "$0.42",
+  ])
+    await expect(page.getByText(shown, { exact: true })).toBeVisible()
 })

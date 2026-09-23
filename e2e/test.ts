@@ -2,6 +2,7 @@ import {
   expect,
   test as base,
   type ConsoleMessage,
+  type Locator,
   type Page,
 } from "@playwright/test"
 
@@ -54,4 +55,4 @@ export const test = base.extend<BrowserErrorGuard>({
 })
 
 export { expect }
-export type { Page }
+export type { Locator, Page }

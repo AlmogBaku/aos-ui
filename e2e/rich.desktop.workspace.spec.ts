@@ -1,3 +1,4 @@
+import { expandByKeyboard } from "./disclosure"
 import { expect, test, type Page } from "./test"
 
 const english = {
@@ -348,4 +349,156 @@ test("Hebrew localizes rich controls while preserving provider content verbatim"
     "dir",
     "ltr"
   )
+})
+
+/** The fold of the latest reply that reads `headline`, opened by keyboard. */
+async function openFold(page: Page, headline: string | RegExp) {
+  await expandByKeyboard(
+    page
+      .getByRole("button", {
+        name: headline,
+        exact: typeof headline === "string",
+      })
+      .last()
+  )
+}
+
+function toolRow(page: Page, name: string | RegExp) {
+  return page.getByRole("button", {
+    name,
+    exact: typeof name === "string",
+  })
+}
+
+test("tool rows name their ACP kind, subject, locations and duration", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Show tool kinds")
+  await expect(page.getByText("The pricing notes are reviewed.")).toBeVisible()
+
+  await openFold(page, "Worked")
+  await expect(
+    page.getByText(
+      "Read 1 file, searched code once, changed 2 files, searched the web once, and used 3 tools"
+    )
+  ).toBeVisible()
+  for (const row of [
+    "Read src/pricing/tiers.ts:12 <1 s",
+    "Searched trialDays 1 s",
+    "Deleted notes/draft-pricing.md",
+    "Moved notes/brief.md +1 more",
+    "Fetched https://example.com/pricing 2 s",
+    "Thought Compare tiers",
+    "Switched mode review",
+    "Used lookup_currency",
+  ])
+    await expect(toolRow(page, row)).toBeVisible()
+
+  // A row folds every location it touched behind its first one.
+  await expandByKeyboard(toolRow(page, "Searched trialDays 1 s"))
+  await expect(
+    page.getByRole("list", { name: "Locations" }).getByRole("listitem")
+  ).toHaveText([
+    "src/pricing/tiers.ts:2",
+    "src/pricing/tiers.test.ts:4",
+    "docs/pricing.md:18",
+  ])
+})
+
+test("an edit folds its diff under a row that totals the changed lines", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Show a diff")
+  await expect(
+    page.getByText("The trial is now 30 days and the logos are tidied.")
+  ).toBeVisible()
+
+  // The fold's headline totals the turn's changes; each row totals its own.
+  await openFold(page, "Worked · Changed 5 files +4 −2")
+  const changedFiles = page.getByRole("list", { name: "Changed files" })
+  await expect(changedFiles).toHaveCount(0)
+
+  await expandByKeyboard(
+    toolRow(
+      page,
+      "Edited src/pricing/tiers.ts +1 more 4 lines added, 2 removed <1 s"
+    )
+  )
+  await expect(changedFiles).toMatchAriaSnapshot(`
+    - listitem: Modified src/pricing/tiers.ts
+    - listitem: Modified src/pricing/tiers.test.ts
+  `)
+  await expect(page.getByText("2 lines added, 1 removed")).toHaveCount(2)
+  await expect(
+    page.getByText("export const trialDays = 30", { exact: true })
+  ).toBeVisible()
+
+  // A change without a patch still names what happened to every file.
+  await expandByKeyboard(toolRow(page, "Edited assets/logo.svg"))
+  await expect(changedFiles.last()).toMatchAriaSnapshot(`
+    - listitem: Moved assets/old-logo.svg to assets/logo.svg
+    - listitem: Added assets/logo-dark.svg
+    - listitem: Deleted assets/logo-legacy.png
+  `)
+})
+
+test("a command's terminal streams its output live and reports its exit", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Run the terminal")
+
+  // While the command runs its terminal is open and fills line by line.
+  const running = toolRow(page, "Running bun run test src/pricing")
+  await expect(running).toHaveAttribute("aria-expanded", "true")
+  const output = page.getByRole("region", { name: "Terminal output" })
+  await expect(output).toContainText("✓ src/pricing/tiers.test.ts (3)")
+  await expect(output).not.toContainText("Tests 10 passed (10)")
+  await expect(
+    page.getByRole("status").filter({ hasText: "Command started" })
+  ).toBeVisible()
+
+  // Settled, the call folds away with its duration and its exit.
+  await expect(page.getByText("All ten pricing tests pass.")).toBeVisible()
+  await openFold(page, "Worked")
+  await expandByKeyboard(toolRow(page, "Ran bun run test src/pricing 4 s"))
+  await expect(output).toContainText("Tests 10 passed (10)")
+  await expect(
+    page.getByRole("status").filter({ hasText: "Command ended. Exit code 0" })
+  ).toBeVisible()
+
+  await sendPrompt(page, "Run the terminal and fail")
+  await openFold(page, "Worked")
+  await expandByKeyboard(toolRow(page, "Ran bun run lint 3 s"))
+  await expect(output.last()).toContainText("✖ 1 problem (1 error, 0 warnings)")
+  await expect(
+    page.getByRole("status").filter({ hasText: "Command ended. Exit code 1" })
+  ).toBeVisible()
+})
+
+test("a nested subagent shows its goal, transcript and footprint", async ({
+  page,
+}) => {
+  await openWorkspace(page)
+  await sendPrompt(page, "Run a nested subagent")
+  await expect(
+    page.getByText("The team tier needs a longer trial.", { exact: true })
+  ).toBeVisible()
+
+  for (const fact of [
+    "Check the pricing tiers against the interviews",
+    "Model claude-opus-5.5",
+    "Depth 1",
+    "Two of three tiers match what buyers asked for; the team tier needs a longer trial.",
+    "18K tokens",
+    "Took 1 min 12 s",
+    "Read 3 files",
+    "Wrote 1 file",
+  ])
+    await expect(page.getByText(fact, { exact: true }).last()).toBeVisible()
+  // The preview's catalog does not know the child Session, so it offers no
+  // way there; the scripted AOS journey covers the link.
+  await expect(page.getByRole("link", { name: "Open session" })).toHaveCount(0)
 })

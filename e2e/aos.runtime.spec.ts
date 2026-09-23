@@ -1,3 +1,4 @@
+import { expandByKeyboard } from "./disclosure"
 import { expect, test, type Page } from "./test"
 
 /**
@@ -13,6 +14,10 @@ const TURN_ID = "run-1"
 const ACP_PATH = "/api/aos/v1/acp"
 /** A prompt the scripted provider leaves running until it is cancelled. */
 const PENDING_PROMPT = "Keep running until I stop it"
+/** A prompt the scripted provider answers with `vocabularyTurn`. */
+const VOCABULARY_PROMPT = "Lengthen the trial and run the tests"
+/** The Session the scripted turn's subagent runs in. */
+const CHILD_SESSION_ID = "session-2"
 
 const runtime = {
   runtime: { id: "hermes", name: "Hermes" },
@@ -141,12 +146,171 @@ const sessionCapabilities = {
   },
 }
 
+const VOCABULARY_ANSWER_ID = "vocabulary-answer"
+const TOOL_CLOCK = Date.parse("2026-09-12T00:00:00.000Z")
+/** An instant `ms` after the scripted tools started. */
+const toolTime = (ms: number) => new Date(TOOL_CLOCK + ms).toISOString()
+/** Tool updates hang off the answer the turn is writing. */
+const onAnswer = (aos: Record<string, unknown> = {}) => ({
+  aos: { messageId: VOCABULARY_ANSWER_ID, ...aos },
+})
+
+/**
+ * One turn in the wire shapes `packages/proxy/acp/translate/turn-events.ts`
+ * emits: an edit with its location and diff, a command with a live terminal, a
+ * compaction, a subagent with its own Session, a provider model switch, and a
+ * length stop that reports its usage and cost.
+ */
+const vocabularyTurn = [
+  {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "edit-1",
+    title: "Edit tiers.ts",
+    name: "edit_file",
+    kind: "edit",
+    status: "in_progress",
+    locations: [{ path: "/w/src/pricing/tiers.ts", line: 2 }],
+    _meta: onAnswer({ startedAt: toolTime(0) }),
+  },
+  {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "edit-1",
+    status: "completed",
+    rawOutput: "updated",
+    content: [
+      { type: "content", content: { type: "text", text: "updated" } },
+      {
+        type: "diff",
+        changes: [{ operation: "modify", path: "/w/src/pricing/tiers.ts" }],
+        patch: {
+          format: "git_patch",
+          text: [
+            "--- a/src/pricing/tiers.ts",
+            "+++ b/src/pricing/tiers.ts",
+            "@@ -1,2 +1,3 @@",
+            ' export const tiers = ["starter", "team"]',
+            "-export const trialDays = 14",
+            "+export const trialDays = 30",
+            '+export const enterprise = "contact sales"',
+          ].join("\n"),
+        },
+      },
+    ],
+    _meta: onAnswer({ completedAt: toolTime(1_200) }),
+  },
+  {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "run-tests",
+    title: "bun run test",
+    name: "run_command",
+    kind: "execute",
+    status: "in_progress",
+    rawInput: { command: "bun run test" },
+    _meta: onAnswer({ startedAt: toolTime(2_000) }),
+  },
+  {
+    sessionUpdate: "terminal_update",
+    terminalId: "term-1",
+    command: "bun run test",
+    cwd: "/w",
+  },
+  {
+    sessionUpdate: "tool_call_content_chunk",
+    toolCallId: "run-tests",
+    content: { type: "terminal", terminalId: "term-1" },
+    _meta: onAnswer(),
+  },
+  {
+    sessionUpdate: "terminal_output_chunk",
+    terminalId: "term-1",
+    data: Buffer.from(" ✓ tiers.test.ts (3)\n", "utf8").toString("base64"),
+  },
+  {
+    sessionUpdate: "terminal_update",
+    terminalId: "term-1",
+    exitStatus: { exitCode: 0 },
+  },
+  {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "run-tests",
+    status: "completed",
+    rawOutput: "3 passed",
+    content: [
+      { type: "content", content: { type: "text", text: "3 passed" } },
+      { type: "terminal", terminalId: "term-1" },
+    ],
+    _meta: onAnswer({ completedAt: toolTime(5_000) }),
+  },
+  {
+    sessionUpdate: "compaction_update",
+    compactionId: "compaction-1",
+    status: "completed",
+    summary: [{ type: "text", text: "The trial change is made and tested." }],
+  },
+  {
+    sessionUpdate: "tool_call_update",
+    toolCallId: "delegate-1",
+    title: "Check the pricing page",
+    name: "delegate_task",
+    kind: "other",
+    status: "completed",
+    rawOutput: "The page matches.",
+    content: [
+      { type: "content", content: { type: "text", text: "The page matches." } },
+    ],
+    _meta: onAnswer({
+      subagent: {
+        id: "subagent-1",
+        goal: "Check the pricing page",
+        status: "completed",
+        childSessionId: CHILD_SESSION_ID,
+      },
+    }),
+  },
+  // The proxy restates the model options when the provider switches models.
+  {
+    sessionUpdate: "config_option_update",
+    configOptions: [
+      {
+        type: "select",
+        configId: "model",
+        name: "Model",
+        category: "model",
+        currentValue: "deep",
+        options: [
+          { value: "default", name: "Default" },
+          { value: "deep", name: "Deep" },
+        ],
+      },
+    ],
+  },
+  {
+    sessionUpdate: "agent_message_chunk",
+    messageId: VOCABULARY_ANSWER_ID,
+    content: { type: "text", text: "The trial is now 30 days, and then" },
+  },
+  {
+    sessionUpdate: "state_update",
+    state: "idle",
+    stopReason: "max_tokens",
+    usage: {
+      inputTokens: 12_000,
+      outputTokens: 3_400,
+      totalTokens: 15_400,
+      cachedReadTokens: 6_000,
+    },
+    _meta: { aos: { cost: { amount: 0.25, currency: "USD" } } },
+  },
+]
+
 /** Every payload the scripted responder answers with, in one serializable object. */
 const script = {
   acpPath: ACP_PATH,
   sessionId: SESSION_ID,
   turnId: TURN_ID,
   pendingPrompt: PENDING_PROMPT,
+  vocabularyPrompt: VOCABULARY_PROMPT,
+  vocabularyTurn,
   /** `InitializeResponse._meta.aos` for the operator lane. */
   initializeMeta: {
     version: 1,
@@ -383,9 +547,12 @@ function installAcpStub(script: AcpScript) {
     /** One run-stream `session/update`, carrying its position in the run. */
     run(update: Record<string, unknown>) {
       stub.sequence += 1
+      const aos = asRecord(asRecord(update._meta).aos)
       this.update({
         ...update,
-        _meta: { aos: { sequence: stub.sequence, turnId: script.turnId } },
+        _meta: {
+          aos: { ...aos, sequence: stub.sequence, turnId: script.turnId },
+        },
       })
     }
 
@@ -416,6 +583,12 @@ function installAcpStub(script: AcpScript) {
       // A resume from the start replays the stored turns; a resume positioned
       // by `_meta.aos.after` reports only what the dropped transport missed.
       this.handlers.set("session/resume", (params, id) => {
+        // A subagent's own Session opens with nothing stored.
+        if (params.sessionId !== script.sessionId)
+          return this.respond(id, {
+            configOptions: script.configOptions,
+            _meta: { aos: script.resumeMeta },
+          })
         if (asRecord(params.replayFrom).type === "start")
           for (const entry of script.history)
             this.message(entry.role, entry.messageId, entry.text)
@@ -448,6 +621,16 @@ function installAcpStub(script: AcpScript) {
         })
         this.run({ sessionUpdate: "state_update", state: "running" })
         if (promptText(params).includes(script.pendingPrompt)) return
+        if (promptText(params).includes(script.vocabularyPrompt)) {
+          // A model switch is Session state, not a position in the run.
+          for (const update of script.vocabularyTurn)
+            if (update.sessionUpdate === "config_option_update")
+              this.update(update)
+            else this.run(update)
+          // A settled turn restates the context window.
+          this.update({ sessionUpdate: "usage_update", ...script.usage })
+          return
+        }
         for (const text of script.reply)
           this.run({
             sessionUpdate: "agent_message_chunk",
@@ -631,4 +814,107 @@ test("AOS proxy shows the context gauge when the window arrives after the resume
   for (const shown of ["System", "8k", "Tools", "12k", "Messages", "22k"])
     await expect(page.getByText(shown, { exact: true })).toBeVisible()
   expect(await recorded(page, "session/resume")).toHaveLength(1)
+})
+
+test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({
+  page,
+}) => {
+  await serveAcp(page, {
+    sessions: [
+      ...script.sessions,
+      {
+        sessionId: CHILD_SESSION_ID,
+        cwd: "/",
+        title: "Pricing page check",
+        updatedAt: "2026-09-11T00:00:00.000Z",
+        _meta: {
+          aos: {
+            agentId: AGENT_ID,
+            status: "idle",
+            archived: false,
+            unread: false,
+          },
+        },
+      },
+    ],
+  })
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  const model = page.getByRole("combobox", { name: "Choose model" })
+  await expect(model).toContainText("Default")
+
+  await page
+    .getByRole("textbox", { name: "Message input" })
+    .fill(VOCABULARY_PROMPT)
+  await page.getByRole("button", { name: "Send message" }).click()
+  await expect(
+    page.getByText("The trial is now 30 days, and then", { exact: true })
+  ).toBeVisible()
+
+  // A max_tokens stop is a length stop, named on the fold and beneath the answer.
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "The answer stopped at the length limit." })
+  ).toBeVisible()
+  await expandByKeyboard(
+    page.getByRole("button", { name: /^Stopped at the length limit/ })
+  )
+
+  // The edit row names its kind, location, line totals and duration; its diff
+  // stays folded until the row opens.
+  const edit = page.getByRole("button", {
+    name: "Edited /w/src/pricing/tiers.ts:2 2 lines added, 1 removed 1 s",
+    exact: true,
+  })
+  await expect(page.getByRole("list", { name: "Changed files" })).toHaveCount(0)
+  await expandByKeyboard(edit)
+  await expect(page.getByRole("list", { name: "Changed files" }))
+    .toMatchAriaSnapshot(`
+    - listitem: Modified /w/src/pricing/tiers.ts
+  `)
+  await expect(
+    page.getByText("export const trialDays = 30", { exact: true })
+  ).toBeVisible()
+
+  // The command's terminal decodes the base64 output ACP carried.
+  await expandByKeyboard(
+    page.getByRole("button", { name: "Ran bun run test 3 s", exact: true })
+  )
+  await expect(
+    page.getByRole("region", { name: "Terminal output" })
+  ).toContainText("✓ tiers.test.ts (3)")
+  await expect(
+    page.getByRole("status").filter({ hasText: "Command ended. Exit code 0" })
+  ).toBeVisible()
+
+  await expandByKeyboard(
+    page.getByRole("button", { name: "Context compacted", exact: true })
+  )
+  await expect(
+    page.getByText("The trial change is made and tested.", { exact: true })
+  ).toBeVisible()
+
+  // The provider's model switch reaches the composer's selector.
+  await expect(model).toContainText("Deep")
+
+  // The idle update's usage and cost reach the context popover.
+  await page.getByRole("button", { name: "Context usage" }).focus()
+  for (const shown of [
+    "Last turn",
+    "12K in · 3.4K out · 6K cached",
+    "Session cost",
+    "$0.25",
+  ])
+    await expect(page.getByText(shown, { exact: true })).toBeVisible()
+  await page.keyboard.press("Escape")
+
+  // The subagent's own Session opens in place from its activity.
+  await page.getByRole("link", { name: "Open session" }).click()
+  await expect(
+    page.getByRole("tab", { name: "Pricing page check" })
+  ).toHaveAttribute("aria-selected", "true")
+  await expect
+    .poll(async () => (await resumes(page)).map((call) => call.sessionId))
+    .toContain(CHILD_SESSION_ID)
 })
