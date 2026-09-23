@@ -4,24 +4,16 @@ import { lazy, Suspense, type ComponentType, type ReactNode } from "react"
 import type { z } from "zod"
 
 import {
-  presentationToolDefinitions,
-  type PresentationToolName,
-} from "../../../shared/presentation/tools"
-
-import {
   ActivityTool,
   activityPayloadSchema,
   type ActivityPayload,
 } from "./activity"
-import { chartPayloadSchema, type ChartPayload } from "./payloads/chart"
 import { GenericJsonTool } from "./generic-json"
 import { LazyVisualBoundary } from "./lazy-boundary"
-import { mapPayloadSchema, type MapPayload } from "./payloads/map"
 import {
   permissionPayloadSchema,
   type PermissionPayload,
 } from "./payloads/permission"
-import { statsPayloadSchema, type StatsPayload } from "./payloads/stats"
 import {
   questionPayloadSchema,
   type QuestionPayload,
@@ -36,15 +28,6 @@ const QuestionFlowTool = lazy(() =>
 )
 const PermissionTool = lazy(() =>
   import("./permission").then((module) => ({ default: module.PermissionTool }))
-)
-const ChartTool = lazy(() =>
-  import("./chart").then((module) => ({ default: module.ChartTool }))
-)
-const MapTool = lazy(() =>
-  import("./map").then((module) => ({ default: module.MapTool }))
-)
-const StatsTool = lazy(() =>
-  import("./stats").then((module) => ({ default: module.StatsTool }))
 )
 
 function ToolDisplayFallback({
@@ -155,27 +138,6 @@ const permission = defineToolRenderer<PermissionPayload>({
   acceptsPart: (part) => part.approval !== undefined,
 })
 
-const chart = defineToolRenderer<ChartPayload>({
-  displayNameKey: "chart",
-  schema: chartPayloadSchema,
-  Renderer: ChartTool,
-  optional: true,
-})
-
-const map = defineToolRenderer<MapPayload>({
-  displayNameKey: "map",
-  schema: mapPayloadSchema,
-  Renderer: MapTool,
-  optional: true,
-})
-
-const stats = defineToolRenderer<StatsPayload>({
-  displayNameKey: "stats",
-  schema: statsPayloadSchema,
-  Renderer: StatsTool,
-  optional: true,
-})
-
 function SubagentActivity(props: RegisteredRendererProps<ActivityPayload>) {
   return <ActivityTool {...props} kind="subagent" />
 }
@@ -187,29 +149,12 @@ const subagentActivity = defineToolRenderer<ActivityPayload>({
 })
 
 /**
- * Presentation tools are registered from the same canonical name set exposed
- * to runtimes. Adding or removing a server-facing presentation tool therefore
- * requires its message renderer to change in the same type-checked edit.
- */
-const presentationToolRenderers = {
-  render_chart: chart,
-  render_map: map,
-  render_stats: stats,
-} satisfies Record<PresentationToolName, RichToolRegistration>
-
-const presentationRichToolRegistry = Object.fromEntries(
-  (Object.keys(presentationToolDefinitions) as PresentationToolName[]).map(
-    (toolName) => [toolName, presentationToolRenderers[toolName]]
-  )
-) as Readonly<Record<PresentationToolName, RichToolRegistration>>
-
-/**
- * The rich-tool dispatch table combines canonical presentation tools with
- * provider-native semantic controls. Ordinary execution, skill, and generic
- * activity calls deliberately stay out so the native timeline groups them.
+ * The rich-tool dispatch table holds provider-native semantic controls. Charts,
+ * maps and stats are MCP App views their own server draws; ordinary execution,
+ * skill, and generic activity calls stay out so the native timeline groups
+ * them.
  */
 export const richToolRegistry: RichToolRegistry = Object.freeze({
-  ...presentationRichToolRegistry,
   ask_user_question: question,
   question,
   request_permission: permission,

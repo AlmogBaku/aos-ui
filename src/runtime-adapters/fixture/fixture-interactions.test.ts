@@ -39,7 +39,9 @@ describe("createFixtureInteractions", () => {
 
   it("clears the pending request and delivers answers on respond", async () => {
     const appended: string[][][] = []
-    const adapter = createFixtureInteractions((_, answers) => appended.push(answers))
+    const adapter = createFixtureInteractions((_, answers) =>
+      appended.push(answers)
+    )
     const listener = vi.fn()
     adapter.subscribe("thread-aster-market", listener)
     adapter.register(questionRequest)

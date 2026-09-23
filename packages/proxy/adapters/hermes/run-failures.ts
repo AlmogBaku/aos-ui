@@ -57,9 +57,11 @@ export class HermesRunRewindConflictError extends Error {
   }
 }
 
-/** The names the run engine logs under; the only two lines it ever writes. */
+/** The names the run engine logs under; the only three lines it ever writes. */
 export const RUN_NATIVE_ERROR_LOG = "hermes.run.native_error"
 export const RUN_FAILED_LOG = "hermes.run.failed"
+/** A run ended with `resetRequired`; `reason` names the path that decided it. */
+export const RUN_RESET_LOG = "hermes.run.reset_required"
 
 /** Every public run failure the Hermes adapter can publish. */
 export const RUN_FAILURES = {

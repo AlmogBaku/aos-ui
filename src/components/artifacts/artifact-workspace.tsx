@@ -364,12 +364,20 @@ function previewFailureMessage(
   return labels.loadFailed
 }
 
-/** Only pruned bytes need a second line: what happened and what to do next. */
+/**
+ * Only pruned bytes need a second line: what happened and what to do next. The
+ * retention explanation holds only for generated audio and video.
+ */
 function previewFailureDetail(
   reason: ArtifactPreviewFailure,
-  labels: Dictionary["artifacts"]
+  labels: Dictionary["artifacts"],
+  artifact: Pick<ArtifactDescriptor, "filename" | "mimeType">
 ) {
-  return reason === "missing" ? labels.missingDetail : undefined
+  if (reason !== "missing") return undefined
+  const kind = artifactMediaKind(artifact.mimeType, artifact.filename)
+  return kind === "audio" || kind === "video"
+    ? labels.missingDetail
+    : labels.missingFileDetail
 }
 
 function previewFailureTone(reason: ArtifactPreviewFailure): SystemNoticeTone {
@@ -598,7 +606,7 @@ function ArtifactInlineMedia({
           {published.filename}
         </p>
         <SystemNotice
-          detail={previewFailureDetail(state.reason, labels)}
+          detail={previewFailureDetail(state.reason, labels, published)}
           locale={locale}
           title={previewFailureMessage(state.reason, labels)}
           tone={previewFailureTone(state.reason)}
@@ -981,7 +989,7 @@ export function ArtifactViewerContent({
           state={state}
           labels={labels}
           locale={locale}
-          filename={selectedArtifact.filename}
+          artifact={selectedArtifact}
           onRetry={retry}
         />
       </div>
@@ -993,15 +1001,16 @@ function ArtifactPreview({
   state,
   labels,
   locale,
-  filename,
+  artifact,
   onRetry,
 }: {
   state: ArtifactPreviewState
   labels: Dictionary["artifacts"]
   locale: Locale
-  filename: string
+  artifact: ArtifactDescriptor
   onRetry: () => void
 }) {
+  const { filename } = artifact
   if (state.status === "idle") return null
   if (state.status === "loading") {
     return (
@@ -1018,7 +1027,7 @@ function ArtifactPreview({
     return (
       <div className="flex min-h-56 flex-col items-center justify-center">
         <SystemNotice
-          detail={previewFailureDetail(state.reason, labels)}
+          detail={previewFailureDetail(state.reason, labels, artifact)}
           locale={locale}
           title={previewFailureMessage(state.reason, labels)}
           tone={previewFailureTone(state.reason)}

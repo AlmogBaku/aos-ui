@@ -294,13 +294,122 @@ model (`packages/proxy/acp/session-attachment.ts:228-242`). Implement
 unavailable; a provider that cannot answer at all leaves the last reading
 standing without emitting an empty gauge.
 
-### Artifact descriptors
+### Published Artifacts
 
-An adapter may publish an `_aos/artifact` notification carrying an
-`AosArtifactDescriptorSchema` payload (`packages/protocol/acp.ts:352-378`).
-The `source` discriminant is one of `inline` (with `encoding` and `data`),
-`url`, or `provider` (with an opaque `reference`). Only the `id`, `filename`,
-and `source` fields are required.
+A published Artifact travels as the proxy-owned `CUSTOM` run event
+`aos.artifact` whose value is an `AosArtifactDescriptor`
+(`packages/protocol/acp.ts:374-396`; translated in
+`packages/proxy/acp/translate/run-events.ts:135`), or, in history, as a `data`
+message part named `aos.artifact`
+(`packages/proxy/acp/translate/history.ts:33`). Only `id`, `filename`, and
+`source` are required; `source` is `inline`, `url`, or `provider` with an
+opaque `reference`. The ACP layer turns either form into a `resource_link`
+content block with `uri: "artifact://<id>"` on the owning turn, so a live turn
+and a replayed one reach the browser identically. The id must be opaque and
+stable for that Agent and Session; never put a native path in it or in any
+public tool argument or result.
+
+Emit a descriptor only from an authoritative source: a `present_artifact`
+receipt from the `aos-ui` tools MCP server
+(`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`),
+a harness's own `MEDIA:` delivery convention, or a trusted native delivery
+tool such as Hermes text-to-speech. `packages/proxy/core/media-lines.ts`
+(`MediaLineFilter`) strips `MEDIA:` lines from streamed prose across deltas
+and replaces an unclaimed one with `[Media unavailable]`.
+
+Validate every path with `packages/proxy/core/artifact-path.ts` before keeping
+it: `safeArtifactPath` accepts only absolute POSIX paths with no `..`
+segment, no control characters, at most 4096 bytes, and no credential-like
+basename (`.env*`, `auth.json`, `config.yaml`, `credentials`, and similar);
+`safeRelativeArtifactPath` applies the same rules to a project-relative path.
+Keep the path in a private Agent-and-Session-scoped mapping.
+
+Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
+(`packages/proxy/core/runtime.ts:264-268`) to resolve the id only within that
+Session and return `{bytes, mimeType?, filename}`, read through the harness's
+own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
+`GET .../sessions/:sessionId/artifacts/:artifactId`
+(`packages/proxy/routes/content.ts:87`) serves it on both lanes.
+
+### MCP tool names
+
+The `aos-ui` tools MCP server (`packages/tools-mcp`) and every other MCP server
+are registered with the harness by the operator, never by the proxy. Each
+harness prefixes MCP tool names its own way, so pass every native tool name
+through `canonicalToolName(rawName, resolve)`
+(`packages/proxy/core/aos-tool-names.ts`) before it enters the run vocabulary
+or history:
+
+- the four `aos-ui` tools read bare: `render_chart`, `render_map`,
+  `render_stats`, `present_artifact` (`canonicalAosToolName`);
+- any other MCP tool the adapter's resolver recognizes reads
+  `mcp__<server>__<tool>`, built from the original server and tool names, so
+  one server gives the same name on every runtime;
+- an unknown name stays raw.
+
+The resolver matches a raw name against the runtime's own MCP server list,
+never by splitting the string. Hermes and OpenCode build it with
+`createMcpToolNames(scheme, catalog)` (`packages/proxy/mcp-apps/tool-names.ts`),
+where the scheme states how the harness spells a tool: Hermes
+`mcp__<sanitized>__<sanitized>` with its 64-character hash clamp, OpenCode
+`<server>_<tool>` matched longest server first. OpenClaw resolves
+`<server>__<tool>` against its native `tools.effective` answer
+(`packages/proxy/adapters/openclaw/mcp-tool-names.ts`). Each list sits in
+`createMcpServerCache` (`packages/proxy/core/mcp-server-cache.ts`): one
+single-flight fetch per key, reused for 5 minutes; an unknown name refetches
+at most once per 30 s; a failed fetch keeps the last good list, and with no
+list names stay raw. Use the same resolver live and on replay.
+
+When the harness loads MCP servers per Session rather than globally, enable
+`aos-ui` in the adapter before each turn, not in shared coordinator code. The
+OpenClaw adapter creates Sessions with
+`toolOverrides.mcpServers["aos-ui"] = true` and, before every non-resume turn,
+patches the same override onto a Session created elsewhere with a
+compare-and-swap on the previous overrides
+(`packages/proxy/adapters/openclaw/native-schemas.ts:175-203`,
+`packages/proxy/adapters/openclaw/run.ts:1253-1272`). A failed enable fails
+the turn rather than running it without the tools.
+
+### MCP Apps
+
+An MCP tool whose server declares a `ui://` view (`_meta.ui.resourceUri`)
+renders as an App card. Implement the optional `ServerRuntime.mcpApps`
+(`packages/proxy/core/runtime.ts`) in the adapter's `mcp-apps.ts`:
+
+| Method                                             | Answers                                                                            |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `observe?(scope, call)`                            | A flagged call of this Session's run as it streams: name, then input, then result. |
+| `describe(scope, {toolCallId, toolName, result?})` | Whether the call's tool declares a view.                                           |
+| `open(scope, toolCallId, signal?)`                 | The `McpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.  |
+| `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.              |
+| `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                       |
+
+Every method first finds the `toolCallId` in this Session's own native
+history, the same scoping as `artifact`, or among the running calls `observe`
+heard for that Session; the browser never names a server, tool, or resource
+URI. An unknown or foreign call reads as not found. A host that holds its views
+natively leaves `observe` out.
+
+Map the native MCP Apps API when the runtime has one (OpenClaw's
+`mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
+the hook with `createMcpAppsFallback(source, client)`
+(`packages/proxy/mcp-apps/fallback.ts`): the adapter supplies only the server
+list and the stored call, and the proxy's own Streamable HTTP client reads the
+view. A view named in the stored result wins over the server's `tools/list`.
+The fallback reaches only HTTP servers the proxy may connect to: without auth,
+or with headers the operator configured under `mcpApps.fallback.servers`
+([configuration](../configuration.md#mcp-apps-fallback)), where the operator
+may also override the URL the proxy connects to. It is a bridge;
+delete it once no adapter reaches it.
+
+Wrap the adapter in `withMcpApps(runtime)` (`packages/proxy/mcp-apps/annotate.ts`)
+in its factory, before the coordinator. On the run, recover, and discover
+streams the wrapper awaits `describe` (1.5 s budget) when an `mcp__` or bare
+`aos-ui` tool call starts, so the browser draws the view while the call runs,
+and asks again with the result only for a call the start could not flag. It
+does the same for `history()`, sets the `app` flag, and advertises
+`content.mcpApps` in the Session capabilities. The ACP layer carries the flag
+as `_meta.aos.app` on `tool_call_update`, from the call's first update.
 
 ### Registration and adapter file layout
 
@@ -309,18 +418,19 @@ union (`packages/proxy/config.ts:109`) and add a corresponding branch in
 `packages/proxy/adapters/create-runtime.ts`. The conventional per-adapter
 module layout (as used by OpenCode and OpenClaw) is:
 
-| Module           | Responsibility                                           |
-| ---------------- | -------------------------------------------------------- |
-| `adapter.ts`     | Composes all modules into `ServerRuntime`                |
-| `factory.ts`     | Entry point; builds and returns a `RuntimeInstance`      |
-| `capabilities.ts`| Maps native capabilities to normalized form              |
-| `client.ts`      | Validated HTTP or RPC client for native API calls        |
-| `content.ts`     | Normalizes native content types and attachment envelopes |
-| `history.ts`     | Converts authoritative native history rows               |
-| `interactions.ts`| Answers native clarify/approval interactions             |
-| `run.ts`         | Converts native execution frames to proxy-owned events   |
-| `workspace.ts`   | Agent/Session catalog and metadata                       |
-| `native-schemas.ts` | Validated Zod schemas for native payloads             |
+| Module              | Responsibility                                           |
+| ------------------- | -------------------------------------------------------- |
+| `adapter.ts`        | Composes all modules into `ServerRuntime`                |
+| `factory.ts`        | Entry point; builds and returns a `RuntimeInstance`      |
+| `capabilities.ts`   | Maps native capabilities to normalized form              |
+| `client.ts`         | Validated HTTP or RPC client for native API calls        |
+| `content.ts`        | Normalizes native content types and attachment envelopes |
+| `history.ts`        | Converts authoritative native history rows               |
+| `interactions.ts`   | Answers native clarify/approval interactions             |
+| `mcp-apps.ts`       | `ServerRuntime.mcpApps`, native or through the fallback  |
+| `run.ts`            | Converts native execution frames to proxy-owned events   |
+| `workspace.ts`      | Agent/Session catalog and metadata                       |
+| `native-schemas.ts` | Validated Zod schemas for native payloads                |
 
 The Hermes adapter predates this layout and uses different module names for
 some of these roles; see

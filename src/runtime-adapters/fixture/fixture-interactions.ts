@@ -5,7 +5,10 @@ import type {
 } from "@/runtime-adapters/contracts"
 
 /** Called when the operator answers a question; receives the thread and the answers matrix. */
-export type FixtureAnswerAppender = (threadId: string, answers: string[][]) => void
+export type FixtureAnswerAppender = (
+  threadId: string,
+  answers: string[][]
+) => void
 
 /**
  * Deterministic RuntimeInteractionAdapter for fixture mode. One pending request
@@ -14,7 +17,9 @@ export type FixtureAnswerAppender = (threadId: string, answers: string[][]) => v
  */
 export function createFixtureInteractions(
   onAnswer: FixtureAnswerAppender = () => {}
-): RuntimeInteractionAdapter & { register(request: RuntimeQuestionRequest): void } {
+): RuntimeInteractionAdapter & {
+  register(request: RuntimeQuestionRequest): void
+} {
   const pending = new Map<string, RuntimeQuestionRequest>()
   const listeners = new Map<string, Set<() => void>>()
 

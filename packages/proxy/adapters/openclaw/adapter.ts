@@ -11,6 +11,7 @@ import {
 } from "../../../protocol"
 import type {
   ServerAttachmentStage,
+  ServerMcpApps,
   ServerRunEngine,
   ServerRuntime,
 } from "../../core/runtime"
@@ -20,6 +21,16 @@ import {
   OpenClawClientUnavailableError,
   type OpenClawGatewayClient,
 } from "./client"
+import {
+  artifactFilename,
+  artifactMime,
+  downloadBytes,
+  isNativeArtifactId,
+  isReceiptArtifactId,
+  OpenClawArtifactUnavailableError,
+  OpenClawArtifactUnreadableError,
+  sessionFileBytes,
+} from "./artifacts"
 import { OpenClawContentPublicError } from "./content"
 import { openClawCapabilities } from "./capabilities"
 import { stageOpenClawChatAttachments } from "./content"
@@ -29,7 +40,18 @@ import {
   type OpenClawHistorySubscription,
 } from "./history"
 import { OpenClawInteractionPublicError } from "./interactions"
-import { OpenClawNativePayloadError } from "./native-schemas"
+import { createOpenClawMcpApps } from "./mcp-apps"
+import {
+  createOpenClawMcpToolNames,
+  type OpenClawMcpToolNames,
+} from "./mcp-tool-names"
+import {
+  OpenClawNativePayloadError,
+  openClawArtifactDownloadParams,
+  openClawSessionFileParams,
+  parseOpenClawArtifactDownload,
+  parseOpenClawSessionFile,
+} from "./native-schemas"
 import {
   createOpenClawWorkspace,
   OpenClawWorkspaceOwnershipError,
@@ -44,11 +66,33 @@ export class OpenClawAdapterUnavailableError extends Error {
   }
 }
 
+/**
+ * One artifact read. The gateway refuses a missing, unknown, or unsupported
+ * artifact without saying which, so every refusal reads as unreadable.
+ */
+async function readable(read: () => Promise<unknown>) {
+  try {
+    return await read()
+  } catch (error) {
+    if (
+      error instanceof OpenClawClientRequestError &&
+      error.kind === "rejected"
+    )
+      throw new OpenClawArtifactUnreadableError()
+    throw error
+  }
+}
+
 type OpenClawServerAdapterOptions = Readonly<{
   client: OpenClawGatewayClient
   runs: ServerRunEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
+  /** The gateway's HTTP origin, where a ticketed media download resolves. */
+  gatewayOrigin?: string
+  fetch?: typeof fetch
+  /** Shared with the run engine so live and stored tool names agree. */
+  mcpToolNames?: OpenClawMcpToolNames
 }>
 
 /**
@@ -57,10 +101,13 @@ type OpenClawServerAdapterOptions = Readonly<{
  */
 export class OpenClawServerAdapter implements ServerRuntime {
   readonly runs: ServerRunEngine
+  readonly mcpApps: ServerMcpApps
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
   readonly #subscribeSession: OpenClawHistorySubscription
+  readonly #gatewayOrigin?: string
+  readonly #fetch: typeof fetch
   #ready?: Promise<void>
   #close?: Promise<void>
 
@@ -68,6 +115,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
     this.runs = options.runs
     this.#client = options.client
     this.#subscribeSession = options.subscribeSession
+    this.#gatewayOrigin = options.gatewayOrigin
+    this.#fetch = options.fetch ?? fetch
     this.#workspace = createOpenClawWorkspace({
       client: options.client,
       hiddenAgentIds: options.hiddenAgentIds,
@@ -76,6 +125,18 @@ export class OpenClawServerAdapter implements ServerRuntime {
       client: options.client,
       authority: this.#workspace,
       subscribeSession: options.subscribeSession,
+      mcpToolNames:
+        options.mcpToolNames ?? createOpenClawMcpToolNames(options.client),
+    })
+    this.mcpApps = createOpenClawMcpApps({
+      client: options.client,
+      authority: {
+        getSession: (agentId, sessionKey) =>
+          this.#workspace.getSession(agentId, sessionKey),
+        mcpAppViewId: (agentId, sessionKey, toolCallId) =>
+          this.#history.mcpAppViewId(agentId, sessionKey, toolCallId),
+      },
+      start: () => this.#start(),
     })
   }
 
@@ -105,6 +166,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
       return { code: "uncertain_mutation", status: 503 } as const
     if (
       cause instanceof OpenClawWorkspaceOwnershipError ||
+      // The artifact is still authoritative, but OpenClaw cannot read it:
+      // unlike a 503, "not found" never invites a retry that cannot succeed.
+      cause instanceof OpenClawArtifactUnreadableError ||
       (cause instanceof OpenClawInteractionPublicError &&
         cause.code === "AOS_INTERACTION_NOT_FOUND")
     )
@@ -123,6 +187,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
       cause instanceof OpenClawHistoryUnavailableError ||
       cause instanceof OpenClawNativePayloadError ||
       cause instanceof OpenClawAdapterUnavailableError ||
+      cause instanceof OpenClawArtifactUnavailableError ||
       (cause instanceof OpenClawInteractionPublicError &&
         cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
     )
@@ -302,12 +367,59 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   async artifact(
-    _agentId: string,
-    _publicSessionId: string,
-    _artifactId: string
+    agentId: string,
+    publicSessionId: string,
+    artifactId: string
   ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }> {
-    void [_agentId, _publicSessionId, _artifactId]
-    throw new OpenClawAdapterUnavailableError()
+    await this.#start()
+    await this.#workspace.getSession(agentId, publicSessionId)
+    return isReceiptArtifactId(artifactId)
+      ? this.#receiptArtifact(agentId, publicSessionId, artifactId)
+      : this.#nativeArtifact(agentId, publicSessionId, artifactId)
+  }
+
+  /** A `present_artifact` receipt's file, read through the Session workspace. */
+  async #receiptArtifact(agentId: string, sessionKey: string, id: string) {
+    const artifact = await this.#history.publishedArtifact(
+      agentId,
+      sessionKey,
+      id
+    )
+    if (!artifact) throw new OpenClawWorkspaceOwnershipError()
+    const file = parseOpenClawSessionFile(
+      await readable(() =>
+        this.#client.request(
+          "sessions.files.get",
+          openClawSessionFileParams(agentId, sessionKey, artifact.path)
+        )
+      )
+    )
+    const { filename, mimeType } = artifact.descriptor
+    const nativeMime = artifactMime(file.mimeType)
+    return {
+      bytes: sessionFileBytes(file),
+      ...(mimeType || nativeMime ? { mimeType: mimeType ?? nativeMime } : {}),
+      filename,
+    }
+  }
+
+  /** OpenClaw's own transcript artifact; the gateway scopes it to the Session. */
+  async #nativeArtifact(agentId: string, sessionKey: string, id: string) {
+    if (!isNativeArtifactId(id)) throw new OpenClawWorkspaceOwnershipError()
+    const download = parseOpenClawArtifactDownload(
+      await readable(() =>
+        this.#client.request(
+          "artifacts.download",
+          openClawArtifactDownloadParams(agentId, sessionKey, id)
+        )
+      )
+    )
+    const mimeType = artifactMime(download.artifact.mimeType)
+    return {
+      bytes: await downloadBytes(download, this.#gatewayOrigin, this.#fetch),
+      ...(mimeType ? { mimeType } : {}),
+      filename: artifactFilename(download.artifact.title),
+    }
   }
 
   async transcribe(

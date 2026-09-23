@@ -9,6 +9,8 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosPlanMetaSchema,
+  type AosArtifactDescriptor,
+  formatArtifactUri,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext } from "../types"
 
@@ -61,7 +63,8 @@ export function stateOutbound(
 /** A streamed delta, or the whole block a stored part replays as. */
 export function chunkOutbound(
   context: TranslateContext,
-  sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
+  sessionUpdate:
+    "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk",
   messageId: string,
   content: string | ContentBlock
 ): AcpOutbound {
@@ -74,11 +77,35 @@ export function chunkOutbound(
   })
 }
 
+/**
+ * A published artifact as a `resource_link` chunk on the turn it belongs to.
+ * The link names only the artifact; the reader fetches it through the Session
+ * and lane it already reads.
+ */
+export function artifactOutbound(
+  context: TranslateContext,
+  sessionUpdate: "agent_message_chunk" | "user_message_chunk",
+  messageId: string,
+  artifact: AosArtifactDescriptor
+): AcpOutbound {
+  return chunkOutbound(context, sessionUpdate, messageId, {
+    type: "resource_link",
+    uri: formatArtifactUri(artifact.id),
+    name: artifact.filename,
+    ...(artifact.mimeType === undefined ? {} : { mimeType: artifact.mimeType }),
+    ...(artifact.sizeBytes === undefined ? {} : { size: artifact.sizeBytes }),
+  })
+}
+
 export function toolOutbound(
   context: TranslateContext,
   messageId: string,
   call: Omit<ToolCallUpdate, "_meta">,
-  args?: { argsTextDelta: string } | { argsText: string }
+  /** Streaming arguments, and the flag of a call that opens an MCP App view. */
+  args?:
+    | { argsTextDelta: string }
+    | { argsText: string; app?: Record<string, never> }
+    | { app: Record<string, never> }
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_update",

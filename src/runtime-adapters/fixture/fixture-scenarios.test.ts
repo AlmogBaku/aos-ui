@@ -23,6 +23,7 @@ describe("deterministic fixture scenarios", () => {
       ["show malformed mermaid", "mermaid-malformed"],
       ["show oversized mermaid", "mermaid-oversized"],
       ["return a malformed tool", "malformed-tool"],
+      ["open the mcp app", "mcp-app"],
       ["simulate provider outage", "provider-outage"],
     ]
     const scenarios = cases.map(([prompt, expected]) => {

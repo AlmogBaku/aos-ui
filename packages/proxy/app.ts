@@ -14,6 +14,7 @@ import type { PushRegistrations } from "./push/registrations"
 import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
+import { registerMcpAppRoutes } from "./routes/mcp-apps"
 import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerPushRoutes } from "./routes/push"
 import { registerRuntimeRoute } from "./routes/runtime"
@@ -147,6 +148,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     requireRuntime,
     requireScopedSession
   )
+  registerMcpAppRoutes(app, options, requireRuntime, requireScopedSession)
   registerPushRoutes(app, options, resolvePrincipal)
   if (options.guestInvitations)
     registerInvitationRoutes(app, {

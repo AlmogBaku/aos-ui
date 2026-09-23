@@ -21,6 +21,8 @@ import {
   AOS_PLAN_ID,
 } from "@aos/protocol/acp"
 
+import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+
 import type {
   AcpConnection,
   AcpResumeOptions,
@@ -614,38 +616,35 @@ describe("useAcpRuntime", () => {
     expect(onComposerPrefill).toHaveBeenCalledWith("Next question?")
   })
 
-  it("appends an artifact only for its own Session", async () => {
+  it("projects a published artifact link as an artifact part", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "On it"))
-    })
-    const artifact = {
-      id: "art-1",
-      filename: "chart.json",
-      mimeType: "application/json",
-      source: { type: "inline", encoding: "utf8", data: "{}" },
-    }
-    act(() => {
-      fake.notify(AOS_METHODS.notify.artifact, {
-        sessionId: "other-session",
-        ...RUN_META,
-        artifact,
+      fake.emit({
+        sessionUpdate: "agent_message_chunk",
+        messageId: "a1",
+        content: {
+          type: "resource_link",
+          uri: "artifact://art-1",
+          name: "chart.json",
+          mimeType: "application/json",
+        },
       })
     })
-    expect(result.current.thread.getState().messages[0]?.content).toHaveLength(
-      1
-    )
-    act(() => {
-      fake.notify(AOS_METHODS.notify.artifact, {
-        sessionId: SESSION_ID,
-        ...RUN_META,
-        artifact,
-      })
-    })
-    expect(result.current.thread.getState().messages[0]?.content).toHaveLength(
-      2
-    )
+    expect(result.current.thread.getState().messages[0]?.content).toEqual([
+      { type: "text", text: "On it" },
+      {
+        type: "data",
+        name: ARTIFACT_DATA_PART_NAME,
+        data: {
+          id: "art-1",
+          filename: "chart.json",
+          mimeType: "application/json",
+          source: { type: "provider", reference: "art-1" },
+        },
+      },
+    ])
   })
 
   it("holds queued sends while a run owns the Session", async () => {

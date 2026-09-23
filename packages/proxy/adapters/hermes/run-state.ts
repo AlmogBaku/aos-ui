@@ -7,16 +7,18 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type {
-  RunInterruptOutcome,
-  TokenUsage,
-} from "../../core/events"
+import type { RunInterruptOutcome, TokenUsage } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
 import { EventQueue, startedQueue } from "./event-queue"
-import type { NativeFailure, RunFailure } from "./run-failures"
+import {
+  RUN_FAILURES,
+  RUN_RESET_LOG,
+  type NativeFailure,
+  type RunFailure,
+} from "./run-failures"
 import type { BufferedNativeEvents } from "./run-frames"
 import type { HermesNativeStatus, HermesRunNative } from "./run-native"
 
@@ -107,6 +109,20 @@ export type RunEngineHost = {
   fail(active: ActiveRun, failure: RunFailure): void
   detach(active: ActiveRun, failure: RunFailure): void
   settle(active: ActiveRun): void
+}
+
+/**
+ * End a run that must be reconciled with Hermes history. Every such path
+ * publishes the same failure, so the log line names which one decided it.
+ */
+export function failReset(
+  host: RunEngineHost,
+  active: ActiveRun,
+  reason: string
+) {
+  if (active.terminal) return
+  host.log.warn(RUN_RESET_LOG, { sessionId: active.scope.sessionId, reason })
+  host.fail(active, RUN_FAILURES.resetRequired)
 }
 
 /** A promise and its resolver: the one shape for AOS' own settlement edges. */

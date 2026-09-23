@@ -7,9 +7,7 @@
  * turn. Whenever a sequence is missing, one bounded read of Hermes' ring decides
  * whether the run can continue or the browser has to reconcile.
  */
-import type {
-  RunInterruptOutcome,
-} from "../../core/events"
+import type { RunInterruptOutcome } from "../../core/events"
 
 import { boundedNativeBytes, sessionKey } from "./native"
 import { providerUnavailable, RUN_FAILURES } from "./run-failures"
@@ -28,6 +26,7 @@ import {
 } from "./run-frames"
 import { settleFrom } from "./run-settlement"
 import {
+  failReset,
   safelyUnsubscribe,
   settledStatus,
   type ActiveRun,
@@ -127,7 +126,11 @@ export async function attachRun(
   host.runs.set(sessionKey(active.scope), active)
   if (cursor.reconcile || buffered.overflow) {
     drainBufferedEvents(buffered)
-    return host.fail(active, RUN_FAILURES.resetRequired)
+    return failReset(
+      host,
+      active,
+      cursor.reconcile ? "attach-cursor-reconcile" : "attach-buffer-overflow"
+    )
   }
   if (lost) {
     drainBufferedEvents(buffered)
@@ -135,7 +138,7 @@ export async function attachRun(
   }
   if (cursor.replayed && !acceptReplayed(host, active, cursor.replayed)) {
     drainBufferedEvents(buffered)
-    return host.fail(active, RUN_FAILURES.resetRequired)
+    return failReset(host, active, "attach-replay-rejected")
   }
   // A watermark past the last frame this page carried means the sequences
   // in between are missing rather than delivered: read the ring once more.
@@ -334,7 +337,7 @@ async function catchUp(host: RunEngineHost, active: ActiveRun) {
     // the gap; an empty page with nothing held is a heal that missed nothing.
     (!active.terminal && firstBufferedSeq(held) > active.lastSeen + 1)
   ) {
-    host.fail(active, RUN_FAILURES.resetRequired)
+    failReset(host, active, "catch-up-gap")
     return
   }
   for (const event of held) host.accept(active, event, true)
@@ -348,5 +351,5 @@ function lostRun(host: RunEngineHost, active: ActiveRun, reason: LostReason) {
   if (reason === "disconnected")
     host.detach(active, RUN_FAILURES.connectionInterrupted)
   // A rebound or restarted live Session cannot answer for this run's cursor.
-  else host.fail(active, RUN_FAILURES.resetRequired)
+  else failReset(host, active, `live-session-${reason}`)
 }

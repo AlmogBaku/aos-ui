@@ -14,10 +14,7 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type {
-  AosActivityNotification,
-  AosArtifactDescriptor,
-} from "../../protocol/acp"
+import type { AosActivityNotification } from "../../protocol/acp"
 import type {
   ExecutionEvent,
   PendingRequest,
@@ -155,12 +152,6 @@ export const initialTranslateState: TranslateState = {
 export type AcpOutbound =
   | { kind: "update"; update: SessionUpdate }
   | {
-      kind: "artifact"
-      runId: string
-      messageId?: string
-      artifact: AosArtifactDescriptor
-    }
-  | {
       kind: "steer-accepted"
       runId: string
       requestId: string
@@ -221,8 +212,8 @@ export type TranslateRunEvent = (
 
 /**
  * `translate/history.ts` → `translateHistory`. A replay sends the same outbound
- * kinds a run segment does, so a stored artifact reaches the browser through
- * `_aos/artifact` exactly as the live one did.
+ * kinds a run segment does, so a stored artifact reaches the browser as the
+ * same `resource_link` chunk the live one did.
  */
 export type TranslateHistory = (
   history: SessionHistoryResponse,

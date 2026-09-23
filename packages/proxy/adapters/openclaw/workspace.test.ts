@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  OPENCLAW_CREATOR_AGENT_ID,
   OpenClawWorkspaceOwnershipError,
   createOpenClawWorkspace,
 } from "./workspace"
@@ -53,6 +54,42 @@ describe("OpenClaw workspace reads", () => {
         revision: expect.any(String),
       },
     ])
+  })
+
+  it("[CL1-WORKSPACE-013] reports the reserved creator Agent as a hidden creator", async () => {
+    const workspace = createOpenClawWorkspace({
+      client: gateway({
+        "agents.list": {
+          defaultId: "analyst",
+          mainKey: "main",
+          scope: "global",
+          agents: [
+            { id: "analyst", name: "Analyst", kind: "agent" },
+            {
+              id: OPENCLAW_CREATOR_AGENT_ID,
+              name: "Agent Creator",
+              kind: "agent",
+            },
+          ],
+        },
+      }),
+    })
+
+    const result = await workspace.listAgents()
+
+    expect(result.agents).toContainEqual({
+      summary: {
+        kind: "ready",
+        id: OPENCLAW_CREATOR_AGENT_ID,
+        name: "Agent Creator",
+        visibility: "hidden",
+        role: "creator",
+      },
+      visibility: "hidden",
+      selectable: false,
+      editable: false,
+      revision: expect.any(String),
+    })
   })
 
   it("[CL1-WORKSPACE-002] rejects a Session row whose key and declared owner disagree", async () => {
@@ -329,7 +366,7 @@ describe("OpenClaw workspace reads", () => {
     })
     expect(native.requests).toContainEqual({
       method: "sessions.create",
-      params: { agentId },
+      params: { agentId, toolOverrides: { mcpServers: { "aos-ui": true } } },
     })
     expect(native.requests.at(-1)).toEqual({
       method: "sessions.list",

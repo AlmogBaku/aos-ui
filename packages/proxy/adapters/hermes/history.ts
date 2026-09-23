@@ -1,4 +1,5 @@
 import type { SessionMessage } from "../../../protocol"
+import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import {
   isRecord as isNativeRecord,
   rowText,
@@ -171,7 +172,8 @@ function isRedirectCorrection(value: JsonRecord): boolean {
 
 /** Converts provider-native durable rows into the strict public history shape. */
 export function projectHermesHistory(
-  rows: readonly unknown[]
+  rows: readonly unknown[],
+  resolve?: McpToolNameResolver
 ): SessionMessage[] {
   const messages: SessionMessage[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
@@ -211,7 +213,7 @@ export function projectHermesHistory(
         return
       const resultToolName = trimmedText(value.tool_name ?? value.toolName)
       const toolName = resultToolName
-        ? canonicalToolName(resultToolName)
+        ? canonicalToolName(resultToolName, resolve)
         : part.toolName
       const outcome = projectHermesToolOutcome(
         toolCallId,
@@ -267,10 +269,11 @@ export function projectHermesHistory(
     const text = rowText(value, rawContent)
     const userContent =
       role === "user" ? projectHermesUserContent(text, id) : undefined
-    const visibleText =
+    const assistantContent =
       role === "assistant"
         ? projectHermesMediaText(text, mediaReferences.get(messageIndex) ?? [])
-        : (userContent?.text ?? text)
+        : undefined
+    const visibleText = assistantContent?.text ?? userContent?.text ?? text
     const content = previousAssistant ? [...previousAssistant.content] : []
     const reasoning =
       role === "assistant"
@@ -278,6 +281,18 @@ export function projectHermesHistory(
         : undefined
     if (reasoning) content.push({ type: "reasoning", text: reasoning })
     if (visibleText) content.push({ type: "text", text: visibleText })
+    // Live publishes a MEDIA line's artifact as the line streams past, once per
+    // reference however many rows of the turn repeat it.
+    for (const { descriptor } of assistantContent?.artifacts ?? [])
+      if (
+        !content.some(
+          (part) =>
+            part.type === "data" &&
+            isRecord(part.data) &&
+            part.data.id === descriptor.id
+        )
+      )
+        content.push({ type: "data", name: "aos.artifact", data: descriptor })
     const inlineImages =
       role === "user" && Array.isArray(rawContent)
         ? rawContent.flatMap((part) => {
@@ -303,7 +318,8 @@ export function projectHermesHistory(
         if (!toolCallId || !nativeToolName) continue
         const { toolName, args } = projectHermesToolCall(
           nativeToolName,
-          fn?.arguments
+          fn?.arguments,
+          resolve
         )
         const partIndex = content.length
         content.push({
@@ -346,4 +362,23 @@ export function projectHermesHistory(
       ? message
       : { ...message, completedAt: new Date(ms).toISOString() }
   })
+}
+
+/** Every raw tool name the rows carry, so their MCP names load before projection. */
+export function hermesHistoryToolNames(rows: readonly unknown[]) {
+  const names = new Set<string>()
+  for (const row of rows) {
+    if (!isRecord(row)) continue
+    const resultName = trimmedText(row.tool_name ?? row.toolName)
+    if (resultName) names.add(resultName)
+    if (!Array.isArray(row.tool_calls)) continue
+    for (const call of row.tool_calls) {
+      const name =
+        isRecord(call) && isRecord(call.function)
+          ? trimmedText(call.function.name)
+          : undefined
+      if (name) names.add(name)
+    }
+  }
+  return names
 }

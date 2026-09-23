@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  aosToolsPatch,
   OpenClawNativePayloadError,
+  openClawCreateSessionParams,
   openClawDeleteSessionParams,
   openClawHistoryParams,
   openClawModelsParams,
@@ -104,6 +106,52 @@ describe("OpenClaw native workspace schemas", () => {
       parseOpenClawSessions(
         { sessions: [{ key: "agent:a:one", pinned: "yes" }] },
         1
+      )
+    ).toThrow(OpenClawNativePayloadError)
+  })
+
+  it("enables the aos-ui MCP server through official create and patch parameters", () => {
+    expect(openClawCreateSessionParams("researcher")).toEqual({
+      agentId: "researcher",
+      toolOverrides: { mcpServers: { "aos-ui": true } },
+    })
+    expect(
+      openClawPatchSessionParams(
+        "researcher",
+        "agent:researcher:main",
+        aosToolsPatch({
+          mcpServers: { other: false },
+          skills: { review: true },
+        })
+      )
+    ).toEqual({
+      agentId: "researcher",
+      key: "agent:researcher:main",
+      toolOverrides: {
+        mcpServers: { other: false, "aos-ui": true },
+        skills: { review: true },
+      },
+      expectedToolOverrides: {
+        mcpServers: { other: false },
+        skills: { review: true },
+      },
+    })
+    expect(
+      openClawPatchSessionParams(
+        "researcher",
+        "agent:researcher:main",
+        aosToolsPatch(undefined)
+      )
+    ).toMatchObject({ expectedToolOverrides: null })
+  })
+
+  it("rejects a listed Session whose tool overrides are not official", () => {
+    expect(() =>
+      parseOpenClawSessions(
+        {
+          sessions: [{ key: "agent:researcher:main", toolOverrides: { x: 1 } }],
+        },
+        10
       )
     ).toThrow(OpenClawNativePayloadError)
   })

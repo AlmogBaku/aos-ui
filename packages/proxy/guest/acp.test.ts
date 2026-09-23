@@ -108,9 +108,28 @@ const CAPABILITIES = {
   content: {
     attachments: { status: "unavailable", reason: "not-supported" },
     artifacts: { status: "unavailable", reason: "not-supported" },
+    mcpApps: { status: "unavailable", reason: "not-supported" },
     transcription: { status: "unavailable", reason: "not-supported" },
     speech: { status: "unavailable", reason: "not-supported" },
   },
+}
+
+/** One published artifact, as the Hermes adapter emits it live and stored. */
+const ARTIFACT = {
+  id: "art-1",
+  filename: "notes.md",
+  mimeType: "text/markdown",
+  source: { type: "provider" as const, reference: "art-1" },
+}
+
+/** A tool that declares an MCP App view, which a guest sees as its card. */
+const APP_TOOL = "mcp__excalidraw__create_view"
+
+/** The one tool update a guest receives for an App: its card, nothing more. */
+function appCards(recorder: ReturnType<typeof createRecorder>) {
+  return updates(recorder).flatMap(({ update }) =>
+    update.sessionUpdate === "tool_call_update" ? [update] : []
+  )
 }
 
 /** A stored conversation whose reasoning and setup turn are operator-only. */
@@ -138,6 +157,23 @@ const HISTORY = {
       content: [
         { type: "text" as const, text: "Safe answer" },
         { type: "reasoning" as const, text: "private reasoning" },
+        { type: "data" as const, name: "aos.artifact", data: ARTIFACT },
+        {
+          type: "tool-call" as const,
+          toolCallId: "stored-app",
+          toolName: APP_TOOL,
+          args: { title: "private app input" },
+          argsText: '{"title":"private app input"}',
+          result: { content: [{ type: "text", text: "private app output" }] },
+          app: true as const,
+        },
+        {
+          type: "tool-call" as const,
+          toolCallId: "stored-read",
+          toolName: "read_file",
+          args: { path: "/private" },
+          argsText: '{"path":"/private"}',
+        },
       ],
       createdAt: "2026-09-15T00:00:01.000Z",
     },
@@ -216,15 +252,40 @@ function runEvents(runId: string): RunEvent[] {
       toolCallName: "read_file",
     },
     {
+      type: RunEventKind.TOOL_CALL_RESULT,
+      messageId: "tool-1-result",
+      toolCallId: "tool-1",
+      content: "private file",
+    },
+    {
       type: RunEventKind.TEXT_MESSAGE_START,
       messageId: "assistant-native",
       role: "assistant",
+    },
+    {
+      type: RunEventKind.TOOL_CALL_START,
+      toolCallId: "live-app",
+      toolCallName: APP_TOOL,
+    },
+    {
+      type: RunEventKind.TOOL_CALL_ARGS,
+      toolCallId: "live-app",
+      delta: '{"title":"private app input"}',
+    },
+    { type: RunEventKind.TOOL_CALL_END, toolCallId: "live-app" },
+    {
+      type: RunEventKind.TOOL_CALL_RESULT,
+      messageId: "live-app-result",
+      toolCallId: "live-app",
+      content: "private app output",
+      app: true,
     },
     {
       type: RunEventKind.TEXT_MESSAGE_CONTENT,
       messageId: "assistant-native",
       delta: "Guest-visible answer",
     },
+    { type: RunEventKind.CUSTOM, name: "aos.artifact", value: ARTIFACT },
     { type: RunEventKind.TEXT_MESSAGE_END, messageId: "assistant-native" },
     {
       type: RunEventKind.RUN_FINISHED,
@@ -553,11 +614,48 @@ describe("guest ACP lane", () => {
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
     expect(replayed).not.toContain("private reasoning")
+    expect(appCards(test.recorder)).toEqual([
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "stored-app",
+        title: APP_TOOL,
+        status: "completed",
+        _meta: {
+          [AOS_META_KEY]: expect.objectContaining({ app: {} }),
+        },
+      },
+    ])
+    expect(replayed).not.toContain("private app")
+    expect(replayed).not.toContain("/private")
     // The invitation's setup turn is not part of the guest conversation.
     expect(replayed).not.toContain(INSTRUCTION)
     await expect(test.resume("another-session")).rejects.toMatchObject({
       code: AOS_JSONRPC_ERRORS.notFound,
     })
+    test.close()
+  })
+
+  it("links a streamed artifact by its id alone", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF, true)
+    await test.prompt("Show the notes")
+    await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("resource_link")
+    )
+
+    const links = updates(test.recorder).flatMap(({ update }) =>
+      "content" in update &&
+      !Array.isArray(update.content) &&
+      update.content?.type === "resource_link"
+        ? [update.content]
+        : []
+    )
+    // The guest history projection keeps text alone, so only the live
+    // publication links, and it names neither a route nor the stored Session.
+    expect(links.map((link) => link.uri)).toEqual(["artifact://art-1"])
+    expect(JSON.stringify(links)).not.toContain(STORED)
     test.close()
   })
 
@@ -643,9 +741,19 @@ describe("guest ACP lane", () => {
     const streamed = JSON.stringify(updates(test.recorder))
     expect(streamed).toContain("agent_message_chunk")
     expect(streamed).not.toContain("agent_thought_chunk")
-    expect(streamed).not.toContain("tool_call_update")
+    expect(appCards(test.recorder)).toEqual([
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "live-app",
+        title: APP_TOOL,
+        status: "completed",
+        _meta: {
+          [AOS_META_KEY]: expect.objectContaining({ app: {} }),
+        },
+      },
+    ])
     expect(streamed).not.toContain("read_file")
-    expect(streamed).not.toContain("private reasoning")
+    expect(streamed).not.toContain("private")
     test.close()
   })
 

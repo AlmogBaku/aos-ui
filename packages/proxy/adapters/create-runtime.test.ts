@@ -39,8 +39,16 @@ describe("runtime selection", () => {
       passwordFile: "/run/secrets/opencode-password",
     } satisfies Extract<RuntimeConfig, { kind: "opencode" }>
 
-    await expect(createRuntimeInstance(config, limits)).resolves.toBe(selected)
-    expect(factories.opencode).toHaveBeenCalledExactlyOnceWith(config, limits)
+    const mcpServerOverrides = new Map([
+      ["desktop", { headers: { Authorization: "Bearer test" } }],
+    ])
+
+    await expect(
+      createRuntimeInstance(config, limits, mcpServerOverrides)
+    ).resolves.toBe(selected)
+    expect(factories.opencode).toHaveBeenCalledExactlyOnceWith(config, limits, {
+      mcpServerOverrides,
+    })
     expect(factories.hermes).not.toHaveBeenCalled()
   })
 

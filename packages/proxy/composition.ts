@@ -11,7 +11,13 @@ import {
   type GuestInvitationKey,
   type GuestInvitationService,
 } from "./auth/guest-invitation"
-import { parseProxyConfig, type ProxyConfig, type VoiceConfig } from "./config"
+import {
+  parseProxyConfig,
+  type McpAppsConfig,
+  type ProxyConfig,
+  type VoiceConfig,
+} from "./config"
+import type { McpServerOverrides } from "./mcp-apps/client"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import type { RuntimeInstance } from "./core/runtime"
 import { createSessionRows, type SessionRows } from "./core/session-rows"
@@ -77,6 +83,39 @@ async function createVoiceProviders(
   }
 }
 
+/** Header values, each read once at startup from its own file. */
+async function readHeaderFiles(headers: Record<string, { file: string }>) {
+  return Object.fromEntries(
+    await Promise.all(
+      Object.entries(headers).map(
+        async ([header, { file }]) =>
+          [header, await readSecretFile(file)] as const
+      )
+    )
+  )
+}
+
+/** Each configured fallback server: its URL override and its headers. */
+async function readMcpServerOverrides(
+  mcpApps: McpAppsConfig | undefined
+): Promise<McpServerOverrides> {
+  const servers = Object.entries(mcpApps?.fallback.servers ?? {})
+  return new Map(
+    await Promise.all(
+      servers.map(
+        async ([name, { url, headers }]) =>
+          [
+            name,
+            {
+              ...(url ? { url } : {}),
+              ...(headers ? { headers: await readHeaderFiles(headers) } : {}),
+            },
+          ] as const
+      )
+    )
+  )
+}
+
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
  * configured private one, the stored devices, the presence the ACP lane reports
@@ -122,10 +161,12 @@ export async function createConfiguredProxy(
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
+  const mcpServerOverrides = await readMcpServerOverrides(config.mcpApps)
   const [nativeInstance, invitationKeys, voiceProviders] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
-      config.limits
+      config.limits,
+      mcpServerOverrides
     ),
     config.guest
       ? Promise.all(

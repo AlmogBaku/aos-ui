@@ -559,3 +559,67 @@ describe("isHttpsOrLoopback", () => {
     expect(isHttpsOrLoopback(new URL("http://192.168.1.4:3000"))).toBe(false)
   })
 })
+
+describe("MCP Apps fallback credentials", () => {
+  const withHeaders = (headers: Record<string, unknown>) => ({
+    ...validConfig(),
+    mcpApps: { fallback: { servers: { weather: { headers } } } },
+  })
+
+  it("accepts a header whose value lives in an absolute file", () => {
+    const parsed = parseProxyConfig(
+      withHeaders({ Authorization: { file: "/run/secrets/weather-mcp" } })
+    )
+    expect(parsed.mcpApps?.fallback.servers.weather?.headers).toEqual({
+      Authorization: { file: "/run/secrets/weather-mcp" },
+    })
+  })
+
+  it("rejects a relative file, an inline value, and a header name that is not a token", () => {
+    for (const headers of [
+      { Authorization: { file: "secrets/weather-mcp" } },
+      { Authorization: "Bearer inline" },
+      { "Bad Header": { file: "/run/secrets/weather-mcp" } },
+    ])
+      expect(() => parseProxyConfig(withHeaders(headers))).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+  const withServer = (server: Record<string, unknown>) => ({
+    ...validConfig(),
+    mcpApps: { fallback: { servers: { "aos-ui": server } } },
+  })
+  const header = { Authorization: { file: "/run/secrets/aos-ui-mcp" } }
+
+  it("accepts a URL override alone, including a plain-HTTP Compose service", () => {
+    const parsed = parseProxyConfig(
+      withServer({ url: "http://tools-mcp:4110/mcp" })
+    )
+    expect(parsed.mcpApps?.fallback.servers["aos-ui"]).toEqual({
+      url: "http://tools-mcp:4110/mcp",
+    })
+  })
+
+  it("accepts a URL override with headers over HTTPS or loopback", () => {
+    for (const url of [
+      "https://tools.example.test/mcp",
+      "http://127.0.0.1:4110/mcp",
+    ])
+      expect(
+        parseProxyConfig(withServer({ url, headers: header })).mcpApps?.fallback
+          .servers["aos-ui"]
+      ).toEqual({ url, headers: header })
+  })
+
+  it("rejects a non-HTTP URL, headers over non-loopback HTTP, and an empty entry", () => {
+    for (const server of [
+      { url: "ws://tools-mcp:4110/mcp" },
+      { url: "file:///run/mcp" },
+      { url: "http://tools-mcp:4110/mcp", headers: header },
+      {},
+    ])
+      expect(() => parseProxyConfig(withServer(server))).toThrow(
+        "Invalid proxy configuration"
+      )
+  })
+})

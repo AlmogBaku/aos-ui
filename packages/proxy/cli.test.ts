@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { stringify } from "yaml"
 
+import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
@@ -213,6 +214,24 @@ describe("proxy executable", () => {
         "img-src 'self' https: data: blob:"
       )
       expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
+      // The guest page frames the MCP App sandbox proxy, which is served on
+      // both listeners with its own policy: the relay script runs, only this
+      // origin may frame it, and the guest page's policy does not apply.
+      expect(guestDocument?.headers.get("content-security-policy")).toContain(
+        "frame-src 'self'"
+      )
+      for (const app of [guestApp, start.mock.calls[0]![0].app!]) {
+        const sandbox = await app.fetch(
+          new Request(
+            `https://aos.example.test${MCP_APP_SANDBOX_PATH}?allow=camera`
+          )
+        )
+        const policy = sandbox?.headers.get("content-security-policy")
+        expect(policy).toBe(MCP_APP_SANDBOX_CSP)
+        expect(policy).toContain("script-src 'self'")
+        expect(policy).toContain("frame-ancestors 'self'")
+        expect(sandbox?.headers.get("x-frame-options")).toBeNull()
+      }
       for (const reservedPath of [
         "/auth",
         "/auth/callback",

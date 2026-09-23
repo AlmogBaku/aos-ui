@@ -19,6 +19,7 @@ node_modules
 **/.pytest_cache
 coverage
 dist
+packages/tools-mcp/dist
 playwright-report
 test-results
 *.log

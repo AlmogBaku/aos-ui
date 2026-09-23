@@ -36,6 +36,14 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 | `request_permission`, `request_approval`    | permission    |
 | `delegate_subagent`, `run_subagent`, `task` | activity      |
 
+The `render_*` tools come from the AOS UI tools MCP server
+(`packages/tools-mcp`). Each harness prefixes MCP tool names differently
+(`mcp__aos_ui__render_chart` on Hermes, `aos-ui__render_chart` on OpenClaw);
+the proxy canonicalizes them in `packages/proxy/core/aos-tool-names.ts`, so
+the registry only ever sees the bare names above. The fourth server tool,
+`present_artifact`, publishes an Artifact and is resolved by
+`src/components/artifacts`, not by this registry.
+
 ## Safety rule
 
 Rich output must stay inspectable and safe:

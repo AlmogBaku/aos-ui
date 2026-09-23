@@ -12,6 +12,13 @@ async function boundaryErrors(filePath: string, code: string) {
   )
 }
 
+async function restrictedImportErrors(filePath: string, code: string) {
+  const [result] = await eslint.lintText(code, { filePath })
+  return result!.messages.filter(
+    ({ ruleId }) => ruleId === "no-restricted-imports"
+  )
+}
+
 /** Any module specifier, however it is written: import, export, or require. */
 const AG_UI_SPECIFIER =
   /["'`](?:@ag-ui\/[^"'`]*|@assistant-ui\/react-ag-ui)["'`]/u
@@ -77,6 +84,47 @@ describe("runtime package import boundaries", () => {
       await boundaryErrors(
         "src/runtime-adapters/aos/example.ts",
         'import { AosRemoteClient } from "./aos-client"'
+      )
+    ).toEqual([])
+  })
+
+  it.each([
+    ["src/components/example.tsx", 'import "../../packages/tools-mcp/server"'],
+    [
+      "src/components/example.test.tsx",
+      'import "../../packages/tools-mcp/server"',
+    ],
+    [
+      "packages/proxy/example.ts",
+      'import { createToolsServer } from "../tools-mcp/server"',
+    ],
+    ["packages/proxy/acp/example.ts", 'import "../../tools-mcp/cli"'],
+    ["packages/tools-mcp/example.ts", 'import { cn } from "@/lib/utils"'],
+    ["packages/tools-mcp/example.ts", 'import "../../src/main"'],
+    [
+      "packages/tools-mcp/views/example.tsx",
+      'import { Button } from "@/components/ui/button"',
+    ],
+    [
+      "packages/tools-mcp/example.ts",
+      'import { runProxyCli } from "../proxy/cli"',
+    ],
+    [
+      "packages/tools-mcp/example.ts",
+      'import { redactForLog } from "../proxy/redaction"',
+    ],
+  ])(
+    "keeps the tools MCP server apart from browser and proxy code: %s %s",
+    async (filePath, code) => {
+      expect(await restrictedImportErrors(filePath, code)).toHaveLength(1)
+    }
+  )
+
+  it("lets the tools MCP server import shared contracts", async () => {
+    expect(
+      await restrictedImportErrors(
+        "packages/tools-mcp/example.ts",
+        'import { presentationToolDefinitions } from "../../shared/presentation/tools"'
       )
     ).toEqual([])
   })

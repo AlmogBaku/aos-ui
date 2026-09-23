@@ -77,7 +77,6 @@ const withoutParams = () => undefined
 const EXTENSIONS = {
   steer: true,
   rewind: true,
-  artifacts: true,
   composerPrefill: true,
   agents: true,
   invalidation: true,
@@ -102,7 +101,6 @@ const GUEST_METHODS = new Set<string>([
 const GUEST_EXTENSIONS = {
   steer: false,
   rewind: false,
-  artifacts: true,
   composerPrefill: false,
   agents: false,
   invalidation: false,

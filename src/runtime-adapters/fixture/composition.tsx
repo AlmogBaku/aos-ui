@@ -5,7 +5,6 @@ import { useEffect, useState } from "react"
 import { AosUiWorkspace } from "@/components/aos-ui-workspace"
 import type { Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
-import { fixtureProviderInstructions } from "@shared/presentation/manifests"
 import {
   DEFAULT_COMPOSER_FEATURE_CONFIG,
   type ComposerFeatureConfig,
@@ -88,13 +87,13 @@ function FixtureRuntimeProvider({
     workspace: bundle.workspace,
     composer: composerFeatureViewModel,
     activityCoverage: "workspace",
-    assistantConfig: { instructions: fixtureProviderInstructions },
     environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",
     artifacts: {
       resolver: bundle.artifacts,
       htmlAssetOrigins: config.artifactHtmlAssetOrigins,
     },
     interactions: bundle.interactions,
+    mcpApps: bundle.mcpApps,
   })
 }
 

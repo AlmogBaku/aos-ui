@@ -439,11 +439,11 @@ export function useWorkspaceNavigation({
   }, [setAgents, workspace])
 
   /**
-   * A creation receipt names an Agent the provider owns. The catalog decides
-   * when the draft is done: until the created Agent is listed, the interview
-   * stays exactly where the operator left it.
+   * A created Agent is one the provider owns. The catalog decides when the
+   * draft is done: until the created Agent is listed, the interview stays
+   * exactly where the operator left it.
    */
-  const acceptCreationReceipt = useEffectEvent(
+  const acceptCreatedAgent = useEffectEvent(
     async (event: WorkspaceActivityEvent) => {
       const owner = publishedSessions.find(
         ({ threadId }) => threadId === event.threadId
@@ -491,7 +491,7 @@ export function useWorkspaceNavigation({
         event.type === "agent-ready" ||
         event.type === "agent-activation-failed"
       )
-        void acceptCreationReceipt(event).catch((reason: unknown) =>
+        void acceptCreatedAgent(event).catch((reason: unknown) =>
           setActionError(toError(reason))
         )
     })

@@ -19,13 +19,10 @@ function toolPart(
   }
 }
 
-const statsPart = toolPart({
-  toolName: "render_stats",
-  args: {
-    title: "Provider metrics",
-    stats: [{ key: "sessions", label: "Sessions", value: 42 }],
-  },
-  result: "Metrics ready",
+const questionPart = toolPart({
+  toolName: "ask_user_question",
+  args: { question: "Which audience leads?", options: ["Investors"] },
+  result: "Question answered",
 })
 
 beforeEach(() => {
@@ -36,9 +33,6 @@ afterEach(() => {
   cleanup()
   vi.doUnmock("./question-flow")
   vi.doUnmock("./permission")
-  vi.doUnmock("./chart")
-  vi.doUnmock("./map")
-  vi.doUnmock("./stats")
 })
 
 describe("optional renderer loading", () => {
@@ -50,45 +44,17 @@ describe("optional renderer loading", () => {
     }
     vi.doMock("./question-flow", unavailable)
     vi.doMock("./permission", unavailable)
-    vi.doMock("./chart", unavailable)
-    vi.doMock("./map", unavailable)
-    vi.doMock("./stats", unavailable)
 
     const imported = import("./registry")
     await expect(imported).resolves.toHaveProperty("richToolRegistry")
     const { richToolRegistry, RichToolRenderer } = await imported
     for (const part of [
-      toolPart({
-        toolName: "ask_user_question",
-        args: { question: "Choose", options: ["One"] },
-      }),
+      questionPart,
       toolPart({
         toolName: "request_permission",
         args: { action: "Read" },
         approval: { id: "approval" },
       }),
-      toolPart({
-        toolName: "render_chart",
-        args: {
-          title: "Chart",
-          type: "line",
-          xKey: "quarter",
-          series: [{ key: "value", label: "Value" }],
-          data: [{ quarter: "Q1", value: 12 }],
-        },
-        result: "Chart ready",
-      }),
-      toolPart({
-        toolName: "render_map",
-        args: {
-          title: "Map",
-          locations: [
-            { id: "origin", label: "Origin", latitude: 0, longitude: 0 },
-          ],
-        },
-        result: "Map ready",
-      }),
-      statsPart,
     ]) {
       expect(richToolRegistry[part.toolName].validate(part).valid).toBe(true)
     }
@@ -134,7 +100,7 @@ describe("optional renderer loading", () => {
       const download = new Promise<void>((resolve) => {
         release = resolve
       })
-      vi.doMock("./stats", async (importOriginal) => {
+      vi.doMock("./question-flow", async (importOriginal) => {
         await download
         return importOriginal()
       })
@@ -154,20 +120,19 @@ describe("optional renderer loading", () => {
         const RichToolRenderer = imported!.RichToolRenderer
         render(
           <ToolUiLocaleProvider locale={locale}>
-            <RichToolRenderer {...statsPart} />
+            <RichToolRenderer {...questionPart} />
           </ToolUiLocaleProvider>
         )
         expect(screen.getByText(loadingLabel)).toHaveAttribute("role", "status")
-        fireEvent.click(screen.getByText("render_stats"))
-        expect(screen.getByText(/"value": 42/)).toBeVisible()
-        expect(screen.getByText(/Metrics ready/)).toBeVisible()
+        fireEvent.click(screen.getByText("ask_user_question"))
+        expect(screen.getByText(/"options"/)).toBeVisible()
+        expect(screen.getByText(/Question answered/)).toBeVisible()
 
         await act(async () => {
           release()
           await download
         })
-        expect(await screen.findByText("Sessions")).toBeVisible()
-        expect(screen.getByText("42")).toBeVisible()
+        expect(await screen.findByText("Which audience leads?")).toBeVisible()
         expect(screen.queryByText(loadingLabel)).not.toBeInTheDocument()
       } finally {
         clearTimeout(timer)
@@ -184,7 +149,7 @@ describe("optional renderer loading", () => {
   ] as const)(
     "preserves inspectable provider data after a failed %s display download",
     async (locale, errorLabel) => {
-      vi.doMock("./stats", () => {
+      vi.doMock("./question-flow", () => {
         throw new Error("Display download failed")
       })
       const imported = import("./registry")
@@ -196,14 +161,14 @@ describe("optional renderer loading", () => {
         render(
           <ToolUiLocaleProvider locale={locale}>
             <p>Transcript remains</p>
-            <RichToolRenderer {...statsPart} />
+            <RichToolRenderer {...questionPart} />
           </ToolUiLocaleProvider>
         )
         expect(await screen.findByRole("alert")).toHaveTextContent(errorLabel)
         expect(screen.getByText("Transcript remains")).toBeVisible()
-        fireEvent.click(screen.getByText("render_stats"))
-        expect(screen.getByText(/"value": 42/)).toBeVisible()
-        expect(screen.getByText(/Metrics ready/)).toBeVisible()
+        fireEvent.click(screen.getByText("ask_user_question"))
+        expect(screen.getByText(/"options"/)).toBeVisible()
+        expect(screen.getByText(/Question answered/)).toBeVisible()
       } finally {
         error.mockRestore()
       }

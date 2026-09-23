@@ -65,6 +65,7 @@ const CAPABILITIES = {
   content: {
     attachments: { status: "unavailable", reason: "attachments-unavailable" },
     artifacts: { status: "unavailable", reason: "artifacts-unavailable" },
+    mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
     transcription: {
       status: "unavailable",
       reason: "native-transcription-unavailable",
@@ -265,6 +266,7 @@ describe("withVoiceProviders", () => {
     expect(await content(wrapped)).toEqual({
       attachments: CAPABILITIES.content.attachments,
       artifacts: CAPABILITIES.content.artifacts,
+      mcpApps: CAPABILITIES.content.mcpApps,
       transcription: PROVIDER_TRANSCRIPTION,
       speech: PROVIDER_SPEECH,
     })
@@ -305,6 +307,7 @@ describe("withVoiceProviders", () => {
     expect(await content(wrapped)).toEqual({
       attachments: CAPABILITIES.content.attachments,
       artifacts: CAPABILITIES.content.artifacts,
+      mcpApps: CAPABILITIES.content.mcpApps,
       transcription: NATIVE_TRANSCRIPTION,
       speech: NATIVE_SPEECH,
     })
@@ -327,6 +330,7 @@ describe("withVoiceProviders", () => {
     expect(await content(wrapped)).toEqual({
       attachments: CAPABILITIES.content.attachments,
       artifacts: CAPABILITIES.content.artifacts,
+      mcpApps: CAPABILITIES.content.mcpApps,
       transcription: PROVIDER_TRANSCRIPTION,
       speech: PROVIDER_SPEECH,
     })

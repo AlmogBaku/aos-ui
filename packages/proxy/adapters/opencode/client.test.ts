@@ -150,6 +150,45 @@ describe("OpenCodeClient", () => {
     }
   })
 
+  it("reads a file inside the configured directory through the native file route", async () => {
+    const paths: string[] = []
+    const server = await nativeServer((request) => {
+      expect(request.url.pathname).toBe("/file/content")
+      expect(request.directory).toBe("/workspaces/aos")
+      paths.push(request.url.searchParams.get("path") ?? "")
+      return Response.json({ type: "text", content: "# Notes" })
+    })
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.files.read("/workspaces/aos/out/notes.md")
+      ).resolves.toEqual({ type: "text", content: "# Notes" })
+      for (const outside of ["/workspaces/other/notes.md", "/etc/passwd"])
+        await expect(subject.files.read(outside)).rejects.toMatchObject({
+          code: "not_found",
+        })
+      expect(paths).toEqual(["out/notes.md"])
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it("rejects a native file body that is not file content", async () => {
+    const server = await nativeServer(() => Response.json({ type: "folder" }))
+    const subject = client(server.baseUrl)
+
+    try {
+      await expect(
+        subject.files.read("/workspaces/aos/out/notes.md")
+      ).rejects.toMatchObject({ code: "invalid_response" })
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
   it("switches an exact native model with the same uncertain acknowledgement fence", async () => {
     const server = await nativeServer(async (request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/model")

@@ -7,6 +7,7 @@ import {
   type RequestReply,
 } from "../../core/events"
 import type { RunEvent } from "../../core/events"
+import type { McpToolNames } from "../../mcp-apps/tool-names"
 
 import {
   ServerRunConflictError,
@@ -60,6 +61,8 @@ export type OpenCodeRunEngineOptions = Readonly<{
   maxQueueEvents?: number
   maxBufferedEvents?: number
   waitRetryMs?: number
+  /** Keyed by Agent; a run reads the names its Agent last loaded. */
+  mcpToolNames?: McpToolNames
 }>
 
 type ActiveRun = {
@@ -414,6 +417,9 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     stage?: ServerAttachmentStage
   ): Promise<ServerRunHandle> {
     const { input, resume, text } = validateInput(scope, candidate)
+    // Warm the MCP tool names while the turn is admitted, so its first tool
+    // call already reads under its canonical name.
+    void this.#options.mcpToolNames?.load(scope.agentId).catch(() => undefined)
     let files: readonly { uri: string; name?: string }[] | undefined
     if (stage) {
       try {
@@ -607,7 +613,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
     const projector = new OpenCodeEventProjector(
       { sessionId: scope.sessionId, threadId: scope.threadId, runId },
       after,
-      { admissionId: expectedAdmission }
+      {
+        admissionId: expectedAdmission,
+        resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
+      }
     )
     if (nativeSettlement.stopRequested) projector.markStopping()
     return {
@@ -643,7 +652,10 @@ export class OpenCodeRunEngine implements ServerRunEngine {
         runId: run.runId,
       },
       after,
-      { admissionId: expectedAdmission }
+      {
+        admissionId: expectedAdmission,
+        resolveMcpTool: this.#options.mcpToolNames?.resolver(run.scope.agentId),
+      }
     )
     if (run.nativeSettlement.stopRequested) projector.markStopping()
     return projector

@@ -16,6 +16,7 @@
       "@shared/*": ["./shared/*"],
       "@aos/protocol/acp": ["./packages/protocol/acp.ts"],
       "@aos/protocol/push": ["./packages/protocol/push.ts"],
+      "@aos/protocol/mcp-apps": ["./packages/protocol/mcp-apps.ts"],
       "@aos/protocol": ["./packages/protocol/index.ts"]
     }
   }

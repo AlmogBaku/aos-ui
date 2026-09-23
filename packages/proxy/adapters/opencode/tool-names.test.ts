@@ -1,14 +1,31 @@
 import { describe, expect, it } from "vitest"
 
+import { createMcpToolNames } from "../../mcp-apps/tool-names"
 import {
   canonicalOpenCodeToolCall,
   canonicalOpenCodeToolName,
+  OPENCODE_MCP_TOOL_NAMES,
 } from "./tool-names"
 
 describe("canonicalOpenCodeToolName", () => {
   it("renames the native subagent tool and passes every other name through", () => {
     expect(canonicalOpenCodeToolName("task")).toBe("delegate_subagent")
     expect(canonicalOpenCodeToolName("read")).toBe("read")
+  })
+
+  it("names an aos-ui MCP tool by its bare AOS name and keeps any other MCP tool raw", () => {
+    expect(canonicalOpenCodeToolName("aos-ui_render_chart")).toBe(
+      "render_chart"
+    )
+    expect(canonicalOpenCodeToolName("mcp__aos-ui__present_artifact")).toBe(
+      "present_artifact"
+    )
+    expect(canonicalOpenCodeToolName("aos-ui_unknown_tool")).toBe(
+      "aos-ui_unknown_tool"
+    )
+    expect(canonicalOpenCodeToolName("github_render_chart")).toBe(
+      "github_render_chart"
+    )
   })
 })
 
@@ -63,5 +80,27 @@ describe("canonicalOpenCodeToolCall", () => {
       args: { path: "README.md" },
       result: "contents",
     })
+  })
+})
+
+describe("OpenCode MCP tool names", () => {
+  it.each([
+    ["my-server_get_weather", "mcp__my-server__get.weather"],
+    // The longest configured server name wins the shared prefix.
+    ["my-server_admin_purge", "mcp__my-server_admin__purge"],
+    ["local_run", "mcp__local__run"],
+    ["aos-ui_render_chart", "render_chart"],
+    ["task", "delegate_subagent"],
+    ["web_fetch", "web_fetch"],
+  ])("reads %s as %s", async (raw, canonical) => {
+    const names = createMcpToolNames(OPENCODE_MCP_TOOL_NAMES, async () => [
+      { name: "my-server", tools: ["get.weather"] },
+      { name: "my-server_admin", tools: ["purge"] },
+      { name: "local" },
+    ])
+
+    expect(
+      canonicalOpenCodeToolName(raw, await names.load("build", [raw]))
+    ).toBe(canonical)
   })
 })

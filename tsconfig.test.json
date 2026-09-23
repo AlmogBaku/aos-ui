@@ -16,6 +16,8 @@
     "e2e/**/*.ts",
     "test/containers/**/*.ts",
     "test/architecture/**/*.ts",
+    "packages/tools-mcp/**/*.test.ts",
+    "packages/tools-mcp/**/*.test.tsx",
     "playwright*.config.ts",
     "vitest.config.ts"
   ]

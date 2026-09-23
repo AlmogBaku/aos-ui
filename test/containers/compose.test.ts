@@ -6,6 +6,8 @@ import { resolve } from "node:path"
 import { parse } from "yaml"
 import { describe, expect, it } from "vitest"
 
+import { parseProxyConfig } from "../../packages/proxy/config"
+
 type ComposeConfig = {
   configs?: Record<string, { file?: string }>
   secrets?: Record<
@@ -18,6 +20,7 @@ type ComposeConfig = {
       build?: { target?: string }
       command?: string[]
       depends_on?: Record<string, { condition: string }>
+      healthcheck?: { test?: string[] }
       environment?: Record<string, string>
       expose?: string[]
       extra_hosts?: string[]
@@ -103,7 +106,9 @@ describe("container orchestration", () => {
         invitations: { keys: Array<{ secretFile: string }> }
       }
       limits: Record<string, number>
+      mcpApps: unknown
     }
+    expect(parseProxyConfig(proxy)).toBeDefined()
     expect(proxy.deploymentId).toBe("aos-hermes-local")
     expect(proxy.listen).toMatchObject({
       host: "0.0.0.0",
@@ -129,6 +134,10 @@ describe("container orchestration", () => {
       guestActiveExecutions: 32,
       operatorEventPeers: 256,
     })
+    // Hermes registers the host's loopback URL; the container overrides it.
+    expect(proxy.mcpApps).toEqual({
+      fallback: { servers: { "aos-ui": { url: "http://tools-mcp:4110/mcp" } } },
+    })
     expect(proxy).not.toHaveProperty("operator")
     expect(proxy).not.toHaveProperty("push")
     expect(proxy.guest).not.toHaveProperty("hermes")
@@ -137,10 +146,10 @@ describe("container orchestration", () => {
     )
   })
 
-  it("keeps the base composition web-only and loopback-only", () => {
+  it("keeps the base composition web plus tools MCP and loopback-only", () => {
     const config = composeConfig(["compose.yaml"])
 
-    expect(Object.keys(config.services)).toEqual(["web"])
+    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
     expect(config.services.web.ports).toContainEqual(
       expect.objectContaining({
         host_ip: "127.0.0.1",
@@ -151,6 +160,50 @@ describe("container orchestration", () => {
     expect(config.configs?.["runtime-config"]?.file).toBe(
       resolve(root, "deploy/runtime-config.json")
     )
+  })
+
+  it("publishes the tools MCP server on loopback only, with a health check", () => {
+    const toolsMcp = composeConfig(["compose.yaml"]).services["tools-mcp"]!
+
+    expect(toolsMcp.build?.target).toBe("tools-mcp")
+    const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
+    expect(dockerfile).toContain("FROM dependencies AS tools-mcp")
+    expect(dockerfile).toContain("./packages/tools-mcp")
+    expect(dockerfile).toContain("./shared/presentation")
+    // The image carries the MCP App views it serves, built at image time.
+    expect(dockerfile).toContain("RUN bun run tools-mcp:build")
+    expect(toolsMcp.command).toEqual([
+      "bun",
+      "run",
+      "packages/tools-mcp/cli.ts",
+      "--http",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "4110",
+    ])
+    expect(toolsMcp.ports).toEqual([
+      expect.objectContaining({
+        host_ip: "127.0.0.1",
+        published: "4110",
+        target: 4110,
+      }),
+    ])
+    expect(toolsMcp.healthcheck?.test?.join(" ")).toContain(
+      "http://127.0.0.1:4110/health"
+    )
+    expect(
+      composeConfig(["compose.yaml"], {
+        AOS_UI_BIND_ADDRESS: "0.0.0.0",
+        AOS_UI_TOOLS_MCP_PORT: "4999",
+      }).services["tools-mcp"]!.ports
+    ).toEqual([
+      expect.objectContaining({
+        host_ip: "127.0.0.1",
+        published: "4999",
+        target: 4110,
+      }),
+    ])
   })
 
   it("adds OpenCode only through the explicit engine overlay", () => {
@@ -169,7 +222,11 @@ describe("container orchestration", () => {
       AOS_UI_HOST_GID: "2345",
     })
 
-    expect(Object.keys(config.services).sort()).toEqual(["opencode", "web"])
+    expect(Object.keys(config.services).sort()).toEqual([
+      "opencode",
+      "tools-mcp",
+      "web",
+    ])
     expect(config.services.web.depends_on?.opencode.condition).toBe(
       "service_healthy"
     )
@@ -220,7 +277,11 @@ describe("container orchestration", () => {
       OPENCODE_SERVER_USERNAME: "aos-ui",
       AOS_UI_OPENCODE_PASSWORD_FILE: "/run/secrets/opencode-password",
       AOS_UI_OPENCODE_WORKTREE: "/workspace",
+      AOS_UI_TOOLS_MCP_URL: "http://tools-mcp:4110/mcp",
     })
+    expect(config.services.opencode.depends_on?.["tools-mcp"]?.condition).toBe(
+      "service_healthy"
+    )
     expect(config.services.opencode.expose).toEqual(["4096"])
     expect(config.services.opencode.ports).toBeUndefined()
     expect(config.services.opencode.environment).not.toHaveProperty(
@@ -272,7 +333,7 @@ describe("container orchestration", () => {
       AOS_UI_HOST_GID: "2345",
     })
 
-    expect(Object.keys(config.services)).toEqual(["web"])
+    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
     expect(config.services.web.user).toBe("1234:2345")
     expect(config.services.web.environment).toMatchObject({
       AOS_UI_STATIC_ROOT: "/app/dist",
@@ -356,7 +417,7 @@ describe("container orchestration", () => {
       AOS_UI_HOST_GID: "2345",
     })
 
-    expect(Object.keys(config.services)).toEqual(["web"])
+    expect(Object.keys(config.services).sort()).toEqual(["tools-mcp", "web"])
     expect(config.services.web.user).toBe("1234:2345")
     expect(config.services.web.command).toEqual([
       "bun",

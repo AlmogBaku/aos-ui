@@ -8,6 +8,7 @@ import {
   type GuestAppOptions,
 } from "./context"
 import { registerGuestContentRoutes } from "./routes/content"
+import { registerGuestMcpAppRoutes } from "./routes/mcp-apps"
 import { registerGuestRuntimeRoute } from "./routes/runtime"
 
 export type { GuestAppOptions } from "./context"
@@ -24,6 +25,7 @@ export function createGuestApp(options: GuestAppOptions) {
 
   registerGuestRuntimeRoute(app, routes)
   registerGuestContentRoutes(app, routes)
+  registerGuestMcpAppRoutes(app, routes)
 
   app.onError(() =>
     Response.json(

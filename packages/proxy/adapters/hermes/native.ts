@@ -46,6 +46,19 @@ export function parseJsonOrValue(value: unknown): unknown {
   }
 }
 
+/**
+ * Hermes stores every MCP tool result of 32 or more characters inside one
+ * untrusted-data block: a source tag and a one-line preamble ahead of the
+ * handler's own text. Returns that text; anything else is returned unchanged.
+ */
+const UNTRUSTED_TOOL_RESULT =
+  /^<untrusted_tool_result source="[^"\n]*">\n[^\n]*\n\n([\s\S]*)\n<\/untrusted_tool_result>$/u
+
+export function unwrappedToolText(content: unknown) {
+  if (typeof content !== "string") return content
+  return UNTRUSTED_TOOL_RESULT.exec(content)?.[1] ?? content
+}
+
 // ---------------------------------------------------------------------------
 // Text helpers
 // ---------------------------------------------------------------------------

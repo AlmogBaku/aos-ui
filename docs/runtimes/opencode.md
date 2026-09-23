@@ -49,67 +49,140 @@ AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   docker compose -f compose.yaml -f compose.opencode.yaml up --build
 ```
 
+The overlay also points the launcher at the base stack's `tools-mcp` service (`AOS_UI_TOOLS_MCP_URL=http://tools-mcp:4110/mcp`) and starts OpenCode only after that service is healthy.
+
 The example proxy configuration uses `http://opencode:4096` and `/workspace`, which are correct only inside this Compose composition. On Linux, set `AOS_UI_HOST_UID` and `AOS_UI_HOST_GID` when the defaults do not match the worktree owner.
 
-## Native model configuration and optional tools
+## Native model configuration and AOS UI tools
+
+The installation prompt, [`shared/install/PROMPT.md`](../../shared/install/PROMPT.md),
+lets an agent perform the steps below; its [OpenCode reference](../../shared/install/reference/harness-opencode.md)
+holds the exact commands. The manual steps follow.
 
 OpenCode owns provider/model configuration and credentials. AOS reads the
 native model catalog and can select a model for an attached Session, but does
 not choose a default model. Reasoning-effort selection is unavailable because
 OpenCode reports no reasoning ladder.
 
-The optional AOS native integration supplies presentation tools, guarded
-creator support, Session handoff, and the `aos-invite-link` skill; it remains
-optional to the proxy attachment. Build and load it for local native-tool
-development with:
+`bun run opencode:serve` is an optional launcher. It adds the UI's tools MCP
+server to the OpenCode config as `mcp["aos-ui"]`, a remote server at
+`AOS_UI_TOOLS_MCP_URL` (default `http://127.0.0.1:4110/mcp`) enabled in every
+Session. Start that server first:
 
 ```bash
-bun run integrations:build
+bun run tools-mcp:serve
 AOS_UI_OPENCODE_WORKTREE=/absolute/path/to/external-worktree \
   bun run opencode:serve
 ```
 
-`bun run opencode:serve` writes the creator Agent definition and
-`.opencode/skills/aos-invite-link/SKILL.md` into the worktree and refuses to
-start if they would conflict with existing content or if the target port is
-already occupied.
+An independently launched OpenCode server registers the same entry in its own
+`opencode.json`:
+
+```json
+{
+  "mcp": {
+    "aos-ui": {
+      "type": "remote",
+      "url": "http://127.0.0.1:4110/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+OpenCode's v2 session engine, which AOS drives, does not expose MCP tools at the
+pinned `1.18.29`. The `aos-ui` tools are therefore registered but not callable
+through AOS on OpenCode until upstream exposes MCP tools to that engine. When
+they are, the proxy canonicalizes their names like any other harness. Charts,
+maps, and stats are [MCP App](#mcp-apps) views the proxy reads from the
+registered URL itself, so that URL must reach the server from the proxy as
+well as from OpenCode, and each view receives a text-only result.
+
+`bun run opencode:serve` also writes the hidden `agent-builder` creator
+definition, `.opencode/skills/aos-agent-creator/SKILL.md` with its
+`reference/harness-opencode.md`, and `.opencode/skills/aos-invite-link/SKILL.md`
+into the worktree, and refuses to start if they would conflict with existing
+content or if the target port is already occupied. The creator may write only
+a new `.opencode/agents/<id>.md` file. The OpenCode adapter does not yet report
+it as the creator, so AOS does not offer **New Agent** on OpenCode.
 
 The launcher accepts these environment variables:
 
-| Variable                            | Default     | Meaning                                         |
-| ----------------------------------- | ----------- | ----------------------------------------------- |
-| `AOS_UI_OPENCODE_HOST`              | `127.0.0.1` | Bind address for the OpenCode server.           |
-| `AOS_UI_OPENCODE_PORT`              | `4096`      | Port for the OpenCode server.                   |
-| `AOS_UI_OPENCODE_CORS_ORIGINS`      | unset       | Comma-separated allowed CORS origins.           |
-| `AOS_UI_OPENCODE_PLUGIN_PATH`       | built path  | Absolute path to the compiled plugin JS.        |
-| `AOS_UI_OPENCODE_PASSWORD_FILE`     | unset       | Owner-only file containing the server password. |
-| `AOS_UI_OPENCODE_WORKTREE`          | required    | Absolute path to the OpenCode working tree.     |
-| `AOS_UI_OPENAI_COMPATIBLE_BASE_URL` | unset       | OpenAI-compatible provider base URL.            |
-| `AOS_UI_OPENAI_COMPATIBLE_API_KEY`  | unset       | OpenAI-compatible API key.                      |
-| `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` | unset       | OpenAI-compatible model identifier.             |
+| Variable                            | Default                     | Meaning                                         |
+| ----------------------------------- | --------------------------- | ----------------------------------------------- |
+| `AOS_UI_OPENCODE_HOST`              | `127.0.0.1`                 | Bind address for the OpenCode server.           |
+| `AOS_UI_OPENCODE_PORT`              | `4096`                      | Port for the OpenCode server.                   |
+| `AOS_UI_OPENCODE_CORS_ORIGINS`      | unset                       | Comma-separated allowed CORS origins.           |
+| `AOS_UI_OPENCODE_PASSWORD_FILE`     | unset                       | Owner-only file containing the server password. |
+| `AOS_UI_OPENCODE_WORKTREE`          | required                    | Absolute path to the OpenCode working tree.     |
+| `AOS_UI_TOOLS_MCP_URL`              | `http://127.0.0.1:4110/mcp` | The `aos-ui` tools MCP server.                  |
+| `AOS_UI_OPENAI_COMPATIBLE_BASE_URL` | unset                       | OpenAI-compatible provider base URL.            |
+| `AOS_UI_OPENAI_COMPATIBLE_API_KEY`  | unset                       | OpenAI-compatible API key.                      |
+| `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID` | unset                       | OpenAI-compatible model identifier.             |
 
 The three `AOS_UI_OPENAI_COMPATIBLE_*` variables are all-or-none.
-
-The integration sets `create_agent: "deny"` in the OpenCode permission config
-when the plugin is loaded. This prevents the Agent from spawning new OpenCode
-Agents during a run; Session creation (`start_session`) remains allowed.
 
 Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
 configured operator proxy origin. The skill prefers the operator invitation
 endpoint over the local CLI, so it needs network access but no signing key.
 
+## MCP Apps
+
+AOS renders an MCP server's App views as App cards ([MCP Apps](../mcp-apps.md)).
+Register the App server as a remote entry in the OpenCode `mcp` config; AOS
+itself needs no entry:
+
+```json
+{
+  "mcp": {
+    "NAME": {
+      "type": "remote",
+      "url": "https://apps.example.test/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+OpenCode keeps no App views, so the proxy reads the server list from
+`GET /config` and connects to each view's server with its own MCP client:
+
+- It reaches only enabled remote servers without `headers` or OAuth. A local
+  server, or one that needs credentials the proxy does not hold, shows the
+  tool call's textual details.
+- For a server that needs headers, give the proxy its own copy under
+  `mcpApps.fallback.servers.NAME.headers` in the proxy configuration
+  ([MCP Apps fallback](../configuration.md#mcp-apps-fallback)). Its URL must
+  then be `https:` or loopback.
+- When the proxy reaches a server at another address than OpenCode does, set
+  `mcpApps.fallback.servers.NAME.url`; the proxy connects there instead.
+- OpenCode stores only a tool's text output, so the view receives a text-only
+  result; the tool is never called again to recover more.
+- The tool shows as `mcp__NAME__TOOL`, matched against the configured server
+  names even when a name contains `_`.
+
+MCP tools are not callable from the v2 session engine at the pinned `1.18.29`
+(see above), so Apps appear once upstream exposes them. This fallback is
+temporary and goes away once OpenCode serves MCP Apps itself.
+
+## Artifacts
+
+A completed `present_artifact` receipt publishes an Artifact. The proxy reads
+its bytes through OpenCode's `GET /file/content`, confined to the configured
+project directory: a receipt path outside that directory reads as unavailable.
+Only a receipt the Session still holds grants read access.
+
 ## Capability limits
 
-- AOS reads the native Agent catalog and creates Sessions, but Agent visibility, Session titles, deletion, Todos, Activity, context accounting, and artifacts are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- AOS reads the native Agent catalog and creates Sessions, but Agent visibility, Session titles, deletion, Todos, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
 - An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API exposes neither title-bearing creation nor title mutation; a new invitation therefore cannot create a Session on first Send.
-- AOS never restarts OpenCode automatically. If the optional integration reports an Agent as `setup-needed`, let active work finish and restart OpenCode under operator control.
+- AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
 
 ## Verify
 
 ```bash
-bun run integrations:build
-bunx vitest run test/opencode packages/proxy/adapters/opencode integrations/opencode
+bunx vitest run test/opencode scripts/opencode packages/proxy/adapters/opencode packages/tools-mcp
 ```
 
 Native live acceptance has not been run. It requires approved disposable Agents and real model credentials; mocked tests do not prove a live OpenCode journey.

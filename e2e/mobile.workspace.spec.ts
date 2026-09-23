@@ -323,13 +323,16 @@ for (const tool of ["question", "chart"] as const) {
       .getByRole("textbox", { name: "שדה הודעה" })
       .fill(tool === "question" ? "Ask me a question" : "Show a chart")
     await page.getByRole("button", { name: "שליחת הודעה" }).click()
-    const content = page
-      .locator(
-        tool === "question"
-          ? '[data-slot="option-list"]'
-          : '[data-slot="chart"][data-tool-ui-id]'
-      )
-      .last()
+    const content =
+      tool === "question"
+        ? page.getByRole("region", { name: "שאלות" })
+        : page
+            .locator('iframe[title="יישומון render_chart"]')
+            .last()
+            .contentFrame()
+            .locator("iframe")
+            .contentFrame()
+            .getByRole("heading", { name: "Enterprise AI spend" })
     await expect(content).toBeVisible()
   })
 }

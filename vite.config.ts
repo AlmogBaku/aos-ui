@@ -16,10 +16,17 @@ import {
   serializePublicRuntimeConfiguration,
 } from "./shared/runtime-config.ts"
 import {
+  MCP_APP_SANDBOX_CSP,
+  MCP_APP_SANDBOX_PATH,
+} from "./packages/protocol/mcp-apps.ts"
+import {
   DEFAULT_RUNTIME_MODE,
   getRuntimeEntrypoint,
 } from "./shared/runtime-modes.ts"
 import { readTitleBarColors } from "./shared/theme-color.ts"
+import { FIXTURE_AOS_UI_MCP_PATH } from "./shared/presentation/views.ts"
+import { buildViews } from "./packages/tools-mcp/views/build.ts"
+import { snapshotToolsServer } from "./packages/tools-mcp/snapshot.ts"
 
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
@@ -135,6 +142,80 @@ function e2eReadinessPlugin(environment: NodeJS.ProcessEnv): Plugin {
   }
 }
 
+/** The MCP App sandbox page carries the policy the proxy serves it with. */
+function mcpAppSandboxPlugin(): Plugin {
+  const secure = (server: ViteDevServer | PreviewServer) => {
+    server.middlewares.use((request, response, next) => {
+      if (request.url?.split("?")[0] === MCP_APP_SANDBOX_PATH)
+        response.setHeader("Content-Security-Policy", MCP_APP_SANDBOX_CSP)
+      next()
+    })
+  }
+  return {
+    name: "aos-mcp-app-sandbox",
+    configureServer: secure,
+    configurePreviewServer: secure,
+  }
+}
+
+/** The real `aos-ui` server's answers, as JSON, from views built right now. */
+async function recordToolsServer() {
+  return JSON.stringify(await snapshotToolsServer(await buildViews()))
+}
+
+/**
+ * Fixture mode draws charts, maps and stats through the real `aos-ui` server:
+ * its views are built and its `tools/list` and `resources/read` answers
+ * recorded at `FIXTURE_AOS_UI_MCP_PATH`. The dev server records on first
+ * request and again after a view or schema changes; the build writes the file
+ * into `dist`, where preview and the Bun proxy serve it.
+ */
+function fixtureToolsServerPlugin(): Plugin {
+  const sources = [
+    path.resolve(import.meta.dirname, "packages/tools-mcp"),
+    path.resolve(import.meta.dirname, "shared/presentation"),
+  ]
+  return {
+    name: "aos-fixture-tools-server",
+    configureServer(server) {
+      let recorded: Promise<string> | undefined
+      server.watcher.add(sources)
+      server.watcher.on("all", (_event, file) => {
+        if (sources.some((source) => file.startsWith(source)))
+          recorded = undefined
+      })
+      server.middlewares.use(
+        FIXTURE_AOS_UI_MCP_PATH,
+        async (_request, response) => {
+          response.setHeader("cache-control", "no-store")
+          try {
+            recorded ??= recordToolsServer()
+            const body = await recorded
+            response.setHeader(
+              "content-type",
+              "application/json; charset=utf-8"
+            )
+            response.end(body)
+          } catch (error) {
+            recorded = undefined
+            server.config.logger.error(String(error))
+            response.statusCode = 500
+            response.end()
+          }
+        }
+      )
+    },
+    async generateBundle() {
+      if (this.environment.name !== "client") return
+      this.emitFile({
+        type: "asset",
+        fileName: FIXTURE_AOS_UI_MCP_PATH.slice(1),
+        source: await recordToolsServer(),
+      })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const environment = {
     ...loadEnv(mode, process.cwd(), ""),
@@ -175,6 +256,8 @@ export default defineConfig(({ mode }) => {
       react(),
       runtimeConfigurationPlugin(environment),
       e2eReadinessPlugin(environment),
+      mcpAppSandboxPlugin(),
+      fixtureToolsServerPlugin(),
       titleBarColorPlugin(titleBarColors),
       // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest
       // injected, no offline shell, and no registration script in the HTML.
@@ -241,6 +324,10 @@ export default defineConfig(({ mode }) => {
         "@aos/protocol/push": path.resolve(
           import.meta.dirname,
           "packages/protocol/push.ts"
+        ),
+        "@aos/protocol/mcp-apps": path.resolve(
+          import.meta.dirname,
+          "packages/protocol/mcp-apps.ts"
         ),
         "@aos/protocol": path.resolve(
           import.meta.dirname,

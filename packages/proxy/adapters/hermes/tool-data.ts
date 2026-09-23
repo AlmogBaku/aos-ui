@@ -8,6 +8,10 @@
  */
 
 import {
+  canonicalToolName as canonicalMcpToolName,
+  type McpToolNameResolver,
+} from "../../core/aos-tool-names"
+import {
   boundedGraphBytes,
   containsCredentialValue,
   containsPrivateValue,
@@ -15,6 +19,7 @@ import {
   parseJson,
   parseJsonOrValue,
   trimmedText,
+  unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
 import {
@@ -24,15 +29,24 @@ import {
 
 /** Hermes' native tool names AOS renames. */
 export const CANONICAL_TOOL_NAMES = new Map<string, string>([
-  ["aos_create_agent", "create_agent"],
   ["delegate_task", "delegate_subagent"],
   ["skill_view", "use_skill"],
   ["todo_list", "todo"],
   ["clarify", "question"],
 ])
 
-export function canonicalToolName(name: string) {
-  return CANONICAL_TOOL_NAMES.get(name) ?? name
+const NO_MCP_TOOLS: McpToolNameResolver = () => undefined
+
+/**
+ * The public name of a native tool: an `aos-ui` MCP tool loses its prefix, and
+ * another MCP tool `resolve` recognizes reads as `mcp__<server>__<tool>` under
+ * its original names.
+ */
+export function canonicalToolName(
+  name: string,
+  resolve: McpToolNameResolver = NO_MCP_TOOLS
+) {
+  return CANONICAL_TOOL_NAMES.get(name) ?? canonicalMcpToolName(name, resolve)
 }
 
 export type HermesPublicJsonValue =
@@ -472,10 +486,14 @@ function publicToolArgs(
 }
 
 /** The public name and arguments of one native Hermes tool call. */
-export function projectHermesToolCall(name: string, args: unknown) {
+export function projectHermesToolCall(
+  name: string,
+  args: unknown,
+  resolve?: McpToolNameResolver
+) {
   const unwrapped = unwrapToolCall(name, args)
   return {
-    toolName: canonicalToolName(unwrapped.name),
+    toolName: canonicalToolName(unwrapped.name, resolve),
     args: publicToolArgs(
       unwrapped.name,
       canonicalToolArgs(unwrapped.name, unwrapped.args)
@@ -605,14 +623,15 @@ export type HermesToolOutcome = {
 export function projectHermesToolOutcome(
   toolCallId: string,
   name: string,
-  result: unknown,
+  wrapped: unknown,
   nativeIsError = false
 ): HermesToolOutcome {
+  const result = unwrappedToolText(wrapped)
   const canonicalName = canonicalToolName(name)
   const isError = hermesToolResultIsError(result, nativeIsError)
   const artifact =
     canonicalName === "present_artifact" && !isError
-      ? projectHermesArtifactReceipt(result)
+      ? projectHermesArtifactReceipt(toolCallId, result)
       : undefined
   const media = isError
     ? []

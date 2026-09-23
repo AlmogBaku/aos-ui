@@ -22,6 +22,8 @@ import { useMemo, useState } from "react"
 import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
 import { buildFixtureScenario } from "./fixture-scenarios"
 import { createFixtureInteractions } from "./fixture-interactions"
+import { createFixtureMcpAppAdapter } from "./fixture-mcp-apps"
+import { fixturePresentationPart } from "./fixture-presentations"
 import {
   FIXTURE_NOW,
   createFixtureWorkspace,
@@ -41,23 +43,6 @@ const fixtureAttachmentAdapter = new CompositeAttachmentAdapter([
 const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
 ) => structuredClone(repository)
-
-const marketInvestmentChartArgs = {
-  title: "Investment is shifting into applied AI",
-  type: "line",
-  xKey: "quarter",
-  series: [
-    { key: "platform", label: "AI platforms" },
-    { key: "applied", label: "Applied AI" },
-    { key: "governance", label: "Governance" },
-  ],
-  data: [
-    { quarter: "Q2 ’24", platform: 100, applied: 72, governance: 38 },
-    { quarter: "Q3 ’24", platform: 108, applied: 84, governance: 46 },
-    { quarter: "Q4 ’24", platform: 121, applied: 103, governance: 57 },
-    { quarter: "Q1 ’25", platform: 136, applied: 128, governance: 71 },
-  ],
-} as const
 
 function messagesFor(threadId: string): readonly ThreadMessageLike[] {
   if (threadId === "thread-aster-market") {
@@ -135,14 +120,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
                 "Validated the segment definitions and four-quarter trend.",
             },
           },
-          {
-            type: "tool-call",
-            toolCallId: "fixture-initial-chart",
-            toolName: "render_chart",
-            args: marketInvestmentChartArgs,
-            argsText: JSON.stringify(marketInvestmentChartArgs),
-            result: { ok: true },
-          },
+          fixturePresentationPart("fixture-initial-chart"),
           {
             type: "source",
             sourceType: "url",
@@ -683,6 +661,7 @@ export function useFixtureRuntimeBundle({
   )
   const artifacts = useMemo(() => createFixtureArtifactAdapter(), [])
   const interactions = useMemo(() => createFixtureInteractions(), [])
+  const mcpApps = useMemo(() => createFixtureMcpAppAdapter(), [])
   const chatModel = useMemo(
     () =>
       createFixtureChatModel(workspace, {
@@ -708,7 +687,7 @@ export function useFixtureRuntimeBundle({
   })
 
   return useMemo(
-    () => ({ assistantRuntime, workspace, artifacts, interactions }),
-    [artifacts, assistantRuntime, workspace, interactions]
+    () => ({ assistantRuntime, workspace, artifacts, interactions, mcpApps }),
+    [artifacts, assistantRuntime, workspace, interactions, mcpApps]
   )
 }

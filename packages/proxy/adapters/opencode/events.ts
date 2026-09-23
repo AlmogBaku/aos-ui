@@ -3,11 +3,13 @@ import {
   aggregateTokenUsage,
   type TokenUsage,
 } from "../../core/events"
+import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import type { RunEvent } from "../../core/events"
 
 import { projectTodos, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
+import { openCodeArtifactReceipt } from "./content"
 import { OPENCODE_TODO_STATUS_ALIASES, OPENCODE_TODO_TOOL } from "./todos"
 import {
   canonicalOpenCodeToolCall,
@@ -542,10 +544,15 @@ export class OpenCodeEventProjector {
   #plan?: string
   readonly #usage: TokenUsage[] = []
 
+  readonly #resolveMcpTool?: McpToolNameResolver
+
   constructor(
     scope: ProjectorScope,
     lastSeen: number,
-    options: Readonly<{ admissionId?: string }> = {}
+    options: Readonly<{
+      admissionId?: string
+      resolveMcpTool?: McpToolNameResolver
+    }> = {}
   ) {
     if (
       !identifier(scope.sessionId) ||
@@ -560,6 +567,7 @@ export class OpenCodeEventProjector {
     this.#lastSeen = lastSeen
     this.#admissionId = options.admissionId
     this.#admissionMatched = options.admissionId === undefined
+    this.#resolveMcpTool = options.resolveMcpTool
   }
 
   recoveryPosition() {
@@ -749,17 +757,33 @@ export class OpenCodeEventProjector {
       const tool = this.#tools.get(callId)
       if (!tool || tool.ended) throw new OpenCodeEventValidationError()
       tool.ended = true
+      const text =
+        type === "session.next.tool.success"
+          ? safeTextContent(data.content)
+          : undefined
+      const artifact =
+        text !== undefined &&
+        canonicalOpenCodeToolName(tool.name) === "present_artifact"
+          ? openCodeArtifactReceipt(callId, text)
+          : undefined
       events.push({ type: RunEventKind.TOOL_CALL_END, toolCallId: callId })
       events.push({
         type: RunEventKind.TOOL_CALL_RESULT,
         messageId: `${tool.messageId}:tool:${callId}`,
         toolCallId: callId,
-        content:
-          type === "session.next.tool.failed"
+        content: artifact
+          ? JSON.stringify(artifact.result)
+          : text === undefined
             ? JSON.stringify({ status: "error" })
-            : toolResultContent(tool.name, safeTextContent(data.content)),
+            : toolResultContent(tool.name, text),
         role: "tool",
       })
+      if (artifact)
+        events.push({
+          type: RunEventKind.CUSTOM,
+          name: "aos.artifact",
+          value: artifact.descriptor,
+        })
       // A written list is authoritative; a failed write left the plan alone.
       if (type === "session.next.tool.success" && tool.todoInput) {
         const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
@@ -852,7 +876,7 @@ export class OpenCodeEventProjector {
     events.push({
       type: RunEventKind.TOOL_CALL_START,
       toolCallId: callId,
-      toolCallName: canonicalOpenCodeToolName(name),
+      toolCallName: canonicalOpenCodeToolName(name, this.#resolveMcpTool),
       parentMessageId: messageId,
     })
     return tool

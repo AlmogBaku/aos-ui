@@ -2,9 +2,15 @@ import { SessionCoordinator } from "../../core/session-coordinator"
 import type { RuntimeInstance, ServerRunEngine } from "../../core/runtime"
 import type { RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
+import { withMcpApps } from "../../mcp-apps/annotate"
+import {
+  createMcpAppClient,
+  type McpServerOverrides,
+} from "../../mcp-apps/client"
 import { createOpenCodeClient, type OpenCodeClientOptions } from "./client"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 import { OpenCodeInteractions } from "./interactions"
+import { createOpenCodeMcpCatalog } from "./mcp-apps"
 import { OpenCodeRunEngine } from "./run"
 
 /**
@@ -25,6 +31,7 @@ export type OpenCodeRuntimeFactoryDependencies = Readonly<{
   /** Test-only override; production builds exactly one native run engine. */
   runs?: ServerRunEngine
   creatorAgentId?: string
+  mcpServerOverrides?: McpServerOverrides
 }>
 
 export async function createOpenCodeRuntime(
@@ -43,14 +50,29 @@ export async function createOpenCodeRuntime(
     questions: client.sessions.questions,
     permissions: client.sessions.permissions,
   })
+  const { catalog } = client
+  const mcpAppClient = catalog.config
+    ? createMcpAppClient({ servers: dependencies.mcpServerOverrides })
+    : undefined
+  const mcp =
+    mcpAppClient &&
+    createOpenCodeMcpCatalog(() => catalog.config!(), mcpAppClient)
   const runs =
-    dependencies.runs ?? new OpenCodeRunEngine(client, { resume: interactions })
-  const runtime = new OpenCodeServerAdapter({
-    client,
-    runs,
-    interactions,
-    creatorAgentId: dependencies.creatorAgentId,
-  })
+    dependencies.runs ??
+    new OpenCodeRunEngine(client, {
+      resume: interactions,
+      ...(mcp ? { mcpToolNames: mcp.names } : {}),
+    })
+  // Wrapped before the coordinator, which runs turns through `runtime.runs`.
+  const runtime = withMcpApps(
+    new OpenCodeServerAdapter({
+      client,
+      runs,
+      interactions,
+      creatorAgentId: dependencies.creatorAgentId,
+      ...(mcp ? { mcp } : {}),
+    })
+  )
   const sessions = new SessionCoordinator({
     engine: runtime.runs,
     maxActiveExecutions: limits.activeExecutions,
@@ -69,6 +91,7 @@ export async function createOpenCodeRuntime(
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
         await runtime.close()
+        await mcpAppClient?.close()
       })
       return closePromise
     },
