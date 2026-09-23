@@ -152,36 +152,97 @@ function scrollOccurrenceIntoView(occurrence: Range) {
   setScrollTopImmediately(viewport, centeredTop)
 }
 
+/** Frames to wait for a virtualized thread to mount a message it scrolled to. */
+const REVEAL_FRAMES = 10
+
+const ALWAYS_MOUNTED = () => true
+
+type SearchMatch = { readonly messageId: string; readonly ordinal: number }
+
+function messageMatches(
+  messages: readonly SearchableMessage[],
+  needle: string
+): SearchMatch[] {
+  const matcher = new RegExp(escapeRegularExpression(needle), "giu")
+  return messages.flatMap((message) => {
+    const count = message.content.reduce(
+      (total, part) =>
+        part.type === "text" && part.text
+          ? total + Array.from(part.text.matchAll(matcher)).length
+          : total,
+      0
+    )
+    return Array.from({ length: count }, (_, ordinal) => ({
+      messageId: message.id,
+      ordinal,
+    }))
+  })
+}
+
 /**
  * A registry-style, provider-neutral conversation search surface. Its caller
  * supplies the current Thread's loaded messages, so server history and other
  * branches never become searchable by accident.
+ *
+ * Matches come from the message data, not the page, because a virtualized
+ * thread mounts only the messages near the viewport. Moving to a match asks
+ * `revealMessage` to bring its message into the mounted window, then
+ * highlights it; the other matches are highlighted wherever they are mounted.
  */
 export function ConversationSearch({
   messages,
   labels = DEFAULT_CONVERSATION_SEARCH_LABELS,
   direction = "ltr",
+  revealMessage = ALWAYS_MOUNTED,
 }: {
   messages: readonly SearchableMessage[]
   labels?: ConversationSearchLabels
   direction?: LocaleDirection
+  /** Returns true once the message is mounted; false while it scrolls in. */
+  revealMessage?: (messageId: string) => boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
   const restoreFramesRef = useRef<number[]>([])
+  const activeOccurrenceRef = useRef<Range | undefined>(undefined)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [index, setIndex] = useState(0)
-  const [occurrences, setOccurrences] = useState<readonly Range[]>([])
 
-  const messageIds = useMemo(
-    () => messages.map((message) => message.id),
-    [messages]
+  const needle = query.trim()
+  const matches = useMemo(
+    () => (open && needle ? messageMatches(messages, needle) : []),
+    [messages, needle, open]
   )
+  const count = matches.length
+  const activeIndex = Math.min(index, Math.max(count - 1, 0))
+  const activeMatch = matches[activeIndex]
+  const activeMessageId = activeMatch?.messageId
+  const activeOrdinal = activeMatch?.ordinal ?? 0
+
+  /** Highlights every mounted match and returns the active one's range. */
+  const paint = useCallback(() => {
+    if (!matches.length) {
+      clearSearchHighlights()
+      activeOccurrenceRef.current = undefined
+      return undefined
+    }
+    const messageIds = [...new Set(matches.map((match) => match.messageId))]
+    const occurrences = messageIds.flatMap((messageId) =>
+      searchableRanges(messageId, needle)
+    )
+    const activeRanges = activeMessageId
+      ? searchableRanges(activeMessageId, needle)
+      : []
+    const activeOccurrence =
+      activeRanges[Math.min(activeOrdinal, activeRanges.length - 1)]
+    showSearchHighlights(occurrences, activeOccurrence)
+    activeOccurrenceRef.current = activeOccurrence
+    return activeOccurrence
+  }, [activeMessageId, activeOrdinal, matches, needle])
 
   const close = useCallback(() => {
-    const activeOccurrence =
-      occurrences[Math.min(index, occurrences.length - 1)]
+    const activeOccurrence = activeOccurrenceRef.current
     const anchor = activeOccurrence?.startContainer.parentElement
     const viewport = anchor ? scrollableParent(anchor) : null
     const anchorTop =
@@ -207,16 +268,14 @@ export function ConversationSearch({
       triggerRef.current?.focus({ preventScroll: true })
     })
     restoreFramesRef.current.push(firstFrame)
-  }, [index, occurrences])
+  }, [])
 
   const move = useCallback(
     (delta: 1 | -1) => {
-      if (!occurrences.length) return
-      setIndex(
-        (current) => (current + delta + occurrences.length) % occurrences.length
-      )
+      if (!count) return
+      setIndex((current) => (current + delta + count) % count)
     },
-    [occurrences.length]
+    [count]
   )
 
   useEffect(() => {
@@ -248,32 +307,49 @@ export function ConversationSearch({
     []
   )
 
+  // Moving to a match brings its message in, then centers the match.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      const needle = query.trim()
-      setOccurrences(
-        open && needle
-          ? messageIds.flatMap((messageId) =>
-              searchableRanges(messageId, needle)
-            )
-          : []
-      )
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [messageIds, messages, open, query])
-
-  useEffect(() => {
-    if (!occurrences.length) {
-      clearSearchHighlights()
-      return
+    if (!activeMessageId) return
+    let attempts = 0
+    let frame: number | null = null
+    const reveal = () => {
+      frame = null
+      if (!revealMessage(activeMessageId) && ++attempts < REVEAL_FRAMES) {
+        frame = requestAnimationFrame(reveal)
+        return
+      }
+      const activeOccurrence = paint()
+      if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
     }
+    reveal()
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+    // Only a different active match moves the thread; new matches repaint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMessageId, activeOrdinal, needle, revealMessage])
 
-    const activeIndex = Math.min(index, occurrences.length - 1)
-    const activeOccurrence = occurrences[activeIndex]
-    showSearchHighlights(occurrences, activeOccurrence)
-    if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
-    return clearSearchHighlights
-  }, [index, occurrences])
+  // Matches in messages mounted later, by scrolling or streaming, light up too.
+  useEffect(() => {
+    let frame: number | null = null
+    const repaint = () => {
+      frame ??= requestAnimationFrame(() => {
+        frame = null
+        paint()
+      })
+    }
+    repaint()
+    document.addEventListener("scroll", repaint, {
+      capture: true,
+      passive: true,
+    })
+    return () => {
+      document.removeEventListener("scroll", repaint, { capture: true })
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+  }, [paint])
+
+  useEffect(() => clearSearchHighlights, [])
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (keyboardEventSafetyReason(event)) return
@@ -293,8 +369,6 @@ export function ConversationSearch({
   }
 
   if (!open) return null
-  const count = occurrences.length
-  const activeIndex = Math.min(index, Math.max(count - 1, 0))
   return (
     <div
       role="search"

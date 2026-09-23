@@ -14,7 +14,10 @@ import {
 } from "./conversation-search"
 
 const messages = [
-  { id: "first", content: [{ type: "text", text: "A search result" }] },
+  {
+    id: "first",
+    content: [{ type: "text", text: "A **search** result and SEARCH notes" }],
+  },
   { id: "second", content: [{ type: "text", text: "Another Search result" }] },
   { id: "third", content: [{ type: "text", text: "Unrelated" }] },
 ]
@@ -145,6 +148,47 @@ describe("ConversationSearch", () => {
     await waitFor(() => expect(trigger).toHaveFocus())
     trigger.remove()
     viewport.remove()
+  })
+
+  it("counts matches in messages that are not mounted and reveals one before highlighting it", async () => {
+    const user = userEvent.setup()
+    const far = document.createElement("article")
+    far.dataset.messageId = "far"
+    far.innerHTML = "<div data-searchable-message-text>The distant beacon</div>"
+    const revealMessage = vi.fn((messageId: string) => {
+      if (document.querySelector(`[data-message-id="${messageId}"]`))
+        return true
+      document.body.append(far)
+      return false
+    })
+
+    render(
+      <ConversationSearch
+        messages={[
+          { id: "near", content: [{ type: "text", text: "Nearby notes" }] },
+          {
+            id: "far",
+            content: [{ type: "text", text: "The distant beacon" }],
+          },
+        ]}
+        revealMessage={revealMessage}
+      />
+    )
+    window.dispatchEvent(new Event(CONVERSATION_SEARCH_EVENT))
+    const input = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(input, "beacon")
+
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    await waitFor(() =>
+      expect(
+        highlightRegistry
+          .get("aos-conversation-search-active")
+          ?.ranges.map((range) => range.toString())
+      ).toEqual(["beacon"])
+    )
+    expect(revealMessage).toHaveBeenCalledWith("far")
   })
 
   it("uses the supplied RTL direction and localized search controls", async () => {
