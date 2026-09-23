@@ -17,6 +17,10 @@ import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
+import {
+  DisclosureMemoryProvider,
+  useRememberedDisclosure,
+} from "@/components/assistant-ui/elements/disclosure-memory"
 import { ToolRunGroup } from "@/components/assistant-ui/elements/message-tool-experience"
 import {
   ReasoningContent,
@@ -588,12 +592,14 @@ const ThreadRoot: FC<{
             <ThreadHistorySkeleton />
           </AuiIf>
 
-          <ThreadMessageList
-            ref={messageListRef}
-            viewportRef={viewportRef}
-            components={THREAD_MESSAGE_COMPONENTS}
-            className="mx-auto mb-8 w-full max-w-(--thread-content-max-width) empty:hidden @md:mb-10"
-          />
+          <DisclosureMemoryProvider scope={threadId}>
+            <ThreadMessageList
+              ref={messageListRef}
+              viewportRef={viewportRef}
+              components={THREAD_MESSAGE_COMPONENTS}
+              className="mx-auto mb-8 w-full max-w-(--thread-content-max-width) empty:hidden @md:mb-10"
+            />
+          </DisclosureMemoryProvider>
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
@@ -1700,8 +1706,17 @@ const TurnReasoning: FC<PropsWithChildren<{ indices: readonly number[] }>> = ({
         (index) => state.message.parts[index]?.status.type === "running"
       )
   )
+  const [chosenOpen, setOpen] = useRememberedDisclosure(
+    `reasoning:${indices[0] ?? 0}`
+  )
   return (
-    <ReasoningRoot variant="ghost" className="mb-0" streaming={streaming}>
+    <ReasoningRoot
+      variant="ghost"
+      className="mb-0"
+      streaming={streaming}
+      open={chosenOpen ?? streaming}
+      onOpenChange={setOpen}
+    >
       <ReasoningTrigger active={streaming} />
       <ReasoningContent aria-busy={streaming}>
         <ReasoningText>{children}</ReasoningText>

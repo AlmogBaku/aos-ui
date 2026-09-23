@@ -641,6 +641,51 @@ describe("virtualized thread", () => {
     expect(mountedMessageCount()).toBeLessThanOrEqual(30)
   })
 
+  it("keeps a fold the reader opened open after its message leaves the window and returns", async () => {
+    const user = userEvent.setup()
+    const messages = longThread()
+    messages[LONG_THREAD_LENGTH - 1] = {
+      id: "folded-turn",
+      role: "assistant",
+      metadata: { timing: TURN_TIMING },
+      content: [
+        { type: "text", text: "Checking the notes first." },
+        {
+          type: "tool-call",
+          toolCallId: "read",
+          toolName: "read_file",
+          args: { path: "README.md" },
+          result: "contents",
+        },
+        { type: "text", text: "The settled answer." },
+      ],
+    }
+    render(<LocalThread initialMessages={messages} />)
+    await settle()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Worked for 29s" })
+    )
+    expect(
+      screen.getByRole("button", { name: "Worked for 29s" })
+    ).toHaveAttribute("aria-expanded", "true")
+
+    // The focused message stays mounted, so the reader moves on to another.
+    viewport().scrollTop = 0
+    await settle()
+    const elsewhere = screen.getByText("Long thread message 0")
+    elsewhere.tabIndex = -1
+    act(() => elsewhere.focus())
+    await settle()
+    expect(screen.queryByText("The settled answer.")).not.toBeInTheDocument()
+
+    viewport().scrollTop = maximumScrollTop(viewport())
+    await settle()
+    expect(
+      await screen.findByRole("button", { name: "Worked for 29s" })
+    ).toHaveAttribute("aria-expanded", "true")
+  })
+
   it("keeps the newest streamed content in view until the reader scrolls up", async () => {
     const gates: Array<() => void> = []
     const nextChunk = () =>

@@ -7,7 +7,7 @@ import type {
   ToolCallMessagePartStatus,
 } from "@assistant-ui/react"
 import { useAuiState } from "@assistant-ui/react"
-import { useCallback, useMemo, useState } from "react"
+import { useMemo } from "react"
 
 import {
   ToolTimeline,
@@ -17,6 +17,7 @@ import {
 import { ToolCall } from "./tool-call"
 import { describeToolRun, isOrdinaryToolPart, partsAt } from "./turn-fold"
 import { useInsideTurnFold } from "./turn-working-fold"
+import { useRememberedDisclosure } from "./disclosure-memory"
 import { useToolUiLocale } from "@/components/tool-ui"
 import { toolResultSignalsFailure } from "@/components/tool-ui/lifecycle"
 import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
@@ -198,9 +199,10 @@ export function ToolRunGroup({
     [labels.assistant.toolActions, labels.states, parts]
   )
   const timelineState = toolRunState(parts, streaming)
-  const [chosenOpen, setChosenOpen] = useState<boolean>()
+  const [chosenOpen, onOpenChange] = useRememberedDisclosure(
+    `tools:${indices[0] ?? 0}`
+  )
   const open = chosenOpen ?? (streaming && hasRunningTerminal(parts))
-  const onOpenChange = useCallback((next: boolean) => setChosenOpen(next), [])
   if (!parts.length) return null
   return (
     <div data-slot="message-tool-experience" className="mt-0.5 mb-1.5">
