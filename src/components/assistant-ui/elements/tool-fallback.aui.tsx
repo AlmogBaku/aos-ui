@@ -23,6 +23,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
+import { useRememberedDisclosure } from "@/components/assistant-ui/elements/disclosure-memory"
 import { DisclosureChevron } from "./disclosure-chevron"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -653,6 +654,7 @@ function ToolFallbackApproval({
 }
 
 const ToolFallbackImpl: ToolCallMessagePartComponent = ({
+  toolCallId,
   toolName,
   argsText,
   result,
@@ -669,7 +671,10 @@ const ToolFallbackImpl: ToolCallMessagePartComponent = ({
   const shouldRenderApproval =
     isRequiresAction && offersInterruptAction(status, approval, interrupt)
 
-  const [open, setOpen] = useState(isRequiresAction)
+  // A pending approval opens the call, and it stays open as the reader's own
+  // choice would, so the opening is remembered the same way.
+  const [chosenOpen, setOpen] = useRememberedDisclosure(`tool:${toolCallId}`)
+  const open = chosenOpen ?? isRequiresAction
   const [prevRequiresAction, setPrevRequiresAction] = useState(isRequiresAction)
   if (isRequiresAction !== prevRequiresAction) {
     setPrevRequiresAction(isRequiresAction)

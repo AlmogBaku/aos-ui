@@ -155,6 +155,15 @@ export function turnLayout(
 }
 
 /**
+ * Whether the part at `index` folds: once the turn settles, every foldable part
+ * but the final answer does. Search reads this too, because a closed fold
+ * renders none of its text.
+ */
+export function isFoldedAt(layout: TurnLayout, index: number | undefined) {
+  return layout.settled && index !== undefined && index !== layout.terminalIndex
+}
+
+/**
  * The per-message `groupBy` for `MessagePrimitive.GroupedParts`. A `groupBy`
  * sees one part with no position, so the message's own parts are closed over to
  * resolve it; an unmapped part is treated as outside the fold, which is what a
@@ -178,9 +187,7 @@ export function createTurnGroupBy(
   const positions = new Map(parts.map((part, index) => [part, index]))
   const groupBy = (part: TurnPart, context?: TurnGroupContext) => {
     if (isFirstClassPart(part, context)) return OUTSIDE
-    const index = positions.get(part)
-    const folded =
-      layout.settled && index !== undefined && index !== layout.terminalIndex
+    const folded = isFoldedAt(layout, positions.get(part))
     switch (part.type) {
       case "reasoning":
         return folded ? WORKING_REASONING : REASONING

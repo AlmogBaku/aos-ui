@@ -17,6 +17,10 @@ import { Image as MessageImage } from "@/components/assistant-ui/elements/image"
 import { MarkdownText } from "@/components/assistant-ui/elements/markdown-text"
 import { Source } from "@/components/assistant-ui/elements/sources"
 import { ToolFallback } from "@/components/assistant-ui/elements/tool-fallback.aui"
+import {
+  DisclosureMemoryProvider,
+  useRememberedDisclosure,
+} from "@/components/assistant-ui/elements/disclosure-memory"
 import { ToolRunGroup } from "@/components/assistant-ui/elements/message-tool-experience"
 import {
   ReasoningContent,
@@ -82,6 +86,10 @@ import {
 } from "./message-actions"
 import { MessageContextMenu } from "./message-context-menu"
 import { useThreadReadingPosition } from "./thread-reading-position"
+import {
+  ThreadMessageList,
+  type ThreadMessageListHandle,
+} from "./thread-message-list"
 import { useTouchPrimaryInput } from "./touch-primary"
 import {
   VoiceComposerControl,
@@ -143,6 +151,7 @@ import {
   type KeyboardEvent,
   type PropsWithChildren,
   type ReactNode,
+  type RefObject,
 } from "react"
 
 /**
@@ -496,14 +505,26 @@ const ThreadRoot: FC<{
   const labels = useContext(ThreadLabelsContext)
   const aui = useAui()
   const viewportRef = useRef<HTMLDivElement>(null)
+  const messageListRef = useRef<ThreadMessageListHandle>(null)
   const threadId = useAuiState((state) => state.threadListItem.id)
-  const messages = useAuiState((state) => state.thread.messages)
   const contentReady = useAuiState((state) => !state.thread.isLoading)
-  useThreadReadingPosition({
+  const readingPosition = useThreadReadingPosition({
     threadId,
     contentReady,
     viewportRef,
   })
+  // A virtualized thread only knows its full height once the newest messages
+  // are measured, so a jump to the latest content follows it rather than
+  // aiming at a height that is still an estimate.
+  const followLatest = useCallback(() => {
+    if (threadId) readingPosition.follow(threadId)
+  }, [readingPosition, threadId])
+  useAuiEvent("thread.runStart", followLatest)
+  const revealMessage = useCallback(
+    (messageId: string) =>
+      messageListRef.current?.revealMessage(messageId) ?? true,
+    []
+  )
 
   const handleThreadKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -549,13 +570,11 @@ const ThreadRoot: FC<{
         className="relative flex flex-1 flex-col overflow-x-hidden overflow-y-scroll scroll-smooth motion-reduce:scroll-auto"
         onKeyDown={handleThreadKeyDown}
       >
-        <ConversationSearch
-          messages={messages}
+        <ThreadConversationSearch
           direction={direction}
-          labels={{
-            ...DEFAULT_CONVERSATION_SEARCH_LABELS,
-            ...labels.conversationSearch,
-          }}
+          revealMessage={revealMessage}
+          viewportRef={viewportRef}
+          labels={labels.conversationSearch}
         />
         <div
           className={cn(
@@ -573,14 +592,14 @@ const ThreadRoot: FC<{
             <ThreadHistorySkeleton />
           </AuiIf>
 
-          <div
-            data-slot="aui_message-group"
-            className="mx-auto mb-8 flex w-full max-w-(--thread-content-max-width) flex-col gap-y-6 empty:hidden @md:mb-10"
-          >
-            <ThreadPrimitive.Messages>
-              {() => <ThreadMessage />}
-            </ThreadPrimitive.Messages>
-          </div>
+          <DisclosureMemoryProvider scope={threadId}>
+            <ThreadMessageList
+              ref={messageListRef}
+              viewportRef={viewportRef}
+              components={THREAD_MESSAGE_COMPONENTS}
+              className="mx-auto mb-8 w-full max-w-(--thread-content-max-width) empty:hidden @md:mb-10"
+            />
+          </DisclosureMemoryProvider>
 
           <ThreadPrimitive.ViewportFooter
             className={cn(
@@ -589,7 +608,7 @@ const ThreadRoot: FC<{
                 "sticky bottom-0 mt-auto rounded-t-(--composer-radius)"
             )}
           >
-            <ThreadScrollToBottom />
+            <ThreadScrollToBottom onClick={followLatest} />
             <ThreadFollowupSuggestions />
             {BeforeComposer ? <BeforeComposer /> : null}
             <ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -624,10 +643,36 @@ const ThreadMessage: FC = () => {
   return <AssistantMessageComponent />
 }
 
-const ThreadScrollToBottom: FC = () => {
+/** `ThreadMessage` picks the role and the edit composer itself. */
+const THREAD_MESSAGE_COMPONENTS = { Message: ThreadMessage }
+
+/**
+ * Search reads the loaded messages; subscribing here keeps a streaming token
+ * from re-rendering the whole Thread root.
+ */
+const ThreadConversationSearch: FC<{
+  direction: LocaleDirection
+  revealMessage: (messageId: string) => boolean
+  viewportRef: RefObject<HTMLElement | null>
+  labels: Partial<ConversationSearchLabels> | undefined
+}> = ({ direction, revealMessage, viewportRef, labels }) => {
+  const messages = useAuiState((state) => state.thread.messages)
+  return (
+    <ConversationSearch
+      messages={messages}
+      direction={direction}
+      revealMessage={revealMessage}
+      viewportRef={viewportRef}
+      labels={{ ...DEFAULT_CONVERSATION_SEARCH_LABELS, ...labels }}
+    />
+  )
+}
+
+const ThreadScrollToBottom: FC<{ onClick: () => void }> = ({ onClick }) => {
   const labels = useContext(ThreadLabelsContext)
   return (
     <ThreadPrimitive.ScrollToBottom
+      onClick={onClick}
       render={
         <TooltipIconButton
           tooltip={labels.scrollToBottom}
@@ -1661,8 +1706,17 @@ const TurnReasoning: FC<PropsWithChildren<{ indices: readonly number[] }>> = ({
         (index) => state.message.parts[index]?.status.type === "running"
       )
   )
+  const [chosenOpen, setOpen] = useRememberedDisclosure(
+    `reasoning:${indices[0] ?? 0}`
+  )
   return (
-    <ReasoningRoot variant="ghost" className="mb-0" streaming={streaming}>
+    <ReasoningRoot
+      variant="ghost"
+      className="mb-0"
+      streaming={streaming}
+      open={chosenOpen ?? streaming}
+      onOpenChange={setOpen}
+    >
       <ReasoningTrigger active={streaming} />
       <ReasoningContent aria-busy={streaming}>
         <ReasoningText>{children}</ReasoningText>
@@ -1704,9 +1758,10 @@ const AssistantMessage: FC = () => {
     AssistantIdentity,
     ToolFallback: ToolFallbackComponent = ToolFallback,
   } = useContext(ThreadComponentsContext)
+  const entrance = useMessageEntrance()
 
   const ACTION_BAR_PT = "pt-1.5"
-  // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
+  // Keep the action bar inside the root's box, then cancel its reserved space in flow.
   const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`
 
   if (completedWithoutContent) return null
@@ -1721,7 +1776,7 @@ const AssistantMessage: FC = () => {
       <MessagePrimitive.Root
         data-slot="aui_assistant-message-root"
         data-role="assistant"
-        className="relative -mb-7.5 animate-in pb-7.5 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
+        className={cn("relative -mb-7.5 pb-7.5", entrance)}
       >
         {AssistantIdentity ? <AssistantIdentity /> : null}
         <div
@@ -1930,6 +1985,17 @@ const UserImagePart: ImageMessagePartComponent = (part) => (
   </div>
 )
 
+/**
+ * Only the newest message slides in. A virtualized thread mounts older
+ * messages as the reader scrolls to them, and those must simply be there.
+ */
+function useMessageEntrance() {
+  const isLast = useAuiState((state) => state.message.isLast)
+  return isLast
+    ? "animate-in duration-150 fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none"
+    : undefined
+}
+
 const USER_MESSAGE_PART_COMPONENTS = {
   // The user's own words render through the same Markdown mechanism and the
   // same body type scale as the assistant's, so neither role carries its own
@@ -1943,6 +2009,7 @@ const UserMessage: FC = () => {
   const labels = useContext(ThreadLabelsContext)
   const direction = useContext(ThreadDirectionContext)
   const messageRewind = useContext(MessageRewindContext)
+  const entrance = useMessageEntrance()
   return (
     <MessageContextMenu
       role="user"
@@ -1952,7 +2019,10 @@ const UserMessage: FC = () => {
     >
       <MessagePrimitive.Root
         data-slot="aui_user-message-root"
-        className="grid animate-in auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,auto)] content-start gap-y-2 px-2 duration-150 [contain-intrinsic-size:var(--workspace-message-contain-intrinsic-size,none)] [content-visibility:var(--workspace-message-content-visibility,visible)] fade-in slide-in-from-bottom-1 motion-reduce:transform-none motion-reduce:animate-none [&:where(>*)]:col-start-2"
+        className={cn(
+          "grid auto-rows-auto grid-cols-[minmax(72px,1fr)_minmax(0,auto)] content-start gap-y-2 px-2 [&:where(>*)]:col-start-2",
+          entrance
+        )}
         data-role="user"
       >
         <UserMessageAttachments />
@@ -2027,7 +2097,7 @@ const EditComposer: FC = () => {
   return (
     <MessagePrimitive.Root
       data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
+      className="flex flex-col px-2"
     >
       <ComposerPrimitive.Root className="aui-edit-composer-root ms-auto flex w-full max-w-[85%] cursor-text flex-col rounded-(--composer-radius) border border-border/60 bg-(--composer-bg) dark:border-muted-foreground/15">
         <ComposerPrimitive.Input

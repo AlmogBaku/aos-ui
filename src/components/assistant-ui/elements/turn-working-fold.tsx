@@ -18,6 +18,7 @@ import {
 import { collapsePanel, ShimmerLabel } from "@/lib/surfaces"
 import { cn } from "@/lib/utils"
 import { DisclosureChevron } from "./disclosure-chevron"
+import { useRememberedDisclosure } from "./disclosure-memory"
 import {
   describeToolRun,
   formatTurnDuration,
@@ -54,10 +55,10 @@ export function TurnWorkingFold({
   children: ReactNode
 }) {
   const { labels, locale } = useToolUiLocale()
-  const [open, setOpen] = useState(false)
+  const start = indices[0] ?? 0
+  const [open = false, setOpen] = useRememberedDisclosure(`fold:${start}`)
   const timing = useMessageTiming()
   const outcome = useAuiState((state) => turnOutcome(state.message.status))
-  const start = indices[0] ?? 0
   // Only the run that opens the turn's work reports the turn's duration; a run
   // a first-class part split off continues it and names what it ran instead.
   const continues = useAuiState((state) =>

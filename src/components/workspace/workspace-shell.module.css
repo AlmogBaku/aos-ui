@@ -10,8 +10,6 @@
   --workspace-status-attention: var(--warning);
   --workspace-status-unread: var(--success);
   --workspace-status-idle: oklch(0.67 0 0);
-  --workspace-message-content-visibility: visible;
-  --workspace-message-contain-intrinsic-size: none;
   position: relative;
   display: grid;
   height: 100svh;
@@ -749,8 +747,6 @@
 
 @container workspace (min-width: 64rem) {
   .shell {
-    --workspace-message-content-visibility: auto;
-    --workspace-message-contain-intrinsic-size: auto 200px;
     height: calc(100svh - var(--workspace-shell-gutter) * 2);
     grid-template-columns: 15.5rem minmax(20rem, 1fr) 17rem;
     grid-template-rows: minmax(0, 1fr);

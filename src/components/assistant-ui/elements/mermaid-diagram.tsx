@@ -124,7 +124,7 @@ function stepZoom(zoom: number, direction: 1 | -1) {
 }
 
 // When the frame has been measured we use a direct pixel width so zoom is a
-// true scale factor. Before measurement (jsdom, content-visibility: auto) we
+// true scale factor. Before measurement (jsdom, a frame not yet laid out) we
 // fall back to a CSS-only expression that keeps the diagram at the readable
 // floor scale without needing JavaScript.
 function diagramHolderWidth(
@@ -292,8 +292,8 @@ function DiagramFrame({
     useDragToPan()
 
   // Measure the frame's available width via ResizeObserver so zoom becomes a
-  // true scale factor. Guards against jsdom (clientWidth = 0) and
-  // content-visibility: auto (measures 0 for off-screen messages).
+  // true scale factor. Guards against jsdom and a frame not yet laid out, both
+  // of which measure 0.
   const [measuredWidth, setMeasuredWidth] = useState(0)
   useLayoutEffect(() => {
     const el = frameRef.current

@@ -146,6 +146,15 @@ export class ThreadReadingPositionController {
     return bookmark
   }
 
+  /**
+   * Returns a thread to follow mode ahead of a scroll toward its latest
+   * content, so every later growth keeps pinning it to the bottom even while
+   * that scroll is still under way.
+   */
+  follow(threadId: string) {
+    this.#bookmarks.set(threadId, { mode: "follow" })
+  }
+
   syncAfterContentChange(threadId: string, viewport: HTMLElement) {
     const bookmark = this.#bookmarks.get(threadId)
     if (bookmark) this.#apply(viewport, bookmark)

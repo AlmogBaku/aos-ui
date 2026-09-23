@@ -169,6 +169,20 @@ describe("thread reading position", () => {
     expect(controller.capture("thread-a", viewport).mode).toBe("reading")
   })
 
+  it("follows the latest content again once asked, before any scroll lands", () => {
+    const controller = new ThreadReadingPositionController()
+    const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })
+    controller.restore("thread-a", viewport)
+    viewport.scrollTop = 200
+    expect(controller.capture("thread-a", viewport).mode).toBe("reading")
+
+    controller.follow("thread-a")
+    setMetric(viewport, "scrollHeight", 1_600)
+    controller.syncAfterContentChange("thread-a", viewport)
+
+    expect(viewport.scrollTop).toBe(1_200)
+  })
+
   it("keeps following through an upward scroll the reader did not make", () => {
     const controller = new ThreadReadingPositionController()
     const viewport = createViewport({ clientHeight: 400, scrollHeight: 900 })

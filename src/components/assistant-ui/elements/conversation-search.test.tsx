@@ -14,7 +14,10 @@ import {
 } from "./conversation-search"
 
 const messages = [
-  { id: "first", content: [{ type: "text", text: "A search result" }] },
+  {
+    id: "first",
+    content: [{ type: "text", text: "A **search** result and SEARCH notes" }],
+  },
   { id: "second", content: [{ type: "text", text: "Another Search result" }] },
   { id: "third", content: [{ type: "text", text: "Unrelated" }] },
 ]
@@ -145,6 +148,163 @@ describe("ConversationSearch", () => {
     await waitFor(() => expect(trigger).toHaveFocus())
     trigger.remove()
     viewport.remove()
+  })
+
+  it("counts matches in messages that are not mounted and reveals one before highlighting it", async () => {
+    const user = userEvent.setup()
+    const far = document.createElement("article")
+    far.dataset.messageId = "far"
+    far.innerHTML = "<div data-searchable-message-text>The distant beacon</div>"
+    const revealMessage = vi.fn((messageId: string) => {
+      if (document.querySelector(`[data-message-id="${messageId}"]`))
+        return true
+      document.body.append(far)
+      return false
+    })
+
+    render(
+      <ConversationSearch
+        messages={[
+          { id: "near", content: [{ type: "text", text: "Nearby notes" }] },
+          {
+            id: "far",
+            content: [{ type: "text", text: "The distant beacon" }],
+          },
+        ]}
+        revealMessage={revealMessage}
+      />
+    )
+    window.dispatchEvent(new Event(CONVERSATION_SEARCH_EVENT))
+    const input = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(input, "beacon")
+
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    await waitFor(() =>
+      expect(
+        highlightRegistry
+          .get("aos-conversation-search-active")
+          ?.ranges.map((range) => range.toString())
+      ).toEqual(["beacon"])
+    )
+    expect(revealMessage).toHaveBeenCalledWith("far")
+  })
+
+  async function searchFor(term: string) {
+    const user = userEvent.setup()
+    window.dispatchEvent(new Event(CONVERSATION_SEARCH_EVENT))
+    const input = await screen.findByRole("searchbox", {
+      name: "Search in conversation",
+    })
+    await user.type(input, term)
+    return user
+  }
+
+  function mountMessage(id: string, html: string) {
+    const message = document.createElement("article")
+    message.dataset.messageId = id
+    message.innerHTML = `<div data-searchable-message-text>${html}</div>`
+    message.scrollIntoView = vi.fn()
+    document.body.append(message)
+    return message
+  }
+
+  it("skips text a settled turn folds away, as the closed fold shows none of it", async () => {
+    mountMessage("turn", "The final signal")
+    render(
+      <ConversationSearch
+        messages={[
+          {
+            id: "turn",
+            role: "assistant",
+            status: { type: "complete" },
+            content: [
+              { type: "text", text: "Checking the signal first" },
+              { type: "tool-call" },
+              { type: "text", text: "The final signal" },
+            ],
+          },
+        ]}
+      />
+    )
+    const user = await searchFor("signal")
+
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    await user.keyboard("{Enter}")
+    expect(screen.getByText("1 of 1")).toBeVisible()
+    await waitFor(() =>
+      expect(
+        highlightRegistry
+          .get("aos-conversation-search-active")
+          ?.ranges.map((range) => range.toString())
+      ).toEqual(["signal"])
+    )
+  })
+
+  it("counts every match while a turn is still running, since nothing folds yet", async () => {
+    mountMessage("turn", "Checking the signal first")
+    render(
+      <ConversationSearch
+        messages={[
+          {
+            id: "turn",
+            role: "assistant",
+            status: { type: "running" },
+            content: [
+              { type: "text", text: "Checking the signal first" },
+              { type: "tool-call" },
+              { type: "text", text: "The final signal" },
+            ],
+          },
+        ]}
+      />
+    )
+    await searchFor("signal")
+
+    expect(await screen.findByText("1 of 2")).toBeVisible()
+  })
+
+  it("matches the rendered words of Markdown, not its syntax", async () => {
+    mountMessage("notes", "Read the guide")
+    render(
+      <ConversationSearch
+        messages={[
+          {
+            id: "notes",
+            content: [
+              {
+                type: "text",
+                text: "## Read the [guide](https://docs.example/guide)\n\n```guide\nplain\n```\n**gu**ide `code`",
+              },
+            ],
+          },
+        ]}
+      />
+    )
+    await searchFor("guide")
+    // The heading's link text and the bold word render; the URL and the fence
+    // language tag do not.
+    expect(await screen.findByText("1 of 2")).toBeVisible()
+
+    await userEvent.setup().clear(screen.getByRole("searchbox"))
+    await userEvent.setup().type(screen.getByRole("searchbox"), "## read")
+    expect(await screen.findByText("0 of 0")).toBeVisible()
+  })
+
+  it("still reveals a message whose rendered text holds none of its matches", async () => {
+    const message = mountMessage("mismatch", "Nothing to see")
+    render(
+      <ConversationSearch
+        messages={[
+          { id: "mismatch", content: [{ type: "text", text: "hidden word" }] },
+        ]}
+      />
+    )
+    await searchFor("hidden")
+
+    expect(await screen.findByText("1 of 1")).toBeVisible()
+    await waitFor(() => expect(message.scrollIntoView).toHaveBeenCalled())
   })
 
   it("uses the supplied RTL direction and localized search controls", async () => {

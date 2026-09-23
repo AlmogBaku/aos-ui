@@ -5,7 +5,11 @@ import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import { Search, X } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { KeyboardEvent } from "react"
+import type { KeyboardEvent, RefObject } from "react"
+import {
+  isFoldedAt,
+  turnLayout,
+} from "@/components/assistant-ui/elements/turn-fold"
 
 export const CONVERSATION_SEARCH_EVENT = "aos:conversation-search"
 
@@ -14,6 +18,8 @@ const SEARCH_ACTIVE_HIGHLIGHT = "aos-conversation-search-active"
 
 type SearchableMessage = {
   readonly id: string
+  readonly role?: string
+  readonly status?: { readonly type: string }
   readonly content: readonly { readonly type: string; readonly text?: string }[]
 }
 
@@ -152,36 +158,138 @@ function scrollOccurrenceIntoView(occurrence: Range) {
   setScrollTopImmediately(viewport, centeredTop)
 }
 
+/** Centers a message whose rendered text holds no match to highlight. */
+function scrollMessageIntoView(messageId: string) {
+  document
+    .querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)
+    ?.scrollIntoView?.({ block: "center", behavior: "auto" })
+}
+
+/** Frames to wait for a virtualized thread to mount a message it scrolled to. */
+const REVEAL_FRAMES = 10
+
+const ALWAYS_MOUNTED = () => true
+
+type SearchMatch = { readonly messageId: string; readonly ordinal: number }
+
+/**
+ * A cheap plain-text pass over Markdown, so matches count what renders rather
+ * than its source: link targets, emphasis and inline-code markers, fence info
+ * strings, and heading hashes are dropped. It is an approximation, not a
+ * parser; the highlight still comes from the rendered text.
+ */
+export function markdownPlainText(markdown: string) {
+  return markdown
+    .replace(/^ {0,3}(`{3,}|~{3,}).*$/gm, "")
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`+/g, "")
+    .replace(/\*+|~~/g, "")
+    .replace(/(^|[^\p{L}\p{N}])_+|_+(?=[^\p{L}\p{N}]|$)/gu, "$1")
+}
+
+/**
+ * The text a message shows while its folds are closed. A settled assistant
+ * turn folds its mid-turn prose, and a closed fold renders none of it.
+ */
+function visibleText(message: SearchableMessage) {
+  const layout =
+    message.role === "assistant"
+      ? turnLayout(message.content, message.status?.type)
+      : undefined
+  return message.content.flatMap((part, index) =>
+    part.type === "text" && part.text && !(layout && isFoldedAt(layout, index))
+      ? [markdownPlainText(part.text)]
+      : []
+  )
+}
+
+function messageMatches(
+  messages: readonly SearchableMessage[],
+  needle: string
+): SearchMatch[] {
+  const matcher = new RegExp(escapeRegularExpression(needle), "giu")
+  return messages.flatMap((message) => {
+    const count = visibleText(message).reduce(
+      (total, text) => total + Array.from(text.matchAll(matcher)).length,
+      0
+    )
+    return Array.from({ length: count }, (_, ordinal) => ({
+      messageId: message.id,
+      ordinal,
+    }))
+  })
+}
+
 /**
  * A registry-style, provider-neutral conversation search surface. Its caller
  * supplies the current Thread's loaded messages, so server history and other
  * branches never become searchable by accident.
+ *
+ * Matches come from the message data, not the page, because a virtualized
+ * thread mounts only the messages near the viewport. Moving to a match asks
+ * `revealMessage` to bring its message into the mounted window, then
+ * highlights it; the other matches are highlighted wherever they are mounted.
  */
 export function ConversationSearch({
   messages,
   labels = DEFAULT_CONVERSATION_SEARCH_LABELS,
   direction = "ltr",
+  revealMessage = ALWAYS_MOUNTED,
+  viewportRef,
 }: {
   messages: readonly SearchableMessage[]
   labels?: ConversationSearchLabels
   direction?: LocaleDirection
+  /** Returns true once the message is mounted; false while it scrolls in. */
+  revealMessage?: (messageId: string) => boolean
+  /** The scrolling thread, whose scroll mounts messages that may match. */
+  viewportRef?: RefObject<HTMLElement | null>
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const triggerRef = useRef<HTMLElement | null>(null)
   const restoreFramesRef = useRef<number[]>([])
+  const activeOccurrenceRef = useRef<Range | undefined>(undefined)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
   const [index, setIndex] = useState(0)
-  const [occurrences, setOccurrences] = useState<readonly Range[]>([])
 
-  const messageIds = useMemo(
-    () => messages.map((message) => message.id),
-    [messages]
+  const needle = query.trim()
+  const matches = useMemo(
+    () => (open && needle ? messageMatches(messages, needle) : []),
+    [messages, needle, open]
   )
+  const count = matches.length
+  const activeIndex = Math.min(index, Math.max(count - 1, 0))
+  const activeMatch = matches[activeIndex]
+  const activeMessageId = activeMatch?.messageId
+  const activeOrdinal = activeMatch?.ordinal ?? 0
+
+  /** Highlights every mounted match and returns the active one's range. */
+  const paint = useCallback(() => {
+    if (!matches.length) {
+      clearSearchHighlights()
+      activeOccurrenceRef.current = undefined
+      return undefined
+    }
+    const messageIds = [...new Set(matches.map((match) => match.messageId))]
+    const occurrences = messageIds.flatMap((messageId) =>
+      searchableRanges(messageId, needle)
+    )
+    const activeRanges = activeMessageId
+      ? searchableRanges(activeMessageId, needle)
+      : []
+    // The data and the page can disagree on a count; the nearest one stands in.
+    const activeOccurrence =
+      activeRanges[Math.min(activeOrdinal, activeRanges.length - 1)] ??
+      activeRanges[0]
+    showSearchHighlights(occurrences, activeOccurrence)
+    activeOccurrenceRef.current = activeOccurrence
+    return activeOccurrence
+  }, [activeMessageId, activeOrdinal, matches, needle])
 
   const close = useCallback(() => {
-    const activeOccurrence =
-      occurrences[Math.min(index, occurrences.length - 1)]
+    const activeOccurrence = activeOccurrenceRef.current
     const anchor = activeOccurrence?.startContainer.parentElement
     const viewport = anchor ? scrollableParent(anchor) : null
     const anchorTop =
@@ -207,16 +315,14 @@ export function ConversationSearch({
       triggerRef.current?.focus({ preventScroll: true })
     })
     restoreFramesRef.current.push(firstFrame)
-  }, [index, occurrences])
+  }, [])
 
   const move = useCallback(
     (delta: 1 | -1) => {
-      if (!occurrences.length) return
-      setIndex(
-        (current) => (current + delta + occurrences.length) % occurrences.length
-      )
+      if (!count) return
+      setIndex((current) => (current + delta + count) % count)
     },
-    [occurrences.length]
+    [count]
   )
 
   useEffect(() => {
@@ -248,32 +354,48 @@ export function ConversationSearch({
     []
   )
 
+  // Moving to a match brings its message in, then centers the match.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      const needle = query.trim()
-      setOccurrences(
-        open && needle
-          ? messageIds.flatMap((messageId) =>
-              searchableRanges(messageId, needle)
-            )
-          : []
-      )
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [messageIds, messages, open, query])
-
-  useEffect(() => {
-    if (!occurrences.length) {
-      clearSearchHighlights()
-      return
+    if (!activeMessageId) return
+    let attempts = 0
+    let frame: number | null = null
+    const reveal = () => {
+      frame = null
+      if (!revealMessage(activeMessageId) && ++attempts < REVEAL_FRAMES) {
+        frame = requestAnimationFrame(reveal)
+        return
+      }
+      const activeOccurrence = paint()
+      if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
+      else scrollMessageIntoView(activeMessageId)
     }
+    reveal()
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+    // Only a different active match moves the thread; new matches repaint.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeMessageId, activeOrdinal, needle, revealMessage])
 
-    const activeIndex = Math.min(index, occurrences.length - 1)
-    const activeOccurrence = occurrences[activeIndex]
-    showSearchHighlights(occurrences, activeOccurrence)
-    if (activeOccurrence) scrollOccurrenceIntoView(activeOccurrence)
-    return clearSearchHighlights
-  }, [index, occurrences])
+  // Matches in messages mounted later, by scrolling or streaming, light up too.
+  useEffect(() => {
+    let frame: number | null = null
+    const repaint = () => {
+      frame ??= requestAnimationFrame(() => {
+        frame = null
+        paint()
+      })
+    }
+    repaint()
+    const viewport = viewportRef?.current
+    viewport?.addEventListener("scroll", repaint, { passive: true })
+    return () => {
+      viewport?.removeEventListener("scroll", repaint)
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
+  }, [paint, viewportRef])
+
+  useEffect(() => clearSearchHighlights, [])
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (keyboardEventSafetyReason(event)) return
@@ -293,8 +415,6 @@ export function ConversationSearch({
   }
 
   if (!open) return null
-  const count = occurrences.length
-  const activeIndex = Math.min(index, Math.max(count - 1, 0))
   return (
     <div
       role="search"
