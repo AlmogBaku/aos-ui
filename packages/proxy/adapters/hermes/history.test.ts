@@ -46,6 +46,47 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
+  it("replays a failed command with its exit code and hint", () => {
+    const result = {
+      output: "Error: in prepare, no such table: users",
+      exit_code: 1,
+      error: null,
+      hint: "Exit 1: the command failed. Read the output before retrying.",
+    }
+    const messages = projectHermesHistory([
+      {
+        id: "assistant-command",
+        role: "assistant",
+        tool_calls: [
+          {
+            id: "failed-command",
+            function: {
+              name: "terminal",
+              arguments: '{"command":"sqlite3 app.db \'select * from users\'"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "failed-command",
+        tool_name: "terminal",
+        is_error: true,
+        content: JSON.stringify(result),
+      },
+    ])
+
+    expect(messages[0]?.content).toMatchObject([
+      {
+        type: "tool-call",
+        toolCallId: "failed-command",
+        args: { command: "sqlite3 app.db 'select * from users'" },
+        result,
+        isError: true,
+      },
+    ])
+  })
+
   it("restores trusted TTS media and suppresses a redundant copied marker", () => {
     const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
     const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"

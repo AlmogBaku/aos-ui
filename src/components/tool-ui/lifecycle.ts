@@ -76,8 +76,8 @@ export function toolResultSignalsFailure(value: unknown): boolean {
     result.ok === false
   )
     return true
-  const exitCode = result.exit_code ?? result.exitCode
-  if (typeof exitCode === "number" && exitCode !== 0) return true
+  const exitCode = toolResultExitCode(result)
+  if (exitCode !== undefined && exitCode !== 0) return true
   if (
     typeof result.status === "string" &&
     /^(?:error|failed|failure)$/iu.test(result.status)
@@ -86,6 +86,14 @@ export function toolResultSignalsFailure(value: unknown): boolean {
   if (typeof result.error === "string" && result.error.trim()) return true
   if (result.error && typeof result.error === "object") return true
   return false
+}
+
+/** The exit code a command's structured result reports, if any. */
+export function toolResultExitCode(
+  result: Record<string, unknown>
+): number | undefined {
+  const exitCode = result.exit_code ?? result.exitCode
+  return typeof exitCode === "number" ? exitCode : undefined
 }
 
 function createState(phase: RichToolPhase): RichToolState {

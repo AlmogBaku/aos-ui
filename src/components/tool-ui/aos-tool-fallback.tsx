@@ -6,7 +6,10 @@ import {
   CodeRunner,
   type RunState,
 } from "@/components/assistant-ui/elements/code-runner"
-import { TerminalBlock } from "@/components/assistant-ui/elements/terminal-block"
+import {
+  TerminalBlock,
+  type TerminalBlockStatus,
+} from "@/components/assistant-ui/elements/terminal-block"
 import {
   ToolCall,
   ToolCallPayload,
@@ -14,7 +17,7 @@ import {
 import { ToolError } from "@/components/assistant-ui/elements/tool-error"
 
 import { LazyToolDiff, LazyToolTerminal } from "./lazy-tool-views"
-import { normalizeRichToolState } from "./lifecycle"
+import { normalizeRichToolState, toolResultExitCode } from "./lifecycle"
 import { useToolUiLocale } from "./locale"
 import {
   safeToolDisplayValue,
@@ -79,6 +82,15 @@ function codeRunnerDuration(value: unknown) {
   return undefined
 }
 
+function terminalStatus(
+  phase: ReturnType<typeof normalizeRichToolState>["phase"]
+): TerminalBlockStatus {
+  if (phase === "complete" || phase === "answered") return "ok"
+  if (phase === "failed") return "failed"
+  if (phase === "cancelled") return "stopped"
+  return "running"
+}
+
 function codeRunnerState(
   phase: ReturnType<typeof normalizeRichToolState>["phase"]
 ): RunState {
@@ -102,6 +114,17 @@ function toolErrorMessage(part: RichToolPart) {
     }
   }
   return safeToolPresentation(part.result).text
+}
+
+/**
+ * A command that carries no source code shows as a terminal however it ended,
+ * so a failed or stopped run still shows its output and exit status.
+ */
+export function showsAsTerminal(part: RichToolPart) {
+  return (
+    toolActionKind(part) === "command" &&
+    !safeToolDisplayValue(part.args, ["code"], "")
+  )
 }
 
 export const AosToolError: RichToolFallbackComponent = (part) => {
@@ -148,8 +171,15 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
     chosenOpen ?? (running && terminals.some((terminal) => terminal.running))
   const elapsedMs = useToolElapsedMs(part.timing, running)
   const hasArtifactViews = diffs.length > 0 || terminals.length > 0
+  const kind = toolActionKind(part)
+  // Any call that carries source code reads best as code, whatever the runtime
+  // named it. The language is shown only when the call declares one.
+  const code = safeToolDisplayValue(part.args, ["code"], "")
+  const language = safeToolDisplayValue(part.args, ["language"], "")
+  const useCodeRunner = Boolean(code)
+  const useTerminalBlock = showsAsTerminal(part) && state.phase !== "expired"
 
-  if (state.phase === "failed" && !hasArtifactViews)
+  if (state.phase === "failed" && !hasArtifactViews && !useTerminalBlock)
     return <AosToolError {...part} />
 
   const displayState =
@@ -164,7 +194,6 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
             : "failed"
   const request = safeToolPresentation(part.args).text
   const result = safeToolPresentation(part.result).text
-  const kind = toolActionKind(part)
   const action = labels.assistant.toolActions[kind]
   const query =
     kind === "generic" && locations.length === 0
@@ -176,17 +205,11 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
   const requestLabel = locale === "he" ? "בקשה" : "Request"
   const resultLabel = locale === "he" ? "תוצאה" : "Result"
 
-  // Any call that carries source code reads best as code, whatever the runtime
-  // named it. The language is shown only when the call declares one.
-  const code = safeToolDisplayValue(part.args, ["code"], "")
-  const language = safeToolDisplayValue(part.args, ["language"], "")
-  const useCodeRunner = Boolean(code)
-  const useTerminalBlock =
-    !useCodeRunner &&
-    kind === "command" &&
-    state.phase !== "cancelled" &&
-    state.phase !== "expired"
   const lines = useTerminalBlock ? terminalLines(part.result) : []
+  const record = useTerminalBlock ? resultRecord(part.result) : undefined
+  const exitCode = record && toolResultExitCode(record)
+  const hint =
+    typeof record?.hint === "string" ? safeToolText(record.hint) : undefined
 
   const body =
     terminals.length > 0 ? (
@@ -218,8 +241,9 @@ export const AosToolFallback: RichToolFallbackComponent = (part) => {
       <TerminalBlock
         command={query}
         lines={lines}
-        visibleCount={lines.length}
-        done={state.phase === "complete" || state.phase === "answered"}
+        status={terminalStatus(state.phase)}
+        {...(exitCode === undefined ? {} : { exitCode })}
+        {...(hint ? { hint } : {})}
         className="mt-2 max-w-none"
       />
     ) : (

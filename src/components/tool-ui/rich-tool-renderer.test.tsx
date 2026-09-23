@@ -241,23 +241,36 @@ describe("AosToolFallback", () => {
     }
   )
 
-  it("uses Tool Error for a failed call", () => {
-    const { container } = render(
+  it("keeps a failed command in its terminal with its exit status and hint", async () => {
+    const user = userEvent.setup()
+    const hint = "Exit 124: the command hit its timeout. Raise timeout=."
+    render(
       <AosToolPresentation
         {...toolPart({
           toolName: "terminal",
-          args: { command: "bun run build" },
-          result: { output: "Build failed", exit_code: 1 },
+          args: { command: "sleep 5" },
+          result: {
+            output: "[Command timed out after 2s]",
+            exit_code: 124,
+            error: null,
+            hint,
+          },
         })}
       />
     )
 
-    expect(container.querySelector('[data-slot="tool-error"]')).toBeVisible()
-    expect(screen.getByText("bun run build")).toBeVisible()
-    expect(screen.getByText("Build failed")).toBeVisible()
+    const trigger = screen.getByRole("button")
+    expect(within(trigger).getByText("sleep 5")).toBeVisible()
+    expect(screen.queryByText("1/1")).not.toBeInTheDocument()
+
+    await user.click(trigger)
+    expect(screen.getByText("[Command timed out after 2s]")).toBeVisible()
+    expect(screen.getByText("exit 124")).toBeVisible()
+    expect(screen.getByText(hint)).toBeVisible()
   })
 
-  it("keeps a stopped command's output line breaks as written", () => {
+  it("keeps a stopped command's output lines as written", async () => {
+    const user = userEvent.setup()
     render(
       <AosToolPresentation
         {...toolPart({
@@ -268,10 +281,71 @@ describe("AosToolFallback", () => {
       />
     )
 
+    await user.click(screen.getByRole("button"))
+    expect(screen.getByText("waiting")).toBeVisible()
+    expect(screen.getByText("[Command interrupted]")).toBeVisible()
+    expect(screen.getByText("exit 130")).toBeVisible()
+  })
+
+  it("shows a hint only when the command failed", async () => {
+    const user = userEvent.setup()
+    render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "bun run dev", background: true },
+          result: {
+            output: "Background process started",
+            exit_code: 0,
+            hint: "Started silently.",
+          },
+        })}
+      />
+    )
+
+    await user.click(screen.getByRole("button"))
+    expect(screen.getByText("exit 0")).toBeVisible()
+    expect(screen.queryByText("Started silently.")).not.toBeInTheDocument()
+  })
+
+  it("names a running command before any output arrives", async () => {
+    const user = userEvent.setup()
+    render(
+      <AosToolFallback
+        {...toolPart({
+          toolName: "terminal",
+          args: { command: "for i in 1 2 3; do echo $i; sleep 1; done" },
+          status: { type: "running" },
+        })}
+      />
+    )
+
+    const trigger = screen.getByRole("button")
+    expect(
+      within(trigger).getByText("for i in 1 2 3; do echo $i; sleep 1; done")
+    ).toBeVisible()
+    expect(within(trigger).queryByText("terminal")).not.toBeInTheDocument()
+    await user.click(trigger)
+    expect(screen.queryByText(/^exit /)).not.toBeInTheDocument()
+  })
+
+  it("uses Tool Error for a failed call that runs no command", () => {
+    render(
+      <AosToolPresentation
+        {...toolPart({
+          toolName: "fetch_page",
+          args: { url: "https://example.com" },
+          result: { error: "Not found\nstatus 404" },
+          isError: true,
+        })}
+      />
+    )
+
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
     expect(
       screen.getByText(
         (_, element) =>
-          element?.textContent === "waiting\n[Command interrupted]" &&
+          element?.textContent === "Not found\nstatus 404" &&
           element.children.length === 0
       )
     ).toBeVisible()
