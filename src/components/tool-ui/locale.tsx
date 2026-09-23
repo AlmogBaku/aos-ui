@@ -96,9 +96,11 @@ export type ToolUiLocaleLabels = {
     toolActions: Record<ToolUiActionKind, { active: string; complete: string }>
     /** The turn's work disclosure; the duration clause is dropped without one. */
     fold: Record<TurnFoldKind, (duration?: string) => string>
+    /** One unit of a compact span, e.g. "17m" or "17 דק׳". */
     duration: {
+      hours: (hours: number) => string
+      minutes: (minutes: number) => string
       seconds: (seconds: number) => string
-      minutes: (minutes: number, seconds: number) => string
       /** A tool call that took less than a second. */
       underSecond: string
     }
@@ -255,10 +257,10 @@ export const enToolUiLabels: ToolUiLocaleLabels = {
         duration ? `Declined after ${duration}` : "Declined",
     },
     duration: {
-      seconds: (seconds) => `${seconds} s`,
-      minutes: (minutes, seconds) =>
-        seconds === 0 ? `${minutes} min` : `${minutes} min ${seconds} s`,
-      underSecond: "<1 s",
+      hours: (hours) => `${hours}h`,
+      minutes: (minutes) => `${minutes}m`,
+      seconds: (seconds) => `${seconds}s`,
+      underSecond: "<1s",
     },
     toolLocations: "Locations",
     moreLocations: (count) => `+${count} more`,
@@ -487,9 +489,9 @@ export const heToolUiLabels: ToolUiLocaleLabels = {
       refused: (duration) => (duration ? `סירב אחרי ${duration}` : "סירב"),
     },
     duration: {
+      hours: (hours) => `${hours} שע׳`,
+      minutes: (minutes) => `${minutes} דק׳`,
       seconds: (seconds) => `${seconds} שנ׳`,
-      minutes: (minutes, seconds) =>
-        seconds === 0 ? `${minutes} דק׳` : `${minutes} דק׳ ${seconds} שנ׳`,
       underSecond: "פחות משנייה",
     },
     toolLocations: "מיקומים",

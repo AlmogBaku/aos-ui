@@ -9,7 +9,6 @@ import {
   createTurnGroupBy,
   describeToolRun,
   formatTurnDuration,
-  turnDiffStats,
   turnLayout,
   turnOutcome,
   type TurnPart,
@@ -243,14 +242,16 @@ describe("formatTurnDuration", () => {
   const he = heToolUiLabels.assistant.duration
 
   it("rounds to whole seconds under a minute", () => {
-    expect(formatTurnDuration(29_400, en)).toBe("29 s")
-    expect(formatTurnDuration(29_400, he)).toBe("29 שנ׳")
+    expect(formatTurnDuration(20_400, en)).toBe("20s")
+    expect(formatTurnDuration(20_400, he)).toBe("20 שנ׳")
   })
 
-  it("splits a longer turn into minutes and seconds", () => {
-    expect(formatTurnDuration(65_000, en)).toBe("1 min 5 s")
-    expect(formatTurnDuration(65_000, he)).toBe("1 דק׳ 5 שנ׳")
-    expect(formatTurnDuration(120_000, en)).toBe("2 min")
+  it("reads a longer turn in its two largest units", () => {
+    expect(formatTurnDuration(1_047_000, en)).toBe("17m 27s")
+    expect(formatTurnDuration(1_047_000, he)).toBe("17 דק׳ 27 שנ׳")
+    expect(formatTurnDuration(120_000, en)).toBe("2m")
+    expect(formatTurnDuration(3_900_000, en)).toBe("1h 5m")
+    expect(formatTurnDuration(3_900_000, he)).toBe("1 שע׳ 5 דק׳")
   })
 })
 
@@ -267,45 +268,5 @@ describe("turnOutcome", () => {
     expect(turnOutcome({ type: "incomplete", reason: "content-filter" })).toBe(
       "refused"
     )
-  })
-})
-
-describe("turnDiffStats", () => {
-  const edit = (patch: string, paths: readonly string[]): TurnPart => ({
-    type: "tool-call",
-    toolName: "edit_file",
-    artifact: {
-      aos: {
-        diffs: [
-          {
-            changes: paths.map((path) => ({ kind: "modify", path })),
-            patch,
-          },
-        ],
-      },
-    },
-  })
-
-  it("sums every tool's reported diffs across the turn", () => {
-    const parts = [
-      edit("--- a/a\n+++ b/a\n+one\n+two\n-old", ["a", "b"]),
-      tool("read_file"),
-      text("Between the edits."),
-      edit("+three", ["c"]),
-    ]
-
-    expect(turnDiffStats(parts)).toEqual({
-      files: 3,
-      additions: 3,
-      deletions: 1,
-    })
-  })
-
-  it("reports nothing for a turn whose tools carry no diffs", () => {
-    expect(turnDiffStats([tool("read_file"), text("Done.")])).toEqual({
-      files: 0,
-      additions: 0,
-      deletions: 0,
-    })
   })
 })

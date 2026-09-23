@@ -384,11 +384,11 @@ test("tool rows name their ACP kind, subject, locations and duration", async ({
     )
   ).toBeVisible()
   for (const row of [
-    "Read src/pricing/tiers.ts:12 <1 s",
-    "Searched trialDays 1 s",
+    "Read src/pricing/tiers.ts:12 <1s",
+    "Searched trialDays 1s",
     "Deleted notes/draft-pricing.md",
     "Moved notes/brief.md +1 more",
-    "Fetched https://example.com/pricing 2 s",
+    "Fetched https://example.com/pricing 2s",
     "Thought Compare tiers",
     "Switched mode review",
     "Used lookup_currency",
@@ -396,7 +396,7 @@ test("tool rows name their ACP kind, subject, locations and duration", async ({
     await expect(toolRow(page, row)).toBeVisible()
 
   // A row folds every location it touched behind its first one.
-  await expandByKeyboard(toolRow(page, "Searched trialDays 1 s"))
+  await expandByKeyboard(toolRow(page, "Searched trialDays 1s"))
   await expect(
     page.getByRole("list", { name: "Locations" }).getByRole("listitem")
   ).toHaveText([
@@ -415,15 +415,15 @@ test("an edit folds its diff under a row that totals the changed lines", async (
     page.getByText("The trial is now 30 days and the logos are tidied.")
   ).toBeVisible()
 
-  // The fold's headline totals the turn's changes; each row totals its own.
-  await openFold(page, "Worked · Changed 5 files +4 −2")
+  // The fold's headline names no changes; each edit row totals its own.
+  await openFold(page, "Worked")
   const changedFiles = page.getByRole("list", { name: "Changed files" })
   await expect(changedFiles).toHaveCount(0)
 
   await expandByKeyboard(
     toolRow(
       page,
-      "Edited src/pricing/tiers.ts +1 more 4 lines added, 2 removed <1 s"
+      "Edited src/pricing/tiers.ts +1 more 4 lines added, 2 removed <1s"
     )
   )
   await expect(changedFiles).toMatchAriaSnapshot(`
@@ -463,7 +463,7 @@ test("a command's terminal streams its output live and reports its exit", async 
   // Settled, the call folds away with its duration and its exit.
   await expect(page.getByText("All ten pricing tests pass.")).toBeVisible()
   await openFold(page, "Worked")
-  await expandByKeyboard(toolRow(page, "Ran bun run test src/pricing 4 s"))
+  await expandByKeyboard(toolRow(page, "Ran bun run test src/pricing 4s"))
   await expect(output).toContainText("Tests 10 passed (10)")
   await expect(
     page.getByRole("status").filter({ hasText: "Command ended. Exit code 0" })
@@ -471,7 +471,7 @@ test("a command's terminal streams its output live and reports its exit", async 
 
   await sendPrompt(page, "Run the terminal and fail")
   await openFold(page, "Worked")
-  await expandByKeyboard(toolRow(page, "Ran bun run lint 3 s"))
+  await expandByKeyboard(toolRow(page, "Ran bun run lint 3s"))
   await expect(output.last()).toContainText("✖ 1 problem (1 error, 0 warnings)")
   await expect(
     page.getByRole("status").filter({ hasText: "Command ended. Exit code 1" })
@@ -493,7 +493,7 @@ test("a nested subagent shows its goal, transcript and footprint", async ({
     "Depth 1",
     "Two of three tiers match what buyers asked for; the team tier needs a longer trial.",
     "18K tokens",
-    "Took 1 min 12 s",
+    "Took 1m 12s",
     "Read 3 files",
     "Wrote 1 file",
   ])

@@ -482,7 +482,7 @@ test("a compaction divides the trace where it happened and keeps its summary", a
   ).toBeVisible()
 
   const fold = () =>
-    page.getByRole("button", { name: "Worked · Changed 1 file +2 −1" }).last()
+    page.getByRole("button", { name: "Worked", exact: true }).last()
   await expandByKeyboard(fold())
   // The divider folds its summary away until it is asked for.
   const summary = page.getByText(
