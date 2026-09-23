@@ -1,6 +1,10 @@
 import type { GuestAuthorization, GuestCapability } from "./guest-invitation"
 import { guestCapabilities, guestOperations } from "./guest-invitation"
-import { PendingRequestKind } from "../core/events"
+import {
+  PendingRequestKind,
+  PendingRequestSchema,
+  type PendingQuestion,
+} from "../core/events"
 
 const MAX_INPUT_BYTES = 65_536
 const MAX_OUTPUT_BYTES = 32_768
@@ -75,6 +79,7 @@ const requestKeys = [
   "toolCallId",
   "expiresAt",
   "responseSchema",
+  "questions",
 ] as const
 
 type Transport = "rest" | "turn" | "artifact" | "error"
@@ -132,7 +137,8 @@ export type GuestSafeRequest = {
   requestId: string
   kind: PendingRequestKind
   message?: string
-  responseSchema: Record<string, unknown>
+  responseSchema?: Record<string, unknown>
+  questions?: PendingQuestion[]
 }
 
 export type GuestOutboundProjection = {
@@ -572,9 +578,20 @@ function projectRequests(
             candidate.expiresAt))
     )
       return undefined
-    const responseSchema = projectJsonSchema(candidate.responseSchema)
-    if (!responseSchema) return undefined
+    const responseSchema =
+      candidate.responseSchema === undefined
+        ? undefined
+        : projectJsonSchema(candidate.responseSchema)
+    if (candidate.responseSchema !== undefined && !responseSchema)
+      return undefined
+    // The questions are the words the guest answers; the strict schema keeps
+    // anything else an adapter might attach out of the projection.
+    const questions = PendingRequestSchema.shape.questions.safeParse(
+      candidate.questions
+    )
+    if (!questions.success) return undefined
     if (
+      responseSchema &&
       candidate.kind === PendingRequestKind.Permission &&
       Array.isArray(responseSchema.enum)
     ) {
@@ -590,7 +607,8 @@ function projectRequests(
       ...(candidate.message === undefined
         ? {}
         : { message: candidate.message as string }),
-      responseSchema,
+      ...(responseSchema ? { responseSchema } : {}),
+      ...(questions.data ? { questions: questions.data } : {}),
     })
   }
   return { type: "requests", requests }

@@ -410,7 +410,7 @@ describe("OpenClaw workspace reads", () => {
     const workspace = createOpenClawWorkspace({ client: native })
 
     await expect(
-      workspace.patchSession("analyst", "agent:other:main", {
+      workspace.updateSession("analyst", "agent:other:main", {
         archived: true,
       })
     ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())

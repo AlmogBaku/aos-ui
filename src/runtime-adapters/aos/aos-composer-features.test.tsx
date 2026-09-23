@@ -31,7 +31,7 @@ function capabilities(): AosWorkspaceCapabilities {
         breakdown: "provider-categories",
       },
       todos: { status: "unavailable", reason: "history-unavailable" },
-      activity: { status: "unavailable", reason: "session-info-unavailable" },
+      activity: { status: "unavailable", reason: "session-state-unavailable" },
     },
     interactions: {
       steering: {
@@ -290,7 +290,7 @@ describe("AOS composer features", () => {
           id: "large",
           label: "Large",
           group: "Native",
-          efforts: ["low", "medium", "high"],
+          efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
         },
       ],
     }))
@@ -460,7 +460,12 @@ describe("AOS composer features", () => {
       selectedId: "a",
       effortId: "medium",
       options: [
-        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+        {
+          id: "a",
+          label: "A",
+          group: "G",
+          efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+        },
       ],
     }))
     const client = {
@@ -497,7 +502,12 @@ describe("AOS composer features", () => {
       selectedId: "a",
       effortId: "medium",
       options: [
-        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
+        {
+          id: "a",
+          label: "A",
+          group: "G",
+          efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+        },
         { id: "b", label: "B", group: "G" },
       ],
     }))
@@ -553,8 +563,18 @@ describe("AOS composer features", () => {
       selectedId: threadId === "session-1" ? "a" : "b",
       effortId: threadId === "session-1" ? "medium" : "low",
       options: [
-        { id: "a", label: "A", group: "G", efforts: ["low", "medium", "high"] },
-        { id: "b", label: "B", group: "G", efforts: ["low", "medium", "high"] },
+        {
+          id: "a",
+          label: "A",
+          group: "G",
+          efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+        },
+        {
+          id: "b",
+          label: "B",
+          group: "G",
+          efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+        },
       ],
     }))
     const client = {
@@ -676,7 +696,12 @@ describe("AOS composer features", () => {
       selectedId: "small",
       options: [
         { id: "small", label: "Small", group: "Native" },
-        { id: "large", label: "Large", group: "Native", efforts: ["high"] },
+        {
+          id: "large",
+          label: "Large",
+          group: "Native",
+          efforts: [{ id: "high" }],
+        },
       ],
     }))
     const followers = new Set<() => void>()

@@ -61,7 +61,7 @@ import {
   HermesSessionGoneError,
   isSessionGone,
 } from "./attachment-registry"
-import type { ServerRuntime } from "../../core/runtime"
+import type { ServerRuntime, SessionPatch } from "../../core/runtime"
 import { nativeSlashCommands } from "./slash-commands"
 import {
   DEFAULT_RETRY_SCHEDULE,
@@ -1516,20 +1516,29 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
-  async mutateSession(
+  updateSession(profile: string, storedId: string, patch: SessionPatch) {
+    // The native patch owns every flag's side effects: pinning a Session also
+    // clears `hidden` and exempts the row from auto-archive.
+    return this.#mutateSession(profile, storedId, (dashboard) =>
+      dashboard.updateSession(profile, storedId, patch)
+    )
+  }
+
+  deleteSession(profile: string, storedId: string) {
+    return this.#mutateSession(profile, storedId, (dashboard) =>
+      dashboard.deleteSession(profile, storedId)
+    )
+  }
+
+  async #mutateSession(
     profile: string,
     storedId: string,
-    method: "PATCH" | "DELETE",
-    body?: unknown
+    write: (dashboard: HermesDashboardClient) => Promise<unknown>
   ) {
     await this.getSession(profile, storedId)
     if (!this.#dashboard) throw new HermesUnavailableError()
-    // The native patch owns every flag's side effects: pinning a Session also
-    // clears `hidden` and exempts the row from auto-archive.
     try {
-      await (method === "PATCH"
-        ? this.#dashboard.updateSession(profile, storedId, body)
-        : this.#dashboard.deleteSession(profile, storedId))
+      await write(this.#dashboard)
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
         throw new HermesSessionNotFoundError()

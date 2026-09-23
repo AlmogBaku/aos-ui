@@ -21,7 +21,7 @@ function harness(
     mutate?: () => Promise<void>
   } = {}
 ) {
-  const mutateSession = vi.fn(options.mutate ?? (async () => undefined))
+  const updateSession = vi.fn(options.mutate ?? (async () => undefined))
   const runtimeInfo = vi.fn(async () => ({
     runtime: { id: "hermes", name: "Hermes" },
     status: "ready",
@@ -40,7 +40,7 @@ function harness(
       runtimeInfo,
       resolveSessionId: (_agentId: string, publicId: string) =>
         `stored-${publicId}`,
-      mutateSession,
+      updateSession,
     },
   } as unknown as RuntimeInstance
   const sessionRows = createSessionRows()
@@ -62,7 +62,7 @@ function harness(
     lane: options.lane ?? "operator",
     onUnreadChanged,
   })
-  return { mutateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }
+  return { updateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }
 }
 
 /** Runs the debounce and the write's own promise chain to completion. */
@@ -105,56 +105,53 @@ describe("createReadState", () => {
   })
 
   it("arms the watermark once per exposure even when the row reads read", async () => {
-    const { mutateSession, onUnreadChanged, readState } = harness()
+    const { updateSession, onUnreadChanged, readState } = harness()
 
     readState.focus(AGENT, SESSION)
-    expect(mutateSession).not.toHaveBeenCalled()
+    expect(updateSession).not.toHaveBeenCalled()
 
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledWith(
-      AGENT,
-      `stored-${SESSION}`,
-      "PATCH",
-      { unread: false }
-    )
+    expect(updateSession).toHaveBeenCalledWith(AGENT, `stored-${SESSION}`, {
+      unread: false,
+    })
     expect(onUnreadChanged).toHaveBeenCalledWith(AGENT, SESSION, false)
 
     await settle(REACK_FLOOR_MS * 2)
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
 
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(updateSession).toHaveBeenCalledTimes(2)
   })
 
   it("defers a re-lit exposure's re-ack to the floor and ignores other Sessions", async () => {
-    const { mutateSession, readState } = harness({ unread: true })
+    const { updateSession, readState } = harness({ unread: true })
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
 
     readState.onExecution(lifecycle("turn-finished"))
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
 
     // The floor spaces the writes out; it does not drop the one it held back.
     await settle(REACK_FLOOR_MS - FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(updateSession).toHaveBeenCalledTimes(2)
 
     await settle(REACK_FLOOR_MS)
     readState.onExecution(attention())
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(3)
+    expect(updateSession).toHaveBeenCalledTimes(3)
 
     await settle(REACK_FLOOR_MS)
     readState.onExecution(lifecycle("turn-started"))
     readState.onExecution(lifecycle("turn-failed", "session-2"))
     readState.onExecution(attention("session-2"))
     await settle(REACK_FLOOR_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(3)
+    expect(updateSession).toHaveBeenCalledTimes(3)
   })
 
   it("drops a floored re-ack once the Session leaves focus", async () => {
-    const { mutateSession, readState } = harness()
+    const { updateSession, readState } = harness()
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
     readState.onExecution(lifecycle("turn-finished"))
@@ -162,11 +159,11 @@ describe("createReadState", () => {
 
     readState.blur()
     await settle(REACK_FLOOR_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
   })
 
   it("forwards no unread the provider reports while an ack is on its way", async () => {
-    const { mutateSession, readState, sessionRows } = harness()
+    const { updateSession, readState, sessionRows } = harness()
     const published: (boolean | undefined)[] = []
     sessionRows.subscribe((row) => published.push(row.unread))
     const relight = () =>
@@ -186,7 +183,7 @@ describe("createReadState", () => {
     relight()
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
 
     // A re-ack the floor holds back still holds the row read until it lands.
     await settle(READ_GUARD_MS)
@@ -205,31 +202,30 @@ describe("createReadState", () => {
     await settle(FOCUS_DEBOUNCE_MS - 100)
     first.readState.focus(AGENT, "session-2")
     await settle(FOCUS_DEBOUNCE_MS - 100)
-    expect(first.mutateSession).not.toHaveBeenCalled()
+    expect(first.updateSession).not.toHaveBeenCalled()
 
     await settle(100)
-    expect(first.mutateSession).toHaveBeenCalledTimes(1)
-    expect(first.mutateSession).toHaveBeenCalledWith(
+    expect(first.updateSession).toHaveBeenCalledTimes(1)
+    expect(first.updateSession).toHaveBeenCalledWith(
       AGENT,
       "stored-session-2",
-      "PATCH",
       { unread: false }
     )
 
     first.readState.focus(AGENT, SESSION)
     first.readState.blur()
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(first.mutateSession).toHaveBeenCalledTimes(1)
+    expect(first.updateSession).toHaveBeenCalledTimes(1)
 
     const second = harness()
     second.readState.focus(AGENT, SESSION)
     second.readState.close()
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(second.mutateSession).not.toHaveBeenCalled()
+    expect(second.updateSession).not.toHaveBeenCalled()
   })
 
   it("keeps the optimistic row when the provider rejects the write", async () => {
-    const { mutateSession, onUnreadChanged, readState, sessionRows } = harness({
+    const { updateSession, onUnreadChanged, readState, sessionRows } = harness({
       unread: true,
       mutate: async () => {
         throw new Error("Session not found")
@@ -238,13 +234,13 @@ describe("createReadState", () => {
 
     await expect(readState.markRead(AGENT, SESSION)).resolves.toBeUndefined()
 
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
     expect(onUnreadChanged).toHaveBeenCalledWith(AGENT, SESSION, false)
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
   })
 
   it("acknowledges a Session the provider re-lights under the operator's eyes", async () => {
-    const { mutateSession, readState, sessionRows } = harness()
+    const { updateSession, readState, sessionRows } = harness()
     const relight = (sessionId: string) => {
       sessionRows.rememberList([
         {
@@ -261,7 +257,7 @@ describe("createReadState", () => {
 
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(1)
+    expect(updateSession).toHaveBeenCalledTimes(1)
 
     // Past the write guard, so the list read is believed rather than coerced.
     await settle(READ_GUARD_MS)
@@ -269,17 +265,17 @@ describe("createReadState", () => {
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
 
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(updateSession).toHaveBeenCalledTimes(2)
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
 
     await settle(READ_GUARD_MS)
     relight("session-2")
     await settle(FOCUS_DEBOUNCE_MS)
-    expect(mutateSession).toHaveBeenCalledTimes(2)
+    expect(updateSession).toHaveBeenCalledTimes(2)
   })
 
   it("writes nothing when the runtime does not track read state", async () => {
-    const { mutateSession, readState, runtimeInfo } = harness({
+    const { updateSession, readState, runtimeInfo } = harness({
       tracked: false,
       unread: true,
     })
@@ -289,12 +285,12 @@ describe("createReadState", () => {
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
 
-    expect(mutateSession).not.toHaveBeenCalled()
+    expect(updateSession).not.toHaveBeenCalled()
     expect(runtimeInfo).toHaveBeenCalledTimes(1)
   })
 
   it("never moves the watermark for a guest", async () => {
-    const { mutateSession, onUnreadChanged, readState, sessionRows } = harness({
+    const { updateSession, onUnreadChanged, readState, sessionRows } = harness({
       lane: "guest",
       unread: true,
     })
@@ -305,7 +301,7 @@ describe("createReadState", () => {
     await settle(FOCUS_DEBOUNCE_MS)
     await readState.markRead(AGENT, SESSION)
 
-    expect(mutateSession).not.toHaveBeenCalled()
+    expect(updateSession).not.toHaveBeenCalled()
     expect(onUnreadChanged).not.toHaveBeenCalled()
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
   })

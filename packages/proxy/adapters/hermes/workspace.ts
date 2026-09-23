@@ -95,7 +95,7 @@ export type HermesWorkspaceCapabilities = {
         coverage: "active-session-only"
         source: "provider-session-state"
       }
-    | { status: "unavailable"; reason: "session-info-unavailable" }
+    | { status: "unavailable"; reason: "session-state-unavailable" }
 }
 
 /** Hermes' native reasoning-effort ladder, weakest to strongest. */
@@ -115,7 +115,7 @@ export type HermesModelChoice = {
   id: string
   label: string
   group: string
-  efforts?: readonly string[]
+  efforts?: readonly { id: string }[]
 }
 
 export type HermesModelChoices = {
@@ -140,7 +140,7 @@ export type HermesActivity =
   | {
       status: "unavailable"
       reason:
-        "session-not-attached" | "session-idle" | "session-info-unavailable"
+        "session-not-attached" | "session-idle" | "session-state-unavailable"
     }
   | {
       status: "available"
@@ -221,7 +221,8 @@ type NativeModel = HermesModelChoice & { provider: string; model: string }
 
 /**
  * Hermes reports reasoning support per model but never sends the ladder, so an
- * unknown model reports no efforts rather than an assumed ladder.
+ * unknown model reports no efforts rather than an assumed ladder. Nor does it
+ * name a level, so each effort is its id alone.
  */
 function projectEfforts(capability: unknown) {
   if (!isRecord(capability) || capability.reasoning !== true) return undefined
@@ -230,7 +231,7 @@ function projectEfforts(capability: unknown) {
       ? [HERMES_REASONING_DISABLED]
       : []),
     ...HERMES_REASONING_EFFORTS,
-  ]
+  ].map((id) => ({ id }))
 }
 
 function projectEffortId(value: unknown) {
@@ -530,7 +531,7 @@ export function createHermesWorkspaceOperations(input: {
               coverage: "active-session-only",
               source: "provider-session-state",
             }
-          : { status: "unavailable", reason: "session-info-unavailable" },
+          : { status: "unavailable", reason: "session-state-unavailable" },
       }
     },
     models,
@@ -662,7 +663,7 @@ export function createHermesWorkspaceOperations(input: {
           state: "idle",
         }
       if (!input.transport.sessionInfo)
-        return { status: "unavailable", reason: "session-info-unavailable" }
+        return { status: "unavailable", reason: "session-state-unavailable" }
       const info = await input.transport.sessionInfo(session).catch(() => {
         throw new HermesWorkspaceUnavailableError()
       })

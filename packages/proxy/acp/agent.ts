@@ -28,7 +28,7 @@ import {
   type AosExtensions,
 } from "../../protocol/acp"
 import type { PromptTurnInput } from "../core/events"
-import type { SessionScope } from "../core/runtime"
+import type { ServerRuntime, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
@@ -73,18 +73,24 @@ const SESSION_LIST_LIMIT = 50
 /** Extension methods with no params still need a parser for the SDK. */
 const withoutParams = () => undefined
 
-/** Every AOS extension is implemented; only the guest projection is a lane. */
-const EXTENSIONS = {
-  steer: true,
-  rewind: true,
-  artifacts: true,
-  composerPrefill: true,
-  agents: true,
-  invalidation: true,
-  activity: true,
-  readState: true,
-  focus: true,
-} satisfies Omit<AosExtensions, "guestProjection">
+/**
+ * The operator lane's extensions. The proxy implements each of them itself,
+ * except the provider catalog invalidation a runtime may not signal.
+ */
+function operatorExtensions(runtime: ServerRuntime): AosExtensions {
+  return {
+    steer: true,
+    rewind: true,
+    artifacts: true,
+    composerPrefill: true,
+    agents: true,
+    invalidation: runtime.subscribeCatalogChanges !== undefined,
+    activity: true,
+    readState: true,
+    focus: true,
+    guestProjection: false,
+  }
+}
 
 /** What a redeemed invitation may call; every other method is unavailable. */
 const GUEST_METHODS = new Set<string>([
@@ -368,7 +374,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           lane,
           extensions: context.guest
             ? GUEST_EXTENSIONS
-            : { ...EXTENSIONS, guestProjection: false },
+            : operatorExtensions(runtime),
         },
       },
     }
@@ -565,7 +571,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
     guestFor(methods.agent.session.delete)
     const scope = sessions.scope(params.sessionId)
-    await workspace.mutate(scope, "DELETE")
+    await workspace.delete(scope)
     sessions.forget(scope)
     await client.notify(AOS_METHODS.notify.catalogInvalidated)
     return {}
@@ -581,9 +587,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await context.readState.markRead(scope.agentId, scope.threadId)
         return {}
       }
-      await workspace.mutate(
+      await workspace.update(
         scope,
-        "PATCH",
         params.title !== undefined
           ? { title: params.title }
           : params.archived !== undefined

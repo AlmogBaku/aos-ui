@@ -11,7 +11,7 @@ const models: SessionModelsResponse = {
       id: "sonnet",
       label: "Sonnet",
       group: "Anthropic",
-      efforts: ["low", "medium", "high"],
+      efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
     },
     { id: "haiku", label: "Haiku", group: "Anthropic" },
   ],
@@ -73,6 +73,27 @@ describe("configOptionsOf", () => {
         { value: "low", name: "low" },
         { value: "medium", name: "medium" },
         { value: "high", name: "high" },
+      ],
+    })
+  })
+
+  it("carries the name a provider gave an effort", () => {
+    const named: SessionModelsResponse = {
+      selectedId: "sonnet",
+      options: [
+        {
+          id: "sonnet",
+          label: "Sonnet",
+          group: "Anthropic",
+          efforts: [{ id: "turbo", name: "Turbo" }, { id: "low" }],
+        },
+      ],
+    }
+
+    expect(configOptionsOf(named)[1]).toMatchObject({
+      options: [
+        { value: "turbo", name: "Turbo" },
+        { value: "low", name: "low" },
       ],
     })
   })

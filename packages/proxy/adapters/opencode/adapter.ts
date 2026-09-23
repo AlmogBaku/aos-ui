@@ -18,6 +18,7 @@ import type {
   ServerAttachmentStage,
   ServerTurnEngine,
   ServerRuntime,
+  SessionPatch,
 } from "../../core/runtime"
 import { projectTodos } from "../todos"
 import {
@@ -404,15 +405,12 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return this.#workspace.createSession(agentId)
   }
 
-  async mutateSession(
-    agentId: string,
-    sessionId: string,
-    method: "PATCH" | "DELETE",
-    body?: unknown
-  ) {
-    await (method === "DELETE"
-      ? this.#workspace.deleteSession(agentId, sessionId)
-      : this.#workspace.patchSession(agentId, sessionId, body))
+  async updateSession(agentId: string, sessionId: string, patch: SessionPatch) {
+    await this.#workspace.updateSession(agentId, sessionId, patch)
+  }
+
+  async deleteSession(agentId: string, sessionId: string) {
+    await this.#workspace.deleteSession(agentId, sessionId)
   }
 
   async workspaceCapabilities(agentId: string, publicSessionId: string) {

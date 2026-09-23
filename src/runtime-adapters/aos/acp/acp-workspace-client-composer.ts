@@ -108,9 +108,13 @@ function modelOptionsOf(
   )
 }
 
-function valueIdsOf(option: SelectConfigOption) {
+/** Each effort with the name its provider gave it. */
+function effortsOf(option: SelectConfigOption) {
   return entriesOf(option).flatMap((entry) =>
-    "groupId" in entry ? entry.options.map((item) => item.value) : [entry.value]
+    ("groupId" in entry ? entry.options : [entry]).map((item) => ({
+      id: item.value,
+      name: item.name,
+    }))
   )
 }
 
@@ -121,7 +125,7 @@ export function projectModels(
   const model = firstSelect(options, MODEL_CATEGORY)
   if (!model) return {}
   const effort = firstSelect(options, EFFORT_CATEGORY)
-  const efforts = effort ? valueIdsOf(effort) : []
+  const efforts = effort ? effortsOf(effort) : []
   return {
     models: {
       selectedId: model.currentValue,

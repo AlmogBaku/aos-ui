@@ -662,8 +662,18 @@ export const SessionModelsResponseSchema = z.strictObject({
         id: IdentifierSchema,
         label: z.string().min(1).max(256),
         group: z.string().min(1).max(256),
-        /** Provider-reported reasoning effort ids; absent when the model has none. */
-        efforts: z.array(IdentifierSchema).min(1).max(16).optional(),
+        /** Provider-reported reasoning efforts; absent when the model has none. */
+        efforts: z
+          .array(
+            z.strictObject({
+              id: IdentifierSchema,
+              /** The provider's own name for the effort, when it reports one. */
+              name: z.string().min(1).max(256).optional(),
+            })
+          )
+          .min(1)
+          .max(16)
+          .optional(),
       })
     )
     .max(4_096),
@@ -757,7 +767,7 @@ export const SessionActivityResponseSchema = z.discriminatedUnion("status", [
     reason: z.enum([
       "session-not-attached",
       "session-idle",
-      "session-info-unavailable",
+      "session-state-unavailable",
     ]),
   }),
   z.strictObject({

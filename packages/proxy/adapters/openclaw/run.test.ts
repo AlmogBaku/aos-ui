@@ -280,7 +280,7 @@ describe("OpenClaw run engine", () => {
           {
             requestId: "question-a",
             status: "resolved",
-            payload: { answers: { choice: ["yes"] } },
+            payload: { answers: [["yes"]] },
           },
         ]),
         stage
@@ -445,7 +445,7 @@ describe("OpenClaw run engine", () => {
       {
         requestId: "question-a",
         status: "resolved" as const,
-        payload: { answers: { choice: ["yes"] } },
+        payload: { answers: [["yes"]] },
       },
     ],
     [
@@ -559,7 +559,7 @@ describe("OpenClaw run engine", () => {
         {
           requestId: "question-a",
           status: "resolved",
-          payload: { answers: { choice: ["yes"] } },
+          payload: { answers: [["yes"]] },
         },
       ])
     )
@@ -637,7 +637,7 @@ describe("OpenClaw run engine", () => {
           {
             requestId: "question-restored",
             status: "resolved",
-            payload: { answers: { choice: ["yes"] } },
+            payload: { answers: [["yes"]] },
           },
         ],
         "question-continuation"
@@ -1256,7 +1256,7 @@ describe("OpenClaw run engine", () => {
         {
           requestId: "question-a",
           status: "resolved",
-          payload: { answers: { choice: ["yes"] } },
+          payload: { answers: [["yes"]] },
         },
       ])
     )

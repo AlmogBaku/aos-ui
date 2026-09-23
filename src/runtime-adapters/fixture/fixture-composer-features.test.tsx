@@ -43,7 +43,7 @@ describe("fixture composer features", () => {
         id: "fixture-balanced",
         label: "Fixture Balanced",
         group: "Fixture",
-        efforts: ["low", "medium", "high"],
+        efforts: [{ id: "low" }, { id: "medium" }, { id: "high" }],
       },
       { id: "fixture-fast", label: "Fixture Fast", group: "Fixture" },
     ])

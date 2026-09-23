@@ -1207,7 +1207,7 @@ describe("Hermes server adapter", () => {
         .mockRejectedValueOnce(new HermesHttpError(409)),
     })
     await expect(
-      conflict.mutateSession("researcher", "stored", "PATCH", {
+      conflict.updateSession("researcher", "stored", {
         archived: true,
       })
     ).rejects.toBeInstanceOf(HermesSessionConflictError)
@@ -1438,7 +1438,7 @@ describe("Hermes server adapter", () => {
     })
     const adapter = new HermesServerAdapter({ request: vi.fn(), http })
 
-    await adapter.mutateSession("researcher", "stored/1", "PATCH", {
+    await adapter.updateSession("researcher", "stored/1", {
       unread: false,
     })
 
@@ -1456,7 +1456,7 @@ describe("Hermes server adapter", () => {
     })
     const adapter = new HermesServerAdapter({ request: vi.fn(), http })
 
-    await adapter.mutateSession("researcher", "stored/1", "PATCH", {
+    await adapter.updateSession("researcher", "stored/1", {
       pinned: true,
     })
 

@@ -44,6 +44,7 @@ import type {
   ServerTurnEngine,
   ServerTurnHandle,
   ServerRuntime,
+  SessionPatch,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
@@ -386,22 +387,16 @@ async function harness(options: HarnessOptions = {}) {
     if (!row) throw new Error("not found")
     return row
   })
-  const mutateSession = vi.fn(
-    async (
-      _agentId: string,
-      sessionId: string,
-      method: "PATCH" | "DELETE",
-      body?: unknown
-    ) => {
+  const updateSession = vi.fn(
+    async (_agentId: string, sessionId: string, patch: SessionPatch) => {
       const current = rows.get(sessionId)
-      if (method === "DELETE") {
-        rows.delete(sessionId)
-        return
-      }
       if (current)
-        rows.set(sessionId, { ...current, ...PatchSchema.parse(body ?? {}) })
+        rows.set(sessionId, { ...current, ...PatchSchema.parse(patch) })
     }
   )
+  const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
+    rows.delete(sessionId)
+  })
   const history = vi.fn(async () => options.history ?? HISTORY)
 
   const runtime: ServerRuntime = {
@@ -425,7 +420,8 @@ async function harness(options: HarnessOptions = {}) {
       )
       return { session: { id: CREATED, agentId } }
     },
-    mutateSession,
+    updateSession,
+    deleteSession,
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => MODELS,
     updateModel: unsupported,
@@ -519,7 +515,8 @@ async function harness(options: HarnessOptions = {}) {
     recorder,
     sources,
     start,
-    mutateSession,
+    updateSession,
+    deleteSession,
     /** Registers the Agent that owns the seeded Session, as a roster read does. */
     list: () => connection.agent.request(methods.agent.session.list, {}),
     create: () =>
@@ -714,9 +711,9 @@ function turnEnded(): TurnEvent {
 }
 
 /**
- * The clarification Hermes raises: one question interrupt whose prefixed answer
- * schemas are a single choice, a multi-select, and a free-text question. An
- * adapter that knows which tool call is asking names it.
+ * The clarification Hermes raises: one question interrupt asking a single
+ * choice, a multi-select, and a free-text question. An adapter that knows which
+ * tool call is asking names it.
  */
 function turnQuestioned(toolCallId?: string): TurnEvent {
   return {
@@ -727,41 +724,26 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
         kind: PendingRequestKind.Elicitation,
         message: "3 questions require answers",
         ...(toolCallId === undefined ? {} : { toolCallId }),
-        responseSchema: {
-          type: "object",
-          properties: {
-            answers: {
-              type: "array",
-              prefixItems: [
-                {
-                  type: "array",
-                  description: "Which environment?",
-                  items: { type: "string", enum: ["staging", "production"] },
-                  minItems: 0,
-                  maxItems: 1,
-                },
-                {
-                  type: "array",
-                  description: "Which services?",
-                  items: { type: "string", enum: ["api", "worker", "web"] },
-                  minItems: 0,
-                  maxItems: 3,
-                },
-                {
-                  type: "array",
-                  description: "Anything else to watch?",
-                  items: { type: "string", maxLength: 4096 },
-                  minItems: 0,
-                  maxItems: 64,
-                },
-              ],
-              minItems: 3,
-              maxItems: 3,
-            },
+        questions: [
+          {
+            text: "Which environment?",
+            choices: ["staging", "production"],
+            multiple: false,
+            custom: true,
           },
-          required: ["answers"],
-          additionalProperties: false,
-        },
+          {
+            text: "Which services?",
+            choices: ["api", "worker", "web"],
+            multiple: true,
+            custom: true,
+          },
+          {
+            text: "Anything else to watch?",
+            choices: [],
+            multiple: true,
+            custom: true,
+          },
+        ],
       },
     ],
   }
@@ -1194,11 +1176,11 @@ describe("operator ACP lane", () => {
     test.clock.advance(500)
 
     await vi.waitFor(() =>
-      expect(test.mutateSession).toHaveBeenCalledWith(AGENT, SESSION, "PATCH", {
+      expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
         unread: false,
       })
     )
-    expect(test.mutateSession).toHaveBeenCalledTimes(1)
+    expect(test.updateSession).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(unreadChanges(test.recorder)).toHaveLength(2))
     expect(unreadChanges(test.recorder)[1]).toMatchObject({
       agentId: AGENT,

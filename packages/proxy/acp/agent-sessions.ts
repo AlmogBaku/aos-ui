@@ -14,7 +14,7 @@ import {
   type SessionModelUpdateRequest,
 } from "../../protocol"
 import { AOS_META_KEY, type AosSessionInfoMeta } from "../../protocol/acp"
-import type { SessionScope } from "../core/runtime"
+import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import { createSessionAttachment } from "./session-attachment"
@@ -180,10 +180,10 @@ export function createWorkspace(context: AcpConnectionContext) {
       ),
     history: (scope: SessionScope, limit: number) =>
       call(() => runtime.history(scope.agentId, scope.sessionId, limit, 0)),
-    mutate: (scope: SessionScope, method: "PATCH" | "DELETE", body?: unknown) =>
-      call(() =>
-        runtime.mutateSession(scope.agentId, scope.sessionId, method, body)
-      ),
+    update: (scope: SessionScope, patch: SessionPatch) =>
+      call(() => runtime.updateSession(scope.agentId, scope.sessionId, patch)),
+    delete: (scope: SessionScope) =>
+      call(() => runtime.deleteSession(scope.agentId, scope.sessionId)),
     /** Addressed by public reference, so an invited Session needs no detail. */
     capabilities: (scope: Pick<SessionScope, "agentId" | "threadId">) =>
       call(async () =>

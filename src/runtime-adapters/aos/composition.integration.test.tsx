@@ -360,7 +360,8 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       created.push(agentId)
       return { session: { id: CREATED_SESSION_ID, agentId } }
     },
-    mutateSession: async () => undefined,
+    updateSession: async () => undefined,
+    deleteSession: async () => undefined,
     workspaceCapabilities: async () => CAPABILITIES,
     models: async () => models,
     updateModel,

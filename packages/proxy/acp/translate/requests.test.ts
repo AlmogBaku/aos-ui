@@ -60,39 +60,25 @@ const approval: PendingRequest = {
   expiresAt: "2026-09-19T10:00:00.000Z",
 }
 
-/** The clarification Hermes raises: prefixed per-question answer schemas. */
+/** The clarification Hermes raises: a choice and a free-text question. */
 const questions: PendingRequest = {
   requestId: "clarify-1",
   kind: "elicitation",
   message: "2 questions require answers",
-  responseSchema: {
-    type: "object",
-    properties: {
-      answers: {
-        type: "array",
-        prefixItems: [
-          {
-            type: "array",
-            description: "Which environment?",
-            items: { type: "string", enum: ["staging", "production"] },
-            minItems: 0,
-            maxItems: 1,
-          },
-          {
-            type: "array",
-            description: "Anything else to watch?",
-            items: { type: "string", maxLength: 4096 },
-            minItems: 0,
-            maxItems: 64,
-          },
-        ],
-        minItems: 2,
-        maxItems: 2,
-      },
+  questions: [
+    {
+      text: "Which environment?",
+      choices: ["staging", "production"],
+      multiple: false,
+      custom: true,
     },
-    required: ["answers"],
-    additionalProperties: false,
-  },
+    {
+      text: "Anything else to watch?",
+      choices: [],
+      multiple: true,
+      custom: true,
+    },
+  ],
   expiresAt: "2026-09-19T10:00:00.000Z",
 }
 
@@ -178,37 +164,20 @@ const located: PendingRequest = {
   requestId: "clarify-5",
   kind: "elicitation",
   message: "Where should exports live? Not under /srv/aos/repo.",
-  responseSchema: {
-    type: "object",
-    properties: {
-      answers: {
-        type: "array",
-        prefixItems: [
-          {
-            type: "array",
-            description: "Where should exports live? Not under /srv/aos/repo.",
-            items: {
-              type: "string",
-              enum: ["/home/operator/exports (Recommended)", "ask later"],
-            },
-            minItems: 0,
-            maxItems: 1,
-          },
-          {
-            type: "array",
-            description: "Anything else? See https://docs.example.test/exports",
-            items: { type: "string", maxLength: 4096 },
-            minItems: 0,
-            maxItems: 1,
-          },
-        ],
-        minItems: 2,
-        maxItems: 2,
-      },
+  questions: [
+    {
+      text: "Where should exports live? Not under /srv/aos/repo.",
+      choices: ["/home/operator/exports (Recommended)", "ask later"],
+      multiple: false,
+      custom: true,
     },
-    required: ["answers"],
-    additionalProperties: false,
-  },
+    {
+      text: "Anything else? See https://docs.example.test/exports",
+      choices: [],
+      multiple: false,
+      custom: true,
+    },
+  ],
 }
 
 describe("pendingRequestToOutbound questions", () => {
@@ -249,12 +218,9 @@ describe("pendingRequestToOutbound questions", () => {
       metaOf(
         elicitationOf(
           {
-            ...located,
+            requestId: "clarify-9",
+            kind: "elicitation",
             message: "Post on X / twitter and/or 24/7?",
-            responseSchema: {
-              type: "object",
-              properties: { answers: { type: "object" } },
-            },
           },
           "guest"
         )
@@ -263,7 +229,7 @@ describe("pendingRequestToOutbound questions", () => {
     expect(meta.questions[0]?.prompt).toBe("Post on X / twitter and/or 24/7?")
   })
 
-  it("projects each prefixed answer schema into one form field", () => {
+  it("projects each question into one form field", () => {
     const outbound = elicitationOf(questions)
 
     expect(fieldOf(outbound, "mode")).toBe("form")
@@ -281,8 +247,6 @@ describe("pendingRequestToOutbound questions", () => {
   })
 
   it("keeps the questions losslessly in parseable elicitation metadata", () => {
-    // Every question is `custom`: the native contract always offers an
-    // "Other (type your answer)" row beside the choices it lists.
     expect(
       AosElicitationMetaSchema.parse(metaOf(elicitationOf(questions)))
     ).toEqual({
@@ -309,20 +273,14 @@ describe("pendingRequestToOutbound questions", () => {
     const outbound = elicitationOf({
       requestId: "clarify-2",
       kind: "elicitation",
-      responseSchema: {
-        type: "object",
-        properties: {
-          answers: {
-            prefixItems: [
-              {
-                description: "Pick the suites",
-                items: { type: "string", enum: ["unit", "e2e"] },
-                maxItems: 2,
-              },
-            ],
-          },
+      questions: [
+        {
+          text: "Pick the suites",
+          choices: ["unit", "e2e"],
+          multiple: true,
+          custom: true,
         },
-      },
+      ],
     })
 
     // ACP requires a `"string"` item type to declare its `enum`, and the
@@ -357,11 +315,9 @@ describe("pendingRequestToOutbound questions", () => {
     const outbound = elicitationOf({
       requestId: "clarify-3",
       kind: "elicitation",
-      responseSchema: {
-        properties: {
-          answers: { prefixItems: [{ description, maxItems: 1 }] },
-        },
-      },
+      questions: [
+        { text: description, choices: [], multiple: false, custom: true },
+      ],
     })
     const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
 
@@ -373,20 +329,15 @@ describe("pendingRequestToOutbound questions", () => {
     const outbound = elicitationOf({
       requestId: "clarify-6",
       kind: "elicitation",
-      responseSchema: {
-        properties: {
-          answers: {
-            prefixItems: [
-              {
-                title: "Region",
-                description: "Which region should the export land in?",
-                items: { type: "string", enum: ["eu", "us"] },
-                maxItems: 1,
-              },
-            ],
-          },
+      questions: [
+        {
+          label: "Region",
+          text: "Which region should the export land in?",
+          choices: ["eu", "us"],
+          multiple: false,
+          custom: true,
         },
-      },
+      ],
     })
     const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
 
@@ -413,11 +364,14 @@ describe("pendingRequestToOutbound questions", () => {
         elicitationOf({
           requestId: "clarify-7",
           kind: "elicitation",
-          responseSchema: {
-            properties: {
-              answers: { prefixItems: [{ title: "w".repeat(600) }] },
+          questions: [
+            {
+              label: "w".repeat(600),
+              choices: [],
+              multiple: false,
+              custom: true,
             },
-          },
+          ],
         })
       )
     )
@@ -432,13 +386,14 @@ describe("pendingRequestToOutbound questions", () => {
           {
             requestId: "clarify-8",
             kind: "elicitation",
-            responseSchema: {
-              properties: {
-                answers: {
-                  prefixItems: [{ title: "Under /srv/aos/repo?" }],
-                },
+            questions: [
+              {
+                label: "Under /srv/aos/repo?",
+                choices: [],
+                multiple: false,
+                custom: true,
               },
-            },
+            ],
           },
           "guest"
         )
@@ -448,16 +403,36 @@ describe("pendingRequestToOutbound questions", () => {
     expect(meta.questions[0]?.header).toBe("Under [provider path redacted]")
   })
 
-  it("asks one free-text question when the schema lists no answer fields", () => {
+  it("offers only the choices of a question that takes no free text", () => {
+    const meta = AosElicitationMetaSchema.parse(
+      metaOf(
+        elicitationOf({
+          requestId: "clarify-10",
+          kind: "elicitation",
+          questions: [
+            {
+              label: "Deploy",
+              text: "Deploy now?",
+              choices: ["yes", "no"],
+              multiple: false,
+              custom: false,
+            },
+          ],
+        })
+      )
+    )
+
+    expect(meta.questions[0]).toMatchObject({
+      options: [{ label: "yes" }, { label: "no" }],
+      custom: false,
+    })
+  })
+
+  it("asks one free-text question when the request lists none", () => {
     const outbound = elicitationOf({
       requestId: "clarify-4",
       kind: "elicitation",
       message: "Which branch should I use?",
-      responseSchema: {
-        type: "object",
-        properties: { answers: { type: "object" } },
-        required: ["answers"],
-      },
     })
 
     expect(AosElicitationMetaSchema.parse(metaOf(outbound)).questions).toEqual([

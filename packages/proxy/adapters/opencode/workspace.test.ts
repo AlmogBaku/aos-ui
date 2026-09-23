@@ -271,7 +271,7 @@ describe("OpenCode workspace operations", () => {
     })
 
     await expect(
-      operations.patchSession("research", "session-1", { title: "Renamed" })
+      operations.updateSession("research", "session-1", { title: "Renamed" })
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
     await expect(
       operations.deleteSession("research", "session-1")

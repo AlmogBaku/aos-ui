@@ -5,8 +5,14 @@ export type ComposerModelOption = {
   readonly label: string
   readonly description?: string | undefined
   readonly group?: string | undefined
-  /** Provider-reported reasoning effort ids; the UI localizes their labels. */
-  readonly efforts?: readonly string[] | undefined
+  /** Provider-reported reasoning efforts; the UI localizes the ladder's ids. */
+  readonly efforts?: readonly ComposerModelEffort[] | undefined
+}
+
+/** One reasoning effort, with the provider's own name when it reports one. */
+export type ComposerModelEffort = {
+  readonly id: string
+  readonly name?: string | undefined
 }
 
 /** A partial model change: the model, its reasoning effort, or both. */

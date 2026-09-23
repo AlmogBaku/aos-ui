@@ -90,7 +90,7 @@ describe("OpenCodeInteractions", () => {
       {
         requestId: "question-1",
         status: "resolved" as const,
-        payload: [["option-1"]],
+        payload: { answers: [["Europe"]] },
       },
     ]
 
@@ -136,6 +136,22 @@ describe("OpenCodeInteractions", () => {
         requestId: "native-question-id",
         kind: PendingRequestKind.Elicitation,
         message: "2 questions require answers",
+        questions: [
+          {
+            label: "Region",
+            text: "Where should this run?",
+            choices: ["Europe", "US"],
+            multiple: false,
+            custom: true,
+          },
+          {
+            label: "Checks",
+            text: "Which checks?",
+            choices: ["Lint"],
+            multiple: true,
+            custom: true,
+          },
+        ],
       },
     ])
     await expect(
@@ -143,7 +159,7 @@ describe("OpenCodeInteractions", () => {
         {
           requestId: "native-question-id",
           status: "resolved",
-          payload: [["option-1"], ["option-1"]],
+          payload: { answers: [["Europe"], ["Lint"]] },
         },
       ])
     ).resolves.toEqual({ status: "resolved" })
@@ -154,6 +170,52 @@ describe("OpenCodeInteractions", () => {
         answers: [["Europe"], ["Lint"]],
       }
     )
+  })
+
+  it("keeps the choices of a multi-choice question and answers every one", async () => {
+    const reply = vi.fn(async () => undefined)
+    const interactions = new OpenCodeInteractions({
+      questions: { reply, reject: vi.fn(async () => undefined) },
+      permissions: { reply: vi.fn(async () => undefined) },
+    })
+
+    const [request] = interactions.acceptQuestion(scope, {
+      id: "question-1",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "Checks",
+          question: "Which checks?",
+          options: [
+            { label: "Lint", description: "Static checks" },
+            { label: "Unit", description: "Unit tests" },
+            { label: "E2E", description: "Browser tests" },
+          ],
+          multiple: true,
+          custom: false,
+        },
+      ],
+    })
+
+    expect(request?.questions).toEqual([
+      {
+        label: "Checks",
+        text: "Which checks?",
+        choices: ["Lint", "Unit", "E2E"],
+        multiple: true,
+        custom: false,
+      },
+    ])
+    await interactions.respond(scope, [
+      {
+        requestId: "question-1",
+        status: "resolved",
+        payload: { answers: [["Lint", "E2E"]] },
+      },
+    ])
+    expect(reply).toHaveBeenCalledWith("native-session-1", "question-1", {
+      answers: [["Lint", "E2E"]],
+    })
   })
 
   it("rejects incomplete or choice-substituted responses before native dispatch", async () => {
@@ -170,11 +232,13 @@ describe("OpenCodeInteractions", () => {
           header: "Region",
           question: "Where?",
           options: [{ label: "Europe", description: "EU" }],
+          custom: false,
         },
         {
           header: "Check",
           question: "Which?",
           options: [{ label: "Lint", description: "Static" }],
+          custom: false,
         },
       ],
     })
@@ -184,7 +248,7 @@ describe("OpenCodeInteractions", () => {
         {
           requestId: "native-question-id",
           status: "resolved",
-          payload: [["option-1"]],
+          payload: { answers: [["Europe"]] },
         },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
@@ -193,7 +257,7 @@ describe("OpenCodeInteractions", () => {
         {
           requestId: "native-question-id",
           status: "resolved",
-          payload: [["Outside"], ["option-1"]],
+          payload: { answers: [["Outside"], ["Lint"]] },
         },
       ])
     ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
@@ -224,18 +288,14 @@ describe("OpenCodeInteractions", () => {
       action: "write",
       resources: [],
     })
-    const publicChoice = (
-      question[0]!.responseSchema!.items as Array<{
-        items: { enum: string[] }
-      }>
-    )[0]!.items.enum[0]!
+    const choice = question[0]!.questions![0]!.choices[0]!
 
     await expect(
       interactions.respond({ ...scope, turnId: "reply-segment" }, [
         {
           requestId: "question-1",
           status: "resolved",
-          payload: [[publicChoice]],
+          payload: { answers: [[choice]] },
         },
         { requestId: "permission-1", status: "resolved", payload: "once" },
       ])
@@ -273,7 +333,7 @@ describe("OpenCodeInteractions", () => {
         {
           requestId: "question-1",
           status: "resolved",
-          payload: [["option-1"]],
+          payload: { answers: [["Yes"]] },
         },
       ])
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
@@ -303,7 +363,7 @@ describe("OpenCodeInteractions", () => {
       {
         requestId: "question-1",
         status: "resolved",
-        payload: [["option-1"]],
+        payload: { answers: [["Yes"]] },
       },
     ]
     interactions.acceptQuestion(scope, question)

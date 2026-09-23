@@ -303,7 +303,8 @@ function harness(options: HarnessOptions = {}) {
         ? { sessionId: STORED, created: !options.existing }
         : undefined
   )
-  const mutateSession = vi.fn(async () => undefined)
+  const updateSession = vi.fn(async () => undefined)
+  const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(async () => HISTORY)
@@ -334,7 +335,8 @@ function harness(options: HarnessOptions = {}) {
       status: "idle",
     }),
     createSession: unsupported,
-    mutateSession,
+    updateSession,
+    deleteSession,
     workspaceCapabilities,
     models: unsupported,
     updateModel: unsupported,
@@ -407,7 +409,8 @@ function harness(options: HarnessOptions = {}) {
     start,
     handles,
     history,
-    mutateSession,
+    updateSession,
+    deleteSession,
     runtimeInfo,
     resolveInvitedSession,
     initialize: () =>
@@ -603,7 +606,7 @@ describe("guest ACP lane", () => {
         value: "opus",
       })
     ).rejects.toMatchObject(refused)
-    expect(test.mutateSession).not.toHaveBeenCalled()
+    expect(test.updateSession).not.toHaveBeenCalled()
     test.close()
   })
 
@@ -713,7 +716,7 @@ describe("guest ACP lane", () => {
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: REF })
     await test.resume(REF)
 
-    expect(test.mutateSession).not.toHaveBeenCalled()
+    expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
     test.close()
   })

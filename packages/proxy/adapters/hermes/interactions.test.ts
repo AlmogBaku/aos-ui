@@ -74,27 +74,14 @@ describe("HermesInteractions server requests", () => {
       requestId: id,
       kind: PendingRequestKind.Elicitation,
       message: "Which region?",
-      responseSchema: {
-        type: "object",
-        properties: {
-          answers: {
-            type: "array",
-            prefixItems: [
-              {
-                type: "array",
-                description: "Which region?",
-                items: { type: "string", enum: ["eu", "us"] },
-                minItems: 0,
-                maxItems: 1,
-              },
-            ],
-            minItems: 1,
-            maxItems: 1,
-          },
+      questions: [
+        {
+          text: "Which region?",
+          choices: ["eu", "us"],
+          multiple: false,
+          custom: true,
         },
-        required: ["answers"],
-        additionalProperties: false,
-      },
+      ],
     })
     expect(JSON.stringify(request)).not.toContain(LIVE)
     expect(requests.frames()).toEqual([])
@@ -135,15 +122,14 @@ describe("HermesInteractions server requests", () => {
     // The interrupt offers the whole selection, so the answer must carry it:
     // Hermes parses a single multi-select answer as a JSON array
     // (`tools/clarify_tool.py` `_parse_multi_select_response`).
-    expect(interactions.pending(scope)[0]).toMatchObject({
-      responseSchema: {
-        properties: {
-          answers: {
-            prefixItems: [{ maxItems: 3, uniqueItems: true }],
-          },
-        },
+    expect(interactions.pending(scope)[0]?.questions).toEqual([
+      {
+        text: "Which checks?",
+        choices: ["smoke", "e2e", "unit"],
+        multiple: true,
+        custom: true,
       },
-    })
+    ])
 
     await expect(
       interactions.respond(scope, {
@@ -184,9 +170,10 @@ describe("HermesInteractions server requests", () => {
       requestId: id,
       kind: PendingRequestKind.Elicitation,
       message: "2 questions require answers",
-      responseSchema: {
-        properties: { answers: { minItems: 2, maxItems: 2 } },
-      },
+      questions: [
+        { text: "Which region?", choices: ["eu", "us"], multiple: false },
+        { text: "Which checks?", choices: ["smoke", "e2e"], multiple: true },
+      ],
     })
     expect(JSON.stringify(pending)).not.toContain("q0")
 
@@ -204,7 +191,7 @@ describe("HermesInteractions server requests", () => {
     expect(requests.frames()).toHaveLength(1)
   })
 
-  it("restores answers Hermes already locked as ordered schema defaults", async () => {
+  it("answers a question Hermes already locked with its locked native value", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver(
@@ -230,18 +217,11 @@ describe("HermesInteractions server requests", () => {
       { replayed: false }
     )
 
-    const interrupt = interactions.pending(scope)[0]
-    const schema = interrupt?.responseSchema as {
-      properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
-    }
-    const locked = schema.properties.answers.prefixItems[0]!.default!
-    expect(locked).toEqual(["/home/operator/secret"])
-
     // A locked free-text answer is echoed back as its native value.
     await interactions.respond(scope, {
       requestId: id,
       status: "resolved",
-      payload: { answers: [locked, ["eu"]] },
+      payload: { answers: [["/home/operator/secret"], ["eu"]] },
     })
 
     expect(requests.answer(id)).toEqual({
@@ -829,15 +809,7 @@ describe("HermesInteractions server requests", () => {
     expect(interrupt?.message).toBe(
       "Use https://hermes.internal with [credential redacted]"
     )
-    const choices = (
-      interrupt?.responseSchema as {
-        properties: {
-          answers: {
-            prefixItems: Array<{ items: { enum?: string[] } }>
-          }
-        }
-      }
-    ).properties.answers.prefixItems[0]!.items.enum!
+    const choices = interrupt?.questions?.[0]?.choices ?? []
     expect(choices).toEqual(["/home/operator/run.sh", "skip"])
 
     await interactions.respond(scope, {
@@ -890,14 +862,7 @@ describe("HermesInteractions server requests", () => {
         },
       ],
     })
-    const prefixItems = (
-      interactions.pending(scope)[0]?.responseSchema as {
-        properties: {
-          answers: { prefixItems: Array<{ items: { enum?: string[] } }> }
-        }
-      }
-    ).properties.answers.prefixItems
-    const displayed = prefixItems[0]!.items.enum![0]!
+    const displayed = interactions.pending(scope)[0]!.questions![0]!.choices[0]!
 
     // Hermes always offers "Other (type your answer)" beside the choices it
     // lists (`MAX_CHOICES` in `tools/clarify_tool.py`), so an answer that is
@@ -944,7 +909,7 @@ describe("HermesInteractions server requests", () => {
     expect(requests.answer(id)).toEqual({ answer: '["smoke","soak"]' })
   })
 
-  it("restores a locked free-text answer to a question that offered choices", async () => {
+  it("accepts a locked free-text answer to a question that offered choices", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {
@@ -959,14 +924,6 @@ describe("HermesInteractions server requests", () => {
       ],
       answers: { q0: "ap-southeast" },
     })
-
-    const interrupt = interactions.pending(scope)[0]
-    const schema = interrupt?.responseSchema as {
-      properties: { answers: { prefixItems: Array<{ default?: string[] }> } }
-    }
-    expect(schema.properties.answers.prefixItems[0]!.default).toEqual([
-      "ap-southeast",
-    ])
 
     await interactions.respond(scope, {
       requestId: id,

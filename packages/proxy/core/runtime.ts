@@ -22,6 +22,13 @@ export type SessionScope = {
   hasAttachments?: boolean
 }
 
+/** Exactly one Session field a write changes, as the wire request carries it. */
+export type SessionPatch =
+  | { title: string }
+  | { archived: boolean }
+  | { pinned: boolean }
+  | { unread: boolean }
+
 export type ServerTurnHandle = {
   events: AsyncIterable<TurnEvent>
   /** Resolves only when the provider segment is terminal. */
@@ -204,12 +211,12 @@ export interface ServerRuntime {
   ): Promise<SessionHistoryResponse>
   getSession(agentId: string, runtimeSessionId: string): Promise<Session>
   createSession(agentId: string, title?: string): Promise<unknown>
-  mutateSession(
+  updateSession(
     agentId: string,
     runtimeSessionId: string,
-    method: "PATCH" | "DELETE",
-    body?: unknown
+    patch: SessionPatch
   ): Promise<void>
+  deleteSession(agentId: string, runtimeSessionId: string): Promise<void>
   workspaceCapabilities(
     agentId: string,
     publicSessionId: string

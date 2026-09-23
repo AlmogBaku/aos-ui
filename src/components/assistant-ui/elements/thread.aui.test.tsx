@@ -1639,7 +1639,7 @@ describe("Thread accessibility", () => {
               {
                 id: "opaque-balanced",
                 label: "Balanced",
-                efforts: ["low", "high"],
+                efforts: [{ id: "low" }, { id: "high" }],
               },
               { id: "opaque-fast", label: "Fast" },
             ],
@@ -1661,6 +1661,42 @@ describe("Thread accessibility", () => {
 
     await user.click(await screen.findByText("Fast"))
     expect(update).toHaveBeenLastCalledWith({ selectedId: "opaque-fast" })
+  })
+
+  it.each([
+    ["a ladder id keeps its localized name", "high", "High"],
+    ["an unknown id shows its provider's name", "turbo", "Turbo"],
+    ["an unnamed unknown id shows the id", "burst", "burst"],
+  ])("names the effort: %s", async (_label, effortId, name) => {
+    const user = userEvent.setup()
+    render(
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{
+          model: {
+            options: [
+              {
+                id: "opaque-balanced",
+                label: "Balanced",
+                efforts: [
+                  { id: "high", name: "Deep" },
+                  { id: "turbo", name: "Turbo" },
+                  { id: "burst" },
+                ],
+              },
+            ],
+            selectedId: "opaque-balanced",
+            effortId,
+            update: async () => undefined,
+          },
+        }}
+      />
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+    expect(
+      await screen.findByRole("slider", { name: "Thinking" })
+    ).toHaveAttribute("aria-valuetext", name)
   })
 
   it("hides reasoning effort when the provider reports none", async () => {

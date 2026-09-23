@@ -4,10 +4,8 @@ import type {
   Session,
   SessionCatalogResponse,
 } from "../../../protocol"
-import {
-  SessionCreateResponseSchema,
-  SessionPatchRequestSchema,
-} from "../../../protocol"
+import { SessionCreateResponseSchema } from "../../../protocol"
+import type { SessionPatch } from "../../core/runtime"
 
 import {
   openClawAgentsParams,
@@ -110,13 +108,11 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
  * Maps one normalized Session intent to its proven native equivalent. `unread`
  * and every rejected body stay unavailable rather than emulated.
  */
-function nativeSessionPatch(body: unknown): OpenClawSessionPatch {
-  const intent = SessionPatchRequestSchema.safeParse(body)
-  if (!intent.success) throw new OpenClawWorkspaceUnavailableError()
-  const { title, archived, pinned } = intent.data
-  if (title !== undefined) return { label: title }
-  if (archived !== undefined) return { archived }
-  if (pinned !== undefined) return { pinned }
+function nativeSessionPatch(patch: SessionPatch): OpenClawSessionPatch {
+  if ("title" in patch) return { label: patch.title }
+  if ("archived" in patch) return { archived: patch.archived }
+  if ("pinned" in patch) return { pinned: patch.pinned }
+  // OpenClaw has no native read state to write.
   throw new OpenClawWorkspaceUnavailableError()
 }
 
@@ -144,10 +140,10 @@ export type OpenClawWorkspace = Readonly<{
   ): Promise<SessionCatalogResponse>
   getSession(agentId: string, sessionKey: string): Promise<Session>
   createSession(agentId: string): Promise<unknown>
-  patchSession(
+  updateSession(
     agentId: string,
     sessionKey: string,
-    body: unknown
+    patch: SessionPatch
   ): Promise<void>
   deleteSession(agentId: string, sessionKey: string): Promise<void>
   resolveSessionId(agentId: string, publicSessionId: string): string | undefined
@@ -302,14 +298,14 @@ export function createOpenClawWorkspace(input: {
         session: { id: created.key, agentId },
       })
     },
-    async patchSession(agentId, sessionKey, body) {
+    async updateSession(agentId, sessionKey, patch) {
       await getSession(agentId, sessionKey)
       await input.client.request(
         "sessions.patch",
         openClawPatchSessionParams(
           agentId,
           sessionKey,
-          nativeSessionPatch(body)
+          nativeSessionPatch(patch)
         )
       )
     },
