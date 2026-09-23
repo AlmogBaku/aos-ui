@@ -1430,6 +1430,18 @@ describe("applyUpdate tool facts", () => {
     })
   })
 
+  it("times the call from its duration alone when it reported neither end", () => {
+    const state = fold([
+      toolCall(
+        { title: "terminal", status: "completed" },
+        { ...TOOL_META, durationMs: 201 }
+      ),
+    ])
+    const timing = toolPartOf(state)?.timing
+    expect(timing?.completedAt).toBeDefined()
+    expect((timing?.completedAt ?? 0) - (timing?.startedAt ?? 0)).toBe(201)
+  })
+
   it("appends partial output held back until its call appears", () => {
     const early = fold([
       agentChunk("a1", "Working"),
