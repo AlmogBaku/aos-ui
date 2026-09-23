@@ -118,7 +118,14 @@ const CAPABILITIES = {
   },
 }
 
-/** A stored conversation whose reasoning and setup turn are operator-only. */
+/** A file under the operator's home: tool data carries it to operators only. */
+const OPERATOR_PATH = "/home/operator/project/notes.md"
+const OPERATOR_DIFF = {
+  changes: [{ operation: "modify" as const, path: OPERATOR_PATH }],
+  patch: `--- a${OPERATOR_PATH}\n+++ b${OPERATOR_PATH}\n-old\n+new\n`,
+}
+
+/** A stored conversation whose reasoning, edit, and setup turn are operator-only. */
 const HISTORY = {
   sessionId: STORED,
   messages: [
@@ -143,6 +150,17 @@ const HISTORY = {
       content: [
         { type: "text" as const, text: "Safe answer" },
         { type: "reasoning" as const, text: "private reasoning" },
+        {
+          type: "tool-call" as const,
+          toolCallId: "stored-edit",
+          toolName: "patch",
+          args: { path: OPERATOR_PATH },
+          argsText: JSON.stringify({ path: OPERATOR_PATH }),
+          result: "ok",
+          kind: "edit" as const,
+          locations: [{ path: OPERATOR_PATH }],
+          diffs: [OPERATOR_DIFF],
+        },
       ],
       createdAt: "2026-09-15T00:00:01.000Z",
     },
@@ -206,7 +224,7 @@ function openHandle(events: readonly TurnEvent[]): ServerTurnHandle {
   }
 }
 
-/** One run segment whose reasoning, tool call, and prose all reach the proxy. */
+/** One run segment whose reasoning, file edit, and prose all reach the proxy. */
 const RUN_EVENTS: TurnEvent[] = [
   { kind: TurnEventKind.TurnStarted },
   {
@@ -219,6 +237,14 @@ const RUN_EVENTS: TurnEvent[] = [
     toolCallId: "tool-1",
     title: "read_file",
     parentMessageId: "assistant-native",
+    locations: [{ path: OPERATOR_PATH }],
+  },
+  {
+    kind: TurnEventKind.ToolCallFinished,
+    toolCallId: "tool-1",
+    output: "ok",
+    failed: false,
+    diffs: [OPERATOR_DIFF],
   },
   {
     kind: TurnEventKind.MessageChunk,
@@ -537,6 +563,8 @@ describe("guest ACP lane", () => {
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
     expect(replayed).not.toContain("private reasoning")
+    expect(replayed).not.toContain(OPERATOR_PATH)
+    expect(replayed).not.toContain("+new")
     // The invitation's setup turn is not part of the guest conversation.
     expect(replayed).not.toContain(INSTRUCTION)
     await expect(test.resume("another-session")).rejects.toMatchObject({
@@ -630,6 +658,33 @@ describe("guest ACP lane", () => {
     expect(streamed).not.toContain("tool_call_update")
     expect(streamed).not.toContain("read_file")
     expect(streamed).not.toContain("private reasoning")
+    expect(streamed).not.toContain(OPERATOR_PATH)
+    expect(streamed).not.toContain("+new")
+    test.close()
+  })
+
+  it("streams a failed turn without the location its provider detail names", async () => {
+    const test = harness({
+      handle: () =>
+        terminalHandle([
+          { kind: TurnEventKind.TurnStarted },
+          {
+            kind: TurnEventKind.TurnFailed,
+            code: "AOS_PROVIDER_RUN_FAILED",
+            message: `Hermes could not complete this turn.\n${OPERATOR_PATH} is locked`,
+          },
+        ]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Start the interview").catch(() => undefined)
+
+    await test.recorder.wait((entry) =>
+      JSON.stringify(entry.params).includes("request_failed")
+    )
+    expect(JSON.stringify(test.recorder.entries)).not.toContain(OPERATOR_PATH)
     test.close()
   })
 

@@ -985,10 +985,10 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
-  it("keeps a stored edit's kind, public location, and diff", () => {
-    const path = "/workspace/app/notes.md"
-    const diff = `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
-    const secret = "/home/operator/secret.md"
+  it("keeps a stored edit's kind, location, and diff", () => {
+    const path = "/home/operator/project/notes.md"
+    const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
+    const secret = "/workspace/token=ghp_leaked.md"
     const messages = projectHermesHistory([
       assistantToolCall("a1", [
         { toolCallId: "c1", name: "patch", args: { path, old_string: "old" } },

@@ -169,12 +169,25 @@ describe("Hermes native submit outcomes", () => {
     ).resolves.toMatchObject({ reason: "busy", detail: message })
   })
 
-  it("drops refusal text that names a private location", async () => {
+  it("keeps refusal text that names a location for the operator", async () => {
+    const message = "session busy: /home/operator/.hermes/state.db is locked"
+    const { native } = runtime({
+      "prompt.submit": async () => {
+        throw new HermesRpcRejectedError(4009, message)
+      },
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
+    ).resolves.toMatchObject({ reason: "busy", detail: message })
+  })
+
+  it("drops refusal text that carries a credential", async () => {
     const { native } = runtime({
       "prompt.submit": async () => {
         throw new HermesRpcRejectedError(
           4009,
-          "session busy: /home/operator/.hermes/state.db is locked"
+          "session busy: retry with token=ghp_leaked"
         )
       },
     })

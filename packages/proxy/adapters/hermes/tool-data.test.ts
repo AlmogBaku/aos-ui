@@ -354,14 +354,22 @@ describe("projectHermesToolOutcome", () => {
     expect(JSON.stringify(outcome)).not.toContain("/srv/private")
   })
 
-  it("drops an artifact receipt message that names a private location", () => {
-    const outcome = projectHermesToolOutcome("call-3b", "present_artifact", {
-      ok: false,
-      status: "failed",
-      message: "Could not write /home/alice/reports/report.md",
-    })
-    expect(outcome.result).toEqual({ ok: false, status: "failed" })
-    expect(JSON.stringify(outcome)).not.toContain("/home/alice")
+  it("keeps an artifact receipt message's location and redacts a credential", () => {
+    const message = "Could not write /home/alice/reports/report.md"
+    expect(
+      projectHermesToolOutcome("call-3b", "present_artifact", {
+        ok: false,
+        status: "failed",
+        message,
+      }).result
+    ).toEqual({ ok: false, status: "failed", message })
+    expect(
+      projectHermesToolOutcome("call-3c", "present_artifact", {
+        ok: false,
+        status: "failed",
+        message: "Upload rejected: token=ghp_leaked",
+      }).result
+    ).toEqual({ ok: false, status: "failed", message: "[REDACTED]" })
   })
 
   it("collapses a text_to_speech receipt to a status and trusts its media", () => {

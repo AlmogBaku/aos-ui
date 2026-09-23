@@ -74,8 +74,10 @@ export function containsCredentialValue(value: string) {
 
 /**
  * True when a native string looks like a credential or a private filesystem or
- * internal-network location. The one rule deciding what may leave the adapter,
- * shared by tool projection and artifact receipts.
+ * internal-network location. It guards what the guest lane may receive from the
+ * adapter: published artifact identities. Operator-only data (tool calls,
+ * diffs, locations, failure details) is held to `containsCredentialValue`
+ * alone, because the guest projection never forwards it.
  */
 export function containsPrivateValue(value: string) {
   return containsCredentialValue(value) || PRIVATE_LOCATION_VALUE.test(value)

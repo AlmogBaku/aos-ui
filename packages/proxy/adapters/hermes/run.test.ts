@@ -6582,8 +6582,33 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
-  it("keeps a private file out of locations and diffs", async () => {
-    const path = "/home/operator/secret.md"
+  it("locates and diffs an edit under the operator's home directory", async () => {
+    const path = "/home/operator/project/notes.md"
+    const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
+    const events = await turnEvents((t) => [
+      t.messageStart("m1"),
+      t.toolStart("edit-1", "patch", { path, old_string: "old" }),
+      t.toolComplete("edit-1", "patch", {
+        success: true,
+        diff,
+        files_modified: [path],
+      }),
+      t.complete("m1", ""),
+    ])
+
+    expect(ofKind(events, TurnEventKind.ToolCallStarted)).toMatchObject([
+      { toolCallId: "edit-1", locations: [{ path }] },
+    ])
+    expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
+      {
+        toolCallId: "edit-1",
+        diffs: [{ changes: [{ operation: "modify", path }], patch: diff }],
+      },
+    ])
+  })
+
+  it("keeps a credential out of locations and diffs", async () => {
+    const path = "/workspace/token=ghp_leaked/notes.md"
     const events = await turnEvents((t) => [
       t.messageStart("m1"),
       t.toolStart("edit-1", "write_file", { path, content: "x" }),
@@ -6591,16 +6616,26 @@ describe("Hermes native provider facts", () => {
         bytes_written: 1,
         files_modified: [path],
       }),
+      t.toolStart("edit-2", "patch", { path: "/workspace/.env" }),
+      t.toolComplete("edit-2", "patch", {
+        success: true,
+        diff: "--- a/workspace/.env\n+++ b/workspace/.env\n+API_KEY=sk-leaked\n",
+        files_modified: ["/workspace/.env"],
+      }),
       t.complete("m1", ""),
     ])
 
-    const tool = [
-      ...ofKind(events, TurnEventKind.ToolCallStarted),
-      ...ofKind(events, TurnEventKind.ToolCallFinished),
-    ]
-    expect(tool.some((event) => "locations" in event || "diffs" in event)).toBe(
-      false
-    )
+    const [first, second] = ofKind(events, TurnEventKind.ToolCallFinished)
+    expect(
+      ofKind(events, TurnEventKind.ToolCallStarted)[0]?.locations
+    ).toBeUndefined()
+    expect(first?.diffs).toBeUndefined()
+    expect(second?.diffs).toEqual([
+      {
+        changes: [{ operation: "modify", path: "/workspace/.env" }],
+      },
+    ])
+    expect(JSON.stringify(events)).not.toContain("leaked")
   })
 
   it("streams a background process as the terminal of its call", async () => {
@@ -6731,7 +6766,11 @@ describe("Hermes native provider facts", () => {
         input_tokens: 30,
         output_tokens: 12,
         duration_seconds: 2.5,
-        files_read: ["/workspace/app/a.ts", "/home/operator/b.ts"],
+        files_read: [
+          "/workspace/app/a.ts",
+          "/home/operator/b.ts",
+          "/workspace/token=ghp_leaked",
+        ],
       }),
       t.toolComplete("delegate-1", "delegate_task", { results: [] }),
       t.complete("m1", ""),
@@ -6757,7 +6796,7 @@ describe("Hermes native provider facts", () => {
           depth: 1,
           status: "completed",
           tokens: 42,
-          filesRead: ["/workspace/app/a.ts"],
+          filesRead: ["/workspace/app/a.ts", "/home/operator/b.ts"],
           durationMs: 2500,
           summary: "Looks fine",
         },
