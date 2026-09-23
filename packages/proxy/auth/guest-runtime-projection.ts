@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { z } from "zod"
 
 import {
   GuestRuntimeCapabilitiesResponseSchema,
@@ -121,6 +122,14 @@ export function projectGuestText(
     : undefined
 }
 
+/**
+ * A replay from the start may join every page of the Session, each already
+ * bounded as it was read, so only the page's own size limit is lifted.
+ */
+const ProjectedHistorySchema = SessionHistoryResponseSchema.extend({
+  messages: z.array(SessionHistoryResponseSchema.shape.messages.element),
+})
+
 export function projectGuestHistory(
   history: SessionHistoryResponse,
   authorization: GuestAuthorization,
@@ -199,7 +208,7 @@ export function projectGuestHistory(
         : {}),
     })
   }
-  return SessionHistoryResponseSchema.parse({
+  return ProjectedHistorySchema.parse({
     sessionId: publicSessionId,
     messages,
     total: history.total,

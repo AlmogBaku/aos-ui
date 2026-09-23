@@ -121,7 +121,8 @@ older ones through
 ```
 
 Any other client gets what ACP's `start` promises: every retained message,
-read page by page on the server, with no `nextCursor` in the reply.
+read page by page on the server, with no `nextCursor` in the reply. The reply
+still carries `truncated: true` when the reading stopped at a reach bound.
 
 - `cursor` is the opaque `history.nextCursor` of an earlier resume, 1 to 256
   characters. The server picks the page size; offsets count back from the
@@ -134,10 +135,11 @@ read page by page on the server, with no `nextCursor` in the reply.
 - The response carries only `_meta.aos.history`
   (`AosHistoryPageResponseMetaSchema`). A missing `nextCursor` means the
   beginning. `truncated: true` with no cursor means the proxy's bound stopped
-  the reading, and the thread says earlier messages can't be loaded.
-- A page is read only for a Session this connection already resumed, one at a
-  time per Session. It never re-attaches, restates configuration or usage, or
-  reports execution. A cursor that does not decode, or points past the
+  the reading, or the runtime's own reach did, and the thread says earlier
+  messages can't be loaded.
+- A page is read only for a Session this connection is attached to, whether by
+  a resume, `session/new`, or a prompt, one at a time per Session. It never
+  re-attaches, restates configuration or usage, or reports execution. A cursor that does not decode, or points past the
   history, is invalid params.
 - An accepted rewind deletes the newest rows, so it marks the browser's cursor
   stale and drops a page still loading; the next load resumes from `start`

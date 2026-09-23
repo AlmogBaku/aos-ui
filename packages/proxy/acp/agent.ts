@@ -315,10 +315,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const newest = await readHistory(scope)
     if (clientPagesHistory) return newest
     const older: SessionHistoryResponse["messages"][] = []
+    // A turn stored between two reads shifts the offsets, so the same message
+    // can come back on the next older page.
+    const seen = new Set(newest.messages.map(({ id }) => id))
     let page = newest
     while (historyCursor(page).nextCursor !== undefined) {
       page = await readHistory(scope, page.nextOffset)
-      older.unshift(page.messages)
+      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
+      for (const { id } of page.messages) seen.add(id)
     }
     return {
       ...newest,
@@ -353,8 +357,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     paging.add(publicSessionId)
     try {
       const history = await readHistory(member.scope, offset)
-      // A cursor past this Session's history was never issued for it.
-      if (offset >= history.total) throw invalidRequest()
+      // A cursor past this Session's history was never issued for it. One at
+      // its end was: a runtime that estimates `total` learns the start only
+      // by reading an empty page there.
+      if (offset > history.total) throw invalidRequest()
       const updates = historyOutbounds(history).flatMap((outbound) =>
         outbound.kind === "update" &&
         outbound.update.sessionUpdate !== "plan_update"

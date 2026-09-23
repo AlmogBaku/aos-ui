@@ -3629,6 +3629,39 @@ describe("History pages", () => {
     test.close()
   })
 
+  it("replays a message once when a turn stored during the replay shifts its page", async () => {
+    const transcript = conversation(1_200)
+    let reads = 0
+    const test = await harness({
+      transcript,
+      pagesHistory: false,
+      beforeHistory: async () => {
+        // Two rows land between the newest page and the one before it.
+        reads += 1
+        if (reads === 2)
+          transcript.push(
+            ...conversation(1_202)
+              .slice(1_200)
+              .map((message) => ({ ...message, id: `late-${message.id}` }))
+          )
+      },
+    })
+    await test.list()
+    reads = 0
+    const from = test.recorder.entries.length
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+
+    expect(
+      pageUpdates(test.recorder, from).map((update) => update.messageId)
+    ).toEqual(conversation(1_200).map(({ id }) => id))
+    test.close()
+  })
+
   it("sends each older page as tagged updates before its reply, one per message", async () => {
     const test = await harness({ transcript: conversation(1_200) })
     await test.list()
@@ -3857,7 +3890,68 @@ describe("History pages", () => {
     await expect(older(cut, cursorOf(1_000))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
+    // A runtime at its reach may still count rows past it; no cursor leads there.
+    cut.history.mockResolvedValueOnce({
+      sessionId: SESSION,
+      messages: conversation(100),
+      total: 601,
+      limit: 500,
+      offset: 500,
+      nextOffset: 600,
+      truncated: true,
+    })
+    await expect(older(cut, cursorOf(500))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+    })
     cut.close()
+  })
+
+  it("reaches the beginning of a Session whose runtime estimated one more row", async () => {
+    const test = await harness({ transcript: conversation(1_200) })
+    await test.list()
+    await open(test)
+    // The previous page was full, so the runtime counted a row past it.
+    test.history.mockResolvedValueOnce({
+      sessionId: SESSION,
+      messages: [],
+      total: 500,
+      limit: 500,
+      offset: 500,
+      nextOffset: 500,
+    })
+
+    await expect(older(test, cursorOf(500))).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: {} } },
+    })
+    test.close()
+  })
+
+  it("sends a page of large messages one frame per message", async () => {
+    const large = "x".repeat(900_000)
+    const transcript = conversation(1_000).map((message, index) =>
+      index < 505
+        ? { ...message, content: [{ type: "text" as const, text: large }] }
+        : message
+    )
+    const test = await harness({ transcript, translateHistory })
+    await test.list()
+    await open(test)
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(500))
+
+    const frames = test.recorder.entries
+      .slice(from)
+      .filter(({ method }) => method === methods.client.session.update)
+      .map((entry) => Buffer.byteLength(JSON.stringify(entry)))
+    expect(frames.length).toBeGreaterThanOrEqual(500)
+    // The page as a whole is far past the socket's 4 MiB output limit.
+    expect(frames.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(
+      4 * 1_024 * 1_024
+    )
+    for (const bytes of frames) expect(bytes).toBeLessThan(1_000_000)
+    test.close()
   })
 
   it("refuses a cursor it could not have issued for this Session", async () => {

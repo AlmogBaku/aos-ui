@@ -520,11 +520,14 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     listAllSessions,
-    initialize: () =>
+    /** Advertises paging older history, as the AOS browser does, by default. */
+    initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-guest-browser", version: "1" },
-        capabilities: {},
+        capabilities: {
+          _meta: { [AOS_META_KEY]: { historyPages: pagesHistory } },
+        },
       }),
     login: async (token: string) =>
       await connection.agent.request(methods.agent.auth.login, {
@@ -1088,6 +1091,54 @@ describe("guest ACP lane", () => {
       expect(params).toMatchObject({
         update: { _meta: { [AOS_META_KEY]: { historyPage: { cursor } } } },
       })
+    test.close()
+  })
+
+  it("replays a whole long Session, projected, to a guest that does not page", async () => {
+    // The stored setup turn first, then more messages than one page holds.
+    const transcript = [
+      ...HISTORY.messages,
+      ...Array.from({ length: 1_000 }, (_, index) => ({
+        id: `answer-${index}`,
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: `Answer ${index}` }],
+        createdAt: "2026-09-15T00:10:00.000Z",
+      })),
+    ]
+    const test = harness({
+      existing: true,
+      history: (offset) => {
+        const end = Math.max(0, transcript.length - offset)
+        const messages = transcript.slice(Math.max(0, end - 500), end)
+        return {
+          sessionId: STORED,
+          messages,
+          total: transcript.length,
+          limit: 500,
+          offset,
+          nextOffset: offset + messages.length,
+        }
+      },
+    })
+    await test.initialize(false)
+    await test.login(await invite(test.invitations))
+    const from = test.recorder.entries.length
+
+    const resumed = await test.resume(REF, true)
+
+    expect(resumed).toMatchObject({
+      _meta: { [AOS_META_KEY]: { history: {} } },
+    })
+    const replayed = JSON.stringify(
+      test.recorder.entries
+        .slice(from)
+        .filter(({ method }) => method === methods.client.session.update)
+    )
+    expect(replayed).toContain("Safe answer")
+    expect(replayed).toContain("Answer 0")
+    expect(replayed).toContain("Answer 999")
+    expect(replayed).not.toContain("private reasoning")
+    expect(replayed).not.toContain(INSTRUCTION)
     test.close()
   })
 

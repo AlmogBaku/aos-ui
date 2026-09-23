@@ -109,7 +109,7 @@ function createFakeConnection(
     resume.replayFromStart ? replay(sessionId, resumed) : resumed
   )
   const pages: PromiseWithResolvers<AcpHistoryPage>[] = []
-  const resumePage = vi.fn((_sessionId: string, _cursor: string) => {
+  const resumePage = vi.fn<AcpConnection["resumePage"]>(() => {
     const page = Promise.withResolvers<AcpHistoryPage>()
     pages.push(page)
     return page.promise
@@ -180,7 +180,8 @@ function createFakeConnection(
       pages[index]?.reject(new Error("page read failed"))
     },
     /** A resync the connection runs on its own: a from-start replay. */
-    resync: () => replay(SESSION_ID, Promise.resolve(resumeReply())),
+    resync: (reply = Promise.resolve(resumeReply())) =>
+      replay(SESSION_ID, reply),
     settleResume: () => {
       settle()
       return resumed
@@ -1153,6 +1154,129 @@ describe("useAcpRuntime older history", () => {
         hasOlder: true,
         loading: false,
       })
+
+      // Asked again, it rebuilds first, then pages from the fresh cursor.
+      fake.history = { nextCursor: "cursor-rebuilt" }
+      await loadOlder(result.current)
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
+        replayFromStart: true,
+      })
+      expect(fake.resumePage).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        "cursor-rebuilt"
+      )
+      expect(fake.resumeSession.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        fake.resumePage.mock.invocationCallOrder.at(-1) ?? 0
+      )
+      act(() => {
+        fake.emit(textUpdate("user_message", "u3", "Newer question"))
+        fake.emit(textUpdate("agent_message", "a3", "Retried answer"))
+      })
+      await act(async () => {
+        fake.answerPage(
+          1,
+          pageOf(
+            [
+              textUpdate("user_message", "u1", "First question"),
+              textUpdate("agent_message", "a1", "First answer"),
+            ],
+            {}
+          )
+        )
+      })
+
+      expect(ids(result.current)).toEqual(["u1", "a1", "u3", "a3"])
+    })
+
+    it("keeps the cursor stale when the rewind lands during a replay", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+
+      const reply = Promise.withResolvers<ResumeReply>()
+      let replayed: Promise<unknown> = Promise.resolve()
+      act(() => {
+        replayed = fake.resync(reply.promise)
+      })
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+      // The replay read the provider's positions before the rewind moved them.
+      fake.history = { nextCursor: "cursor-before-rewind" }
+      await act(async () => {
+        reply.resolve(resumeReply())
+        await replayed
+      })
+
+      fake.history = { nextCursor: "cursor-rebuilt" }
+      await loadOlder(result.current)
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumePage).toHaveBeenCalledTimes(1)
+      expect(fake.resumePage).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        "cursor-rebuilt"
+      )
+    })
+
+    it("fails the load, and leaves the reader its button, when the rebuild is refused", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+
+      fake.resumeSession.mockRejectedValueOnce(
+        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+      )
+      let load: Promise<void> | undefined
+      await act(async () => {
+        load = historyOf(result.current)?.loadOlder()
+        await load
+      })
+      await expect(load).resolves.toBeUndefined()
+      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.resumePage).not.toHaveBeenCalled()
+      expect(historyOf(result.current)).toMatchObject({
+        hasOlder: true,
+        loading: false,
+        failed: true,
+      })
+      expect(ids(result.current)).toEqual(["u3"])
+    })
+
+    it("retries a rebuild the provider is still bringing up", async () => {
+      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
+      const { result } = await mount(fake)
+      newestPage(fake)
+      await retry(fake, result.current)
+      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
+
+      vi.useFakeTimers()
+      try {
+        fake.resumeSession.mockRejectedValueOnce(
+          new RequestError(
+            AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+            "temporarily_unavailable"
+          )
+        )
+        fake.history = { nextCursor: "cursor-rebuilt" }
+        await loadOlder(result.current)
+        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+        expect(fake.resumePage).not.toHaveBeenCalled()
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(500)
+        })
+        expect(fake.resumeSession).toHaveBeenCalledTimes(3)
+        expect(fake.resumePage).toHaveBeenLastCalledWith(
+          SESSION_ID,
+          "cursor-rebuilt"
+        )
+        expect(historyOf(result.current)?.failed).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })

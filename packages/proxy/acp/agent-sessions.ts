@@ -154,6 +154,8 @@ export function decodeHistoryCursor(cursor: string) {
  * exists that neither the runtime nor the reach serves.
  */
 export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
+  // A runtime that cannot read further back has no page to offer beyond this.
+  if (page.truncated) return { truncated: true }
   const older = page.nextOffset < page.total
   if (
     older &&
@@ -161,7 +163,7 @@ export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
     page.nextOffset < HISTORY_MAX_OFFSET
   )
     return { nextCursor: encodeCursor(page.nextOffset) }
-  return older || page.truncated ? { truncated: true } : {}
+  return older ? { truncated: true } : {}
 }
 
 /**

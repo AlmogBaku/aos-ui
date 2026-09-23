@@ -193,6 +193,9 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
 /** How long a refused resume waits before each further attempt. */
 const RESUME_RETRY_DELAYS_MS = [500, 1000, 2000]
 
+/** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
+type ResumeOutcome = "replayed" | "refused" | "abandoned"
+
 /** Whether the provider refused only because it is not ready yet. */
 const isTemporarilyUnavailable = (error: unknown) =>
   isRecord(error) && error.code === AOS_JSONRPC_ERRORS.temporarilyUnavailable
@@ -256,6 +259,8 @@ function createAcpController({
   /** Rises with every binding, so an abandoned resume stops retrying. */
   let bindings = 0
   let retryTimer: ReturnType<typeof setTimeout> | undefined
+  /** Ends a retry's wait early, so a rebinding releases the replays behind it. */
+  let retryWake: (() => void) | undefined
   let version = 0
   let locals = 0
   let repository = ExportedMessageRepository.fromArray([])
@@ -276,6 +281,8 @@ function createAcpController({
   let olderLoading = false
   let olderFailed = false
   let transcripts = 0
+  /** Accepted rewinds, so a replay that started before one leaves it stale. */
+  let rewinds = 0
   /** Replays under way; a page waits for the transcript they refill. */
   let replaysOpen = 0
   /** The load that owns `olderLoading`, so a rebinding can release it. */
@@ -352,45 +359,58 @@ function createAcpController({
     bound === session && generation === bindings
 
   /**
-   * Resumes one Session until its history is on its way. A rejection otherwise
-   * surfaces through the connection's status and `_aos/error`; the thread only
-   * stops waiting for its history. A `temporarily_unavailable` refusal is the
-   * exception: the provider is still bringing the Session up, so the resume is
-   * worth another try shortly, as long as this binding is still the live one.
+   * Resumes one Session until its history is on its way, and says how that
+   * went. A rejection otherwise surfaces through the connection's status and
+   * `_aos/error`. A `temporarily_unavailable` refusal is the exception: the
+   * provider is still bringing the Session up, so the resume is worth another
+   * try shortly, as long as this binding is still the live one.
    */
   const attemptResume = async (
     session: string,
-    generation: number,
-    retry = 0
-  ) => {
-    try {
-      await whileReplaying(() => resume(session))
-    } catch (error) {
-      if (
-        isTemporarilyUnavailable(error) &&
-        retry < RESUME_RETRY_DELAYS_MS.length &&
-        isBound(session, generation)
-      ) {
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined
-          void attemptResume(session, generation, retry + 1)
-        }, RESUME_RETRY_DELAYS_MS[retry])
-        return
+    generation: number
+  ): Promise<ResumeOutcome> => {
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await whileReplaying(() => resume(session))
+        return "replayed"
+      } catch (error) {
+        if (
+          !isTemporarilyUnavailable(error) ||
+          retry >= RESUME_RETRY_DELAYS_MS.length ||
+          !isBound(session, generation)
+        )
+          return "refused"
       }
+      await new Promise<void>((resolve) => {
+        retryWake = resolve
+        retryTimer = setTimeout(resolve, RESUME_RETRY_DELAYS_MS[retry])
+      })
+      retryTimer = undefined
+      retryWake = undefined
+      if (!isBound(session, generation)) return "abandoned"
     }
-    if (!loading) return
-    loading = false
-    notify()
   }
 
+  /**
+   * Replays the Session from the start, after any replay already queued. Its
+   * outcome ends the thread's wait for its history, unless a rebinding left it
+   * behind.
+   */
   const queueResume = (session: string, generation: number) => {
-    const run = () =>
-      isBound(session, generation)
-        ? attemptResume(session, generation)
-        : undefined
+    const run = async (): Promise<ResumeOutcome> => {
+      if (!isBound(session, generation)) return "abandoned"
+      const outcome = await attemptResume(session, generation)
+      if (outcome !== "abandoned" && loading) {
+        loading = false
+        notify()
+      }
+      return outcome
+    }
     // Either outcome of the resume ahead releases this one; a rejection there is
     // already reported where it happened.
-    resumes = resumes.then(run, run)
+    const settled = resumes.then(run, run)
+    resumes = settled
+    return settled
   }
 
   /**
@@ -419,6 +439,7 @@ function createAcpController({
       connection.onSessionReplay(next, () => {
         commit(clearTranscript(state))
         const before = connection.history(next)
+        const rewound = rewinds
         replaysOpen += 1
         transcripts += 1
         return () => {
@@ -427,7 +448,8 @@ function createAcpController({
           const after = connection.history(next)
           if (bound !== next || after === before) return
           cursor = after
-          cursorStale = false
+          // A rewind accepted mid-replay may have moved what it already read.
+          if (rewinds === rewound) cursorStale = false
           notify()
         }
       }),
@@ -446,6 +468,8 @@ function createAcpController({
     unsubscribe = () => {
       clearTimeout(retryTimer)
       retryTimer = undefined
+      retryWake?.()
+      retryWake = undefined
       for (const off of subscriptions) off()
     }
     queueResume(next, generation)
@@ -510,6 +534,7 @@ function createAcpController({
       // The provider's positions moved under the cursor: the next page first
       // rebuilds the newest one, and a page still in flight is dropped.
       if (rewoundFrom !== undefined) {
+        rewinds += 1
         cursorStale = true
         transcripts += 1
       }
@@ -522,17 +547,11 @@ function createAcpController({
     }
   }
 
-  /** Replays the Session from the start, after any replay already queued. */
-  const rebuild = (session: string) => {
-    const run = () => whileReplaying(() => resume(session))
-    resumes = resumes.then(run, run)
-    return resumes
-  }
-
   /**
    * Reads the page before the cursor into a scratch projection and places its
    * messages first. Its turns are long over, so none of their state reaches
-   * the live execution. One read at a time; a failure waits to be asked again.
+   * the live execution. One read at a time; a failure, of the page or of the
+   * rebuild a stale cursor needs first, waits to be asked again.
    */
   const loadOlder = async () => {
     const session = bound
@@ -549,7 +568,13 @@ function createAcpController({
     olderFailed = false
     notify()
     try {
-      if (cursorStale) await rebuild(session)
+      if (cursorStale) {
+        const generation = bindings
+        if ((await queueResume(session, generation)) !== "replayed") {
+          if (isBound(session, generation)) olderFailed = true
+          return
+        }
+      }
       const from = cursor?.nextCursor
       if (bound !== session || cursorStale || from === undefined) return
       const transcript = transcripts

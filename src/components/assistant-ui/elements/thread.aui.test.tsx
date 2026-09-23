@@ -955,6 +955,78 @@ describe("virtualized thread", () => {
       expect(topOf("Long thread message 0")).toBe(top)
       expect(screen.getByText("Older message 7")).toBeInTheDocument()
     })
+
+    it("keeps the reader's place as a page makes a short thread long enough to window", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread().slice(0, 20)}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 0
+      await settle()
+      const top = topOf("Long thread message 0")
+
+      act(() => thread.current?.prepend(olderMessages(15)))
+
+      expect(topOf("Long thread message 0")).toBe(top)
+      await settle()
+      expect(topOf("Long thread message 0")).toBe(top)
+    })
+
+    it("keeps a reader following the latest message at the bottom as a page lands", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread()}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+
+      act(() => thread.current?.prepend(olderMessages(20)))
+      await settle()
+
+      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+      expect(
+        screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
+      ).toBeInTheDocument()
+    })
+
+    it("keeps the reader's place as a page lands while the latest turn streams", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      const growing = "Streaming words that keep arriving"
+      render(
+        <PagedThread
+          initialMessages={longThread()}
+          history={historyState()}
+          running
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = maximumScrollTop(viewport()) - 4000
+      await settle()
+      const reading = firstVisibleText()
+      const top = topOf(reading)
+
+      act(() => {
+        thread.current?.stream(growing)
+        thread.current?.prepend(olderMessages(20))
+      })
+      expect(topOf(reading)).toBe(top)
+      act(() => thread.current?.stream(growing.repeat(4)))
+      await settle()
+
+      expect(topOf(reading)).toBe(top)
+    })
   })
 })
 
@@ -1276,6 +1348,8 @@ function LocalThread({
 
 type PagedThreadHandle = {
   prepend(older: readonly ThreadMessageLike[]): void
+  /** Replaces the latest message's text, as a streaming turn grows it. */
+  stream(text: string): void
 }
 
 function historyState(
@@ -1309,11 +1383,13 @@ function PagedThread({
   initialMessages,
   history,
   labels,
+  running = false,
   ref,
 }: {
   initialMessages: readonly ThreadMessageLike[]
   history?: ThreadHistoryState
   labels?: Partial<ThreadLabels>
+  running?: boolean
   ref?: Ref<PagedThreadHandle>
 }) {
   const [messages, setMessages] = useState(initialMessages)
@@ -1328,10 +1404,21 @@ function PagedThread({
     messages,
     convertMessage: asMessage,
     onNew: async () => {},
+    isRunning: running,
     extras,
   })
   useImperativeHandle(ref, () => ({
     prepend: (older) => setMessages((current) => [...older, ...current]),
+    stream: (text) =>
+      setMessages((current) => {
+        const latest = current.at(-1)
+        return latest
+          ? [
+              ...current.slice(0, -1),
+              { ...latest, content: [{ type: "text", text }] },
+            ]
+          : current
+      }),
   }))
   return (
     <AssistantRuntimeProvider runtime={runtime}>
