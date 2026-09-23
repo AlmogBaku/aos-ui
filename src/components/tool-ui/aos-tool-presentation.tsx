@@ -1,6 +1,10 @@
 "use client"
 
-import { AosToolError, AosToolFallback } from "./aos-tool-fallback"
+import {
+  AosToolError,
+  AosToolFallback,
+  showsAsTerminal,
+} from "./aos-tool-fallback"
 import { normalizeRichToolState } from "./lifecycle"
 import { RichToolRenderer, richToolRegistry } from "./registry"
 import { readAosToolArtifact } from "./tool-artifact"
@@ -15,12 +19,16 @@ export function isAosRichTool(part: RichToolPart) {
 
 /**
  * A failed call keeps its own view when that view explains the failure: a
- * terminal's exit, a diff, or a subagent's status.
+ * terminal's exit, a command's output, a diff, or a subagent's status.
  */
 function explainsItsFailure(part: RichToolPart) {
   const artifact = readAosToolArtifact(part.artifact)
-  return Boolean(
-    artifact?.subagent || artifact?.terminals?.length || artifact?.diffs?.length
+  return (
+    Boolean(
+      artifact?.subagent ||
+      artifact?.terminals?.length ||
+      artifact?.diffs?.length
+    ) || showsAsTerminal(part)
   )
 }
 

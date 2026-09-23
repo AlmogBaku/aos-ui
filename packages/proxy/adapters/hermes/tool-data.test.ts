@@ -308,6 +308,31 @@ describe("projectHermesToolOutcome", () => {
     ).toBe(false)
   })
 
+  it("keeps a failed command's hint beside its exit code, redacting a credential", () => {
+    const hint =
+      "Exit 124: the command hit its timeout. Raise timeout= (foreground max 600s)."
+    expect(
+      projectHermesToolOutcome("call-1", "terminal", {
+        output: "[Command timed out after 2s]",
+        exit_code: 124,
+        error: null,
+        hint,
+      }).result
+    ).toEqual({
+      output: "[Command timed out after 2s]",
+      exit_code: 124,
+      error: null,
+      hint,
+    })
+    expect(
+      projectHermesToolOutcome("call-1", "terminal", {
+        output: "",
+        exit_code: 1,
+        hint: "Retry with OPENAI_API_KEY=sk-live-0123456789abcdefghij set.",
+      }).result
+    ).toMatchObject({ exit_code: 1, hint: "[REDACTED]" })
+  })
+
   it("publishes an artifact receipt as one public descriptor part", () => {
     const outcome = projectHermesToolOutcome("call-2", "present_artifact", {
       ok: true,

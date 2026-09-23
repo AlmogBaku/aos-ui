@@ -1392,11 +1392,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(await engine.start(scope, input()))
 
-    expect(events.slice(-3)).toEqual([
-      {
-        kind: TurnEventKind.ToolCallInputEnded,
-        toolCallId: "call-lost-complete",
-      },
+    expect(events.slice(-2)).toEqual([
       {
         kind: TurnEventKind.ToolCallFinished,
         toolCallId: "call-lost-complete",
@@ -1408,6 +1404,60 @@ describe("HermesRunEngine", () => {
     await expect(
       engine.start(scope, input({ turnId: "run-after-tool-recovery" }))
     ).resolves.toBeDefined()
+  })
+
+  it("settles a running call's arguments from tool.start, before its result", async () => {
+    const attachment = observation()
+    const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const command = "for i in 1 2 3; do echo $i; sleep 1; done"
+    const engine = new HermesTurnEngine(
+      runtime({
+        observe: attachment.observe,
+        submit: async () => {
+          for (const [seq, type, payload] of [
+            [1, "message.start", { message_id: "message-42" }],
+            [
+              2,
+              "tool.start",
+              { tool_id: "call-run", name: "terminal", args: { command } },
+            ],
+            [
+              3,
+              "tool.complete",
+              {
+                tool_id: "call-run",
+                name: "terminal",
+                args: { command },
+                result: { output: "1\n2\n3", exit_code: 0, error: null },
+              },
+            ],
+            [4, "message.complete", {}],
+          ] as const)
+            publish({ type, session_id: "live-secret", seq, payload })
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
+        },
+      })
+    )
+
+    const events = await collect(await engine.start(scope, input()))
+    const kinds = events.map((event) => (event as { kind?: unknown }).kind)
+    const ended = kinds.indexOf(TurnEventKind.ToolCallInputEnded)
+
+    expect(events.slice(ended - 1, ended + 1)).toEqual([
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "call-run",
+        delta: JSON.stringify({ command }),
+      },
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "call-run" },
+    ])
+    expect(ended).toBeLessThan(kinds.indexOf(TurnEventKind.ToolCallFinished))
+    expect(
+      kinds.filter((kind) => kind === TurnEventKind.ToolCallInputEnded)
+    ).toHaveLength(1)
   })
 
   it("keeps Stop pending until Hermes authoritatively reports idle", async () => {

@@ -49,14 +49,14 @@ export function ToolError({
       data-slot="tool-error"
       className={cn(
         paper,
-        "flex w-full max-w-sm flex-col gap-3 rounded-2xl p-3.5",
+        "flex w-full max-w-none min-w-0 flex-col gap-3 rounded-2xl p-3.5",
         className
       )}
       {...props}
     >
       <div className="flex items-center gap-2.5">
         <AlertCircleIcon className="size-3.5 shrink-0 text-destructive" />
-        <span className={cn(mono, "shrink-0 text-foreground/55")}>{name}</span>
+        <span className={cn(mono, "shrink-0 text-destructive")}>{name}</span>
         <bdi className="min-w-0 flex-1 truncate text-[13px] text-foreground/80">
           {target}
         </bdi>
@@ -66,9 +66,10 @@ export function ToolError({
       </div>
 
       <div
+        dir="auto"
         className={cn(
           field,
-          "rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive"
+          "max-h-80 overflow-auto rounded-xl px-3 py-2 font-mono text-[11px] leading-relaxed whitespace-pre text-foreground/80"
         )}
       >
         {message}
