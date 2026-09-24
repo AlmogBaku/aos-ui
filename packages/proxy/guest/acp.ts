@@ -9,6 +9,7 @@ import type {
   AcpLogger,
   ConnectionAuthentication,
 } from "../acp/types"
+import { publicErrorOf } from "../acp/validation"
 import type { GuestInvitationService } from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
@@ -43,13 +44,14 @@ export type GuestAcpServiceOptions = {
 }
 
 /**
- * The guest lane streams one invited conversation and manages no workspace: it
- * owns no roster, no read state, no catalog, and no turn control beyond Stop.
+ * The guest lane holds one invited conversation and manages no workspace: it
+ * owns no roster, no read state, and no catalog. It steers the conversation
+ * and takes the runtime's prefill as an operator does.
  */
 const GUEST_EXTENSIONS = {
-  steer: false,
+  steer: true,
   rewind: false,
-  composerPrefill: false,
+  composerPrefill: true,
   agents: false,
   invalidation: false,
   activity: false,
@@ -214,6 +216,8 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
     lane,
     principalId: lane,
     agent: createAosAcpAgent,
+    // A guest reads a failure's public code, never what the host knows of it.
+    publicError: publicErrorOf,
     connection: (connectionId) =>
       createGuestConnection(options, sessionRows, connectionId),
   })

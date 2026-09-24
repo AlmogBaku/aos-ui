@@ -165,7 +165,12 @@ export type MemberCommands = {
     rewindSourceId?: string
     attachmentStageId?: string
   }
-  steer: { sessionId: string; requestId: string; text: string }
+  steer: {
+    sessionId: string
+    scope?: SessionScope
+    requestId: string
+    text: string
+  }
   stop: { sessionId: string }
   close: { sessionId: string }
   /** One reply to a request the member was asked, with the answers it saw. */

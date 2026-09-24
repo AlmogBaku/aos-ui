@@ -78,6 +78,12 @@ export function createScopeMiddleware({
         if (!scope) throw refused()
         return next({ ...command, scope })
       },
+      // A conversation that does not exist yet has no turn to steer.
+      steer: async (command, next) => {
+        const scope = await invitedScope(command.sessionId)
+        if (!scope) throw refused()
+        return next({ ...command, scope })
+      },
     },
   }
 }

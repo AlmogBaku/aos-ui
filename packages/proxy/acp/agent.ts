@@ -883,14 +883,20 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           text: params.text,
         },
         async (command) => {
-          const scope = sessions.scope(command.sessionId)
+          const identity = sessions.identity()
+          if (!identity) throw authenticationRequired()
+          const scope = command.scope ?? sessions.scope(command.sessionId)
           const { turnId } = coordinator.snapshot(scope)
           if (turnId === undefined) throw turnInProgress()
-          return await workspace.steer(scope, {
-            requestId: command.requestId,
-            expectedTurnId: turnId,
-            text: command.text,
-          })
+          return await workspace.steer(
+            scope,
+            {
+              requestId: command.requestId,
+              expectedTurnId: turnId,
+              text: command.text,
+            },
+            identity.principal.id
+          )
         }
       )
     }

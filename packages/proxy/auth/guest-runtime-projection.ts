@@ -9,23 +9,29 @@ import {
   type GuestPublicErrorCode,
 } from "./guest-projection"
 
-/** Whether a user turn is an invitation's setup envelope, whatever it asks. */
-export function isFirstTurnEnvelope(content: unknown) {
-  if (!Array.isArray(content) || content.length !== 1) return false
-  const part = content[0]
-  if (part?.type !== "text") return false
+/**
+ * Whether text is shaped like an invitation's setup envelope, whatever it asks
+ * and however it is padded.
+ */
+export function isFirstTurnEnvelopeText(text: string) {
   try {
-    const value = JSON.parse(part.text) as unknown
+    const value = JSON.parse(text.trim()) as unknown
     return (
       typeof value === "object" &&
       value !== null &&
       !Array.isArray(value) &&
-      (value as Record<string, unknown>).v === 1 &&
       (value as Record<string, unknown>).type === "aos.guest.first-turn"
     )
   } catch {
     return false
   }
+}
+
+/** Whether a user turn is an invitation's setup envelope, whatever it asks. */
+export function isFirstTurnEnvelope(content: unknown) {
+  if (!Array.isArray(content) || content.length !== 1) return false
+  const part = content[0]
+  return part?.type === "text" && isFirstTurnEnvelopeText(part.text)
 }
 
 export function projectGuestError(

@@ -20,6 +20,9 @@ const DEFAULT_OUTPUT_BYTES = 4 * 1_024 * 1_024
 
 const decoder = new TextDecoder()
 
+/** A JSON-RPC error reply's `error` member. */
+export type AcpErrorReply = { code: number; message: string; data?: unknown }
+
 export type AcpSocketOptions = {
   /** Closes the concrete WebSocket. Authorization happens before this shim exists. */
   close(code: number, reason: string): void
@@ -30,6 +33,8 @@ export type AcpSocketOptions = {
    * passes either way: a request is refused, and the connection closes.
    */
   lapsed?: () => boolean
+  /** How an error reply is shown; as written by default. */
+  publicError?: (error: AcpErrorReply) => AcpErrorReply
   now?: () => number
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
@@ -149,7 +154,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         closePeer(1008, "ACP credential lapsed")
         return
       }
-      enqueue(raw)
+      enqueue(options.publicError ? publicFrame(raw, options.publicError) : raw)
     },
     close(code, reason) {
       closePeer(code ?? 1000, reason ?? "")
@@ -222,6 +227,28 @@ function frameSize(raw: string | Uint8Array) {
   return typeof raw === "string"
     ? Buffer.byteLength(raw, "utf8")
     : raw.byteLength
+}
+
+/** One serialized frame with its error reply, if it is one, as `shown`. */
+function publicFrame(
+  raw: string,
+  shown: (error: AcpErrorReply) => AcpErrorReply
+) {
+  const frame = JSON.parse(raw) as unknown
+  if (
+    typeof frame !== "object" ||
+    frame === null ||
+    !("error" in frame) ||
+    typeof frame.error !== "object" ||
+    frame.error === null ||
+    !("code" in frame.error) ||
+    typeof frame.error.code !== "number"
+  )
+    return raw
+  return JSON.stringify({
+    ...frame,
+    error: shown(frame.error as AcpErrorReply),
+  })
 }
 
 function positiveLimit(value: number | undefined, fallback: number) {

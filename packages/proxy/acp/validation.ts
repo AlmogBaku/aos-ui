@@ -92,6 +92,38 @@ const PUBLIC_ERROR_CODES: Readonly<
   uncertain_mutation: AOS_JSONRPC_ERRORS.uncertainMutation,
 }
 
+/** JSON-RPC's own code for a method the connection does not serve. */
+const METHOD_NOT_FOUND = -32601
+
+/** Every error code a public reply carries, with the name it travels as. */
+const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map([
+  [AOS_JSONRPC_ERRORS.authenticationRequired, "authentication_required"],
+  [AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress"],
+  [AOS_JSONRPC_ERRORS.staleRequest, "stale_request"],
+  [AOS_JSONRPC_ERRORS.notFound, "not_found"],
+  [AOS_JSONRPC_ERRORS.revisionConflict, "revision_conflict"],
+  [AOS_JSONRPC_ERRORS.temporarilyUnavailable, "temporarily_unavailable"],
+  [AOS_JSONRPC_ERRORS.connectionInterrupted, "connection_interrupted"],
+  [AOS_JSONRPC_ERRORS.uncertainMutation, "uncertain_mutation"],
+  [AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request"],
+  [METHOD_NOT_FOUND, "method_not_found"],
+])
+
+/**
+ * An error reply as a public client may read it: a public code and its name,
+ * and never the detail a failure carries. Any other failure is reported
+ * temporarily unavailable.
+ */
+export function publicErrorOf({ code }: { code: number }) {
+  const name = PUBLIC_ERROR_NAMES.get(code)
+  return name === undefined
+    ? {
+        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        message: "temporarily_unavailable",
+      }
+    : { code, message: name }
+}
+
 /** Coordinator control failures, mirroring the normalized HTTP error map. */
 function coordinatorError(cause: unknown) {
   if (cause instanceof ServerTurnConflictError) return turnInProgress()

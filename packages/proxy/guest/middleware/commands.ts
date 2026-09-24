@@ -1,5 +1,8 @@
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
-import { projectGuestCapabilities } from "../../auth/guest-runtime-projection"
+import {
+  isFirstTurnEnvelopeText,
+  projectGuestCapabilities,
+} from "../../auth/guest-runtime-projection"
 import {
   CommandRefusedError,
   type CommandKind,
@@ -8,9 +11,9 @@ import {
 } from "../../core/member"
 
 /**
- * What a guest may ask at all. The guest lane streams one invited conversation
+ * What a guest may ask at all. The guest lane holds one invited conversation
  * and manages no workspace: it owns no roster, no read state, no catalog, and
- * no turn control beyond Stop.
+ * no model or effort.
  */
 const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   resume: true,
@@ -20,7 +23,7 @@ const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   close: true,
   answer: true,
   focus: true,
-  steer: false,
+  steer: true,
   list: false,
   new: false,
   delete: false,
@@ -37,9 +40,19 @@ const OPERATOR_ONLY = {
 } as const
 
 /**
+ * Text a guest may not send or steer with: a slash command, which the runtime
+ * would run as the operator, or an invitation envelope, however either is
+ * padded.
+ */
+function refusedText(text: string) {
+  return text.trimStart().startsWith("/") || isFirstTurnEnvelopeText(text)
+}
+
+/**
  * The invited Session's capabilities, projected to what the guest lane serves.
  * The member contract carries the workspace shape, so the fields the REST
- * projection drops outright are reported unavailable here instead.
+ * projection drops outright are reported unavailable here instead. A guest
+ * steers the conversation as an operator does, and runs no slash command.
  */
 function projectCapabilities(
   value: WorkspaceCapabilities
@@ -49,13 +62,16 @@ function projectCapabilities(
     throw new Error("The invited Session reported unusable capabilities")
   return SessionWorkspaceCapabilitiesResponseSchema.parse({
     workspace: {
-      slashCommands: projected.workspace.slashCommands,
+      slashCommands: OPERATOR_ONLY,
       models: OPERATOR_ONLY,
       context: OPERATOR_ONLY,
       todos: value.workspace.todos,
       activity: value.workspace.activity,
     },
-    interactions: projected.interactions,
+    interactions: {
+      ...projected.interactions,
+      steering: value.interactions.steering,
+    },
     content: projected.content,
   })
 }
@@ -71,11 +87,31 @@ export function createCommandsMiddleware(): Middleware {
           capabilities: projectCapabilities(resumed.capabilities),
         }
       },
-      // Rewind stays operator-only, exactly as the guest turn route refuses one.
+      // Rebuilt from the fields a guest may set. Rewind stays operator-only
+      // until the history layer guards which message it may name.
       send: async (command, next) => {
-        if (command.rewindSourceId !== undefined)
+        const { sessionId, content, text, rewindSourceId, attachmentStageId } =
+          command
+        if (
+          rewindSourceId !== undefined ||
+          [
+            text,
+            ...content.flatMap((part) =>
+              part.kind === "text" ? [part.text] : []
+            ),
+          ].some(refusedText)
+        )
           throw new CommandRefusedError("invalid")
-        return next(command)
+        return next({
+          sessionId,
+          content,
+          text,
+          ...(attachmentStageId === undefined ? {} : { attachmentStageId }),
+        })
+      },
+      steer: async ({ sessionId, requestId, text }, next) => {
+        if (refusedText(text)) throw new CommandRefusedError("invalid")
+        return next({ sessionId, requestId, text })
       },
       // Read state belongs to the operator; a guest's exposure moves nothing.
       focus: async () => undefined,
