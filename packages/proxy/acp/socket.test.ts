@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { AOS_JSONRPC_ERRORS } from "../../protocol/acp"
+
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
 
 const NOW = 1_700_000_000_000
@@ -111,6 +113,54 @@ describe("ACP WebSocket shim", () => {
     socket.socket.send("second")
 
     expect(closed).toEqual([{ code: 1013, reason: "ACP output overloaded" }])
+  })
+
+  it("refuses a request once the credential lapsed, as the last frame before it closes", () => {
+    let lapsed = false
+    const written: string[] = []
+    const holder: { socket?: ReturnType<typeof harness>["socket"] } = {}
+    const test = harness({
+      lapsed: () => lapsed,
+      notify: () => written.push(...(holder.socket?.drain() ?? [])),
+    })
+    holder.socket = test.socket
+    test.socket.receive('{"jsonrpc":"2.0","id":1,"method":"session/prompt"}')
+
+    lapsed = true
+    test.socket.receive('{"jsonrpc":"2.0","id":2,"method":"session/prompt"}')
+    test.socket.receive('{"jsonrpc":"2.0","id":3,"method":"session/prompt"}')
+
+    expect(test.messages).toEqual([
+      '{"jsonrpc":"2.0","id":1,"method":"session/prompt"}',
+    ])
+    expect(written.map((raw) => JSON.parse(raw) as unknown)).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: expect.objectContaining({
+          code: AOS_JSONRPC_ERRORS.authenticationRequired,
+        }),
+      },
+    ])
+    expect(test.closed).toEqual([
+      { code: 1008, reason: "ACP credential lapsed" },
+    ])
+  })
+
+  it("writes nothing once the credential lapsed, and closes", () => {
+    const written: string[] = []
+    const test = harness({
+      lapsed: () => true,
+      notify: () => written.push("notified"),
+    })
+
+    test.socket.socket.send('{"jsonrpc":"2.0","method":"session/update"}')
+
+    expect(written).toEqual([])
+    expect(test.socket.drain()).toEqual([])
+    expect(test.closed).toEqual([
+      { code: 1008, reason: "ACP credential lapsed" },
+    ])
   })
 
   it("forwards an SDK-initiated close to the peer exactly once", () => {

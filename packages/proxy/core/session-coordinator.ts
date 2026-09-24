@@ -92,11 +92,11 @@ export type SessionCoordinatorOptions = {
   maxReplayBytes: number
 }
 
-/** What one subscriber takes of its Session's readings. */
+/** What one subscriber takes of its Session's readings; it is owed only these. */
 export type SessionReadingListeners = {
-  usage: ReadingListener<SessionContextResponse>
+  usage?: ReadingListener<SessionContextResponse>
   /** The model options, once the subscriber reads that the model switched. */
-  model: ReadingListener<SessionModelsResponse>
+  model?: ReadingListener<SessionModelsResponse>
 }
 
 /**
@@ -482,21 +482,14 @@ export class SessionCoordinator {
     listeners: SessionReadingListeners
   ) {
     const key = scopeKey(scope)
-    const leaveUsage = this.#usage.subscribe(
-      key,
-      scope,
-      subscriberId,
-      listeners.usage
-    )
-    const leaveModels = this.#models.subscribe(
-      key,
-      scope,
-      subscriberId,
-      listeners.model
-    )
+    const leaves = [
+      listeners.usage &&
+        this.#usage.subscribe(key, scope, subscriberId, listeners.usage),
+      listeners.model &&
+        this.#models.subscribe(key, scope, subscriberId, listeners.model),
+    ]
     return () => {
-      leaveUsage()
-      leaveModels()
+      for (const leave of leaves) leave?.()
     }
   }
 

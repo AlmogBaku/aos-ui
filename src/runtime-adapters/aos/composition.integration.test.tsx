@@ -405,7 +405,6 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     readState: createReadState({
       runtimeInstance,
       sessionRows,
-      lane,
       onUnreadChanged: () => undefined,
     }),
     activityFeed: createActivityFeed({ runtimeInstance, sessionRows }),

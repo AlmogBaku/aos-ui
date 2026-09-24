@@ -63,7 +63,6 @@ export function createOperatorAcpService({
       readState: createReadState({
         runtimeInstance,
         sessionRows,
-        lane,
         now,
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,

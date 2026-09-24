@@ -10,6 +10,7 @@ import {
 } from "./events"
 import {
   runEvents,
+  type Feed,
   type Member,
   type PromptPart,
   type SessionEvent,
@@ -434,6 +435,8 @@ export type SeatOptions = {
   ) => void
   /** The public code and message a failure is logged under. */
   describe: (cause: unknown) => { code: string; message: string }
+  /** The readings this member is given, as authentication chose them. */
+  feeds: ReadonlySet<Feed>
 }
 
 export function createChannel(options: CreateChannelOptions) {
@@ -500,12 +503,17 @@ class Seat {
     this.#member = member
     this.#scope = scope
     this.#options = options
+    const { feeds } = options
     this.#leaveReadings = this.#coordinator.subscribeReadings(
       scope,
       options.subscriberId,
       {
-        usage: (usage) => this.#deliver({ kind: "usage", usage }),
-        model: (models) => this.#deliver({ kind: "model", models }),
+        ...(feeds.has("usage")
+          ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
+          : {}),
+        ...(feeds.has("model")
+          ? { model: (models) => this.#deliver({ kind: "model", models }) }
+          : {}),
       }
     )
     this.#seat = {

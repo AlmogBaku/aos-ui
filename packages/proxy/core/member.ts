@@ -49,6 +49,15 @@ export type Principal = {
 }
 
 /**
+ * A proxy-owned reading the Channel sends only a member given it. A feature
+ * the proxy owns is off unless authentication gives it.
+ */
+export type Feed = "usage" | "model"
+
+/** What an operator is given: every feed. */
+export const EVERY_FEED: ReadonlySet<Feed> = new Set<Feed>(["usage", "model"])
+
+/**
  * One coordinator subscription as a member reads it. An encoder keys the
  * state it carries between the stream's events by this object, so a stream
  * still draining never mixes into the one after it. `dropped` turns true once

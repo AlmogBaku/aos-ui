@@ -26,7 +26,7 @@ import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channel } from "../core/channel"
-import type { Member } from "../core/member"
+import type { Feed, Member } from "../core/member"
 
 export type Lane = "operator" | "guest"
 
@@ -51,7 +51,6 @@ type AcpConnectionBase = {
   principalId: string
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
-  readState: ReadState
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
@@ -71,16 +70,23 @@ type AcpConnectionBase = {
 
 /**
  * One connection's context, typed by its lane: only an operator reads the
- * activity feed, since a guest learns nothing about the rest of the Agent, and
- * only a guest authenticates over ACP rather than at its upgrade.
+ * activity feed and owns read state, since a guest learns nothing about the
+ * rest of the Agent, and only a guest authenticates over ACP rather than at
+ * its upgrade.
  */
 export type AcpConnectionContext = AcpConnectionBase &
   (
-    | { lane: "operator"; activityFeed: ActivityFeed; authentication?: never }
+    | {
+        lane: "operator"
+        activityFeed: ActivityFeed
+        readState: ReadState
+        authentication?: never
+      }
     | {
         lane: "guest"
         authentication: ConnectionAuthentication
         activityFeed?: never
+        readState?: never
       }
   )
 
@@ -98,8 +104,15 @@ export type ConnectionAuthentication = {
   authenticate(token: string): Promise<boolean>
   /** Who the credential acts as, and its stack; absent before it is redeemed. */
   member(): Omit<Member, "connection"> | undefined
+  /** The readings the credential is given. */
+  feeds: ReadonlySet<Feed>
   /** Whether a redeemed credential still holds, before its close arrives. */
   live(): boolean
+  /**
+   * Whether a redeemed credential has lapsed: from then on no frame passes
+   * either way, and the connection closes.
+   */
+  lapsed(): boolean
   /** Schedules the close the credential's lapse owes, returning its canceller. */
   expire(close: () => void): () => void
 }

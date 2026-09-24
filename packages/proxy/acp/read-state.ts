@@ -1,7 +1,7 @@
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
-import type { Lane, ReadState } from "./types"
+import type { ReadState } from "./types"
 
 /** Collapses a burst of exposure and activity into one watermark write. */
 export const FOCUS_DEBOUNCE_MS = 400
@@ -15,7 +15,6 @@ type Target = { agentId: string; sessionId: string }
 export type ReadStateOptions = {
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
-  lane: Lane
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => TimerHandle
   cancel?: (handle: TimerHandle) => void
@@ -41,7 +40,6 @@ function sameTarget(left: Target, right: Target) {
 export function createReadState({
   runtimeInstance,
   sessionRows,
-  lane,
   now = Date.now,
   schedule = setTimeout,
   cancel = clearTimeout,
@@ -83,8 +81,6 @@ export function createReadState({
   }
 
   const markRead = async (agentId: string, sessionId: string) => {
-    // Guests never own read state, so their exposure moves no watermark.
-    if (lane === "guest") return
     sessionRows.markRead(agentId, sessionId)
     onUnreadChanged(agentId, sessionId, false)
     const providerId = runtime.resolveSessionId(agentId, sessionId)
@@ -119,7 +115,7 @@ export function createReadState({
    * never loses its acknowledgement to a floored re-ack.
    */
   function arm(target: Target, force: boolean, delayMs = FOCUS_DEBOUNCE_MS) {
-    if (lane === "guest" || closed) return
+    if (closed) return
     const forced =
       force ||
       (pending !== undefined &&
@@ -152,10 +148,9 @@ export function createReadState({
        * never an operator who wants it kept unread: the row stays read and the
        * provider gets the acknowledgement instead of the browser a flash.
        */
-      if (lane !== "guest")
-        releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
-          arm(target, false)
-        )
+      releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
+        arm(target, false)
+      )
       // Hermes arms its watermark only on a write, so an already-read Session
       // still needs one acknowledgement per exposure.
       arm(target, true)

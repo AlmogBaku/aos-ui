@@ -8,14 +8,12 @@ import {
   FOCUS_DEBOUNCE_MS,
   REACK_FLOOR_MS,
 } from "./read-state"
-import type { Lane } from "./types"
 
 const AGENT = "researcher"
 const SESSION = "session-1"
 
 function harness(
   options: {
-    lane?: Lane
     unread?: boolean
     tracked?: boolean
     mutate?: () => Promise<void>
@@ -59,7 +57,6 @@ function harness(
   const readState = createReadState({
     runtimeInstance,
     sessionRows,
-    lane: options.lane ?? "operator",
     onUnreadChanged,
   })
   return { updateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }
@@ -298,22 +295,5 @@ describe("createReadState", () => {
 
     expect(updateSession).not.toHaveBeenCalled()
     expect(runtimeInfo).toHaveBeenCalledTimes(1)
-  })
-
-  it("never moves the watermark for a guest", async () => {
-    const { updateSession, onUnreadChanged, readState, sessionRows } = harness({
-      lane: "guest",
-      unread: true,
-    })
-
-    readState.focus(AGENT, SESSION)
-    await settle(FOCUS_DEBOUNCE_MS)
-    readState.onExecution(lifecycle("turn-finished"))
-    await settle(FOCUS_DEBOUNCE_MS)
-    await readState.markRead(AGENT, SESSION)
-
-    expect(updateSession).not.toHaveBeenCalled()
-    expect(onUnreadChanged).not.toHaveBeenCalled()
-    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 })

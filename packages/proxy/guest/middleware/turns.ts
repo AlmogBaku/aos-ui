@@ -279,14 +279,12 @@ export function createTurnsMiddleware({
               : undefined
           return request && { ...event, request }
         }
-        // A model reading follows the model change the projector hides.
-        case "model":
-          return undefined
         case "history":
         case "request-withdrawn":
         case "question-answered":
         case "execution":
         case "usage":
+        case "model":
         case "session-info":
         case "commands":
         case "invalidated":

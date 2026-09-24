@@ -67,12 +67,11 @@ export function createAcpService(options: AcpServiceOptions) {
   }
 
   function open(upgrade: AcpUpgrade, peer: AcpPeer) {
-    const server = new AcpServer({
-      createAgent: () =>
-        options.agent(
-          options.connection(upgrade.connectionId, upgrade.principalId)
-        ),
-    })
+    const context = options.connection(
+      upgrade.connectionId,
+      upgrade.principalId
+    )
+    const server = new AcpServer({ createAgent: () => options.agent(context) })
     const prepared = server.prepareWebSocketUpgrade()
     const holder: { socket?: AcpSocket } = {}
     const socket = createAcpSocket({
@@ -80,6 +79,8 @@ export function createAcpService(options: AcpServiceOptions) {
       notify() {
         for (const raw of holder.socket?.drain() ?? []) peer.send(raw)
       },
+      // The upgrade's principal holds for the connection's whole life.
+      lapsed: () => context.authentication?.lapsed() ?? false,
     })
     holder.socket = socket
     prepared.accept(socket.socket)

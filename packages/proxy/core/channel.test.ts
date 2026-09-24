@@ -735,6 +735,7 @@ function seated(
       subscriberId: "subscriber-1",
       log: () => undefined,
       describe: () => ({ code: "failed", message: "failed" }),
+      feeds: new Set(),
     }
   )
   seat.enterRoom()

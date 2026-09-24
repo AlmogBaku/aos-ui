@@ -850,7 +850,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           const scope = sessions.scope(command.sessionId)
           if ("unread" in command.patch && !command.patch.unread) {
-            await context.readState.markRead(scope.agentId, scope.threadId)
+            await context.readState?.markRead(scope.agentId, scope.threadId)
             return
           }
           await workspace.update(scope, command.patch)
@@ -917,7 +917,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           if (report.sessionId === null) {
             exposure = undefined
-            return context.readState.blur()
+            return context.readState?.blur()
           }
           // A heartbeat re-sends an exposure this connection already
           // acknowledged.
@@ -925,7 +925,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           const agentId = sessions.owner(report.sessionId)
           if (agentId === undefined) return
           exposure = report
-          context.readState.focus(agentId, report.sessionId)
+          context.readState?.focus(agentId, report.sessionId)
         }
       )
     }
@@ -1003,7 +1003,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     for (const stop of stops) stop?.()
     sessions.close()
     context.presence?.clear(context.principalId, context.connectionId)
-    context.readState.close()
+    context.readState?.close()
     context.activityFeed?.close()
   })
 

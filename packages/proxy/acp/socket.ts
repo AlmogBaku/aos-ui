@@ -1,5 +1,7 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
 
+import { authenticationRequired } from "./validation"
+
 /** The WebSocket shape a prepared ACP upgrade drives. */
 export type AcpWebSocket = Parameters<PreparedWebSocketUpgrade["accept"]>[0]
 
@@ -23,6 +25,11 @@ export type AcpSocketOptions = {
   close(code: number, reason: string): void
   /** Signals that one or more serialized frames are available through `drain`. */
   notify?: () => void
+  /**
+   * Whether the connection's credential has lapsed. From then on no frame
+   * passes either way: a request is refused, and the connection closes.
+   */
+  lapsed?: () => boolean
   now?: () => number
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
@@ -94,6 +101,35 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     listeners.clear()
   }
 
+  /** Queues one serialized frame for the concrete WebSocket. */
+  function enqueue(raw: string) {
+    const bytes = Buffer.byteLength(raw, "utf8")
+    if (
+      bytes > maxOutputBytes ||
+      output.length >= maxOutputFrames ||
+      outputBytes + bytes > maxOutputBytes
+    ) {
+      closePeer(1013, "ACP output overloaded")
+      return
+    }
+    output.push({ raw, bytes })
+    outputBytes += bytes
+    options.notify?.()
+  }
+
+  /**
+   * Answers a request a lapsed credential sent that authentication is
+   * required, so it is the last frame written, and closes the connection.
+   */
+  function refuse(data: string) {
+    const id = requestIdOf(data)
+    if (id !== undefined) {
+      const { code, message } = authenticationRequired()
+      enqueue(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }))
+    }
+    closePeer(1008, "ACP credential lapsed")
+  }
+
   function exceedsInputRate(bytes: number) {
     const currentTime = now()
     if (currentTime - windowStartedAt >= inputWindowMs) {
@@ -109,18 +145,11 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
   const socket: AcpWebSocket = {
     send(raw) {
       if (closed) return
-      const bytes = Buffer.byteLength(raw, "utf8")
-      if (
-        bytes > maxOutputBytes ||
-        output.length >= maxOutputFrames ||
-        outputBytes + bytes > maxOutputBytes
-      ) {
-        closePeer(1013, "ACP output overloaded")
+      if (options.lapsed?.()) {
+        closePeer(1008, "ACP credential lapsed")
         return
       }
-      output.push({ raw, bytes })
-      outputBytes += bytes
-      options.notify?.()
+      enqueue(raw)
     },
     close(code, reason) {
       closePeer(code ?? 1000, reason ?? "")
@@ -148,10 +177,12 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         closePeer(1008, "ACP rate exceeded")
         return
       }
-      dispatch("message", {
-        type: "message",
-        data: typeof raw === "string" ? raw : decoder.decode(raw),
-      })
+      const data = typeof raw === "string" ? raw : decoder.decode(raw)
+      if (options.lapsed?.()) {
+        refuse(data)
+        return
+      }
+      dispatch("message", { type: "message", data })
     },
     drain(maxFrames = Number.MAX_SAFE_INTEGER) {
       if (!Number.isSafeInteger(maxFrames) || maxFrames <= 0) return []
@@ -168,6 +199,23 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
       listeners.clear()
     },
   }
+}
+
+/** The id of the one JSON-RPC request a frame carries, if it carries one. */
+function requestIdOf(data: string): string | number | undefined {
+  let frame: unknown
+  try {
+    frame = JSON.parse(data)
+  } catch {
+    return undefined
+  }
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+    return undefined
+  const { id, method } = frame as { id?: unknown; method?: unknown }
+  return typeof method === "string" &&
+    (typeof id === "string" || typeof id === "number")
+    ? id
+    : undefined
 }
 
 function frameSize(raw: string | Uint8Array) {

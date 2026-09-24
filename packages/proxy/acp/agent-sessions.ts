@@ -22,7 +22,7 @@ import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { Seat } from "../core/channel"
-import type { Member, MemberConnection } from "../core/member"
+import { EVERY_FEED, type Member, type MemberConnection } from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import {
@@ -354,6 +354,8 @@ export function createSessions(
             })
           ),
         describe: (cause) => errorNotificationOf(runtime, cause),
+        // The upgrade's principal is the operator, given every feed.
+        feeds: context.authentication?.feeds ?? EVERY_FEED,
       })
       members.set(scope.threadId, seat)
       return seat

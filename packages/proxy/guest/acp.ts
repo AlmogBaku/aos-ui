@@ -1,6 +1,5 @@
 import { createAosAcpAgent } from "../acp/agent"
 import { createWorkspace, type Workspace } from "../acp/agent-sessions"
-import { createReadState } from "../acp/read-state"
 import { createAcpService } from "../acp/service"
 import type { Channel } from "../core/channel"
 import type { Member } from "../core/member"
@@ -60,6 +59,9 @@ const GUEST_EXTENSIONS = {
   historyPages: true,
 } satisfies AosExtensions
 
+/** The longest delay one timer holds; a longer one fires at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1
+
 const INVITE_AUTH_METHOD = {
   type: "agent",
   methodId: AOS_AUTH_METHOD_INVITE,
@@ -91,11 +93,15 @@ function createGuestAuthentication(
   let close: (() => void) | undefined
   let timer: unknown
 
+  const lapsed = () =>
+    redeemed !== undefined && now() >= redeemed.grant.expiresAt
+
+  /** Waits for the expiry in steps, since a longer timer fires at once. */
   const arm = () => {
     if (!redeemed || !close) return
     const delayMs = redeemed.grant.expiresAt - now()
     if (delayMs <= 0) return close()
-    timer = schedule(delayMs, () => close?.())
+    timer = schedule(Math.min(delayMs, MAX_TIMER_MS), arm)
   }
 
   return {
@@ -124,6 +130,8 @@ function createGuestAuthentication(
           ? { firstTurnInstruction: identity.firstTurn.instruction }
           : {}),
       }
+      // A connection acts as one invitation for its whole life.
+      if (redeemed) return false
       redeemed = {
         grant,
         member: {
@@ -144,7 +152,12 @@ function createGuestAuthentication(
 
     member: () => redeemed?.member,
 
-    live: () => redeemed !== undefined && now() < redeemed.grant.expiresAt,
+    // A guest is given no reading: no usage and no model.
+    feeds: new Set(),
+
+    live: () => redeemed !== undefined && !lapsed(),
+
+    lapsed,
 
     expire(closeConnection) {
       close = closeConnection
@@ -159,9 +172,9 @@ function createGuestAuthentication(
 }
 
 /**
- * One accepted guest connection: its own invitation and read-state
- * service (inert on this lane). It carries no activity feed, which would
- * describe the Agent's other Sessions.
+ * One accepted guest connection and its own invitation. It carries no
+ * activity feed, which would describe the Agent's other Sessions, and no read
+ * state, which is the operator's.
  */
 export function createGuestConnection(
   options: GuestAcpServiceOptions,
@@ -169,7 +182,6 @@ export function createGuestConnection(
   connectionId: string
 ): AcpConnectionContext {
   const lane = "guest" as const
-  const now = options.now ?? Date.now
   const { runtimeInstance } = options
   const authentication = createGuestAuthentication(
     options,
@@ -187,13 +199,6 @@ export function createGuestConnection(
     rooms: options.rooms,
     logger: options.logger,
     authentication,
-    readState: createReadState({
-      runtimeInstance,
-      sessionRows,
-      lane,
-      now,
-      onUnreadChanged: () => undefined,
-    }),
   }
 }
 

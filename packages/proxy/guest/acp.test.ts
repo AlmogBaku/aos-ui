@@ -21,7 +21,14 @@ import {
 import { createChannel } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
 import type { ConnectionAuthentication } from "../acp/types"
-import { connectClient, updates, type Recorder } from "../acp/test-harness"
+import {
+  connectClient,
+  MODELS,
+  settled,
+  updates,
+  USAGE,
+  type Recorder,
+} from "../acp/test-harness"
 import {
   createGuestInvitationService,
   type GuestInvitationService,
@@ -41,7 +48,11 @@ import type {
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
-import { createGuestConnection } from "./acp"
+import {
+  createGuestAcpService,
+  createGuestConnection,
+  type GuestAcpServiceOptions,
+} from "./acp"
 
 const NOW = 1_700_000_000_000
 const ORIGIN = "https://guest.example.test"
@@ -238,7 +249,10 @@ const HISTORY = {
   nextOffset: 2,
 }
 
-function invitationService() {
+/** The longest delay one timer holds; a longer one fires at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1
+
+function invitationService(ttlSeconds = 259_200) {
   return createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
@@ -246,15 +260,15 @@ function invitationService() {
     runtimeId: RUNTIME_ID,
     keys: [{ id: "current", secret: KEY }],
     now: () => NOW,
-    ttlSeconds: 259_200,
+    ttlSeconds,
   })
 }
 
-async function invite(service: GuestInvitationService) {
+async function invite(service: GuestInvitationService, ref = REF) {
   return (
     await service.issue({
       agentId: AGENT,
-      ref: REF,
+      ref,
       firstTurn: { instruction: INSTRUCTION },
     })
   ).token
@@ -360,6 +374,10 @@ type HarnessOptions = {
     params: unknown,
     signal: AbortSignal
   ) => Promise<RequestPermissionResponse>
+  /** The Session's usage and model readings are readable, as an operator's are. */
+  readings?: boolean
+  /** The longest invitation the service issues; three days by default. */
+  ttlSeconds?: number
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -421,9 +439,9 @@ function harness(options: HarnessOptions = {}) {
     updateSession,
     deleteSession,
     workspaceCapabilities,
-    models: unsupported,
+    models: options.readings ? async () => MODELS : unsupported,
     updateModel: unsupported,
-    context: unsupported,
+    context: options.readings ? async () => USAGE : unsupported,
     subscribeSessionInvalidation: unsupported,
     subscribeCatalogChanges: unsupported,
     stageAttachments: unsupported,
@@ -449,23 +467,24 @@ function harness(options: HarnessOptions = {}) {
   }
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
   const clock = { now: NOW }
-  const invitations = invitationService()
-  const context = createGuestConnection(
-    {
-      publicOrigin: ORIGIN,
-      runtimeInstance,
-      invitations,
-      attachmentStages: new AttachmentStageRegistry(),
-      rooms: createChannel({
-        snapshot: (scope) => coordinator.snapshot(scope),
-      }),
-      now: () => clock.now,
-      schedule: (delayMs, task) => {
-        scheduled.push({ delayMs, task })
-        return scheduled.length
-      },
-      cancel: () => undefined,
+  const invitations = invitationService(options.ttlSeconds)
+  const lane: GuestAcpServiceOptions = {
+    publicOrigin: ORIGIN,
+    runtimeInstance,
+    invitations,
+    attachmentStages: new AttachmentStageRegistry(),
+    rooms: createChannel({
+      snapshot: (scope) => coordinator.snapshot(scope),
+    }),
+    now: () => clock.now,
+    schedule: (delayMs, task) => {
+      scheduled.push({ delayMs, task })
+      return scheduled.length
     },
+    cancel: () => undefined,
+  }
+  const context = createGuestConnection(
+    lane,
     createSessionRows({ now: () => NOW }),
     "connection-1"
   )
@@ -484,6 +503,7 @@ function harness(options: HarnessOptions = {}) {
     clock,
     invitations,
     policy: context.authentication,
+    lane,
     coordinator,
     start,
     handles,
@@ -526,6 +546,107 @@ function harness(options: HarnessOptions = {}) {
       }),
   }
 }
+
+type Frame = {
+  id?: number | string
+  method?: string
+  result?: unknown
+  error?: { code: number }
+  params?: unknown
+}
+
+/**
+ * One guest browser on the raw WebSocket the listener opens, frame by frame,
+ * so what the socket itself writes and closes is observable.
+ */
+async function wire(lane: GuestAcpServiceOptions) {
+  const service = createGuestAcpService(lane)
+  const upgrade = await service.authorizeUpgrade(
+    new Request(`${ORIGIN}/api/aos/v1/acp`, { headers: { origin: ORIGIN } })
+  )
+  if (!upgrade) throw new Error("The guest upgrade was refused")
+  const frames: Frame[] = []
+  const closed: Array<{ code: number; reason: string }> = []
+  const socket = service.open(upgrade, {
+    send: (raw) => frames.push(JSON.parse(raw) as Frame),
+    close: (code, reason) => closed.push({ code, reason }),
+  })
+  let nextId = 0
+  const send = (frame: Record<string, unknown>) =>
+    socket.receive(JSON.stringify({ jsonrpc: "2.0", ...frame }))
+  const request = (method: string, params: unknown) => {
+    nextId += 1
+    const id = nextId
+    send({ id, method, params })
+    return vi.waitFor(() => {
+      const reply = frames.find((frame) => frame.id === id)
+      if (!reply) throw new Error(`No reply to ${method}`)
+      return reply
+    })
+  }
+  return { frames, closed, send, request, close: () => socket.close() }
+}
+
+/** Opens a raw guest connection that redeemed `token` and resumed the ref. */
+async function redeemedWire(lane: GuestAcpServiceOptions, token: string) {
+  const socket = await wire(lane)
+  await socket.request(methods.agent.initialize, {
+    protocolVersion: ACP_PROTOCOL_VERSION,
+    info: { name: "aos-guest-browser", version: "1" },
+    capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+  })
+  expect(
+    await socket.request(methods.agent.auth.login, {
+      methodId: AOS_AUTH_METHOD_INVITE,
+      _meta: { [AOS_META_KEY]: { token } },
+    })
+  ).toMatchObject({ result: {} })
+  expect(
+    await socket.request(methods.agent.session.resume, {
+      sessionId: REF,
+      cwd: "/",
+    })
+  ).toMatchObject({ result: {} })
+  // What the resume owes after its reply lands before the clock moves.
+  await settled()
+  return socket
+}
+
+/** The frames a lapsed guest sends; each one would act for it. */
+const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
+  [
+    "a prompt",
+    {
+      id: "late",
+      method: methods.agent.session.prompt,
+      params: { sessionId: REF, prompt: [{ type: "text", text: "Hello" }] },
+    },
+  ],
+  [
+    "a steer",
+    {
+      id: "late",
+      method: AOS_METHODS.session.steer,
+      params: { sessionId: REF, requestId: "steer-1", text: "Shorter" },
+    },
+  ],
+  [
+    "a rewind",
+    {
+      id: "late",
+      method: methods.agent.session.prompt,
+      params: {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Again" }],
+        _meta: { [AOS_META_KEY]: { rewindSourceId: "user-1" } },
+      },
+    },
+  ],
+  [
+    "an answer",
+    { id: "request-1", result: { outcome: { outcome: "cancelled" } } },
+  ],
+]
 
 describe("guest ACP lane", () => {
   it("advertises the invitation auth method and no workspace extensions", async () => {
@@ -1153,6 +1274,118 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
+  it("refuses a second login and keeps acting as the first invitation", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await expect(
+      test.login(await invite(test.invitations, "other_ref"))
+    ).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+
+    const resumed = await test.resume(REF, true)
+    expect(resumed).toMatchObject({ _meta: { [AOS_META_KEY]: {} } })
+    expect(JSON.stringify(updates(test.recorder))).not.toContain(INSTRUCTION)
+    await expect(test.resume("other_ref")).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.notFound,
+    })
+    test.close()
+  })
+
+  it("sends a guest no usage or model reading", async () => {
+    const test = harness({
+      readings: true,
+      handle: () =>
+        terminalHandle([
+          { kind: TurnEventKind.TurnStarted },
+          { kind: TurnEventKind.ModelChanged, modelId: "opus" },
+          ...RUN_EVENTS.slice(1),
+        ]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Start the interview")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"idle"'),
+      'an update carrying "idle"'
+    )
+    await settled()
+
+    const kinds = updates(test.recorder).map(
+      (params) =>
+        (params as { update: { sessionUpdate: string } }).update.sessionUpdate
+    )
+    expect(kinds).toContain("agent_message_chunk")
+    expect(kinds).not.toContain("usage_update")
+    expect(kinds).not.toContain("config_option_update")
+    test.close()
+  })
+
+  it.each(ACTING_FRAMES)(
+    "refuses %s once the invitation lapsed, before its timer fires",
+    async (_name, frame) => {
+      const test = harness({ existing: true })
+      const socket = await redeemedWire(
+        test.lane,
+        await invite(test.invitations)
+      )
+      const written = socket.frames.length
+
+      test.clock.now = NOW + 259_200_000
+      socket.send(frame)
+      await settled()
+
+      const refusal =
+        "method" in frame
+          ? [
+              {
+                jsonrpc: "2.0",
+                id: "late",
+                error: expect.objectContaining({
+                  code: AOS_JSONRPC_ERRORS.authenticationRequired,
+                }),
+              },
+            ]
+          : []
+      expect(socket.frames.slice(written)).toEqual(refusal)
+      expect(socket.closed).toHaveLength(1)
+      expect(test.start).not.toHaveBeenCalled()
+      socket.close()
+    }
+  )
+
+  it("keeps an invitation longer than one timer open until it expires", async () => {
+    const test = harness({ existing: true, ttlSeconds: 2_592_000 })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    let closed = false
+    void test.closed.then(() => {
+      closed = true
+    })
+
+    const first = await vi.waitFor(() => {
+      const scheduled = test.scheduled.at(0)
+      if (!scheduled) throw new Error("No expiry was scheduled")
+      return scheduled
+    })
+    expect(first.delayMs).toBeLessThanOrEqual(MAX_TIMER_MS)
+    test.clock.now = NOW + first.delayMs
+    first.task()
+    await settled()
+
+    expect(closed).toBe(false)
+    const second = test.scheduled.at(1)
+    expect(second?.delayMs).toBe(2_592_000_000 - first.delayMs)
+    test.clock.now = NOW + 2_592_000_000
+    second?.task()
+    await expect(test.closed).resolves.toBeUndefined()
+  })
+
   it("closes the connection when the invitation expires", async () => {
     const test = harness({ existing: true })
     await test.initialize()
@@ -1165,6 +1398,7 @@ describe("guest ACP lane", () => {
       return scheduled
     })
     expect(expiry.delayMs).toBe(259_200_000)
+    test.clock.now = NOW + expiry.delayMs
     expiry.task()
 
     await expect(test.closed).resolves.toBeUndefined()
