@@ -46,18 +46,23 @@ const RECORDING_CODEC = new Set(RECORDING_CODECS)
 /**
  * Splits an uploaded recording's `type[;codecs=value]` into its accepted parts,
  * or nothing when either the container or the codec is not one we take.
+ * Case and whitespace around `;` and `=` are tolerated, as MIME allows: iOS
+ * Safari labels its recordings `audio/webm; codecs=opus`.
  */
 export function parseRecordingMime(
   value: string
 ): { type: string; codec?: string } | undefined {
   const separator = value.indexOf(";")
-  const type = separator < 0 ? value : value.slice(0, separator)
+  const type = (separator < 0 ? value : value.slice(0, separator))
+    .trim()
+    .toLowerCase()
   if (!RECORDING_MIME.has(type)) return undefined
   if (separator < 0) return { type }
-  const parameter = value.slice(separator + 1)
-  if (!parameter.startsWith("codecs=")) return undefined
-  const codec = parameter.slice("codecs=".length)
-  return RECORDING_CODEC.has(codec) ? { type, codec } : undefined
+  const [name, raw, ...rest] = value.slice(separator + 1).split("=")
+  if (rest.length > 0 || name?.trim().toLowerCase() !== "codecs")
+    return undefined
+  const codec = raw?.trim().toLowerCase()
+  return codec && RECORDING_CODEC.has(codec) ? { type, codec } : undefined
 }
 
 export const MAX_RECORDING_BYTES = 5 * 1024 * 1024

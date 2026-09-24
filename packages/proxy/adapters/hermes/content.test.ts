@@ -587,6 +587,26 @@ describe("Hermes content operations", () => {
     )
   })
 
+  it("forwards the iOS Safari recording label in its canonical form", async () => {
+    const h = harness()
+    await expect(
+      h.operations.transcribe(
+        "research",
+        Uint8Array.of(1, 2, 3),
+        "audio/webm; codecs=opus"
+      )
+    ).resolves.toBe("transcript")
+    expect(h.transcribe).toHaveBeenCalledWith(
+      { agentId: "research" },
+      {
+        data_url: "data:audio/webm;codecs=opus;base64,AQID",
+        mime_type: "audio/webm;codecs=opus",
+      },
+      undefined,
+      1_000_000
+    )
+  })
+
   it("rejects unsupported and oversized recordings before forwarding", async () => {
     const h = harness()
     await expect(
