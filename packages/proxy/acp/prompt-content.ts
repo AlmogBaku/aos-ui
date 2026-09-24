@@ -1,6 +1,9 @@
 import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { AOS_ATTACHMENT_URI_SCHEME } from "../../protocol/acp"
+import {
+  AOS_ATTACHMENT_URI_SCHEME,
+  formatArtifactUri,
+} from "../../protocol/acp"
 import type { PromptPart } from "../core/member"
 
 /** Text, or a link to a batch the browser staged over REST. */
@@ -62,5 +65,25 @@ export function promptBlocks(prompt: readonly PromptPart[]): ContentBlock[] {
           ...(part.mimeType === undefined ? {} : { mimeType: part.mimeType }),
         }
     }
+  })
+}
+
+/**
+ * A prompt as its viewers are shown it: each staged attachment the provider
+ * already names an artifact for links to that artifact instead of the upload,
+ * so the echo shows what the turn shows once it is history. `artifactIds`
+ * follows the attachment parts' order.
+ */
+export function echoedParts(
+  prompt: readonly PromptPart[],
+  artifactIds: readonly (string | undefined)[]
+): PromptPart[] {
+  let index = 0
+  return prompt.map((part) => {
+    if (part.kind !== "attachment") return part
+    const artifactId = artifactIds[index++]
+    return artifactId === undefined
+      ? part
+      : { ...part, uri: formatArtifactUri(artifactId) }
   })
 }

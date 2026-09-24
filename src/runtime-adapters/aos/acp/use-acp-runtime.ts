@@ -715,10 +715,17 @@ function createAcpController({
       )
     },
     reload: async (parentId: string | null) => {
-      const blocks = parentId ? messageBlocks(state, parentId) : []
-      if (!parentId || blocks.length === 0)
-        throw new Error("An ACP retry needs the user turn it replaces")
+      // Only the turn's text is resent: its uploads were consumed when it was
+      // first sent, so the provider re-attaches the turn's images itself from
+      // the row the rewind replaces.
+      const blocks = parentId
+        ? messageBlocks(state, parentId).filter(
+            (block) => block.type === "text"
+          )
+        : []
       const rewound = rewindFor(parentId)
+      if (!parentId || (blocks.length === 0 && rewound === undefined))
+        throw new Error("An ACP retry needs the user turn it replaces")
       const sessionId = await boundSession()
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a
       // rejection here. The refusal reaches the operator on the turn the prompt
