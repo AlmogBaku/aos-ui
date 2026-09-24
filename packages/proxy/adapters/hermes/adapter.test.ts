@@ -1191,6 +1191,7 @@ describe("Hermes server adapter", () => {
         return { session_id: "live-private", stored_session_id: "stored-1" }
       }
       if (method === "session.title") return { ok: true }
+      if (method === "session.close") return { closed: true }
       throw new Error(`unexpected ${method}`)
     })
     const adapter = new HermesServerAdapter({ request })
@@ -1255,6 +1256,9 @@ describe("Hermes server adapter", () => {
           title: "aos-invite:guest_ref",
         },
       ],
+      // The first prompt resumes from the store, so the seed rows carry the
+      // row ids an Edit before any reload rewinds to.
+      ["session.close", { session_id: "live-private" }],
       [
         "session.list",
         {

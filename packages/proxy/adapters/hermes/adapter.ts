@@ -624,6 +624,10 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
+    // Hermes keeps no row ids on the seed rows it holds live, so a turn run
+    // there never reports its rows saved and an Edit before any reload has
+    // nothing to rewind to. The first prompt resumes from the store instead.
+    await this.#closeNativeSession(payload.session_id)
     const authoritative = await this.#findInvitedSession(agentId, title)
     if (!authoritative || authoritative !== payload.stored_session_id)
       throw new HermesSessionConflictError()
