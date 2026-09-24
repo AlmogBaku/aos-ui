@@ -11,7 +11,6 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../../protocol"
 import {
-  ServerAgentUpdateUnsupportedError,
   type ServerAttachmentStage,
   type ServerMcpApps,
   type ServerTurnEngine,
@@ -58,6 +57,7 @@ import {
 import {
   createOpenClawWorkspace,
   OpenClawWorkspaceOwnershipError,
+  OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
 
@@ -176,6 +176,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
         cause.code === "AOS_INTERACTION_NOT_FOUND")
     )
       return { code: "not_found", status: 404 } as const
+    if (cause instanceof OpenClawWorkspaceRevisionConflictError)
+      return { code: "revision_conflict", status: 409 } as const
     if (
       cause instanceof OpenClawContentPublicError ||
       (cause instanceof OpenClawInteractionPublicError &&
@@ -230,14 +232,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   async updateAgent(
-    _agentId: string,
+    agentId: string,
     patch: AgentUpdatePatch,
-    _observedRevision: string
+    observedRevision: string
   ): Promise<AgentUpdateResponse> {
-    void [_agentId, _observedRevision]
-    if (patch.avatar !== undefined)
-      throw new ServerAgentUpdateUnsupportedError()
-    throw new OpenClawAdapterUnavailableError()
+    await this.#start()
+    return this.#workspace.updateAgent(agentId, patch, observedRevision)
   }
 
   async listAllSessions(limit: number, offset: number) {

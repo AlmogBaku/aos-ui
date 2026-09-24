@@ -9,6 +9,7 @@ import {
 } from "../../../protocol"
 import type { SessionPatch } from "../../core/runtime"
 import {
+  openCodeAgentAvatar,
   parseOpenCodeAgentCatalog,
   parseOpenCodeSession,
   parseOpenCodeSessionCatalog,
@@ -95,6 +96,7 @@ function projectSession(
     agentId,
     title: value.title,
     archived: value.time.archived !== undefined,
+    createdAt: timestamp(value.time.created),
     updatedAt: timestamp(value.time.updated ?? value.time.created),
     status: "idle",
     // Only a metadata-bearing row proves the pin state; absence stays absent.
@@ -250,28 +252,35 @@ export function createOpenCodeWorkspaceOperations(input: {
       const agents = parsed.data.data
         .filter((agent) => agent.id !== input.creatorAgentId)
         .sort((left, right) => left.id.localeCompare(right.id))
-        .map((agent) => ({
-          summary: {
-            kind: "ready" as const,
-            id: agent.id,
-            name: agent.id,
-            ...(agent.description ? { description: agent.description } : {}),
-            status: "unknown" as const,
-            activity: "unknown" as const,
+        .map((agent) => {
+          const avatar = openCodeAgentAvatar(agent.request)
+          return {
+            summary: {
+              kind: "ready" as const,
+              id: agent.id,
+              name: agent.id,
+              ...(agent.description ? { description: agent.description } : {}),
+              ...(avatar ? { avatar } : {}),
+              status: "unknown" as const,
+              activity: "unknown" as const,
+              visibility: agent.hidden
+                ? ("hidden" as const)
+                : ("visible" as const),
+            },
             visibility: agent.hidden
               ? ("hidden" as const)
               : ("visible" as const),
-          },
-          visibility: agent.hidden ? ("hidden" as const) : ("visible" as const),
-          selectable: !agent.hidden,
-          editable: false,
-          avatarEditable: false,
-          revision: revision([
-            agent.id,
-            agent.description ?? "",
-            String(agent.hidden),
-          ]),
-        }))
+            selectable: !agent.hidden,
+            editable: false,
+            avatarEditable: false,
+            revision: revision([
+              agent.id,
+              agent.description ?? "",
+              String(agent.hidden),
+              avatar ?? "",
+            ]),
+          }
+        })
       return AgentCatalogResponseSchema.parse({
         revision: revision(agents.map((agent) => agent.revision)),
         agents,

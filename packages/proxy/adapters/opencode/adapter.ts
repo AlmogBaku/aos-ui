@@ -386,10 +386,9 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     patch: AgentUpdatePatch,
     observedRevision: string
   ): Promise<AgentUpdateResponse> {
-    void [agentId, observedRevision]
-    if (patch.avatar !== undefined)
-      throw new ServerAgentUpdateUnsupportedError()
-    throw new OpenCodeWorkspaceUnavailableError()
+    // OpenCode has no native Agent write; its Agent files stay operator-owned.
+    void [agentId, patch, observedRevision]
+    throw new ServerAgentUpdateUnsupportedError()
   }
 
   listAllSessions(

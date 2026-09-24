@@ -1,20 +1,32 @@
 import { createHash } from "node:crypto"
 import type {
   AgentCatalogResponse,
+  AgentUpdatePatch,
+  AgentUpdateResponse,
   Session,
   SessionCatalogResponse,
 } from "../../../protocol"
-import { SessionCreateResponseSchema } from "../../../protocol"
-import type { SessionPatch } from "../../core/runtime"
+import {
+  AgentAvatarSchema,
+  AgentUpdateResponseSchema,
+  SessionCreateResponseSchema,
+} from "../../../protocol"
+import {
+  ServerAgentUpdateUnsupportedError,
+  type SessionPatch,
+} from "../../core/runtime"
 
 import {
+  openClawAgentAvatarPatchParams,
   openClawAgentsParams,
+  openClawConfigGetParams,
   openClawCreateSessionParams,
   openClawDeleteSessionParams,
   openClawInvitedSessionsParams,
   openClawPatchSessionParams,
   openClawSessionsParams,
   parseOpenClawAgents,
+  parseOpenClawConfiguredAgents,
   parseOpenClawCreatedSession,
   parseOpenClawSessions,
   type OpenClawAgent,
@@ -44,6 +56,13 @@ export class OpenClawWorkspaceUnavailableError extends Error {
   }
 }
 
+export class OpenClawWorkspaceRevisionConflictError extends Error {
+  constructor() {
+    super("Agent revision conflict")
+    this.name = "OpenClawWorkspaceRevisionConflictError"
+  }
+}
+
 function revision(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
@@ -68,6 +87,29 @@ function isVisiblePrimaryAgent(
     agent.creatorAgentId == null &&
     !hidden.has(agent.id)
   )
+}
+
+function projectAgent(agent: OpenClawAgent, configured: ReadonlySet<string>) {
+  const creator = agent.id === OPENCLAW_CREATOR_AGENT_ID
+  const visibility = creator ? ("hidden" as const) : ("visible" as const)
+  // A stored value that is not a token (a file path, a URL) reads as none.
+  const avatar = AgentAvatarSchema.safeParse(agent.identity?.avatar)
+  return {
+    summary: {
+      kind: "ready" as const,
+      id: agent.id,
+      name: agentName(agent),
+      ...(avatar.success ? { avatar: avatar.data } : {}),
+      ...(creator ? { visibility, role: "creator" as const } : {}),
+    },
+    visibility,
+    selectable: !creator,
+    editable: false,
+    // Only an Agent with its own authored entry can take a merge-by-id patch;
+    // the implicit default Agent has none.
+    avatarEditable: !creator && configured.has(agent.id),
+    revision: revision(agent),
+  }
 }
 
 function verifyOwnership(agentId: string, row: OpenClawSession) {
@@ -103,6 +145,9 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
     agentId,
     title: row.label ?? row.displayName ?? row.key,
     archived: row.archived ?? false,
+    ...(row.createdAt === undefined
+      ? {}
+      : { createdAt: new Date(row.createdAt).toISOString() }),
     updatedAt: updatedAt(row),
     status: sessionStatus(row),
     // Absent pin state stays absent: it never overwrites a known value.
@@ -135,6 +180,11 @@ export function invitedOpenClawSessionKey(agentId: string, ref: string) {
 
 export type OpenClawWorkspace = Readonly<{
   listAgents(): Promise<AgentCatalogResponse>
+  updateAgent(
+    agentId: string,
+    patch: AgentUpdatePatch,
+    observedRevision: string
+  ): Promise<AgentUpdateResponse>
   listSessions(
     agentId: string,
     limit: number,
@@ -168,6 +218,28 @@ export function createOpenClawWorkspace(input: {
     parseOpenClawAgents(
       await input.client.request("agents.list", openClawAgentsParams())
     )
+  const listVisibleAgents = async () =>
+    (await listNativeAgents())
+      .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
+      .sort((left, right) => left.id.localeCompare(right.id))
+  // `config.get` carries credentials: it is reduced on arrival and nothing
+  // else from it is kept, logged, returned, or put in an error.
+  const readConfiguredAgents = async () =>
+    parseOpenClawConfiguredAgents(
+      await input.client.request("config.get", openClawConfigGetParams())
+    )
+  const listAgents = async () => {
+    const [agents, configured] = await Promise.all([
+      listVisibleAgents(),
+      // An unreadable config only means no Agent can take an avatar write.
+      readConfiguredAgents().then(
+        ({ agentIds }) => agentIds,
+        () => new Set<string>()
+      ),
+    ])
+    const entries = agents.map((agent) => projectAgent(agent, configured))
+    return { revision: revision(entries), agents: entries }
+  }
   const requireVisibleAgent = async (agentId: string) => {
     const agents = await listNativeAgents()
     const matches = agents.filter(
@@ -219,30 +291,35 @@ export function createOpenClawWorkspace(input: {
   }
 
   return {
-    async listAgents() {
-      const agents = (await listNativeAgents())
-        .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
-        .sort((left, right) => left.id.localeCompare(right.id))
-      return {
-        revision: revision(agents),
-        agents: agents.map((agent) => {
-          const creator = agent.id === OPENCLAW_CREATOR_AGENT_ID
-          const visibility = creator ? "hidden" : "visible"
-          return {
-            summary: {
-              kind: "ready" as const,
-              id: agent.id,
-              name: agentName(agent),
-              ...(creator ? { visibility, role: "creator" as const } : {}),
-            },
-            visibility,
-            selectable: !creator,
-            editable: false,
-            avatarEditable: false,
-            revision: revision(agent),
-          }
-        }),
-      }
+    listAgents,
+    async updateAgent(agentId, patch, observedRevision) {
+      // A patch that touches visibility is unsupported as a whole.
+      if (patch.visibility !== undefined || patch.avatar === undefined)
+        throw new ServerAgentUpdateUnsupportedError()
+      const agent = await requireVisibleAgent(agentId)
+      if (agent.id === OPENCLAW_CREATOR_AGENT_ID)
+        throw new ServerAgentUpdateUnsupportedError()
+      if (revision(agent) !== observedRevision)
+        throw new OpenClawWorkspaceRevisionConflictError()
+      const configured = await readConfiguredAgents()
+      if (!configured.agentIds.has(agent.id))
+        throw new ServerAgentUpdateUnsupportedError()
+      if (configured.hash === undefined)
+        throw new OpenClawWorkspaceUnavailableError()
+      await input.client.request(
+        "config.patch",
+        openClawAgentAvatarPatchParams(agent.id, patch.avatar, configured.hash)
+      )
+      const confirmed = await listAgents()
+      const updated = confirmed.agents.find(
+        (entry) => entry.summary.id === agent.id
+      )
+      if ((updated?.summary.avatar ?? null) !== patch.avatar)
+        throw new OpenClawWorkspaceUnavailableError()
+      return AgentUpdateResponseSchema.parse({
+        revision: confirmed.revision,
+        agent: updated,
+      })
     },
     listSessions,
     async listAllSessions(limit, offset) {
@@ -250,9 +327,7 @@ export function createOpenClawWorkspace(input: {
         throw new OpenClawWorkspaceUnavailableError()
       if (!Number.isInteger(offset) || offset < 0)
         throw new OpenClawWorkspaceUnavailableError()
-      const agents = (await listNativeAgents())
-        .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
-        .sort((left, right) => left.id.localeCompare(right.id))
+      const agents = await listVisibleAgents()
       const prefix = offset + limit
       const fetchPrefix = async (agentId: string) => {
         const sessions: Session[] = []

@@ -71,6 +71,7 @@ describe("OpenCode workspace operations", () => {
           agentId: "research",
           title: "Research notes",
           archived: false,
+          createdAt: "1970-01-01T00:00:01.000Z",
           updatedAt: "1970-01-01T00:01:30.000Z",
           status: "idle",
         },
@@ -79,6 +80,7 @@ describe("OpenCode workspace operations", () => {
           agentId: "research",
           title: "Research notes",
           archived: false,
+          createdAt: "1970-01-01T00:00:01.000Z",
           updatedAt: "1970-01-01T00:00:10.000Z",
           status: "idle",
         },
@@ -218,6 +220,55 @@ describe("OpenCode workspace operations", () => {
         source: "latest-completed-todo-tool-result",
       },
     })
+  })
+
+  it("reads a token avatar from the native request body and folds only it into the revision", async () => {
+    let body: Record<string, unknown> = { avatar: "ring/blue" }
+    let headers: Record<string, string> = { "x-sample": "one" }
+    const operations = createOpenCodeWorkspaceOperations({
+      client: {
+        catalog: {
+          agents: async () => ({
+            data: [
+              {
+                id: "agent-a",
+                mode: "primary",
+                hidden: false,
+                permissions: [],
+                request: { headers, body },
+              },
+            ],
+          }),
+        },
+        sessions: {
+          list: async () => ({ data: [], cursor: {} }),
+          get: async () => session(),
+          create: async () => session(),
+          update: async () => {},
+          delete: async () => {},
+        },
+      },
+    })
+
+    const tokened = await operations.listAgents()
+    expect(tokened.agents[0]).toMatchObject({
+      summary: { id: "agent-a", avatar: "ring/blue" },
+      avatarEditable: false,
+    })
+
+    headers = { "x-sample": "two" }
+    const sameAvatar = await operations.listAgents()
+    expect(sameAvatar.agents[0]!.revision).toBe(tokened.agents[0]!.revision)
+
+    body = { avatar: "ring/green" }
+    const changed = await operations.listAgents()
+    expect(changed.agents[0]!.revision).not.toBe(tokened.agents[0]!.revision)
+
+    for (const avatar of ["Not A Token", 7, "ring"]) {
+      body = { avatar }
+      const ignored = await operations.listAgents()
+      expect(ignored.agents[0]!.summary).not.toHaveProperty("avatar")
+    }
   })
 
   it("projects the native pin state only from Session metadata", async () => {

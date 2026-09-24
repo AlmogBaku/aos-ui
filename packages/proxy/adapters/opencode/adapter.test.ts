@@ -459,6 +459,27 @@ describe("OpenCode server adapter", () => {
     })
   })
 
+  it("refuses every Agent update as unsupported and marks no Agent avatarEditable", async () => {
+    const native = client()
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      turns: turnEngine,
+    })
+
+    const catalog = await adapter.listAgents()
+    expect(catalog.agents.map((agent) => agent.avatarEditable)).toEqual([false])
+    const revision = catalog.agents[0]!.revision
+    for (const patch of [
+      { avatar: "ring/blue" },
+      { avatar: null },
+      { visibility: "hidden" as const },
+    ])
+      await expect(
+        adapter.updateAgent("research", patch, revision)
+      ).rejects.toMatchObject({ name: "ServerAgentUpdateUnsupportedError" })
+    expect(native.sessions.update).not.toHaveBeenCalled()
+  })
+
   it("reports every Session lifecycle operation as temporarily unavailable when the catalog cannot be read", async () => {
     const native = client()
     native.catalog.agents = async () => {

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 
+import { ServerAgentUpdateUnsupportedError } from "../../core/runtime"
 import {
   OPENCLAW_CREATOR_AGENT_ID,
   OpenClawWorkspaceOwnershipError,
+  OpenClawWorkspaceRevisionConflictError,
+  OpenClawWorkspaceUnavailableError,
   createOpenClawWorkspace,
 } from "./workspace"
 
@@ -462,5 +465,352 @@ describe("OpenClaw workspace reads", () => {
           request.method !== "agents.list" && request.method !== "sessions.list"
       )
     ).toBe(false)
+  })
+
+  it("[CL1-WORKSPACE-014] projects a Session's native creation time", async () => {
+    const workspace = createOpenClawWorkspace({
+      client: gateway({
+        "agents.list": {
+          defaultId: "agent-a",
+          mainKey: "main",
+          scope: "global",
+          agents: [{ id: "agent-a", kind: "agent" }],
+        },
+        "sessions.list": {
+          sessions: [
+            { key: "agent:agent-a:one", agentId: "agent-a", createdAt: 1_000 },
+            { key: "agent:agent-a:two", agentId: "agent-a" },
+          ],
+        },
+      }),
+    })
+
+    const page = await workspace.listSessions("agent-a", 10, 0)
+
+    expect(page.sessions[0]).toMatchObject({
+      createdAt: "1970-01-01T00:00:01.000Z",
+    })
+    expect(page.sessions[1]).not.toHaveProperty("createdAt")
+  })
+})
+
+/** Looks like a credential so any leak of the config payload is visible. */
+const SECRET = "sk-sentinel-0000-do-not-leak"
+
+type NativeAgent = { id: string; kind: "agent"; identity?: { avatar?: string } }
+
+/**
+ * A gateway whose `config.patch` behaves like OpenClaw's: it merges the one
+ * Agent entry by id, so a later `agents.list` shows the stored avatar.
+ */
+function configuredGateway(input: {
+  agents: NativeAgent[]
+  configured: string[]
+  applyPatch?: boolean
+  config?: unknown
+}) {
+  const requests: Array<{ method: string; params: unknown }> = []
+  let agents = input.agents
+  return {
+    requests,
+    methods: () => requests.map((request) => request.method),
+    request: async (method: string, params: unknown) => {
+      requests.push({ method, params })
+      if (method === "agents.list")
+        return {
+          defaultId: "agent-a",
+          mainKey: "main",
+          scope: "global",
+          agents,
+        }
+      if (method === "config.get")
+        return (
+          input.config ?? {
+            path: `/private/${SECRET}/openclaw.json`,
+            exists: true,
+            raw: `{ gateway: { auth: { token: "${SECRET}" } } }`,
+            valid: true,
+            hash: "hash-1",
+            sourceConfig: {
+              gateway: { auth: { token: SECRET } },
+              agents: {
+                list: input.configured.map((id) => ({
+                  id,
+                  identity: { name: SECRET },
+                })),
+              },
+            },
+            config: { gateway: { auth: { token: SECRET } } },
+          }
+        )
+      if (method === "config.patch") {
+        const patch = JSON.parse((params as { raw: string }).raw) as {
+          agents: {
+            list: Array<{ id: string; identity: { avatar: string | null } }>
+          }
+        }
+        const entry = patch.agents.list[0]!
+        if (input.applyPatch !== false)
+          agents = agents.map((agent) =>
+            agent.id !== entry.id
+              ? agent
+              : entry.identity.avatar === null
+                ? { id: agent.id, kind: agent.kind }
+                : { ...agent, identity: { avatar: entry.identity.avatar } }
+          )
+        return { ok: true }
+      }
+      throw new Error(`Unexpected method ${method} ${SECRET}`)
+    },
+  }
+}
+
+async function rejection(promise: Promise<unknown>) {
+  try {
+    await promise
+  } catch (error) {
+    return error as Error
+  }
+  throw new Error("expected a rejection")
+}
+
+function leaks(value: unknown) {
+  const text =
+    value instanceof Error
+      ? `${value.name} ${value.message} ${value.stack ?? ""} ${JSON.stringify(value)}`
+      : JSON.stringify(value)
+  return text.includes(SECRET) || text.includes("hash-1")
+}
+
+describe("OpenClaw Agent avatars", () => {
+  it("[CL1-WORKSPACE-015] reads only a token avatar and lets only a configured non-creator Agent edit it", async () => {
+    const native = configuredGateway({
+      agents: [
+        { id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } },
+        { id: "agent-b", kind: "agent", identity: { avatar: "avatars/b.png" } },
+        { id: "main", kind: "agent" },
+        {
+          id: OPENCLAW_CREATOR_AGENT_ID,
+          kind: "agent",
+          identity: { avatar: "ring/green" },
+        },
+      ],
+      // The implicit default `main` has no entry of its own.
+      configured: ["agent-a", "agent-b", OPENCLAW_CREATOR_AGENT_ID],
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const catalog = await workspace.listAgents()
+
+    expect(
+      catalog.agents.map((agent) => ({
+        id: agent.summary.id,
+        avatar:
+          agent.summary.kind === "ready" ? agent.summary.avatar : undefined,
+        avatarEditable: agent.avatarEditable,
+      }))
+    ).toEqual([
+      { id: "agent-a", avatar: "ring/blue", avatarEditable: true },
+      { id: "agent-b", avatar: undefined, avatarEditable: true },
+      {
+        id: OPENCLAW_CREATOR_AGENT_ID,
+        avatar: "ring/green",
+        avatarEditable: false,
+      },
+      { id: "main", avatar: undefined, avatarEditable: false },
+    ])
+    expect(leaks(catalog)).toBe(false)
+  })
+
+  it("[CL1-WORKSPACE-016] keeps the catalog readable and non-editable when the config read fails or is unusable", async () => {
+    for (const config of [
+      { valid: false, hash: "hash-1", raw: SECRET, sourceConfig: {} },
+      {
+        hash: "hash-1",
+        sourceConfig: { agents: { list: [{ name: SECRET }] } },
+      },
+      { sourceConfig: { agents: { list: SECRET } } },
+      SECRET,
+    ]) {
+      const workspace = createOpenClawWorkspace({
+        client: configuredGateway({
+          agents: [{ id: "agent-a", kind: "agent" }],
+          configured: ["agent-a"],
+          config,
+        }),
+      })
+      const catalog = await workspace.listAgents()
+      expect(catalog.agents.map((agent) => agent.avatarEditable)).toEqual([
+        false,
+      ])
+      expect(leaks(catalog)).toBe(false)
+    }
+
+    const failing = createOpenClawWorkspace({
+      client: {
+        request: async (method: string) => {
+          if (method === "config.get") throw new Error(`denied ${SECRET}`)
+          return {
+            defaultId: "agent-a",
+            mainKey: "main",
+            scope: "global",
+            agents: [{ id: "agent-a", kind: "agent" }],
+          }
+        },
+      },
+    })
+    const catalog = await failing.listAgents()
+    expect(catalog.agents.map((agent) => agent.avatarEditable)).toEqual([false])
+    expect(leaks(catalog)).toBe(false)
+  })
+
+  it("[CL1-WORKSPACE-017] writes exactly one Agent's avatar against the read config hash and confirms it", async () => {
+    const native = configuredGateway({
+      agents: [
+        { id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } },
+        { id: "agent-b", kind: "agent" },
+      ],
+      configured: ["agent-a", "agent-b"],
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+    const before = await workspace.listAgents()
+    native.requests.length = 0
+
+    const result = await workspace.updateAgent(
+      "agent-a",
+      { avatar: "ring/green" },
+      before.agents[0]!.revision
+    )
+
+    expect(native.methods()).toEqual([
+      "agents.list",
+      "config.get",
+      "config.patch",
+      "agents.list",
+      "config.get",
+    ])
+    expect(native.requests[2]!.params).toEqual({
+      raw: JSON.stringify({
+        agents: {
+          list: [{ id: "agent-a", identity: { avatar: "ring/green" } }],
+        },
+      }),
+      baseHash: "hash-1",
+    })
+    expect(result.agent).toMatchObject({
+      summary: { id: "agent-a", avatar: "ring/green" },
+      avatarEditable: true,
+    })
+    expect(result.revision).not.toBe(before.revision)
+    expect(leaks(result)).toBe(false)
+
+    native.requests.length = 0
+    const cleared = await workspace.updateAgent(
+      "agent-a",
+      { avatar: null },
+      result.agent.revision
+    )
+    expect(
+      JSON.parse((native.requests[2]!.params as { raw: string }).raw)
+    ).toEqual({
+      agents: { list: [{ id: "agent-a", identity: { avatar: null } }] },
+    })
+    expect(cleared.agent.summary).not.toHaveProperty("avatar")
+  })
+
+  it("[CL1-WORKSPACE-018] refuses an update outside the avatar rule and writes nothing", async () => {
+    const native = configuredGateway({
+      agents: [
+        { id: "agent-a", kind: "agent" },
+        { id: "main", kind: "agent" },
+        { id: OPENCLAW_CREATOR_AGENT_ID, kind: "agent" },
+      ],
+      configured: ["agent-a", OPENCLAW_CREATOR_AGENT_ID],
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+    const catalog = await workspace.listAgents()
+    const revisionOf = (id: string) =>
+      catalog.agents.find((agent) => agent.summary.id === id)!.revision
+    native.requests.length = 0
+
+    // A patch that touches visibility is unsupported as a whole.
+    for (const patch of [
+      { visibility: "hidden" as const },
+      { visibility: "visible" as const, avatar: "ring/blue" },
+    ]) {
+      const error = await rejection(
+        workspace.updateAgent("agent-a", patch, revisionOf("agent-a"))
+      )
+      expect(error).toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+    }
+    expect(native.requests).toEqual([])
+
+    for (const id of ["main", OPENCLAW_CREATOR_AGENT_ID]) {
+      const error = await rejection(
+        workspace.updateAgent(id, { avatar: "ring/blue" }, revisionOf(id))
+      )
+      expect(error).toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+      expect(leaks(error)).toBe(false)
+    }
+    await expect(
+      workspace.updateAgent("agent-z", { avatar: "ring/blue" }, "any")
+    ).rejects.toBeInstanceOf(OpenClawWorkspaceOwnershipError)
+    expect(native.methods()).not.toContain("config.patch")
+  })
+
+  it("[CL1-WORKSPACE-019] rejects a stale Agent revision before reading the config", async () => {
+    const native = configuredGateway({
+      agents: [{ id: "agent-a", kind: "agent" }],
+      configured: ["agent-a"],
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const error = await rejection(
+      workspace.updateAgent("agent-a", { avatar: "ring/blue" }, "stale")
+    )
+
+    expect(error).toBeInstanceOf(OpenClawWorkspaceRevisionConflictError)
+    expect(native.methods()).toEqual(["agents.list"])
+  })
+
+  it("[CL1-WORKSPACE-020] reports an unconfirmed or unhashed write as unavailable without leaking the config", async () => {
+    const unconfirmed = configuredGateway({
+      agents: [{ id: "agent-a", kind: "agent" }],
+      configured: ["agent-a"],
+      applyPatch: false,
+    })
+    const workspace = createOpenClawWorkspace({ client: unconfirmed })
+    const { agents } = await workspace.listAgents()
+    const error = await rejection(
+      workspace.updateAgent(
+        "agent-a",
+        { avatar: "ring/blue" },
+        agents[0]!.revision
+      )
+    )
+    expect(error).toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    expect(leaks(error)).toBe(false)
+
+    const unhashed = configuredGateway({
+      agents: [{ id: "agent-a", kind: "agent" }],
+      configured: ["agent-a"],
+      config: {
+        valid: true,
+        raw: SECRET,
+        sourceConfig: { agents: { list: [{ id: "agent-a" }] } },
+      },
+    })
+    const other = createOpenClawWorkspace({ client: unhashed })
+    const current = await other.listAgents()
+    const missingHash = await rejection(
+      other.updateAgent(
+        "agent-a",
+        { avatar: "ring/blue" },
+        current.agents[0]!.revision
+      )
+    )
+    expect(missingHash).toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    expect(leaks(missingHash)).toBe(false)
+    expect(unhashed.methods()).not.toContain("config.patch")
   })
 })
