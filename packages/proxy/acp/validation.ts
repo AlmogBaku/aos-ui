@@ -55,6 +55,13 @@ export function turnInProgress() {
   return new RequestError(AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress")
 }
 
+export function temporarilyUnavailable() {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+    "temporarily_unavailable"
+  )
+}
+
 export function staleRequest() {
   return new RequestError(AOS_JSONRPC_ERRORS.staleRequest, "stale_request")
 }
@@ -78,10 +85,7 @@ function coordinatorError(cause: unknown) {
     cause instanceof ServerTurnCapacityError ||
     cause instanceof ServerTurnSteerUnavailableError
   )
-    return new RequestError(
-      AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-      "temporarily_unavailable"
-    )
+    return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError)
     return new RequestError(
       AOS_JSONRPC_ERRORS.uncertainMutation,

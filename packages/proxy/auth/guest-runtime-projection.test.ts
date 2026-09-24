@@ -73,7 +73,7 @@ describe("guest turn projection", () => {
     })
   })
 
-  it("keeps normalized recovery state and hides the private first-turn envelope", () => {
+  it("keeps normalized recovery state and hides any first-turn envelope, whatever it asks", () => {
     const projected = projectGuestHistory(
       {
         sessionId: "stored",
@@ -100,10 +100,8 @@ describe("guest turn projection", () => {
         nextOffset: 1,
         execution: { status: "running", turnId: "run-1" },
       },
-      {
-        ...authorization,
-        firstTurn: { instruction: "Private setup" },
-      },
+      // An invitation without setup text still hides another one's envelope.
+      authorization,
       "ref"
     )
 

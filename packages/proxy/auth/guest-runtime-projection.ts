@@ -28,7 +28,8 @@ import type { SessionScope } from "../core/runtime"
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import { validIdentifier } from "../routes/http"
 
-function isPrivateFirstTurn(content: unknown, instruction: string) {
+/** Whether a user turn is an invitation's setup envelope, whatever it asks. */
+export function isFirstTurnEnvelope(content: unknown) {
   if (!Array.isArray(content) || content.length !== 1) return false
   const part = content[0]
   if (part?.type !== "text") return false
@@ -39,8 +40,7 @@ function isPrivateFirstTurn(content: unknown, instruction: string) {
       value !== null &&
       !Array.isArray(value) &&
       (value as Record<string, unknown>).v === 1 &&
-      (value as Record<string, unknown>).type === "aos.guest.first-turn" &&
-      (value as Record<string, unknown>).instruction === instruction
+      (value as Record<string, unknown>).type === "aos.guest.first-turn"
     )
   } catch {
     return false
@@ -139,11 +139,7 @@ export function projectGuestHistory(
   for (const message of history.messages) {
     if (message.role === "system") continue
     // Pages count back from the newest, so the setup turn may open any page.
-    if (
-      message.role === "user" &&
-      authorization.firstTurn?.instruction &&
-      isPrivateFirstTurn(message.content, authorization.firstTurn.instruction)
-    )
+    if (message.role === "user" && isFirstTurnEnvelope(message.content))
       continue
     if (message.role === "activity") {
       messages.push(message)

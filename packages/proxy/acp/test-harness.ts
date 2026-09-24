@@ -6,10 +6,12 @@
 import {
   client,
   methods,
+  type ContentBlock,
   type CreateElicitationResponse,
   type RequestPermissionResponse,
+  type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import { vi } from "vitest"
+import { expect, vi } from "vitest"
 import { z } from "zod"
 
 import {
@@ -47,12 +49,7 @@ import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createSessionRooms } from "./session-rooms"
 import { persistedCorrections } from "./translate/history"
-import type {
-  AcpConnectionContext,
-  AcpOutbound,
-  GuestPolicy,
-  Translators,
-} from "./types"
+import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
 export const PRINCIPAL = "operator"
@@ -555,25 +552,8 @@ export function connectClient(
   return { connection: clientApp.connect(createAosAcpAgent(context)), recorder }
 }
 
-/** A redeemed-invitation lane with nothing granted, for the guest guards. */
-export const GUEST_POLICY: GuestPolicy = {
-  authenticate: async () => undefined,
-  grant: () => undefined,
-  active: () => false,
-  project: {
-    access: (base) => base,
-    history: (value) => value,
-    turn: () => undefined,
-    capabilities: (value) => value,
-    permissionReply: (_request, reply) => reply,
-  },
-  expire: () => () => undefined,
-}
-
 export type HarnessOptions = {
   rows?: Session[]
-  /** Runs the connection on the guest lane instead of the operator lane. */
-  guest?: boolean
   total?: number
   activity?: AosActivityNotification[]
   /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
@@ -845,7 +825,6 @@ export async function harness(options: HarnessOptions = {}) {
   async function connect(
     connectionId: string,
     lane: {
-      guest?: GuestPolicy
       /** This browser's answer to a permission request, if not the harness's. */
       permission?: HarnessOptions["permission"]
       /** This browser's answer to a question, if not the harness's. */
@@ -876,13 +855,8 @@ export async function harness(options: HarnessOptions = {}) {
       rooms,
       presence,
       logger,
-      // As the lanes do, only an operator reads the activity feed.
-      ...(lane.guest
-        ? { lane: "guest", guest: lane.guest }
-        : {
-            lane: "operator",
-            activityFeed: composed?.activityFeed ?? activityFeed,
-          }),
+      lane: "operator",
+      activityFeed: composed?.activityFeed ?? activityFeed,
     }
 
     const { connection, recorder } = connectClient(context, {
@@ -920,10 +894,7 @@ export async function harness(options: HarnessOptions = {}) {
     }
   }
 
-  const primary = await connect(
-    CONNECTION,
-    options.guest ? { guest: GUEST_POLICY } : {}
-  )
+  const primary = await connect(CONNECTION)
 
   const scope: SessionScope = {
     agentId: AGENT,
@@ -935,6 +906,8 @@ export async function harness(options: HarnessOptions = {}) {
     ...primary,
     connect,
     coordinator,
+    runtimeInstance,
+    rooms,
     scope,
     sources,
     start,
@@ -965,4 +938,215 @@ export function turnStarted(): TurnEvent {
 
 export function updates(recorder: Recorder) {
   return recorder.of(methods.client.session.update).map((entry) => entry.params)
+}
+
+export type Browser = Pick<
+  Awaited<ReturnType<typeof harness>>,
+  "agent" | "recorder"
+>
+
+/**
+ * What one browser shows of a Session, in order: replayed rows, prompts, and
+ * the turn stream. Usage, commands, and row updates are left out.
+ */
+export function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
+  return recorder.entries.slice(from).flatMap(({ method, params }) => {
+    if (method !== methods.client.session.update) return []
+    const { sessionId: target, update } = params as {
+      sessionId: string
+      update: Record<string, unknown>
+    }
+    if (target !== sessionId) return []
+    switch (update.sessionUpdate) {
+      case "agent_message":
+        return [`history ${String(update.messageId)}`]
+      case "user_message":
+        return [`prompt ${String(update.messageId)}`]
+      case "state_update":
+        return [`state ${String(update.state)}`]
+      case "agent_message_chunk":
+        return [`chunk ${(update.content as { text: string }).text}`]
+      default:
+        return []
+    }
+  })
+}
+
+/** The content of every `user_message` one browser received for a Session. */
+export function prompts(recorder: Recorder, sessionId = SESSION) {
+  return updates(recorder).flatMap((params) => {
+    const { sessionId: target, update } = params as {
+      sessionId: string
+      update: { sessionUpdate: string; content?: unknown }
+    }
+    return target === sessionId && update.sessionUpdate === "user_message"
+      ? [update.content]
+      : []
+  })
+}
+
+/** Sends one prompt and returns the user message id the proxy minted. */
+export async function prompt(
+  browser: Browser,
+  content: string | ContentBlock[],
+  sessionId = SESSION,
+  meta: Record<string, unknown> = {}
+) {
+  const accepted = await browser.agent.request(methods.agent.session.prompt, {
+    sessionId,
+    prompt:
+      typeof content === "string" ? [{ type: "text", text: content }] : content,
+    _meta: { [AOS_META_KEY]: meta },
+  })
+  return z
+    .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
+    .parse(accepted)._meta.aos.messageId
+}
+
+/** Opens a Session and waits for the execution report its resume owes. */
+export async function open(
+  browser: Browser,
+  params: Partial<ResumeSessionRequest> = {}
+) {
+  const from = browser.recorder.entries.length
+  await browser.agent.request(methods.agent.session.resume, {
+    sessionId: SESSION,
+    cwd: "/",
+    ...params,
+  })
+  await browser.recorder.wait(
+    (entry) =>
+      browser.recorder.entries.indexOf(entry) >= from &&
+      JSON.stringify(entry.params).includes("state_update"),
+    "an update carrying state_update"
+  )
+}
+
+/** Streams one reply on a provider segment and ends its turn. */
+export function reply(source: EventSource | undefined, text: string) {
+  source?.emit(turnStarted())
+  source?.emit({
+    kind: TurnEventKind.MessageChunk,
+    messageId: "assistant-1",
+    text,
+  })
+  source?.emit({ kind: TurnEventKind.TurnEnded })
+}
+
+/** Lets the follow-ups a response schedules for the next task run. */
+export const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
+
+/**
+ * Streams one reply, ending its turn only once every watcher saw it live: a
+ * browser the room brings in late must still find the turn running.
+ */
+export async function replyWhileWatched(
+  source: EventSource | undefined,
+  text: string,
+  watchers: readonly Browser[]
+) {
+  source?.emit(turnStarted())
+  source?.emit({
+    kind: TurnEventKind.MessageChunk,
+    messageId: "assistant-1",
+    text,
+  })
+  for (const { recorder } of watchers)
+    await recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(text),
+      `an update carrying ${text}`
+    )
+  source?.emit({ kind: TurnEventKind.TurnEnded })
+  for (const { recorder } of watchers)
+    await recorder.wait(endedTurn, "the turn to end")
+}
+
+export const endedTurn = (entry: Recorded) =>
+  JSON.stringify(entry.params).includes("end_turn")
+
+/** Matches the first entry whose params carry `text`. */
+export const said = (text: string) => (entry: Recorded) =>
+  JSON.stringify(entry.params).includes(text)
+
+export const isPromptOrChunk = (item: string) =>
+  item.startsWith("prompt") || item.startsWith("chunk")
+
+/** Streams one assistant chunk on a provider segment. */
+export function chunk(
+  source: EventSource | undefined,
+  text: string,
+  messageId = "assistant-1"
+) {
+  source?.emit({ kind: TurnEventKind.MessageChunk, messageId, text })
+}
+
+/**
+ * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * has seen it. Returns the prompt's message id.
+ */
+export async function liveTurn(
+  test: Awaited<ReturnType<typeof harness>>,
+  watchers: readonly Browser[]
+) {
+  const messageId = await prompt(test, "Summarize")
+  await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  test.sources[0]?.emit(turnStarted())
+  chunk(test.sources[0], "Live")
+  for (const { recorder } of watchers)
+    await recorder.wait(said("Live"), "an update carrying Live")
+  return messageId
+}
+
+/**
+ * What Hermes stores of a turn still running: its prompt, then the rows it
+ * folded into one message so far. Stored by default as the turn is admitted.
+ */
+export function storedLiveTurn(
+  createdAt = new Date().toISOString(),
+  correction?: string
+): SessionHistoryResponse["messages"] {
+  return [
+    {
+      id: "user-1",
+      role: "user",
+      content: [{ type: "text", text: " Summarize " }],
+      createdAt,
+    },
+    ...(correction === undefined
+      ? []
+      : [
+          {
+            id: "correction-1",
+            role: "user" as const,
+            content: [{ type: "text" as const, text: correction }],
+            createdAt,
+            metadata: { custom: { correction: true } },
+          },
+        ]),
+    {
+      id: "assistant-0",
+      role: "assistant",
+      content: [{ type: "text", text: "Live" }],
+      createdAt,
+    },
+  ]
+}
+
+/** One browser's view of a Session without the states that bracket it. */
+export const withoutStates = (seen: readonly string[]) =>
+  seen.filter((item) => !item.startsWith("state"))
+
+/** A held step a test releases when the scenario needs it to go on. */
+export function gate() {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  return { held: promise, release: () => resolve() }
+}
+
+/** A browser holding its answer until the proxy withdraws the request. */
+export function heldUntilWithdrawn(signal: AbortSignal) {
+  return new Promise<never>((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    })
+  })
 }

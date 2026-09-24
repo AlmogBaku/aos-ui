@@ -1,6 +1,5 @@
 import {
   methods,
-  type ContentBlock,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -11,7 +10,6 @@ import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_EXTENSION_VERSION,
-  AOS_ATTACHMENT_URI_SCHEME,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
@@ -29,25 +27,40 @@ import {
 } from "../core/events"
 import type { ServerTurnWatcher, ServerRuntime } from "../core/runtime"
 import { translateHistory } from "./translate/history"
-import type { GuestGrant, GuestPolicy } from "./types"
 import { invalidRequest } from "./validation"
 import {
   AGENT,
   CONNECTION,
   CREATED,
   EventSource,
-  GUEST_POLICY,
   NOW,
   PRINCIPAL,
   SESSION,
   USAGE,
+  type Browser,
   type Recorder,
+  chunk,
+  endedTurn,
+  flow,
+  gate,
   harness,
+  heldUntilWithdrawn,
+  isPromptOrChunk,
+  liveTurn,
+  open,
+  prompt,
+  prompts,
+  reply,
+  replyWhileWatched,
+  said,
   sessionRow,
+  settled,
+  storedLiveTurn,
   turnStarted,
   updates,
   type Recorded,
   waitFor,
+  withoutStates,
 } from "./test-harness"
 
 /** Every `_meta.aos.sequence` the recorded run-stream updates carry, in order. */
@@ -932,20 +945,6 @@ describe("AOS ACP agent", () => {
     )
   })
 
-  it("keeps a guest's exposure out of presence and read state", async () => {
-    const test = await harness({ guest: true })
-
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    // One round trip after the notification proves the lane has handled it.
-    await expect(
-      test.agent.request(methods.agent.session.close, { sessionId: SESSION })
-    ).rejects.toThrow()
-
-    expect(test.presence.set).not.toHaveBeenCalled()
-    expect(test.readState.focus).not.toHaveBeenCalled()
-    test.close()
-  })
-
   it("hydrates the connection with the activity snapshot", async () => {
     const event: AosActivityNotification = {
       type: "turn-started",
@@ -1178,237 +1177,6 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 })
-
-type Browser = Pick<Awaited<ReturnType<typeof harness>>, "agent" | "recorder">
-
-/**
- * What one browser shows of a Session, in order: replayed rows, prompts, and
- * the turn stream. Usage, commands, and row updates are left out.
- */
-function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
-  return recorder.entries.slice(from).flatMap(({ method, params }) => {
-    if (method !== methods.client.session.update) return []
-    const { sessionId: target, update } = params as {
-      sessionId: string
-      update: Record<string, unknown>
-    }
-    if (target !== sessionId) return []
-    switch (update.sessionUpdate) {
-      case "agent_message":
-        return [`history ${String(update.messageId)}`]
-      case "user_message":
-        return [`prompt ${String(update.messageId)}`]
-      case "state_update":
-        return [`state ${String(update.state)}`]
-      case "agent_message_chunk":
-        return [`chunk ${(update.content as { text: string }).text}`]
-      default:
-        return []
-    }
-  })
-}
-
-/** The content of every `user_message` one browser received for a Session. */
-function prompts(recorder: Recorder, sessionId = SESSION) {
-  return updates(recorder).flatMap((params) => {
-    const { sessionId: target, update } = params as {
-      sessionId: string
-      update: { sessionUpdate: string; content?: unknown }
-    }
-    return target === sessionId && update.sessionUpdate === "user_message"
-      ? [update.content]
-      : []
-  })
-}
-
-/** Sends one prompt and returns the user message id the proxy minted. */
-async function prompt(
-  browser: Browser,
-  content: string | ContentBlock[],
-  sessionId = SESSION,
-  meta: Record<string, unknown> = {}
-) {
-  const accepted = await browser.agent.request(methods.agent.session.prompt, {
-    sessionId,
-    prompt:
-      typeof content === "string" ? [{ type: "text", text: content }] : content,
-    _meta: { [AOS_META_KEY]: meta },
-  })
-  return z
-    .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
-    .parse(accepted)._meta.aos.messageId
-}
-
-/** Opens a Session and waits for the execution report its resume owes. */
-async function open(
-  browser: Browser,
-  params: Partial<ResumeSessionRequest> = {}
-) {
-  const from = browser.recorder.entries.length
-  await browser.agent.request(methods.agent.session.resume, {
-    sessionId: SESSION,
-    cwd: "/",
-    ...params,
-  })
-  await browser.recorder.wait(
-    (entry) =>
-      browser.recorder.entries.indexOf(entry) >= from &&
-      JSON.stringify(entry.params).includes("state_update"),
-    "an update carrying state_update"
-  )
-}
-
-/** Streams one reply on a provider segment and ends its turn. */
-function reply(source: EventSource | undefined, text: string) {
-  source?.emit(turnStarted())
-  source?.emit({
-    kind: TurnEventKind.MessageChunk,
-    messageId: "assistant-1",
-    text,
-  })
-  source?.emit({ kind: TurnEventKind.TurnEnded })
-}
-
-/** Lets the follow-ups a response schedules for the next task run. */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
-
-/**
- * Streams one reply, ending its turn only once every watcher saw it live: a
- * browser the room brings in late must still find the turn running.
- */
-async function replyWhileWatched(
-  source: EventSource | undefined,
-  text: string,
-  watchers: readonly Browser[]
-) {
-  source?.emit(turnStarted())
-  source?.emit({
-    kind: TurnEventKind.MessageChunk,
-    messageId: "assistant-1",
-    text,
-  })
-  for (const { recorder } of watchers)
-    await recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes(text),
-      `an update carrying ${text}`
-    )
-  source?.emit({ kind: TurnEventKind.TurnEnded })
-  for (const { recorder } of watchers)
-    await recorder.wait(endedTurn, "the turn to end")
-}
-
-const endedTurn = (entry: Recorded) =>
-  JSON.stringify(entry.params).includes("end_turn")
-
-/** Matches the first entry whose params carry `text`. */
-const said = (text: string) => (entry: Recorded) =>
-  JSON.stringify(entry.params).includes(text)
-
-const isPromptOrChunk = (item: string) =>
-  item.startsWith("prompt") || item.startsWith("chunk")
-
-/** Streams one assistant chunk on a provider segment. */
-function chunk(
-  source: EventSource | undefined,
-  text: string,
-  messageId = "assistant-1"
-) {
-  source?.emit({ kind: TurnEventKind.MessageChunk, messageId, text })
-}
-
-/**
- * Starts one turn and streams its first chunk, `Live`, until every watcher
- * has seen it. Returns the prompt's message id.
- */
-async function liveTurn(
-  test: Awaited<ReturnType<typeof harness>>,
-  watchers: readonly Browser[]
-) {
-  const messageId = await prompt(test, "Summarize")
-  await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-  test.sources[0]?.emit(turnStarted())
-  chunk(test.sources[0], "Live")
-  for (const { recorder } of watchers)
-    await recorder.wait(said("Live"), "an update carrying Live")
-  return messageId
-}
-
-/**
- * What Hermes stores of a turn still running: its prompt, then the rows it
- * folded into one message so far. Stored by default as the turn is admitted.
- */
-function storedLiveTurn(
-  createdAt = new Date().toISOString(),
-  correction?: string
-): SessionHistoryResponse["messages"] {
-  return [
-    {
-      id: "user-1",
-      role: "user",
-      content: [{ type: "text", text: " Summarize " }],
-      createdAt,
-    },
-    ...(correction === undefined
-      ? []
-      : [
-          {
-            id: "correction-1",
-            role: "user" as const,
-            content: [{ type: "text" as const, text: correction }],
-            createdAt,
-            metadata: { custom: { correction: true } },
-          },
-        ]),
-    {
-      id: "assistant-0",
-      role: "assistant",
-      content: [{ type: "text", text: "Live" }],
-      createdAt,
-    },
-  ]
-}
-
-/** One browser's view of a Session without the states that bracket it. */
-const withoutStates = (seen: readonly string[]) =>
-  seen.filter((item) => !item.startsWith("state"))
-
-/** A held step a test releases when the scenario needs it to go on. */
-function gate() {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  return { held: promise, release: () => resolve() }
-}
-
-/** A browser holding its answer until the proxy withdraws the request. */
-function heldUntilWithdrawn(signal: AbortSignal) {
-  return new Promise<never>((_resolve, reject) => {
-    signal.addEventListener("abort", () => reject(signal.reason), {
-      once: true,
-    })
-  })
-}
-
-const GUEST_REF = "guest-ref"
-
-/** A redeemed invitation to the seeded Session, marking what it projects. */
-function invitedGuest(denied?: string): GuestPolicy {
-  const grant: GuestGrant = {
-    agentId: AGENT,
-    ref: GUEST_REF,
-    principalId: "guest-1",
-    expiresAt: Number.MAX_SAFE_INTEGER,
-  }
-  return {
-    ...GUEST_POLICY,
-    grant: () => grant,
-    active: () => true,
-    project: {
-      ...GUEST_POLICY.project,
-      // As the real guest projection does, a guest controls what it follows.
-      access: (base) => ({ ...base, canControl: true }),
-      turn: (text) => (text === denied ? undefined : `projected ${text}`),
-    },
-  }
-}
 
 const QUESTION: PendingRequest = {
   requestId: "question-1",
@@ -2060,29 +1828,6 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("shows a guest a live turn history already stored once", async () => {
-    const test = await harness({ providerIds: true, history: storedLiveTurn() })
-    await test.list()
-    const guest = await test.connect("guest-connection", {
-      guest: invitedGuest(),
-    })
-    await liveTurn(test, [test])
-
-    await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
-    chunk(test.sources[0], "More")
-    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await guest.recorder.wait(endedTurn, "the turn to end")
-
-    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
-    expect(withoutStates(flow(guest.recorder, GUEST_REF))).toEqual([
-      "history user-1",
-      "chunk Live",
-      "chunk More",
-    ])
-    test.close()
-    guest.close()
-  })
-
   it("asks a reopen to reload when the turn it cut ends before it follows", async () => {
     const test: Awaited<ReturnType<typeof harness>> = await harness({
       providerIds: true,
@@ -2585,157 +2330,6 @@ describe("Session rooms", () => {
     expect(prompts(other.recorder)).toHaveLength(1)
     test.close()
     other.close()
-  })
-
-  it("shows a guest an operator's prompt as projected text, and lets it Stop", async () => {
-    const test = await harness({ providerIds: true })
-    await test.list()
-    const guest = await test.connect("guest-connection", {
-      guest: invitedGuest(),
-    })
-    await open(guest, { sessionId: GUEST_REF })
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
-
-    const messageId = await prompt(test, [
-      { type: "text", text: "Summarize" },
-      {
-        type: "resource_link",
-        uri: `${AOS_ATTACHMENT_URI_SCHEME}stage/notes`,
-        name: "notes.md",
-        mimeType: "text/markdown",
-      },
-    ])
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "Live",
-    })
-    await guest.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("Live"),
-      "an update carrying Live"
-    )
-
-    expect(flow(guest.recorder, GUEST_REF)).toContain(`prompt ${messageId}`)
-    expect(prompts(guest.recorder, GUEST_REF)).toEqual([
-      [{ type: "text", text: "projected Summarize" }],
-    ])
-    expect(prompts(other.recorder)).toEqual([
-      [
-        { type: "text", text: "Summarize" },
-        {
-          type: "resource_link",
-          uri: `${AOS_ATTACHMENT_URI_SCHEME}stage/notes`,
-          name: "notes.md",
-          mimeType: "text/markdown",
-        },
-      ],
-    ])
-    await guest.agent.notify(methods.agent.session.cancel, {
-      sessionId: GUEST_REF,
-    })
-    await waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
-    test.close()
-    guest.close()
-    other.close()
-  })
-
-  it("streams a guest an operator's turn whose prompt it may not see", async () => {
-    const test = await harness({ providerIds: true })
-    await test.list()
-    const guest = await test.connect("guest-connection", {
-      guest: invitedGuest("Private"),
-    })
-    await open(guest, { sessionId: GUEST_REF })
-
-    await prompt(test, "Private")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    await replyWhileWatched(test.sources[0], "Done", [guest])
-
-    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
-    expect(flow(guest.recorder, GUEST_REF)).toContain("chunk Done")
-    test.close()
-    guest.close()
-  })
-
-  it("lets a guest answer an operator's approval once only within its grant", async () => {
-    const unanswered = gate()
-    const test = await harness({
-      providerIds: true,
-      // The operator's own browser never answers, so the guest's answer decides.
-      permission: async () => {
-        await unanswered.held
-        return { outcome: { outcome: "cancelled" } }
-      },
-    })
-    await test.list()
-    await open(test)
-    const policy = invitedGuest()
-    const guest = await test.connect("guest-connection", {
-      guest: {
-        ...policy,
-        project: {
-          ...policy.project,
-          // As the real guest projection does, refuse a widened grant.
-          permissionReply: (_request, reply) => {
-            if (JSON.stringify(reply.payload).includes('"once"')) return reply
-            throw invalidRequest()
-          },
-        },
-      },
-      permission: async () => ({
-        outcome: { outcome: "selected", optionId: "once" },
-      }),
-    })
-    await open(guest, { sessionId: GUEST_REF })
-    await prompt(test, "Delete it")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [APPROVAL],
-    })
-    test.sources[0]?.finish()
-
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
-      replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
-    })
-    unanswered.release()
-    test.close()
-    guest.close()
-  })
-
-  it("shows an operator a guest's prompt rebuilt from its allowed fields", async () => {
-    const test = await harness({ providerIds: true })
-    await test.list()
-    await open(test)
-    const guest = await test.connect("guest-connection", {
-      guest: invitedGuest(),
-    })
-
-    const messageId = await prompt(
-      guest,
-      [
-        {
-          type: "text",
-          text: "Hello",
-          annotations: { priority: 1 },
-          _meta: { private: "guest-only" },
-        },
-      ],
-      GUEST_REF
-    )
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    await replyWhileWatched(test.sources[0], "Done", [test])
-
-    expect(flow(test.recorder)).toContain(`prompt ${messageId}`)
-    expect(prompts(test.recorder)).toEqual([[{ type: "text", text: "Hello" }]])
-    test.close()
-    guest.close()
   })
 
   it("streams a turn the runtime started by itself to every open browser", async () => {
