@@ -1972,6 +1972,70 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
+  describe("a staged attachment", () => {
+    /** Stages one attachment for the invited conversation, as the REST route does. */
+    const staged = (test: ReturnType<typeof harness>) => {
+      const cleanup = vi.fn(async () => undefined)
+      const stageId = test.lane.attachmentStages.create(AGENT, REF, {
+        public: [],
+        appendTo: (text) => `${text}\n[attached notes.txt]`,
+        cleanup,
+      })
+      if (!stageId) throw new Error("The stage was refused")
+      return { stageId, cleanup }
+    }
+    const send = (
+      test: ReturnType<typeof harness>,
+      attachmentStageId: string
+    ) => {
+      // The browser's prompt `_meta` is the shape this lane accepts.
+      expect(AosPromptMetaSchema.safeParse({ attachmentStageId }).success).toBe(
+        true
+      )
+      return test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Read this" }],
+        _meta: { [AOS_META_KEY]: { attachmentStageId } },
+      })
+    }
+
+    for (const [name, existing] of [
+      ["reaches the runtime with a guest's send", true],
+      [
+        "reaches the runtime with the send that creates the conversation",
+        false,
+      ],
+    ] as const)
+      it(name, async () => {
+        const test = harness({ existing })
+        await test.initialize()
+        await test.login(await invite(test.invitations))
+        await test.resume(REF)
+        const { stageId } = staged(test)
+
+        await send(test, stageId)
+
+        await vi.waitFor(() => expect(test.start).toHaveBeenCalledOnce())
+        expect(test.start.mock.calls[0]?.[1]).toMatchObject({
+          prompt: expect.stringContaining("Read this\n[attached notes.txt]"),
+        })
+        test.close()
+      })
+
+    it("refuses a stage id that was never staged", async () => {
+      const test = harness({ existing: true })
+      await test.initialize()
+      await test.login(await invite(test.invitations))
+      await test.resume(REF)
+
+      await expect(send(test, "missing-stage")).rejects.toMatchObject({
+        code: AOS_JSONRPC_ERRORS.invalidRequest,
+      })
+      expect(test.start).not.toHaveBeenCalled()
+      test.close()
+    })
+  })
+
   it("edits or retries only a message the guest was shown", async () => {
     const test = harness({ existing: true })
     await test.initialize()
