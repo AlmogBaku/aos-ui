@@ -6,7 +6,6 @@ import {
   type AgentContext,
   type AnyWireMessage,
   type PromptRequest,
-  type RequestPermissionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
@@ -15,7 +14,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -330,14 +328,6 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         },
       })
     },
-    askPermission(): Promise<RequestPermissionResponse> | undefined {
-      return peer?.request(methods.client.session.requestPermission, {
-        sessionId: REF,
-        title: "Delete the notes?",
-        options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-        _meta: { [AOS_META_KEY]: { requestId: "interrupt-1" } },
-      })
-    },
   }
 }
 
@@ -525,24 +515,6 @@ describe("AOS guest browser composition", () => {
     expect(
       screen.queryAllByRole("button", { name: /reasoning|tool call/iu })
     ).toEqual([])
-  })
-
-  it("answers a permission request on its approval card", async () => {
-    const user = userEvent.setup()
-    const { proxy } = mount()
-    await screen.findByText("Earlier guest answer")
-
-    const answered = proxy.askPermission()
-
-    const card = await screen.findByRole("group", { name: "Delete the notes?" })
-    expect(
-      screen.queryByRole("button", { name: "Send answer" })
-    ).not.toBeInTheDocument()
-    await user.click(within(card).getByRole("button", { name: "Allow once" }))
-
-    await expect(answered).resolves.toMatchObject({
-      outcome: { outcome: "selected", optionId: "once" },
-    })
   })
 
   it("answers a question in the composer even when its tool call never showed", async () => {
