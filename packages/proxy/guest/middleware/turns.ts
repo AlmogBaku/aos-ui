@@ -18,6 +18,7 @@ import {
 } from "../../core/events"
 import {
   promptText,
+  unhandledKind,
   type MemberEvent,
   type Middleware,
   type TurnStream,
@@ -213,6 +214,7 @@ export function createTurnProjector(
       case TurnEventKind.SteerAccepted:
         return undefined
     }
+    return unhandledKind(candidate)
   }
 }
 
@@ -291,6 +293,7 @@ export function createTurnsMiddleware({
         case "error":
           return event
       }
+      return unhandledKind(event)
     },
   }
 }

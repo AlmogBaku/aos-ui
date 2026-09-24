@@ -18,6 +18,7 @@ import {
 } from "../../auth/guest-runtime-projection"
 import {
   CommandRefusedError,
+  unhandledKind,
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
@@ -185,6 +186,7 @@ export function createHistoryMiddleware({
         case "error":
           return event
       }
+      return unhandledKind(event)
     },
   }
 }

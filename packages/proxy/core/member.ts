@@ -247,6 +247,16 @@ export type Middleware = {
   event?(event: MemberEvent, act: MemberAct): MemberEvent | undefined
 }
 
+/**
+ * Proves a switch named every kind: a kind added later fails to compile until
+ * someone decides what it does. One that arrives anyway at run time is
+ * dropped.
+ */
+export function unhandledKind(kind: never): undefined {
+  void kind
+  return undefined
+}
+
 /** Why a middleware refused a command, in words a transport maps to its wire. */
 export type CommandRefusal = "invalid" | "not-found" | "authentication-required"
 

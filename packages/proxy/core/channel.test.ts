@@ -747,7 +747,7 @@ describe("a seat's declines", () => {
   it("denies a permission in the member's own turn once the member was offered it", async () => {
     const test = seated({ startedBy: GUEST, decline: declining })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     await settle()
 
     expect(test.log).toEqual([
@@ -764,7 +764,7 @@ describe("a seat's declines", () => {
       requests: [{ ...APPROVAL, responseSchema: { enum: ["once"] } }],
     })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-1:cancelled:undefined"])
@@ -778,7 +778,7 @@ describe("a seat's declines", () => {
         ...(startedBy ? { startedBy } : {}),
       })
 
-      await test.seat.reissuePending()
+      test.seat.reissuePending()
       await settle()
 
       expect(test.log).toEqual([])
@@ -796,7 +796,7 @@ describe("a seat's declines", () => {
       },
     })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-2:resolved:deny"])
@@ -805,7 +805,7 @@ describe("a seat's declines", () => {
   it("skips a decline whose connection stopped being live before it ran", async () => {
     const test = seated({ startedBy: GUEST, decline: declining, hide: true })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     test.state.live = false
     await settle()
 
@@ -822,7 +822,7 @@ describe("a seat's declines", () => {
       },
     })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-1:resolved:deny"])
@@ -831,7 +831,7 @@ describe("a seat's declines", () => {
   it("gives a member no answer and no withdrawal of a request its stack hid", async () => {
     const test = seated({ hide: true })
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     expect(() => test.seat.request("approval-1")).toThrow(
       ServerRequestStaleError
     )
@@ -847,7 +847,7 @@ describe("a seat's declines", () => {
   it("withdraws a request it delivered once another member answers it", async () => {
     const test = seated()
 
-    await test.seat.reissuePending()
+    test.seat.reissuePending()
     await settle()
     expect(test.seat.request("approval-1")).toEqual(APPROVAL)
     await test.coordinator.answer(SCOPE, {

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { readdir, readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
 
 import { CANONICAL_TOOL_NAMES } from "./adapters/hermes/tool-data"
@@ -181,6 +181,20 @@ function importsFrom(directory: string) {
   )
 }
 
+/** The `lane` reads left in `acp/`, each a guest branch still to remove. */
+const ACP_LANE_READS: Record<string, number> = {
+  "acp/agent-sessions.ts": 1,
+  "acp/agent.ts": 3,
+  "acp/member-encoder.ts": 8,
+  "acp/operator.ts": 4,
+  "acp/read-state.ts": 5,
+  "acp/service.ts": 4,
+  "acp/translate/history.ts": 6,
+  "acp/translate/requests.ts": 25,
+  "acp/translate/turn-events.ts": 2,
+  "acp/types.ts": 6,
+}
+
 describe("member boundary", () => {
   const proxyRoot = import.meta.dirname
 
@@ -228,5 +242,21 @@ describe("member boundary", () => {
       join(proxyRoot, "core/channel.ts"),
       join(proxyRoot, "core/channel.ts"),
     ])
+  })
+  /**
+   * A2: every `lane` the ACP transport still reads, per file. The guest
+   * branches leave task by task, so a new one fails here; the count may only
+   * shrink.
+   */
+  it("reads the lane in the ACP transport only where it is allowed", async () => {
+    const counts: Record<string, number> = {}
+    for (const path of await productionFiles(join(proxyRoot, "acp"))) {
+      if (path.endsWith("test-harness.ts")) continue
+      const source = stripComments(await readFile(path, "utf8"))
+      const reads = source.match(/\blane\b/gu)?.length ?? 0
+      if (reads > 0) counts[relative(proxyRoot, path)] = reads
+    }
+
+    expect(counts).toEqual(ACP_LANE_READS)
   })
 })

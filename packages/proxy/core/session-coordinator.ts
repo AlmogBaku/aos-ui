@@ -749,7 +749,8 @@ export class SessionCoordinator {
    * never asked, is stale. Each answer withdraws its request from every member
    * at once; the last one continues the turn as a fresh segment, whose turnId
    * this returns with the one it continues. Every member follows that segment
-   * the way it follows any other.
+   * the way it follows any other. A member answers through its Seat, never
+   * here, so the Channel's offered and delivered records stay in step.
    */
   async answer(
     scope: Pick<SessionScope, "agentId" | "sessionId">,

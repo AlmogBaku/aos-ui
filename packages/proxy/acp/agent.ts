@@ -514,7 +514,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // only a report here keeps its composer from opening on an empty gauge.
       if (!addressed) await member.reportUsage()
       if (coordinator.state(scope) === "waiting-for-input")
-        await member.reissuePending()
+        member.reissuePending()
     })
     return {
       agentId: scope.agentId,

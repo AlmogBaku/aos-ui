@@ -724,7 +724,7 @@ class Seat {
   }
 
   /** Asks again the requests a recovered wait is still holding. */
-  async reissuePending() {
+  reissuePending() {
     for (const request of this.#coordinator.snapshot(this.#scope).requests)
       this.#offer(request)
   }

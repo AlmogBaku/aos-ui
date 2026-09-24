@@ -14,11 +14,12 @@ import {
 } from "../../protocol/acp"
 import type { Seat } from "../core/channel"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
-import type {
-  MemberCommands,
-  MemberConnection,
-  MemberEvent,
-  TurnStream,
+import {
+  unhandledKind,
+  type MemberCommands,
+  type MemberConnection,
+  type MemberEvent,
+  type TurnStream,
 } from "../core/member"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import { redactForLog } from "../redaction"
@@ -233,6 +234,7 @@ export function createMemberEncoder({
       case "elicitation":
         return
     }
+    return unhandledKind(outbound)
   }
 
   function fail(sessionId: string, cause: unknown) {
@@ -436,6 +438,7 @@ export function createMemberEncoder({
         return
       }
     }
+    return unhandledKind(event)
   }
 
   return {
