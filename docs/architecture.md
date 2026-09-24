@@ -116,10 +116,13 @@ infrastructure, not part of the runtime boundary.
 
 The optional guest listener uses a distinct port and scoped, expiring JWTs.
 Operator and guest lanes share the same configured runtime adapter, transport,
-and Session coordinator. Authorization and outbound projection remain
-lane-specific, so a guest token grants only its declared runtime, Agent,
-Session, and operations. Guests may stop runs they started (`session/cancel` is
-in `GUEST_METHODS`). There is no second guest Hermes credential.
+and Session coordinator. Authorization and outbound projection are the guest
+middleware stack's (`packages/proxy/guest/middleware`), so a guest token grants
+only its declared runtime, Agent, and conversation. Within it a guest sends,
+edits and retries messages it was shown, steers, takes the composer prefill,
+stops the conversation's turn, and answers questions. It never sees a
+permission request, and it gets no usage, model, activity, read-state, or
+catalog feed. There is no second guest Hermes credential.
 
 Hermes authentication uses one server token read from a private file. Optional
 guest invitation signing keys are also file-backed secrets. None appear in the

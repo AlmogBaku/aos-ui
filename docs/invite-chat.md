@@ -44,8 +44,9 @@ but it does not sandbox the Agent itself.
 Slash-command suggestions are hidden in the guest composer by default. Set
 `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them. This
 flag is forwarded only by `compose.hermes.yaml`; other overlays do not pass it.
-It is only a presentation flag: it does not add an authorization boundary or
-change how submitted text is handled.
+It is only a presentation flag: the guest lane refuses any guest message or
+steer whose text starts with `/`, even after leading whitespace, whatever the
+flag says.
 
 The `limits.guestActiveExecutions` proxy config field caps concurrent guest
 runs. It must not exceed `limits.activeExecutions`.
@@ -105,6 +106,12 @@ the guest connection.
   invited Session resolves.
 - Streaming, Stop, questions, cancellation, reload, and reconnect use the same
   normalized ACP v2 path as operator conversations.
+- A guest can edit or retry a message it was shown, steer the active turn, and
+  start from the runtime's composer prefill. Stop reaches only the invited
+  conversation.
+- Permission requests never reach a guest. One raised in a turn the guest
+  started is declined for it; one raised in another turn waits for the
+  operator.
 - Voice transcription and speech are Agent-scoped and do not create a Session. Guest audio and read-aloud text may reach the operator-configured proxy speech provider under the same permissions as operator requests. Guest audio is budgeted per conversation at 2 concurrent in-flight operations and 60 audio operations per 10 minutes, shared across all tabs and devices on the same invitation link.
 - An Artifact the invited Session publishes reaches the guest as a link. The
   guest browser fetches it from
@@ -124,8 +131,8 @@ the guest connection.
 - Expiry detaches the guest only; it does not stop provider work.
 - Invalid or expired links ask the guest to request a new invitation.
 
-Guest output is allowlisted. It excludes reasoning, raw tools, privileged
-roles, provider metadata and positions, filesystem paths, credentials, live
+Guest output is allowlisted. It excludes reasoning, raw tools, permission
+requests, usage and model readings, privileged roles, provider metadata and positions, filesystem paths, credentials, live
 provider IDs, and Agent-wide approval grants.
 
 Native live acceptance has not been run for the OpenClaw and OpenCode guest

@@ -29,18 +29,22 @@ similar.
 ```text
 browser presentation and drafts
         -> ACP v2 WebSocket (ACP layer) / AOS REST (bytes/discovery)
+        -> member middleware stack (empty for the operator)
+        -> Channel (per-member delivery)
         -> SessionCoordinator
         -> ServerRuntime / ServerTurnEngine
         -> native adapter clients and transports
 ```
 
-| Owner                | Responsibilities                                                                                                                                                                          |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                        |
-| Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                      |
-| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, turn segment identities, subscriber fanout, bounded replay, and authoritative settlement.     |
-| Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention. |
-| Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                          |
+| Owner                | Responsibilities                                                                                                                                                                                                                                    |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                                                                                  |
+| Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                                                                                |
+| Member middleware    | Lane rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
+| Channel              | Per-member delivery for one Session room: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                                  |
+| `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, turn segment identities, subscriber fanout, bounded replay, per-conversation answer collection, usage and model readings, and authoritative settlement. |
+| Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention.                                                           |
+| Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                                                                                    |
 
 The coordinator must not learn native WebSocket methods, live Session IDs, or
 provider event shapes. The adapter must not create a second turn coordinator or
@@ -215,6 +219,12 @@ idempotent; conflicting, expired, wrong-Session, or incomplete responses make
 no native call. Reload reconstructs the request from normalized history or
 adapter-private native discovery, not from a browser polling contract.
 
+The coordinator collects the answers per conversation
+(`packages/proxy/core/session-coordinator.ts:748-782`), so members in different
+tabs may each answer one request of a batch. The first answer to a request
+wins, and the adapter receives one complete batch of replies when the last
+open request is answered.
+
 ## Design for uncertainty and reconnect
 
 Every native mutation needs an admission identity and an acknowledgement
@@ -265,10 +275,13 @@ the same Runtime instance, coordinator, provider connection, and native
 execution. Authorization controls observation and mutation; it does not create
 a duplicate runtime.
 
-Project guest output before it enters the guest subscriber queue. This keeps
-reasoning, raw tools, privileged roles, native metadata, paths, live IDs, and
-provider positions out of memory that an authorized guest connection can
-drain. A slow or expired guest may lose its own subscriber without delaying or
+Guest output is projected by the guest middleware
+(`packages/proxy/guest/middleware/`) before the member encoder
+(`packages/proxy/acp/member-encoder.ts`) writes it to the guest connection.
+This keeps reasoning, raw tools, permission requests, privileged roles, native
+metadata, paths, live IDs, and provider positions out of memory that an authorized guest
+connection can drain. Adapters stay lane-blind: they never see which member
+asked. A slow or expired guest may lose its own subscriber without delaying or
 stopping operator delivery.
 
 ## Implement one vertical operation
@@ -363,7 +376,10 @@ it with a synthetic value.
 
 The proxy emits one `usage_update` on `session/new`, on `session/resume`, after
 every settled turn, and after a `session/set_config_option` that changes the
-model (`packages/proxy/acp/session-member.ts:342-346`). Implement
+model, to every member given the usage feed; guests are given none. The
+coordinator owns the reading (`packages/proxy/core/session-coordinator.ts:442-455`),
+and the Channel reports it to a member joining the Session
+(`packages/proxy/core/channel.ts:649-660`). Implement
 `workspaceCapabilities` to return a `SessionContextResponse`, or declare usage
 unavailable; a provider that cannot answer at all leaves the last reading
 standing without emitting an empty gauge.

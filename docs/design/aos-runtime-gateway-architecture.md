@@ -59,6 +59,14 @@ Bun HTTP server  (server.ts:startProxyServer → bunServe)
 AcpConnectionContext  (acp/types.ts:53-67)
         |
         | per-connection Session registry  (acp/agent-sessions.ts)
+        | member commands and events  (core/member.ts; ACP encoding in acp/member-encoder.ts)
+        v
+member middleware stack  (guest/middleware; empty for the operator)
+        |
+        | member {connection, middleware, principal}
+        v
+Channel: Session rooms and per-member delivery  (core/channel.ts)
+        |
         v
 SessionCoordinator  (core/session-coordinator.ts:378)
         |
@@ -119,23 +127,52 @@ defaults to `"operator"` (`acp/service.ts:50`). Routes: static assets,
 ### 4.2 Guest lane
 
 Physically separate listener and origin (validated different from operator,
-`config.ts:166-184`). JWT: type `aos-guest-invitation+jwt`, HS256, issuer
+`config.ts:318-327`). JWT: type `aos-guest-invitation+jwt`, HS256, issuer
 `aos-invite`, audience `aos-guest` (`auth/guest-invitation.ts:6-9`). Claims
 include `deploymentId`, `runtimeId`, `agentId`, `ref`, optional `firstTurn`,
-expiry. Default TTL 259 200 s (`config.ts:159`).
+expiry. Default TTL 259 200 s (`config.ts:300`).
 
-API prefix `/api/guest/v1`; ACP at `/api/guest/v1/acp`. Paths `/auth` and
-`/hermes` → 404; non-health `/api/*` → 404 (`cli/serve.ts:23,44-62`).
+API prefix `/api/guest/v1`; ACP at `/api/guest/v1/acp`. The guest surface
+serves nothing under `/auth`, `/sw.js`, or `/manifest.webmanifest`
+(`cli/serve.ts:22`), and every `/api/*` path outside the prefix except
+`/api/health` is 404 (`cli/serve.ts:100`).
 
-An unauthenticated guest's `initialize` omits runtime info (`acp/agent.ts:320`).
-`auth/login` redeems the token. Connection closes on expiry (`guest/acp.ts:191-200`).
+**Authentication** (`guest/acp.ts:78-171`). An unauthenticated guest's
+`initialize` omits runtime info (`acp/agent.ts:382`). `auth/login` redeems the
+token and gives the connection its member: a guest principal and the guest
+middleware stack. A second `auth/login` on the same connection is refused
+(`guest/acp.ts:136`). At expiry the socket gate stops every frame in both
+directions and closes with code 1008
+(`acp/socket.ts:139-146,163-166,198-201`), and an expiry timer closes the
+connection, re-arming in steps of at most 2^31−1 ms
+(`guest/acp.ts:65,102-107`).
 
-Guest extensions (`acp/agent.ts:101-112`): `steer:false`, `rewind:false`,
-`artifacts:true`, `agents:false`, `invalidation:false`, `activity:false`,
-`readState:false`, `focus:false`, `guestProjection:true`.
+**Extensions** (`GUEST_EXTENSIONS`, `guest/acp.ts:51-62`): `steer:true`,
+`rewind:true`, `composerPrefill:true`, `agents:false`, `invalidation:false`,
+`activity:false`, `readState:false`, `focus:false`, `guestProjection:true`,
+`historyPages:true`. The invited Session reports slash commands, models, and
+context usage unavailable (`guest/middleware/commands.ts:64-84`).
 
-Allowed methods for a redeemed guest (`acp/agent.ts:89-95`): `session/resume`,
-`session/prompt`, `session/cancel`, `session/close`, `_aos/session/focus`.
+**Middleware** (`guest/middleware/index.ts:31-41`). Every ACP method runs as a
+member command down the stack commands → scope → history → turns →
+permissions, and every member event passes back up it in reverse
+(`core/member.ts:288-318`). A method the stack does not admit is method not
+found before its params are decoded (`acp/agent.ts:188-194`).
+
+| Layer         | Rule                                                                                                                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `commands`    | Admits resume, older pages, send, steer, Stop, close, answers, and focus; refuses list, new, delete, update, config, and the Agent catalog. Refuses slash text (leading `/`, even after whitespace or zero-width characters) and envelope-shaped text. Focus moves nothing. |
+| `scope`       | Only the invited reference; the first Send creates the Session with the invitation's setup text. Stop reaches only the invited conversation.                                                                                                                                |
+| `history`     | Projects history pages; Edit and Retry may name only a user message this connection was shown.                                                                                                                                                                              |
+| `turns`       | Shows the conversation's text whole and an MCP App's card; drops reasoning, tool input and output, the model, Session rows, and command lists.                                                                                                                              |
+| `permissions` | Hides every permission request. One in a turn the guest started (`startedBy`) is declined: `deny`, or `cancelled` when `deny` is not offered (`core/channel.ts:117-126,1023-1044`). Questions pass whole.                                                                   |
+
+**Feeds** are chosen at join. The guest is given none (`guest/acp.ts:155`): no
+usage, no model, no activity, no read state, and no catalog.
+
+**Errors** reach a guest as public codes only: the guest socket maps every
+error reply and `_aos/error` notification through `PUBLIC_ERRORS`
+(`acp/socket.ts:249`; `acp/validation.ts:125-137`).
 
 ### 4.3 Shared runtime instance
 
@@ -236,11 +273,14 @@ retains the execution in `waiting-for-input`.
 
 Delivery: each pending request is sent as a server→client `requestPermission`
 or `elicitation.create` call with a `requestId` in `_meta.aos`
-(`protocol/acp.ts:315-341`; `acp/session-member.ts:700-781`).
+(`protocol/acp.ts:315-341`). The Channel offers each request to every member
+(`core/channel.ts:1230-1241`), a guest's middleware hides permissions, and the
+member encoder asks what remains (`acp/member-encoder.ts:250-315`).
 
-Answering every request starts a new turn segment whose `TurnInput` carries
-the `replies` array (`acp/session-member.ts`, `#settle`;
-`session-coordinator.ts`).
+The coordinator collects answers per conversation, so two tabs may each answer
+one request of a batch; the first answer to a request wins. Answering the last
+open request starts a new turn segment whose `TurnInput` carries the `replies`
+array (`core/channel.ts:1002-1015`; `core/session-coordinator.ts:748-782`).
 
 Every UI with the Session open is asked. Once the Session resolves a request,
 through another UI's answer or a Stop, each member still asking withdraws it
@@ -250,7 +290,7 @@ the request's signal aborts. A stale request (the execution has moved on)
 returns JSON-RPC error `-32003 staleRequest` (`acp/validation.ts:58-59`).
 
 On reconnect, pending requests are re-issued via `reissuePending`
-(`acp/session-member.ts:348-353`).
+(`core/channel.ts:953-956`).
 
 ---
 
@@ -285,8 +325,9 @@ smaller staging limits (`guest/context.ts:37-40`).
 the browser arms a debounce timer (400 ms, `FOCUS_DEBOUNCE_MS`). When it fires
 the proxy writes a read watermark to the provider. A floor of 5 000 ms
 (`REACK_FLOOR_MS`) prevents redundant writes. The provider's `sessionReadState`
-capability is checked once and cached. Guest connections are inert: `focus`
-calls return without writing (`read-state.ts:62-81`).
+capability is checked once and cached. Guest connections carry no read state
+(`acp/types.ts:85-90`); a guest's focus report is accepted and moves nothing
+(`guest/middleware/commands.ts:124`).
 
 **`SessionRows`** (`core/session-rows.ts:12-30`): the proxy-local row cache.
 A write guard of 10 s (`READ_GUARD_MS`) prevents a list read that races the
@@ -297,7 +338,7 @@ mark-read write from clearing an optimistic `unread: false`.
 `HYDRATION_PAGE_SIZE`). Events are sent as `_aos/activity` notifications on
 connect and as live feed items thereafter.
 
-Guest activity is scoped to the invited Agent only (`guest/acp.ts:234-243`).
+Guest connections carry no activity feed (`acp/types.ts:85-90`).
 
 ---
 
@@ -336,7 +377,7 @@ journal cannot answer the cursor (`acp/agent.ts:287-307`).
 
 The `discover` preamble reconstructs authoritative state before replay
 (`acp/agent.ts:506-513`). `reissuePending` re-delivers pending requests after
-reconnect (`acp/session-member.ts:348-353`). Adapter-private
+reconnect (`core/channel.ts:953-956`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
 **Accepted steering survives replay exactly once.** The browser projects
@@ -454,15 +495,16 @@ stack traces never cross either listener.
 
 **Status: Implemented**
 
-| Test file                                                    | What it checks                                         |
-| ------------------------------------------------------------ | ------------------------------------------------------ |
-| `packages/proxy/architecture.test.ts:24-44`                  | Native types out of common proxy and browser modules   |
-| `packages/proxy/architecture.test.ts:46-53`                  | AG-UI absent from the proxy                            |
-| `packages/proxy/architecture.test.ts:55-69`                  | Each runtime selected in exactly one module            |
-| `test/architecture/runtime-import-boundaries.test.ts:19-116` | Provider packages do not import each other             |
-| `test/architecture/startup-bundle.test.ts:16-54`             | Browser bundle does not contain server code            |
-| `packages/proxy/core/session-coordinator.test.ts`            | Coordinator admission, capacity, conflict              |
-| `packages/proxy/acp/*.test.ts`                               | ACP protocol, read state, activity feed, socket limits |
+| Test file                                                    | What it checks                                                                                                                                                                 |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/proxy/architecture.test.ts:24-44`                  | Native types out of common proxy and browser modules                                                                                                                           |
+| `packages/proxy/architecture.test.ts:46-53`                  | AG-UI absent from the proxy                                                                                                                                                    |
+| `packages/proxy/architecture.test.ts:55-69`                  | Each runtime selected in exactly one module                                                                                                                                    |
+| `packages/proxy/architecture.test.ts:194-257`                | No ACP imports in `core/` or `guest/middleware`; no guest code, `.grant` reads, or lane branches in `core/` and `acp/`; no lane reads in `acp/translate` or the member encoder |
+| `test/architecture/runtime-import-boundaries.test.ts:19-116` | Provider packages do not import each other                                                                                                                                     |
+| `test/architecture/startup-bundle.test.ts:16-54`             | Browser bundle does not contain server code                                                                                                                                    |
+| `packages/proxy/core/session-coordinator.test.ts`            | Coordinator admission, capacity, conflict                                                                                                                                      |
+| `packages/proxy/acp/*.test.ts`                               | ACP protocol, read state, activity feed, socket limits                                                                                                                         |
 
 ---
 
@@ -470,17 +512,17 @@ stack traces never cross either listener.
 
 **Status: Implemented**
 
-| #   | Invariant                                                                                            | Checked by                                                        |
-| --- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 1   | One runtime per deployment (`config.ts:151`)                                                         | `architecture.test.ts:55-69`                                      |
-| 2   | Adapter boundary: `acp/`,`auth/`,`core/`,`guest/`,`routes/`, browser never import native packages    | `architecture.test.ts:24-44`, `runtime-import-boundaries.test.ts` |
-| 3   | AG-UI absent from the proxy                                                                          | `architecture.test.ts:46-53`                                      |
-| 4   | `adapters/create-runtime.ts` is the only runtime-kind branch                                         | `architecture.test.ts:55-69`                                      |
-| 5   | No synthetic fallback; fixture is browser-only                                                       | runtime-mode validation at startup                                |
-| 6   | Guest lane fails closed; extensions `steer`,`agents`,`invalidation`,`activity`,`readState` = `false` | `acp/agent.test.ts`                                               |
-| 7   | `guestActiveExecutions` ≤ `activeExecutions`                                                         | `config.ts:166-172` (`superRefine`)                               |
-| 8   | Turn control requires registered `controllerId`                                                      | `session-coordinator.ts:746-748`                                  |
-| 9   | Steer dedup: same `requestId`+fingerprint → same result; different fingerprint → conflict            | `session-coordinator.ts:786-795,821-824`                          |
+| #   | Invariant                                                                                                                              | Checked by                                                        |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 1   | One runtime per deployment (`config.ts:151`)                                                                                           | `architecture.test.ts:55-69`                                      |
+| 2   | Adapter boundary: `acp/`,`auth/`,`core/`,`guest/`,`routes/`, browser never import native packages                                      | `architecture.test.ts:24-44`, `runtime-import-boundaries.test.ts` |
+| 3   | AG-UI absent from the proxy                                                                                                            | `architecture.test.ts:46-53`                                      |
+| 4   | `adapters/create-runtime.ts` is the only runtime-kind branch                                                                           | `architecture.test.ts:55-69`                                      |
+| 5   | No synthetic fallback; fixture is browser-only                                                                                         | runtime-mode validation at startup                                |
+| 6   | Guest lane fails closed; `steer`,`rewind`,`composerPrefill` = `true`; `agents`,`invalidation`,`activity`,`readState`,`focus` = `false` | `guest/acp.test.ts`                                               |
+| 7   | `guestActiveExecutions` ≤ `activeExecutions`                                                                                           | `config.ts:166-172` (`superRefine`)                               |
+| 8   | Turn control requires registered `controllerId`                                                                                        | `session-coordinator.ts:746-748`                                  |
+| 9   | Steer dedup: same `requestId`+fingerprint → same result; different fingerprint → conflict                                              | `session-coordinator.ts:786-795,821-824`                          |
 
 ---
 

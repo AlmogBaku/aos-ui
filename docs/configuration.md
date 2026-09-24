@@ -262,9 +262,8 @@ Runtime slash-command suggestions are enabled on the operator surface. The
 guest surface hides them by default; set
 `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them there.
 This flag is forwarded only by `compose.hermes.yaml`; other runtime overlays
-do not pass it. This flag changes presentation only. A guest submission is
-still routed by the runtime according to the invitation's existing message
-permissions.
+do not pass it. This flag changes presentation only. The guest lane refuses
+any guest message or steer whose text starts with `/`, whatever the flag says.
 
 ### Voice providers {#voice-providers}
 

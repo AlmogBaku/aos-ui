@@ -55,6 +55,82 @@ transport recovery before resuming sessions.
 `acp.ts:29`) and carries the invitation token in `_meta.aos.token`
 (`AosLoginMetaSchema`, `acp.ts:123-125`).
 
+## Guest lane
+
+A guest connection reaches nothing but `initialize` and `auth/login` until it
+redeems an invitation (`packages/proxy/guest/acp.ts`). Its `initialize` omits
+the runtime's title and advertises only the `aos-invite` auth method. A
+connection acts as one invitation for its whole life: a second `auth/login` is
+refused with `-32001`.
+
+From the invitation's expiry no frame passes in either direction
+(`packages/proxy/acp/socket.ts`): a request received after it is answered
+`-32001` and the socket closes with code `1008`, and an outbound frame after it
+closes the socket instead of being written. A timer also closes the connection
+at expiry; it re-arms in steps of at most 2^31−1 ms, the longest delay one
+timer holds (`guest/acp.ts:65`, `:102-107`).
+
+The guest lane advertises (`GUEST_EXTENSIONS`, `guest/acp.ts:51-62`):
+
+| Extension         | Guest   |
+| ----------------- | ------- |
+| `steer`           | `true`  |
+| `rewind`          | `true`  |
+| `composerPrefill` | `true`  |
+| `agents`          | `false` |
+| `invalidation`    | `false` |
+| `activity`        | `false` |
+| `readState`       | `false` |
+| `focus`           | `false` |
+| `guestProjection` | `true`  |
+| `historyPages`    | `true`  |
+
+The invited Session's capabilities report slash commands, models, and context
+usage unavailable, and steering as the runtime reports it.
+
+Every method runs as a member command through the guest middleware stack in
+`packages/proxy/guest/middleware/` (commands, scope, history, turns,
+permissions; events pass back through it in reverse). The guest addresses the
+invited conversation by its reference alone; any other Session id is
+`-32004`.
+
+| Method                                                                                                               | Guest behavior                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session/resume`                                                                                                     | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
+| `session/prompt`                                                                                                     | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
+| `_aos/session/steer`                                                                                                 | Steers the invited conversation's active turn.                                                                                               |
+| `session/cancel`                                                                                                     | Stops a turn in the invited conversation only.                                                                                               |
+| `session/close`                                                                                                      | Detaches the connection from the Session.                                                                                                    |
+| `_aos/session/focus`                                                                                                 | Accepted and ignored: read state is the operator's.                                                                                          |
+| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_aos/session/update`, `_aos/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+
+`session/prompt` and `_aos/session/steer` refuse, with `-32602`, text that
+starts with `/` (after any leading whitespace or zero-width characters) and
+text shaped like an invitation envelope. The text itself travels as written.
+
+What a guest is shown:
+
+- The conversation's text passes whole, under the runtime's ids. There are no
+  inline size or count caps beyond the frame and queue limits every
+  connection has; the REST byte caps still apply.
+- Reasoning, tool input and output, terminals, compaction, the model, and
+  subagent prose are dropped. A tool call that declares an MCP App reaches
+  the guest as its card alone.
+- Questions (`elicitation/create`) reach the guest unchanged, and the guest may
+  answer them.
+- Permission requests are never shown to a guest. One raised in a turn the
+  guest started is declined for it: with `deny`, or `cancelled` when `deny` is
+  not offered. One raised in another member's turn is hidden and left for the
+  operator to answer.
+- No feeds: no `usage_update`, no model readings, no `_aos/activity`, no
+  `session_info_update`, and no `_aos/catalog_invalidated`.
+
+Guest errors carry only a public code (`PUBLIC_ERRORS`,
+`packages/proxy/acp/validation.ts:125`): an error reply keeps its JSON-RPC code
+with the code's public name as its message, and an `_aos/error` notification
+keeps only a public code. Any other failure reads `-32006`
+`temporarily_unavailable`.
+
 ## Session lifecycle methods
 
 `session/new`, `session/list`, `session/resume`, `session/prompt`,
@@ -285,7 +361,7 @@ The proxy returns these vendor error codes beyond the standard JSON-RPC set
 
 | Code     | Name                     | Meaning                                      |
 | -------- | ------------------------ | -------------------------------------------- |
-| `-32001` | `authenticationRequired` | No valid session token (guest lane)          |
+| `-32001` | `authenticationRequired` | No valid invitation token (guest lane)       |
 | `-32002` | `turnInProgress`         | Cannot send while a turn is active           |
 | `-32003` | `staleRequest`           | Request ID no longer valid                   |
 | `-32004` | `notFound`               | Agent or Session does not exist              |

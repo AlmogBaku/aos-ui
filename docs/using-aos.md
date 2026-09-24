@@ -64,7 +64,7 @@ Use the conversation search control to find messages in the current Session. Res
 
 ## Use slash-command suggestions
 
-Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. They are hidden in the guest composer unless `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` is set on the proxy.
+Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. They are hidden in the guest composer unless `AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` is set on the proxy, and the guest lane refuses a guest message that starts with `/` either way.
 
 ## Answer a question or free-text "Other"
 

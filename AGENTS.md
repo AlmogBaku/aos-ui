@@ -143,9 +143,14 @@ external reverse proxy is optional.
 - `packages/proxy/core` owns normalized execution coordination;
   `packages/proxy/adapters` owns native server clients, transports, identity,
   retention, recovery, validation, and conversion. Do not move a native
-  transport concern into the shared coordinator. `packages/proxy/acp` owns ACP
-  translation, read state, activity feed, and session membership.
-  `packages/proxy/auth` and `packages/proxy/guest` own authorization lanes;
+  transport concern into the shared coordinator. Session membership and
+  per-member delivery live in `packages/proxy/core/channel.ts`, and the member
+  types (`Principal`, `Member`, `Middleware`, commands, and events) in
+  `packages/proxy/core/member.ts`. `packages/proxy/acp` owns ACP translation,
+  read state, and the activity feed; `acp/member-encoder.ts` is the only code
+  that turns member events into ACP. `packages/proxy/auth` and
+  `packages/proxy/guest` own authorization lanes, and the guest rules live in
+  the `packages/proxy/guest/middleware` stack;
   `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
   server entry point. `packages/proxy/voice` owns proxy speech providers (the
   OpenAI-compatible client and the `ServerRuntime` voice wrapper);
