@@ -129,7 +129,7 @@ async function* annotatedEvents(
       yield event
       continue
     }
-    const toolName = names.get(event.toolCallId) ?? event.name
+    const toolName = names.get(event.toolCallId)
     const app =
       event.app ||
       flagged.has(event.toolCallId) ||

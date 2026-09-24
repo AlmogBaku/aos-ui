@@ -404,24 +404,6 @@ describe("translateHistory", () => {
     })
   })
 
-  it("keeps execution history out of the guest lane, but not outcomes", () => {
-    expect(kinds(translateHistory(history, "guest"))).toEqual([
-      "user_message",
-      "state_update",
-      "agent_message_chunk",
-      "agent_message_chunk",
-      "state_update",
-      "plan_update",
-      "agent_message_chunk",
-    ])
-  })
-
-  it("links a guest's replayed artifact exactly as the operator's", () => {
-    expect(translateHistory(history, "guest")[3]).toEqual(
-      artifactLink("agent_message_chunk", "a1", ARTIFACT)
-    )
-  })
-
   it("replays a failed turn that streamed nothing, carrying its failure", () => {
     const updates = updatesOf(
       translateHistory(

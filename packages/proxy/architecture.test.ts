@@ -188,9 +188,9 @@ const ACP_LANE_READS: Record<string, number> = {
   "acp/member-encoder.ts": 8,
   "acp/operator.ts": 3,
   "acp/service.ts": 4,
-  "acp/translate/history.ts": 6,
+  "acp/translate/history.ts": 4,
   "acp/translate/requests.ts": 25,
-  "acp/translate/turn-events.ts": 2,
+  "acp/translate/turn-events.ts": 1,
   "acp/types.ts": 6,
 }
 

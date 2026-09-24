@@ -187,18 +187,20 @@ describe("guest in a Session room", () => {
     other.close()
   })
 
-  it("streams a guest an operator's turn whose prompt it may not see", async () => {
+  it("streams a guest an operator's long prompt whole", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 
-    // One byte past the guest message text bound.
-    await prompt(test, "x".repeat(16_385))
+    const text = "x".repeat(80_000)
+    await prompt(test, text)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [guest])
 
-    expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
+    expect(prompts(guest.recorder, GUEST_REF)).toEqual([
+      [{ type: "text", text }],
+    ])
     expect(flow(guest.recorder, GUEST_REF)).toContain("chunk Done")
     test.close()
     guest.close()

@@ -24,8 +24,6 @@ export type GuestGrant = {
 
 export type GuestMiddlewareOptions = GuestScopeOptions & {
   read: VerifiedGuestAuthorization
-  errors: VerifiedGuestAuthorization
-  now: () => number
 }
 
 /**

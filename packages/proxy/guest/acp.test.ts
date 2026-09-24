@@ -332,6 +332,8 @@ const RUN_EVENTS: TurnEvent[] = [
     kind: TurnEventKind.ToolCallStarted,
     toolCallId: "live-app",
     title: APP_TOOL,
+    name: APP_TOOL,
+    app: true,
   },
   {
     kind: TurnEventKind.ToolCallInputChunk,
@@ -667,6 +669,21 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
     },
   ],
   [
+    "an older page",
+    {
+      id: "late",
+      method: methods.agent.session.resume,
+      params: {
+        sessionId: REF,
+        cwd: "/",
+        replayFrom: {
+          type: AOS_REPLAY_BEFORE,
+          cursor: Buffer.from("500").toString("base64url"),
+        },
+      },
+    },
+  ],
+  [
     "an answer",
     { id: "request-1", result: { outcome: { outcome: "cancelled" } } },
   ],
@@ -688,6 +705,7 @@ describe("guest ACP lane", () => {
           extensions: {
             guestProjection: true,
             steer: true,
+            rewind: true,
             composerPrefill: true,
             agents: false,
             readState: false,
@@ -782,8 +800,9 @@ describe("guest ACP lane", () => {
         title: APP_TOOL,
         name: APP_TOOL,
         status: "completed",
+        rawInput: {},
         _meta: {
-          [AOS_META_KEY]: expect.objectContaining({ app: {} }),
+          [AOS_META_KEY]: expect.objectContaining({ argsText: "", app: {} }),
         },
       },
     ])
@@ -799,14 +818,13 @@ describe("guest ACP lane", () => {
 
   it("projects another member's prompt the way its history projects a user turn", async () => {
     const test = harness()
-    // One byte past the guest message text bound, which history drops too.
-    const oversized = "x".repeat(16_385)
+    const long = "x".repeat(80_000)
     expect(test.policy?.member()).toBeUndefined()
     await test.initialize()
     await test.login(await invite(test.invitations))
 
     expect(shownPrompt(test.policy, "Hello")).toBe("Hello")
-    expect(shownPrompt(test.policy, oversized)).toBeUndefined()
+    expect(shownPrompt(test.policy, long)).toBe(long)
     const page: SessionHistoryResponse = {
       sessionId: REF,
       messages: [
@@ -819,7 +837,7 @@ describe("guest ACP lane", () => {
         {
           id: "user-2",
           role: "user",
-          content: [{ type: "text", text: oversized }],
+          content: [{ type: "text", text: long }],
           createdAt: "2026-01-01T00:00:00.000Z",
         },
       ],
@@ -837,17 +855,10 @@ describe("guest ACP lane", () => {
     expect(
       history?.kind === "history" &&
         history.page.messages.map(({ content }) => content)
-    ).toEqual([[{ type: "text", text: "Hello" }]])
-    test.close()
-  })
-
-  it("gives an expired grant no copy of another member's prompt", async () => {
-    const test = harness()
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-
-    test.clock.now = NOW + 259_200_000
-    expect(shownPrompt(test.policy, "Hello")).toBeUndefined()
+    ).toEqual([
+      [{ type: "text", text: "Hello" }],
+      [{ type: "text", text: long }],
+    ])
     test.close()
   })
 
@@ -952,16 +963,22 @@ describe("guest ACP lane", () => {
     const streamed = JSON.stringify(updates(test.recorder))
     expect(streamed).toContain("agent_message_chunk")
     expect(streamed).not.toContain("agent_thought_chunk")
-    expect(appCards(test.recorder)).toEqual([
+    expect(
+      updates(test.recorder).flatMap(({ update }) =>
+        "toolCallId" in update ? [update] : []
+      )
+    ).toMatchObject([
       {
         sessionUpdate: "tool_call_update",
         toolCallId: "live-app",
         title: APP_TOOL,
-        name: APP_TOOL,
+        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "live-app",
         status: "completed",
-        _meta: {
-          [AOS_META_KEY]: expect.objectContaining({ app: {} }),
-        },
+        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
       },
     ])
     expect(streamed).not.toContain("read_file")
@@ -1265,23 +1282,6 @@ describe("guest ACP lane", () => {
     expect(replayed).toContain("Answer 999")
     expect(replayed).not.toContain("private reasoning")
     expect(replayed).not.toContain(INSTRUCTION)
-    test.close()
-  })
-
-  it("refuses an older page once the invitation expired, before its timer fires", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    test.clock.now = NOW + 259_200_000
-
-    await expect(
-      test.older(Buffer.from("500").toString("base64url"))
-    ).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
-    })
-    expect(test.history).not.toHaveBeenCalled()
     test.close()
   })
 
@@ -1632,7 +1632,150 @@ describe("guest scope and commands", () => {
       requestId: "steer-1",
       text: "Shorter, please",
     })
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
+      "the steer's acknowledgement"
+    )
     test.close()
+  })
+
+  it("streams the conversation whole, under the runtime's ids, with the runtime's prefill", async () => {
+    const text = "x".repeat(80_000)
+    const test = harness({
+      existing: true,
+      handle: () =>
+        terminalHandle([
+          { kind: TurnEventKind.TurnStarted },
+          {
+            kind: TurnEventKind.MessageChunk,
+            messageId: "assistant-native",
+            text,
+          },
+          { kind: TurnEventKind.TurnEnded, composerPrefill: "Tell me more" },
+        ]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Start the interview")
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.composerPrefill,
+      "the runtime's prefill"
+    )
+
+    expect(
+      JSON.stringify(test.recorder.of(AOS_METHODS.notify.composerPrefill))
+    ).toContain("Tell me more")
+    const chunks = updates(test.recorder).flatMap(({ update }) =>
+      update.sessionUpdate === "agent_message_chunk" ? [update] : []
+    )
+    expect(chunks.map((chunk) => chunk.messageId)).toContain("assistant-native")
+    expect(
+      chunks.map((chunk) =>
+        chunk.content.type === "text" ? chunk.content.text : ""
+      )
+    ).toContain(text)
+    test.close()
+  })
+
+  it("edits or retries only a message the guest was shown", async () => {
+    const test = harness({ existing: true })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const rewind = (rewindSourceId: string) =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Again" }],
+        _meta: { [AOS_META_KEY]: { rewindSourceId } },
+      })
+
+    // The invitation's setup turn is in the stored history, never shown.
+    await expect(rewind("user-0")).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.invalidRequest,
+    })
+    const from = test.recorder.entries.length
+    await test.prompt("Hello")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
+      "an update carrying Guest-visible answer"
+    )
+    await settled()
+    const own = test.recorder.entries
+      .slice(from)
+      .filter(({ method }) => method === methods.client.session.update)
+      .flatMap(({ params }) => {
+        const { update } = params as {
+          update: { sessionUpdate: string; messageId?: string }
+        }
+        return update.sessionUpdate === "user_message" ? [update.messageId] : []
+      })
+      .at(0)
+    expect(own).toBeDefined()
+
+    await rewind(own ?? "")
+
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ rewindSourceId: own })
+    )
+    test.close()
+  })
+
+  it("never writes the invitation's setup text to a guest frame", async () => {
+    // The setup turn sits on the older page, behind the newest one.
+    const test = harness({
+      existing: true,
+      history: (offset) =>
+        offset === 0
+          ? {
+              sessionId: STORED,
+              messages: [
+                {
+                  id: "assistant-9",
+                  role: "assistant",
+                  content: [{ type: "text", text: "Newest answer" }],
+                  createdAt: "2026-09-15T00:10:00.000Z",
+                },
+              ],
+              total: 502,
+              limit: 500,
+              offset: 0,
+              nextOffset: 500,
+            }
+          : { ...HISTORY, total: 502, offset, nextOffset: 502 },
+    })
+    const token = await invite(test.invitations)
+    const replay = { sessionId: REF, cwd: "/", replayFrom: { type: "start" } }
+
+    const first = await loggedInWire(test.lane, token)
+    await first.request(methods.agent.session.resume, replay)
+    await first.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: [{ type: "text", text: "Hello" }],
+    })
+    await settled()
+    // A reload replays from the start and scrolls back a page.
+    const reloaded = await loggedInWire(test.lane, token)
+    await reloaded.request(methods.agent.session.resume, replay)
+    await reloaded.request(methods.agent.session.resume, {
+      ...replay,
+      replayFrom: {
+        type: AOS_REPLAY_BEFORE,
+        cursor: Buffer.from("500").toString("base64url"),
+      },
+    })
+
+    expect(test.history).toHaveBeenCalledTimes(3)
+    expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
+    const written = JSON.stringify([...first.frames, ...reloaded.frames])
+    expect(written).toContain("Guest-visible answer")
+    expect(written).toContain("Safe answer")
+    expect(written).not.toContain(INSTRUCTION)
+    first.close()
+    reloaded.close()
   })
 
   it("keeps unknown parameters and metadata from the runtime", async () => {

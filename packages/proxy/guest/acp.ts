@@ -45,12 +45,12 @@ export type GuestAcpServiceOptions = {
 
 /**
  * The guest lane holds one invited conversation and manages no workspace: it
- * owns no roster, no read state, and no catalog. It steers the conversation
+ * owns no roster, no read state, and no catalog. It steers, edits, retries,
  * and takes the runtime's prefill as an operator does.
  */
 const GUEST_EXTENSIONS = {
   steer: true,
-  rewind: false,
+  rewind: true,
   composerPrefill: true,
   agents: false,
   invalidation: false,
@@ -141,8 +141,6 @@ function createGuestAuthentication(
           middleware: createGuestMiddleware({
             grant,
             read,
-            errors,
-            now,
             invited: workspace.invited,
             capabilities: workspace.capabilities,
           }),

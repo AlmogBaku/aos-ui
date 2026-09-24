@@ -396,28 +396,6 @@ function toolFinished(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.ToolCallFinished>
 ): Step {
-  // The guest projection passes an MCP App's card alone, so its lane settles
-  // the call under its name and nothing more. A call the start could not flag
-  // arrives here first, so the card may be what opens the segment.
-  if (context.lane === "guest") {
-    if (!event.app) return { state, outbound: [] }
-    const segment = segmentMessage(state, context.turnId)
-    return {
-      state: segment.state,
-      outbound: [
-        toolOutbound(
-          context,
-          segment.messageId,
-          {
-            toolCallId: event.toolCallId,
-            ...(event.name ? { title: event.name, name: event.name } : {}),
-            status: "completed",
-          },
-          { app: {} }
-        ),
-      ],
-    }
-  }
   // The settled content replaces everything streamed into the call, so it
   // restates the terminals the call announced.
   const terminals = Object.entries(state.terminals).flatMap(

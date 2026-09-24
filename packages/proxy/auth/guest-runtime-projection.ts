@@ -77,29 +77,6 @@ export function projectGuestError(
     : new Response(null, { status })
 }
 
-/**
- * One message's text as the guest may read it. A user turn projects under the
- * `guest` role whoever sent it; `undefined` means the guest sees none of it.
- */
-export function projectGuestText(
-  authorization: GuestAuthorization,
-  role: "guest" | "assistant",
-  text: string
-) {
-  const projected = projectGuestOutbound(
-    {
-      transport: "rest",
-      agentId: authorization.agentId,
-      sessionId: authorization.sessionId,
-      payload: { type: "message", role, text },
-    },
-    authorization
-  )
-  return projected?.payload.type === "message"
-    ? projected.payload.text
-    : undefined
-}
-
 export function projectGuestCapabilities(value: unknown) {
   const parsed = SessionWorkspaceCapabilitiesResponseSchema.safeParse(value)
   if (!parsed.success) return undefined

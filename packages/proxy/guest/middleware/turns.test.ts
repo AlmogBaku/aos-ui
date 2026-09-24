@@ -39,59 +39,60 @@ const authorization: VerifiedGuestAuthorization = {
   operation: "messages:read",
 }
 
-/** One guest turn stream's projector. */
+/** One guest member's projector. */
 const projectorOf = () =>
-  createTurnProjector(
-    { agentId: "agent", threadId: "ref" },
-    authorization,
-    { ...authorization, operation: "errors:read" },
-    () => 10_000
-  )
+  createTurnProjector({ agentId: "agent", threadId: "ref" }, authorization)
 
 /** One turn event, validated the way the projector validates it. */
 const project = (event: TurnEvent) =>
   projectorOf()(TurnEventSchema.parse(event))
 
 describe("guest turn projection", () => {
-  it("drops turn usage, cost, the composer prefill, and saved ids but keeps the stop reason", () => {
-    expect(
-      project({
-        kind: TurnEventKind.TurnEnded,
-        usage: [{ provider: "private", totalTokens: 12 }],
-        cost: { amount: 0.5, currency: "USD" },
-        composerPrefill: "/private",
-        // The guest's live ids are hashed, so a native saved id would name
-        // rows its projection may hide.
-        saved: {
-          user: { messageId: "user-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
-      })
-    ).toEqual({ kind: TurnEventKind.TurnEnded })
+  it("keeps the stop reason, the prefill, and the saved ids but drops usage and cost", () => {
+    const saved = {
+      user: { messageId: "user-1", savedId: "hermes-row-7" },
+      replyId: "hermes-row-8",
+    }
     expect(
       project({
         kind: TurnEventKind.TurnEnded,
         stopReason: StopReason.Refusal,
+        usage: [{ provider: "private", totalTokens: 12 }],
         cost: { amount: 0.5, currency: "USD" },
+        composerPrefill: "Try again with",
+        saved,
       })
-    ).toEqual({ kind: TurnEventKind.TurnEnded, stopReason: StopReason.Refusal })
-    expect(project({ kind: TurnEventKind.TurnStarted })).toEqual({
+    ).toEqual({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.Refusal,
+      composerPrefill: "Try again with",
+      saved,
+    })
+    expect(
+      project({
+        kind: TurnEventKind.TurnStarted,
+        startedAt: "2026-01-01T00:00:00.000Z",
+      })
+    ).toEqual({
       kind: TurnEventKind.TurnStarted,
+      startedAt: "2026-01-01T00:00:00.000Z",
     })
   })
 
-  it("renames assistant prose and drops reasoning and tool calls", () => {
-    const projected = project({
+  it("passes assistant prose whole under its runtime id and drops reasoning and tool calls", () => {
+    const text = "x".repeat(80_000)
+
+    expect(
+      project({
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text,
+      })
+    ).toEqual({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
-      text: "Hello",
+      text,
     })
-
-    expect(projected).toMatchObject({
-      kind: TurnEventKind.MessageChunk,
-      text: "Hello",
-    })
-    expect(projected).not.toMatchObject({ messageId: "assistant-1" })
     expect(
       project({
         kind: TurnEventKind.ThoughtChunk,
@@ -177,8 +178,17 @@ describe("guest turn projection", () => {
       output: "",
       failed: false,
       app: true,
-      name: "render_chart",
     })
+    // A call flagged only at its settling had no card to settle.
+    expect(
+      projectOne({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "chart-2",
+        output: "private data",
+        failed: false,
+        app: true,
+      })
+    ).toBeUndefined()
     expect(
       projectOne({
         kind: TurnEventKind.ToolCallStarted,
@@ -193,6 +203,19 @@ describe("guest turn projection", () => {
         output: "private file",
         failed: false,
       })
+    ).toBeUndefined()
+  })
+
+  it("passes a steer's acknowledgement and drops a kind it does not know", () => {
+    const accepted: TurnEvent = {
+      kind: TurnEventKind.SteerAccepted,
+      requestId: "steer-1",
+      text: "Shorter, please",
+      delivery: "steered",
+    }
+    expect(project(accepted)).toEqual(accepted)
+    expect(
+      projectorOf()({ kind: "forged", text: "private" } as unknown as TurnEvent)
     ).toBeUndefined()
   })
 

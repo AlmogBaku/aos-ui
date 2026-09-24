@@ -1,15 +1,9 @@
-import { createHash } from "node:crypto"
-
 import {
   guestErrorDescription,
   projectGuestOutbound,
 } from "../../auth/guest-projection"
 import type { VerifiedGuestAuthorization } from "../../auth/guest-invitation"
-import { guestAuthorizationActive } from "../../auth/guest-request"
-import {
-  projectGuestText,
-  publicTurnError,
-} from "../../auth/guest-runtime-projection"
+import { publicTurnError } from "../../auth/guest-runtime-projection"
 import {
   isTurnEvent,
   TurnEventKind,
@@ -21,25 +15,16 @@ import {
   unhandledKind,
   type MemberEvent,
   type Middleware,
-  type TurnStream,
 } from "../../core/member"
 import { validIdentifier } from "../../routes/http"
 import type { GuestGrant } from "./index"
 
 /**
- * What a guest is shown of a live turn: the run projection the guest REST
- * routes apply, another member's prompt as its history shows a user turn, and
+ * What a guest is shown of a live turn: the conversation's own text whole,
+ * under the runtime's ids, an MCP App's card, and nothing of how the turn ran.
+ * Another member's prompt reaches it as its history shows a user turn, and
  * each request it is asked without approval internals.
  */
-
-function guestMessageId(tokenId: string, sourceId: string) {
-  return `guest-message-${createHash("sha256")
-    .update(tokenId)
-    .update("\0")
-    .update(sourceId)
-    .digest("base64url")
-    .slice(0, 24)}`
-}
 
 /** Passes a provider-held artifact only; guests never receive inline data. */
 function projectArtifact(
@@ -67,60 +52,44 @@ function projectArtifact(
 /** The invited conversation a projected event describes. */
 type InvitedScope = { agentId: string; threadId: string }
 
+/**
+ * One turn stream's projector. `shown` collects the calls whose card a guest
+ * was shown, across every stream of the member.
+ */
 export function createTurnProjector(
   scope: InvitedScope,
   read: VerifiedGuestAuthorization,
-  errors: VerifiedGuestAuthorization,
-  now: () => number
+  shown: Set<string> = new Set()
 ) {
-  // The names of the calls a guest saw start, so a flagged settling can name
-  // the card even when the start itself was not flagged.
-  const toolNames = new Map<string, string>()
   return (candidate: TurnEvent): TurnEvent | undefined => {
-    if (
-      !guestAuthorizationActive(read, now) ||
-      !guestAuthorizationActive(errors, now) ||
-      !isTurnEvent(candidate)
-    )
-      return undefined
+    if (!isTurnEvent(candidate)) return undefined
     switch (candidate.kind) {
       case TurnEventKind.TurnStarted:
-        return { kind: TurnEventKind.TurnStarted }
-      // Why the turn stopped is the guest's to know; what it spent is not.
-      case TurnEventKind.TurnEnded:
+        return {
+          kind: TurnEventKind.TurnStarted,
+          ...(candidate.startedAt ? { startedAt: candidate.startedAt } : {}),
+        }
+      // How the turn stopped, what it was saved as, and what the runtime asks
+      // the composer to start with are the guest's; what it spent is not.
+      case TurnEventKind.TurnEnded: {
+        const { stopReason, composerPrefill, saved } = candidate
         return {
           kind: TurnEventKind.TurnEnded,
-          ...(candidate.stopReason ? { stopReason: candidate.stopReason } : {}),
+          ...(stopReason ? { stopReason } : {}),
+          ...(composerPrefill === undefined ? {} : { composerPrefill }),
+          ...(saved ? { saved } : {}),
         }
-      case TurnEventKind.MessageChunk: {
-        // A subagent's prose is its tool call's output, which guests never see.
-        if (
-          !validIdentifier(candidate.messageId) ||
-          candidate.subagentId !== undefined
-        )
-          return undefined
-        const projected = projectGuestOutbound(
-          {
-            transport: "turn",
-            agentId: scope.agentId,
-            sessionId: scope.threadId,
-            payload: {
-              type: "message",
-              role: "assistant",
-              text: candidate.text,
-            },
-          },
-          read
-        )
-        return projected?.payload.type === "message" &&
-          projected.payload.text !== undefined
+      }
+      // A subagent's prose is its tool call's output, which guests never see.
+      case TurnEventKind.MessageChunk:
+        return validIdentifier(candidate.messageId) &&
+          candidate.subagentId === undefined
           ? {
               kind: TurnEventKind.MessageChunk,
-              messageId: guestMessageId(read.tokenId, candidate.messageId),
-              text: projected.payload.text,
+              messageId: candidate.messageId,
+              text: candidate.text,
             }
           : undefined
-      }
       case TurnEventKind.TurnRequiresAction: {
         const projected = projectGuestOutbound(
           {
@@ -139,70 +108,50 @@ export function createTurnProjector(
           : undefined
       }
       case TurnEventKind.TurnFailed: {
-        const error = publicTurnError(candidate.code)
-        const projected = projectGuestOutbound(
-          {
-            transport: "error",
-            agentId: scope.agentId,
-            sessionId: scope.threadId,
-            payload: {
-              type: "error",
-              code: error.code,
-              description: guestErrorDescription(error.code),
-              retryable: error.retryable,
-            },
-          },
-          errors
-        )
-        return projected?.payload.type === "error"
-          ? {
-              kind: TurnEventKind.TurnFailed,
-              code: projected.payload.code,
-              message:
-                projected.payload.description ??
-                guestErrorDescription(projected.payload.code),
-              ...(candidate.awaitingStop
-                ? { awaitingStop: true as const }
-                : {}),
-            }
-          : undefined
+        const { code } = publicTurnError(candidate.code)
+        return {
+          kind: TurnEventKind.TurnFailed,
+          code,
+          message: guestErrorDescription(code),
+          ...(candidate.awaitingStop ? { awaitingStop: true as const } : {}),
+        }
       }
-      // Only an MCP App's card, from its start to its settling: no arguments,
-      // no output, and no other tool call. The App's input and result reach
-      // the guest through its view.
+      // Only an MCP App's card, from its start to its settling: its name, no
+      // arguments, no output, and no other tool call. The App's input and
+      // result reach the guest through its view.
       case TurnEventKind.ToolCallStarted: {
-        if (candidate.subagentId !== undefined) return undefined
+        if (!candidate.app || candidate.subagentId !== undefined)
+          return undefined
         const name = candidate.name ?? candidate.title
-        toolNames.set(candidate.toolCallId, name)
-        return candidate.app
-          ? {
-              kind: TurnEventKind.ToolCallStarted,
-              toolCallId: candidate.toolCallId,
-              title: name,
-              name,
-              app: true,
-            }
-          : undefined
+        shown.add(candidate.toolCallId)
+        return {
+          kind: TurnEventKind.ToolCallStarted,
+          toolCallId: candidate.toolCallId,
+          title: name,
+          name,
+          app: true,
+        }
       }
-      case TurnEventKind.ToolCallFinished: {
-        const name = toolNames.get(candidate.toolCallId)
-        return candidate.app && name !== undefined
+      // A settling whose start the guest was not shown has no card to settle.
+      case TurnEventKind.ToolCallFinished:
+        return shown.has(candidate.toolCallId)
           ? {
               kind: TurnEventKind.ToolCallFinished,
               toolCallId: candidate.toolCallId,
               output: "",
               failed: candidate.failed,
               app: true,
-              name,
             }
           : undefined
-      }
       case TurnEventKind.PlanUpdated:
         return { kind: TurnEventKind.PlanUpdated, todos: candidate.todos }
       case TurnEventKind.ArtifactPublished:
         return projectArtifact(candidate)
+      // A correction is the conversation's own text, whoever steered.
+      case TurnEventKind.SteerAccepted:
+        return candidate
       // Reasoning, a call's input and output, terminals, compaction, the
-      // model, subagents and steer acknowledgements are never a guest's.
+      // model and subagents are never a guest's.
       case TurnEventKind.ThoughtChunk:
       case TurnEventKind.ToolCallInputChunk:
       case TurnEventKind.ToolCallInputEnded:
@@ -211,7 +160,6 @@ export function createTurnProjector(
       case TurnEventKind.CompactionUpdated:
       case TurnEventKind.ModelChanged:
       case TurnEventKind.SubagentUpdated:
-      case TurnEventKind.SteerAccepted:
         return undefined
     }
     return unhandledKind(candidate)
@@ -221,48 +169,39 @@ export function createTurnProjector(
 export type GuestTurnsOptions = {
   grant: GuestGrant
   read: VerifiedGuestAuthorization
-  errors: VerifiedGuestAuthorization
-  now: () => number
 }
 
 export function createTurnsMiddleware({
   grant,
   read,
-  errors,
-  now,
 }: GuestTurnsOptions): Middleware {
   const scope = { agentId: grant.agentId, threadId: grant.ref }
-  /** One projector per turn stream, so a stream never reads another's calls. */
-  const projectors = new WeakMap<
-    TurnStream,
-    ReturnType<typeof createTurnProjector>
-  >()
-  const projectorOf = (stream: TurnStream) => {
-    const existing = projectors.get(stream)
-    if (existing) return existing
-    const created = createTurnProjector(scope, read, errors, now)
-    projectors.set(stream, created)
-    return created
-  }
+  /** Every call whose card this guest was shown. */
+  const shown = new Set<string>()
+  const project = createTurnProjector(scope, read, shown)
 
   return {
     event(event): MemberEvent | undefined {
       switch (event.kind) {
         case "turn": {
-          const shown = projectorOf(event.stream)(event.event)
-          return shown && { ...event, event: shown }
+          const projected = project(event.event)
+          return projected && { ...event, event: projected }
         }
         // Another member's prompt reaches a guest as its history shows a user
-        // turn: the text alone, and nothing once the invitation lapsed.
+        // turn: its text alone, whole.
         case "prompt": {
           if (event.own) return event
-          const text = guestAuthorizationActive(read, now)
-            ? projectGuestText(read, "guest", promptText(event.content))
+          const text = promptText(event.content)
+          return text
+            ? { ...event, content: [{ kind: "text", text }] }
             : undefined
-          return text === undefined
-            ? undefined
-            : { ...event, content: [{ kind: "text", text }] }
         }
+        // An answer settles the call that asked it, which a guest may not see.
+        case "question-answered":
+          return event.request.toolCallId === undefined ||
+            shown.has(event.request.toolCallId)
+            ? event
+            : undefined
         case "request-asked": {
           const projected = projectGuestOutbound(
             {
@@ -281,7 +220,6 @@ export function createTurnsMiddleware({
         }
         case "history":
         case "request-withdrawn":
-        case "question-answered":
         case "execution":
         case "usage":
         case "model":

@@ -99,10 +99,6 @@ function toolCallOutbound(
     name: part.toolName,
     status: part.isError ? "failed" : "completed",
   }
-  // A guest sees an MCP App's card alone; the App's input and result reach it
-  // through the invitation's own view route.
-  if (context.lane === "guest")
-    return part.app ? [toolOutbound(context, messageId, call, { app: {} })] : []
   return [
     toolOutbound(
       context,
@@ -164,9 +160,8 @@ function settledOutbound(
  * One stored turn's parts, in the order the provider produced them, which is the
  * order the turn stream sent: a whole-message upsert cannot say that this
  * paragraph came after that tool call, because it replaces one source's content
- * as one block. Execution history is the operator's; a published artifact and an
- * MCP App's card are the turn's outcome, so they replay on both lanes and the
- * guest history projection has already dropped the parts a guest may not see.
+ * as one block. A member's middleware has already dropped the parts it may not
+ * see.
  */
 function partsOutbound(
   message: SessionMessage,
@@ -180,10 +175,9 @@ function partsOutbound(
     outbound.push(chunkOutbound(context, sessionUpdate, message.id, content))
   }
   for (const part of message.content) {
-    if (part.type === "reasoning") {
-      if (context.lane !== "guest")
-        chunk("agent_thought_chunk", { type: "text", text: part.text })
-    } else if (part.type === "text")
+    if (part.type === "reasoning")
+      chunk("agent_thought_chunk", { type: "text", text: part.text })
+    else if (part.type === "text")
       chunk("agent_message_chunk", { type: "text", text: part.text })
     else if (part.type === "image") {
       const image = imageBlock(part.image)

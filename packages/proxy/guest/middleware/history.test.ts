@@ -1,35 +1,15 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import type { VerifiedGuestAuthorization } from "../../auth/guest-invitation"
+import type { SessionHistoryResponse } from "../../../protocol"
 import { guestErrorDescription } from "../../auth/guest-projection"
-import { projectGuestHistory } from "./history"
-
-const authorization: VerifiedGuestAuthorization = {
-  version: 1,
-  lane: "guest",
-  issuer: "aos-invite",
-  audience: "aos-guest",
-  deploymentId: "deployment",
-  principalId: "guest_ref",
-  invitationId: "invite_ref",
-  runtimeId: "runtime",
-  agentId: "agent",
-  sessionId: "ref",
-  ref: "ref",
-  capabilities: [
-    "artifact-metadata",
-    "attachment-metadata",
-    "custom-ui",
-    "message-text",
-    "safe-errors",
-  ],
-  tokenId: "token",
-  issuedAt: 1,
-  notBefore: 1,
-  expiresAt: 100,
-  authorizationExpiresAt: 100,
-  operation: "messages:read",
-}
+import { TurnEventKind } from "../../core/events"
+import {
+  CommandRefusedError,
+  type MemberAct,
+  type MemberCommands,
+  type MemberEvent,
+} from "../../core/member"
+import { createHistoryMiddleware, projectGuestHistory } from "./history"
 
 describe("guest history projection", () => {
   it("keeps normalized recovery state and hides any first-turn envelope, whatever it asks", () => {
@@ -59,8 +39,6 @@ describe("guest history projection", () => {
         nextOffset: 1,
         execution: { status: "running", turnId: "run-1" },
       },
-      // An invitation without setup text still hides another one's envelope.
-      authorization,
       "ref"
     )
 
@@ -95,7 +73,6 @@ describe("guest history projection", () => {
           offset: index * 2,
           nextOffset: index * 2 + 2,
         },
-        { ...authorization, firstTurn: { instruction: "Private setup" } },
         "ref"
       )
     )
@@ -129,7 +106,6 @@ describe("guest history projection", () => {
         offset: 0,
         nextOffset: 2,
       },
-      authorization,
       "ref"
     )
 
@@ -174,7 +150,6 @@ describe("guest history projection", () => {
         offset: 0,
         nextOffset: 2,
       },
-      authorization,
       "ref"
     )
 
@@ -214,7 +189,6 @@ describe("guest history projection", () => {
         offset: 0,
         nextOffset: 1,
       },
-      authorization,
       "ref"
     )
 
@@ -257,7 +231,6 @@ describe("guest history projection", () => {
         offset: 0,
         nextOffset: 1,
       },
-      authorization,
       "ref"
     )
 
@@ -298,7 +271,6 @@ describe("guest history projection", () => {
         offset: 0,
         nextOffset: 1,
       },
-      authorization,
       "ref"
     )
 
@@ -314,5 +286,156 @@ describe("guest history projection", () => {
     })
     expect(JSON.stringify(projected)).not.toContain(".hermes")
     expect(JSON.stringify(projected)).not.toContain("@file:")
+  })
+
+  it("drops a system notice", () => {
+    const projected = projectGuestHistory(
+      {
+        ...page([{ id: "ask", role: "user", text: "Hello" }]),
+        messages: [
+          {
+            id: "notice",
+            role: "system",
+            content: [{ type: "text", text: "Private notice" }],
+            createdAt: "2026-09-15T00:00:00.000Z",
+          },
+          ...page([{ id: "ask", role: "user", text: "Hello" }]).messages,
+        ],
+      },
+      "ref"
+    )
+
+    expect(projected.messages.map((message) => message.id)).toEqual(["ask"])
+  })
+
+  it("keeps a long message whole", () => {
+    const text = "x".repeat(20_000)
+    const projected = projectGuestHistory(
+      page([
+        { id: "ask", role: "user", text },
+        { id: "reply", role: "assistant", text },
+      ]),
+      "ref"
+    )
+
+    expect(projected.messages.map((message) => message.content)).toEqual([
+      [{ type: "text", text }],
+      [{ type: "text", text }],
+    ])
+  })
+})
+
+const SETUP = JSON.stringify({
+  v: 1,
+  type: "aos.guest.first-turn",
+  instruction: "Private setup",
+})
+
+/** One history page of text messages. */
+function page(
+  messages: Array<{ id: string; role: "user" | "assistant"; text: string }>
+): SessionHistoryResponse {
+  return {
+    sessionId: "stored",
+    messages: messages.map(({ id, role, text }) => ({
+      id,
+      role,
+      content: [{ type: "text", text }],
+      createdAt: "2026-09-15T00:00:00.000Z",
+    })),
+    total: messages.length,
+    limit: 200,
+    offset: 0,
+    nextOffset: messages.length,
+  }
+}
+
+const act: MemberAct = { decline: () => undefined }
+
+/** A guest's history layer, and what an Edit or Retry of `sourceId` does. */
+function guarded() {
+  const middleware = createHistoryMiddleware({
+    grant: {
+      agentId: "agent",
+      ref: "ref",
+      principalId: "guest_ref",
+      expiresAt: 100,
+    },
+  })
+  const next = vi.fn(async () => ({ messageId: "sent" }))
+  return {
+    show: (event: MemberEvent) => middleware.event?.(event, act),
+    rewind: (rewindSourceId: string) => {
+      const command: MemberCommands["send"] = {
+        sessionId: "ref",
+        content: [{ kind: "text", text: "Again" }],
+        text: "Again",
+        rewindSourceId,
+      }
+      return middleware.commands?.send?.(command, next)
+    },
+    next,
+  }
+}
+
+const STREAM = { turnId: "run-1", replayedCorrections: 0, dropped: false }
+
+describe("guest Edit and Retry", () => {
+  it("refuses a message the guest was never shown, the setup turn among them", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([
+        { id: "seed", role: "user", text: SETUP },
+        { id: "reply", role: "assistant", text: "Welcome" },
+      ]),
+    })
+
+    for (const id of ["seed", "reply", "never-shown"])
+      await expect(test.rewind(id), id).rejects.toBeInstanceOf(
+        CommandRefusedError
+      )
+    expect(test.next).not.toHaveBeenCalled()
+  })
+
+  it("runs on a message the guest was shown, by any id it knows it by", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([{ id: "stored-ask", role: "user", text: "Hello" }]),
+    })
+    test.show({
+      sessionId: "ref",
+      kind: "prompt",
+      messageId: "live-ask",
+      content: [{ kind: "text", text: "Next" }],
+      own: true,
+    })
+    const ended = (messageId: string, savedId: string): MemberEvent => ({
+      sessionId: "ref",
+      kind: "turn",
+      stream: STREAM,
+      sequence: 1,
+      stopping: false,
+      event: {
+        kind: TurnEventKind.TurnEnded,
+        saved: { user: { messageId, savedId } },
+      },
+    })
+    test.show(ended("live-ask", "row-7"))
+    test.show(ended("unseen-ask", "row-9"))
+
+    for (const id of ["stored-ask", "live-ask", "row-7"])
+      await expect(test.rewind(id), id).resolves.toEqual({
+        messageId: "sent",
+      })
+    await expect(test.rewind("row-9")).rejects.toBeInstanceOf(
+      CommandRefusedError
+    )
+    expect(test.next).toHaveBeenCalledTimes(3)
   })
 })

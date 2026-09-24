@@ -87,13 +87,12 @@ export function createCommandsMiddleware(): Middleware {
           capabilities: projectCapabilities(resumed.capabilities),
         }
       },
-      // Rebuilt from the fields a guest may set. Rewind stays operator-only
-      // until the history layer guards which message it may name.
+      // Rebuilt from the fields a guest may set; the history layer decides
+      // which message an Edit or Retry may name.
       send: async (command, next) => {
         const { sessionId, content, text, rewindSourceId, attachmentStageId } =
           command
         if (
-          rewindSourceId !== undefined ||
           [
             text,
             ...content.flatMap((part) =>
@@ -106,6 +105,7 @@ export function createCommandsMiddleware(): Middleware {
           sessionId,
           content,
           text,
+          ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
           ...(attachmentStageId === undefined ? {} : { attachmentStageId }),
         })
       },

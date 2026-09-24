@@ -429,27 +429,6 @@ describe("translateTurnEvent tool calls", () => {
     expect(chunk).toMatchObject({ messageId: "m9" })
   })
 
-  it("lets a guest's App card that opens the segment name it for the text after", () => {
-    const { outbound } = translate(
-      [
-        {
-          kind: TurnEventKind.ToolCallFinished,
-          toolCallId: "c1",
-          name: "mcp__demo__open_demo",
-          output: "",
-          failed: false,
-          app: true,
-        },
-        messageChunk("m1", "Opened."),
-      ],
-      { lane: "guest" }
-    )
-
-    const [card, chunk] = updatesOf(outbound)
-    expect(AosToolCallMetaSchema.parse(aosMeta(card!)).messageId).toBe("run-1")
-    expect(chunk).toMatchObject({ messageId: "run-1" })
-  })
-
   it("keeps unparseable streamed arguments as text", () => {
     const { outbound } = translate([
       {

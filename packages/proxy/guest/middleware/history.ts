@@ -5,17 +5,12 @@ import {
   type SessionHistoryResponse,
   type SessionMessage,
 } from "../../../protocol"
-import type {
-  GuestAuthorization,
-  VerifiedGuestAuthorization,
-} from "../../auth/guest-invitation"
 import { guestErrorDescription } from "../../auth/guest-projection"
-import { guestAuthorizationActive } from "../../auth/guest-request"
 import {
   isFirstTurnEnvelope,
-  projectGuestText,
   publicTurnError,
 } from "../../auth/guest-runtime-projection"
+import { TurnEventKind } from "../../core/events"
 import {
   CommandRefusedError,
   unhandledKind,
@@ -26,7 +21,8 @@ import type { GuestGrant } from "./index"
 
 /**
  * What a guest reads of the invited conversation's history: every page it is
- * shown, validated and projected the way the guest history route serves one.
+ * shown, validated and projected by main's guest history rules, and the only
+ * user messages an Edit or Retry of its may name.
  */
 
 /** The normalized turn failure code a restored failed turn carries, if any. */
@@ -48,7 +44,6 @@ const ProjectedHistorySchema = SessionHistoryResponseSchema.extend({
 
 export function projectGuestHistory(
   history: SessionHistoryResponse,
-  authorization: GuestAuthorization,
   publicSessionId = history.sessionId
 ) {
   const messages: unknown[] = []
@@ -79,13 +74,7 @@ export function projectGuestHistory(
                 },
               ]
             : []
-        if (part.type !== "text") return []
-        const text = projectGuestText(
-          authorization,
-          message.role === "user" ? "guest" : "assistant",
-          part.text
-        )
-        return text === undefined ? [] : [{ type: "text" as const, text }]
+        return part.type === "text" ? [{ type: "text", text: part.text }] : []
       }
     )
     // A turn the provider failed reaches a guest as a failed turn, never as an
@@ -140,40 +129,49 @@ export function projectGuestHistory(
   })
 }
 
-export type GuestHistoryOptions = {
-  grant: GuestGrant
-  read: VerifiedGuestAuthorization
-  now: () => number
-}
+export type GuestHistoryOptions = { grant: GuestGrant }
 
 export function createHistoryMiddleware({
   grant,
-  read,
-  now,
 }: GuestHistoryOptions): Middleware {
+  /**
+   * Every user message this guest was shown, by each id it may know it by, so
+   * an Edit or Retry never names the hidden setup turn or anything unseen.
+   */
+  const shown = new Set<string>()
   return {
     commands: {
-      // A page is a read the expiry timer may not have caught up with.
-      "older-page": async (command, next) => {
-        if (!guestAuthorizationActive(read, now))
-          throw new CommandRefusedError("authentication-required")
+      send: async (command, next) => {
+        const { rewindSourceId } = command
+        if (rewindSourceId !== undefined && !shown.has(rewindSourceId))
+          throw new CommandRefusedError("invalid")
         return next(command)
       },
     },
     event(event): MemberEvent | undefined {
       switch (event.kind) {
         // The authoritative page is validated before anything reads it.
-        case "history":
-          return {
-            ...event,
-            page: projectGuestHistory(
-              ProjectedHistorySchema.parse(event.page),
-              read,
-              grant.ref
-            ),
-          }
-        case "turn":
+        case "history": {
+          const page = projectGuestHistory(
+            ProjectedHistorySchema.parse(event.page),
+            grant.ref
+          )
+          for (const message of page.messages)
+            if (message.role === "user") shown.add(message.id)
+          return { ...event, page }
+        }
         case "prompt":
+          shown.add(event.messageId)
+          return event
+        // A user message is saved under a new id only once it was shown.
+        case "turn": {
+          const user =
+            event.event.kind === TurnEventKind.TurnEnded
+              ? event.event.saved?.user
+              : undefined
+          if (user && shown.has(user.messageId)) shown.add(user.savedId)
+          return event
+        }
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":
