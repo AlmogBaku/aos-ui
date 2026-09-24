@@ -50,11 +50,9 @@ import {
   historyCursor,
 } from "./agent-sessions"
 import { isPromptBlock, promptParts, promptText } from "./prompt-content"
-import type { RoomTurn, Seat } from "../core/channel"
 import {
   admits,
   CommandRefusedError,
-  promptText as roomPromptText,
   runCommand,
   type CommandKind,
   type CommandNext,
@@ -63,7 +61,6 @@ import {
   type MemberCommands,
 } from "../core/member"
 import { createMemberEncoder } from "./member-encoder"
-import { beforeLiveTurn, lastPromptIndex } from "./translate/history"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
@@ -106,48 +103,6 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
     guestProjection: false,
     historyPages: true,
   }
-}
-
-/**
- * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
- * inside the turn, so the prompt is the last user message before them.
- */
-function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
-  const index = lastPromptIndex(history)
-  const prompt = history.messages[index]
-  if (!prompt || !Array.isArray(prompt.content)) return -1
-  const text = prompt.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n")
-  // A prompt without text matches any other, so it never names the live one.
-  const expected = roomPromptText(turn.content).trim()
-  return expected && text.trim() === expected ? index : -1
-}
-
-/**
- * Whether a resume already shows the live turn's prompt: its cursor sits inside
- * that turn, or the page it replayed ends on that prompt.
- */
-function showsPrompt(
-  turn: RoomTurn | undefined,
-  meta: { turnId?: string },
-  history?: SessionHistoryResponse
-) {
-  if (!turn) return false
-  if (meta.turnId === turn.turnId) return true
-  return history !== undefined && promptIndex(turn, history) >= 0
-}
-
-/**
- * Runs work once the response for the current request has been written. The
- * caller must have settled every await its response needs before calling this:
- * the task fires on the next turn of the loop, so anything still pending in the
- * handler lets these notifications reach the client before the response does.
- */
-function afterResponse(member: Seat, task: () => Promise<void>) {
-  setTimeout(() => {
-    void task().catch((cause: unknown) => member.report(cause))
-  }, 0)
 }
 
 /**
@@ -285,31 +240,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const paging = new Set<string>()
 
   /**
-   * An older page beside a live turn the view streams from its start. A turn
-   * longer than the newest page leaves its first rows on older pages too, so a
-   * page holding a row stored after the turn began is cut as the newest page
-   * is. A page wholly before the turn is kept, so the clock skew the cut allows
-   * never drops the end of the turn before it.
-   */
-  function beforeStreamedTurn(
-    scope: SessionScope,
-    history: SessionHistoryResponse
-  ) {
-    const at = coordinator.replayStart(scope)?.at
-    const reached =
-      at !== undefined &&
-      history.messages.some(
-        (message) =>
-          message.role !== "activity" && Date.parse(message.createdAt) >= at
-      )
-    return reached ? (beforeLiveTurn(history, at) ?? history) : history
-  }
-
-  /**
    * One older page of a Session this connection attached, however it did, as
-   * tagged updates ahead of the reply. A page re-attaches nothing: the view
-   * keeps its room, its follow, and its reports, and learns only where the
-   * next page starts.
+   * tagged updates ahead of the reply.
    */
   async function replayOlder({
     sessionId,
@@ -326,131 +258,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // its end was: a runtime that estimates `total` learns the start only
       // by reading an empty page there.
       if (offset > page.total) throw invalidRequest()
-      await member.showHistory(beforeStreamedTurn(member.scope, page), {
-        cursor,
-        offset,
-      })
+      await member.showOlderPage(page, { cursor, offset })
       return { page }
     } finally {
       paging.delete(sessionId)
     }
-  }
-
-  /**
-   * The page a `replayFrom: { type: "start" }` resume replays. A running turn
-   * the coordinator replays from its start is shown by that replay alone: the
-   * stream the member held stops before the page is read, and the page is cut
-   * where the turn began, so `restarted` names the turn the view then shows
-   * only while its follow streams it. A page that cannot be cut there, or a
-   * turn adopted without its native start, is kept whole and its follow
-   * `reset`. Any other turn keeps the page: its start is
-   * gone and a cursorless follow could only reset it. A turn that starts during
-   * the read waits for the page and is replayed the same way.
-   */
-  async function replayPage(member: Seat, scope: SessionScope) {
-    const liveTurn = () => {
-      const { state, turnId } = coordinator.snapshot(scope)
-      return state === "idle" ? undefined : turnId
-    }
-    const before = liveTurn()
-    const started = () => {
-      const after = liveTurn()
-      return after !== undefined && after !== before
-    }
-    const restarted = coordinator.replayStart(scope)
-    member.holdRoom()
-    if (restarted) await member.restartStream()
-    let history: SessionHistoryResponse
-    try {
-      history = await readReplay(scope)
-    } catch (cause) {
-      // A turn that started during the read was held back, so it streams the
-      // same way a restarted one does once its reload failed.
-      await recoverReplay(member, restarted?.turnId, started())
-      throw cause
-    }
-    const held = started()
-    const shown =
-      restarted ?? (held ? coordinator.replayStart(scope) : undefined)
-    if (!shown) return { history, held }
-    const cut =
-      shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
-    return {
-      history: cut ?? history,
-      held,
-      restarted: shown.turnId,
-      reset: cut === undefined,
-    }
-  }
-
-  /**
-   * Ends the hold of a from-start replay that failed before the view was
-   * rebuilt. The stream stopped on `restarted` is gone: the view is asked to
-   * reload, and once that failed too, it streams the turn from its prompt, as
-   * it does a turn the hold kept `held` back.
-   */
-  async function recoverReplay(
-    member: Seat,
-    restarted: string | undefined,
-    held: boolean
-  ) {
-    member.releaseRoom()
-    if (restarted ? !(await member.reloadOnce(restarted)) : held) {
-      member.enterRoom(false, true)
-      await member.follow().catch(() => undefined)
-    }
-  }
-
-  /**
-   * Rebuilds the view from the page a from-start resume replays. A page that
-   * cannot reach the view recovers as a failed read does, so the room's turns
-   * still reach it.
-   */
-  async function replayHistory(member: Seat, scope: SessionScope) {
-    const replay = await replayPage(member, scope)
-    try {
-      // Counted on the authoritative page, before a member's stack rebuilds
-      // its messages: a guest's projection keeps no user-turn metadata.
-      const corrections = translators.persistedCorrections(replay.history)
-      await member.showHistory(replay.history)
-      return { ...replay, corrections }
-    } catch (cause) {
-      await recoverReplay(member, replay.restarted, replay.held)
-      throw cause
-    }
-  }
-
-  /**
-   * Subscribes to the live turn, reporting a cursor that cannot position it.
-   * A view whose stream `restarted` on a turn shows it only while this follow
-   * streams that turn; a view whose page could not be cut for it is `reset`.
-   */
-  async function followPositioned(
-    member: Seat,
-    scope: SessionScope,
-    meta: { turnId?: string; after?: number },
-    replay?: { corrections: number; restarted?: string; reset?: boolean }
-  ) {
-    const positioned =
-      meta.turnId === undefined ||
-      meta.turnId === coordinator.snapshot(scope).turnId
-    const restarted = replay?.restarted
-    const followed = await member
-      .follow(
-        replay?.reset ? "reset" : positioned ? meta.after : undefined,
-        replay?.corrections
-      )
-      .catch(() => null)
-    if (restarted !== undefined && followed !== restarted) {
-      // A view rebuilt from the start does not act on `resync`, and this one
-      // lacks the rest of its turn: have it rebuild again once this response
-      // lands.
-      afterResponse(member, async () => {
-        await member.reloadOnce(restarted)
-      })
-      return { resync: true as const }
-    }
-    return positioned && followed !== null ? {} : { resync: true as const }
   }
 
   /**
@@ -477,53 +289,25 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
       await workspace.discover(scope)
     const member = sessions.join(client, scope)
-    // A correction the provider persisted the moment it accepted the steer is
-    // already in this page, so the journal's acknowledgement of it is dropped.
-    const replay = command.fromStart
-      ? await replayHistory(member, scope)
-      : undefined
-    const history = replay?.history
-    // Seated after its history and before any other provider read, so a turn
-    // another browser starts meanwhile reaches it, prompt first.
-    member.enterRoom(
-      showsPrompt(context.rooms.current(scope), command, history),
-      history !== undefined
-    )
-    // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload. A view rebuilt
-    // from history owns nothing of the turn, so it follows without a cursor.
-    const resync = await followPositioned(
-      member,
-      scope,
-      history === undefined ? command : {},
-      replay
+    const resumed = await member.resume(
+      command,
+      command.fromStart ? () => readReplay(scope) : undefined
     )
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is
-    // scheduled: `afterResponse` fires on the next task, so a read awaited
-    // after it lets the notifications overtake the very response that tells
-    // the browser to start listening for them.
+    // scheduled: it fires on the next task, so a read awaited after it lets
+    // the notifications overtake the very response that tells the browser to
+    // start listening for them.
     const models = addressed ? undefined : await workspace.models(scope)
     const capabilities = await workspace.capabilities(scope)
-    afterResponse(member, async () => {
-      // A turn admitted since this response was built reports itself on its
-      // own stream; restating it here would run ahead of that stream.
-      if (coordinator.snapshot(scope).turnId === execution.turnId)
-        await member.reportExecution()
-      // A resumed Session carries the window every earlier turn already grew;
-      // only a report here keeps its composer from opening on an empty gauge.
-      if (!addressed) await member.reportUsage()
-      if (coordinator.state(scope) === "waiting-for-input")
-        member.reissuePending()
-    })
+    member.afterResume(execution.turnId, !addressed)
     return {
       agentId: scope.agentId,
       ...(row ? { row } : {}),
       execution,
       capabilities,
       ...(models ? { models } : {}),
-      ...resync,
-      ...(history === undefined ? {} : { history }),
+      ...resumed,
     }
   }
 
@@ -557,7 +341,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         : { rewindSourceId: command.rewindSourceId }),
     }
     const member = sessions.join(client, scope)
-    afterResponse(member, async () => {
+    member.afterResponse(async () => {
       // Seated before admission, so a turn that wins the race still reaches
       // this browser, and shown its own prompt as today.
       member.enterRoom()
@@ -651,7 +435,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const capabilities = await workspace.capabilities(scope)
         const models = await workspace.models(scope)
         const member = sessions.join(client, scope)
-        afterResponse(member, async () => {
+        member.afterResponse(async () => {
           await member.emit({ kind: "commands", capabilities })
           await member.reportUsage()
         })
@@ -799,7 +583,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         // usage every browser on the Session holds against the model it has
         // just left.
         const member = sessions.member(command.sessionId)
-        if (member) afterResponse(member, () => coordinator.reportUsage(scope))
+        member?.afterResponse(() => coordinator.reportUsage(scope))
         return { models }
       }
     )

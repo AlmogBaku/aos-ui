@@ -1,20 +1,11 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import {
-  StopReason,
-  type SessionHistoryResponse,
-  type SessionMessage,
-} from "../../../protocol"
+import { StopReason, type SessionMessage } from "../../../protocol"
 import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
 } from "../../../protocol/acp"
-import type {
-  AcpOutbound,
-  PersistedCorrections,
-  TranslateContext,
-  TranslateHistory,
-} from "../types"
+import type { AcpOutbound, TranslateContext, TranslateHistory } from "../types"
 import {
   ACP_STOP_REASON,
   artifactOutbound,
@@ -243,60 +234,3 @@ export const translateHistory = ((history) => {
   }
   return outbound
 }) satisfies TranslateHistory
-
-/** A user turn the provider persisted as a mid-turn correction. */
-export function isCorrection(
-  message: SessionHistoryResponse["messages"][number]
-) {
-  return message.role === "user" && message.metadata?.custom.correction === true
-}
-
-/** Where the page's last prompt sits: its last user turn that is no correction. */
-export function lastPromptIndex(history: SessionHistoryResponse) {
-  return history.messages.findLastIndex(
-    (message) => message.role === "user" && !isCorrection(message)
-  )
-}
-
-/**
- * How many of the live turn's steer acknowledgements this history already carried
- * as user turns. Only the corrections after the running turn's prompt count: the
- * provider cannot persist another prompt while a turn runs, so every flagged
- * user turn beyond the last plain one belongs to the turn the journal replays.
- */
-export const persistedCorrections = ((history) =>
-  // No plain prompt in the page leaves every flagged turn to count.
-  history.messages
-    .slice(lastPromptIndex(history) + 1)
-    .filter((message) => message.role === "user")
-    .length) satisfies PersistedCorrections
-
-/** How far a provider's clock may run behind the proxy's for a stored row. */
-const PROMPT_CLOCK_SKEW_MS = 5_000
-
-/**
- * The page a view shows beside a live turn replayed from `startedAt`: the
- * stream owns every row the turn stored from then on, corrections included,
- * so they are dropped and the turn shows once. The page's last prompt stays,
- * since the provider stores no other prompt while a turn runs and the stream
- * carries none. `undefined` when a row after that prompt has no time to cut
- * it by, so only a reset can show the turn once.
- */
-export function beforeLiveTurn(
-  history: SessionHistoryResponse,
-  startedAt: number
-): SessionHistoryResponse | undefined {
-  const threshold = startedAt - PROMPT_CLOCK_SKEW_MS
-  const prompt = lastPromptIndex(history)
-  const messages = []
-  for (const [index, message] of history.messages.entries()) {
-    if (index <= prompt || message.role === "activity") {
-      messages.push(message)
-      continue
-    }
-    const createdAt = Date.parse(message.createdAt)
-    if (Number.isNaN(createdAt)) return undefined
-    if (createdAt < threshold) messages.push(message)
-  }
-  return { ...history, messages }
-}

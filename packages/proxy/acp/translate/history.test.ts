@@ -9,12 +9,9 @@ import {
   AosStateMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
+import { beforeLiveTurn, persistedCorrections } from "../../core/replay-page"
 import type { AcpOutbound } from "../types"
-import {
-  beforeLiveTurn,
-  persistedCorrections,
-  translateHistory,
-} from "./history"
+import { translateHistory } from "./history"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 

@@ -1,5 +1,10 @@
 import type { SessionHistoryResponse } from "../../protocol"
 import {
+  beforeLiveTurn,
+  lastPromptIndex,
+  persistedCorrections,
+} from "./replay-page"
+import {
   PendingRequestKind,
   ReplyStatus,
   TurnEventKind,
@@ -9,6 +14,7 @@ import {
   type RequestReply,
 } from "./events"
 import {
+  promptText,
   runEvents,
   type Feed,
   type Member,
@@ -117,6 +123,39 @@ function declineReply(request: PendingRequest): RequestReply {
         payload: "deny",
       }
     : { requestId: request.requestId, status: ReplyStatus.Cancelled }
+}
+
+/** Where a resuming view already reaches in the live turn. */
+export type ResumePosition = { turnId?: string; after?: number }
+
+/**
+ * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
+ * inside the turn, so the prompt is the last user message before them.
+ */
+function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
+  const index = lastPromptIndex(history)
+  const prompt = history.messages[index]
+  if (!prompt || !Array.isArray(prompt.content)) return -1
+  const text = prompt.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+  // A prompt without text matches any other, so it never names the live one.
+  const expected = promptText(turn.content).trim()
+  return expected && text.trim() === expected ? index : -1
+}
+
+/**
+ * Whether a resume already shows the live turn's prompt: its cursor sits inside
+ * that turn, or the page it replayed ends on that prompt.
+ */
+function showsPrompt(
+  turn: RoomTurn | undefined,
+  position: ResumePosition,
+  history?: SessionHistoryResponse
+) {
+  if (!turn) return false
+  if (position.turnId === turn.turnId) return true
+  return history !== undefined && promptIndex(turn, history) >= 0
 }
 
 /**
@@ -570,8 +609,98 @@ class Seat {
     return sent
   }
 
+  /**
+   * Attaches this member's view on resume. `read` gives the page a from-start
+   * resume replays, which rebuilds the view first; without it the view keeps
+   * what it holds up to `position`. Either way the member is then seated in
+   * the room and follows the live turn. Returns the page it replayed, and
+   * `resync` when the view must rebuild itself.
+   */
+  async resume(
+    position: ResumePosition,
+    read?: () => Promise<SessionHistoryResponse>
+  ): Promise<{ history?: SessionHistoryResponse; resync?: true }> {
+    // A correction the provider persisted the moment it accepted the steer is
+    // already in this page, so the journal's acknowledgement of it is dropped.
+    const replay = read ? await this.#replayHistory(read) : undefined
+    const history = replay?.history
+    // Seated after its history and before any other provider read, so a turn
+    // another browser starts meanwhile reaches it, prompt first.
+    this.enterRoom(
+      showsPrompt(this.#rooms.current(this.#scope), position, history),
+      history !== undefined
+    )
+    // A cursor for another turn cannot position this one, and a cursor beyond
+    // bounded replay cannot be served: both need a full reload. A view rebuilt
+    // from history owns nothing of the turn, so it follows without a cursor.
+    const resync = await this.#followPositioned(
+      history === undefined ? position : {},
+      replay
+    )
+    return { ...(history === undefined ? {} : { history }), ...resync }
+  }
+
+  /**
+   * Owes this member what a resume's response cannot carry, once it lands:
+   * the execution, unless the turn it named as `turnId` was replaced since;
+   * the context `usage`, when asked; and the requests a recovered wait still
+   * holds.
+   */
+  afterResume(turnId: string | undefined, usage: boolean) {
+    this.afterResponse(async () => {
+      // A turn admitted since this response was built reports itself on its
+      // own stream; restating it here would run ahead of that stream.
+      if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
+        await this.reportExecution()
+      // A resumed Session carries the window every earlier turn already grew;
+      // only a report here keeps its composer from opening on an empty gauge.
+      if (usage) await this.reportUsage()
+      if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+        this.reissuePending()
+    })
+  }
+
+  /**
+   * Runs work once the response for the current request has been written. The
+   * caller must have settled every await its response needs before calling
+   * this: the task fires on the next turn of the loop, so anything still
+   * pending in the handler lets these notifications reach the client before
+   * the response does.
+   */
+  afterResponse(task: () => Promise<void>) {
+    setTimeout(() => {
+      void task().catch((cause: unknown) => this.report(cause))
+    }, 0)
+  }
+
+  /**
+   * Shows this member one older page of its Session. A page re-attaches
+   * nothing: the view keeps its room, its follow, and its reports, and learns
+   * only where the next page starts. Beside a live turn the view streams from
+   * its start, a turn longer than the newest page leaves its first rows on
+   * older pages too, so a page holding a row stored after the turn began is
+   * cut as the newest page is. A page wholly before the turn is kept, so the
+   * clock skew the cut allows never drops the end of the turn before it.
+   */
+  showOlderPage(
+    page: SessionHistoryResponse,
+    older: { cursor: string; offset: number }
+  ) {
+    const at = this.#coordinator.replayStart(this.#scope)?.at
+    const reached =
+      at !== undefined &&
+      page.messages.some(
+        (message) =>
+          message.role !== "activity" && Date.parse(message.createdAt) >= at
+      )
+    return this.#showHistory(
+      reached ? (beforeLiveTurn(page, at) ?? page) : page,
+      older
+    )
+  }
+
   /** Shows this member a history page at the cursor it has reached. */
-  showHistory(
+  #showHistory(
     page: SessionHistoryResponse,
     older?: { cursor: string; offset: number }
   ) {
@@ -584,14 +713,116 @@ class Seat {
   }
 
   /**
-   * Subscribes to the Session's live turn, if one is still in flight, and
-   * returns the turnId it streams. `after` is the cursor the view holds, or
-   * `"reset"` for a view holding part of the turn it cannot position.
-   * `replayedCorrections` names the steer acknowledgements this subscription
-   * must drop because the history it follows already carried them.
+   * The page a from-start resume replays. A running turn the coordinator
+   * replays from its start is shown by that replay alone: the stream the
+   * member held stops before the page is read, and the page is cut where the
+   * turn began, so `restarted` names the turn the view then shows only while
+   * its follow streams it. A page that cannot be cut there, or a turn adopted
+   * without its native start, is kept whole and its follow `reset`. Any other
+   * turn keeps the page: its start is gone and a cursorless follow could only
+   * reset it. A turn that starts during the read waits for the page and is
+   * replayed the same way.
    */
-  follow(after?: number | "reset", replayedCorrections = 0) {
-    return this.#follow(true, after, replayedCorrections)
+  async #replayPage(read: () => Promise<SessionHistoryResponse>) {
+    const scope = this.#scope
+    const liveTurn = () => {
+      const { state, turnId } = this.#coordinator.snapshot(scope)
+      return state === "idle" ? undefined : turnId
+    }
+    const before = liveTurn()
+    const started = () => {
+      const after = liveTurn()
+      return after !== undefined && after !== before
+    }
+    const restarted = this.#coordinator.replayStart(scope)
+    // The room's prompts and streams wait while the view is rebuilt, so none
+    // lands above the page; `enterRoom` or a recovery ends the hold.
+    this.#rebuilding = true
+    if (restarted) await this.#restartStream()
+    let history: SessionHistoryResponse
+    try {
+      history = await read()
+    } catch (cause) {
+      // A turn that started during the read was held back, so it streams the
+      // same way a restarted one does once its reload failed.
+      await this.#recoverReplay(restarted?.turnId, started())
+      throw cause
+    }
+    const held = started()
+    const shown =
+      restarted ?? (held ? this.#coordinator.replayStart(scope) : undefined)
+    if (!shown) return { history, held }
+    const cut =
+      shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
+    return {
+      history: cut ?? history,
+      held,
+      restarted: shown.turnId,
+      reset: cut === undefined,
+    }
+  }
+
+  /**
+   * Ends the hold of a from-start replay that failed before the view was
+   * rebuilt. The stream stopped on `restarted` is gone: the view is asked to
+   * reload, and once that failed too, it streams the turn from its prompt, as
+   * it does a turn the hold kept `held` back.
+   */
+  async #recoverReplay(restarted: string | undefined, held: boolean) {
+    this.#rebuilding = false
+    if (restarted ? !(await this.#reloadOnce(restarted)) : held) {
+      this.enterRoom(false, true)
+      await this.#follow(true).catch(() => undefined)
+    }
+  }
+
+  /**
+   * Rebuilds the view from the page a from-start resume replays. A page that
+   * cannot reach the view recovers as a failed read does, so the room's turns
+   * still reach it.
+   */
+  async #replayHistory(read: () => Promise<SessionHistoryResponse>) {
+    const replay = await this.#replayPage(read)
+    try {
+      // Counted on the authoritative page, before a member's stack rebuilds
+      // its messages: a guest's projection keeps no user-turn metadata.
+      const corrections = persistedCorrections(replay.history)
+      await this.#showHistory(replay.history)
+      return { ...replay, corrections }
+    } catch (cause) {
+      await this.#recoverReplay(replay.restarted, replay.held)
+      throw cause
+    }
+  }
+
+  /**
+   * Subscribes to the live turn, reporting a cursor that cannot position it.
+   * A view whose stream `restarted` on a turn shows it only while this follow
+   * streams that turn; a view whose page could not be cut for it is `reset`.
+   */
+  async #followPositioned(
+    position: ResumePosition,
+    replay?: { corrections: number; restarted?: string; reset?: boolean }
+  ): Promise<{ resync?: true }> {
+    const positioned =
+      position.turnId === undefined ||
+      position.turnId === this.#coordinator.snapshot(this.#scope).turnId
+    const restarted = replay?.restarted
+    const followed = await this.#follow(
+      true,
+      replay?.reset ? "reset" : positioned ? position.after : undefined,
+      replay?.corrections
+    ).catch(() => null)
+    if (restarted !== undefined && followed !== restarted) {
+      // A view rebuilt from the start does not act on `resync`, and this one
+      // lacks the rest of its turn: have it rebuild again once this response
+      // lands.
+      this.afterResponse(async () => {
+        await this.#reloadOnce(restarted)
+      })
+      return { resync: true }
+    }
+    return positioned && followed !== null ? {} : { resync: true }
   }
 
   /**
@@ -599,7 +830,7 @@ class Seat {
    * turn from the start to a view about to be rebuilt from history. The turn
    * stays followed, so the room does not subscribe this member meanwhile.
    */
-  async restartStream() {
+  async #restartStream() {
     await this.#exclusive(async () => {
       const subscription = this.#subscription
       if (!subscription) return
@@ -610,24 +841,11 @@ class Seat {
   }
 
   /**
-   * Keeps the room's prompts and streams from this view while it is rebuilt
-   * from history, so none lands above the page. `enterRoom` or `releaseRoom`
-   * ends it.
-   */
-  holdRoom() {
-    this.#rebuilding = true
-  }
-
-  releaseRoom() {
-    this.#rebuilding = false
-  }
-
-  /**
    * Tells the member to rebuild this Session's view from history, once per
    * turn: a rebuild that fails the same way again must not ask again. Returns
    * whether it asked.
    */
-  async reloadOnce(turnId: string) {
+  async #reloadOnce(turnId: string) {
     if (this.#reloadedTurn === turnId) return false
     this.#reloadedTurn = turnId
     await this.#invalidate()

@@ -48,7 +48,6 @@ import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannel } from "../core/channel"
-import { persistedCorrections } from "./translate/history"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
@@ -369,7 +368,6 @@ export const translators: Translators = {
       }
     return { state, outbound: [] }
   },
-  persistedCorrections,
   translateHistory: (history) =>
     history.messages.map((message) => ({
       kind: "update",

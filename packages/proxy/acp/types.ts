@@ -237,12 +237,6 @@ export type TranslateHistory = (
   history: SessionHistoryResponse
 ) => AcpOutbound[]
 
-/**
- * `translate/history.ts` → `persistedCorrections`. How many of the run journal's
- * steer acknowledgements the replayed history already carried as user turns.
- */
-export type PersistedCorrections = (history: SessionHistoryResponse) => number
-
 /** `translate/requests.ts` → `pendingRequestToOutbound` */
 export type PendingRequestToOutbound = (
   request: PendingRequest
@@ -275,7 +269,6 @@ export type ConfigWriteOf = (
 export type Translators = {
   translateTurnEvent: TranslateTurnEvent
   translateHistory: TranslateHistory
-  persistedCorrections: PersistedCorrections
   pendingRequestToOutbound: PendingRequestToOutbound
   replyFromPermission: ReplyFromPermission
   replyFromElicitation: ReplyFromElicitation
