@@ -9,7 +9,6 @@ import {
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
-import type { GuestGrant } from "./index"
 
 /**
  * A guest answers no permission. One its own turn raises is declined for it,
@@ -29,9 +28,10 @@ function isPermission(request: PendingRequest) {
 }
 
 export function createPermissionsMiddleware({
-  grant,
+  principalId,
 }: {
-  grant: GuestGrant
+  /** The guest's own identity, which starts the turns it sends. */
+  principalId: string
 }): Middleware {
   return {
     commands: {
@@ -45,7 +45,7 @@ export function createPermissionsMiddleware({
       switch (event.kind) {
         case "request-asked":
           if (!isPermission(event.request)) return event
-          if (event.startedBy === grant.principalId)
+          if (event.startedBy === principalId)
             act.decline(event.request.requestId)
           return undefined
         case "turn": {

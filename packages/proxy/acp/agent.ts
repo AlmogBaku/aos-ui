@@ -87,6 +87,12 @@ const SESSION_LIST_LIMIT = 50
 const withoutParams = () => undefined
 
 /**
+ * Hands an extension method its params undecoded, so its handler refuses a
+ * method the stack does not admit before it parses them.
+ */
+const undecoded = (params: unknown) => params
+
+/**
  * The operator lane's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
@@ -615,9 +621,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(
     AOS_METHODS.session.update,
-    AosSessionUpdateRequestSchema,
-    async ({ params, client }) => {
+    undecoded,
+    async ({ params: raw, client }) => {
       admit(AOS_METHODS.session.update, "update")
+      const params = AosSessionUpdateRequestSchema.parse(raw)
       const patch: SessionPatch =
         params.unread === false
           ? { unread: false }
@@ -656,9 +663,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(
     AOS_METHODS.session.steer,
-    AosSteerRequestSchema,
-    async ({ params }) => {
+    undecoded,
+    async ({ params: raw }) => {
       admit(AOS_METHODS.session.steer, "steer")
+      const params = AosSteerRequestSchema.parse(raw)
       return await perform(
         "steer",
         {
@@ -688,10 +696,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onNotification(
     AOS_METHODS.session.focus,
-    AosFocusNotificationSchema,
-    async ({ params }) => {
+    undecoded,
+    async ({ params: raw }) => {
       if (!sessions.identity()) return
       admit(AOS_METHODS.session.focus, "focus")
+      const params = AosFocusNotificationSchema.parse(raw)
       await perform(
         "focus",
         {
@@ -728,9 +737,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(
     AOS_METHODS.agents.setVisibility,
-    AosSetVisibilityRequestSchema,
-    async ({ params }) => {
+    undecoded,
+    async ({ params: raw }) => {
       admit(AOS_METHODS.agents.setVisibility, "set-visibility")
+      const params = AosSetVisibilityRequestSchema.parse(raw)
       return await perform(
         "set-visibility",
         {

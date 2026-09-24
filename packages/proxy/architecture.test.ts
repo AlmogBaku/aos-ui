@@ -182,9 +182,11 @@ function importsFrom(directory: string) {
 }
 
 /**
- * A lane compared, in either order: the one way a file could branch on it.
- * The lane stays the connection's identity, written to the browser's
- * `initialize` meta and to the member's principal, and nothing reads it back.
+ * A lane compared, in either order. The lane stays the connection's identity,
+ * written to the browser's `initialize` meta and to the member's principal,
+ * and nothing reads it back. This is a heuristic that catches the comparisons
+ * one writes, not every way to branch: the real gates are the per-file count
+ * of role reads and the translators and encoder naming no lane at all.
  */
 const LANE_BRANCH =
   /\blane\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?lane\b|\bcase\s+["'](?:guest|operator)["']/u

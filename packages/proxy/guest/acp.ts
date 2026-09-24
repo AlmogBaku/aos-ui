@@ -9,7 +9,7 @@ import type {
   AcpLogger,
   ConnectionAuthentication,
 } from "../acp/types"
-import { publicErrorOf } from "../acp/validation"
+import { PUBLIC_ERRORS } from "../acp/validation"
 import type { GuestInvitationService } from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
@@ -214,7 +214,7 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
     principalId: lane,
     agent: createAosAcpAgent,
     // A guest reads a failure's public code, never what the host knows of it.
-    publicError: publicErrorOf,
+    publicErrors: PUBLIC_ERRORS,
     connection: (connectionId) =>
       createGuestConnection(options, sessionRows, connectionId),
   })

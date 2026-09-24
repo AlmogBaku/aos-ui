@@ -277,8 +277,8 @@ const credentialText =
   /(?:\bauthorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:access[-_]?token|api[-_]?key|credential|password|secret|token)\s*[=:]\s*[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)/giu
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
- * adapter. Paths and URLs are the operator's own machine and stay: the ACP lane
- * projection decides what a guest may see of them.
+ * adapter. Paths and URLs stay: a question reaches every member of the
+ * conversation, a guest included, in the words the agent wrote.
  */
 function publicText(value: string) {
   return value.replace(credentialText, "[credential redacted]")

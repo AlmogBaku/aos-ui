@@ -14,6 +14,7 @@ import {
   type ServerRuntimePublicError,
 } from "../core/runtime"
 import type { CommandRefusal } from "../core/member"
+import type { PublicErrors } from "./socket"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
@@ -109,19 +110,30 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map([
   [METHOD_NOT_FOUND, "method_not_found"],
 ])
 
+/** Every code an `_aos/error` notification reports a failure with. */
+const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
+  ...PUBLIC_ERROR_NAMES.values(),
+  ...Object.keys(PUBLIC_ERROR_CODES),
+  "internal_error",
+])
+
 /**
- * An error reply as a public client may read it: a public code and its name,
- * and never the detail a failure carries. Any other failure is reported
- * temporarily unavailable.
+ * A failure as a public client may read it: a public code, and never the
+ * detail a failure carries. Any other failure is reported temporarily
+ * unavailable, as a reply and as a notification alike.
  */
-export function publicErrorOf({ code }: { code: number }) {
-  const name = PUBLIC_ERROR_NAMES.get(code)
-  return name === undefined
-    ? {
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-        message: "temporarily_unavailable",
-      }
-    : { code, message: name }
+export const PUBLIC_ERRORS: PublicErrors = {
+  reply({ code }) {
+    const name = PUBLIC_ERROR_NAMES.get(code)
+    return name === undefined
+      ? {
+          code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+          message: "temporarily_unavailable",
+        }
+      : { code, message: name }
+  },
+  notice: (code) =>
+    PUBLIC_NOTICE_CODES.has(code) ? code : "temporarily_unavailable",
 }
 
 /** Coordinator control failures, mirroring the normalized HTTP error map. */

@@ -13,17 +13,9 @@ import {
   type MemberEvent,
   type TurnStream,
 } from "../../core/member"
-import type { GuestGrant } from "./index"
 import { createPermissionsMiddleware } from "./permissions"
 
 const GUEST = "guest-principal"
-
-const grant: GuestGrant = {
-  agentId: "agent",
-  ref: "ref",
-  principalId: GUEST,
-  expiresAt: 100,
-}
 
 const APPROVAL: PendingRequest = {
   requestId: "approval-1",
@@ -56,9 +48,13 @@ const STREAM: TurnStream = {
 /** One event through a guest's permissions layer, with the declines it asked. */
 function shown(event: MemberEvent) {
   const decline = vi.fn()
-  const result = runEvents([createPermissionsMiddleware({ grant })], event, {
-    decline,
-  })
+  const result = runEvents(
+    [createPermissionsMiddleware({ principalId: GUEST })],
+    event,
+    {
+      decline,
+    }
+  )
   return { result, declined: decline.mock.calls.map(([id]) => id) }
 }
 
@@ -117,7 +113,7 @@ describe("guest permissions", () => {
     const execute = vi.fn(async () => undefined)
     const answer = (request: PendingRequest, payload: unknown) =>
       runCommand(
-        [createPermissionsMiddleware({ grant })],
+        [createPermissionsMiddleware({ principalId: GUEST })],
         "answer",
         {
           sessionId: "ref",

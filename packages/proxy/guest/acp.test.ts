@@ -2,6 +2,7 @@
 
 import {
   methods,
+  RequestError,
   type CreateElicitationResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
@@ -419,13 +420,14 @@ type HarnessOptions = {
   creates?: boolean
   /** How the runtime resolves a public Session id; none resolves by default. */
   resolveSessionId?: (agentId: string, sessionId: string) => string | undefined
-  /** What the invited lookup or the capabilities read throws instead. */
-  fails?: { lookup?: unknown; capabilities?: unknown }
+  /** What the invited lookup, the capabilities read or a run's start throws instead. */
+  fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
 }
 
 function harness(options: HarnessOptions = {}) {
   const handles: ServerTurnHandle[] = []
   const start = vi.fn(async (): Promise<ServerTurnHandle> => {
+    if (options.fails?.start) throw options.fails.start
     const handle = options.handle
       ? options.handle()
       : terminalHandle(RUN_EVENTS)
@@ -979,6 +981,21 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
+  it("refuses an operator's method as unknown however its params are spelled", async () => {
+    const test = harness({ existing: true })
+    const socket = await loggedInWire(test.lane, await invite(test.invitations))
+
+    for (const method of [
+      AOS_METHODS.session.update,
+      AOS_METHODS.agents.setVisibility,
+    ])
+      expect(await socket.request(method, { sessionId: 5 })).toMatchObject({
+        error: { code: METHOD_NOT_FOUND },
+      })
+    expect(test.updateSession).not.toHaveBeenCalled()
+    socket.close()
+  })
+
   it("carries the invitation's first turn and streams only guest-safe output", async () => {
     const test = harness()
     await test.initialize()
@@ -1195,6 +1212,42 @@ describe("guest ACP lane", () => {
     )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     test.close()
+  })
+
+  it("stops no run in a Session other than the invited one, and answers nothing", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    const operatorScope = {
+      agentId: AGENT,
+      sessionId: "operator-session",
+      threadId: "operator",
+    }
+    await test.coordinator.start(
+      operatorScope,
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const before = socket.frames.length
+
+    for (const sessionId of ["operator", "operator-session"])
+      socket.send({
+        method: methods.agent.session.cancel,
+        params: { sessionId },
+      })
+    await settled()
+
+    expect(test.handles.at(0)?.stop).not.toHaveBeenCalled()
+    expect(test.coordinator.state(operatorScope)).toBe("running")
+    expect(socket.frames.slice(before)).toEqual([])
+    socket.close()
   })
 
   it("ignores focus, which belongs to the operator's read state", async () => {
@@ -1506,6 +1559,8 @@ const REFUSED_TEXT: Array<[string, string[]]> = [
   ["a slash command after spaces", ["  /help"]],
   ["a slash command behind a byte order mark", ["\uFEFF/help"]],
   ["a slash command behind a no-break space", ["\u00A0/help"]],
+  ["a slash command behind a zero-width space", ["\u200B/help"]],
+  ["a slash command behind a word joiner", ["\u2060/help"]],
   ["a slash command opening several blocks", ["/help", "and then this"]],
   ["an invitation envelope", [FORGED_ENVELOPE]],
   ["a padded invitation envelope", [` ${FORGED_ENVELOPE}\n`]],
@@ -1943,6 +1998,33 @@ describe("guest scope and commands", () => {
       socket.close()
     }
   )
+
+  it("reports a run that failed to start with a public code alone", async () => {
+    const test = harness({
+      existing: true,
+      fails: { start: new RequestError(-32000, OPERATOR_SECRET) },
+    })
+    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+
+    await socket.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: [{ type: "text", text: "Hello" }],
+    })
+    const failure = await vi.waitFor(() => {
+      const frame = socket.frames.find(
+        ({ method }) => method === AOS_METHODS.notify.error
+      )
+      if (!frame) throw new Error("No error notification")
+      return frame
+    })
+
+    expect(failure.params).toEqual({
+      sessionId: REF,
+      code: "temporarily_unavailable",
+      message: "temporarily_unavailable",
+    })
+    socket.close()
+  })
 
   it("answers a frame it cannot decode with a public code alone", async () => {
     const test = harness({ existing: true })

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 
 import { withinGrace } from "../grace"
-import { createAcpSocket, type AcpErrorReply, type AcpSocket } from "./socket"
+import { createAcpSocket, type AcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory, Lane } from "./types"
 
 /**
@@ -47,8 +47,8 @@ export type AcpServiceOptions = {
    * letting a lane name stand in for an identity.
    */
   principalId: string
-  /** How this lane shows an error reply; as written by default. */
-  publicError?: (error: AcpErrorReply) => AcpErrorReply
+  /** How this lane shows a failure; as written by default. */
+  publicErrors?: PublicErrors
 }
 
 /** Hosts one ACP v2 lane over WebSocket as the single normalized connection. */
@@ -83,7 +83,7 @@ export function createAcpService(options: AcpServiceOptions) {
       },
       // The upgrade's principal holds for the connection's whole life.
       lapsed: () => context.authentication?.lapsed() ?? false,
-      ...(options.publicError ? { publicError: options.publicError } : {}),
+      ...(options.publicErrors ? { publicErrors: options.publicErrors } : {}),
     })
     holder.socket = socket
     prepared.accept(socket.socket)

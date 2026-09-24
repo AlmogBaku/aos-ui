@@ -36,6 +36,6 @@ export function createGuestMiddleware(
     createScopeMiddleware(options),
     createHistoryMiddleware(options),
     createTurnsMiddleware(),
-    createPermissionsMiddleware(options),
+    createPermissionsMiddleware({ principalId: options.grant.principalId }),
   ]
 }

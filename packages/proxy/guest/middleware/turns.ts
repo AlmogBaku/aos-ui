@@ -140,7 +140,10 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
 }
 
 export function createTurnsMiddleware(): Middleware {
-  /** Every call whose card this guest was shown. */
+  /**
+   * Every call whose card this guest was shown. It grows with the one invited
+   * conversation alone, which is all a guest's member ever reaches.
+   */
   const shown = new Set<string>()
   const project = createTurnProjector(shown)
 
@@ -172,11 +175,14 @@ export function createTurnsMiddleware(): Middleware {
         case "execution":
         case "usage":
         case "model":
-        case "session-info":
-        case "commands":
         case "invalidated":
         case "error":
           return event
+        // A Session row and a command list come from the operator's catalog
+        // and its Session creation, which are never a guest's.
+        case "session-info":
+        case "commands":
+          return undefined
       }
       return unhandledKind(event)
     },

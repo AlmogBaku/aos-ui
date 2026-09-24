@@ -1,5 +1,6 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
 
+import { AOS_METHODS } from "../../protocol/acp"
 import { authenticationRequired } from "./validation"
 
 /** The WebSocket shape a prepared ACP upgrade drives. */
@@ -23,6 +24,15 @@ const decoder = new TextDecoder()
 /** A JSON-RPC error reply's `error` member. */
 export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
+/**
+ * How a lane shows its failures: an error reply as a public reply, and an
+ * `_aos/error` notification's code as a public code.
+ */
+export type PublicErrors = {
+  reply(error: AcpErrorReply): AcpErrorReply
+  notice(code: string): string
+}
+
 export type AcpSocketOptions = {
   /** Closes the concrete WebSocket. Authorization happens before this shim exists. */
   close(code: number, reason: string): void
@@ -33,8 +43,8 @@ export type AcpSocketOptions = {
    * passes either way: a request is refused, and the connection closes.
    */
   lapsed?: () => boolean
-  /** How an error reply is shown; as written by default. */
-  publicError?: (error: AcpErrorReply) => AcpErrorReply
+  /** How a failure is shown; as written by default. */
+  publicErrors?: PublicErrors
   now?: () => number
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
@@ -154,7 +164,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         closePeer(1008, "ACP credential lapsed")
         return
       }
-      enqueue(options.publicError ? publicFrame(raw, options.publicError) : raw)
+      enqueue(
+        options.publicErrors ? publicFrame(raw, options.publicErrors) : raw
+      )
     },
     close(code, reason) {
       closePeer(code ?? 1000, reason ?? "")
@@ -229,26 +241,41 @@ function frameSize(raw: string | Uint8Array) {
     : raw.byteLength
 }
 
-/** One serialized frame with its error reply, if it is one, as `shown`. */
-function publicFrame(
-  raw: string,
-  shown: (error: AcpErrorReply) => AcpErrorReply
-) {
+/**
+ * One serialized frame as `shown` makes it public: an error reply, and an
+ * error notification, which carries its code as its message too. Any other
+ * frame is written as it is.
+ */
+function publicFrame(raw: string, shown: PublicErrors) {
   const frame = JSON.parse(raw) as unknown
+  if (typeof frame !== "object" || frame === null) return raw
   if (
-    typeof frame !== "object" ||
-    frame === null ||
-    !("error" in frame) ||
-    typeof frame.error !== "object" ||
-    frame.error === null ||
-    !("code" in frame.error) ||
-    typeof frame.error.code !== "number"
+    "error" in frame &&
+    typeof frame.error === "object" &&
+    frame.error !== null &&
+    "code" in frame.error &&
+    typeof frame.error.code === "number"
   )
-    return raw
-  return JSON.stringify({
-    ...frame,
-    error: shown(frame.error as AcpErrorReply),
-  })
+    return JSON.stringify({
+      ...frame,
+      error: shown.reply(frame.error as AcpErrorReply),
+    })
+  if (
+    "method" in frame &&
+    frame.method === AOS_METHODS.notify.error &&
+    "params" in frame &&
+    typeof frame.params === "object" &&
+    frame.params !== null &&
+    "code" in frame.params &&
+    typeof frame.params.code === "string"
+  ) {
+    const code = shown.notice(frame.params.code)
+    return JSON.stringify({
+      ...frame,
+      params: { ...frame.params, code, message: code },
+    })
+  }
+  return raw
 }
 
 function positiveLimit(value: number | undefined, fallback: number) {

@@ -9,7 +9,8 @@ import {
   TurnEventSchema,
   type TurnEvent,
 } from "../../core/events"
-import { createTurnProjector } from "./turns"
+import { runEvents, type MemberEvent } from "../../core/member"
+import { createTurnProjector, createTurnsMiddleware } from "./turns"
 
 /** One guest member's projector. */
 const projectorOf = () => createTurnProjector()
@@ -343,5 +344,39 @@ describe("guest turn projection", () => {
       message: guestErrorDescription("request_failed"),
       awaitingStop: true,
     })
+  })
+})
+
+describe("guest turns layer", () => {
+  /** One event through a guest's turns layer. */
+  const shown = (event: MemberEvent) =>
+    runEvents([createTurnsMiddleware()], event, { decline: () => undefined })
+
+  it("drops a Session row, which only an operator's feed emits", () => {
+    expect(
+      shown({
+        sessionId: "ref",
+        kind: "session-info",
+        row: {
+          id: "ref",
+          agentId: "agent",
+          title: "Operator-owned title",
+          archived: false,
+          updatedAt: "2026-09-15T00:00:00.000Z",
+          status: "idle",
+        },
+        status: "idle",
+      } as MemberEvent)
+    ).toBeUndefined()
+  })
+
+  it("drops a command list, which only an operator's feed emits", () => {
+    expect(
+      shown({
+        sessionId: "ref",
+        kind: "commands",
+        capabilities: {},
+      } as MemberEvent)
+    ).toBeUndefined()
   })
 })

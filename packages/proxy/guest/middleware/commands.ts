@@ -39,13 +39,20 @@ const OPERATOR_ONLY = {
   reason: "operator-session-controls-required",
 } as const
 
+/** Leading whitespace, and the invisible characters `trimStart` keeps. */
+const LEADING_PADDING = /^[\s\u200B\u2060\uFEFF]+/u
+
 /**
  * Text a guest may not send or steer with: a slash command, which the runtime
  * would run as the operator, or an invitation envelope, however either is
- * padded.
+ * padded. The padding is stripped for this check alone; the text travels as
+ * written.
  */
 function refusedText(text: string) {
-  return text.trimStart().startsWith("/") || isFirstTurnEnvelopeText(text)
+  return (
+    text.replace(LEADING_PADDING, "").startsWith("/") ||
+    isFirstTurnEnvelopeText(text)
+  )
 }
 
 /**
