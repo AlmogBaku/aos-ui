@@ -1,5 +1,6 @@
 import type {
   AgentApp,
+  AuthMethod,
   CreateElicitationRequest,
   CreateElicitationResponse,
   RequestPermissionRequest,
@@ -14,7 +15,7 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { AosActivityNotification } from "../../protocol/acp"
+import type { AosActivityNotification, AosExtensions } from "../../protocol/acp"
 import type {
   ExecutionEvent,
   PendingRequest,
@@ -71,24 +72,35 @@ type AcpConnectionBase = {
 /**
  * One connection's context, typed by its lane: only an operator reads the
  * activity feed, since a guest learns nothing about the rest of the Agent, and
- * only a guest carries the policy that authorizes and projects it.
+ * only a guest authenticates over ACP rather than at its upgrade.
  */
 export type AcpConnectionContext = AcpConnectionBase &
   (
-    | { lane: "operator"; activityFeed: ActivityFeed; guest?: never }
-    | { lane: "guest"; guest: GuestPolicy; activityFeed?: never }
+    | { lane: "operator"; activityFeed: ActivityFeed; authentication?: never }
+    | {
+        lane: "guest"
+        authentication: ConnectionAuthentication
+        activityFeed?: never
+      }
   )
 
 /**
- * The guest lane's per-connection authorization, implemented in
- * `guest/acp.ts`. Nothing is reachable before an invitation is redeemed.
+ * How a connection that authenticates over ACP proves who it acts as. It
+ * reaches nothing, and learns nothing about the deployment, until a credential
+ * yields its member; the connection closes when that credential lapses.
  */
-export type GuestPolicy = {
-  /** Redeems one invitation token; `false` means it is not usable. */
+export type ConnectionAuthentication = {
+  /** What `initialize` offers to authenticate with. */
+  authMethods: readonly AuthMethod[]
+  /** The AOS extensions this connection is served. */
+  extensions: AosExtensions
+  /** Redeems one credential; `false` means it is not usable. */
   authenticate(token: string): Promise<boolean>
-  /** Who the redeemed invitation acts as, and its stack; absent before login. */
+  /** Who the credential acts as, and its stack; absent before it is redeemed. */
   member(): Omit<Member, "connection"> | undefined
-  /** Schedules the close the invitation's expiry owes, returning its canceller. */
+  /** Whether a redeemed credential still holds, before its close arrives. */
+  live(): boolean
+  /** Schedules the close the credential's lapse owes, returning its canceller. */
   expire(close: () => void): () => void
 }
 

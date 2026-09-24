@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest"
 
-import type { ExecutionEvent } from "./events"
 import {
+  PendingRequestKind,
+  type ExecutionEvent,
+  type PendingRequest,
+  type RequestReply,
+} from "./events"
+import type { MemberAct, MemberConnection, Middleware } from "./member"
+import {
+  ServerRequestStaleError,
   ServerTurnConflictError,
   type ServerTurnWatcher,
   type SessionScope,
@@ -12,6 +19,7 @@ import {
   type RoomScope,
   type RoomTurn,
 } from "./channel"
+import type { SessionCoordinator } from "./session-coordinator"
 
 const SCOPE: SessionScope = {
   agentId: "researcher",
@@ -626,5 +634,232 @@ describe("createChannel adopting runtime-started turns", () => {
     await runtime.rooms.recheck(SCOPE)
 
     expect(first.follows()).toBe(1)
+  })
+})
+
+const GUEST = "guest:token-1"
+
+const APPROVAL: PendingRequest = {
+  requestId: "approval-1",
+  kind: PendingRequestKind.Permission,
+  responseSchema: { type: "string", enum: ["once", "deny"] },
+}
+
+const QUESTION: PendingRequest = {
+  requestId: "question-1",
+  kind: PendingRequestKind.Elicitation,
+  questions: [{ choices: ["Yes"], multiple: false, custom: false }],
+}
+
+/**
+ * One member seated on a Session waiting on `requests`, over a coordinator
+ * that records the answers it is given. `decline` is what the member's stack
+ * does with each request it is asked, and `hide` hides every request.
+ */
+function seated(
+  options: {
+    requests?: PendingRequest[]
+    startedBy?: string
+    decline?: (requestId: string, act: MemberAct) => void
+    hide?: boolean
+  } = {}
+) {
+  let requests = options.requests ?? [APPROVAL]
+  const observers = new Set<(event: ExecutionEvent) => void>()
+  const log: string[] = []
+  const state = { live: true }
+  const coordinator = {
+    subscribeReadings: () => () => undefined,
+    snapshot: () => ({
+      state: requests.length > 0 ? "waiting-for-input" : "idle",
+      turnId: "turn-1",
+      requests: [...requests],
+      ...(options.startedBy === undefined
+        ? {}
+        : { startedBy: options.startedBy }),
+    }),
+    observeScope(_scope: SessionScope, listener: (e: ExecutionEvent) => void) {
+      observers.add(listener)
+      return () => observers.delete(listener)
+    },
+    /** Resolves one open request, as any member's answer or Stop does. */
+    async answer(_scope: SessionScope, reply: RequestReply) {
+      if (!requests.some(({ requestId }) => requestId === reply.requestId))
+        throw new ServerRequestStaleError()
+      log.push(
+        `answered:${reply.requestId}:${reply.status}:${String(reply.payload)}`
+      )
+      requests = requests.filter(
+        ({ requestId }) => requestId !== reply.requestId
+      )
+      for (const observer of observers)
+        observer({
+          agentId: SCOPE.agentId,
+          sessionId: SCOPE.sessionId,
+          turnId: "turn-1",
+          occurredAt: "2026-09-24T00:00:00Z",
+          kind: "attention-resolved",
+          requestId: reply.requestId,
+        })
+      return undefined
+    },
+  } as unknown as SessionCoordinator
+  const middleware: Middleware = {
+    event(event, act) {
+      if (event.kind !== "request-asked") return event
+      options.decline?.(event.request.requestId, act)
+      return options.hide ? undefined : event
+    },
+  }
+  const connection: MemberConnection = {
+    async send(event) {
+      log.push(
+        event.kind === "request-asked"
+          ? `asked:${event.request.requestId}`
+          : event.kind === "request-withdrawn"
+            ? `withdrawn:${event.requestId}`
+            : event.kind
+      )
+    },
+    live: () => state.live,
+  }
+  const seat = createChannel({ snapshot: () => ({ state: "idle" }) }).join(
+    {
+      principal: { id: GUEST, role: "guest" },
+      middleware: [middleware],
+      connection,
+    },
+    SCOPE,
+    {
+      coordinator,
+      subscriberId: "subscriber-1",
+      log: () => undefined,
+      describe: () => ({ code: "failed", message: "failed" }),
+    }
+  )
+  seat.enterRoom()
+  return { seat, log, state, coordinator }
+}
+
+const declining = (requestId: string, act: MemberAct) => act.decline(requestId)
+
+describe("a seat's declines", () => {
+  it("denies a permission in the member's own turn once the member was offered it", async () => {
+    const test = seated({ startedBy: GUEST, decline: declining })
+
+    await test.seat.reissuePending()
+    await settle()
+
+    expect(test.log).toEqual([
+      "asked:approval-1",
+      "answered:approval-1:resolved:deny",
+    ])
+  })
+
+  it("cancels a permission that offers no deny", async () => {
+    const test = seated({
+      startedBy: GUEST,
+      decline: declining,
+      hide: true,
+      requests: [{ ...APPROVAL, responseSchema: { enum: ["once"] } }],
+    })
+
+    await test.seat.reissuePending()
+    await settle()
+
+    expect(test.log).toEqual(["answered:approval-1:cancelled:undefined"])
+  })
+
+  it("leaves a request alone in a turn the member did not start", async () => {
+    for (const startedBy of ["operator:almog", undefined]) {
+      const test = seated({
+        decline: declining,
+        hide: true,
+        ...(startedBy ? { startedBy } : {}),
+      })
+
+      await test.seat.reissuePending()
+      await settle()
+
+      expect(test.log).toEqual([])
+    }
+  })
+
+  it("never declines a question, or a request it did not ask this member", async () => {
+    const test = seated({
+      startedBy: GUEST,
+      hide: true,
+      requests: [QUESTION, { ...APPROVAL, requestId: "approval-2" }],
+      decline: (requestId, act) => {
+        act.decline(requestId)
+        act.decline("approval-unasked")
+      },
+    })
+
+    await test.seat.reissuePending()
+    await settle()
+
+    expect(test.log).toEqual(["answered:approval-2:resolved:deny"])
+  })
+
+  it("skips a decline whose connection stopped being live before it ran", async () => {
+    const test = seated({ startedBy: GUEST, decline: declining, hide: true })
+
+    await test.seat.reissuePending()
+    test.state.live = false
+    await settle()
+
+    expect(test.log).toEqual([])
+  })
+
+  it("drops a second decline of the same request silently", async () => {
+    const test = seated({
+      startedBy: GUEST,
+      hide: true,
+      decline: (requestId, act) => {
+        act.decline(requestId)
+        act.decline(requestId)
+      },
+    })
+
+    await test.seat.reissuePending()
+    await settle()
+
+    expect(test.log).toEqual(["answered:approval-1:resolved:deny"])
+  })
+
+  it("gives a member no answer and no withdrawal of a request its stack hid", async () => {
+    const test = seated({ hide: true })
+
+    await test.seat.reissuePending()
+    expect(() => test.seat.request("approval-1")).toThrow(
+      ServerRequestStaleError
+    )
+    await test.coordinator.answer(SCOPE, {
+      requestId: "approval-1",
+      status: "cancelled",
+    })
+    await settle()
+
+    expect(test.log).toEqual(["answered:approval-1:cancelled:undefined"])
+  })
+
+  it("withdraws a request it delivered once another member answers it", async () => {
+    const test = seated()
+
+    await test.seat.reissuePending()
+    await settle()
+    expect(test.seat.request("approval-1")).toEqual(APPROVAL)
+    await test.coordinator.answer(SCOPE, {
+      requestId: "approval-1",
+      status: "cancelled",
+    })
+    await settle()
+
+    expect(test.log).toEqual([
+      "asked:approval-1",
+      "answered:approval-1:cancelled:undefined",
+      "withdrawn:approval-1",
+    ])
   })
 })

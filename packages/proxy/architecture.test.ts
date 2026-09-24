@@ -94,8 +94,8 @@ describe("runtime adapter boundary", () => {
     const repositoryRoot = join(proxyRoot, "../..")
     const commonProxyFiles = (
       await Promise.all(
-        ["acp", "auth", "core", "guest", "mcp-apps", "routes", "voice"].map((directory) =>
-          productionFiles(join(proxyRoot, directory))
+        ["acp", "auth", "core", "guest", "mcp-apps", "routes", "voice"].map(
+          (directory) => productionFiles(join(proxyRoot, directory))
         )
       )
     ).flat()
@@ -167,5 +167,66 @@ describe("runtime adapter boundary", () => {
       }
       expect(selectors, provider).toEqual([selector])
     }
+  })
+})
+
+const ACP_IMPORT =
+  /(?:from\s+|import\s*\()["'](?:@agentclientprotocol\/|[^"']*protocol\/acp(?:\.ts)?["'])/u
+
+/** A relative import of `directory`, however deep the importer sits. */
+function importsFrom(directory: string) {
+  return new RegExp(
+    `(?:from\\s+|import\\s*\\()["'](?:\\.\\.?\\/)+${directory}(?:\\/|["'])`,
+    "u"
+  )
+}
+
+describe("member boundary", () => {
+  const proxyRoot = import.meta.dirname
+
+  /** A1: the core and the guest rules speak members, never the ACP wire. */
+  it("keeps ACP out of the core and the guest middleware", async () => {
+    const core = await productionFiles(join(proxyRoot, "core"))
+    const middleware = await productionFiles(
+      join(proxyRoot, "guest/middleware")
+    )
+
+    for (const path of [...core, ...middleware]) {
+      const source = stripComments(await readFile(path, "utf8"))
+      expect(source, path).not.toMatch(ACP_IMPORT)
+    }
+    for (const path of middleware) {
+      const source = stripComments(await readFile(path, "utf8"))
+      expect(source, path).not.toMatch(importsFrom("acp"))
+    }
+  })
+
+  /**
+   * A2: the core and the ACP transport are lane-blind. Nothing reads a
+   * guest's grant, and a principal's role is read only where the Channel
+   * reports a lane: the coordinator's capacity cap and an adoption's
+   * preference for an operator.
+   */
+  it("keeps guest code out of the core and the ACP transport", async () => {
+    const files = [
+      ...(await productionFiles(join(proxyRoot, "acp"))),
+      ...(await productionFiles(join(proxyRoot, "core"))),
+    ]
+    const roleReaders: string[] = []
+
+    for (const path of files) {
+      const source = stripComments(await readFile(path, "utf8"))
+      expect(source, path).not.toMatch(importsFrom("guest"))
+      expect(source, path).not.toMatch(importsFrom("auth\\/guest-[\\w-]+"))
+      expect(source, path).not.toMatch(/\bGuestPolicy\b|\bcontext\.guest\b/u)
+      expect(source, path).not.toMatch(/\.grant\b/u)
+      const reads = source.match(/\bprincipal\.role\b/gu) ?? []
+      roleReaders.push(...reads.map(() => path))
+    }
+
+    expect(roleReaders).toEqual([
+      join(proxyRoot, "core/channel.ts"),
+      join(proxyRoot, "core/channel.ts"),
+    ])
   })
 })

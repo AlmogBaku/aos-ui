@@ -13,7 +13,6 @@ import {
 } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_AUTH_METHOD_INVITE,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
@@ -108,29 +107,6 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
     historyPages: true,
   }
 }
-
-/**
- * The guest lane streams one invited conversation and manages no workspace: it
- * owns no roster, no read state, no catalog, and no turn control beyond Stop.
- */
-const GUEST_EXTENSIONS = {
-  steer: false,
-  rewind: false,
-  composerPrefill: false,
-  agents: false,
-  invalidation: false,
-  activity: false,
-  readState: false,
-  focus: false,
-  guestProjection: true,
-  historyPages: true,
-} satisfies AosExtensions
-
-const INVITE_AUTH_METHOD = {
-  type: "agent",
-  methodId: AOS_AUTH_METHOD_INVITE,
-  name: "Invitation",
-} as const
 
 /**
  * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
@@ -610,8 +586,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       params.capabilities?._meta?.[AOS_META_KEY] ?? {}
     )
     clientPagesHistory = client.success && client.data.historyPages
-    // An unauthenticated guest learns nothing about the deployment it reached.
-    const info = context.guest ? undefined : await workspace.info()
+    // A connection still to authenticate learns nothing about the deployment
+    // it reached.
+    const { authentication } = context
+    const info = authentication ? undefined : await workspace.info()
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
@@ -623,16 +601,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       capabilities: {
         session: {
           prompt: { image: {}, embeddedContext: {} },
-          ...(context.guest ? {} : { delete: {} }),
+          ...(authentication ? {} : { delete: {} }),
         },
       },
-      authMethods: context.guest ? [INVITE_AUTH_METHOD] : [],
+      authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
           lane,
-          extensions: context.guest
-            ? GUEST_EXTENSIONS
+          extensions: authentication
+            ? authentication.extensions
             : operatorExtensions(runtime),
         },
       },
@@ -641,12 +619,18 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   // The operator lane authenticates its WebSocket upgrade instead.
   app.onRequest(methods.agent.auth.login, async ({ params }) => {
-    const policy = context.guest
-    if (!policy) throw RequestError.methodNotFound(methods.agent.auth.login)
-    if (params.methodId !== AOS_AUTH_METHOD_INVITE)
+    const { authentication } = context
+    if (!authentication)
+      throw RequestError.methodNotFound(methods.agent.auth.login)
+    if (
+      !authentication.authMethods.some(
+        ({ methodId }) => methodId === params.methodId
+      )
+    )
       throw authenticationRequired()
     const { token } = parseMeta(AosLoginMetaSchema, params._meta)
-    if (!(await policy.authenticate(token))) throw authenticationRequired()
+    if (!(await authentication.authenticate(token)))
+      throw authenticationRequired()
     return {}
   })
 
@@ -993,10 +977,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       context.activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
-      // A guest owns no roster and no catalog, and its connection ends with the
-      // invitation it redeemed.
-      ...(context.guest
-        ? [context.guest.expire(() => connection.close())]
+      // A connection that authenticated over ACP is shown no roster and no
+      // catalog, and ends with the credential it redeemed.
+      ...(context.authentication
+        ? [context.authentication.expire(() => connection.close())]
         : [
             context.sessionRows.subscribe((row) => {
               const member = sessions.member(row.id)

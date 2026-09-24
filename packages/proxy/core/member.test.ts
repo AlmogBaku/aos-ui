@@ -88,10 +88,11 @@ describe("member stack", () => {
       },
     })
 
-    expect(textOf(runEvents([layer("a"), layer("b")], prompt("x")))).toBe(
+    const act = { decline: () => undefined }
+    expect(textOf(runEvents([layer("a"), layer("b")], prompt("x"), act))).toBe(
       "x<b<a"
     )
-    expect(runEvents([layer("a"), layer("b", true)], prompt("x"))).toBe(
+    expect(runEvents([layer("a"), layer("b", true)], prompt("x"), act)).toBe(
       undefined
     )
     expect(seen).toEqual(["b", "a", "b"])

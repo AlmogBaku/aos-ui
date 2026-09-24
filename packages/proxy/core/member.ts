@@ -118,6 +118,17 @@ export type MemberEvent = { sessionId: string } & SessionEvent
 export type MemberConnection = {
   /** Resolves once the event is written; rejects when it cannot be. */
   send(event: MemberEvent): Promise<void>
+  /** Whether the connection's credential still holds. */
+  live(): boolean
+}
+
+/**
+ * What a middleware may do beyond shaping an event. `decline` refuses one
+ * permission request this member was asked, in a turn this member started;
+ * the Channel runs it once the request was delivered, and ignores any other.
+ */
+export type MemberAct = {
+  decline(requestId: string): void
 }
 
 /**
@@ -233,7 +244,7 @@ export type Middleware = {
    */
   admits?(kind: CommandKind): boolean
   commands?: { [K in CommandKind]?: CommandStep<K> }
-  event?(event: MemberEvent): MemberEvent | undefined
+  event?(event: MemberEvent, act: MemberAct): MemberEvent | undefined
 }
 
 /** Why a middleware refused a command, in words a transport maps to its wire. */
@@ -271,12 +282,13 @@ export function runCommand<K extends CommandKind>(
 /** Runs one event up the stack; `undefined` means a layer hid it. */
 export function runEvents(
   stack: readonly Middleware[],
-  event: MemberEvent
+  event: MemberEvent,
+  act: MemberAct
 ): MemberEvent | undefined {
   let shown: MemberEvent | undefined = event
   for (const layer of [...stack].reverse()) {
     if (!shown) return undefined
-    if (layer.event) shown = layer.event(shown)
+    if (layer.event) shown = layer.event(shown, act)
   }
   return shown
 }

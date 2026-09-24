@@ -1,5 +1,7 @@
 import type { SessionHistoryResponse } from "../../protocol"
 import {
+  PendingRequestKind,
+  ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
   type PendingRequest,
@@ -99,6 +101,22 @@ type Room = {
 }
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
+
+/**
+ * How a declined permission is answered: the one-time refusal when the
+ * request offers it, so no lasting rule lands on the Agent, and a
+ * cancellation otherwise.
+ */
+function declineReply(request: PendingRequest): RequestReply {
+  const choices = request.responseSchema?.enum
+  return Array.isArray(choices) && choices.includes("deny")
+    ? {
+        requestId: request.requestId,
+        status: ReplyStatus.Resolved,
+        payload: "deny",
+      }
+    : { requestId: request.requestId, status: ReplyStatus.Cancelled }
+}
 
 /**
  * Keyed like the coordinator's `scopeKey`, never by `threadId`: a guest's
@@ -446,8 +464,13 @@ class Seat {
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
-  /** The requests this member was asked and has not settled. */
-  readonly #asked = new Set<string>()
+  /**
+   * The requests this member's stack was offered and not settled, and those
+   * of them its connection was handed: a decline needs the first, an answer
+   * and a withdrawal the second.
+   */
+  readonly #offered = new Set<string>()
+  readonly #delivered = new Set<string>()
   #sequence = 0
   #stopRequested = false
   #left = false
@@ -518,15 +541,25 @@ class Seat {
    * that left is shown nothing, and neither is one whose stack hides it: a
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
-   * rides on the send starting now.
+   * rides on the send starting now. What the stack declines runs once the
+   * event is delivered.
    */
   emit(event: SessionEvent): Promise<void> {
     if (this.#left) return Promise.resolve()
-    const shown = runEvents(this.#member.middleware, {
-      sessionId: this.#scope.threadId,
-      ...event,
-    })
-    return shown ? this.#member.connection.send(shown) : Promise.resolve()
+    const declines = new Set<string>()
+    const shown = runEvents(
+      this.#member.middleware,
+      { sessionId: this.#scope.threadId, ...event },
+      { decline: (requestId) => declines.add(requestId) }
+    )
+    if (shown?.kind === "request-asked")
+      this.#delivered.add(shown.request.requestId)
+    const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
+    if (declines.size > 0)
+      void sent
+        .catch(() => undefined)
+        .then(() => Promise.all([...declines].map((id) => this.#decline(id))))
+    return sent
   }
 
   /** Shows this member a history page at the cursor it has reached. */
@@ -701,9 +734,14 @@ class Seat {
     await this.emit({ kind: "error", cause })
   }
 
-  /** The open request this member answers; a settled one is stale. */
+  /**
+   * The open request this member answers. One settled, or never handed to
+   * this member, is stale.
+   */
   request(requestId: string) {
-    const request = this.#openRequest(requestId)
+    const request = this.#delivered.has(requestId)
+      ? this.#openRequest(requestId)
+      : undefined
     if (!request) throw new ServerRequestStaleError()
     return request
   }
@@ -722,26 +760,61 @@ class Seat {
   ) {
     if (answers)
       await this.emit({ kind: "question-answered", request, answers })
+    await this.#settle(reply)
+  }
+
+  leave() {
+    for (const requestId of [...this.#offered]) this.#withdraw(requestId)
+    this.#left = true
+    this.#leaveRoom?.()
+    this.#leaveReadings()
+    this.#subscription?.close()
+    this.#subscription = undefined
+  }
+
+  /** Gives the Session one reply of this member's. */
+  async #settle(reply: RequestReply) {
     this.#log("info", "acp.request.answered", {
-      requestId: request.requestId,
+      requestId: reply.requestId,
       status: reply.status,
     })
     // Before the answer resolves this request, so the member answering it
-    // is not withdrawn its own request.
-    this.#asked.delete(request.requestId)
+    // is not withdrawn its own request, and a second decline finds none.
+    this.#offered.delete(reply.requestId)
+    this.#delivered.delete(reply.requestId)
     const continued = await this.#coordinator.answer(this.#scope, reply)
     if (!continued) return
     this.#rooms.continueTurn(this.#scope, continued.from, continued.turnId)
     await this.#rooms.sync(this.#scope)
   }
 
-  leave() {
-    for (const requestId of [...this.#asked]) this.#withdraw(requestId)
-    this.#left = true
-    this.#leaveRoom?.()
-    this.#leaveReadings()
-    this.#subscription?.close()
-    this.#subscription = undefined
+  /**
+   * Declines one permission request for this member. Only a request this
+   * member was offered and has not settled, in a turn this member started,
+   * while its credential holds; any other decline, a second one from another
+   * tab included, is dropped silently.
+   */
+  async #decline(requestId: string) {
+    if (
+      this.#left ||
+      !this.#offered.has(requestId) ||
+      !this.#member.connection.live()
+    )
+      return
+    const open = this.#coordinator.snapshot(this.#scope)
+    const request = open.requests.find(
+      (pending) => pending.requestId === requestId
+    )
+    if (
+      request?.kind !== PendingRequestKind.Permission ||
+      open.startedBy !== this.#member.principal.id
+    )
+      return
+    try {
+      await this.#settle(declineReply(request))
+    } catch (cause) {
+      if (!(cause instanceof ServerRequestStaleError)) await this.report(cause)
+    }
   }
 
   /**
@@ -929,11 +1002,11 @@ class Seat {
    * reissue reaches it.
    */
   #offer(request: PendingRequest) {
-    if (this.#asked.has(request.requestId)) return
+    if (this.#offered.has(request.requestId)) return
     const open = this.#coordinator.snapshot(this.#scope)
     if (!open.requests.some(({ requestId }) => requestId === request.requestId))
       return
-    this.#asked.add(request.requestId)
+    this.#offered.add(request.requestId)
     void this.emit({
       kind: "request-asked",
       request,
@@ -941,9 +1014,13 @@ class Seat {
     })
   }
 
-  /** Withdraws a request the Session resolved from this member. */
+  /**
+   * Withdraws a request the Session resolved from this member, which is told
+   * only of a request its connection was handed.
+   */
   #withdraw(requestId: string) {
-    if (!this.#asked.delete(requestId)) return
+    this.#offered.delete(requestId)
+    if (!this.#delivered.delete(requestId)) return
     void this.emit({ kind: "request-withdrawn", requestId })
   }
 

@@ -5,7 +5,11 @@ import { createAcpService } from "../acp/service"
 import type { Channel } from "../core/channel"
 import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
-import type { AcpConnectionContext, AcpLogger, GuestPolicy } from "../acp/types"
+import type {
+  AcpConnectionContext,
+  AcpLogger,
+  ConnectionAuthentication,
+} from "../acp/types"
 import type { GuestInvitationService } from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
@@ -14,13 +18,14 @@ import {
 } from "../auth/guest-request"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
+import { AOS_AUTH_METHOD_INVITE, type AosExtensions } from "../../protocol/acp"
 import { createGuestMiddleware, type GuestGrant } from "./middleware"
 
 /**
  * The guest lane's ACP service: one invited conversation per connection, with
  * the same invitation authorization and output projection the guest REST routes
  * apply. The lane's principal is the invitation, so every per-connection
- * authorization lives in its `GuestPolicy` rather than in the upgrade.
+ * authorization lives in its authentication rather than in the upgrade.
  */
 
 export type GuestAcpServiceOptions = {
@@ -39,14 +44,37 @@ export type GuestAcpServiceOptions = {
 }
 
 /**
+ * The guest lane streams one invited conversation and manages no workspace: it
+ * owns no roster, no read state, no catalog, and no turn control beyond Stop.
+ */
+const GUEST_EXTENSIONS = {
+  steer: false,
+  rewind: false,
+  composerPrefill: false,
+  agents: false,
+  invalidation: false,
+  activity: false,
+  readState: false,
+  focus: false,
+  guestProjection: true,
+  historyPages: true,
+} satisfies AosExtensions
+
+const INVITE_AUTH_METHOD = {
+  type: "agent",
+  methodId: AOS_AUTH_METHOD_INVITE,
+  name: "Invitation",
+} as const
+
+/**
  * One connection's invitation. Nothing is reachable before `auth/login`
  * redeems a token, and the redeemed member acts as the controller identity the
  * coordinator already knows guests by, through the guest middleware.
  */
-function createGuestPolicy(
+function createGuestAuthentication(
   options: GuestAcpServiceOptions,
   workspace: Pick<Workspace, "invited" | "capabilities">
-): GuestPolicy {
+): ConnectionAuthentication {
   const now = options.now ?? Date.now
   const schedule =
     options.schedule ??
@@ -71,6 +99,9 @@ function createGuestPolicy(
   }
 
   return {
+    authMethods: [INVITE_AUTH_METHOD],
+    extensions: GUEST_EXTENSIONS,
+
     async authenticate(token) {
       const identity = await options.invitations.verify(token)
       if (!identity || !guestAuthorizationActive(identity, now)) return false
@@ -113,6 +144,8 @@ function createGuestPolicy(
 
     member: () => redeemed?.member,
 
+    live: () => redeemed !== undefined && now() < redeemed.grant.expiresAt,
+
     expire(closeConnection) {
       close = closeConnection
       arm()
@@ -126,7 +159,7 @@ function createGuestPolicy(
 }
 
 /**
- * One accepted guest connection: its own invitation policy and read-state
+ * One accepted guest connection: its own invitation and read-state
  * service (inert on this lane). It carries no activity feed, which would
  * describe the Agent's other Sessions.
  */
@@ -138,7 +171,7 @@ export function createGuestConnection(
   const lane = "guest" as const
   const now = options.now ?? Date.now
   const { runtimeInstance } = options
-  const guest = createGuestPolicy(
+  const authentication = createGuestAuthentication(
     options,
     createWorkspace({ runtimeInstance, sessionRows, principalId: lane })
   )
@@ -153,7 +186,7 @@ export function createGuestConnection(
     attachmentStages: options.attachmentStages,
     rooms: options.rooms,
     logger: options.logger,
-    guest,
+    authentication,
     readState: createReadState({
       runtimeInstance,
       sessionRows,

@@ -20,7 +20,7 @@ import {
 } from "../../protocol/acp"
 import { createChannel } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
-import type { GuestPolicy } from "../acp/types"
+import type { ConnectionAuthentication } from "../acp/types"
 import { connectClient, updates, type Recorder } from "../acp/test-harness"
 import {
   createGuestInvitationService,
@@ -55,12 +55,20 @@ const INSTRUCTION = "Load the interview skill."
 const METHOD_NOT_FOUND = -32601
 
 /** What the redeemed member's stack shows it of one event, if anything. */
-function shown(policy: GuestPolicy | undefined, event: MemberEvent) {
-  return runEvents(policy?.member()?.middleware ?? [], event)
+function shown(
+  policy: ConnectionAuthentication | undefined,
+  event: MemberEvent
+) {
+  return runEvents(policy?.member()?.middleware ?? [], event, {
+    decline: () => undefined,
+  })
 }
 
 /** The text another member's prompt reaches this member with, if any. */
-function shownPrompt(policy: GuestPolicy | undefined, text: string) {
+function shownPrompt(
+  policy: ConnectionAuthentication | undefined,
+  text: string
+) {
   const event = shown(policy, {
     sessionId: REF,
     kind: "prompt",
@@ -475,7 +483,7 @@ function harness(options: HarnessOptions = {}) {
     scheduled,
     clock,
     invitations,
-    policy: context.guest,
+    policy: context.authentication,
     coordinator,
     start,
     handles,
@@ -1130,6 +1138,18 @@ describe("guest ACP lane", () => {
       code: AOS_JSONRPC_ERRORS.authenticationRequired,
     })
     expect(test.history).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("stays live from its login until its invitation expires", async () => {
+    const test = harness()
+    await test.initialize()
+    expect(test.policy?.live()).toBe(false)
+    await test.login(await invite(test.invitations))
+    expect(test.policy?.live()).toBe(true)
+
+    test.clock.now = NOW + 259_200_000
+    expect(test.policy?.live()).toBe(false)
     test.close()
   })
 

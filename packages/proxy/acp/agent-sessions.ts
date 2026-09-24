@@ -283,12 +283,12 @@ export function createSessions(
   let member: Member | undefined
 
   /**
-   * Who this connection acts as, and its stack: the operator's is empty, and
-   * a guest has none until it redeems an invitation.
+   * Who this connection acts as, and its stack: one that authenticates over
+   * ACP has none until it does, and the upgrade's principal has an empty one.
    */
   function identity(): Omit<Member, "connection"> | undefined {
-    return context.guest
-      ? context.guest.member()
+    return context.authentication
+      ? context.authentication.member()
       : {
           principal: { id: context.principalId, role: context.lane },
           middleware: [],

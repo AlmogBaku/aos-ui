@@ -438,5 +438,9 @@ export function createMemberEncoder({
     }
   }
 
-  return { send: encode }
+  return {
+    send: encode,
+    // The upgrade's principal holds for the connection's whole life.
+    live: () => context.authentication?.live() ?? true,
+  }
 }
