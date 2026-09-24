@@ -11,6 +11,7 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -26,6 +27,9 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
   AOS_METHODS,
+  AosComposerPrefillNotificationSchema,
+  AosPromptMetaSchema,
+  AosSteerRequestSchema,
 } from "@aos/protocol/acp"
 
 import { en } from "@/lib/i18n/dictionaries/en"
@@ -109,6 +113,13 @@ function guestRuntimeContext() {
     expiresAt: "2026-09-22T08:00:00.000Z",
   }
 }
+
+/** The `_aos/composer_prefill` params the guest lane sends after a run. */
+const prefillParams = (text: string) => ({
+  sessionId: REF,
+  turnId: "run-1",
+  text,
+})
 
 const authenticationRequired = () =>
   new RequestError(
@@ -287,10 +298,36 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     finishRun,
     /** The provider's suggested next turn for the invited composer. */
     suggestPrefill(text: string) {
-      void peer?.notify(AOS_METHODS.notify.composerPrefill, {
+      void peer?.notify(AOS_METHODS.notify.composerPrefill, prefillParams(text))
+    },
+    /**
+     * A question raised inside a tool call the guest lane dropped, so the
+     * browser never saw the call it names.
+     */
+    askQuestion() {
+      return peer?.request(methods.client.elicitation.create, {
+        mode: "form",
         sessionId: REF,
-        turnId: "run-1",
-        text,
+        toolCallId: "hidden-tool-1",
+        message: "The runtime needs an answer",
+        requestedSchema: {
+          type: "object",
+          properties: { q0: { type: "string", enum: ["Yes", "No"] } },
+        },
+        _meta: {
+          [AOS_META_KEY]: {
+            requestId: "question-1",
+            questions: [
+              {
+                header: "Confirm",
+                prompt: "Continue the interview?",
+                options: [{ label: "Yes" }, { label: "No" }],
+                multiple: false,
+                custom: false,
+              },
+            ],
+          },
+        },
       })
     },
     askPermission(): Promise<RequestPermissionResponse> | undefined {
@@ -367,11 +404,19 @@ function mount({
   stubMatchMedia()
   const proxy = createGuestProxyAgent(options)
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
-  const fetcher = vi.fn(async (input: RequestInfo | URL) =>
-    String(input) === `${BASE_PATH}/runtime`
-      ? Response.json(guestRuntimeContext())
-      : new Response(null, { status: 404 })
-  )
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === `${BASE_PATH}/runtime`)
+      return Response.json(guestRuntimeContext())
+    if (url.endsWith(`/sessions/${REF}/attachments/stage`))
+      return Response.json({
+        stageId: "stage-1",
+        attachments: [
+          { type: "file", filename: "brief.txt", mimeType: "text/plain" },
+        ],
+      })
+    return new Response(null, { status: 404 })
+  })
   vi.stubGlobal("fetch", fetcher)
   render(
     <GuestAosSurface
@@ -500,6 +545,25 @@ describe("AOS guest browser composition", () => {
     })
   })
 
+  it("answers a question in the composer even when its tool call never showed", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount()
+    await screen.findByText("Earlier guest answer")
+
+    const answered = proxy.askQuestion()
+
+    expect(await screen.findByText("Continue the interview?")).toBeVisible()
+    await user.click(screen.getByText("Yes"))
+    await user.click(screen.getByRole("button", { name: "Send answer" }))
+
+    await expect(answered).resolves.toMatchObject({
+      action: "accept",
+      content: { q0: "Yes" },
+    })
+    // The call the question names was dropped server-side, so none appears.
+    expect(screen.queryAllByRole("button", { name: /tool call/iu })).toEqual([])
+  })
+
   it("keeps operator notification surfaces out of the invited lane", async () => {
     const requestPermission = vi.fn()
     vi.stubGlobal(
@@ -564,6 +628,35 @@ describe("AOS guest browser composition", () => {
       prompt: [{ type: "text", text: "A better question" }],
       _meta: { [AOS_META_KEY]: { rewindSourceId: "history-0" } },
     })
+    expect(
+      AosPromptMetaSchema.safeParse(proxy.prompts[0]?._meta?.[AOS_META_KEY])
+        .success
+    ).toBe(true)
+  })
+
+  it("links a staged attachment batch from the guest prompt", async () => {
+    const user = userEvent.setup()
+    const { proxy, fetcher } = mount()
+    await screen.findByText("Earlier guest answer")
+
+    const composer = screen.getByRole("textbox", { name: "Message input" })
+    fireEvent.paste(composer, {
+      clipboardData: {
+        files: [new File(["notes"], "brief.txt", { type: "text/plain" })],
+      },
+    })
+    await screen.findByRole("button", { name: "Remove attachment" })
+    await sendTurn(user, "Read the brief")
+
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(
+      fetcher.mock.calls.some(([input]) =>
+        String(input).endsWith(`/sessions/${REF}/attachments/stage`)
+      )
+    ).toBe(true)
+    const meta = proxy.prompts[0]?._meta?.[AOS_META_KEY]
+    expect(meta).toEqual({ attachmentStageId: "stage-1" })
+    expect(AosPromptMetaSchema.safeParse(meta).success).toBe(true)
   })
 
   it("steers the running turn when the invited Session allows steering", async () => {
@@ -588,6 +681,7 @@ describe("AOS guest browser composition", () => {
         },
       ])
     )
+    expect(AosSteerRequestSchema.safeParse(proxy.steers[0]).success).toBe(true)
     expect(proxy.prompts).toHaveLength(1)
   })
 
@@ -622,6 +716,11 @@ describe("AOS guest browser composition", () => {
 
     proxy.finishRun()
     await waitFor(() => expect(composer).toHaveValue("What about pricing?"))
+    expect(
+      AosComposerPrefillNotificationSchema.safeParse(
+        prefillParams("What about pricing?")
+      ).success
+    ).toBe(true)
   })
 
   it("never lets a suggested turn overwrite what the guest typed", async () => {
