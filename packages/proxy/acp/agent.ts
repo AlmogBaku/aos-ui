@@ -357,7 +357,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       try {
         await member.startTurn(input, stage)
       } catch (cause) {
-        if (!(cause instanceof ServerTurnConflictError)) throw cause
+        // The prompt was accepted and echoed, so its turn fails in view.
+        if (!(cause instanceof ServerTurnConflictError))
+          return member.refuseTurn(input.turnId, cause)
         // Another browser's turn won: report the conflict, then follow it.
         await member.report(cause)
         await member.catchUp()

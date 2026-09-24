@@ -126,8 +126,16 @@ export type SessionEvent =
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
   /** The member's view is incomplete and must be rebuilt from history. */
   | { kind: "invalidated" }
-  /** A failure that has no request to answer. */
-  | { kind: "error"; cause: unknown }
+  /**
+   * A failure that has no request to answer. `turn` names the turn this
+   * member's accepted prompt was to start, when the failure is that it never
+   * did.
+   */
+  | {
+      kind: "error"
+      cause: unknown
+      turn?: { turnId: string; sequence: number }
+    }
 
 /** One Session event, addressed by the Session's public id. */
 export type MemberEvent = { sessionId: string } & SessionEvent

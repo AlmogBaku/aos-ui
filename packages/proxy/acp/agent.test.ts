@@ -1282,10 +1282,30 @@ describe("Session rooms", () => {
     await open(other)
 
     await prompt(test, "Summarize")
-    await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
+    // The sender reads its accepted prompt's turn as one that failed at once.
+    const failed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
+      "a failed state_update"
     )
+    expect(failed.params).toMatchObject({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: AOS_STOP_REASONS.error,
+        _meta: {
+          [AOS_META_KEY]: {
+            turnId: expect.any(String),
+            code: "internal_error",
+          },
+        },
+      },
+    })
+    expect(
+      test.recorder.entries.some(
+        (entry) => entry.method === AOS_METHODS.notify.error
+      )
+    ).toBe(false)
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
