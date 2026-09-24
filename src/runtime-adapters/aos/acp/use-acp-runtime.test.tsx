@@ -655,6 +655,34 @@ describe("useAcpRuntime", () => {
     ])
   })
 
+  it("retries a turn of images alone as the rewind of its source", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit({
+        sessionUpdate: "user_message",
+        messageId: "u1",
+        content: [
+          {
+            type: "resource_link",
+            uri: "aos-attachment:stage-1/att-1",
+            name: "photo.png",
+            mimeType: "image/png",
+          },
+        ],
+      })
+      fake.emit(textUpdate("agent_message", "a1", "Stopped"))
+    })
+    await act(async () => {
+      result.current.thread.startRun({ parentId: "u1" })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalledWith(SESSION_ID, [], {
+        rewindSourceId: "provider-u1",
+      })
+    })
+  })
+
   it("cancels the Session's run", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)

@@ -1130,6 +1130,41 @@ describe("artifact links", () => {
     })
   })
 
+  it("shows a prompt echo's artifact links as artifacts, once each", () => {
+    const echo: Entry = [
+      {
+        sessionUpdate: "user_message",
+        messageId: "u2",
+        content: [
+          { type: "text", text: "Look" },
+          {
+            type: "resource_link",
+            uri: "artifact://art-1",
+            name: "chart.json",
+            mimeType: "application/json",
+          },
+        ],
+      },
+    ]
+
+    expect(toThreadMessages(fold([echo, echo], answered))[2]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "Look" },
+        { type: "data", name: ARTIFACT_DATA_PART_NAME, data: ARTIFACT },
+      ],
+    })
+    const [, , prompt] = toThreadMessages(fold([echo, echo], answered))
+    expect(prompt).toEqual({
+      id: "u2",
+      role: "user",
+      content: [
+        { type: "text", text: "Look" },
+        { type: "data", name: ARTIFACT_DATA_PART_NAME, data: ARTIFACT },
+      ],
+    })
+  })
+
   it("carries the size the publisher reported", () => {
     const [, answer] = toThreadMessages(
       fold([artifactLink("a1", { size: 2_048 })], answered)

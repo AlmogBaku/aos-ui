@@ -185,17 +185,29 @@ const STOP_REASONS: Record<string, StopReason> = {
 }
 
 /**
+ * The boundary rows `agent/turn_failure_copy.py` has Hermes append when a turn
+ * ends with no assistant reply of its own. Hermes writes them for a stopped
+ * turn and a failed one alike, so a failure reads as stopped once reloaded.
+ */
+const FAILED_TURN_NOTICES: readonly string[] = [
+  "Your request was not processed. Send it again if you still want me to carry it out.",
+  "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+]
+
+/**
  * The row Hermes appends when a stopped turn's tail is a tool result:
  * `agent/message_sanitization.py` `close_interrupted_tool_sequence` writes the
  * turn's interrupt text, or a bare "Operation interrupted.", as an assistant
- * row with no model call behind it, so no `finish_reason`. It is Hermes'
- * record that the turn was stopped, not assistant prose.
+ * row with no model call behind it, so no `finish_reason`. A failed-turn notice
+ * closes a turn the same way. Either is Hermes' record that the turn ended
+ * early, not assistant prose.
  */
 function isInterruptMarker(value: JsonRecord, text: string): boolean {
   return (
     value.finish_reason == null &&
     !(Array.isArray(value.tool_calls) && value.tool_calls.length > 0) &&
-    text.startsWith("Operation interrupted")
+    (text.startsWith("Operation interrupted") ||
+      FAILED_TURN_NOTICES.includes(text.trim()))
   )
 }
 

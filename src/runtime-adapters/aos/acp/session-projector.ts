@@ -778,8 +778,25 @@ function applyWhole(
   const named = text(update.messageId)
   if (named === undefined) return state
   const messageId = addressed(state, named)
+  const blocks = blockPatch(update.content)
+  // A prompt echo names the images it attached as artifacts, which show the
+  // way the same turn does once history replays it.
+  const artifacts = (blocks ?? []).flatMap((block) => {
+    const artifact = linkedArtifact(block)
+    return artifact ? [artifact] : []
+  })
   return onMessage(state, messageId, roleOf(kind), (message) =>
-    replaceBlocks(message, sourceOf(kind), blockPatch(update.content))
+    artifacts.reduce(
+      (next, artifact) =>
+        carriesArtifact(next, artifact.id)
+          ? next
+          : appendData(next, ARTIFACT_DATA_PART_NAME, artifact),
+      replaceBlocks(
+        message,
+        sourceOf(kind),
+        blocks && blocks.filter((block) => !linkedArtifact(block))
+      )
+    )
   )
 }
 

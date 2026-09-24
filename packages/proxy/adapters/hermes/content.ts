@@ -11,6 +11,7 @@ import {
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 
 import { isRecord, utf8BytesWithin } from "./native"
+import { hermesAttachedImageArtifact } from "./media-artifacts"
 
 type NativeRecord = Record<string, unknown>
 
@@ -535,6 +536,7 @@ export function createHermesContentOperations(input: {
       if (queuedCleanup)
         throw new HermesContentCleanupRequiredError(queuedCleanup)
       const images: string[] = []
+      const artifactIds: (string | undefined)[] = []
       const references: string[] = []
       const publicAttachments: HermesPublicAttachment[] = []
       const cleanup = async () => {
@@ -570,6 +572,9 @@ export function createHermesContentOperations(input: {
             )
               throw new HermesContentUnavailableError()
             images.push(String(result.path))
+            artifactIds.push(
+              hermesAttachedImageArtifact(String(result.path))?.descriptor.id
+            )
             publicAttachments.push({
               type: "image",
               dataUrl: attachment.dataUrl,
@@ -590,6 +595,7 @@ export function createHermesContentOperations(input: {
           )
             throw new HermesContentUnavailableError()
           references.push(result.ref_text)
+          artifactIds.push(undefined)
           publicAttachments.push({
             type: "file",
             mimeType: attachment.mimeType,
@@ -612,6 +618,7 @@ export function createHermesContentOperations(input: {
         appendTo(text: string) {
           return [text.trim(), ...references].filter(Boolean).join("\n")
         },
+        artifactIds: () => artifactIds,
         cleanup,
       }
     },

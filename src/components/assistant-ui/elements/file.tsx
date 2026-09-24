@@ -69,6 +69,9 @@ function getFileDataKind(
   if (sourceType) return sourceType
   if (/^data:/i.test(data)) return "data-uri"
   if (/^https?:\/\//i.test(data)) return "url"
+  // Base64 has no colon, so any other scheme names bytes held elsewhere, like
+  // an `aos-attachment:` upload link, rather than carrying them.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(data)) return "id"
   return "base64"
 }
 
