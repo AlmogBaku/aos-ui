@@ -1035,4 +1035,12 @@ describe("server-side Hermes history projection", () => {
     expect(turn?.stopReason).toBe(StopReason.Cancelled)
     expect(turn?.content.map((part) => part.type)).toEqual(["tool-call"])
   })
+
+  it("keeps a user message that is a JSON object as the text that was sent", () => {
+    const sent = JSON.stringify({ v: 1, type: "note", body: "Synthetic" })
+
+    const [message] = projectHermesHistory([userRow("u1", sent)])
+
+    expect(message?.content).toEqual([{ type: "text", text: sent }])
+  })
 })

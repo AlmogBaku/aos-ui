@@ -377,9 +377,12 @@ export function rowText(row: Record<string, unknown>, content: unknown) {
           : []
       )
     : undefined
-  return String(
-    display ?? row.text ?? (parts ? parts.join("\n") : content) ?? ""
-  )
+  // Text that merely parses as a JSON object is still the text that was sent.
+  const raw =
+    typeof content !== "string" && typeof row.content === "string"
+      ? row.content
+      : content
+  return String(display ?? row.text ?? (parts ? parts.join("\n") : raw) ?? "")
 }
 
 // ---------------------------------------------------------------------------
