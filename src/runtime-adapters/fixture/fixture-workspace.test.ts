@@ -28,7 +28,7 @@ describe("FixtureWorkspace", () => {
     })
   })
 
-  it("shows meaningful progress in the market briefing Session", () => {
+  it("publishes the market Session's Todos in completed, active, and pending states", () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const listener = vi.fn()
 

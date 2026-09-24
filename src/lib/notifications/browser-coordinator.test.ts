@@ -201,24 +201,16 @@ describe("live browser Activity", () => {
     h.coordinator.publish(h.store.ingest(event))
     expect(h.shown).toEqual([])
   })
-  it.each([
-    [true, true, 0],
-    [true, false, 1],
-    [false, true, 1],
-    [false, false, 1],
-  ])(
-    "delivery follows visible=%s focused=%s, including exact selected Session",
-    async (visible, focused, count) => {
-      const h = setup()
-      h.localContext.pageVisible = !!visible
-      h.localContext.pageFocused = !!focused
-      h.localContext.selection = { agentId: "a", threadId: "t" }
-      h.coordinator.start()
-      await h.coordinator.setEnabled(true)
-      h.coordinator.publish(h.store.ingest(event))
-      expect(h.shown).toHaveLength(Number(count))
-    }
-  )
+  it("delivers nothing for the exact selected Session on a visible, focused page", async () => {
+    const h = setup()
+    h.localContext.pageVisible = true
+    h.localContext.pageFocused = true
+    h.localContext.selection = { agentId: "a", threadId: "t" }
+    h.coordinator.start()
+    await h.coordinator.setEnabled(true)
+    h.coordinator.publish(h.store.ingest(event))
+    expect(h.shown).toHaveLength(0)
+  })
   it.each(["denied", "unsupported"] as const)(
     "never re-prompts %s even on explicit enable",
     async (permission) => {

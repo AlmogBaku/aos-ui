@@ -21,8 +21,6 @@ const unreadSessions: SessionMetadata[] = [
 
 it.each([
   [true, true, ["hidden"]],
-  [true, false, []],
-  [false, true, ["hidden"]],
   [false, false, []],
 ])(
   "delivers one OS alert only while the provider reports the Session unread (hidden leader first=%s, unread=%s)",

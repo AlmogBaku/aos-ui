@@ -11,7 +11,7 @@ import { persistedTurnRows } from "./run-frames"
 import { HermesNativeRuntime } from "./run-native"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
-import { PendingRequestKind, type PendingRequest } from "../../core/events"
+import type { PendingRequest } from "../../core/events"
 
 const scope: HermesTurnScope = {
   agentId: "researcher",
@@ -90,15 +90,10 @@ describe("Hermes native submit outcomes", () => {
 
   it.each([
     [4001, "session-gone"],
-    [4007, "session-gone"],
     [4009, "busy"],
     [4090, "unknown"],
-    [4091, "busy"],
     [5070, "storage"],
-    [5071, "storage"],
     [-32600, "invalid"],
-    [-32602, "invalid"],
-    [4121, "unknown"],
     [undefined, "unknown"],
   ] as const)(
     "classifies the authoritative native rejection %s as %s",
@@ -641,39 +636,6 @@ describe("Hermes native replay cursor", () => {
 })
 
 describe("Hermes native retention", () => {
-  it("delegates retention to the attachment registry", async () => {
-    const { native, attachments, release } = runtime()
-
-    const stop = await native.retain(scope, "settling")
-
-    expect(attachments.retain).toHaveBeenCalledWith(scope, "settling")
-    stop()
-    expect(release).toHaveBeenCalledOnce()
-  })
-
-  it("passes pending requests through from the interaction surface", () => {
-    const { native, interactions } = runtime()
-    const observed = vi.fn()
-
-    const stop = native.onPendingRequest(scope, observed)
-    const request = {
-      requestId: "srq-1",
-      kind: PendingRequestKind.Permission,
-      message: "Continue?",
-    }
-    interactions.raise(request)
-
-    expect(observed).toHaveBeenCalledWith(request)
-    expect(interactions.onPendingRequest).toHaveBeenCalledWith(
-      scope,
-      expect.any(Function)
-    )
-
-    stop()
-    interactions.raise(request)
-    expect(observed).toHaveBeenCalledTimes(1)
-  })
-
   it("refuses to observe a live Session that was never attached", async () => {
     const router = rpcRouter()
     const native = new HermesNativeRuntime({

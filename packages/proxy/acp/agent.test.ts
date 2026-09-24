@@ -1,22 +1,13 @@
 import {
-  client,
   methods,
   type ContentBlock,
-  type CreateElicitationResponse,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
-import {
-  INTERACTION_PROTOCOL,
-  SESSION_CATALOG_MAX_WINDOW,
-  type RuntimeInfo,
-  type Session,
-  type SessionHistoryResponse,
-  type SessionModelsResponse,
-} from "../../protocol"
+import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_EXTENSION_VERSION,
@@ -31,873 +22,67 @@ import {
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
+  PromptTurnInputSchema,
+  RepliesTurnInputSchema,
   TurnEventKind,
   type PendingRequest,
-  type TurnEvent,
 } from "../core/events"
-import type {
-  RuntimeInstance,
-  ServerTurnEngine,
-  ServerTurnWatcher,
-  ServerTurnHandle,
-  ServerRuntime,
-  SessionPatch,
-  SessionScope,
-} from "../core/runtime"
-import { AttachmentStageRegistry } from "../core/attachment-stages"
-import { SessionCoordinator } from "../core/session-coordinator"
-import { createSessionRows } from "../core/session-rows"
-import { createAosAcpAgent } from "./agent"
-import { createSessionRooms } from "./session-rooms"
-import { persistedCorrections, translateHistory } from "./translate/history"
-import type {
-  AcpConnectionContext,
-  AcpOutbound,
-  GuestGrant,
-  GuestPolicy,
-  Translators,
-} from "./types"
+import type { ServerTurnWatcher, ServerRuntime } from "../core/runtime"
+import { translateHistory } from "./translate/history"
+import type { GuestGrant, GuestPolicy } from "./types"
 import { invalidRequest } from "./validation"
+import {
+  AGENT,
+  CONNECTION,
+  CREATED,
+  EventSource,
+  GUEST_POLICY,
+  NOW,
+  PRINCIPAL,
+  SESSION,
+  USAGE,
+  type Recorder,
+  harness,
+  sessionRow,
+  turnStarted,
+  updates,
+  type Recorded,
+  waitFor,
+} from "./test-harness"
 
-const AGENT = "researcher"
-const PRINCIPAL = "operator"
-const CONNECTION = "connection-1"
-const SESSION = "session-1"
-const CREATED = "session-created"
-const NOW = "2026-01-01T00:00:00.000Z"
-
-function sessionRow(overrides: Partial<Session> = {}): Session {
-  return {
-    id: SESSION,
-    agentId: AGENT,
-    title: "Notes",
-    archived: false,
-    updatedAt: NOW,
-    status: "idle",
-    ...overrides,
-  }
-}
-
-const MODELS: SessionModelsResponse = {
-  selectedId: "sonnet",
-  options: [
-    { id: "sonnet", label: "Sonnet", group: "Anthropic" },
-    { id: "opus", label: "Opus", group: "Anthropic" },
-  ],
-}
-
-const AVAILABLE = { status: "available" } as const
-
-const RUNTIME_INFO: RuntimeInfo = {
-  runtime: { id: "hermes", name: "Hermes" },
-  status: "ready",
-  capabilities: {
-    agentCatalog: AVAILABLE,
-    agentVisibility: AVAILABLE,
-    sessionCatalog: {
-      status: "available",
-      scope: "workspace",
-      order: "recent",
-      defaultPageSize: 50,
-      maxPageSize: 100,
-      maxWindow: SESSION_CATALOG_MAX_WINDOW,
-    },
-    sessionHistory: {
-      status: "available",
-      order: "chronological",
-      compacted: true,
-      loading: "on-open",
-      defaultPageSize: 200,
-      maxPageSize: 500,
-    },
-    sessionDetail: AVAILABLE,
-    sessionCreation: AVAILABLE,
-    sessionTitle: AVAILABLE,
-    sessionArchival: AVAILABLE,
-    sessionPin: AVAILABLE,
-    sessionDeletion: AVAILABLE,
-    sessionTurn: AVAILABLE,
-    sessionStop: AVAILABLE,
-    sessionSteer: AVAILABLE,
-    sessionReadState: AVAILABLE,
-  },
-}
-
-const CAPABILITIES = {
-  workspace: {
-    slashCommands: {
-      status: "available",
-      scope: "attached-session",
-      commands: [{ name: "plan", description: "Draft a plan" }],
-    },
-    models: {
-      status: "available",
-      scope: "attached-session",
-      selection: "native-session",
-      choices: "provider-reported",
-    },
-    context: {
-      status: "available",
-      scope: "attached-session",
-      source: "provider-usage-or-estimate",
-      breakdown: "provider-categories",
-    },
-    todos: { status: "unavailable", reason: "todos-unavailable" },
-    activity: { status: "unavailable", reason: "activity-unavailable" },
-  },
-  interactions: {
-    steering: {
-      status: "available",
-      scope: "active-turn",
-      semantics: "visible-user-message",
-      input: "text",
-      fallback: "provider-queue",
-    },
-    approvals: {
-      status: "available",
-      protocol: INTERACTION_PROTOCOL,
-      scope: "turn",
-      choices: [{ value: "once", scope: "request" }],
-      maxPending: 1,
-    },
-    questions: {
-      status: "available",
-      protocol: INTERACTION_PROTOCOL,
-      scope: "turn",
-      answerModes: ["single", "multiple", "free-text"],
-      cancellation: "native-cancel",
-      maxQuestions: 1,
-      maxChoicesPerQuestion: 4,
-      maxAnswerValuesPerQuestion: "complete-request",
-      maxStringBytes: 4096,
-    },
-    reactions: { status: "unavailable", reason: "reactions-unavailable" },
-  },
-  content: {
-    attachments: { status: "unavailable", reason: "attachments-unavailable" },
-    artifacts: { status: "unavailable", reason: "artifacts-unavailable" },
-    mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
-    transcription: {
-      status: "unavailable",
-      reason: "transcription-unavailable",
-    },
-    speech: { status: "unavailable", reason: "speech-unavailable" },
-  },
-}
-
-const USAGE = {
-  usedTokens: 1_200,
-  maxTokens: 20_000,
-  source: "provider-usage" as const,
-  breakdown: { systemTokens: 300, toolTokens: 400, messageTokens: 500 },
-}
-
-/** One provider run segment the test drives event by event. */
-class EventSource implements ServerTurnHandle {
-  readonly #values: TurnEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
-  readonly stop = vi.fn<ServerTurnHandle["stop"]>(async () => "stopping")
-  readonly steer = vi.fn(async () => "steered" as const)
-  readonly settled: Promise<void>
-  #resolveSettled!: () => void
-  #closed = false
-
-  constructor() {
-    this.settled = new Promise((resolve) => {
-      this.#resolveSettled = resolve
-    })
-  }
-
-  readonly events: AsyncIterable<TurnEvent> = {
-    [Symbol.asyncIterator]: () => ({
-      next: () => {
-        const value = this.#values.shift()
-        if (value) return Promise.resolve({ done: false, value })
-        if (this.#closed)
-          return Promise.resolve({ done: true, value: undefined })
-        return new Promise<IteratorResult<TurnEvent>>((resolve) =>
-          this.#waiters.push(resolve)
-        )
-      },
+/** Every `_meta.aos.sequence` the recorded run-stream updates carry, in order. */
+function sequencesOf(recorder: Recorder) {
+  const Schema = z.object({
+    update: z.object({
+      _meta: z.object({ [AOS_META_KEY]: z.object({ sequence: z.number() }) }),
     }),
-  }
-
-  emit(event: TurnEvent) {
-    const waiter = this.#waiters.shift()
-    if (waiter) waiter({ done: false, value: event })
-    else this.#values.push(event)
-  }
-
-  finish() {
-    this.#closed = true
-    for (const waiter of this.#waiters.splice(0))
-      waiter({ done: true, value: undefined })
-    this.#resolveSettled()
-  }
-
-  recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 0 }
-  }
-}
-
-type RequestOutbound = Extract<
-  AcpOutbound,
-  { kind: "request-permission" | "elicitation" }
->
-
-function permissionOutbound(request: PendingRequest): RequestOutbound {
-  return {
-    kind: "request-permission",
-    requestId: request.requestId,
-    request: {
-      title: request.message ?? "",
-      options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { requestId: request.requestId } },
-    },
-  }
-}
-
-function questionOutbound(request: PendingRequest): RequestOutbound {
-  return {
-    kind: "elicitation",
-    requestId: request.requestId,
-    request: {
-      mode: "form",
-      message: request.message ?? "",
-      requestedSchema: { type: "object", properties: {} },
-    },
-  }
-}
-
-const requestOutbound = (request: PendingRequest): RequestOutbound =>
-  request.kind === PendingRequestKind.Elicitation
-    ? questionOutbound(request)
-    : permissionOutbound(request)
-
-/** Deterministic stand-ins for the translator lane's pure projections. */
-const translators: Translators = {
-  translateTurnEvent(state, event, context) {
-    const meta = {
-      _meta: {
-        [AOS_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
-      },
-    }
-    if (event.kind === TurnEventKind.TurnStarted)
-      return {
-        state,
-        outbound: [
-          {
-            kind: "update",
-            update: {
-              sessionUpdate: "state_update",
-              state: "running",
-              // As the real translator does, a dated start keeps its date.
-              _meta: {
-                [AOS_META_KEY]: {
-                  ...meta._meta[AOS_META_KEY],
-                  ...(event.startedAt ? { at: event.startedAt } : {}),
-                },
-              },
-            },
-          },
-        ],
-      }
-    if (event.kind === TurnEventKind.MessageChunk)
-      return {
-        state: { ...state, messageId: event.messageId },
-        outbound: [
-          {
-            kind: "update",
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              messageId: event.messageId,
-              content: { type: "text", text: event.text },
-              ...meta,
-            },
-          },
-        ],
-      }
-    if (event.kind === TurnEventKind.TurnFailed)
-      return {
-        state,
-        outbound: [
-          {
-            kind: "update",
-            update: {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: AOS_STOP_REASONS.uncertain,
-              // As the real translator does, the failure itself travels with
-              // the state it settled, which is what the member logs.
-              _meta: {
-                [AOS_META_KEY]: {
-                  ...meta._meta[AOS_META_KEY],
-                  ...(event.code ? { code: event.code } : {}),
-                  message: event.message,
-                },
-              },
-            },
-          },
-        ],
-      }
-    if (event.kind === TurnEventKind.TurnRequiresAction)
-      return { state, outbound: event.requests.map(requestOutbound) }
-    if (event.kind === TurnEventKind.TurnEnded)
-      return {
-        state,
-        outbound: [
-          {
-            kind: "update",
-            update: {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: context.stopping ? "cancelled" : "end_turn",
-              ...meta,
-            },
-          },
-        ],
-      }
-    if (event.kind === TurnEventKind.SteerAccepted)
-      return {
-        state,
-        outbound: [
-          {
-            kind: "steer-accepted",
-            turnId: context.turnId,
-            requestId: event.requestId,
-            text: event.text,
-            delivery: event.delivery,
-          },
-        ],
-      }
-    return { state, outbound: [] }
-  },
-  persistedCorrections,
-  translateHistory: (history) =>
-    history.messages.map((message) => ({
-      kind: "update",
-      update: {
-        sessionUpdate: "agent_message",
-        messageId: message.id,
-        content: [{ type: "text", text: `replay:${message.id}` }],
-      },
-    })),
-  pendingRequestToOutbound: (request) => requestOutbound(request),
-  replyFromPermission: (request, response) => ({
-    requestId: request.requestId,
-    status: "resolved",
-    payload: response.outcome,
-  }),
-  replyFromElicitation: (request) => ({
-    requestId: request.requestId,
-    status: "resolved",
-  }),
-  configOptionsOf: (models) => [
-    {
-      type: "select",
-      configId: "model",
-      name: "Model",
-      currentValue: models.selectedId,
-      options: models.options.map(({ id, label }) => ({
-        value: id,
-        name: label,
-      })),
-    },
-  ],
-  configWriteOf: (configId, value) =>
-    configId === "model" && typeof value === "string"
-      ? { selectedId: value }
-      : undefined,
-}
-
-type Recorded = { method: string; params: unknown }
-
-function createRecorder() {
-  const entries: Recorded[] = []
-  const waiters = new Set<() => void>()
-  return {
-    entries,
-    of(method: string) {
-      return entries.filter((entry) => entry.method === method)
-    },
-    add(entry: Recorded) {
-      entries.push(entry)
-      for (const resolve of [...waiters]) resolve()
-    },
-    async wait(predicate: (entry: Recorded) => boolean) {
-      for (;;) {
-        const found = entries.find(predicate)
-        if (found) return found
-        await new Promise<void>((resolve) => {
-          const wake = () => {
-            waiters.delete(wake)
-            resolve()
-          }
-          waiters.add(wake)
-        })
-      }
-    },
-  }
-}
-
-const unsupported = () => {
-  throw new Error("The ACP agent test does not exercise this operation")
-}
-
-const PatchSchema = z.object({
-  title: z.string().optional(),
-  archived: z.boolean().optional(),
-  unread: z.boolean().optional(),
-  pinned: z.boolean().optional(),
-})
-
-const ModelPatchSchema = z.object({
-  selectedId: z.string().optional(),
-  effortId: z.string().optional(),
-})
-
-/** A redeemed-invitation lane with nothing granted, for the guest guards. */
-const GUEST_POLICY: GuestPolicy = {
-  authenticate: async () => undefined,
-  grant: () => undefined,
-  active: () => false,
-  project: {
-    access: (base) => base,
-    history: (value) => value,
-    turn: () => undefined,
-    capabilities: (value) => value,
-    permissionReply: (_request, reply) => reply,
-  },
-  expire: () => () => undefined,
-}
-
-type HarnessOptions = {
-  rows?: Session[]
-  /** Runs the connection on the guest lane instead of the operator lane. */
-  guest?: boolean
-  total?: number
-  activity?: AosActivityNotification[]
-  /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
-  permission?: (
-    params: unknown,
-    signal: AbortSignal
-  ) => Promise<RequestPermissionResponse>
-  /** This browser's answer to a question; `signal` aborts on withdrawal. */
-  question?: (
-    params: unknown,
-    signal: AbortSignal
-  ) => Promise<CreateElicitationResponse>
-  discover?: ServerTurnEngine["discover"]
-  /** Stands for a runtime that reports the turns it starts by itself. */
-  watch?: ServerTurnEngine["watch"]
-  /** Defaults to a readable window; a rejection stands for one that is not. */
-  context?: ServerRuntime["context"]
-  /** Runs before each model catalog read; a slow one stands for a real provider. */
-  beforeModels?: () => Promise<void>
-  /** Runs before each history read; a held one stands for a slow page. */
-  beforeHistory?: () => Promise<void>
-  /** Bounds each turn's journal; a small one stands for a long turn. */
-  maxReplayEvents?: number
-  /** Runs as a resume translates the page it read, before it follows the turn. */
-  onReplay?: () => void
-  /** Stands for a provider with no catalog change signal. */
-  withoutCatalogChanges?: boolean
-  /**
-   * Runs as the provider admits each turn, before its handle returns: holding
-   * it holds the admission, and throwing refuses the turn.
-   */
-  onStart?: (source: EventSource) => void | Promise<void>
-  /** The replayed page's messages; defaults to one earlier assistant reply. */
-  history?: SessionHistoryResponse["messages"]
-  /**
-   * The Session's whole history, oldest first, paged newest first as every
-   * runtime pages it; `truncated` stands for older rows it cannot reach.
-   */
-  transcript?: SessionHistoryResponse["messages"]
-  truncated?: boolean
-  /** Replaces the harness's one-update-per-message history translation. */
-  translateHistory?: Translators["translateHistory"]
-  /** Gives provider Sessions ids of their own, as a real runtime does. */
-  providerIds?: boolean
-  /** Whether the client pages older history, as the AOS browser does. */
-  pagesHistory?: boolean
-}
-
-async function harness(options: HarnessOptions = {}) {
-  const sources: EventSource[] = []
-  const start = vi.fn(async () => {
-    const source = new EventSource()
-    sources.push(source)
-    await options.onStart?.(source)
-    return source
   })
-  const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
-  const discover = vi.fn(options.discover ?? (async () => undefined))
-  const engine: ServerTurnEngine = { start, recover, discover }
-  const coordinator = new SessionCoordinator({
-    engine,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: 64,
-    maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: options.maxReplayEvents ?? 64,
-    maxReplayBytes: 256 * 1024,
+  return updates(recorder).flatMap((params) => {
+    const parsed = Schema.safeParse(params)
+    return parsed.success
+      ? [parsed.data.update._meta[AOS_META_KEY].sequence]
+      : []
   })
-
-  const rows = new Map(
-    (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
-  )
-  // A provider id is the public one behind a prefix, so either maps to the other.
-  const providerId = (publicId: string) =>
-    options.providerIds ? `provider-${publicId}` : publicId
-  const publicId = (sessionId: string) =>
-    options.providerIds ? sessionId.replace(/^provider-/u, "") : sessionId
-  let models: SessionModelsResponse = MODELS
-
-  const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
-    sessions: [...rows.values()],
-    total: options.total ?? rows.size,
-    limit,
-    offset,
-  }))
-  const getSession = vi.fn(async (_agentId: string, sessionId: string) => {
-    const row = rows.get(publicId(sessionId))
-    if (!row) throw new Error("not found")
-    return row
-  })
-  const updateSession = vi.fn(
-    async (_agentId: string, sessionId: string, patch: SessionPatch) => {
-      const current = rows.get(sessionId)
-      if (current)
-        rows.set(sessionId, { ...current, ...PatchSchema.parse(patch) })
-    }
-  )
-  const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
-    rows.delete(sessionId)
-  })
-  const updateModel = vi.fn(
-    async (_agentId: string, _sessionId: string, patch: unknown) => {
-      models = { ...models, ...ModelPatchSchema.parse(patch) }
-      return { selectedId: models.selectedId }
-    }
-  )
-  const history = vi.fn(
-    async (
-      _agentId: string,
-      sessionId: string,
-      limit: number,
-      offset: number
-    ): Promise<SessionHistoryResponse> => {
-      await options.beforeHistory?.()
-      const { transcript } = options
-      if (transcript) {
-        const end = Math.max(0, transcript.length - offset)
-        const messages = transcript.slice(Math.max(0, end - limit), end)
-        const nextOffset = offset + messages.length
-        return {
-          sessionId,
-          messages,
-          total: transcript.length,
-          limit,
-          offset,
-          nextOffset,
-          ...(options.truncated && nextOffset >= transcript.length
-            ? { truncated: true }
-            : {}),
-        }
-      }
-      return {
-        sessionId,
-        messages: options.history ?? [
-          {
-            id: "message-1",
-            role: "assistant" as const,
-            content: [{ type: "text" as const, text: "Earlier" }],
-            createdAt: NOW,
-          },
-        ],
-        total: (options.history ?? [undefined]).length,
-        limit: 500,
-        offset: 0,
-        nextOffset: 0,
-      }
-    }
-  )
-
-  const runtime: ServerRuntime = {
-    turns: engine,
-    // Every invitation in this harness addresses the seeded Session.
-    resolveInvitedSession: async () => ({
-      sessionId: providerId(SESSION),
-      created: false,
-    }),
-    resolveSessionId: (_agentId, publicSessionId) =>
-      providerId(publicSessionId),
-    publicError: () => undefined,
-    authState: unsupported,
-    runtimeInfo: async () => RUNTIME_INFO,
-    listAgents: async () => ({ revision: "rev-1", agents: [] }),
-    updateAgentVisibility: unsupported,
-    listAllSessions,
-    listSessions: async (_agentId, limit, offset) =>
-      listAllSessions(limit, offset),
-    history,
-    getSession,
-    createSession: async (agentId, title) => {
-      rows.set(
-        CREATED,
-        sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
-      )
-      return { session: { id: CREATED, agentId } }
-    },
-    updateSession,
-    deleteSession,
-    workspaceCapabilities: async () => CAPABILITIES,
-    models: async () => {
-      await options.beforeModels?.()
-      return models
-    },
-    updateModel,
-    context: options.context ?? (async () => USAGE),
-    subscribeSessionInvalidation: unsupported,
-    ...(options.withoutCatalogChanges
-      ? {}
-      : { subscribeCatalogChanges: async () => () => undefined }),
-    stageAttachments: unsupported,
-    artifact: unsupported,
-    transcribe: unsupported,
-    speak: unsupported,
-  }
-
-  const runtimeInstance: RuntimeInstance = {
-    id: "test",
-    runtime,
-    sessions: coordinator,
-    close: async () => undefined,
-  }
-
-  const readState = {
-    focus: vi.fn(),
-    blur: vi.fn(),
-    onExecution: vi.fn(),
-    markRead: vi.fn(async () => undefined),
-    close: vi.fn(),
-  }
-  const presence = {
-    set: vi.fn(),
-    clear: vi.fn(),
-    present: vi.fn(() => false),
-    exposed: vi.fn(() => false),
-    lastPresentAt: vi.fn(() => undefined),
-  }
-  const activityListeners = new Set<(event: AosActivityNotification) => void>()
-  const activityFeed = {
-    snapshot: () => options.activity ?? [],
-    subscribe: (listener: (event: AosActivityNotification) => void) => {
-      activityListeners.add(listener)
-      return () => activityListeners.delete(listener)
-    },
-    close: vi.fn(),
-  }
-
-  const logger = { info: vi.fn(), error: vi.fn() }
-  // One lane's connections share its row cache, as the operator lane's do.
-  const sessionRows = createSessionRows()
-  const { watch } = options
-  const rooms = createSessionRooms({
-    snapshot: (roomScope) => coordinator.snapshot(roomScope),
-    ...(watch
-      ? {
-          adoption: {
-            watch,
-            discover: (roomScope, lane) =>
-              coordinator.discover(roomScope, lane),
-            observe: (roomScope, listener) =>
-              coordinator.observeScope(roomScope, listener),
-          },
-        }
-      : {}),
-  })
-
-  /**
-   * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and room registry, as one deployment's lanes do.
-   */
-  async function connect(
-    connectionId: string,
-    lane: {
-      guest?: GuestPolicy
-      /** This browser's answer to a permission request, if not the harness's. */
-      permission?: HarnessOptions["permission"]
-      /** This browser's answer to a question, if not the harness's. */
-      question?: HarnessOptions["question"]
-    } = {}
-  ) {
-    const attachmentStages = new AttachmentStageRegistry()
-    const permission = lane.permission ?? options.permission
-    const question = lane.question ?? options.question
-    const context: AcpConnectionContext = {
-      connectionId,
-      principalId: PRINCIPAL,
-      runtimeInstance,
-      sessionRows,
-      readState,
-      translators: {
-        ...translators,
-        translateHistory: (history, lane) => {
-          options.onReplay?.()
-          return (options.translateHistory ?? translators.translateHistory)(
-            history,
-            lane
-          )
-        },
-      },
-      attachmentStages,
-      rooms,
-      presence,
-      logger,
-      // As the lanes do, only an operator reads the activity feed.
-      ...(lane.guest
-        ? { lane: "guest", guest: lane.guest }
-        : { lane: "operator", activityFeed }),
-    }
-
-    const recorder = createRecorder()
-    const clientApp = client({ name: "aos-browser" })
-      .onNotification(methods.client.session.update, ({ params }) => {
-        recorder.add({ method: methods.client.session.update, params })
-      })
-      .onRequest(
-        methods.client.session.requestPermission,
-        async ({ params, signal }) => {
-          recorder.add({
-            method: methods.client.session.requestPermission,
-            params,
-          })
-          return (
-            (await permission?.(params, signal)) ?? {
-              outcome: { outcome: "selected", optionId: "once" },
-            }
-          )
-        }
-      )
-      .onRequest(
-        methods.client.elicitation.create,
-        async ({ params, signal }) => {
-          recorder.add({ method: methods.client.elicitation.create, params })
-          return (
-            (await question?.(params, signal)) ?? {
-              action: "accept",
-              content: {},
-            }
-          )
-        }
-      )
-    for (const method of Object.values(AOS_METHODS.notify))
-      clientApp.onNotification(
-        method,
-        (params) => params,
-        ({ params }) => {
-          recorder.add({ method, params })
-        }
-      )
-
-    const connection = clientApp.connect(createAosAcpAgent(context))
-    const initialize = await connection.agent.request(
-      methods.agent.initialize,
-      {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        info: { name: "aos-browser", version: "1" },
-        capabilities: {
-          _meta: {
-            [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
-          },
-        },
-      }
-    )
-    return {
-      agent: connection.agent,
-      close: () => connection.close(),
-      initialize,
-      recorder,
-      attachmentStages,
-      /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
-      list: () => connection.agent.request(methods.agent.session.list, {}),
-      create: () =>
-        connection.agent.request(methods.agent.session.new, {
-          cwd: "/",
-          _meta: {
-            [AOS_META_KEY]: { agentId: AGENT },
-          },
-        }),
-    }
-  }
-
-  const primary = await connect(
-    CONNECTION,
-    options.guest ? { guest: GUEST_POLICY } : {}
-  )
-
-  const scope: SessionScope = {
-    agentId: AGENT,
-    sessionId: providerId(SESSION),
-    threadId: SESSION,
-  }
-
-  return {
-    ...primary,
-    connect,
-    coordinator,
-    scope,
-    sources,
-    start,
-    discover,
-    updateSession,
-    deleteSession,
-    updateModel,
-    listAllSessions,
-    history,
-    readState,
-    presence,
-    rows,
-    logger,
-    /** Every structured line the connection wrote, whatever its level. */
-    logged: () =>
-      [...logger.info.mock.calls, ...logger.error.mock.calls].map(
-        ([value]) => value
-      ),
-    publishActivity(event: AosActivityNotification) {
-      for (const listener of activityListeners) listener(event)
-    },
-  }
-}
-
-function turnStarted(): TurnEvent {
-  return { kind: TurnEventKind.TurnStarted }
-}
-
-function updates(recorder: ReturnType<typeof createRecorder>) {
-  return recorder.of(methods.client.session.update).map((entry) => entry.params)
 }
 
 /** Every catalog relist this connection has asked the client for. */
-function relists(recorder: ReturnType<typeof createRecorder>) {
+function relists(recorder: Recorder) {
   return recorder.of(AOS_METHODS.notify.catalogInvalidated)
 }
 
 /** Every context reading this connection has pushed, newest last. */
-function usages(recorder: ReturnType<typeof createRecorder>) {
+function usages(recorder: Recorder) {
   return updates(recorder).filter((update) =>
     JSON.stringify(update).includes("usage_update")
   )
 }
 
 /** The newest reading, once the connection has pushed `count` of them. */
-async function usageOf(
-  test: { recorder: ReturnType<typeof createRecorder> },
-  count = 1
-) {
-  await test.recorder.wait(() => usages(test.recorder).length >= count)
+async function usageOf(test: { recorder: Recorder }, count = 1) {
+  await test.recorder.wait(
+    () => usages(test.recorder).length >= count,
+    `usage reading ${count}`
+  )
   return usages(test.recorder).at(-1)
 }
 
@@ -929,7 +114,7 @@ describe("AOS ACP agent", () => {
 
     expect(test.initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: { name: "aos-proxy", title: "Hermes" },
+      info: { name: "aos-proxy", title: "Test Runtime" },
       capabilities: { session: { delete: {}, prompt: { image: {} } } },
       authMethods: [],
       _meta: {
@@ -981,7 +166,8 @@ describe("AOS ACP agent", () => {
     await test.recorder.wait(
       (entry) =>
         entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes("usage_update")
+        JSON.stringify(entry.params).includes("usage_update"),
+      "an update carrying usage_update"
     )
     expect(updates(test.recorder)).toMatchObject([
       {
@@ -1113,8 +299,9 @@ describe("AOS ACP agent", () => {
       sessionId: SESSION,
       update: { sessionUpdate: "agent_message", messageId: "message-1" },
     })
-    const running = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes('"state":"running"')
+    const running = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      'an update carrying "state":"running"'
     )
     expect(running.params).toMatchObject({
       sessionId: SESSION,
@@ -1129,8 +316,9 @@ describe("AOS ACP agent", () => {
       messageId: "assistant-1",
       text: "Live",
     })
-    const streamed = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Live")
+    const streamed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Live"),
+      "an update carrying Live"
     )
     expect(streamed.params).toMatchObject({
       sessionId: SESSION,
@@ -1156,7 +344,7 @@ describe("AOS ACP agent", () => {
       .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
       .parse(accepted)._meta.aos.messageId
     expect(messageId).toHaveLength(36)
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     expect(test.start.mock.calls[0]?.[0]).toMatchObject({ threadId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
       messageId,
@@ -1171,8 +359,9 @@ describe("AOS ACP agent", () => {
     })
     source?.emit({ kind: TurnEventKind.TurnEnded })
 
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("end_turn")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("end_turn"),
+      "an update carrying end_turn"
     )
     // `session/new` and the settled turn each push usage out of band: the turn
     // grew the window, so the composer is owed the reading it left behind.
@@ -1205,6 +394,13 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    // Only the proxy-minted user turn is unsequenced; the run stream is not.
+    const sequences = sequencesOf(test.recorder)
+    expect(sequences).toHaveLength(3)
+    expect(sequences.every((value) => Number.isInteger(value))).toBe(true)
+    expect([...sequences].sort((left, right) => left - right)).toEqual(
+      sequences
+    )
     test.close()
   })
 
@@ -1216,7 +412,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Delete it" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
     source?.emit({
@@ -1232,7 +428,8 @@ describe("AOS ACP agent", () => {
     source?.finish()
 
     const asked = await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the permission request"
     )
 
     expect(asked.params).toMatchObject({
@@ -1241,7 +438,7 @@ describe("AOS ACP agent", () => {
       options: [{ optionId: "once", kind: "allow_once" }],
       _meta: { [AOS_META_KEY]: { requestId: "approval-1" } },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
       replies: [
         {
@@ -1251,6 +448,10 @@ describe("AOS ACP agent", () => {
         },
       ],
     })
+    // The reply segment is a turn of its own, not the one that asked.
+    const asking = PromptTurnInputSchema.parse(test.start.mock.calls[0]?.[1])
+    const reply = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
+    expect(reply.turnId).not.toBe(asking.turnId)
     test.close()
   })
 
@@ -1262,19 +463,21 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Long job" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes('"state":"running"')
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      'an update carrying "state":"running"'
     )
 
     await test.agent.notify(methods.agent.session.cancel, {
       sessionId: CREATED,
     })
 
-    const stopping = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("stopping")
+    const stopping = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("stopping"),
+      "an update carrying stopping"
     )
     expect(stopping.params).toMatchObject({
       sessionId: CREATED,
@@ -1286,8 +489,9 @@ describe("AOS ACP agent", () => {
     })
     expect(source?.stop).toHaveBeenCalledTimes(1)
     source?.emit({ kind: TurnEventKind.TurnEnded })
-    const settled = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("cancelled")
+    const settled = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("cancelled"),
+      "an update carrying cancelled"
     )
     expect(settled.params).toMatchObject({
       sessionId: CREATED,
@@ -1599,9 +803,9 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Start" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         test.coordinator.state({ agentId: AGENT, sessionId: CREATED })
       ).toBe("running")
@@ -1615,7 +819,8 @@ describe("AOS ACP agent", () => {
 
     expect(steered).toEqual({ status: "steered" })
     const accepted = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.steerAccepted
+      (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
+      "the steer acknowledgement"
     )
     expect(accepted.params).toMatchObject({
       sessionId: CREATED,
@@ -1631,11 +836,11 @@ describe("AOS ACP agent", () => {
     await test.list()
 
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
     )
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: null })
-    await vi.waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
+    await waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
     test.close()
   })
 
@@ -1645,7 +850,7 @@ describe("AOS ACP agent", () => {
 
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
         sessionId: SESSION,
         foreground: true,
@@ -1665,7 +870,7 @@ describe("AOS ACP agent", () => {
       idle: true,
     })
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
         sessionId: SESSION,
         foreground: false,
@@ -1684,7 +889,7 @@ describe("AOS ACP agent", () => {
       foreground: true,
     })
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
         sessionId: null,
         foreground: true,
@@ -1700,7 +905,7 @@ describe("AOS ACP agent", () => {
     await test.list()
 
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
     )
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
@@ -1710,7 +915,7 @@ describe("AOS ACP agent", () => {
       idle: false,
     })
 
-    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
     expect(test.readState.focus).toHaveBeenCalledTimes(1)
     test.close()
   })
@@ -1718,11 +923,11 @@ describe("AOS ACP agent", () => {
   it("forgets this connection's presence when it closes", async () => {
     const test = await harness()
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await vi.waitFor(() => expect(test.presence.set).toHaveBeenCalled())
+    await waitFor(() => expect(test.presence.set).toHaveBeenCalled())
 
     test.close()
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.presence.clear).toHaveBeenCalledWith(PRINCIPAL, CONNECTION)
     )
   })
@@ -1752,13 +957,15 @@ describe("AOS ACP agent", () => {
     const test = await harness({ activity: [event] })
 
     const hydrated = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.activity
+      (entry) => entry.method === AOS_METHODS.notify.activity,
+      "an activity notification"
     )
 
     expect(hydrated.params).toEqual(event)
     test.publishActivity({ ...event, turnId: "lifecycle-2" })
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("lifecycle-2")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("lifecycle-2"),
+      "an update carrying lifecycle-2"
     )
     test.close()
   })
@@ -1771,7 +978,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "First" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
     await expect(
       test.agent.request(methods.agent.session.prompt, {
@@ -1799,7 +1006,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Delete it" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
     source?.emit({
@@ -1814,7 +1021,8 @@ describe("AOS ACP agent", () => {
     })
     source?.finish()
     await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the permission request"
     )
 
     // The provider authoritatively clears the recovered wait.
@@ -1824,7 +1032,7 @@ describe("AOS ACP agent", () => {
     })
     expect(test.discover).toHaveBeenCalled()
     const signal = await withdrawal.promise
-    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    await waitFor(() => expect(signal.aborted).toBe(true))
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
 
     await settled()
@@ -1846,7 +1054,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Delete it" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
     source?.emit({
@@ -1861,7 +1069,8 @@ describe("AOS ACP agent", () => {
     })
     source?.finish()
     await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the permission request"
     )
 
     test.close()
@@ -1881,7 +1090,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Delete it" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
     source?.emit({
@@ -1895,12 +1104,12 @@ describe("AOS ACP agent", () => {
       ],
     })
     source?.finish()
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
 
     await test.agent.notify(methods.agent.session.cancel, {
       sessionId: CREATED,
     })
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.logged()).toContainEqual({
         event: "acp.turn.cancel",
         connectionId: "connection-1",
@@ -1923,7 +1132,7 @@ describe("AOS ACP agent", () => {
     })
 
     test.close()
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.logged()).toContainEqual({
         event: "acp.connection.closed",
         connectionId: "connection-1",
@@ -1940,7 +1149,7 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Long job" }],
       _meta: { [AOS_META_KEY]: {} },
     })
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
     source?.emit(turnStarted())
     source?.emit({
@@ -1951,7 +1160,7 @@ describe("AOS ACP agent", () => {
     source?.finish()
 
     // The proxy mints the run id the browser sees, so the line reports that one.
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.logged()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1970,7 +1179,6 @@ describe("AOS ACP agent", () => {
   })
 })
 
-type Recorder = ReturnType<typeof createRecorder>
 type Browser = Pick<Awaited<ReturnType<typeof harness>>, "agent" | "recorder">
 
 /**
@@ -2045,7 +1253,8 @@ async function open(
   await browser.recorder.wait(
     (entry) =>
       browser.recorder.entries.indexOf(entry) >= from &&
-      JSON.stringify(entry.params).includes("state_update")
+      JSON.stringify(entry.params).includes("state_update"),
+    "an update carrying state_update"
   )
 }
 
@@ -2079,9 +1288,13 @@ async function replyWhileWatched(
     text,
   })
   for (const { recorder } of watchers)
-    await recorder.wait((entry) => JSON.stringify(entry.params).includes(text))
+    await recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(text),
+      `an update carrying ${text}`
+    )
   source?.emit({ kind: TurnEventKind.TurnEnded })
-  for (const { recorder } of watchers) await recorder.wait(endedTurn)
+  for (const { recorder } of watchers)
+    await recorder.wait(endedTurn, "the turn to end")
 }
 
 const endedTurn = (entry: Recorded) =>
@@ -2112,10 +1325,11 @@ async function liveTurn(
   watchers: readonly Browser[]
 ) {
   const messageId = await prompt(test, "Summarize")
-  await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
   test.sources[0]?.emit(turnStarted())
   chunk(test.sources[0], "Live")
-  for (const { recorder } of watchers) await recorder.wait(said("Live"))
+  for (const { recorder } of watchers)
+    await recorder.wait(said("Live"), "an update carrying Live")
   return messageId
 }
 
@@ -2218,7 +1432,7 @@ describe("Session rooms", () => {
     const from = other.recorder.entries.length
 
     const messageId = await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other, test])
 
     const turn = [
@@ -2250,7 +1464,8 @@ describe("Session rooms", () => {
 
     await prompt(test, "Summarize")
     await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "an _aos/error notification"
     )
     const late = await test.connect("connection-3")
     await late.list()
@@ -2270,17 +1485,18 @@ describe("Session rooms", () => {
     await other.list()
     await open(other)
     await prompt(test, "Long job")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
-    await other.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes('"state":"running"')
+    await other.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      'an update carrying "state":"running"'
     )
 
     await other.agent.notify(methods.agent.session.cancel, {
       sessionId: SESSION,
     })
 
-    await vi.waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    await waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
     test.close()
     other.close()
   })
@@ -2300,7 +1516,7 @@ describe("Session rooms", () => {
     await other.list()
     await open(other)
     await prompt(test, "Delete it")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
       kind: TurnEventKind.TurnRequiresAction,
@@ -2309,17 +1525,17 @@ describe("Session rooms", () => {
     test.sources[0]?.finish()
     const asked = (entry: Recorded) =>
       entry.method === methods.client.session.requestPermission
-    await other.recorder.wait(asked)
-    await test.recorder.wait(asked)
+    await other.recorder.wait(asked, "the request both browsers are asked")
+    await test.recorder.wait(asked, "the request both browsers are asked")
 
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [other])
     expect(flow(other.recorder)).toContain("chunk Resumed")
 
     // The first answer withdrew the request from the other browser, so the
     // answer it gives anyway is dropped rather than refused.
     const signal = await withdrawal.promise
-    await vi.waitFor(() => expect(signal.aborted).toBe(true))
+    await waitFor(() => expect(signal.aborted).toBe(true))
     late.release()
     await settled()
     expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
@@ -2348,7 +1564,7 @@ describe("Session rooms", () => {
     await other.list()
     await open(other)
     await prompt(test, "Pick one")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
       kind: TurnEventKind.TurnRequiresAction,
@@ -2357,13 +1573,13 @@ describe("Session rooms", () => {
     test.sources[0]?.finish()
     const asked = (entry: Recorded) =>
       entry.method === methods.client.elicitation.create
-    await other.recorder.wait(asked)
-    await test.recorder.wait(asked)
+    await other.recorder.wait(asked, "the request both browsers are asked")
+    await test.recorder.wait(asked, "the request both browsers are asked")
     answer.release()
 
     const signal = await withdrawal.promise
-    await vi.waitFor(() => expect(signal.aborted).toBe(true))
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(signal.aborted).toBe(true))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [other])
     expect(flow(other.recorder)).toContain("chunk Resumed")
     expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
@@ -2383,7 +1599,7 @@ describe("Session rooms", () => {
     await other.list()
     await open(other)
     await prompt(test, "Delete it")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.stop.mockResolvedValue("idle")
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
@@ -2391,13 +1607,13 @@ describe("Session rooms", () => {
       requests: [APPROVAL],
     })
     test.sources[0]?.finish()
-    await vi.waitFor(() => expect(signals).toHaveLength(2))
+    await waitFor(() => expect(signals).toHaveLength(2))
 
     await test.agent.notify(methods.agent.session.cancel, {
       sessionId: SESSION,
     })
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
     )
     await settled()
@@ -2422,7 +1638,7 @@ describe("Session rooms", () => {
     await other.list()
     await open(other)
     await prompt(test, "Delete it")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
       kind: TurnEventKind.TurnRequiresAction,
@@ -2433,11 +1649,11 @@ describe("Session rooms", () => {
     const failed = (entry: Recorded) =>
       entry.method === AOS_METHODS.notify.error
     await Promise.race([
-      test.recorder.wait(failed),
-      other.recorder.wait(failed),
+      test.recorder.wait(failed, "an _aos/error notification"),
+      other.recorder.wait(failed, "an _aos/error notification"),
     ])
     admission.release()
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [test, other])
 
     const errors = [
@@ -2457,22 +1673,24 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const messageId = await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
       text: "Live",
     })
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Live")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Live"),
+      "an update carrying Live"
     )
 
     const other = await test.connect("connection-2")
     await other.list()
     await open(other, { replayFrom: { type: "start" } })
-    await other.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Live")
+    await other.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Live"),
+      "an update carrying Live"
     )
 
     const seen = flow(other.recorder)
@@ -2497,7 +1715,7 @@ describe("Session rooms", () => {
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     expect(prompts(other.recorder)).toEqual([])
     expect(withoutStates(flow(other.recorder))).toEqual([
@@ -2524,12 +1742,13 @@ describe("Session rooms", () => {
       text: "Use the tables",
     })
     await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.steerAccepted
+      (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
+      "the steer acknowledgement"
     )
 
     await open(other, { replayFrom: { type: "start" } })
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     expect(withoutStates(flow(other.recorder))).toEqual([
       "history user-1",
@@ -2556,7 +1775,7 @@ describe("Session rooms", () => {
 
     await open(other, { replayFrom: { type: "start" } })
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     expect(flow(other.recorder)).toContain("history assistant-0")
     test.close()
@@ -2592,16 +1811,16 @@ describe("Session rooms", () => {
       requests: [APPROVAL],
     })
     test.sources[0]?.finish()
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     test.sources[1]?.emit(turnStarted())
     chunk(test.sources[1], "Resumed")
-    await test.recorder.wait(said("Resumed"))
+    await test.recorder.wait(said("Resumed"), "an update carrying Resumed")
 
     const other = await test.connect("connection-2")
     await other.list()
     await open(other, { replayFrom: { type: "start" } })
     test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     expect(withoutStates(flow(other.recorder))).toEqual([
       "history user-1",
@@ -2625,17 +1844,18 @@ describe("Session rooms", () => {
       requests: [APPROVAL],
     })
     test.sources[0]?.finish()
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     test.sources[1]?.emit(turnStarted())
     chunk(test.sources[1], "Resumed")
-    await test.recorder.wait(said("Resumed"))
+    await test.recorder.wait(said("Resumed"), "an update carrying Resumed")
 
     const from = test.recorder.entries.length
     await open(test, { replayFrom: { type: "start" } })
     chunk(test.sources[1], "After")
     test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
-    await vi.waitFor(() =>
-      expect(flow(test.recorder, SESSION, from)).toContain("state idle")
+    await test.recorder.wait(
+      () => flow(test.recorder, SESSION, from).includes("state idle"),
+      "the reloaded turn to settle idle"
     )
 
     expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
@@ -2699,7 +1919,7 @@ describe("Session rooms", () => {
         open(test, { replayFrom: { type: "start" } })
       ).rejects.toThrow()
       chunk(test.sources[0], "After")
-      await test.recorder.wait(said("After"))
+      await test.recorder.wait(said("After"), "an update carrying After")
 
       expect(
         flow(test.recorder, SESSION, from).filter(isPromptOrChunk)
@@ -2739,7 +1959,7 @@ describe("Session rooms", () => {
     await settled()
     page.release()
     await reopened
-    await other.recorder.wait(said("Live"))
+    await other.recorder.wait(said("Live"), "an update carrying Live")
 
     expect(flow(other.recorder, SESSION, from).filter(isPromptOrChunk)).toEqual(
       [`prompt ${messageId}`, "chunk Live"]
@@ -2801,7 +2021,7 @@ describe("Session rooms", () => {
     await settled()
     page.release()
     await reopened
-    await other.recorder.wait(said("Live"))
+    await other.recorder.wait(said("Live"), "an update carrying Live")
 
     const seen = flow(other.recorder, SESSION, from)
     expect(seen[0]).toBe("history message-1")
@@ -2834,7 +2054,8 @@ describe("Session rooms", () => {
     ).toBe(true)
     // A view rebuilt from the start reloads on invalidation, not on `resync`.
     await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
+      "the Session invalidation"
     )
     test.close()
   })
@@ -2850,7 +2071,7 @@ describe("Session rooms", () => {
     await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await guest.recorder.wait(endedTurn)
+    await guest.recorder.wait(endedTurn, "the turn to end")
 
     expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
     expect(withoutStates(flow(guest.recorder, GUEST_REF))).toEqual([
@@ -2892,10 +2113,11 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes('"state":"running"')
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      'an update carrying "state":"running"'
     )
     const { turnId } = test.coordinator.snapshot(test.scope)
 
@@ -2914,7 +2136,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const messageId = await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
 
     const other = await test.connect("connection-2")
@@ -2958,7 +2180,7 @@ describe("Session rooms", () => {
     })
     await test.list()
     const messageId = await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
     const other = await test.connect("connection-2")
     await other.list()
@@ -2987,13 +2209,14 @@ describe("Session rooms", () => {
     const other = await test.connect("connection-2")
     await other.list()
     const messageId = await prompt(test, "First")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
     // The winner is still being admitted, so the loser passes the idle check
     // and loses at the coordinator.
     await prompt(other, "Second")
     const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "an _aos/error notification"
     )
     expect(refused.params).toMatchObject({ code: "turn_in_progress" })
     admission.release()
@@ -3031,16 +2254,17 @@ describe("Session rooms", () => {
     const losing = prompt(other, "Second", SESSION, {
       attachmentStageId: stageId,
     })
-    await vi.waitFor(() => expect(appendTo).toHaveBeenCalledOnce())
+    await waitFor(() => expect(appendTo).toHaveBeenCalledOnce())
     const messageId = await prompt(test, "First")
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.coordinator.state(test.scope)).toBe("running")
     )
 
     staged.release()
     await losing
     const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "an _aos/error notification"
     )
     expect(refused.params).toMatchObject({ code: "turn_in_progress" })
     await replyWhileWatched(test.sources[0], "Done", [other])
@@ -3077,7 +2301,7 @@ describe("Session rooms", () => {
       await open(reopening, { replayFrom: { type: "start" } })
       chunk(test.sources[0], "More")
       test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-      await reopening.recorder.wait(endedTurn)
+      await reopening.recorder.wait(endedTurn, "the turn to end")
 
       const seen = flow(reopening.recorder, SESSION, from)
       expect(seen.slice(0, 3)).toEqual([
@@ -3119,7 +2343,7 @@ describe("Session rooms", () => {
     page.release()
     await reopened
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await test.recorder.wait(endedTurn)
+    await test.recorder.wait(endedTurn, "the turn to end")
 
     const seen = flow(test.recorder, SESSION, from)
     const during = seen.filter((item) => item.includes("During"))
@@ -3137,7 +2361,10 @@ describe("Session rooms", () => {
     await test.agent.notify(methods.agent.session.cancel, {
       sessionId: SESSION,
     })
-    await test.recorder.wait(said('"execution":"stopping"'))
+    await test.recorder.wait(
+      said('"execution":"stopping"'),
+      'an update carrying "execution":"stopping"'
+    )
 
     const from = test.recorder.entries.length
     await open(test, { replayFrom: { type: "start" } })
@@ -3145,7 +2372,8 @@ describe("Session rooms", () => {
     const ended = await test.recorder.wait(
       (entry) =>
         test.recorder.entries.indexOf(entry) >= from &&
-        JSON.stringify(entry.params).includes('"state":"idle"')
+        JSON.stringify(entry.params).includes('"state":"idle"'),
+      'an update carrying "state":"idle"'
     )
 
     expect(ended.params).toMatchObject({
@@ -3166,13 +2394,14 @@ describe("Session rooms", () => {
     await open(other, { replayFrom: { type: "start" } })
     await other.recorder.wait(
       (entry) =>
-        other.recorder.entries.indexOf(entry) >= first && said("Live")(entry)
+        other.recorder.entries.indexOf(entry) >= first && said("Live")(entry),
+      'a fresh update carrying "Live"'
     )
     const from = other.recorder.entries.length
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     expect(
       flow(other.recorder, SESSION, from).filter((item) =>
@@ -3192,13 +2421,13 @@ describe("Session rooms", () => {
     await liveTurn(test, [other])
     // A third event outgrows the journal, so the turn's start is gone.
     chunk(test.sources[0], "Aside", "assistant-2")
-    await other.recorder.wait(said("Aside"))
+    await other.recorder.wait(said("Aside"), "an update carrying Aside")
 
     const from = other.recorder.entries.length
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More", "assistant-2")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await other.recorder.wait(endedTurn)
+    await other.recorder.wait(endedTurn, "the turn to end")
 
     const seen = other.recorder.entries.slice(from)
     expect(JSON.stringify(seen)).not.toContain("AOS_RESET_REQUIRED")
@@ -3215,12 +2444,10 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     reply(test.sources[0], "Done")
-    await test.recorder.wait(endedTurn)
-    await vi.waitFor(() =>
-      expect(test.coordinator.state(test.scope)).toBe("idle")
-    )
+    await test.recorder.wait(endedTurn, "the turn to end")
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
 
     const other = await test.connect("connection-2")
     await other.list()
@@ -3244,14 +2471,14 @@ describe("Session rooms", () => {
       sessionId: SESSION,
       cwd: "/",
     })
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.logged()).toContainEqual(
         expect.objectContaining({ connectionId: "connection-2" })
       )
     )
 
     const messageId = await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other])
     models.release()
     await resumed
@@ -3271,7 +2498,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
 
     const other = await test.connect("connection-2")
@@ -3303,14 +2530,14 @@ describe("Session rooms", () => {
       cwd: "/",
     })
     const messageId = await prompt(test, "Summarize", CREATED)
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     models.release()
     await resumed
     await settled()
 
     expect(flow(test.recorder, CREATED)).toEqual([`prompt ${messageId}`])
     reply(test.sources[0], "Done")
-    await test.recorder.wait(endedTurn)
+    await test.recorder.wait(endedTurn, "the turn to end")
     expect(flow(test.recorder, CREATED)).toEqual([
       `prompt ${messageId}`,
       "state running",
@@ -3325,9 +2552,9 @@ describe("Session rooms", () => {
     await test.create()
 
     const messageId = await prompt(test, "Summarize", CREATED)
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     reply(test.sources[0], "Done")
-    await test.recorder.wait(endedTurn)
+    await test.recorder.wait(endedTurn, "the turn to end")
 
     expect(flow(test.recorder, CREATED)).toEqual([
       `prompt ${messageId}`,
@@ -3351,7 +2578,7 @@ describe("Session rooms", () => {
     const from = other.recorder.entries.length
 
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(flow(other.recorder, "session-2", from)).toEqual([])
@@ -3380,15 +2607,16 @@ describe("Session rooms", () => {
         mimeType: "text/markdown",
       },
     ])
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
       text: "Live",
     })
-    await guest.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Live")
+    await guest.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Live"),
+      "an update carrying Live"
     )
 
     expect(flow(guest.recorder, GUEST_REF)).toContain(`prompt ${messageId}`)
@@ -3409,7 +2637,7 @@ describe("Session rooms", () => {
     await guest.agent.notify(methods.agent.session.cancel, {
       sessionId: GUEST_REF,
     })
-    await vi.waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    await waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
     test.close()
     guest.close()
     other.close()
@@ -3424,7 +2652,7 @@ describe("Session rooms", () => {
     await open(guest, { sessionId: GUEST_REF })
 
     await prompt(test, "Private")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [guest])
 
     expect(prompts(guest.recorder, GUEST_REF)).toEqual([])
@@ -3433,68 +2661,53 @@ describe("Session rooms", () => {
     guest.close()
   })
 
-  it.each([
-    ["once", true],
-    ["session", false],
-    ["always", false],
-  ])(
-    "lets a guest answer an operator's approval %s only within its grant",
-    async (optionId, accepted) => {
-      const unanswered = gate()
-      const test = await harness({
-        providerIds: true,
-        // The operator's own browser never answers, so the guest's answer decides.
-        permission: async () => {
-          await unanswered.held
-          return { outcome: { outcome: "cancelled" } }
-        },
-      })
-      await test.list()
-      await open(test)
-      const policy = invitedGuest()
-      const guest = await test.connect("guest-connection", {
-        guest: {
-          ...policy,
-          project: {
-            ...policy.project,
-            // As the real guest projection does, refuse a widened grant.
-            permissionReply: (_request, reply) => {
-              if (JSON.stringify(reply.payload).includes('"once"')) return reply
-              throw invalidRequest()
-            },
+  it("lets a guest answer an operator's approval once only within its grant", async () => {
+    const unanswered = gate()
+    const test = await harness({
+      providerIds: true,
+      // The operator's own browser never answers, so the guest's answer decides.
+      permission: async () => {
+        await unanswered.held
+        return { outcome: { outcome: "cancelled" } }
+      },
+    })
+    await test.list()
+    await open(test)
+    const policy = invitedGuest()
+    const guest = await test.connect("guest-connection", {
+      guest: {
+        ...policy,
+        project: {
+          ...policy.project,
+          // As the real guest projection does, refuse a widened grant.
+          permissionReply: (_request, reply) => {
+            if (JSON.stringify(reply.payload).includes('"once"')) return reply
+            throw invalidRequest()
           },
         },
-        permission: async () => ({
-          outcome: { outcome: "selected", optionId },
-        }),
-      })
-      await open(guest, { sessionId: GUEST_REF })
-      await prompt(test, "Delete it")
-      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-      test.sources[0]?.emit(turnStarted())
-      test.sources[0]?.emit({
-        kind: TurnEventKind.TurnRequiresAction,
-        requests: [APPROVAL],
-      })
-      test.sources[0]?.finish()
+      },
+      permission: async () => ({
+        outcome: { outcome: "selected", optionId: "once" },
+      }),
+    })
+    await open(guest, { sessionId: GUEST_REF })
+    await prompt(test, "Delete it")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
 
-      if (accepted) {
-        await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-        expect(test.start.mock.calls[1]?.[1]).toMatchObject({
-          replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
-        })
-      } else {
-        const refused = await guest.recorder.wait(
-          (entry) => entry.method === AOS_METHODS.notify.error
-        )
-        expect(refused.params).toMatchObject({ code: "invalid_request" })
-        expect(test.start).toHaveBeenCalledTimes(1)
-      }
-      unanswered.release()
-      test.close()
-      guest.close()
-    }
-  )
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+    })
+    unanswered.release()
+    test.close()
+    guest.close()
+  })
 
   it("shows an operator a guest's prompt rebuilt from its allowed fields", async () => {
     const test = await harness({ providerIds: true })
@@ -3516,7 +2729,7 @@ describe("Session rooms", () => {
       ],
       GUEST_REF
     )
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [test])
 
     expect(flow(test.recorder)).toContain(`prompt ${messageId}`)
@@ -3547,12 +2760,10 @@ describe("Session rooms", () => {
     await open(other)
     // An earlier turn of this proxy's own, as a Session that ran one has.
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other, test])
     test.sources[0]?.finish()
-    await vi.waitFor(() =>
-      expect(test.coordinator.state(test.scope)).toBe("idle")
-    )
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
     const fromTest = test.recorder.entries.length
     const fromOther = other.recorder.entries.length
 
@@ -3561,11 +2772,15 @@ describe("Session rooms", () => {
     chunk(background, "Background")
     watchers[0]!.onTurn()
     for (const browser of [test, other])
-      await browser.recorder.wait(said("Background"))
+      await browser.recorder.wait(
+        said("Background"),
+        "an update carrying Background"
+      )
     background.emit({ kind: TurnEventKind.TurnEnded })
     for (const browser of [test, other])
       await browser.recorder.wait(
-        (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+        (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
+        "the Session invalidation"
       )
 
     const turn = ["state running", "chunk Background", "state idle"]
@@ -3592,7 +2807,8 @@ describe("Session rooms", () => {
 
     await prompt(test, "Summarize")
     const invalidated = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
+      "the Session invalidation"
     )
 
     expect(invalidated.params).toEqual({ sessionId: SESSION })
@@ -3613,9 +2829,9 @@ describe("Session rooms", () => {
     const from = other.recorder.entries.length
 
     await prompt(test, "Summarize")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     reply(test.sources[0], "Done")
-    await test.recorder.wait(endedTurn)
+    await test.recorder.wait(endedTurn, "the turn to end")
     await settled()
 
     expect(other.recorder.entries.slice(from)).toEqual([])
@@ -3661,7 +2877,7 @@ describe("Reloading a running turn", () => {
     const reloaded = await reloadAlone(test)
     chunk(test.sources[0], "More")
     test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
-    await reloaded.recorder.wait(endedTurn)
+    await reloaded.recorder.wait(endedTurn, "the turn to end")
 
     expect(prompts(reloaded.recorder)).toEqual([])
     expect(withoutStates(flow(reloaded.recorder))).toEqual([
@@ -3692,12 +2908,12 @@ describe("Reloading a running turn", () => {
     background.emit(turnStarted())
     chunk(background, "Live")
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("Live"))
+    await test.recorder.wait(said("Live"), "an update carrying Live")
 
     const reloaded = await reloadAlone(test)
     chunk(background, "More")
     background.emit({ kind: TurnEventKind.TurnEnded })
-    await reloaded.recorder.wait(endedTurn)
+    await reloaded.recorder.wait(endedTurn, "the turn to end")
 
     expect(withoutStates(flow(reloaded.recorder))).toEqual([
       "history user-1",
@@ -3727,10 +2943,13 @@ describe("Reloading a running turn", () => {
     background.emit(turnStarted())
     chunk(background, "Live")
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("Live"))
+    await test.recorder.wait(said("Live"), "an update carrying Live")
 
     const reloaded = await reloadAlone(test)
-    await reloaded.recorder.wait(said("AOS_RESET_REQUIRED"))
+    await reloaded.recorder.wait(
+      said("AOS_RESET_REQUIRED"),
+      "an update carrying AOS_RESET_REQUIRED"
+    )
     await settled()
 
     expect(withoutStates(flow(reloaded.recorder))).toEqual([
@@ -3761,15 +2980,15 @@ describe("Reloading a running turn", () => {
       requests: [APPROVAL],
     })
     test.sources[0]?.finish()
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     test.sources[1]?.emit(turnStarted())
     chunk(test.sources[1], "Resumed")
-    await test.recorder.wait(said("Resumed"))
+    await test.recorder.wait(said("Resumed"), "an update carrying Resumed")
 
     const reloaded = await reloadAlone(test)
     chunk(test.sources[1], "More")
     test.sources[1]?.emit({ kind: TurnEventKind.TurnEnded })
-    await reloaded.recorder.wait(endedTurn)
+    await reloaded.recorder.wait(endedTurn, "the turn to end")
 
     expect(withoutStates(flow(reloaded.recorder))).toEqual([
       "history user-1",
@@ -3789,7 +3008,10 @@ describe("Reloading a running turn", () => {
     await liveTurn(test, [test])
 
     const reloaded = await reloadAlone(test)
-    await reloaded.recorder.wait(said("AOS_RESET_REQUIRED"))
+    await reloaded.recorder.wait(
+      said("AOS_RESET_REQUIRED"),
+      "an update carrying AOS_RESET_REQUIRED"
+    )
     await settled()
 
     expect(withoutStates(flow(reloaded.recorder))).toEqual([
@@ -3811,7 +3033,7 @@ describe("Reloading a running turn", () => {
     }
 
     const reloaded = await reloadAlone(test)
-    await reloaded.recorder.wait(said("Live"))
+    await reloaded.recorder.wait(said("Live"), "an update carrying Live")
 
     const dated = updates(reloaded.recorder).flatMap((params) => {
       const { update } = params as {
@@ -3852,7 +3074,10 @@ describe("Reloading a running turn", () => {
     first.emit(turnStarted())
     chunk(first, "First reply")
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("First reply"))
+    await test.recorder.wait(
+      said("First reply"),
+      "an update carrying First reply"
+    )
     const firstTurn = test.coordinator.snapshot(test.scope).turnId
 
     // The runtime starts the next turn as the first one ends.
@@ -3863,9 +3088,10 @@ describe("Reloading a running turn", () => {
     )
     first.emit({ kind: TurnEventKind.TurnEnded })
     await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
+      "the Session invalidation"
     )
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(test.coordinator.replayStart(test.scope)?.turnId).not.toBe(
         firstTurn
       )
@@ -3878,8 +3104,9 @@ describe("Reloading a running turn", () => {
     await open(test, { replayFrom: { type: "start" } })
     chunk(next, "Done")
     next.emit({ kind: TurnEventKind.TurnEnded })
-    await vi.waitFor(() =>
-      expect(flow(test.recorder, SESSION, from)).toContain("state idle")
+    await test.recorder.wait(
+      () => flow(test.recorder, SESSION, from).includes("state idle"),
+      "the reloaded turn to settle idle"
     )
 
     expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
@@ -4069,7 +3296,10 @@ describe("History pages", () => {
     expect(test.recorder.entries.slice(from)).toHaveLength(500)
     expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
     await liveTurn(test, [test])
-    const live = await test.recorder.wait(said("Live"))
+    const live = await test.recorder.wait(
+      said("Live"),
+      "an update carrying Live"
+    )
     expect(pageTag((live.params as { update: SentUpdate }).update)).toBe(
       undefined
     )
@@ -4168,36 +3398,6 @@ describe("History pages", () => {
     })
     await expect(older(test, cursorOf(500))).rejects.toMatchObject({
       code: AOS_JSONRPC_ERRORS.notFound,
-    })
-    test.close()
-  })
-
-  it("serves a guest a page of its invited Session alone", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
-    await test.list()
-    const guest = await test.connect("guest-connection", {
-      guest: invitedGuest(),
-    })
-
-    await expect(older(guest, cursorOf(500), GUEST_REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
-    })
-    await open(guest, { sessionId: GUEST_REF })
-    await expect(older(guest, cursorOf(500))).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
-    })
-    await expect(older(guest, cursorOf(500), GUEST_REF)).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
-    })
-    test.close()
-    guest.close()
-  })
-
-  it("asks an unauthenticated guest to authenticate for a page", async () => {
-    const test = await harness({ guest: true })
-
-    await expect(older(test, cursorOf(500), GUEST_REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
     })
     test.close()
   })
@@ -4338,7 +3538,7 @@ describe("History pages", () => {
     hold = true
 
     const first = older(test, cursorOf(500))
-    await vi.waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
     await expect(older(test, cursorOf(500))).rejects.toMatchObject(
       invalidParams
     )
@@ -4384,7 +3584,7 @@ describe("History pages", () => {
     background.emit(turnStarted())
     chunk(background, "Live")
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("Live"))
+    await test.recorder.wait(said("Live"), "an update carrying Live")
 
     /** The message ids of the page older than `offset`. */
     const pageIds = async (offset: number) => {

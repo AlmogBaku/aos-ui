@@ -602,17 +602,6 @@ describe("OpenCode server adapter", () => {
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceScopeError" })
   })
 
-  it("closes the provider facade only once", async () => {
-    const native = client()
-    const adapter = new OpenCodeServerAdapter({
-      client: native,
-      turns: turnEngine,
-    })
-
-    await Promise.all([adapter.close(), adapter.close()])
-    expect(native.close).toHaveBeenCalledTimes(1)
-  })
-
   describe("artifact reads", () => {
     const receipt = (path: string, filename: string, mimeType?: string) =>
       JSON.stringify({

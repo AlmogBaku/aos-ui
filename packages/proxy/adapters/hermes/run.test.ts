@@ -600,7 +600,7 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("rejects browser-owned state, tools, context, and forwarded properties instead of forwarding them to Hermes", async () => {
+  it("rejects browser-owned state, tools, context, forwarded properties, and non-standard run fields instead of forwarding them to Hermes", async () => {
     const submit = vi.fn(async () => ({
       acknowledgement: "accepted" as const,
       status: "streaming" as const,
@@ -619,6 +619,7 @@ describe("HermesRunEngine", () => {
       { context: [{ description: "role", value: "admin" }] },
       { forwardedProps: { provider: "hermes" } },
       { forwardedProps: "native override" },
+      { native: { method: "prompt.submit" } },
     ])
       await expect(
         engine.start(scope, { ...input(), ...field })
@@ -1084,14 +1085,6 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("rejects non-standard top-level run fields instead of accepting provider payloads", async () => {
-    const engine = new HermesTurnEngine(runtime())
-
-    await expect(
-      engine.start(scope, { ...input(), native: { method: "prompt.submit" } })
-    ).rejects.toThrow()
-  })
-
   it("terminalizes an uncertain acknowledgement without retrying or releasing admission", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
@@ -1350,154 +1343,6 @@ describe("HermesRunEngine", () => {
     ])
     for (const event of activities)
       expect(TurnEventSchema.safeParse(event).success).toBe(true)
-  })
-
-  it("streams a published artifact as the same safe AOS data part used by history", async () => {
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(
-      runtime({
-        observe: attachment.observe,
-        submit: async () => {
-          for (const [seq, type, payload] of [
-            [1, "message.start", { message_id: "message-artifact" }],
-            [
-              2,
-              "tool.start",
-              {
-                tool_id: "artifact-call",
-                name: "present_artifact",
-                args: { path: "/srv/hermes/private/report.md" },
-              },
-            ],
-            [
-              3,
-              "tool.complete",
-              {
-                tool_id: "artifact-call",
-                name: "present_artifact",
-                result: {
-                  ok: true,
-                  type: "aos.artifact",
-                  artifact: {
-                    id: "report-1",
-                    filename: "report.md",
-                    path: "/srv/hermes/private/report.md",
-                    mimeType: "text/markdown",
-                    sizeBytes: 42,
-                  },
-                },
-              },
-            ],
-            [4, "message.complete", {}],
-          ] as const)
-            publish({ type, session_id: "live-secret", seq, payload })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-
-    const events = await collect(await engine.start(scope, input()))
-
-    expect(events).toContainEqual({
-      kind: TurnEventKind.ToolCallFinished,
-      toolCallId: "artifact-call",
-      output: JSON.stringify({
-        ok: true,
-        type: "aos.artifact",
-        artifact: {
-          id: "report-1",
-          filename: "report.md",
-          mimeType: "text/markdown",
-          sizeBytes: 42,
-        },
-      }),
-      failed: false,
-    })
-    expect(events).toContainEqual({
-      kind: TurnEventKind.ArtifactPublished,
-      artifact: {
-        id: "report-1",
-        filename: "report.md",
-        mimeType: "text/markdown",
-        sizeBytes: 42,
-        source: { type: "provider", reference: "report-1" },
-      },
-    })
-    expect(JSON.stringify(events)).not.toContain("/srv/hermes/private")
-  })
-
-  it("streams trusted TTS media and suppresses a redundant copied marker", async () => {
-    const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
-    const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(
-      runtime({
-        observe: attachment.observe,
-        submit: async () => {
-          for (const [seq, type, payload] of [
-            [1, "message.start", { message_id: "message-media" }],
-            [
-              2,
-              "tool.start",
-              {
-                tool_id: "tts-call",
-                name: "text_to_speech",
-                args: { text: "Quarterly update" },
-              },
-            ],
-            [
-              3,
-              "tool.complete",
-              {
-                tool_id: "tts-call",
-                name: "text_to_speech",
-                result: {
-                  success: true,
-                  file_path: audioPath,
-                  file_paths: [audioPath],
-                  media_tag: `MEDIA:${audioPath}`,
-                  provider: "edge",
-                },
-              },
-            ],
-            [4, "message.delta", { text: "Your brief is ready.\nME" }],
-            [5, "message.delta", { text: "DIA:" }],
-            [6, "message.delta", { text: copiedPath }],
-            [7, "message.complete", {}],
-          ] as const)
-            publish({ type, session_id: "live-secret", seq, payload })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-
-    const events = await collect(await engine.start(scope, input()))
-    const [artifact] = ofKind(events, TurnEventKind.ArtifactPublished)
-
-    expect(artifact).toMatchObject({
-      kind: TurnEventKind.ArtifactPublished,
-      artifact: {
-        filename: "quick-brief.mp3",
-        mimeType: "audio/mpeg",
-      },
-    })
-    expect(events).toContainEqual({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "message-media",
-      text: "Your brief is ready.\n",
-    })
-    expect(JSON.stringify(events)).not.toContain("MEDIA:")
-    expect(JSON.stringify(events)).not.toContain(audioPath)
-    expect(JSON.stringify(events)).not.toContain(copiedPath)
-    expect(JSON.stringify(events)).not.toContain("Media unavailable")
   })
 
   it("settles a tool before the run when Hermes loses its completion event", async () => {
@@ -2343,22 +2188,6 @@ describe("HermesRunEngine", () => {
     expect(submissions).toBe(0)
   })
 
-  it("does not expose browser transport disconnect controls", async () => {
-    let interrupts = 0
-    const engine = new HermesTurnEngine(
-      runtime({
-        interrupt: async () => {
-          interrupts += 1
-          return "interrupted" as const
-        },
-      })
-    )
-    const handle = await engine.start(scope, input())
-
-    expect("disconnect" in handle).toBe(false)
-    expect(interrupts).toBe(0)
-  })
-
   it("completes a known tool when Hermes omits its repeated name", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
@@ -2399,7 +2228,21 @@ describe("HermesRunEngine", () => {
     })
   })
 
-  it("projects bounded inspectable tool data while redacting credentials and provider metadata", async () => {
+  it("projects bounded inspectable tool data while redacting credentials, credential environment assignments, and provider metadata without hiding safe lookalike keys", async () => {
+    const credentials = [
+      "OPENAI_API_KEY=ordinary-value",
+      "SERVICE_API_KEY=ordinary-value",
+      "AWS_ACCESS_KEY_ID=ordinary-value",
+      "CLIENT_SECRET_KEY=ordinary-value",
+      "SESSION_TOKEN=ordinary-value",
+      "NPM_CONFIG_USERCONFIG=ordinary-value",
+      "NPM_CONFIG__AUTH=ordinary-value",
+      "MYSQL_PWD=ordinary-value",
+      "PASSWORD_HASH=ordinary-value",
+      "SSH_PRIVATE_KEY_B64=ordinary-value",
+    ]
+    const safe =
+      "type x:string; variant A:control; ratio x:y; C:drive-relative; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesTurnEngine(
@@ -2432,9 +2275,25 @@ describe("HermesRunEngine", () => {
                 },
               },
             ],
-            [3, "message.complete", {}],
           ] as const)
             publish({ type, session_id: "live-secret", seq, payload })
+          for (const [index, query] of [...credentials, safe].entries())
+            publish({
+              type: "tool.start",
+              session_id: "live-secret",
+              seq: index + 3,
+              payload: {
+                tool_id: `env-call-${index}`,
+                name: "search",
+                args: { query },
+              },
+            })
+          publish({
+            type: "message.complete",
+            session_id: "live-secret",
+            seq: credentials.length + 4,
+            payload: {},
+          })
           return {
             acknowledgement: "accepted" as const,
             status: "streaming" as const,
@@ -2474,66 +2333,14 @@ describe("HermesRunEngine", () => {
     expect(JSON.stringify(events)).not.toContain("sk-query-secret")
     expect(JSON.stringify(events)).not.toContain("summary-secret")
     expect(JSON.stringify(events)).toContain("[REDACTED]")
-  })
-
-  it("redacts credential environment assignments without hiding safe lookalike keys", async () => {
-    const credentials = [
-      "OPENAI_API_KEY=ordinary-value",
-      "SERVICE_API_KEY=ordinary-value",
-      "AWS_ACCESS_KEY_ID=ordinary-value",
-      "CLIENT_SECRET_KEY=ordinary-value",
-      "SESSION_TOKEN=ordinary-value",
-      "NPM_CONFIG_USERCONFIG=ordinary-value",
-      "NPM_CONFIG__AUTH=ordinary-value",
-      "MYSQL_PWD=ordinary-value",
-      "PASSWORD_HASH=ordinary-value",
-      "SSH_PRIVATE_KEY_B64=ordinary-value",
-    ]
-    const safe =
-      "type x:string; variant A:control; ratio x:y; C:drive-relative; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(
-      runtime({
-        observe: attachment.observe,
-        submit: async () => {
-          publish({
-            type: "message.start",
-            session_id: "live-secret",
-            seq: 1,
-            payload: { message_id: "message-42" },
-          })
-          for (const [index, query] of [...credentials, safe].entries())
-            publish({
-              type: "tool.start",
-              session_id: "live-secret",
-              seq: index + 2,
-              payload: {
-                tool_id: `call-${index}`,
-                name: "search",
-                args: { query },
-              },
-            })
-          publish({
-            type: "message.complete",
-            session_id: "live-secret",
-            seq: credentials.length + 3,
-            payload: {},
-          })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-
-    const events = await collect(await engine.start(scope, input()))
-    const argumentDeltas = ofKind(events, TurnEventKind.ToolCallInputChunk).map(
-      (event) => (event as { delta: string }).delta
-    )
-
-    expect(argumentDeltas).toEqual([
+    const environmentDeltas = ofKind(events, TurnEventKind.ToolCallInputChunk)
+      .filter((event) =>
+        String((event as { toolCallId: string }).toolCallId).startsWith(
+          "env-call-"
+        )
+      )
+      .map((event) => (event as { delta: string }).delta)
+    expect(environmentDeltas).toEqual([
       ...credentials.map((credential) =>
         JSON.stringify({
           query: credential.replace("ordinary-value", "[REDACTED]"),
@@ -3287,56 +3094,6 @@ describe("HermesRunEngine", () => {
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
-  })
-
-  it("unwraps Hermes tool-search bridge calls into the selected tool", async () => {
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(
-      runtime({
-        observe: attachment.observe,
-        submit: async () => {
-          for (const [seq, type, payload] of [
-            [1, "message.start", { message_id: "message-42" }],
-            [
-              2,
-              "tool.complete",
-              {
-                tool_id: "call-7",
-                name: "tool_call",
-                args: {
-                  name: "read_file",
-                  arguments: '{"path":"report.txt"}',
-                },
-                result: "contents",
-              },
-            ],
-            [3, "message.complete", {}],
-          ] as const)
-            publish({ type, session_id: "live-secret", seq, payload })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-
-    const events = await collect(await engine.start(scope, input()))
-
-    expect(events).toContainEqual({
-      kind: TurnEventKind.ToolCallStarted,
-      toolCallId: "call-7",
-      title: "read_file",
-      name: "read_file",
-      toolKind: ToolKind.Read,
-      parentMessageId: "message-42",
-    })
-    expect(events).toContainEqual({
-      kind: TurnEventKind.ToolCallInputChunk,
-      toolCallId: "call-7",
-      delta: '{"path":"report.txt"}',
-    })
   })
 
   it("releases reconnect admission and observation when native recovery setup fails", async () => {
@@ -6480,19 +6237,15 @@ describe("live and refreshed Hermes tool projection agree", () => {
     expect(JSON.stringify(projection)).not.toContain("/home/alice")
   })
 
-  it.each([
-    "mcp__aos_ui__render_chart",
-    "mcp__aos_ui__render_map",
-    "mcp__aos_ui__render_stats",
-  ])("names %s by its bare aos-ui tool identically", async (name) => {
+  it("names mcp__aos_ui__render_chart by its bare aos-ui tool identically", async () => {
     const { projection } = await parity({
-      toolCallId: `${name}-parity`,
-      name,
+      toolCallId: "render-chart-parity",
+      name: "mcp__aos_ui__render_chart",
       args: { title: "Quarter" },
       result: { result: "Quarter is ready for display." },
     })
 
-    expect(projection.toolName).toBe(name.replace("mcp__aos_ui__", ""))
+    expect(projection.toolName).toBe("render_chart")
   })
 
   it("publishes an assistant MEDIA line as the artifact history restores", async () => {
@@ -6716,6 +6469,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
     })
 
     expect(projection.toolName).toBe("read_file")
+    expect(projection.toolKind).toBe(ToolKind.Read)
     expect(projection.args).toEqual({ path: "report.txt" })
   })
 

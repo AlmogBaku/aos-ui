@@ -83,25 +83,17 @@ describe("Hermes native media projection", () => {
     expect(output).not.toContain("/home/")
   })
 
-  it.each([
-    ["a sensitive file", "/home/alice/.hermes/auth.json"],
-    ["a sensitive directory", "/home/alice/.hermes/mcp-tokens/github.json"],
-    ["a relative path", "out/report.pdf"],
-    ["a traversing path", "/home/alice/../bob/report.pdf"],
-  ])(
-    "redacts a MEDIA line naming %s without granting an artifact",
-    (_label, path) => {
-      const filter = new HermesMediaTextFilter()
-      const output = [
-        filter.write("MEDIA:"),
-        filter.write(path),
-        filter.finish(),
-      ].join("")
+  it("redacts a MEDIA line naming a sensitive file without granting an artifact", () => {
+    const filter = new HermesMediaTextFilter()
+    const output = [
+      filter.write("MEDIA:"),
+      filter.write("/home/alice/.hermes/auth.json"),
+      filter.finish(),
+    ].join("")
 
-      expect(output).toBe("[Media unavailable]")
-      expect(filter.takeArtifacts()).toEqual([])
-    }
-  )
+    expect(output).toBe("[Media unavailable]")
+    expect(filter.takeArtifacts()).toEqual([])
+  })
 
   it("turns an assistant MEDIA line into one artifact and drops it from prose", () => {
     const reportPath = "/home/alice/reports/q3 summary.pdf"

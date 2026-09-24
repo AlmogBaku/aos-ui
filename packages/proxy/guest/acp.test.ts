@@ -1,7 +1,6 @@
 // @vitest-environment node
 
 import {
-  client,
   methods,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -19,8 +18,8 @@ import {
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
 } from "../../protocol/acp"
-import { createAosAcpAgent } from "../acp/agent"
 import { createSessionRooms } from "../acp/session-rooms"
+import { connectClient, updates, type Recorder } from "../acp/test-harness"
 import {
   createGuestInvitationService,
   type GuestInvitationService,
@@ -143,7 +142,7 @@ const ARTIFACT = {
 const APP_TOOL = "mcp__excalidraw__create_view"
 
 /** The one tool update a guest receives for an App: its card, nothing more. */
-function appCards(recorder: ReturnType<typeof createRecorder>) {
+function appCards(recorder: Recorder) {
   return updates(recorder).flatMap(({ update }) =>
     update.sessionUpdate === "tool_call_update" ? [update] : []
   )
@@ -319,36 +318,6 @@ const REQUEST_EVENTS: TurnEvent[] = [
   { kind: TurnEventKind.TurnRequiresAction, requests: [APPROVAL] },
 ]
 
-type Recorded = { method: string; params: unknown }
-
-function createRecorder() {
-  const entries: Recorded[] = []
-  const waiters = new Set<() => void>()
-  return {
-    entries,
-    of(method: string) {
-      return entries.filter((entry) => entry.method === method)
-    },
-    add(entry: Recorded) {
-      entries.push(entry)
-      for (const resolve of [...waiters]) resolve()
-    },
-    async wait(predicate: (entry: Recorded) => boolean) {
-      for (;;) {
-        const found = entries.find(predicate)
-        if (found) return found
-        await new Promise<void>((resolve) => {
-          const wake = () => {
-            waiters.delete(wake)
-            resolve()
-          }
-          waiters.add(wake)
-        })
-      }
-    },
-  }
-}
-
 const unsupported = () => {
   throw new Error("The guest ACP lane does not reach this operation")
 }
@@ -473,34 +442,10 @@ function harness(options: HarnessOptions = {}) {
     "connection-1"
   )
 
-  const recorder = createRecorder()
-  const clientApp = client({ name: "aos-guest-browser" })
-    .onNotification(methods.client.session.update, ({ params }) => {
-      recorder.add({ method: methods.client.session.update, params })
-    })
-    .onRequest(
-      methods.client.session.requestPermission,
-      async ({ params, signal }) => {
-        recorder.add({
-          method: methods.client.session.requestPermission,
-          params,
-        })
-        return (
-          (await options.permission?.(params, signal)) ?? {
-            outcome: { outcome: "selected", optionId: "once" },
-          }
-        )
-      }
-    )
-  for (const method of Object.values(AOS_METHODS.notify))
-    clientApp.onNotification(
-      method,
-      (params) => params,
-      ({ params }) => {
-        recorder.add({ method, params })
-      }
-    )
-  const connection = clientApp.connect(createAosAcpAgent(context))
+  const { connection, recorder } = connectClient(context, {
+    name: "aos-guest-browser",
+    ...(options.permission ? { permission: options.permission } : {}),
+  })
 
   return {
     agent: connection.agent,
@@ -552,10 +497,6 @@ function harness(options: HarnessOptions = {}) {
         prompt: [{ type: "text" as const, text }],
       }),
   }
-}
-
-function updates(recorder: ReturnType<typeof createRecorder>) {
-  return recorder.of(methods.client.session.update).map((entry) => entry.params)
 }
 
 describe("guest ACP lane", () => {
@@ -730,8 +671,9 @@ describe("guest ACP lane", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
     await test.prompt("Show the notes")
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("resource_link")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("resource_link"),
+      "an update carrying resource_link"
     )
 
     const links = updates(test.recorder).flatMap(({ update }) =>
@@ -821,8 +763,9 @@ describe("guest ACP lane", () => {
 
     await test.prompt("Start the interview")
 
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Guest-visible answer")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
+      "an update carrying Guest-visible answer"
     )
     expect(test.resolveInvitedSession).toHaveBeenLastCalledWith(AGENT, REF, {
       firstTurnInstruction: INSTRUCTION,
@@ -867,8 +810,9 @@ describe("guest ACP lane", () => {
 
     await test.prompt("Start the interview").catch(() => undefined)
 
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("request_failed")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("request_failed"),
+      "an update carrying request_failed"
     )
     expect(JSON.stringify(test.recorder.entries)).not.toContain(OPERATOR_PATH)
     test.close()
@@ -886,7 +830,8 @@ describe("guest ACP lane", () => {
     await test.prompt("Delete the notes")
 
     const asked = await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the permission request"
     )
     expect(asked.params).toMatchObject({
       sessionId: REF,
@@ -912,7 +857,8 @@ describe("guest ACP lane", () => {
     await test.prompt("Delete the notes")
 
     const reported = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "an _aos/error notification"
     )
     expect(reported.params).toMatchObject({
       sessionId: REF,
@@ -966,7 +912,8 @@ describe("guest ACP lane", () => {
       (entry) =>
         entry.method === methods.client.session.update &&
         (entry.params as { update?: { state?: unknown } }).update?.state ===
-          "idle"
+          "idle",
+      "the turn to settle idle"
     )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
@@ -985,8 +932,9 @@ describe("guest ACP lane", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
     await test.prompt("Start the interview")
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("Guest-visible answer")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
+      "an update carrying Guest-visible answer"
     )
 
     await test.agent.notify(methods.agent.session.cancel, { sessionId: REF })
@@ -1033,7 +981,8 @@ describe("guest ACP lane", () => {
     await test.recorder.wait(
       (entry) =>
         entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes('"idle"')
+        JSON.stringify(entry.params).includes('"idle"'),
+      'an update carrying "idle"'
     )
 
     expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
@@ -1042,7 +991,7 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
-  it("projects an older page as it projects the replayed one", async () => {
+  it("projects an older page as it projects the replayed one, and pages the invited Session alone", async () => {
     const cursor = Buffer.from("500").toString("base64url")
     const test = harness({
       existing: true,
@@ -1077,6 +1026,14 @@ describe("guest ACP lane", () => {
 
     expect(page).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
     expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
+    // A page names the invited Session alone.
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: "another-session",
+        cwd: "/",
+        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
+      })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.notFound })
     const sent = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)

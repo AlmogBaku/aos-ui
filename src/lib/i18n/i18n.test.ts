@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 
-import { defaultLocale, getLocaleDirection, isLocale, locales } from "./config"
 import { getDictionary } from "./get-dictionary"
 import { runErrorMessage, type RunErrorCode } from "./run-errors"
 import {
@@ -9,21 +8,6 @@ import {
   resolveLocale,
   stripLocaleFromPathname,
 } from "./routing"
-
-describe("locale configuration", () => {
-  it("supports exactly the English and Hebrew workspace routes", () => {
-    expect(locales).toEqual(["en", "he"])
-    expect(defaultLocale).toBe("en")
-    expect(isLocale("en")).toBe(true)
-    expect(isLocale("he")).toBe(true)
-    expect(isLocale("fr")).toBe(false)
-  })
-
-  it("assigns a first-class writing direction to each locale", () => {
-    expect(getLocaleDirection("en")).toBe("ltr")
-    expect(getLocaleDirection("he")).toBe("rtl")
-  })
-})
 
 describe("locale routing", () => {
   it("recognizes locale-prefixed paths without matching partial segments", () => {

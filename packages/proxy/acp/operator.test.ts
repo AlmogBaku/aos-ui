@@ -1,58 +1,44 @@
 import {
-  client,
   ElicitationPropertySchema,
   methods,
-  type CreateElicitationResponse,
-  type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { type SessionHistoryResponse } from "../../protocol"
 import {
-  INTERACTION_PROTOCOL,
-  SESSION_CATALOG_MAX_WINDOW,
-  type RuntimeInfo,
-  type Session,
-  type SessionHistoryResponse,
-  type SessionModelsResponse,
-} from "../../protocol"
-import {
-  ACP_PROTOCOL_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
   AOS_PLAN_ID,
   AosActivityNotificationSchema,
   AosElicitationMetaSchema,
-  AosInitializeMetaSchema,
-  AosPermissionMetaSchema,
   AosPlanMetaSchema,
   AosPromptResponseMetaSchema,
-  AosSessionNewResponseMetaSchema,
   AosSessionResumeResponseMetaSchema,
 } from "../../protocol/acp"
-import { AttachmentStageRegistry } from "../core/attachment-stages"
 import {
   PendingRequestKind,
-  PromptTurnInputSchema,
   RepliesTurnInputSchema,
   TurnEventKind,
   type TurnEvent,
 } from "../core/events"
-import type {
-  RuntimeInstance,
-  ServerTurnEngine,
-  ServerTurnHandle,
-  ServerRuntime,
-  SessionPatch,
-} from "../core/runtime"
-import { SessionCoordinator } from "../core/session-coordinator"
-import { createSessionRows } from "../core/session-rows"
 import { createActivityFeed } from "./activity-feed"
-import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
-import { createSessionRooms } from "./session-rooms"
+import {
+  AGENT,
+  CAPABILITIES as HARNESS_CAPABILITIES,
+  CREATED,
+  EventSource,
+  NOW,
+  SESSION,
+  harness as acpHarness,
+  sessionRow,
+  turnStarted,
+  updates,
+  type HarnessOptions as AcpHarnessOptions,
+  type Recorder,
+} from "./test-harness"
 import * as translators from "./translate"
-import type { AcpConnectionContext } from "./types"
 
 /**
  * The operator lane end to end in process: the real translators, the real ACP
@@ -61,143 +47,30 @@ import type { AcpConnectionContext } from "./types"
  * accepted connection, against a fake provider engine and an SDK client.
  */
 
-const AGENT = "researcher"
-const SESSION = "session-1"
-const CREATED = "session-created"
 const CLARIFY = "clarify-1"
-const NOW = "2026-01-01T00:00:00.000Z"
 
-function sessionRow(overrides: Partial<Session> = {}): Session {
-  return {
-    id: SESSION,
-    agentId: AGENT,
-    title: "Notes",
-    archived: false,
-    updatedAt: NOW,
-    status: "idle",
-    ...overrides,
-  }
-}
-
-const MODELS: SessionModelsResponse = {
-  selectedId: "sonnet",
-  options: [
-    { id: "sonnet", label: "Sonnet", group: "Anthropic" },
-    { id: "opus", label: "Opus", group: "Anthropic" },
-  ],
-}
-
-const AVAILABLE = { status: "available" } as const
-
-const RUNTIME_INFO: RuntimeInfo = {
-  runtime: { id: "hermes", name: "Hermes" },
-  status: "ready",
-  capabilities: {
-    agentCatalog: AVAILABLE,
-    agentVisibility: AVAILABLE,
-    sessionCatalog: {
-      status: "available",
-      scope: "workspace",
-      order: "recent",
-      defaultPageSize: 50,
-      maxPageSize: 100,
-      maxWindow: SESSION_CATALOG_MAX_WINDOW,
-    },
-    sessionHistory: {
-      status: "available",
-      order: "chronological",
-      compacted: true,
-      loading: "on-open",
-      defaultPageSize: 200,
-      maxPageSize: 500,
-    },
-    sessionDetail: AVAILABLE,
-    sessionCreation: AVAILABLE,
-    sessionTitle: AVAILABLE,
-    sessionArchival: AVAILABLE,
-    sessionPin: AVAILABLE,
-    sessionDeletion: AVAILABLE,
-    sessionTurn: AVAILABLE,
-    sessionStop: AVAILABLE,
-    sessionSteer: AVAILABLE,
-    sessionReadState: AVAILABLE,
-  },
-}
-
+/** The shared harness's provider, with a Todo projection and a deny choice. */
 const CAPABILITIES = {
+  ...HARNESS_CAPABILITIES,
   workspace: {
-    slashCommands: {
-      status: "available",
-      scope: "attached-session",
-      commands: [{ name: "plan", description: "Draft a plan" }],
-    },
-    models: {
-      status: "available",
-      scope: "attached-session",
-      selection: "native-session",
-      choices: "provider-reported",
-    },
-    context: {
-      status: "available",
-      scope: "attached-session",
-      source: "provider-usage-or-estimate",
-      breakdown: "provider-categories",
-    },
+    ...HARNESS_CAPABILITIES.workspace,
     todos: {
       status: "available",
       scope: "session",
       mode: "read-only-projection",
       source: "latest-completed-todo-tool-result",
     },
-    activity: { status: "unavailable", reason: "activity-unavailable" },
   },
   interactions: {
-    steering: {
-      status: "available",
-      scope: "active-turn",
-      semantics: "visible-user-message",
-      input: "text",
-      fallback: "provider-queue",
-    },
+    ...HARNESS_CAPABILITIES.interactions,
     approvals: {
-      status: "available",
-      protocol: INTERACTION_PROTOCOL,
-      scope: "turn",
+      ...HARNESS_CAPABILITIES.interactions.approvals,
       choices: [
         { value: "once", scope: "request" },
         { value: "deny", scope: "request" },
       ],
-      maxPending: 1,
     },
-    questions: {
-      status: "available",
-      protocol: INTERACTION_PROTOCOL,
-      scope: "turn",
-      answerModes: ["single", "multiple", "free-text"],
-      cancellation: "native-cancel",
-      maxQuestions: 1,
-      maxChoicesPerQuestion: 4,
-      maxAnswerValuesPerQuestion: "complete-request",
-      maxStringBytes: 4096,
-    },
-    reactions: { status: "unavailable", reason: "reactions-unavailable" },
   },
-  content: {
-    attachments: { status: "unavailable", reason: "attachments-unavailable" },
-    artifacts: { status: "unavailable", reason: "artifacts-unavailable" },
-    mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
-    transcription: {
-      status: "unavailable",
-      reason: "transcription-unavailable",
-    },
-    speech: { status: "unavailable", reason: "speech-unavailable" },
-  },
-}
-
-const USAGE = {
-  usedTokens: 1_200,
-  maxTokens: 20_000,
-  source: "provider-usage" as const,
 }
 
 const HISTORY: SessionHistoryResponse = {
@@ -221,86 +94,6 @@ const HISTORY: SessionHistoryResponse = {
   offset: 0,
   nextOffset: 0,
 }
-
-/** One provider run segment the test drives event by event. */
-class EventSource implements ServerTurnHandle {
-  readonly #values: TurnEvent[] = []
-  readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
-  readonly stop = vi.fn(async () => "stopping" as const)
-  readonly steer = vi.fn(async () => "steered" as const)
-  readonly settled: Promise<void>
-  #resolveSettled!: () => void
-  #closed = false
-
-  constructor() {
-    this.settled = new Promise((resolve) => {
-      this.#resolveSettled = resolve
-    })
-  }
-
-  readonly events: AsyncIterable<TurnEvent> = {
-    [Symbol.asyncIterator]: () => ({
-      next: () => {
-        const value = this.#values.shift()
-        if (value) return Promise.resolve({ done: false, value })
-        if (this.#closed)
-          return Promise.resolve({ done: true, value: undefined })
-        return new Promise<IteratorResult<TurnEvent>>((resolve) =>
-          this.#waiters.push(resolve)
-        )
-      },
-    }),
-  }
-
-  emit(event: TurnEvent) {
-    const waiter = this.#waiters.shift()
-    if (waiter) waiter({ done: false, value: event })
-    else this.#values.push(event)
-  }
-
-  finish() {
-    this.#closed = true
-    for (const waiter of this.#waiters.splice(0))
-      waiter({ done: true, value: undefined })
-    this.#resolveSettled()
-  }
-
-  recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 0 }
-  }
-}
-
-type Recorded = { method: string; params: unknown }
-
-function createRecorder() {
-  const entries: Recorded[] = []
-  const waiters = new Set<() => void>()
-  return {
-    entries,
-    of(method: string) {
-      return entries.filter((entry) => entry.method === method)
-    },
-    add(entry: Recorded) {
-      entries.push(entry)
-      for (const resolve of [...waiters]) resolve()
-    },
-    async wait(predicate: (entry: Recorded) => boolean) {
-      for (;;) {
-        const found = entries.find(predicate)
-        if (found) return found
-        await new Promise<void>((resolve) => {
-          const wake = () => {
-            waiters.delete(wake)
-            resolve()
-          }
-          waiters.add(wake)
-        })
-      }
-    },
-  }
-}
-
-type Recorder = ReturnType<typeof createRecorder>
 
 /**
  * A clock and a manual scheduler: the read-state debounce runs only when the
@@ -334,202 +127,44 @@ function createClock(startMs: number) {
   }
 }
 
-const unsupported = () => {
-  throw new Error("The operator ACP test does not exercise this operation")
-}
+type HarnessOptions = Pick<
+  AcpHarnessOptions,
+  "rows" | "maxSubscriberEvents" | "permission" | "question"
+> & { history?: SessionHistoryResponse }
 
-const PatchSchema = z.object({
-  title: z.string().optional(),
-  archived: z.boolean().optional(),
-  unread: z.boolean().optional(),
-})
-
-type HarnessOptions = {
-  rows?: Session[]
-  /** Queue depth one browser's run stream is allowed, before it is dropped. */
-  maxSubscriberEvents?: number
-  history?: SessionHistoryResponse
-  permission?: (params: unknown) => Promise<RequestPermissionResponse>
-  elicitation?: (params: unknown) => Promise<CreateElicitationResponse>
-}
-
-async function harness(options: HarnessOptions = {}) {
+async function harness({ history, ...options }: HarnessOptions = {}) {
   const clock = createClock(Date.parse(NOW))
-  const sources: EventSource[] = []
-  const start = vi.fn(async () => {
-    const source = new EventSource()
-    sources.push(source)
-    return source
-  })
-  const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
-  const engine: ServerTurnEngine = { start, recover }
-  const coordinator = new SessionCoordinator({
-    engine,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
-    maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
-  })
-
-  const rows = new Map(
-    (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
-  )
-
-  const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
-    sessions: [...rows.values()],
-    total: rows.size,
-    limit,
-    offset,
-  }))
-  const getSession = vi.fn(async (_agentId: string, sessionId: string) => {
-    const row = rows.get(sessionId)
-    if (!row) throw new Error("not found")
-    return row
-  })
-  const updateSession = vi.fn(
-    async (_agentId: string, sessionId: string, patch: SessionPatch) => {
-      const current = rows.get(sessionId)
-      if (current)
-        rows.set(sessionId, { ...current, ...PatchSchema.parse(patch) })
-    }
-  )
-  const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
-    rows.delete(sessionId)
-  })
-  const history = vi.fn(async () => options.history ?? HISTORY)
-
-  const runtime: ServerRuntime = {
-    turns: engine,
-    resolveInvitedSession: unsupported,
-    resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
-    publicError: () => undefined,
-    authState: unsupported,
-    runtimeInfo: async () => RUNTIME_INFO,
-    listAgents: async () => ({ revision: "rev-1", agents: [] }),
-    updateAgentVisibility: unsupported,
-    listAllSessions,
-    listSessions: async (_agentId, limit, offset) =>
-      listAllSessions(limit, offset),
-    history,
-    getSession,
-    createSession: async (agentId, title) => {
-      rows.set(
-        CREATED,
-        sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
-      )
-      return { session: { id: CREATED, agentId } }
-    },
-    updateSession,
-    deleteSession,
-    workspaceCapabilities: async () => CAPABILITIES,
-    models: async () => MODELS,
-    updateModel: unsupported,
-    context: async () => USAGE,
-    subscribeSessionInvalidation: unsupported,
-    subscribeCatalogChanges: async () => () => undefined,
-    stageAttachments: unsupported,
-    artifact: unsupported,
-    transcribe: unsupported,
-    speak: unsupported,
-  }
-
-  const runtimeInstance: RuntimeInstance = {
-    id: "test",
-    runtime,
-    sessions: coordinator,
-    close: async () => undefined,
-  }
-
-  // The same object `createOperatorAcpService`'s `connection(...)` builds, with
-  // the injected clock this test drives instead of wall time.
-  const lane = "operator" as const
-  const sessionRows = createSessionRows({ now: clock.now })
-  const context: AcpConnectionContext = {
-    connectionId: "connection-1",
-    principalId: "operator",
-    lane,
-    runtimeInstance,
-    sessionRows,
+  const test = await acpHarness({
+    ...options,
+    capabilities: CAPABILITIES,
+    history: (history ?? HISTORY).messages,
     translators,
-    attachmentStages: new AttachmentStageRegistry(),
-    rooms: createSessionRooms({
-      snapshot: (scope) => coordinator.snapshot(scope),
-    }),
-    logger: { info: vi.fn(), error: vi.fn() },
-    readState: createReadState({
-      runtimeInstance,
-      sessionRows,
-      lane,
-      now: clock.now,
-      schedule: clock.schedule,
-      cancel: clock.cancel,
-      onUnreadChanged: () => undefined,
-    }),
-    activityFeed: createActivityFeed({
-      runtimeInstance,
-      sessionRows,
-      now: clock.now,
-    }),
-  }
-
-  const recorder = createRecorder()
-  const clientApp = client({ name: "aos-browser" })
-    .onNotification(methods.client.session.update, ({ params }) => {
-      recorder.add({ method: methods.client.session.update, params })
-    })
-    .onRequest(methods.client.session.requestPermission, async ({ params }) => {
-      recorder.add({
-        method: methods.client.session.requestPermission,
-        params,
-      })
-      return (
-        (await options.permission?.(params)) ?? {
-          outcome: { outcome: "selected", optionId: "once" },
-        }
-      )
-    })
-    .onRequest(methods.client.elicitation.create, async ({ params }) => {
-      recorder.add({ method: methods.client.elicitation.create, params })
-      return (await options.elicitation?.(params)) ?? { action: "decline" }
-    })
-  for (const method of Object.values(AOS_METHODS.notify))
-    clientApp.onNotification(
-      method,
-      (params) => params,
-      ({ params }) => {
-        recorder.add({ method, params })
-      }
-    )
-
-  const connection = clientApp.connect(createAosAcpAgent(context))
-  const initialize = await connection.agent.request(methods.agent.initialize, {
-    protocolVersion: ACP_PROTOCOL_VERSION,
-    info: { name: "aos-browser", version: "1" },
-    capabilities: {},
-  })
-
-  return {
-    agent: connection.agent,
-    close: () => connection.close(),
-    clock,
-    coordinator,
-    initialize,
-    recorder,
-    sources,
-    start,
-    updateSession,
-    deleteSession,
-    /** Registers the Agent that owns the seeded Session, as a roster read does. */
-    list: () => connection.agent.request(methods.agent.session.list, {}),
-    create: () =>
-      connection.agent.request(methods.agent.session.new, {
-        cwd: "/",
-        _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+    now: clock.now,
+    pagesHistory: false,
+    // An operator who never answers declines, which the lane cancels.
+    question: options.question ?? (async () => ({ action: "decline" })),
+    compose: ({ runtimeInstance, sessionRows }) => ({
+      readState: createReadState({
+        runtimeInstance,
+        sessionRows,
+        lane: "operator",
+        now: clock.now,
+        schedule: clock.schedule,
+        cancel: clock.cancel,
+        onUnreadChanged: () => undefined,
       }),
+      activityFeed: createActivityFeed({
+        runtimeInstance,
+        sessionRows,
+        now: clock.now,
+      }),
+    }),
+  })
+  return {
+    ...test,
+    clock,
     prompt: (text: string) =>
-      connection.agent.request(methods.agent.session.prompt, {
+      test.agent.request(methods.agent.session.prompt, {
         sessionId: CREATED,
         prompt: [{ type: "text", text }],
         _meta: { [AOS_META_KEY]: {} },
@@ -561,7 +196,8 @@ async function askedElicitation(test: Harness) {
   const asked = await test.recorder.wait(
     (entry) =>
       entry.method === methods.client.elicitation.create ||
-      entry.method === AOS_METHODS.notify.error
+      entry.method === AOS_METHODS.notify.error,
+    "the question or the error rejecting it"
   )
   expect(asked.method).toBe(methods.client.elicitation.create)
   return asked
@@ -589,10 +225,6 @@ function formFieldsOf(params: unknown) {
   return Schema.parse(params).requestedSchema.properties
 }
 
-function updates(recorder: Recorder) {
-  return recorder.of(methods.client.session.update).map((entry) => entry.params)
-}
-
 /** Run-stream updates only: `session/new` pushes commands and usage out of band. */
 function turnUpdates(recorder: Recorder) {
   return updates(recorder).filter((update) => {
@@ -609,21 +241,6 @@ function usageUpdates(recorder: Recorder) {
   return updates(recorder).filter((update) =>
     JSON.stringify(update).includes("usage_update")
   )
-}
-
-/** Every `_meta.aos.sequence` the recorded run-stream updates carry, in order. */
-function sequencesOf(recorder: Recorder) {
-  const Schema = z.object({
-    update: z.object({
-      _meta: z.object({ [AOS_META_KEY]: z.object({ sequence: z.number() }) }),
-    }),
-  })
-  return updates(recorder).flatMap((params) => {
-    const parsed = Schema.safeParse(params)
-    return parsed.success
-      ? [parsed.data.update._meta[AOS_META_KEY].sequence]
-      : []
-  })
 }
 
 function unreadChanges(recorder: Recorder) {
@@ -695,8 +312,9 @@ async function drainedReplay(test: Harness, source: EventSource) {
     messageId: "assistant-live",
     text: "Live",
   })
-  await test.recorder.wait((entry) =>
-    JSON.stringify(entry.params).includes("Live")
+  await test.recorder.wait(
+    (entry) => JSON.stringify(entry.params).includes("Live"),
+    "an update carrying Live"
   )
 }
 
@@ -704,10 +322,6 @@ function steerAccepted(recorder: Recorder) {
   return recorder
     .of(AOS_METHODS.notify.steerAccepted)
     .map(({ params }) => params)
-}
-
-function turnStarted(): TurnEvent {
-  return { kind: TurnEventKind.TurnStarted }
 }
 
 function turnEnded(): TurnEvent {
@@ -754,118 +368,6 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
 }
 
 describe("operator ACP lane", () => {
-  it("initializes protocol version 2 on the operator lane with no auth methods", async () => {
-    const test = await harness()
-
-    expect(test.initialize).toMatchObject({
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      authMethods: [],
-    })
-    const meta = AosInitializeMetaSchema.parse(aosMetaOf(test.initialize))
-    expect(meta.lane).toBe("operator")
-    expect(meta.extensions.guestProjection).toBe(false)
-    test.close()
-  })
-
-  it("creates a Session with a model config option and pushes its commands and usage", async () => {
-    const test = await harness()
-
-    const created = await test.create()
-
-    expect(created).toMatchObject({
-      sessionId: CREATED,
-      configOptions: [
-        {
-          type: "select",
-          configId: "model",
-          category: "model",
-          currentValue: "sonnet",
-        },
-      ],
-    })
-    expect(
-      AosSessionNewResponseMetaSchema.parse(aosMetaOf(created)).session.agentId
-    ).toBe(AGENT)
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("usage_update")
-    )
-    expect(updates(test.recorder)).toMatchObject([
-      {
-        sessionId: CREATED,
-        update: {
-          sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "plan", description: "Draft a plan" }],
-        },
-      },
-      {
-        sessionId: CREATED,
-        update: { sessionUpdate: "usage_update", used: 1_200, size: 20_000 },
-      },
-    ])
-    test.close()
-  })
-
-  it("acknowledges a prompt then streams the turn from running to idle", async () => {
-    const test = await harness()
-    const { source, messageId } = await runningTurn(test, "Summarize")
-
-    source.emit(turnStarted())
-    source.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "Hel",
-    })
-    source.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "lo",
-    })
-    source.emit(turnEnded())
-
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("end_turn")
-    )
-    expect(turnUpdates(test.recorder)).toMatchObject([
-      {
-        sessionId: CREATED,
-        update: {
-          sessionUpdate: "user_message",
-          messageId,
-          content: [{ type: "text", text: "Summarize" }],
-        },
-      },
-      { update: { sessionUpdate: "state_update", state: "running" } },
-      {
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          messageId: "assistant-1",
-          content: { type: "text", text: "Hel" },
-        },
-      },
-      {
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "lo" },
-        },
-      },
-      {
-        update: {
-          sessionUpdate: "state_update",
-          state: "idle",
-          stopReason: "end_turn",
-        },
-      },
-    ])
-    // Only the proxy-minted user turn is unsequenced; the run stream is not.
-    const sequences = sequencesOf(test.recorder)
-    expect(sequences).toHaveLength(turnUpdates(test.recorder).length - 1)
-    expect(sequences.every((value) => Number.isInteger(value))).toBe(true)
-    expect([...sequences].sort((left, right) => left - right)).toEqual(
-      sequences
-    )
-    test.close()
-  })
-
   it("restates the model options when the provider switches the model mid-turn", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Summarize")
@@ -873,8 +375,9 @@ describe("operator ACP lane", () => {
     source.emit(turnStarted())
     source.emit({ kind: TurnEventKind.ModelChanged, modelId: "opus" })
 
-    const reported = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("config_option_update")
+    const reported = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("config_option_update"),
+      "an update carrying config_option_update"
     )
     expect(reported.params).toMatchObject({
       sessionId: CREATED,
@@ -890,8 +393,9 @@ describe("operator ACP lane", () => {
     // One event of queue, so the burst below outruns the send the pump awaits.
     const test = await harness({ maxSubscriberEvents: 1 })
     const { source } = await runningTurn(test, "Summarize")
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("usage_update")
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("usage_update"),
+      "an update carrying usage_update"
     )
 
     source.emit(turnStarted())
@@ -904,7 +408,8 @@ describe("operator ACP lane", () => {
     source.emit(turnEnded())
 
     const invalidated = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated
+      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
+      "the Session invalidation"
     )
     expect(invalidated.params).toEqual({ sessionId: CREATED })
     // A dropped stream is not an outcome: the run failed nowhere, the turn this
@@ -930,8 +435,9 @@ describe("operator ACP lane", () => {
       todos,
     })
 
-    const planned = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("plan_update")
+    const planned = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("plan_update"),
+      "an update carrying plan_update"
     )
     expect(planned.params).toMatchObject({
       sessionId: CREATED,
@@ -946,61 +452,9 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("requires action for a request and resumes the turn with the answer", async () => {
-    const test = await harness()
-    const { source } = await runningTurn(test, "Delete it")
-    const admitted = PromptTurnInputSchema.parse(test.start.mock.calls[0]?.[1])
-
-    source.emit(turnStarted())
-    source.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "int-1",
-          kind: PendingRequestKind.Permission,
-          message: "Run rm?",
-          toolCallId: "tool-1",
-          // Adapters carry the approval choices as the response schema's enum.
-          responseSchema: { type: "string", enum: ["once", "deny"] },
-        },
-      ],
-    })
-    source.finish()
-
-    const asked = await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission
-    )
-
-    // The wait is reported as state before the request that carries it.
-    const requiresAction = test.recorder.entries.findIndex((entry) =>
-      JSON.stringify(entry.params).includes("requires_action")
-    )
-    expect(requiresAction).toBeGreaterThanOrEqual(0)
-    expect(requiresAction).toBeLessThan(test.recorder.entries.indexOf(asked))
-    expect(asked.params).toMatchObject({
-      sessionId: CREATED,
-      title: "Run rm?",
-      options: [
-        { optionId: "once", kind: "allow_once" },
-        { optionId: "deny", kind: "reject_once" },
-      ],
-    })
-    expect(
-      AosPermissionMetaSchema.parse(aosMetaOf(asked.params)).requestId
-    ).toBe("int-1")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    const resumed = RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1])
-    expect(resumed.replies).toMatchObject([
-      { requestId: "int-1", status: "resolved" },
-    ])
-    expect(resumed.replies[0]?.payload).toBeDefined()
-    expect(resumed.turnId).not.toBe(admitted.turnId)
-    test.close()
-  })
-
   it("delivers a multi-select question the SDK accepts", async () => {
     const test = await harness({
-      elicitation: async () => ({
+      question: async () => ({
         action: "accept",
         content: {
           q0: "production",
@@ -1087,7 +541,7 @@ describe("operator ACP lane", () => {
 
   it("records the answers on the tool call that asked them", async () => {
     const test = await harness({
-      elicitation: async () => ({
+      question: async () => ({
         action: "accept",
         content: { q0: "production", q1: ["api", "web"], q2: "the queue" },
       }),
@@ -1098,8 +552,9 @@ describe("operator ACP lane", () => {
     source.emit(turnQuestioned("call-9"))
     source.finish()
 
-    const recorded = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("tool_call_update")
+    const recorded = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("tool_call_update"),
+      "an update carrying tool_call_update"
     )
     expect(recorded.params).toMatchObject({
       sessionId: CREATED,
@@ -1122,7 +577,7 @@ describe("operator ACP lane", () => {
 
   it("cancels the request when the operator declines", async () => {
     const test = await harness({
-      elicitation: async () => ({ action: "decline" }),
+      question: async () => ({ action: "decline" }),
     })
     const { source } = await runningTurn(test, "Clarify it")
 
@@ -1140,40 +595,14 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("stops a running turn at the provider and settles it as cancelled", async () => {
-    const test = await harness()
-    const { source } = await runningTurn(test, "Long job")
-    source.emit(turnStarted())
-    await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes('"state":"running"')
-    )
-
-    await test.agent.notify(methods.agent.session.cancel, {
-      sessionId: CREATED,
-    })
-
-    await vi.waitFor(() => expect(source.stop).toHaveBeenCalledTimes(1))
-    source.emit(turnEnded())
-    const settled = await test.recorder.wait((entry) =>
-      JSON.stringify(entry.params).includes("cancelled")
-    )
-    expect(settled.params).toMatchObject({
-      sessionId: CREATED,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "cancelled",
-      },
-    })
-    test.close()
-  })
-
   it("acknowledges the focused Session's read state once the debounce elapses", async () => {
     const test = await harness({ rows: [sessionRow({ unread: true })] })
     await test.list()
-    await vi.waitFor(() =>
-      expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
+    await test.recorder.wait(
+      () => unreadChanges(test.recorder).length > 0,
+      "the Session's unread change"
     )
+    expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
 
     await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
     await vi.waitFor(() => expect(test.clock.pending()).toBe(1))
@@ -1185,7 +614,10 @@ describe("operator ACP lane", () => {
       })
     )
     expect(test.updateSession).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(unreadChanges(test.recorder)).toHaveLength(2))
+    await test.recorder.wait(
+      () => unreadChanges(test.recorder).length === 2,
+      "the Session's read change"
+    )
     expect(unreadChanges(test.recorder)[1]).toMatchObject({
       agentId: AGENT,
       sessionId: SESSION,

@@ -453,12 +453,6 @@ const script = {
     text: "Recovered after reconnect.",
   },
   reply: ["Streamed by AOS.", "Both chunks arrived."],
-  /**
-   * Whether the window is held back after the resume answers until the test
-   * releases it with `__acpStub.pushUsage()`. A provider that cannot report
-   * usage at attach time makes the proxy push it late instead.
-   */
-  deferUsage: false,
   // 42k of a 200k window, attributed the way a provider reports it: the counts
   // are ACP's own fields, the attribution is the AOS extension's meta.
   usage: {
@@ -503,8 +497,6 @@ declare global {
       sequence: number
       /** Drops the live transport, as a proxy restart would. */
       dropSocket: () => void
-      /** Releases the window a deferred resume is holding back. */
-      pushUsage: () => void
       /** Sends the held `_aos/before` page, if one is waiting. */
       releasePage: () => void
     }
@@ -523,7 +515,6 @@ function installAcpStub(script: AcpScript) {
     connections: 0,
     sequence: 0,
     dropSocket: () => {},
-    pushUsage: () => {},
     releasePage: () => {},
   }
   window.__acpStub = stub
@@ -750,10 +741,7 @@ function installAcpStub(script: AcpScript) {
           configOptions: script.configOptions,
           _meta: { aos: script.resumeMeta },
         })
-        const pushUsage = () =>
-          this.update({ sessionUpdate: "usage_update", ...script.usage })
-        if (script.deferUsage) stub.pushUsage = pushUsage
-        else pushUsage()
+        this.update({ sessionUpdate: "usage_update", ...script.usage })
       })
       // The prompt is acknowledged with the minted user message id, then the
       // turn streams. The pending prompt stays running until it is cancelled.
@@ -1057,32 +1045,6 @@ test("AOS proxy loads a long Session's earlier messages as the reader scrolls up
   }).toPass({ intervals: [50] })
   await expect(beginning).toBeInViewport()
   expect(await pageReads()).toBe(length / 200 - 1)
-})
-
-test("AOS proxy shows the context gauge when the window arrives after the resume", async ({
-  page,
-}) => {
-  await serveAcp(page, { deferUsage: true })
-  await page.goto("/")
-
-  // A provider that cannot report the window at attach time opens the Session
-  // without a reading, so the composer offers no gauge to read.
-  await expect(page.getByText("Restored from AOS.")).toBeVisible()
-  await expect(
-    page.getByRole("textbox", { name: "Message input" })
-  ).toBeVisible()
-  const gauge = page.getByRole("button", { name: "Context usage" })
-  await expect(gauge).toHaveCount(0)
-
-  // The late push is still the window this Session carries: it reaches the
-  // composer attributed, without another turn or another resume.
-  await page.evaluate(() => window.__acpStub.pushUsage())
-  await expect(gauge).toBeVisible()
-  await gauge.focus()
-  await expect(page.getByText("42k / 200k")).toBeVisible()
-  for (const shown of ["System", "8k", "Tools", "12k", "Messages", "22k"])
-    await expect(page.getByText(shown, { exact: true })).toBeVisible()
-  expect(await recorded(page, "session/resume")).toHaveLength(1)
 })
 
 test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, stop and usage from the wire", async ({

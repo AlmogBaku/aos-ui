@@ -264,6 +264,8 @@ Several worktrees sweeping at once oversubscribe a shared machine and starve any
 deployment running on it, so `vitest.config.ts` caps workers at half the cores.
 Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
 prefer `nice bun run test` for a full sweep beside a live deployment.
+The suite is two Vitest projects: `bunx vitest run --project node` runs the
+DOM-free server, protocol, and tooling tests, and `--project dom` the jsdom rest.
 
 When a worktree-isolated session's shell guard rejects a compound command, put
 the steps in a script file under `/tmp` and run that script. The tracked skills

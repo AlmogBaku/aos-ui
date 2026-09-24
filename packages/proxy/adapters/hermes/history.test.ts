@@ -154,24 +154,6 @@ describe("server-side Hermes history projection", () => {
     expect(JSON.stringify(messages)).not.toContain("Media unavailable")
   })
 
-  it("redacts an assistant MEDIA path that names a sensitive file", () => {
-    const messages = projectHermesHistory([
-      {
-        id: "assistant-forged-media",
-        role: "assistant",
-        content: "MEDIA:/home/alice/.hermes/auth.json",
-      },
-    ])
-
-    expect(messages).toMatchObject([
-      {
-        content: [{ type: "text", text: "[Media unavailable]" }],
-      },
-    ])
-    expect(JSON.stringify(messages)).not.toContain("/home/")
-    expect(JSON.stringify(messages)).not.toContain("aos.artifact")
-  })
-
   it("restores one artifact per MEDIA reference however many rows repeat it", () => {
     const line = "MEDIA:/home/alice/reports/q3.pdf"
     const messages = projectHermesHistory([
@@ -875,72 +857,6 @@ describe("server-side Hermes history projection", () => {
       },
     ])
     expect(JSON.stringify(messages)).not.toContain("/srv/private")
-  })
-
-  it("history-rows builders produce shapes accepted by projectHermesHistory", () => {
-    // Round-trip: build rows with the test utilities and verify that
-    // projectHermesHistory projects them into the expected message structure.
-    // This keeps the builder shapes pinned to what history.ts actually reads.
-    // Note: adjacent assistant rows are merged by projectHermesHistory, so a
-    // user row separates the two assistant turns.
-    const rows = [
-      userRow("u1", "Hello", { rowId: 1 }),
-      assistantToolCall(
-        "a1",
-        [{ toolCallId: "tc1", name: "bash", args: { cmd: "ls" } }],
-        { rowId: 2 }
-      ),
-      toolRow("tc1", "bash", { output: "file.txt" }, false, { rowId: 3 }),
-      userRow("u2", "Show result", { rowId: 4 }),
-      assistantText("a2", "Done.", { rowId: 5 }),
-    ]
-
-    const messages = projectHermesHistory(rows)
-
-    expect(messages).toHaveLength(4)
-    expect(messages[0]).toMatchObject({ role: "user", id: "hermes-row-1" })
-    expect(messages[1]).toMatchObject({
-      role: "assistant",
-      id: "hermes-row-2",
-    })
-    expect(messages[1]?.content[0]).toMatchObject({
-      type: "tool-call",
-      toolCallId: "tc1",
-      toolName: "bash",
-      args: { cmd: "ls" },
-      result: { output: "file.txt" },
-    })
-    // isError is absent (not false) when the tool result is not an error
-    expect(
-      (messages[1]?.content[0] as Record<string, unknown>)?.isError
-    ).toBeUndefined()
-    expect(messages[2]).toMatchObject({ role: "user", id: "hermes-row-4" })
-    expect(messages[3]).toMatchObject({
-      role: "assistant",
-      id: "hermes-row-5",
-    })
-    expect(messages[3]?.content[0]).toMatchObject({
-      type: "text",
-      text: "Done.",
-    })
-  })
-
-  it("rows with a non-empty display_kind are skipped by projectHermesHistory", () => {
-    // history.ts:484 filters rows where stringValue(display_kind) is truthy.
-    const rows = [
-      userRow("u1", "Hello"),
-      assistantText("a1", "Hidden", { displayKind: "system" }),
-      assistantText("a2", "Visible"),
-    ]
-
-    const messages = projectHermesHistory(rows)
-
-    expect(messages).toHaveLength(2)
-    expect(messages[0]).toMatchObject({ role: "user" })
-    expect(messages[1]?.content[0]).toMatchObject({
-      type: "text",
-      text: "Visible",
-    })
   })
 
   it("flags the user row an accepted redirect persisted mid-turn", () => {

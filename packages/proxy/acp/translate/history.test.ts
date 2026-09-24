@@ -5,7 +5,6 @@ import type { SessionHistoryResponse } from "../../../protocol"
 import {
   AOS_META_KEY,
   AOS_STOP_REASONS,
-  AosChunkMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosToolCallMetaSchema,
@@ -142,21 +141,6 @@ function updatesOf(outbound: readonly AcpOutbound[]) {
 }
 
 describe("translateHistory", () => {
-  it("replays every message in the order the run stream sent it", () => {
-    expect(kinds(translateHistory(history, "operator"))).toEqual([
-      "user_message",
-      "state_update",
-      "agent_thought_chunk",
-      "agent_message_chunk",
-      "tool_call_update",
-      "tool_call_update",
-      "agent_message_chunk",
-      "state_update",
-      "plan_update",
-      "agent_message_chunk",
-    ])
-  })
-
   it("replays a published artifact as a link on the message that stored it", () => {
     expect(translateHistory(history, "operator")[6]).toEqual(
       artifactLink("agent_message_chunk", "a1", ARTIFACT)
@@ -205,28 +189,6 @@ describe("translateHistory", () => {
     expect(outbound[1]).toEqual(
       artifactLink("user_message_chunk", "u9", attached)
     )
-  })
-
-  it("replays reasoning and prose as the chunks the run streamed", () => {
-    const [, , thought, prose] = updatesOf(
-      translateHistory(history, "operator")
-    )
-
-    expect(thought).toMatchObject({
-      sessionUpdate: "agent_thought_chunk",
-      messageId: "a1",
-      content: { type: "text", text: "weigh the options" },
-    })
-    expect(prose).toMatchObject({
-      sessionUpdate: "agent_message_chunk",
-      messageId: "a1",
-      content: { type: "text", text: "Done." },
-    })
-    // Strict, so a replayed chunk carries no field a live one does not.
-    expect(AosChunkMetaSchema.parse(aosMeta(prose!))).toEqual({
-      sequence: 0,
-      turnId: "history",
-    })
   })
 
   it("brackets the turn with the states its run reported, and their moments", () => {

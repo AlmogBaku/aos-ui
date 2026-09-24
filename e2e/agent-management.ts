@@ -1,30 +1,17 @@
 import { expect, type Page } from "./test"
 
-export async function exerciseAgentManagement(
-  page: Page,
-  mobile: boolean,
-  locale: "en" | "he"
-) {
-  const copy =
-    locale === "en"
-      ? {
-          manage: "Manage Agents",
-          open: "Open Agents",
-          back: "Back to Agents",
-          show: "Show in workspace: Aster",
-          heading: "Add an Agent to your workspace.",
-          close: "Close panel",
-        }
-      : {
-          manage: "ניהול סוכנים",
-          open: "פתיחת רשימת הסוכנים",
-          back: "חזרה לסוכנים",
-          show: "הצגה בסביבת העבודה: Aster",
-          heading: "הוסיפו סוכן לסביבת העבודה.",
-          close: "סגירת החלונית",
-        }
+const copy = {
+  manage: "Manage Agents",
+  open: "Open Agents",
+  back: "Back to Agents",
+  show: "Show in workspace: Aster",
+  heading: "Add an Agent to your workspace.",
+  close: "Close panel",
+} as const
+
+export async function exerciseAgentManagement(page: Page, mobile: boolean) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto(`/${locale}`)
+  await page.goto("/en")
   if (mobile) {
     await page.getByRole("button", { name: copy.open }).click()
     const back = page.getByRole("button", { name: copy.back })
@@ -33,7 +20,7 @@ export async function exerciseAgentManagement(
   await page.getByRole("button", { name: copy.manage }).click()
   const dialog = page.getByRole("dialog", { name: copy.manage })
   await expect(dialog).toBeVisible()
-  await expect(dialog).toHaveAttribute("dir", locale === "he" ? "rtl" : "ltr")
+  await expect(dialog).toHaveAttribute("dir", "ltr")
   const switches = dialog.getByRole("switch")
   await expect(
     dialog.getByRole("switch", { checked: false }).first()

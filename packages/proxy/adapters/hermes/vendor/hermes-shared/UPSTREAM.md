@@ -35,18 +35,22 @@ All files listed below are byte-identical copies of the upstream sources at the
 pinned commit. The sha256 column is the SHA-256 hash of the file content. The
 git-blob column is the GitHub blob object hash.
 
-| Vendor file                       | Upstream path                                     | sha256                                                             | git-blob                                   |
-| --------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------ |
-| `json-rpc-gateway.ts`             | `apps/shared/src/json-rpc-gateway.ts`             | `ab80102da6d5e0cd5c831271f4bd353e0b2ecb711281f1d78745e9149da293a8` | `338272b762c8f6fb03c99f5e67640b8539e4aef7` |
-| `json-rpc-channel.ts`             | `apps/shared/src/json-rpc-channel.ts`             | `9ab20d7e9ab8829650a98dc8967283439ae13b11b46f36f4d64ea1243a5250d8` | `46b1f1b0be2ee363aeec5fedd146b4d313f1a1b0` |
-| `reconnect-backoff.ts`            | `apps/shared/src/reconnect-backoff.ts`            | `323c4cd02b95010a6fd7a197f2ccb5182507142677d01fa506b08c055c5ff1f8` | `8a1dd756b5eb5ae0b4c7a310647e04f7b15ef3fb` |
-| `json-rpc-channel.test.ts`        | `apps/shared/src/json-rpc-channel.test.ts`        | `bb49e96d31602af46c9787fc35f8c8e6a7600409f09c9592faa40cd259dbc343` | `80685ba8df1078a654dffe45b3c410f93c8a8e6b` |
-| `json-rpc-gateway-replay.test.ts` | `apps/shared/src/json-rpc-gateway-replay.test.ts` | `58e0edbaf4b166f02a482dbacc74ac55e8df6740914e30dda74e6bb89dcbdfd6` | `a5875738308ace1f0b2dc1d8d189da1efcf4604e` |
-| `reconnect-backoff.test.ts`       | `apps/shared/src/reconnect-backoff.test.ts`       | `149cb74814b5bfde1249dd75490a7bb7131e6ce4151e0cce247aa432d519323f` | `8bca2b7f5c27cc87015cc3bc1febdc7775d1a477` |
-| `LICENSE`                         | `LICENSE`                                         | `821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6` | `75410e73319c72cd3e991a501c5455eb78f38375` |
+| Vendor file            | Upstream path                          | sha256                                                             | git-blob                                   |
+| ---------------------- | -------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------ |
+| `json-rpc-gateway.ts`  | `apps/shared/src/json-rpc-gateway.ts`  | `ab80102da6d5e0cd5c831271f4bd353e0b2ecb711281f1d78745e9149da293a8` | `338272b762c8f6fb03c99f5e67640b8539e4aef7` |
+| `json-rpc-channel.ts`  | `apps/shared/src/json-rpc-channel.ts`  | `9ab20d7e9ab8829650a98dc8967283439ae13b11b46f36f4d64ea1243a5250d8` | `46b1f1b0be2ee363aeec5fedd146b4d313f1a1b0` |
+| `reconnect-backoff.ts` | `apps/shared/src/reconnect-backoff.ts` | `323c4cd02b95010a6fd7a197f2ccb5182507142677d01fa506b08c055c5ff1f8` | `8a1dd756b5eb5ae0b4c7a310647e04f7b15ef3fb` |
+| `LICENSE`              | `LICENSE`                              | `821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6` | `75410e73319c72cd3e991a501c5455eb78f38375` |
 
 `snapshot.test.ts` and `gateway-events.ts` are AOS-authored files and are not
 listed here.
+
+Upstream's own tests (`json-rpc-channel.test.ts`,
+`json-rpc-gateway-replay.test.ts`, `reconnect-backoff.test.ts`) are
+deliberately not vendored. `gateway.ts` runs the client with `replay: false`,
+and the adapter tests in `packages/proxy/adapters/hermes` (`gateway.test.ts`,
+`gateway-socket.test.ts`, `run.test.ts`) cover the correlation, heartbeat,
+server-request, backoff, and replay behavior AOS relies on.
 
 ## Shim rationale
 
@@ -86,23 +90,17 @@ To update to a new upstream pin:
    gh api "repos/NousResearch/hermes-agent/contents/apps/shared/src/reconnect-backoff.ts?ref=${NEW_PIN}" \
      --jq '.content' | base64 -d > "${DEST}/reconnect-backoff.ts"
 
-   gh api "repos/NousResearch/hermes-agent/contents/apps/shared/src/json-rpc-channel.test.ts?ref=${NEW_PIN}" \
-     --jq '.content' | base64 -d > "${DEST}/json-rpc-channel.test.ts"
-
-   gh api "repos/NousResearch/hermes-agent/contents/apps/shared/src/json-rpc-gateway-replay.test.ts?ref=${NEW_PIN}" \
-     --jq '.content' | base64 -d > "${DEST}/json-rpc-gateway-replay.test.ts"
-
-   gh api "repos/NousResearch/hermes-agent/contents/apps/shared/src/reconnect-backoff.test.ts?ref=${NEW_PIN}" \
-     --jq '.content' | base64 -d > "${DEST}/reconnect-backoff.test.ts"
-
    gh api "repos/NousResearch/hermes-agent/contents/LICENSE?ref=${NEW_PIN}" \
      --jq '.content' | base64 -d > "${DEST}/LICENSE"
    ```
 
-2. Run the snapshot tests to confirm byte-identical copy and capture new hashes:
+   Do not fetch upstream's `*.test.ts` files; they are not vendored.
+
+2. Run the snapshot test to confirm byte-identical copy and capture new
+   hashes, then the adapter tests that exercise the vendored client:
 
    ```sh
-   bunx vitest run packages/proxy/adapters/hermes/vendor
+   bunx vitest run packages/proxy/adapters/hermes
    ```
 
    If the hashes changed, update the constants in `snapshot.test.ts` and the

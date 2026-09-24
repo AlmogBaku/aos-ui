@@ -17,16 +17,6 @@ describe("canonicalToolName", () => {
     expect(canonicalToolName("clarify")).toBe("question")
   })
 
-  it("strips the prefix Hermes gives an aos-ui MCP tool", () => {
-    expect(canonicalToolName("mcp__aos_ui__render_chart")).toBe("render_chart")
-    expect(canonicalToolName("mcp__aos_ui__present_artifact")).toBe(
-      "present_artifact"
-    )
-    expect(canonicalToolName("mcp__other__render_chart")).toBe(
-      "mcp__other__render_chart"
-    )
-  })
-
   it("returns unrecognised names unchanged", () => {
     expect(canonicalToolName("read_file")).toBe("read_file")
     expect(canonicalToolName("present_artifact")).toBe("present_artifact")

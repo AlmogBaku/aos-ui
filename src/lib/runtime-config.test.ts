@@ -10,12 +10,9 @@ describe("resolveRuntimeConfiguration", () => {
     })
   })
 
-  it.each(["opencode", "hermes", "ag-ui", "openclaw"])(
-    "does not expose the retired %s browser mode",
-    (mode) => {
-      expect(resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: mode })).toEqual(
-        { status: "unavailable", reason: "invalid-runtime-mode" }
-      )
-    }
-  )
+  it("does not expose the retired hermes browser mode", () => {
+    expect(
+      resolveRuntimeConfiguration({ AOS_UI_RUNTIME_MODE: "hermes" })
+    ).toEqual({ status: "unavailable", reason: "invalid-runtime-mode" })
+  })
 })

@@ -160,7 +160,7 @@ describe("ModelSelector", () => {
     expect(screen.queryByRole("combobox", { name: "Search models" })).toBeNull()
   })
 
-  it("shows the picked model and announces that the switch is in flight", async () => {
+  it("shows the picked model, announces a switch in flight, and reads as settled once none is", async () => {
     const user = userEvent.setup()
     renderSelector({
       efforts: EFFORTS,
@@ -177,11 +177,9 @@ describe("ModelSelector", () => {
     expect(trigger).toHaveAttribute("aria-busy", "true")
     await user.click(trigger)
     expect(await screen.findByText("Switching model…")).toBeVisible()
-  })
 
-  it("reads as settled once no switch is in flight", () => {
+    cleanup()
     renderSelector({ models: SHORT_ROSTER, value: "fast" })
-
     expect(
       screen.getByRole("combobox", { name: "Choose model" })
     ).not.toHaveAttribute("aria-busy")
@@ -282,54 +280,57 @@ describe("ModelSelector", () => {
     expect(screen.queryByRole("slider", { name: "Thinking" })).toBeNull()
   })
 
-  it("reports a failed effort switch on the one status the choice shares", async () => {
+  it.each([
+    { kind: "model", efforts: undefined, error: "Switch failed" },
+    { kind: "effort", efforts: EFFORTS, error: "Effort switch failed" },
+  ])(
+    "surfaces a failed $kind switch on the one status the choice shares, with a retry that repeats only that request",
+    async ({ efforts, error }) => {
+      const user = userEvent.setup()
+      const onValueChange = vi.fn()
+      const retry = vi.fn()
+      renderSelector({
+        efforts,
+        effortValue: "medium",
+        models: SHORT_ROSTER,
+        onEffortChange: () => undefined,
+        onValueChange,
+        selection: { status: "error", error, retry },
+        value: "balanced",
+      })
+
+      await user.click(screen.getByRole("combobox", { name: "Choose model" }))
+      const alerts = await screen.findAllByRole("alert")
+      expect(alerts).toHaveLength(1)
+      expect(alerts[0]).toHaveTextContent(error)
+
+      await user.click(
+        screen.getByRole("button", { name: "Retry model selection" })
+      )
+      expect(retry).toHaveBeenCalledOnce()
+      expect(onValueChange).not.toHaveBeenCalled()
+      expect(
+        screen.getByRole("combobox", { name: "Choose model" })
+      ).toHaveTextContent("Balanced")
+    }
+  )
+
+  it.each([
+    ["a ladder id keeps its localized name", "high", "High"],
+    ["an unnamed unknown id shows the id", "burst", "burst"],
+  ])("names the effort: %s", async (_label, effortValue, name) => {
     const user = userEvent.setup()
-    const retry = vi.fn()
     renderSelector({
-      efforts: EFFORTS,
-      effortValue: "medium",
+      efforts: ["high", "burst"],
+      effortValue,
       models: SHORT_ROSTER,
       onEffortChange: () => undefined,
-      selection: {
-        status: "error",
-        error: "Effort switch failed",
-        retry,
-      },
       value: "balanced",
     })
 
     await user.click(screen.getByRole("combobox", { name: "Choose model" }))
-    const alerts = await screen.findAllByRole("alert")
-    expect(alerts).toHaveLength(1)
-    expect(alerts[0]).toHaveTextContent("Effort switch failed")
-
-    await user.click(
-      screen.getByRole("button", { name: "Retry model selection" })
-    )
-    expect(retry).toHaveBeenCalledOnce()
-  })
-
-  it("surfaces a failed switch with a retry that repeats only that request", async () => {
-    const user = userEvent.setup()
-    const onValueChange = vi.fn()
-    const retry = vi.fn()
-    renderSelector({
-      models: SHORT_ROSTER,
-      onValueChange,
-      selection: { status: "error", error: "Switch failed", retry },
-      value: "balanced",
-    })
-
-    await user.click(screen.getByRole("combobox", { name: "Choose model" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("Switch failed")
-
-    await user.click(
-      screen.getByRole("button", { name: "Retry model selection" })
-    )
-    expect(retry).toHaveBeenCalledOnce()
-    expect(onValueChange).not.toHaveBeenCalled()
     expect(
-      screen.getByRole("combobox", { name: "Choose model" })
-    ).toHaveTextContent("Balanced")
+      await screen.findByRole("slider", { name: "Thinking" })
+    ).toHaveAttribute("aria-valuetext", name)
   })
 })

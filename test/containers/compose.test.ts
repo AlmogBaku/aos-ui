@@ -41,9 +41,26 @@ type ComposeConfig = {
 
 const root = resolve(import.meta.dirname, "../..")
 
+// Each overlay and environment variant renders once per file; tests that ask
+// for the same variant share its result and must not mutate it.
+const rendered = new Map<string, ComposeConfig>()
+
 function composeConfig(
   files: string[],
   overrides: Record<string, string> = {}
+) {
+  const key = JSON.stringify([files, overrides])
+  let config = rendered.get(key)
+  if (!config) {
+    config = renderComposeConfig(files, overrides)
+    rendered.set(key, config)
+  }
+  return config
+}
+
+function renderComposeConfig(
+  files: string[],
+  overrides: Record<string, string>
 ) {
   const args = ["compose"]
   for (const file of files) args.push("-f", file)
@@ -623,25 +640,17 @@ describe("container orchestration", () => {
     })
   })
 
-  it("builds static assets into the Bun proxy image", () => {
+  it("packages the Bun proxy with its static assets as a dedicated non-root image target", () => {
     const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
 
     expect(dockerfile).toContain("FROM dependencies AS proxy")
     expect(dockerfile).toContain("COPY --from=builder")
+    expect(dockerfile).toContain("COPY --chown=bun:bun shared ./shared")
     expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
     expect(dockerfile).toContain("USER bun")
     expect(dockerfile).toContain("/app/dist")
     expect(
       readFileSync(resolve(root, "packages/proxy/static.ts"), "utf8")
     ).toContain("/runtime-config.json")
-  })
-
-  it("packages the Bun proxy as a dedicated non-root image target", () => {
-    const dockerfile = readFileSync(resolve(root, "Dockerfile"), "utf8")
-
-    expect(dockerfile).toMatch(/FROM dependencies AS proxy/)
-    expect(dockerfile).toContain("COPY --chown=bun:bun shared ./shared")
-    expect(dockerfile).toContain('CMD ["bun", "run", "static:serve"]')
-    expect(dockerfile).toContain("USER bun")
   })
 })

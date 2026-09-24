@@ -8,7 +8,4 @@ pnpm-lock.yaml
 packages/proxy/adapters/hermes/vendor/**/json-rpc-gateway.ts
 packages/proxy/adapters/hermes/vendor/**/json-rpc-channel.ts
 packages/proxy/adapters/hermes/vendor/**/reconnect-backoff.ts
-packages/proxy/adapters/hermes/vendor/**/json-rpc-channel.test.ts
-packages/proxy/adapters/hermes/vendor/**/json-rpc-gateway-replay.test.ts
-packages/proxy/adapters/hermes/vendor/**/reconnect-backoff.test.ts
 packages/proxy/adapters/hermes/vendor/**/LICENSE

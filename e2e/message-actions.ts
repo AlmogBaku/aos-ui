@@ -29,21 +29,7 @@ const english: MessageActionsCopy = {
   appLoading: "Loading the app…",
 }
 
-const hebrew: MessageActionsCopy = {
-  copy: "העתקה",
-  retry: "ניסיון חוזר",
-  exportMarkdown: "ייצוא כ-Markdown",
-  edit: "עריכת ההודעה",
-  selectText: "בחירת טקסט",
-  update: "עדכון",
-  cancel: "ביטול",
-  conversation: "שיחה",
-  chartFrame: "יישומון render_chart",
-  showChartData: "הצגת נתוני התרשים",
-  appLoading: "היישומון נטען…",
-}
-
-/** The fixture turns, located by the text a reader sees in either locale. */
+/** The fixture turns, located by the text a reader sees. */
 const USER_TURN = /^Prepare my Q1 planning brief/
 const ASSISTANT_TURN =
   /^Applied AI is accelerating fastest in the planning dataset/
@@ -160,14 +146,10 @@ async function exerciseMobile(page: Page, copy: MessageActionsCopy) {
   })
 }
 
-export async function exerciseMessageActions(
-  page: Page,
-  mobile: boolean,
-  locale: "en" | "he"
-) {
-  const copy = locale === "en" ? english : hebrew
+export async function exerciseMessageActions(page: Page, mobile: boolean) {
+  const copy = english
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto(`/${locale}`)
+  await page.goto("/en")
   await expect(turn(page, ASSISTANT_TURN)).toBeVisible()
   // A following thread returns to its end whenever content grows, and only the
   // reader's own scroll leaves it, so the press waits for the lazily loaded

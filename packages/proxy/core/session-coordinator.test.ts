@@ -2762,221 +2762,229 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
-  it("threads cache key, journal, sequence and terminal hook into a started segment", async () => {
-    const source = new EventSource()
-    const neighbor = new EventSource()
-    const onTerminal = vi.fn(async () => undefined)
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async (target: SessionScope) =>
-        target.sessionId === otherScope.sessionId ? neighbor : source
-      ),
-      recover: vi.fn(async () => {
-        throw new Error("native recovery must not run for a journaled run")
-      }),
-    }
-    const sessions = coordinator(engine)
-    const reloadNeighbor = await neighborRun(sessions, neighbor)
+  it("threads cache key, journal, sequence and terminal hook into started, recovered, discovered, and resumed segments", async () => {
+    // A started segment.
+    {
+      const source = new EventSource()
+      const neighbor = new EventSource()
+      const onTerminal = vi.fn(async () => undefined)
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async (target: SessionScope) =>
+          target.sessionId === otherScope.sessionId ? neighbor : source
+        ),
+        recover: vi.fn(async () => {
+          throw new Error("native recovery must not run for a journaled run")
+        }),
+      }
+      const sessions = coordinator(engine)
+      const reloadNeighbor = await neighborRun(sessions, neighbor)
 
-    const live = await sessions.start(scope, input("run-1"), {
-      ...access("one"),
-      onTerminal,
-    })
-    const readLive = reader(live)
-    source.emit(turnStarted)
-    await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
-    })
+      const live = await sessions.start(scope, input("run-1"), {
+        ...access("one"),
+        onTerminal,
+      })
+      const readLive = reader(live)
+      source.emit(turnStarted)
+      await expect(readLive()).resolves.toMatchObject({
+        value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
+      })
 
-    await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
-      {
+      await expect(
+        reloadedHead(sessions, scope, "run-1")
+      ).resolves.toMatchObject({
         sequence: 1,
         event: { kind: TurnEventKind.TurnStarted },
-      }
-    )
-    await expect(reloadNeighbor()).resolves.toMatchObject({
-      sequence: 1,
-      event: { kind: TurnEventKind.TurnStarted },
-    })
-
-    const terminal = turnEnded
-    source.emit(terminal)
-    source.finish()
-    await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(1))
-    expect(onTerminal).toHaveBeenCalledWith(terminal)
-  })
-
-  it("threads cache key, inherited journal, sequence and terminal hook into a recovered segment", async () => {
-    const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 1 })
-    const neighbor = new EventSource()
-    const onTerminal = vi.fn(async () => undefined)
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async (target: SessionScope) =>
-        target.sessionId === otherScope.sessionId ? neighbor : interrupted
-      ),
-      recover: vi.fn(async () => recovered),
-    }
-    const sessions = coordinator(engine)
-    const reloadNeighbor = await neighborRun(sessions, neighbor)
-
-    const live = await sessions.start(scope, input("run-1"), {
-      ...access("one"),
-      onTerminal,
-    })
-    const readLive = reader(live)
-    interrupted.emit(turnStarted)
-    await readLive()
-    interrupted.emit(interruptedError)
-    await readLive()
-    interrupted.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
-    live.close()
-
-    const redial = await sessions.recover(
-      scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 2 },
-      access("one")
-    )
-    const readRedial = reader(redial)
-    recovered.emit(turnStarted)
-    // One run keeps one monotonic sequence across its segments.
-    await expect(readRedial()).resolves.toMatchObject({
-      value: { sequence: 3, event: { kind: TurnEventKind.TurnStarted } },
-    })
-
-    await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
-      {
+      })
+      await expect(reloadNeighbor()).resolves.toMatchObject({
         sequence: 1,
         event: { kind: TurnEventKind.TurnStarted },
-      }
-    )
-    await expect(reloadNeighbor()).resolves.toMatchObject({
-      sequence: 1,
-      event: { kind: TurnEventKind.TurnStarted },
-    })
+      })
 
-    const terminal = turnEnded
-    recovered.emit(terminal)
-    recovered.finish()
-    await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(2))
-    expect(onTerminal).toHaveBeenLastCalledWith(terminal)
-  })
-
-  it("threads cache key, absent journal, sequence and terminal hook into a discovered segment", async () => {
-    const discovered = new EventSource()
-    const neighbor = new EventSource()
-    const onTerminal = vi.fn(async () => undefined)
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => neighbor),
-      recover: vi.fn(async () => discovered),
-      discover: vi.fn(async () => ({
-        handle: discovered,
-        state: "running" as const,
-      })),
+      const terminal = turnEnded
+      source.emit(terminal)
+      source.finish()
+      await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(1))
+      expect(onTerminal).toHaveBeenCalledWith(terminal)
     }
-    const sessions = coordinator(engine)
-    const reloadNeighbor = await neighborRun(sessions, neighbor)
 
-    await sessions.discover(scope)
-    const turnId = sessions.snapshot(scope).turnId
-    expect(turnId).toBeDefined()
-    // A discovered run owns no request-scoped resources, so it carries no
-    // terminal hook; a later subscriber cannot install one either.
-    const live = await sessions.recover(
-      scope,
-      { threadId: scope.threadId, turnId: turnId!, after: 0 },
-      { ...access("one"), onTerminal }
-    )
-    const readLive = reader(live)
-    discovered.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "Hel",
-    })
-    await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { kind: TurnEventKind.MessageChunk } },
-    })
+    // A recovered segment inherits the journal.
+    {
+      const interrupted = new EventSource()
+      const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 1 })
+      const neighbor = new EventSource()
+      const onTerminal = vi.fn(async () => undefined)
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async (target: SessionScope) =>
+          target.sessionId === otherScope.sessionId ? neighbor : interrupted
+        ),
+        recover: vi.fn(async () => recovered),
+      }
+      const sessions = coordinator(engine)
+      const reloadNeighbor = await neighborRun(sessions, neighbor)
 
-    // AOS never saw this run start, so there is nothing to replay.
-    await expect(reloadedHead(sessions, scope, turnId!)).resolves.toMatchObject(
-      {
+      const live = await sessions.start(scope, input("run-1"), {
+        ...access("one"),
+        onTerminal,
+      })
+      const readLive = reader(live)
+      interrupted.emit(turnStarted)
+      await readLive()
+      interrupted.emit(interruptedError)
+      await readLive()
+      interrupted.finish()
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+      live.close()
+
+      const redial = await sessions.recover(
+        scope,
+        { threadId: scope.threadId, turnId: "run-1", after: 2 },
+        access("one")
+      )
+      const readRedial = reader(redial)
+      recovered.emit(turnStarted)
+      // One run keeps one monotonic sequence across its segments.
+      await expect(readRedial()).resolves.toMatchObject({
+        value: { sequence: 3, event: { kind: TurnEventKind.TurnStarted } },
+      })
+
+      await expect(
+        reloadedHead(sessions, scope, "run-1")
+      ).resolves.toMatchObject({
+        sequence: 1,
+        event: { kind: TurnEventKind.TurnStarted },
+      })
+      await expect(reloadNeighbor()).resolves.toMatchObject({
+        sequence: 1,
+        event: { kind: TurnEventKind.TurnStarted },
+      })
+
+      const terminal = turnEnded
+      recovered.emit(terminal)
+      recovered.finish()
+      await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(2))
+      expect(onTerminal).toHaveBeenLastCalledWith(terminal)
+    }
+
+    // A discovered segment has no journal.
+    {
+      const discovered = new EventSource()
+      const neighbor = new EventSource()
+      const onTerminal = vi.fn(async () => undefined)
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => neighbor),
+        recover: vi.fn(async () => discovered),
+        discover: vi.fn(async () => ({
+          handle: discovered,
+          state: "running" as const,
+        })),
+      }
+      const sessions = coordinator(engine)
+      const reloadNeighbor = await neighborRun(sessions, neighbor)
+
+      await sessions.discover(scope)
+      const turnId = sessions.snapshot(scope).turnId
+      expect(turnId).toBeDefined()
+      // A discovered run owns no request-scoped resources, so it carries no
+      // terminal hook; a later subscriber cannot install one either.
+      const live = await sessions.recover(
+        scope,
+        { threadId: scope.threadId, turnId: turnId!, after: 0 },
+        { ...access("one"), onTerminal }
+      )
+      const readLive = reader(live)
+      discovered.emit({
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Hel",
+      })
+      await expect(readLive()).resolves.toMatchObject({
+        value: { sequence: 1, event: { kind: TurnEventKind.MessageChunk } },
+      })
+
+      // AOS never saw this run start, so there is nothing to replay.
+      await expect(
+        reloadedHead(sessions, scope, turnId!)
+      ).resolves.toMatchObject({
         event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
-      }
-    )
-    await expect(reloadNeighbor()).resolves.toMatchObject({
-      sequence: 1,
-      event: { kind: TurnEventKind.TurnStarted },
-    })
-
-    discovered.emit(turnEnded)
-    discovered.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-    expect(onTerminal).not.toHaveBeenCalled()
-  })
-
-  it("threads cache key, fresh journal, sequence and terminal hook into a resumed segment", async () => {
-    const interrupted = new EventSource()
-    const resumed = new EventSource()
-    const neighbor = new EventSource()
-    const onTerminal = vi.fn(async () => undefined)
-    const sources = [interrupted, resumed]
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async (target: SessionScope) =>
-        target.sessionId === otherScope.sessionId ? neighbor : sources.shift()!
-      ),
-      recover: vi.fn(async () => {
-        throw new Error("native recovery must not run for a journaled run")
-      }),
-    }
-    const sessions = coordinator(engine)
-    const reloadNeighbor = await neighborRun(sessions, neighbor)
-
-    await sessions.start(scope, input("run-1"), {
-      ...access("one"),
-      onTerminal,
-    })
-    interrupted.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "question-1",
-          kind: PendingRequestKind.Elicitation,
-          responseSchema: { type: "object" },
-        },
-      ],
-    })
-    interrupted.finish()
-    await vi.waitFor(() =>
-      expect(sessions.state(scope)).toBe("waiting-for-input")
-    )
-
-    const live = await sessions.start(
-      scope,
-      input("run-2", true),
-      access("one")
-    )
-    const readLive = reader(live)
-    resumed.emit(turnStarted)
-    // A resumed turn is a fresh segment: its own journal and sequence.
-    await expect(readLive()).resolves.toMatchObject({
-      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
-    })
-    await expect(reloadedHead(sessions, scope, "run-2")).resolves.toMatchObject(
-      {
+      })
+      await expect(reloadNeighbor()).resolves.toMatchObject({
         sequence: 1,
         event: { kind: TurnEventKind.TurnStarted },
-      }
-    )
-    await expect(reloadNeighbor()).resolves.toMatchObject({
-      sequence: 1,
-      event: { kind: TurnEventKind.TurnStarted },
-    })
+      })
 
-    resumed.emit(turnEnded)
-    resumed.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-    // The resumed segment carries no terminal hook of its own.
-    expect(onTerminal).toHaveBeenCalledTimes(1)
+      discovered.emit(turnEnded)
+      discovered.finish()
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+      expect(onTerminal).not.toHaveBeenCalled()
+    }
+
+    // A resumed segment gets a fresh journal.
+    {
+      const interrupted = new EventSource()
+      const resumed = new EventSource()
+      const neighbor = new EventSource()
+      const onTerminal = vi.fn(async () => undefined)
+      const sources = [interrupted, resumed]
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async (target: SessionScope) =>
+          target.sessionId === otherScope.sessionId
+            ? neighbor
+            : sources.shift()!
+        ),
+        recover: vi.fn(async () => {
+          throw new Error("native recovery must not run for a journaled run")
+        }),
+      }
+      const sessions = coordinator(engine)
+      const reloadNeighbor = await neighborRun(sessions, neighbor)
+
+      await sessions.start(scope, input("run-1"), {
+        ...access("one"),
+        onTerminal,
+      })
+      interrupted.emit({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          {
+            requestId: "question-1",
+            kind: PendingRequestKind.Elicitation,
+            responseSchema: { type: "object" },
+          },
+        ],
+      })
+      interrupted.finish()
+      await vi.waitFor(() =>
+        expect(sessions.state(scope)).toBe("waiting-for-input")
+      )
+
+      const live = await sessions.start(
+        scope,
+        input("run-2", true),
+        access("one")
+      )
+      const readLive = reader(live)
+      resumed.emit(turnStarted)
+      // A resumed turn is a fresh segment: its own journal and sequence.
+      await expect(readLive()).resolves.toMatchObject({
+        value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
+      })
+      await expect(
+        reloadedHead(sessions, scope, "run-2")
+      ).resolves.toMatchObject({
+        sequence: 1,
+        event: { kind: TurnEventKind.TurnStarted },
+      })
+      await expect(reloadNeighbor()).resolves.toMatchObject({
+        sequence: 1,
+        event: { kind: TurnEventKind.TurnStarted },
+      })
+
+      resumed.emit(turnEnded)
+      resumed.finish()
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+      // The resumed segment carries no terminal hook of its own.
+      expect(onTerminal).toHaveBeenCalledTimes(1)
+    }
   })
 
   it("settles an execution whose provider stream ends after the turn settled", async () => {
