@@ -9,6 +9,7 @@ import { z } from "zod"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
+  AOS_ATTACHMENT_URI_SCHEME,
   AOS_EXTENSION_VERSION,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
@@ -2027,6 +2028,43 @@ describe("Session rooms", () => {
     ])
     test.close()
     other.close()
+  })
+
+  it("sends a turn of attachments alone as the stage's own prompt", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const stageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => [text, "[image one]", "[image two]"].join(""),
+      cleanup: async () => undefined,
+    })
+    const link = (id: string) => ({
+      type: "resource_link" as const,
+      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/${id}`,
+      name: `${id}.jpg`,
+      mimeType: "image/jpeg",
+    })
+
+    await prompt(test, [link("one"), link("two")], SESSION, {
+      attachmentStageId: stageId,
+    })
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    expect(test.start.mock.calls[0]?.[1]).toMatchObject({
+      prompt: "[image one][image two]",
+    })
+    test.close()
+  })
+
+  it("refuses a prompt with neither text nor attachments", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await expect(prompt(test, [])).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.invalidRequest,
+    })
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
   })
 
   it("lets a losing prompt follow the winner it raced before admission", async () => {

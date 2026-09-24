@@ -549,7 +549,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const meta = parseMeta(AosPromptMetaSchema, params._meta)
     if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
     const text = promptText(params.prompt)
-    if (!text) throw invalidRequest()
+    // A turn of attachments alone carries no text; its stage supplies the turn.
+    if (!text && meta.attachmentStageId === undefined) throw invalidRequest()
     const { messageId } = await perform(
       "send",
       {
