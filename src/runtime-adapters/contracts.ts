@@ -32,18 +32,10 @@ export type AgentSummary = ReadyAgentSummary
 
 export type AgentVisibility = "visible" | "hidden"
 
-/** Actionable visibility outcomes; all other failures remain ordinary Errors. */
-export class AgentVisibilityUpdateError extends Error {
-  constructor(
-    readonly code: "provider-active" | "pending-reload",
-    message: string
-  ) {
-    super(message)
-    this.name = "AgentVisibilityUpdateError"
-  }
-}
-
-/** Provider-filtered normal Agents; dedicated creator stays outside management. */
+/**
+ * Every native Agent with its management facts, as one read. The creator is
+ * listed like any Agent; management surfaces leave it out.
+ */
 export type AgentCatalogEntry = {
   summary: ReadyAgentSummary
   visibility: AgentVisibility

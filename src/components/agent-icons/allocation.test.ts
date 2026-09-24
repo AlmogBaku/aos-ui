@@ -311,15 +311,22 @@ describe("planAvatarSaves", () => {
     ])
   })
 
-  it("counts non-editable Agents as holding their pairs", () => {
+  it("counts a non-editable Agent's saved pair as held against an editable one", () => {
     const agents: AgentAvatarInput[] = [
-      { id: "a-readonly", avatarEditable: false },
-      { id: "b-editable", avatarEditable: true },
+      { id: "a-readonly", avatar: "ring/blue", avatarEditable: false },
+      { id: "b-editable", avatar: "ring/blue", avatarEditable: true },
     ]
-    const readonly = resolveAgentIcons(agents).get("a-readonly")
-    const [save] = planAvatarSaves(agents, new Set())
-    expect(save.agentId).toBe("b-editable")
-    expect(parseAvatar(save.avatar).pair[0]).not.toBe(readonly?.pair[0])
+    const icons = resolveAgentIcons(agents)
+    expect(icons.get("a-readonly")).toMatchObject({
+      token: "ring/blue",
+      source: "saved",
+    })
+    expect(icons.get("b-editable")?.source).toBe("contested")
+    const saves = planAvatarSaves(agents, new Set())
+    expect(saves).toEqual([
+      { agentId: "b-editable", avatar: icons.get("b-editable")?.token },
+    ])
+    expect(saves[0].avatar).not.toBe("ring/blue")
   })
 })
 

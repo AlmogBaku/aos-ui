@@ -69,10 +69,11 @@ import {
   HermesSessionGoneError,
   isSessionGone,
 } from "./attachment-registry"
-import type {
-  ServerMcpApps,
-  ServerRuntime,
-  SessionPatch,
+import {
+  ServerAgentUpdateUnsupportedError,
+  type ServerMcpApps,
+  type ServerRuntime,
+  type SessionPatch,
 } from "../../core/runtime"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -1092,6 +1093,11 @@ export class HermesServerAdapter implements ServerRuntime {
     patch: AgentUpdatePatch,
     observedRevision: string
   ): Promise<AgentUpdateResponse> {
+    // Re-checked here so no caller can reach the native write with a bad value.
+    if (
+      !AgentAvatarSchema.nullable().optional().safeParse(patch.avatar).success
+    )
+      throw new ServerAgentUpdateUnsupportedError()
     // The list row is the only read that carries the CAS revisions and the
     // stored keys the write must preserve; `profiles.configure` then compares
     // those revisions itself and rejects the whole write on any mismatch, so a

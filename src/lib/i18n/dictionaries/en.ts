@@ -245,10 +245,6 @@ export const en = {
     loading: "Loading Agents…",
     loadFailed: "Agents could not be loaded. Try again.",
     updateFailed: "Visibility could not be saved. Try again.",
-    providerActive:
-      "Wait for active Sessions to finish, then try changing visibility again.",
-    pendingReload:
-      "Visibility was saved but is not applied yet. Wait for active Sessions to finish, then try the visibility switch again.",
     retry: "Try again",
   },
   creator: {

@@ -20,11 +20,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
-import {
-  AgentVisibilityUpdateError,
-  type AgentCatalogEntry,
-  type AgentVisibility,
-  type WorkspaceAdapter,
+import type {
+  AgentCatalogEntry,
+  AgentVisibility,
+  WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
 
@@ -51,20 +50,12 @@ export function ManageAgents({
 }) {
   const [entries, setEntries] = useState<AgentCatalogEntry[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [updateFailure, setUpdateFailure] = useState<
-    AgentVisibilityUpdateError["code"] | "failed" | null
-  >(null)
+  const [updateFailed, setUpdateFailed] = useState(false)
   const [pending, setPending] = useState<string | null>(null)
   const lifetime = useRef<{ active: boolean; mutating: boolean } | null>(null)
   const generation = useRef(0)
   const copy = dictionary.agentManagement
-  const updateMessage = updateFailure
-    ? {
-        failed: copy.updateFailed,
-        "provider-active": copy.providerActive,
-        "pending-reload": copy.pendingReload,
-      }[updateFailure]
-    : null
+  const updateMessage = updateFailed ? copy.updateFailed : null
 
   useEffect(() => {
     const scope = { active: true, mutating: false }
@@ -155,22 +146,19 @@ export function ManageAgents({
     scope.mutating = true
     generation.current += 1
     setPending(agentId)
-    setUpdateFailure(null)
+    setUpdateFailed(false)
     try {
       // Hiding frees the Agent's icon; showing it again claims one no visible
       // Agent shows. A runtime that cannot store avatars only moves visibility.
-      const patch = visibilityPatch(visibility, shownEntries, Math.random)
+      const patch = visibilityPatch(visibility, shownEntries)
       await workspace.updateAgent(
         agentId,
         entry.avatarEditable ? patch : { visibility }
       )
       if (!scope.active) return
       await onVisibilityChanged()
-    } catch (error) {
-      if (scope.active)
-        setUpdateFailure(
-          error instanceof AgentVisibilityUpdateError ? error.code : "failed"
-        )
+    } catch {
+      if (scope.active) setUpdateFailed(true)
     } finally {
       // Reconcile even rejected mutations: providers may publish on failure.
       // Keep stale values locked if this read fails, until a successful retry.
@@ -187,7 +175,7 @@ export function ManageAgents({
         if (next) {
           setEntries(null)
           setLoadFailed(false)
-          setUpdateFailure(null)
+          setUpdateFailed(false)
         }
         onOpenChange(next)
       }}
@@ -226,7 +214,7 @@ export function ManageAgents({
           className="min-h-0 overflow-y-auto px-6"
           aria-busy={entries === null && !loadFailed}
         >
-          {loadFailed || updateFailure ? (
+          {loadFailed || updateFailed ? (
             <div
               role="alert"
               className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm text-destructive"

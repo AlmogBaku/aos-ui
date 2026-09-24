@@ -281,21 +281,16 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   async listAgentCatalog(): Promise<AgentCatalogEntry[]> {
-    return this.#agents.flatMap((summary) =>
-      summary.kind === "ready" && summary.role !== "creator"
-        ? [
-            {
-              summary: structuredClone(summary),
-              visibility: this.#hiddenAgents.has(summary.id)
-                ? "hidden"
-                : "visible",
-              selectable: !this.#hiddenAgents.has(summary.id),
-              editable: true,
-              avatarEditable: true,
-            },
-          ]
-        : []
-    )
+    return (await this.listAgents()).map((summary) => {
+      const managed = summary.role !== "creator"
+      return {
+        summary,
+        visibility: summary.visibility,
+        selectable: managed && summary.visibility === "visible",
+        editable: managed,
+        avatarEditable: managed,
+      }
+    })
   }
 
   async updateAgent(agentId: string, { visibility, avatar }: AgentUpdate) {

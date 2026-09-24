@@ -230,8 +230,6 @@ export type Dictionary = {
     loading: string
     loadFailed: string
     updateFailed: string
-    providerActive: string
-    pendingReload: string
     retry: string
   }
   creator: {

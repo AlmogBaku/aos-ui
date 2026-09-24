@@ -15,7 +15,6 @@ import {
   resolveAgentIcons,
   visibilityPatch,
 } from "@/components/agent-icons/allocation"
-import { AgentVisibilityUpdateError } from "@/runtime-adapters/contracts"
 import type {
   HarnessRuntime,
   SessionActionCapabilities,
@@ -207,6 +206,7 @@ export function useWorkspaceNavigation({
     agents,
     setAgents,
     avatarEditableIds,
+    reloadCatalog,
     agentsLoading,
     setAgentsLoading,
     agentError: catalogError,
@@ -317,12 +317,7 @@ export function useWorkspaceNavigation({
     workspace,
     agents: avatarInputs,
     ready: !agentsLoading && !catalogError,
-    onConflict: () => {
-      void workspace
-        .refreshAgents()
-        .then(setAgents)
-        .catch(() => undefined)
-    },
+    onConflict: reloadCatalog,
   })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
@@ -1468,24 +1463,12 @@ export function useWorkspaceNavigation({
     const editable = avatarInputs.some(
       (agent) => agent.id === agentId && agent.avatarEditable
     )
-    try {
-      await workspace.updateAgent(
-        agentId,
-        editable
-          ? visibilityPatch("hidden", avatarInputs, Math.random)
-          : { visibility: "hidden" }
-      )
-    } catch (reason) {
-      // The rail owes the same words for a refused hide that Manage Agents
-      // gives, rather than whichever sentence the provider happened to send.
-      if (reason instanceof AgentVisibilityUpdateError)
-        throw new Error(
-          reason.code === "provider-active"
-            ? dictionary.agentManagement.providerActive
-            : dictionary.agentManagement.pendingReload
-        )
-      throw reason
-    }
+    await workspace.updateAgent(
+      agentId,
+      editable
+        ? visibilityPatch("hidden", avatarInputs)
+        : { visibility: "hidden" }
+    )
     await refreshAfterVisibilityChange()
   }
 

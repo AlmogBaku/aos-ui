@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import type { AgentUpdatePatch } from "../../../protocol"
 
 import {
   HermesAgentNotFoundError,
@@ -17,7 +18,10 @@ import {
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 import { PendingRequestKind } from "../../core/events"
-import { ServerTurnSteerUncertainError } from "../../core/runtime"
+import {
+  ServerAgentUpdateUnsupportedError,
+  ServerTurnSteerUncertainError,
+} from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
 import { HermesInteractionPublicError } from "./interactions"
 import {
@@ -2668,6 +2672,21 @@ describe("Hermes server adapter", () => {
         "hermes-bots:7,aos:3"
       )
     ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("sends no native request for a malformed avatar reaching the adapter directly", async () => {
+    const request = vi.fn(async () => ({ profiles: [profile(false, 7)] }))
+    const adapter = new HermesServerAdapter({ request })
+
+    for (const avatar of ["Not A Token", "ring", "ring/blue/extra", 7])
+      await expect(
+        adapter.updateAgent(
+          "researcher",
+          { avatar } as unknown as AgentUpdatePatch,
+          "hermes-bots:7,aos:0"
+        )
+      ).rejects.toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+    expect(request).not.toHaveBeenCalled()
   })
 
   it("refuses an update aimed at the creator", async () => {

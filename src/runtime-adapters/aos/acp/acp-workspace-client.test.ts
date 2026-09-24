@@ -814,16 +814,35 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("shares one catalog request between an overlapping roster and entries read", async () => {
-    const { client, setAgents, calls } = createClient()
-    setAgents([catalogEntry()])
+  it("reads the post-write catalog on a refresh while an older read is still open", async () => {
+    const { client, connection } = createClient()
+    const catalogWith = (avatar: string) => ({
+      revision: "revision-1",
+      agents: [
+        { ...catalogEntry(), summary: { ...catalogEntry().summary, avatar } },
+      ],
+    })
+    let releaseOlder = () => {}
+    const answers = [
+      async () => catalogWith("ring/blue"),
+      () =>
+        new Promise<ReturnType<typeof catalogWith>>((resolve) => {
+          releaseOlder = () => resolve(catalogWith("ring/blue"))
+        }),
+      async () => catalogWith("disc/rose"),
+    ]
+    connection.listAgents = vi.fn(() => answers.shift()!())
 
-    await Promise.all([client.listAgents(), client.listAgentCatalog()])
     await client.listAgents()
+    const older = client.listAgents()
+    await client.updateAgent(AGENT_ID, { avatar: "disc/rose" })
+    const refreshed = client.refreshAgents()
+    releaseOlder()
 
-    expect(calls.filter(({ method }) => method === "listAgents")).toHaveLength(
-      2
-    )
+    await expect(refreshed).resolves.toEqual([
+      expect.objectContaining({ id: AGENT_ID, avatar: "disc/rose" }),
+    ])
+    await older
   })
 
   it("reports nothing when a creator run stops without a new Agent", async () => {

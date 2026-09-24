@@ -106,17 +106,7 @@ export function createAcpWorkspaceClient({
     return agentId
   }
 
-  let catalogRead: ReturnType<typeof readCatalog> | undefined
-
-  /** Overlapping catalog reads, such as roster and entries, share one request. */
-  function catalog() {
-    catalogRead ??= readCatalog().finally(() => {
-      catalogRead = undefined
-    })
-    return catalogRead
-  }
-
-  async function readCatalog() {
+  async function catalog() {
     const response = await connection.listAgents()
     revisions.clear()
     for (const entry of response.agents)

@@ -6,7 +6,9 @@ import { isRosterAgent } from "../agent-identity"
 describe("Agent catalog and visibility contract", () => {
   it("keeps hidden fixture Agents out of the roster and can hide every ready Agent", async () => {
     const workspace = createFixtureWorkspace()
-    const catalog = await workspace.listAgentCatalog()
+    const catalog = (await workspace.listAgentCatalog()).filter(
+      ({ editable }) => editable
+    )
     expect(
       catalog.some(
         (entry) => entry.visibility === "hidden" && !entry.selectable
@@ -28,15 +30,15 @@ describe("Agent catalog and visibility contract", () => {
     })
   })
 
-  it("excludes the dedicated creator from the management catalog", async () => {
+  it("lists the creator as an Agent it cannot change", async () => {
     const workspace = createFixtureWorkspace()
     const creator = workspace.agentCreator!
-    expect(await workspace.listAgentCatalog()).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          summary: expect.objectContaining({ id: creator.id }),
-        }),
-      ])
+    expect(await workspace.listAgentCatalog()).toContainEqual(
+      expect.objectContaining({
+        summary: expect.objectContaining({ id: creator.id }),
+        editable: false,
+        avatarEditable: false,
+      })
     )
     await expect(
       workspace.updateAgent(creator.id, { visibility: "hidden" })
@@ -45,7 +47,9 @@ describe("Agent catalog and visibility contract", () => {
 
   it("seeds distinct avatars on visible Agents only", async () => {
     const workspace = createFixtureWorkspace()
-    const catalog = await workspace.listAgentCatalog()
+    const catalog = (await workspace.listAgentCatalog()).filter(
+      ({ editable }) => editable
+    )
     const visible = catalog.filter((entry) => entry.visibility === "visible")
     const avatars = visible.map((entry) => entry.summary.avatar)
     expect(avatars.every((avatar) => avatar !== undefined)).toBe(true)

@@ -314,7 +314,10 @@ describe("AosUiApp fixture composition", () => {
     const user = userEvent.setup()
     render(<FixtureAosUiApp locale="en" dictionary={en} />)
 
-    await user.click(await screen.findByRole("button", { name: "Nori" }))
+    // Nori's unread Session marks its row unread once Session metadata lands.
+    await user.click(
+      await screen.findByRole("button", { name: /^Nori(, Unread)?$/ })
+    )
 
     await waitFor(() =>
       expect(

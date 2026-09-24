@@ -293,8 +293,10 @@ export function createOpenClawWorkspace(input: {
   return {
     listAgents,
     async updateAgent(agentId, patch, observedRevision) {
-      // A patch that touches visibility is unsupported as a whole.
-      if (patch.visibility !== undefined || patch.avatar === undefined)
+      // A patch that touches visibility is unsupported as a whole, and the
+      // avatar is re-checked so no caller reaches the native write unchecked.
+      const avatar = AgentAvatarSchema.nullable().safeParse(patch.avatar)
+      if (patch.visibility !== undefined || !avatar.success)
         throw new ServerAgentUpdateUnsupportedError()
       const agent = await requireVisibleAgent(agentId)
       if (agent.id === OPENCLAW_CREATOR_AGENT_ID)
@@ -308,13 +310,13 @@ export function createOpenClawWorkspace(input: {
         throw new OpenClawWorkspaceUnavailableError()
       await input.client.request(
         "config.patch",
-        openClawAgentAvatarPatchParams(agent.id, patch.avatar, configured.hash)
+        openClawAgentAvatarPatchParams(agent.id, avatar.data, configured.hash)
       )
       const confirmed = await listAgents()
       const updated = confirmed.agents.find(
         (entry) => entry.summary.id === agent.id
       )
-      if ((updated?.summary.avatar ?? null) !== patch.avatar)
+      if ((updated?.summary.avatar ?? null) !== avatar.data)
         throw new OpenClawWorkspaceUnavailableError()
       return AgentUpdateResponseSchema.parse({
         revision: confirmed.revision,

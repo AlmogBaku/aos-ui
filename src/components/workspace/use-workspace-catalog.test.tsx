@@ -115,3 +115,38 @@ it("keeps the roster it has when an invalidation re-reads the same one", async (
   expect(workspace.refreshAgents).toHaveBeenCalledTimes(1)
   expect(result.current.agents).toBe(roster)
 })
+
+it("reads a management catalog once per load for the roster and its avatars, and reloads through it", async () => {
+  const entry = (id: string, avatarEditable: boolean) => ({
+    summary: { kind: "ready" as const, id, name: id },
+    visibility: "visible" as const,
+    selectable: true,
+    editable: true,
+    avatarEditable,
+  })
+  let entries = [entry("agent-a", true), entry("agent-b", false)]
+  const workspace: WorkspaceAdapter = {
+    listAgents: vi.fn(async () => []),
+    refreshAgents: vi.fn(async () => []),
+    listAgentCatalog: vi.fn(async () => entries),
+    getSessionMetadata: async () => [],
+    createSession: async () => ({ threadId: "unused" }),
+  }
+  const { result } = renderHook(() => useWorkspaceCatalog(workspace, 0))
+  await waitFor(() => expect(result.current.agentsLoading).toBe(false))
+  expect(result.current.agents.map(({ id }) => id)).toEqual([
+    "agent-a",
+    "agent-b",
+  ])
+  expect(result.current.avatarEditableIds).toEqual(["agent-a"])
+  expect(workspace.listAgentCatalog).toHaveBeenCalledTimes(1)
+
+  entries = [entry("agent-a", true), entry("agent-b", true)]
+  await act(async () => result.current.reloadCatalog())
+  await waitFor(() =>
+    expect(result.current.avatarEditableIds).toEqual(["agent-a", "agent-b"])
+  )
+  expect(workspace.listAgentCatalog).toHaveBeenCalledTimes(2)
+  expect(workspace.listAgents).not.toHaveBeenCalled()
+  expect(workspace.refreshAgents).not.toHaveBeenCalled()
+})

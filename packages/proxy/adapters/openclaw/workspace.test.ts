@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import type { AgentUpdatePatch } from "../../../protocol"
 import { ServerAgentUpdateUnsupportedError } from "../../core/runtime"
 import {
   OPENCLAW_CREATOR_AGENT_ID,
@@ -756,6 +757,24 @@ describe("OpenClaw Agent avatars", () => {
       workspace.updateAgent("agent-z", { avatar: "ring/blue" }, "any")
     ).rejects.toBeInstanceOf(OpenClawWorkspaceOwnershipError)
     expect(native.methods()).not.toContain("config.patch")
+  })
+
+  it("[CL1-WORKSPACE-021] sends no native request for a malformed avatar reaching the workspace directly", async () => {
+    const native = configuredGateway({
+      agents: [{ id: "agent-a", kind: "agent" }],
+      configured: ["agent-a"],
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    for (const avatar of ["Not A Token", "ring", "ring/blue/extra", 7])
+      await expect(
+        workspace.updateAgent(
+          "agent-a",
+          { avatar } as unknown as AgentUpdatePatch,
+          "any"
+        )
+      ).rejects.toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+    expect(native.requests).toEqual([])
   })
 
   it("[CL1-WORKSPACE-019] rejects a stale Agent revision before reading the config", async () => {

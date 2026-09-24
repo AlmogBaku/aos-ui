@@ -129,6 +129,10 @@ class Placement {
 /**
  * The unhide rule: the least-used silhouette among `shown`, then a random
  * free tone of it. `random` returns a number in [0, 1).
+ *
+ * Above 34 visible Agents an unhide can shift the silhouette of an unsaved
+ * Agent that is not avatarEditable, since its computed pair is no longer free;
+ * no current provider reaches that many.
  */
 export function nextFree(
   shown: readonly AvatarPair[],
@@ -217,12 +221,13 @@ export function planAvatarSaves(
 
 /**
  * The Agent update for a visibility change: hiding clears the icon, and
- * unhiding takes the next free pair among the icons every visible Agent shows.
+ * unhiding takes the next free pair among the icons every visible Agent shows
+ * (see `nextFree` for the one case above 34 visible Agents).
  */
 export function visibilityPatch(
   visibility: "hidden" | "visible",
   visibleAgents: readonly AgentAvatarInput[],
-  random: () => number
+  random: () => number = Math.random
 ): VisibilityPatch {
   if (visibility === "hidden") return { visibility, avatar: null }
   const shown = [...resolveAgentIcons(visibleAgents).values()].map(

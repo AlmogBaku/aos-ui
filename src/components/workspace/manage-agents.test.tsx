@@ -11,7 +11,6 @@ import { afterEach, expect, it, vi } from "vitest"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { FixtureWorkspace } from "@/runtime-adapters/fixture/fixture-workspace"
-import { AgentVisibilityUpdateError } from "@/runtime-adapters/contracts"
 import { ManageAgents } from "./manage-agents"
 
 afterEach(cleanup)
@@ -23,7 +22,9 @@ it.each([
   "distinguishes shown and hidden read-only Agents in %s",
   async (locale, shown, hidden, ownership) => {
     const workspace = new FixtureWorkspace()
-    const catalog = await workspace.listAgentCatalog()
+    const catalog = (await workspace.listAgentCatalog()).filter(
+      ({ summary }) => summary.role !== "creator"
+    )
     vi.spyOn(workspace, "listAgentCatalog").mockResolvedValue(
       catalog.map((entry) => ({ ...entry, editable: false }))
     )
@@ -37,59 +38,6 @@ it.each([
       ).toBeVisible()
       expect(within(row).queryByRole("switch")).toBeNull()
     }
-  }
-)
-
-it.each([
-  [
-    "en",
-    "provider-active",
-    "Wait for active Sessions to finish, then try changing visibility again.",
-  ],
-  [
-    "en",
-    "pending-reload",
-    "Visibility was saved but is not applied yet. Wait for active Sessions to finish, then try the visibility switch again.",
-  ],
-  ["en", null, "Visibility could not be saved. Try again."],
-  [
-    "he",
-    "provider-active",
-    "המתינו לסיום השיחות הפעילות, ואז נסו לשנות שוב את ההצגה בסביבת העבודה.",
-  ],
-] as const)(
-  "shows actionable %s guidance for %s without losing it on refresh",
-  async (locale, code, guidance) => {
-    const user = userEvent.setup()
-    const workspace = new FixtureWorkspace()
-    let notify!: () => void
-    vi.spyOn(workspace, "subscribeAgentCatalog").mockImplementation(
-      (listener) => {
-        notify = listener
-        return () => true
-      }
-    )
-    vi.spyOn(workspace, "updateAgent").mockRejectedValueOnce(
-      code
-        ? new AgentVisibilityUpdateError(code, "Provider wording")
-        : new Error("pending-reload")
-    )
-    renderCatalog(workspace, locale)
-    const toggle = await screen.findByRole("switch", {
-      name: `${(locale === "he" ? he : en).agentManagement.showInWorkspace}: Aster`,
-    })
-    await user.click(toggle)
-    expect(await screen.findByRole("alert")).toHaveTextContent(guidance)
-    await waitFor(() =>
-      expect(toggle).not.toHaveAttribute("aria-disabled", "true")
-    )
-    await act(async () => {
-      notify()
-    })
-    expect(screen.getByRole("alert")).toHaveTextContent(guidance)
-    await user.click(toggle)
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"))
-    expect(screen.queryByRole("alert")).toBeNull()
   }
 )
 

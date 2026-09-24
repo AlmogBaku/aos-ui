@@ -385,56 +385,56 @@ export function CatalogFixture({
     onThreadIdChange: setThreadId,
   })
   const agentCreator = fixture.workspace.agentCreator!
-  const workspace = useMemo(
-    () =>
-      workspaceFacade(fixture.workspace, {
-        listAgents: async () => {
-          await agentGate
-          if (empty) return []
-          const agents = (await fixture.workspace.listAgents()).filter(
-            (agent) => !readOnly || agent.role !== "creator"
-          )
-          if (creatorOnly) {
-            return agents.filter(({ id }) => id === agentCreator.id)
-          }
-          return creatorFirst
-            ? [
-                ...agents.filter(({ id }) => id === agentCreator.id),
-                ...agents.filter(({ id }) => id !== agentCreator.id),
-              ]
-            : agents
-        },
-        listAgentCatalog: async () => {
-          if (empty) return []
-          const entries = (await fixture.workspace.listAgentCatalog!()).map(
-            (entry) => ({ ...entry, editable: !readOnly })
-          )
-          return creatorInCatalog
-            ? [
-                ...entries,
-                {
-                  summary: agentCreator,
+  const workspace = useMemo(() => {
+    // The roster and the management catalog are one read, as on a real
+    // runtime; each option shapes that read.
+    const catalog = async () => {
+      await agentGate
+      if (empty) return []
+      const entries = (await fixture.workspace.listAgentCatalog())
+        .filter(({ summary }) => !readOnly || summary.role !== "creator")
+        .map((entry) =>
+          entry.summary.role === "creator"
+            ? creatorInCatalog
+              ? {
+                  ...entry,
                   visibility: "visible" as const,
                   selectable: true,
                   editable: !readOnly,
                   avatarEditable: !readOnly,
-                },
-              ]
-            : entries
-        },
-        updateAgent: (id, patch) => fixture.workspace.updateAgent(id, patch),
-      }),
-    [
-      creatorFirst,
-      creatorInCatalog,
-      creatorOnly,
-      agentGate,
-      agentCreator,
-      empty,
-      fixture.workspace,
-      readOnly,
-    ]
-  )
+                }
+              : entry
+            : { ...entry, editable: !readOnly }
+        )
+      const isCreator = ({ summary }: (typeof entries)[number]) =>
+        summary.id === agentCreator.id
+      if (creatorOnly) return entries.filter(isCreator)
+      return creatorFirst
+        ? [
+            ...entries.filter(isCreator),
+            ...entries.filter((e) => !isCreator(e)),
+          ]
+        : entries
+    }
+    return workspaceFacade(fixture.workspace, {
+      listAgents: async () =>
+        (await catalog()).map(({ summary, visibility }) => ({
+          ...summary,
+          visibility,
+        })),
+      listAgentCatalog: catalog,
+      updateAgent: (id, patch) => fixture.workspace.updateAgent(id, patch),
+    })
+  }, [
+    creatorFirst,
+    creatorInCatalog,
+    creatorOnly,
+    agentGate,
+    agentCreator,
+    empty,
+    fixture.workspace,
+    readOnly,
+  ])
   return (
     <AosUiWorkspace
       runtime={asHarnessRuntime({
