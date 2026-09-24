@@ -135,6 +135,14 @@ export class ServerTurnConflictError extends Error {
   }
 }
 
+/** An answer to a request that is not open: answered already, or never asked. */
+export class ServerRequestStaleError extends Error {
+  constructor() {
+    super("The request is no longer open")
+    this.name = "ServerRequestStaleError"
+  }
+}
+
 export class ServerTurnCapacityError extends Error {
   constructor(readonly lane: "global" | "guest" = "global") {
     super("AOS execution capacity exceeded")

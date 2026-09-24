@@ -494,6 +494,11 @@ export type ExecutionEvent = {
   occurredAt: string
 } & (
   | { kind: "turn-started" | "turn-finished" | "turn-failed" }
-  | { kind: "attention-requested"; request: PendingRequest }
+  | {
+      kind: "attention-requested"
+      request: PendingRequest
+      /** The controller that admitted the turn, when this proxy admitted it. */
+      startedBy?: string
+    }
   | { kind: "attention-resolved"; requestId: string }
 )

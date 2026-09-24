@@ -5,10 +5,11 @@ import {
   TurnEventKind,
   type ExecutionEvent,
   type TurnEvent,
-  type TurnInput,
+  type PromptTurnInput,
 } from "./events"
 
 import {
+  ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type ServerTurnEngine,
@@ -96,19 +97,22 @@ const otherScope: SessionScope = {
   threadId: "stored-2",
 }
 
-function input(turnId: string, replies = false): TurnInput {
-  return replies
-    ? {
-        turnId,
-        replies: [
-          {
-            requestId: "question-1",
-            status: "resolved",
-            payload: { answers: [["yes"]] },
-          },
-        ],
-      }
-    : { turnId, messageId: `message-${turnId}`, prompt: "Hello" }
+function input(turnId: string): PromptTurnInput {
+  return { turnId, messageId: `message-${turnId}`, prompt: "Hello" }
+}
+
+/** The answer to the one question a paused test turn asks. */
+const REPLY = {
+  requestId: "question-1",
+  status: "resolved",
+  payload: { answers: [["yes"]] },
+} as const
+
+/** Answers the paused turn's one question; returns the turn that continues. */
+async function continueTurn(sessions: SessionCoordinator) {
+  const continued = await sessions.answer(scope, REPLY)
+  if (!continued) throw new Error("The answer did not continue the turn")
+  return continued.turnId
 }
 
 function access(id: string, lane: "operator" | "guest" = "operator") {
@@ -1124,16 +1128,8 @@ describe("SessionCoordinator", () => {
 
       // A continued turn's journal starts at the answer, not at the prompt.
       clock.mockReturnValue(90_000)
-      const reply = await sessions.start(
-        scope,
-        input("run-2", true),
-        access("own")
-      )
-      expect(sessions.replayStart(scope)).toEqual({
-        turnId: "run-2",
-        at: 90_000,
-      })
-      reply.close()
+      const turnId = await continueTurn(sessions)
+      expect(sessions.replayStart(scope)).toEqual({ turnId, at: 90_000 })
     } finally {
       clock.mockRestore()
     }
@@ -1594,7 +1590,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, original, access("one"))
     const reordered = Object.fromEntries(
       Object.entries(original).reverse()
-    ) as TurnInput
+    ) as PromptTurnInput
 
     await expect(
       sessions.start(scope, reordered, access("two"))
@@ -1629,14 +1625,142 @@ describe("SessionCoordinator", () => {
       expect(sessions.state(scope)).toBe("waiting-for-input")
     )
 
-    await sessions.start(scope, input("run-2", true), access("operator"))
+    const turnId = await continueTurn(sessions)
 
     expect(engine.start).toHaveBeenCalledTimes(2)
     expect(engine.start.mock.calls[1]?.[1]).toEqual({
-      turnId: "run-2",
-      replies: [expect.objectContaining({ requestId: "question-1" })],
+      turnId,
+      replies: [REPLY],
     })
     expect(sessions.state(scope)).toBe("running")
+  })
+
+  describe("answering a paused turn's requests", () => {
+    const questions = ["question-1", "question-2"].map((requestId) => ({
+      requestId,
+      kind: PendingRequestKind.Elicitation,
+      responseSchema: { type: "object" },
+    }))
+    const replyTo = (requestId: string) => ({
+      requestId,
+      status: "resolved" as const,
+      payload: { answers: [[requestId]] },
+    })
+
+    /** A turn `starter` admitted, now waiting on both questions. */
+    async function waitingOnTwo(starter = "one") {
+      const interrupted = new EventSource()
+      const resumed = new EventSource()
+      const engine: ServerTurnEngine = {
+        start: vi
+          .fn<ServerTurnEngine["start"]>()
+          .mockResolvedValueOnce(interrupted)
+          .mockResolvedValueOnce(resumed),
+        recover: vi.fn(async () => resumed),
+      }
+      const sessions = coordinator(engine)
+      const observed: ExecutionEvent[] = []
+      sessions.observeScope(scope, (event) => observed.push(event))
+      await sessions.start(scope, input("run-1"), access(starter))
+      interrupted.emit({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: questions,
+      })
+      interrupted.finish()
+      await vi.waitFor(() =>
+        expect(sessions.state(scope)).toBe("waiting-for-input")
+      )
+      return { engine, sessions, observed, resumed }
+    }
+
+    const resolvedIds = (observed: ExecutionEvent[]) =>
+      observed.flatMap((event) =>
+        event.kind === "attention-resolved" ? [event.requestId] : []
+      )
+
+    it("takes one answer per request from whoever answers, then continues the turn", async () => {
+      const { engine, sessions, observed } = await waitingOnTwo()
+
+      await expect(
+        sessions.answer(scope, replyTo("question-1"))
+      ).resolves.toBeUndefined()
+      // The answered request is withdrawn at once; the other stays open.
+      expect(resolvedIds(observed)).toEqual(["question-1"])
+      expect(sessions.snapshot(scope).requests).toEqual([questions[1]])
+      expect(engine.start).toHaveBeenCalledOnce()
+
+      const continued = await sessions.answer(scope, replyTo("question-2"))
+
+      expect(continued).toEqual({ from: "run-1", turnId: expect.any(String) })
+      expect(engine.start).toHaveBeenCalledTimes(2)
+      expect(engine.start.mock.calls[1]?.[1]).toEqual({
+        turnId: continued?.turnId,
+        replies: [replyTo("question-1"), replyTo("question-2")],
+      })
+      expect(sessions.snapshot(scope)).toMatchObject({
+        state: "running",
+        turnId: continued?.turnId,
+      })
+      expect(resolvedIds(observed)).toEqual(["question-1", "question-2"])
+    })
+
+    it("refuses a later answer to a request already answered as stale", async () => {
+      const { engine, sessions } = await waitingOnTwo()
+      await sessions.answer(scope, replyTo("question-1"))
+
+      await expect(
+        sessions.answer(scope, replyTo("question-1"))
+      ).rejects.toBeInstanceOf(ServerRequestStaleError)
+      await expect(
+        sessions.answer(scope, replyTo("never-asked"))
+      ).rejects.toBeInstanceOf(ServerRequestStaleError)
+      expect(engine.start).toHaveBeenCalledOnce()
+    })
+
+    it("keeps the controllers and the starter across the continued segment", async () => {
+      const { sessions, observed, resumed } = await waitingOnTwo("starter")
+      expect(sessions.snapshot(scope).startedBy).toBe("starter")
+      expect(
+        observed.find(({ kind }) => kind === "attention-requested")
+      ).toMatchObject({ startedBy: "starter" })
+
+      await sessions.answer(scope, replyTo("question-1"))
+      await sessions.answer(scope, replyTo("question-2"))
+      resumed.emit({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [questions[0]!],
+      })
+
+      await vi.waitFor(() =>
+        expect(sessions.state(scope)).toBe("waiting-for-input")
+      )
+      expect(sessions.snapshot(scope).startedBy).toBe("starter")
+      expect(
+        observed.filter(({ kind }) => kind === "attention-requested").at(-1)
+      ).toMatchObject({ startedBy: "starter" })
+      await expect(sessions.stop(scope, "starter")).resolves.toBe("stopping")
+    })
+
+    it("names no starter for a turn it recovered or discovered without holding it", async () => {
+      const source = new EventSource()
+      const sessions = coordinator({
+        start: vi.fn(async () => source),
+        recover: vi.fn(async () => source),
+        discover: vi.fn(async () => ({
+          handle: source,
+          state: "running" as const,
+        })),
+      })
+      await sessions.recover(
+        scope,
+        { threadId: scope.threadId, turnId: "run-1" },
+        access("recovering")
+      )
+      await sessions.discover(otherScope)
+
+      expect(sessions.snapshot(scope).startedBy).toBeUndefined()
+      expect(sessions.snapshot(otherScope).startedBy).toBeUndefined()
+    })
   })
 
   it("keeps Stop in stopping until the provider settles", async () => {
@@ -1887,11 +2011,12 @@ describe("SessionCoordinator", () => {
     await vi.waitFor(() =>
       expect(sessions.state(scope)).toBe("waiting-for-input")
     )
-    await sessions.start(scope, input("run-2", true), access("operator"))
+    await continueTurn(sessions)
     answerStop()
 
     await expect(stopping).resolves.toBe("stopping")
-    // The answered Stop belongs to run-1; run-2 is a live turn of its own.
+    // The answered Stop belongs to run-1; its continuation is a live turn of
+    // its own.
     expect(sessions.state(scope)).toBe("running")
   })
 
@@ -2957,9 +3082,10 @@ describe("SessionCoordinator", () => {
         expect(sessions.state(scope)).toBe("waiting-for-input")
       )
 
-      const live = await sessions.start(
+      const turnId = await continueTurn(sessions)
+      const live = await sessions.recover(
         scope,
-        input("run-2", true),
+        { threadId: scope.threadId, turnId },
         access("one")
       )
       const readLive = reader(live)
@@ -2969,7 +3095,7 @@ describe("SessionCoordinator", () => {
         value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
       })
       await expect(
-        reloadedHead(sessions, scope, "run-2")
+        reloadedHead(sessions, scope, turnId)
       ).resolves.toMatchObject({
         sequence: 1,
         event: { kind: TurnEventKind.TurnStarted },
@@ -3086,13 +3212,13 @@ describe("SessionCoordinator", () => {
       expect(sessions.state(scope)).toBe("waiting-for-input")
     )
 
-    await sessions.start(scope, input("run-2", true), access("one"))
+    const turnId = await continueTurn(sessions)
 
-    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+    expect(observed.map((event) => [event.kind, event.turnId])).toEqual([
       ["turn-started", "run-1"],
       ["attention-requested", "run-1"],
       ["attention-resolved", "run-1"],
-      ["turn-started", "run-2"],
+      ["turn-started", turnId],
     ])
     expect(observed[1]).toMatchObject({ request: { requestId: "question-1" } })
     expect(observed[2]).toMatchObject({ requestId: "question-1" })

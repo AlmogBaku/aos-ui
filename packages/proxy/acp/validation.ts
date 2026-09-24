@@ -3,6 +3,7 @@ import type { z } from "zod"
 
 import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
+  ServerRequestStaleError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
   ServerTurnControlError,
@@ -81,6 +82,7 @@ const PUBLIC_ERROR_CODES: Readonly<
 /** Coordinator control failures, mirroring the normalized HTTP error map. */
 function coordinatorError(cause: unknown) {
   if (cause instanceof ServerTurnConflictError) return turnInProgress()
+  if (cause instanceof ServerRequestStaleError) return staleRequest()
   if (
     cause instanceof ServerTurnCapacityError ||
     cause instanceof ServerTurnSteerUnavailableError

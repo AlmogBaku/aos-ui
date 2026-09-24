@@ -2,17 +2,18 @@ import {
   TurnEventKind,
   isAwaitingStopFailure,
   isRedialableFailure,
-  isRepliesTurn,
   pendingRequestsOf,
   type ExecutionEvent,
   type PendingRequest,
+  type PromptTurnInput,
   type RepliesTurnInput,
+  type RequestReply,
   type TurnEvent,
   type TurnEventOf,
-  type TurnInput,
 } from "./events"
 
 import {
+  ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnCapacityError,
   ServerTurnControlError,
@@ -29,6 +30,16 @@ import { SubscriberFanout } from "./subscriber-fanout"
 
 export type SessionExecutionState =
   "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
+
+/** One Session's execution as a member reads it, outside the turn stream. */
+export type SessionSnapshot = {
+  state: SessionExecutionState
+  turnId?: string
+  /** The requests the turn still waits on: those nobody has answered. */
+  requests: PendingRequest[]
+  /** The controller that admitted the turn, when this proxy admitted it. */
+  startedBy?: string
+}
 
 export type SequencedTurnEvent = {
   sequence: number
@@ -112,6 +123,8 @@ type Segment = {
   nextSequence: number
   terminal: boolean
   requests: PendingRequest[]
+  /** The answers given so far to `requests`, by requestId: first one wins. */
+  answers: Map<string, RequestReply>
   onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
    * Epoch ms the turn's replay starts from: its admission, the answer that
@@ -177,6 +190,12 @@ type Execution = {
   admissionId: string
   admissionFingerprint: string
   startedByLane: "operator" | "guest"
+  /**
+   * The controller whose admission started this turn, kept across every
+   * segment whoever answers. A turn this proxy recovered or adopted without
+   * holding it has no starter.
+   */
+  startedBy?: string
   controllers: Set<string>
   segment: Segment
   control: Promise<void>
@@ -208,6 +227,7 @@ type TurnInit = {
 type ExecutionInit = TurnInit & {
   scope: SessionScope
   startedByLane: "operator" | "guest"
+  startedBy?: string
   controllers?: readonly string[]
 }
 
@@ -355,13 +375,10 @@ function admissionFingerprint(value: unknown): string {
   return JSON.stringify(canonical(value))
 }
 
-function answersEvery(expected: readonly string[], input: RepliesTurnInput) {
-  const received = input.replies.map(({ requestId }) => requestId)
-  return (
-    expected.length > 0 &&
-    expected.length === received.length &&
-    expected.every((id) => received.includes(id)) &&
-    new Set(received).size === received.length
+/** The requests a paused segment still waits on: those nobody has answered. */
+function openRequests(segment: Segment) {
+  return segment.requests.filter(
+    ({ requestId }) => !segment.answers.has(requestId)
   )
 }
 
@@ -414,15 +431,19 @@ export class SessionCoordinator {
     return this.#executions.get(scopeKey(scope))?.state ?? "idle"
   }
 
-  snapshot(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+  snapshot(
+    scope: Pick<SessionScope, "agentId" | "sessionId">
+  ): SessionSnapshot {
     const execution = this.#executions.get(scopeKey(scope))
-    return execution
-      ? {
-          state: execution.state,
-          turnId: execution.segment.turnId,
-          requests: structuredClone(execution.segment.requests),
-        }
-      : { state: "idle" as const, requests: [] as PendingRequest[] }
+    if (!execution) return { state: "idle", requests: [] }
+    return {
+      state: execution.state,
+      turnId: execution.segment.turnId,
+      requests: structuredClone(openRequests(execution.segment)),
+      ...(execution.startedBy === undefined
+        ? {}
+        : { startedBy: execution.startedBy }),
+    }
   }
 
   /**
@@ -565,7 +586,7 @@ export class SessionCoordinator {
 
   async start(
     scope: SessionScope,
-    input: TurnInput,
+    input: PromptTurnInput,
     access: CoordinatorAccess,
     attachments?: ServerAttachmentStage
   ): Promise<CoordinatedTurnSubscription> {
@@ -591,19 +612,6 @@ export class SessionCoordinator {
       )
     }
 
-    if (isRepliesTurn(input)) {
-      if (
-        !existing ||
-        existing.state !== "waiting-for-input" ||
-        !answersEvery(
-          existing.segment.requests.map(({ requestId }) => requestId),
-          input
-        )
-      )
-        throw new ServerTurnConflictError()
-      return this.#startSegment(existing, input, access)
-    }
-
     if (existing && existing.state !== "idle") {
       if (
         existing.state !== "uncertain" ||
@@ -627,6 +635,7 @@ export class SessionCoordinator {
         turnId: input.turnId,
         request: input,
         startedByLane: access.lane,
+        startedBy: access.controllerId,
         controllers: access.canControl ? [access.controllerId] : [],
         segment: this.#createSegment({
           cacheKey: key,
@@ -643,6 +652,51 @@ export class SessionCoordinator {
     } finally {
       this.#admissions.delete(key)
     }
+  }
+
+  /**
+   * Answers one request a paused turn is waiting on, from whichever member
+   * gives it. The first answer wins: a later one, or one to a request the turn
+   * never asked, is stale. Each answer withdraws its request from every member
+   * at once; the last one continues the turn as a fresh segment, whose turnId
+   * this returns with the one it continues. Every member follows that segment
+   * the way it follows any other.
+   */
+  async answer(
+    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    reply: RequestReply
+  ) {
+    const execution = this.#executions.get(scopeKey(scope))
+    const segment = execution?.segment
+    if (
+      !execution ||
+      !segment ||
+      execution.state !== "waiting-for-input" ||
+      !openRequests(segment).some(
+        ({ requestId }) => requestId === reply.requestId
+      )
+    )
+      throw new ServerRequestStaleError()
+    segment.answers.set(reply.requestId, reply)
+    this.#announce(execution.scope, {
+      ...this.#origin(execution.scope, segment.turnId),
+      kind: "attention-resolved",
+      requestId: reply.requestId,
+    })
+    if (openRequests(segment).length > 0) return undefined
+    const replies = segment.requests.flatMap(
+      ({ requestId }) => segment.answers.get(requestId) ?? []
+    )
+    const turnId = crypto.randomUUID()
+    try {
+      await this.#startSegment(execution, { turnId, replies })
+    } catch (cause) {
+      // Nothing continued the turn, so its requests are open again for the
+      // next resume to reissue, exactly as before anyone answered.
+      if (execution.segment === segment) segment.answers.clear()
+      throw cause
+    }
+    return { from: segment.turnId, turnId }
   }
 
   async recover(
@@ -896,11 +950,7 @@ export class SessionCoordinator {
       execution.segment.fanout.close()
   }
 
-  async #startSegment(
-    execution: Execution,
-    input: RepliesTurnInput,
-    access: CoordinatorAccess
-  ) {
+  async #startSegment(execution: Execution, input: RepliesTurnInput) {
     const key = scopeKey(execution.scope)
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
@@ -913,8 +963,6 @@ export class SessionCoordinator {
         handle,
         history: { journal: "start", at },
       })
-      // The reply that continued this turn ends its wait.
-      this.#resolveAttention(execution)
       this.#forgetJournal(execution.segment)
       // A continued turn is a fresh admission on the same execution record.
       Object.assign(
@@ -926,10 +974,8 @@ export class SessionCoordinator {
           segment,
         })
       )
-      if (access.canControl) execution.controllers.add(access.controllerId)
       this.#trackJournal(segment)
       this.#consume(execution, segment)
-      return this.#subscribe(segment, 0, access)
     } finally {
       this.#admissions.delete(key)
     }
@@ -939,6 +985,7 @@ export class SessionCoordinator {
     return {
       scope: init.scope,
       startedByLane: init.startedByLane,
+      ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
       controllers: new Set(init.controllers ?? []),
       ...admittedTurn(init),
     }
@@ -966,11 +1013,11 @@ export class SessionCoordinator {
         }
   }
 
-  /** A wait answered elsewhere, ended, or cleared resolves its requests. */
+  /** A wait ended or cleared resolves the requests nobody answered. */
   #resolveAttention(execution: Execution) {
-    const { requests, turnId } = execution.segment
+    const requests = openRequests(execution.segment)
     if (requests.length === 0) return
-    const origin = this.#origin(execution.scope, turnId)
+    const origin = this.#origin(execution.scope, execution.segment.turnId)
     for (const { requestId } of requests)
       this.#announce(execution.scope, {
         ...origin,
@@ -1008,6 +1055,7 @@ export class SessionCoordinator {
       nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
       requests: [],
+      answers: new Map(),
       ...(init.onTerminal ? { onTerminal: init.onTerminal } : {}),
     }
   }
@@ -1070,6 +1118,9 @@ export class SessionCoordinator {
                   ...origin,
                   kind: "attention-requested",
                   request: structuredClone(request),
+                  ...(execution.startedBy === undefined
+                    ? {}
+                    : { startedBy: execution.startedBy }),
                 })
             else
               this.#announce(execution.scope, {

@@ -890,23 +890,13 @@ describe("guest ACP lane", () => {
     await test.prompt("Delete the notes")
     const signal = await withdrawal.promise
 
-    // The operator addresses the Session by its own public id.
-    const reply = await test.coordinator.start(
-      { agentId: AGENT, sessionId: STORED, threadId: "operator-view" },
-      {
-        turnId: "operator-reply",
-        replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
-      },
-      {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
-        canControl: true,
-      }
+    // The operator's answer names the Session by its provider scope alone.
+    await test.coordinator.answer(
+      { agentId: AGENT, sessionId: STORED },
+      { requestId: APPROVAL.requestId, status: "resolved" }
     )
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))
-    reply.close()
     // The guest follows the operator's reply to its end, past the withdrawal.
     await test.recorder.wait(
       (entry) =>

@@ -157,7 +157,6 @@ class SessionMember {
     string,
     { promise: Promise<void>; controller: AbortController }
   >()
-  readonly #replies = new Map<string, RequestReply>()
   #sequence = 0
   #stopRequested = false
   #left = false
@@ -452,7 +451,6 @@ class SessionMember {
     this.#cancelUsageRetry()
     this.#subscription?.close()
     this.#subscription = undefined
-    this.#replies.clear()
     for (const requestId of [...this.#pending.keys()]) this.#withdraw(requestId)
   }
 
@@ -756,13 +754,13 @@ class SessionMember {
 
   /**
    * Issues one server→client request and settles it as a request reply. A
-   * request already open or already answered here is not asked again, however
-   * a replay or a reissue reaches it.
+   * request already open here, or one the Session no longer waits on, is not
+   * asked again, however a replay or a reissue reaches it.
    */
   #ask(outbound: RequestOutbound) {
     if (
       this.#pending.has(outbound.requestId) ||
-      this.#replies.has(outbound.requestId)
+      !this.#openRequest(outbound.requestId)
     )
       return
     const controller = new AbortController()
@@ -780,8 +778,6 @@ class SessionMember {
 
   /** Cancels a request the Session resolved, which is `$/cancel_request`. */
   #withdraw(requestId: string) {
-    // A partial answer to a resolved wait is owed to no one.
-    this.#replies.delete(requestId)
     const pending = this.#pending.get(requestId)
     if (!pending) return
     this.#pending.delete(requestId)
@@ -839,48 +835,35 @@ class SessionMember {
     await this.#settle(request, replyFromElicitation(request, response, lane))
   }
 
-  /** The request an answer belongs to; a settled one can no longer be answered. */
-  #pendingRequest(requestId: string) {
-    const request = this.#coordinator
+  #openRequest(requestId: string) {
+    return this.#coordinator
       .snapshot(this.#scope)
       .requests.find((pending) => pending.requestId === requestId)
+  }
+
+  /** The request an answer belongs to; a settled one can no longer be answered. */
+  #pendingRequest(requestId: string) {
+    const request = this.#openRequest(requestId)
     if (!request) throw staleRequest()
     return request
   }
 
-  /** Starts the next turn segment once every pending request is answered. */
+  /**
+   * Gives the Session this member's answer to one request. The answer that
+   * leaves nothing open continues the turn, and every member follows it.
+   */
   async #settle(request: PendingRequest, reply: RequestReply) {
     this.#log("info", "acp.request.answered", {
       requestId: request.requestId,
       status: reply.status,
     })
-    // Before the next segment resolves this request, so the member answering it
+    // Before the answer resolves this request, so the member answering it
     // does not withdraw it from itself.
     this.#pending.delete(request.requestId)
-    this.#replies.set(request.requestId, reply)
-    const { requests } = this.#coordinator.snapshot(this.#scope)
-    if (!requests.every(({ requestId }) => this.#replies.has(requestId))) return
-    const replies = requests.flatMap(({ requestId }) => {
-      const entry = this.#replies.get(requestId)
-      return entry ? [entry] : []
-    })
-    this.#replies.clear()
-    const from = this.#coordinator.snapshot(this.#scope).turnId
-    const turnId = crypto.randomUUID()
-    await this.#exclusive(async () =>
-      this.#consume(
-        await this.#coordinator.start(
-          this.#scope,
-          { turnId, replies },
-          this.#access()
-        ),
-        0
-      )
-    )
-    // Outside the admission above: syncing follows every member, this one
-    // included, and a follow waits for the admission it would be inside.
+    const continued = await this.#coordinator.answer(this.#scope, reply)
+    if (!continued) return
     const { rooms } = this.#context
-    if (from !== undefined) rooms.continueTurn(this.#scope, from, turnId)
+    rooms.continueTurn(this.#scope, continued.from, continued.turnId)
     await rooms.sync(this.#scope)
   }
 }

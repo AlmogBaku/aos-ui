@@ -1355,6 +1355,57 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  it("continues a two-question turn once two browsers each answer one", async () => {
+    const SECOND: PendingRequest = { ...QUESTION, requestId: "question-2" }
+    const withdrawn: AbortSignal[] = []
+    /**
+     * Answers the question asked `mine`th, in the order the turn asks them, and
+     * holds the other until it is withdrawn.
+     */
+    const answering = (mine: number) => {
+      let asked = 0
+      return (_params: unknown, signal: AbortSignal) => {
+        if (asked++ === mine)
+          return Promise.resolve({ action: "accept" as const, content: {} })
+        withdrawn.push(signal)
+        return heldUntilWithdrawn(signal)
+      }
+    }
+    const test = await harness({ providerIds: true, question: answering(0) })
+    await test.list()
+    await open(test)
+    const other = await test.connect("connection-2", {
+      question: answering(1),
+    })
+    await other.list()
+    await open(other)
+    await prompt(test, "Pick two")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [QUESTION, SECOND],
+    })
+    test.sources[0]?.finish()
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [
+        { requestId: QUESTION.requestId },
+        { requestId: SECOND.requestId },
+      ],
+    })
+    // Each answer withdrew its question from the browser that held it.
+    expect(withdrawn.map(({ aborted }) => aborted)).toEqual([true, true])
+    await replyWhileWatched(test.sources[1], "Resumed", [test, other])
+    expect(flow(test.recorder)).toContain("chunk Resumed")
+    expect(flow(other.recorder)).toContain("chunk Resumed")
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    test.close()
+    other.close()
+  })
+
   it("withdraws every browser's request when Stop ends the wait", async () => {
     const signals: AbortSignal[] = []
     const holding = async (_params: unknown, signal: AbortSignal) => {
@@ -1392,15 +1443,8 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("refuses the second of two answers given at once as a turn conflict", async () => {
-    const admission = gate()
-    const test = await harness({
-      providerIds: true,
-      // The reply segment's admission is held until the losing answer lands.
-      onStart: async () => {
-        if (test.start.mock.calls.length > 1) await admission.held
-      },
-    })
+  it("takes the first of two answers given at once and continues the turn once", async () => {
+    const test = await harness({ providerIds: true })
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
@@ -1414,23 +1458,14 @@ describe("Session rooms", () => {
     })
     test.sources[0]?.finish()
 
-    const failed = (entry: Recorded) =>
-      entry.method === AOS_METHODS.notify.error
-    await Promise.race([
-      test.recorder.wait(failed, "an _aos/error notification"),
-      other.recorder.wait(failed, "an _aos/error notification"),
-    ])
-    admission.release()
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [test, other])
 
-    const errors = [
-      ...test.recorder.of(AOS_METHODS.notify.error),
-      ...other.recorder.of(AOS_METHODS.notify.error),
-    ].map(({ params }) => params)
-    expect(errors).toEqual([
-      expect.objectContaining({ code: "turn_in_progress" }),
-    ])
+    // The later answer lands on a withdrawn request, which is no failure.
+    await settled()
+    expect(test.start).toHaveBeenCalledTimes(2)
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(flow(test.recorder)).toContain("chunk Resumed")
     expect(flow(other.recorder)).toContain("chunk Resumed")
     test.close()
