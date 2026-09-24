@@ -278,9 +278,59 @@ credentials for its model: Hermes copies a new profile's model block but not
 its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
 another profile's tokens into it.
 
+## Agent icons
+
+Each Agent's icon is an opaque `silhouette/tone` token stored in
+`ui_meta.aos.avatar` of the profile. A stored value that does not match
+`/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/` reads as no icon.
+
+The Agent revision used for the compare-and-set is composite:
+`hermes-bots:N,aos:M`, where `N` and `M` are the per-namespace CAS counters
+that `profiles.list` returns in `ui_meta_revisions`.
+
+`_aos/agents/update` writes the avatar (and optionally visibility) with one
+`profiles.configure` call. That call sends only the `ui_meta` namespaces the
+patch touches, each paired with its current `ui_meta_expected_revisions` entry,
+so unrelated `aos` keys such as `role` survive intact. Passing `null` for the
+avatar removes the key.
+
+`avatarEditable` equals `editable` for every profile. The creator profile is
+never writable.
+
+Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
+
+### Before deploying Agent icons
+
+The first time the workspace opens after the proxy is upgraded, AOS writes an
+icon into every visible, editable Agent. Back up the affected files first.
+
+1. Create a timestamped, owner-only backup directory:
+
+   ```bash
+   sudo install -d -m 700 /etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
+   ```
+
+2. Copy every profile's `profile.yaml`, preserving its mode:
+
+   ```bash
+   for f in ~/.hermes/profiles/*/profile.yaml; do
+     sudo cp -p "$f" \
+       /etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)/$(basename "$(dirname "$f")").profile.yaml
+   done
+   ```
+
+   Check the path pattern against Hermes documentation or the adapter comments
+   if the Hermes home is not the default `~/.hermes`.
+
+3. After the backup, deploy the updated proxy. The next workspace open writes
+   icons.
+
+To restore: roll the proxy back **first**, then restore the files — otherwise
+the next workspace open saves icons again.
+
 ## Operational behavior
 
-- Native profiles form the AOS Agent catalog and can expose visibility changes.
+- Native profiles form the AOS Agent catalog and can expose Agent updates (visibility and avatar).
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity is workspace-wide: the feed covers every Session the connection may observe.
 - ACP v2 starts or resumes a run and carries its server-to-browser event stream.

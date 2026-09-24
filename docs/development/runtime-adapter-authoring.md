@@ -364,6 +364,26 @@ a browser following it replays the whole turn instead of receiving a reset.
 Adapters that omit `watch` behave as before: only turns the proxy started
 reach other browsers.
 
+### Agent updates: `updateAgent(agentId, patch, observedRevision)`
+
+`updateAgent` replaces `updateAgentVisibility`. It writes `patch.visibility`
+and/or `patch.avatar` in one native write, refusing a stale `observedRevision`.
+`patch.avatar` is a token string or `null` to clear.
+
+Rules for every adapter:
+
+- **Filter before parsing.** A stored value that does not match
+  `AgentAvatarSchema` (`/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/`) reads as no
+  icon, not as a bad row.
+- **Throw `ServerAgentUpdateUnsupportedError`** for any field the runtime cannot
+  store. Reject the whole patch; nothing is half-applied.
+- **Enforce `avatarEditable` in the adapter.** The browser flag is informational
+  only; the adapter must refuse a write for any Agent that is not writable.
+- **Take expected revisions from a fresh read.** Read the Agent's current state
+  at the start of `updateAgent`; do not cache revision values from `listAgents`.
+- **Report `createdAt`** in `AosSessionInfoMeta` where the native Session has a
+  creation timestamp. Omit it when the provider does not track one.
+
 ### Session read state and `unread`
 
 Project `unread` in `AosSessionInfoMeta` only when the native payload proves the
