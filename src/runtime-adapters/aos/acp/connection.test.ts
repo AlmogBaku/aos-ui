@@ -25,6 +25,8 @@ import {
   type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
+import { AgentUpdateError } from "@/runtime-adapters/contracts"
+
 import { createAcpConnection } from "./connection"
 import type { AcpPendingRequest } from "./types"
 
@@ -124,6 +126,7 @@ function catalogEntry() {
     visibility: "visible",
     selectable: true,
     editable: true,
+    avatarEditable: true,
     revision: "revision-1",
   }
 }
@@ -147,6 +150,8 @@ function createProxyAgent(
     }
     /** Holds each plain resume open briefly, as a real reattach takes time. */
     slowResume?: boolean
+    /** The JSON-RPC code an Agent update is refused with. */
+    refuseAgentUpdate?: number
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -296,8 +301,10 @@ function createProxyAgent(
         return { revision: "revision-1", agents: [catalogEntry()] }
       }
     )
-    .onRequest(AOS_METHODS.agents.setVisibility, z.unknown(), ({ params }) => {
-      record(AOS_METHODS.agents.setVisibility, params)
+    .onRequest(AOS_METHODS.agents.update, z.unknown(), ({ params }) => {
+      record(AOS_METHODS.agents.update, params)
+      if (options.refuseAgentUpdate !== undefined)
+        throw new RequestError(options.refuseAgentUpdate, "refused")
       return { revision: "revision-2", agent: catalogEntry() }
     })
     .onNotification(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
@@ -619,16 +626,56 @@ describe("ACP connection", () => {
 
     const catalog = await connection.listAgents()
     expect(catalog.agents[0]?.summary.id).toBe(AGENT_ID)
-    const visibility = await connection.setVisibility({
+    const updated = await connection.updateAgent({
       agentId: AGENT_ID,
       visibility: "hidden",
+      avatar: null,
       revision: "revision-1",
     })
-    expect(visibility.revision).toBe("revision-2")
-    expect(proxy.paramsOf(AOS_METHODS.agents.setVisibility)).toEqual({
+    expect(updated.revision).toBe("revision-2")
+    expect(proxy.paramsOf(AOS_METHODS.agents.update)).toEqual({
       agentId: AGENT_ID,
       visibility: "hidden",
+      avatar: null,
       revision: "revision-1",
+    })
+    connection.close()
+  })
+
+  it.each([
+    [AOS_JSONRPC_ERRORS.unsupported, "unsupported"],
+    [AOS_JSONRPC_ERRORS.revisionConflict, "conflict"],
+  ] as const)(
+    "names an Agent update refused with code %i as %s",
+    async (refusal, code) => {
+      const proxy = createProxyAgent({ refuseAgentUpdate: refusal })
+      const connection = connectInProcess(proxy)
+      await connection.initialized
+
+      const failure = await connection
+        .updateAgent({ agentId: AGENT_ID, avatar: "ring/blue", revision: "r" })
+        .catch((error: unknown) => error)
+
+      expect(failure).toBeInstanceOf(AgentUpdateError)
+      expect(failure).toMatchObject({ code })
+      connection.close()
+    }
+  )
+
+  it("leaves any other Agent update failure as it came", async () => {
+    const proxy = createProxyAgent({
+      refuseAgentUpdate: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+    })
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+
+    const failure = await connection
+      .updateAgent({ agentId: AGENT_ID, avatar: "ring/blue", revision: "r" })
+      .catch((error: unknown) => error)
+
+    expect(failure).not.toBeInstanceOf(AgentUpdateError)
+    expect(failure).toMatchObject({
+      code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
     })
     connection.close()
   })

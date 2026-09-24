@@ -19,13 +19,13 @@ import {
   AosFocusNotificationSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
+  AosAgentUpdateRequestSchema,
   AosClientCapabilitiesMetaSchema,
   AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
   AosSessionResumeMetaSchema,
   AosSessionUpdateRequestSchema,
-  AosSetVisibilityRequestSchema,
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
@@ -739,22 +739,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(
-    AOS_METHODS.agents.setVisibility,
+    AOS_METHODS.agents.update,
     undecoded,
     async ({ params: raw }) => {
-      admit(AOS_METHODS.agents.setVisibility, "set-visibility")
-      const params = AosSetVisibilityRequestSchema.parse(raw)
+      admit(AOS_METHODS.agents.update, "update-agent")
+      const { agentId, revision, ...patch } =
+        AosAgentUpdateRequestSchema.parse(raw)
       return await perform(
-        "set-visibility",
-        {
-          agentId: params.agentId,
-          visibility: params.visibility,
-          revision: params.revision,
-        },
+        "update-agent",
+        { agentId, patch, revision },
         (command) =>
-          workspace.setVisibility(
+          workspace.updateAgent(
             command.agentId,
-            command.visibility,
+            command.patch,
             command.revision
           )
       )

@@ -91,6 +91,15 @@ export const RuntimeInfoSchema = z.strictObject({
 })
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
 
+/**
+ * An Agent's icon: an opaque `silhouette/tone` token the browser resolves.
+ * Runtimes store it in their native per-Agent slot; a stored value that is
+ * not token-shaped reads as no icon.
+ */
+export const AgentAvatarSchema = z
+  .string()
+  .regex(/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/)
+
 const AgentSummarySchema = z.strictObject({
   kind: z.literal("ready"),
   id: IdentifierSchema,
@@ -102,13 +111,17 @@ const AgentSummarySchema = z.strictObject({
   activity: z.enum(["active", "idle", "unknown"]).optional(),
   visibility: z.enum(["visible", "hidden"]).optional(),
   role: z.literal("creator").optional(),
+  avatar: AgentAvatarSchema.optional(),
 })
 
 export const AgentCatalogEntrySchema = z.strictObject({
   summary: AgentSummarySchema,
   visibility: z.enum(["visible", "hidden"]),
   selectable: z.boolean(),
+  /** The visibility switch is shown. */
   editable: z.boolean(),
+  /** The runtime can store this Agent's avatar. */
+  avatarEditable: z.boolean(),
   revision: IdentifierSchema,
 })
 export type AgentCatalogEntry = z.infer<typeof AgentCatalogEntrySchema>
@@ -119,21 +132,33 @@ export const AgentCatalogResponseSchema = z.strictObject({
 })
 export type AgentCatalogResponse = z.infer<typeof AgentCatalogResponseSchema>
 
-export const VisibilityUpdateRequestSchema = z.strictObject({
-  visibility: z.enum(["visible", "hidden"]),
+/** The fields an Agent update may write, with the revision it observed. */
+export const AgentUpdateFields = {
+  visibility: z.enum(["visible", "hidden"]).optional(),
+  avatar: AgentAvatarSchema.nullable().optional(),
   revision: IdentifierSchema,
-})
-export type VisibilityUpdateRequest = z.infer<
-  typeof VisibilityUpdateRequestSchema
->
+}
 
-export const VisibilityUpdateResponseSchema = z.strictObject({
+/** At least one field besides the revision. */
+export function writesAgentField(value: {
+  visibility?: unknown
+  avatar?: unknown
+}) {
+  return value.visibility !== undefined || value.avatar !== undefined
+}
+
+export const AgentUpdateRequestSchema = z
+  .strictObject(AgentUpdateFields)
+  .refine(writesAgentField, "At least one of visibility, avatar")
+export type AgentUpdateRequest = z.infer<typeof AgentUpdateRequestSchema>
+/** The fields an Agent update writes, without its observed revision. */
+export type AgentUpdatePatch = Omit<AgentUpdateRequest, "revision">
+
+export const AgentUpdateResponseSchema = z.strictObject({
   revision: IdentifierSchema,
   agent: AgentCatalogEntrySchema,
 })
-export type VisibilityUpdateResponse = z.infer<
-  typeof VisibilityUpdateResponseSchema
->
+export type AgentUpdateResponse = z.infer<typeof AgentUpdateResponseSchema>
 
 export const SessionStatusSchema = z.enum([
   "idle",
@@ -147,6 +172,8 @@ export const SessionSchema = z.strictObject({
   agentId: IdentifierSchema,
   title: z.string().min(1).max(4096),
   archived: z.boolean(),
+  /** Absent when the provider does not report it. */
+  createdAt: z.string().datetime().optional(),
   updatedAt: z.string().datetime(),
   status: SessionStatusSchema,
   /** Provider read state; absent when untracked or unknowable on this read. */
@@ -867,6 +894,7 @@ export const ErrorResponseSchema = z.strictObject({
       "invalid_request",
       "not_found",
       "revision_conflict",
+      "unsupported",
       "turn_conflict",
       "turn_capacity_exceeded",
       "registration_limit_exceeded",

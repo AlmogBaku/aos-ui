@@ -265,6 +265,7 @@ export function createOpenCodeWorkspaceOperations(input: {
           visibility: agent.hidden ? ("hidden" as const) : ("visible" as const),
           selectable: !agent.hidden,
           editable: false,
+          avatarEditable: false,
           revision: revision([
             agent.id,
             agent.description ?? "",

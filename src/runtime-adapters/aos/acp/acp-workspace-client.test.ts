@@ -180,10 +180,16 @@ function configOptions(
 
 function catalogEntry() {
   return {
-    summary: { kind: "ready" as const, id: AGENT_ID, name: "Research" },
+    summary: {
+      kind: "ready" as const,
+      id: AGENT_ID,
+      name: "Research",
+      avatar: "ring/blue",
+    },
     visibility: "visible" as const,
     selectable: true,
     editable: true,
+    avatarEditable: true,
     revision: "revision-1",
   }
 }
@@ -294,8 +300,8 @@ function createFakeConnection() {
       record("listAgents")
       return { revision: "revision-1", agents }
     },
-    async setVisibility(request) {
-      record("setVisibility", request)
+    async updateAgent(request) {
+      record("updateAgent", request)
       return {
         revision: "revision-2",
         agent: { ...catalogEntry(), revision: "revision-3" },
@@ -609,6 +615,38 @@ describe("ACP workspace client", () => {
       archived: true,
       pinned: true,
     })
+  })
+
+  it("keeps a Session's known creation time when a later read omits it", async () => {
+    const { client, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      published.push(metadata)
+    )
+    await settle()
+    await client.attachSession(SESSION_ID)
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update", title: "Renamed" },
+      {
+        agentId: AGENT_ID,
+        status: "running",
+        archived: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }
+    )
+    expect(published.at(-1)?.[0]?.createdAt).toBe("2026-01-01T00:00:00.000Z")
+    const before = published.length
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update", title: "Renamed" },
+      { agentId: AGENT_ID, status: "running", archived: false }
+    )
+
+    // A read that does not know the creation time changes nothing.
+    expect(published).toHaveLength(before)
+    expect(published.at(-1)?.[0]?.createdAt).toBe("2026-01-01T00:00:00.000Z")
   })
 
   it("reads the runtime's Session actions once and retries a failed read", async () => {
@@ -951,7 +989,7 @@ describe("ACP workspace client", () => {
   })
 
   it("creates Sessions, reports focus, steers, and tracks catalog revisions", async () => {
-    const { client, argsOf } = createClient()
+    const { client, argsOf, calls } = createClient()
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
@@ -974,12 +1012,31 @@ describe("ACP workspace client", () => {
     ])
 
     await expect(
-      client.updateAgentVisibility(AGENT_ID, "hidden")
+      client.updateAgent(AGENT_ID, { visibility: "hidden", avatar: null })
     ).rejects.toThrow(/revision/)
-    await client.listAgentCatalog()
-    await client.updateAgentVisibility(AGENT_ID, "hidden")
-    expect(argsOf("setVisibility")).toEqual([
-      { agentId: AGENT_ID, visibility: "hidden", revision: "revision-1" },
+    await expect(client.listAgentCatalog()).resolves.toEqual([
+      {
+        summary: expect.objectContaining({ avatar: "ring/blue" }) as unknown,
+        visibility: "visible",
+        selectable: true,
+        editable: true,
+        avatarEditable: true,
+      },
+    ])
+    await client.updateAgent(AGENT_ID, { visibility: "hidden", avatar: null })
+    await client.updateAgentVisibility(AGENT_ID, "visible")
+    expect(
+      calls
+        .filter((call) => call.method === "updateAgent")
+        .map((call) => call.args[0])
+    ).toEqual([
+      {
+        agentId: AGENT_ID,
+        visibility: "hidden",
+        avatar: null,
+        revision: "revision-1",
+      },
+      { agentId: AGENT_ID, visibility: "visible", revision: "revision-3" },
     ])
   })
 

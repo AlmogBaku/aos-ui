@@ -473,7 +473,7 @@ function harness(options: HarnessOptions = {}) {
     authState: unsupported,
     runtimeInfo,
     listAgents: unsupported,
-    updateAgentVisibility: unsupported,
+    updateAgent: unsupported,
     listAllSessions,
     listSessions: unsupported,
     history,
@@ -1083,7 +1083,7 @@ describe("guest ACP lane", () => {
 
     for (const method of [
       AOS_METHODS.session.update,
-      AOS_METHODS.agents.setVisibility,
+      AOS_METHODS.agents.update,
     ])
       expect(await socket.request(method, { sessionId: 5 })).toMatchObject({
         error: { code: METHOD_NOT_FOUND },

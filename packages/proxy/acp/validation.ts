@@ -10,6 +10,7 @@ import {
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
   ServerSessionNotFoundError,
+  ServerAgentUpdateUnsupportedError,
   type ServerRuntime,
   type ServerRuntimePublicError,
 } from "../core/runtime"
@@ -106,6 +107,7 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map([
   [AOS_JSONRPC_ERRORS.temporarilyUnavailable, "temporarily_unavailable"],
   [AOS_JSONRPC_ERRORS.connectionInterrupted, "connection_interrupted"],
   [AOS_JSONRPC_ERRORS.uncertainMutation, "uncertain_mutation"],
+  [AOS_JSONRPC_ERRORS.unsupported, "unsupported"],
   [AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request"],
   [METHOD_NOT_FOUND, "method_not_found"],
 ])
@@ -157,6 +159,8 @@ function coordinatorError(cause: unknown) {
     cause instanceof ServerSessionNotFoundError
   )
     return notFound()
+  if (cause instanceof ServerAgentUpdateUnsupportedError)
+    return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
   return undefined
 }
 

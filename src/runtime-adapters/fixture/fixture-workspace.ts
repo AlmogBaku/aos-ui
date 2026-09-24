@@ -4,6 +4,7 @@ import { createRuntimeClock } from "@shared/runtime-modes"
 import type {
   AgentSummary,
   AgentCatalogEntry,
+  AgentUpdate,
   AgentVisibility,
   SessionCreationOptions,
   SessionMetadata,
@@ -28,6 +29,7 @@ export const fixtureAgents: AgentSummary[] = [
     description: "Executive assistant",
     status: "running",
     icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
+    avatar: "ring/blue",
   },
   {
     kind: "ready",
@@ -36,6 +38,7 @@ export const fixtureAgents: AgentSummary[] = [
     description: "Accounting and finance",
     status: "idle",
     icon: { kind: "symbol", symbol: "layers", tone: "purple" },
+    avatar: "chamfer-crop/amber",
   },
   {
     kind: "ready",
@@ -44,6 +47,7 @@ export const fixtureAgents: AgentSummary[] = [
     description: "Product strategy",
     status: "attention",
     icon: { kind: "symbol", symbol: "compass", tone: "teal" },
+    avatar: "hexagon/green",
   },
   {
     kind: "ready",
@@ -52,6 +56,7 @@ export const fixtureAgents: AgentSummary[] = [
     description: "Marketing analysis",
     status: "idle",
     icon: { kind: "symbol", symbol: "chart", tone: "ochre" },
+    avatar: "arch/violet",
   },
   {
     kind: "ready",
@@ -60,6 +65,7 @@ export const fixtureAgents: AgentSummary[] = [
     description: "Ghostwriting and editing",
     status: "idle",
     icon: { kind: "symbol", symbol: "pen", tone: "slate" },
+    avatar: "disc/rose",
   },
 ]
 
@@ -293,25 +299,31 @@ export class FixtureWorkspace implements WorkspaceAdapter {
                 : "visible",
               selectable: !this.#hiddenAgents.has(summary.id),
               editable: true,
+              avatarEditable: true,
             },
           ]
         : []
     )
   }
 
-  async updateAgentVisibility(agentId: string, visibility: AgentVisibility) {
+  async updateAgent(agentId: string, { visibility, avatar }: AgentUpdate) {
     if (agentId === this.agentCreator?.id)
-      throw new Error("Creator visibility is managed by the provider")
-    if (
-      !this.#agents.some(
-        (agent) => agent.id === agentId && agent.kind === "ready"
-      )
+      throw new Error("The creator is managed by the provider")
+    const agent = this.#agents.find(
+      (agent) => agent.id === agentId && agent.kind === "ready"
     )
-      throw new Error("Agent visibility cannot be changed")
+    if (!agent) throw new Error("Agent cannot be changed")
     if (visibility === "hidden") this.#hiddenAgents.add(agentId)
     else if (visibility === "visible") this.#hiddenAgents.delete(agentId)
-    else throw new Error("Invalid Agent visibility")
+    else if (visibility !== undefined)
+      throw new Error("Invalid Agent visibility")
+    if (avatar === null) delete agent.avatar
+    else if (avatar !== undefined) agent.avatar = avatar
     this.#publishCatalog()
+  }
+
+  async updateAgentVisibility(agentId: string, visibility: AgentVisibility) {
+    return this.updateAgent(agentId, { visibility })
   }
 
   async refreshAgents() {

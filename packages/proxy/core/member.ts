@@ -2,6 +2,8 @@ import type { z } from "zod"
 
 import type {
   AgentCatalogResponse,
+  AgentUpdatePatch,
+  AgentUpdateResponse,
   Session,
   SessionContextResponse,
   SessionHistoryResponse,
@@ -9,7 +11,6 @@ import type {
   SessionModelUpdateRequest,
   SessionWorkspaceCapabilitiesResponseSchema,
   TurnSteerResponse,
-  VisibilityUpdateResponse,
 } from "../../protocol"
 import type { PendingRequest, RequestReply, TurnEvent } from "./events"
 import type { SessionPatch, SessionScope } from "./runtime"
@@ -198,9 +199,9 @@ export type MemberCommands = {
   /** `write` is absent when the option is not one the Session has. */
   "set-config": { sessionId: string; write?: SessionModelUpdateRequest }
   agents: Record<string, never>
-  "set-visibility": {
+  "update-agent": {
     agentId: string
-    visibility: "visible" | "hidden"
+    patch: AgentUpdatePatch
     revision: string
   }
 }
@@ -239,7 +240,7 @@ export type CommandResults = {
   update: void
   "set-config": { models: SessionModelsResponse }
   agents: AgentCatalogResponse
-  "set-visibility": VisibilityUpdateResponse
+  "update-agent": AgentUpdateResponse
 }
 
 /** Runs the command further down the stack, ending at its execution. */

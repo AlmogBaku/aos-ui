@@ -26,7 +26,11 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import type { ServerTurnWatcher, ServerRuntime } from "../core/runtime"
+import {
+  ServerAgentUpdateUnsupportedError,
+  type ServerTurnWatcher,
+  type ServerRuntime,
+} from "../core/runtime"
 import { translateHistory } from "./translate/history"
 import { invalidRequest } from "./validation"
 import {
@@ -241,6 +245,33 @@ describe("AOS ACP agent", () => {
     const cursor = z.object({ nextCursor: z.string() }).parse(page).nextCursor
     await test.agent.request(methods.agent.session.list, { cursor })
     expect(test.listAllSessions).toHaveBeenLastCalledWith(50, 2)
+    test.close()
+  })
+
+  it("carries a Session's creation time on the Session list", async () => {
+    const test = await harness({
+      rows: [
+        sessionRow({ createdAt: "2025-12-31T00:00:00.000Z" }),
+        sessionRow({ id: "session-2" }),
+      ],
+    })
+
+    const page = await test.list()
+
+    expect(page).toMatchObject({
+      sessions: [
+        {
+          sessionId: SESSION,
+          _meta: {
+            [AOS_META_KEY]: { createdAt: "2025-12-31T00:00:00.000Z" },
+          },
+        },
+        { sessionId: "session-2" },
+      ],
+    })
+    expect(
+      (page.sessions[1]?._meta as Record<string, object>)[AOS_META_KEY]
+    ).not.toHaveProperty("createdAt")
     test.close()
   })
 
@@ -1240,6 +1271,69 @@ const APPROVAL: PendingRequest = {
   kind: PendingRequestKind.Permission,
   message: "permission-required",
 }
+
+describe("Agent updates", () => {
+  const entry = {
+    summary: { kind: "ready" as const, id: AGENT, name: "Researcher" },
+    visibility: "hidden" as const,
+    selectable: false,
+    editable: true,
+    avatarEditable: true,
+    revision: "rev-2",
+  }
+
+  it("writes the fields an operator changes with the revision it observed", async () => {
+    const test = await harness({
+      updateAgent: async () => ({ revision: "rev-2", agent: entry }),
+    })
+
+    const result = await test.agent.request(AOS_METHODS.agents.update, {
+      agentId: AGENT,
+      revision: "rev-1",
+      visibility: "hidden",
+      avatar: null,
+    })
+
+    expect(result).toEqual({ revision: "rev-2", agent: entry })
+    expect(test.updateAgent).toHaveBeenCalledWith(
+      AGENT,
+      { visibility: "hidden", avatar: null },
+      "rev-1"
+    )
+    test.close()
+  })
+
+  it("refuses a malformed avatar before the runtime sees it", async () => {
+    const test = await harness()
+
+    for (const params of [
+      { agentId: AGENT, revision: "rev-1", avatar: "Ring/Blue" },
+      { agentId: AGENT, revision: "rev-1" },
+    ])
+      await expect(
+        test.agent.request(AOS_METHODS.agents.update, params)
+      ).rejects.toMatchObject({ code: invalidRequest().code })
+    expect(test.updateAgent).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("reports a field the runtime cannot store as unsupported", async () => {
+    const test = await harness({
+      updateAgent: async () => {
+        throw new ServerAgentUpdateUnsupportedError()
+      },
+    })
+
+    await expect(
+      test.agent.request(AOS_METHODS.agents.update, {
+        agentId: AGENT,
+        revision: "rev-1",
+        avatar: "ring/blue",
+      })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.unsupported })
+    test.close()
+  })
+})
 
 describe("Session rooms", () => {
   it("shows an open Session another browser's prompt, then its stream", async () => {

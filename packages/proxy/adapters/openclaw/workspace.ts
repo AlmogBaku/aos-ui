@@ -238,6 +238,7 @@ export function createOpenClawWorkspace(input: {
             visibility,
             selectable: !creator,
             editable: false,
+            avatarEditable: false,
             revision: revision(agent),
           }
         }),

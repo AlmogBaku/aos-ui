@@ -417,6 +417,7 @@ export function CatalogFixture({
                   visibility: "visible" as const,
                   selectable: true,
                   editable: !readOnly,
+                  avatarEditable: !readOnly,
                 },
               ]
             : entries

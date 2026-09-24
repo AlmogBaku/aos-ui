@@ -1,20 +1,22 @@
 import type {
+  AgentUpdatePatch,
+  AgentUpdateResponse,
   RuntimeAuthState,
   RuntimeInfo,
   SessionAttachmentStageRequest,
   SessionModelUpdateRequest,
-  VisibilityUpdateResponse,
 } from "../../../protocol"
 import {
   SESSION_CATALOG_MAX_WINDOW,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../../protocol"
-import type {
-  ServerAttachmentStage,
-  ServerMcpApps,
-  ServerTurnEngine,
-  ServerRuntime,
-  SessionPatch,
+import {
+  ServerAgentUpdateUnsupportedError,
+  type ServerAttachmentStage,
+  type ServerMcpApps,
+  type ServerTurnEngine,
+  type ServerRuntime,
+  type SessionPatch,
 } from "../../core/runtime"
 import {
   OpenClawClientConnectionError,
@@ -227,12 +229,14 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.listAgents()
   }
 
-  async updateAgentVisibility(
+  async updateAgent(
     _agentId: string,
-    _visibility: "visible" | "hidden",
+    patch: AgentUpdatePatch,
     _observedRevision: string
-  ): Promise<VisibilityUpdateResponse> {
-    void [_agentId, _visibility, _observedRevision]
+  ): Promise<AgentUpdateResponse> {
+    void [_agentId, _observedRevision]
+    if (patch.avatar !== undefined)
+      throw new ServerAgentUpdateUnsupportedError()
     throw new OpenClawAdapterUnavailableError()
   }
 

@@ -4,6 +4,8 @@ import {
   SessionHistoryResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type AgentCatalogResponse,
+  type AgentUpdatePatch,
+  type AgentUpdateResponse,
   type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
@@ -12,14 +14,14 @@ import {
   type SessionHistoryResponse,
   type SessionModelUpdateRequest,
   type SessionPlanActivityMessage,
-  type VisibilityUpdateResponse,
 } from "../../../protocol"
-import type {
-  ServerAttachmentStage,
-  ServerMcpApps,
-  ServerTurnEngine,
-  ServerRuntime,
-  SessionPatch,
+import {
+  ServerAgentUpdateUnsupportedError,
+  type ServerAttachmentStage,
+  type ServerMcpApps,
+  type ServerTurnEngine,
+  type ServerRuntime,
+  type SessionPatch,
 } from "../../core/runtime"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { projectTodos } from "../todos"
@@ -379,12 +381,14 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return this.#workspace.listAgents()
   }
 
-  async updateAgentVisibility(
+  async updateAgent(
     agentId: string,
-    visibility: "visible" | "hidden",
+    patch: AgentUpdatePatch,
     observedRevision: string
-  ): Promise<VisibilityUpdateResponse> {
-    void [agentId, visibility, observedRevision]
+  ): Promise<AgentUpdateResponse> {
+    void [agentId, observedRevision]
+    if (patch.avatar !== undefined)
+      throw new ServerAgentUpdateUnsupportedError()
     throw new OpenCodeWorkspaceUnavailableError()
   }
 

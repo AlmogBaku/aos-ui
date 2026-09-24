@@ -93,7 +93,8 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
     left.status === right.status &&
     left.archived === right.archived &&
     left.unread === right.unread &&
-    left.pinned === right.pinned
+    left.pinned === right.pinned &&
+    left.createdAt === right.createdAt
   )
 }
 
@@ -144,8 +145,8 @@ export function createAcpSessionStore({
   }
 
   /**
-   * `unread` and `pinned` are absent when unknowable on this read and never
-   * overwrite; `archived` is on every provider read of a Session.
+   * `unread`, `pinned`, and `createdAt` are absent when unknowable on this
+   * read and never overwrite; `archived` is on every provider read of a Session.
    */
   function put(
     threadId: string,
@@ -155,6 +156,7 @@ export function createAcpSessionStore({
     const previous = rows.get(threadId)
     const unread = info.unread ?? previous?.unread
     const pinned = info.pinned ?? previous?.pinned
+    const createdAt = info.createdAt ?? previous?.createdAt
     write(threadId, {
       threadId,
       agentId: info.agentId,
@@ -164,6 +166,7 @@ export function createAcpSessionStore({
       archived: info.archived,
       ...(unread === undefined ? {} : { unread }),
       ...(pinned === undefined ? {} : { pinned }),
+      ...(createdAt === undefined ? {} : { createdAt }),
     })
   }
 

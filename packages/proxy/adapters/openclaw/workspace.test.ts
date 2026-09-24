@@ -51,6 +51,7 @@ describe("OpenClaw workspace reads", () => {
         visibility: "visible",
         selectable: true,
         editable: false,
+        avatarEditable: false,
         revision: expect.any(String),
       },
     ])
@@ -88,6 +89,7 @@ describe("OpenClaw workspace reads", () => {
       visibility: "hidden",
       selectable: false,
       editable: false,
+      avatarEditable: false,
       revision: expect.any(String),
     })
   })

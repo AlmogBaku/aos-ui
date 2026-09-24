@@ -5,6 +5,7 @@ import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import {
+  ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerAttachmentStages,
@@ -162,9 +163,11 @@ export function createProxyApp(options: ProxyAppOptions) {
     const [code, status]: [ErrorCode, number] =
       cause instanceof ServerSessionNotFoundError
         ? ["not_found", 404]
-        : runtimeError
-          ? [runtimeError.code, runtimeError.status]
-          : ["internal_error", 500]
+        : cause instanceof ServerAgentUpdateUnsupportedError
+          ? ["unsupported", 400]
+          : runtimeError
+            ? [runtimeError.code, runtimeError.status]
+            : ["internal_error", 500]
     options.logger.error(
       redactForLog({
         event: "request.failed",

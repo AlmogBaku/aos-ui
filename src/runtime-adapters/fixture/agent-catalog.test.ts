@@ -40,4 +40,47 @@ describe("Agent catalog and visibility contract", () => {
       workspace.updateAgentVisibility(creator.id, "hidden")
     ).rejects.toThrow()
   })
+
+  it("seeds distinct avatars on visible Agents only", async () => {
+    const workspace = createFixtureWorkspace()
+    const catalog = await workspace.listAgentCatalog()
+    const visible = catalog.filter((entry) => entry.visibility === "visible")
+    const avatars = visible.map((entry) => entry.summary.avatar)
+    expect(avatars.every((avatar) => avatar !== undefined)).toBe(true)
+    expect(new Set(avatars).size).toBe(avatars.length)
+    expect(
+      catalog
+        .filter((entry) => entry.visibility === "hidden")
+        .map((entry) => entry.summary.avatar)
+    ).toEqual([undefined])
+    expect(workspace.agentCreator?.avatar).toBeUndefined()
+    expect(catalog.every((entry) => entry.avatarEditable)).toBe(true)
+  })
+
+  it("stores an avatar change and clears one, telling catalog subscribers", async () => {
+    const workspace = createFixtureWorkspace()
+    const [first] = await workspace.listAgentCatalog()
+    const listener = vi.fn()
+    workspace.subscribeAgentCatalog(listener)
+
+    await workspace.updateAgent(first.summary.id, { avatar: "block/red" })
+    expect((await workspace.listAgentCatalog())[0].summary.avatar).toBe(
+      "block/red"
+    )
+    await workspace.updateAgent(first.summary.id, {
+      visibility: "hidden",
+      avatar: null,
+    })
+    const [updated] = await workspace.listAgentCatalog()
+    expect(updated.summary.avatar).toBeUndefined()
+    expect(updated.visibility).toBe("hidden")
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it("refuses an avatar change aimed at the creator", async () => {
+    const workspace = createFixtureWorkspace()
+    await expect(
+      workspace.updateAgent(workspace.agentCreator!.id, { avatar: "ring/blue" })
+    ).rejects.toThrow()
+  })
 })

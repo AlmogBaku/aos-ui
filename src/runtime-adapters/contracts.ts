@@ -32,6 +32,8 @@ type AgentSummaryBase = {
   /** Native roster activity, distinct from exact Session execution. */
   activity?: "active" | "idle" | "unknown"
   icon?: AgentIcon
+  /** Generated robot avatar token, `shape/palette`; absent when unset. */
+  avatar?: string
   visibility?: AgentVisibility
   role?: "creator"
 }
@@ -59,6 +61,25 @@ export type AgentCatalogEntry = {
   visibility: AgentVisibility
   selectable: boolean
   editable: boolean
+  /** Whether the runtime can store this Agent's avatar. */
+  avatarEditable: boolean
+}
+
+/** Fields an operator changes on an Agent; `avatar: null` clears it. */
+export type AgentUpdate = {
+  visibility?: AgentVisibility
+  avatar?: string | null
+}
+
+/** Actionable Agent update refusals; all other failures remain ordinary Errors. */
+export class AgentUpdateError extends Error {
+  constructor(
+    readonly code: "unsupported" | "conflict",
+    message: string
+  ) {
+    super(message)
+    this.name = "AgentUpdateError"
+  }
 }
 
 export type SessionStatus =
@@ -96,6 +117,8 @@ export type SessionMetadata = {
   unread?: boolean
   /** Provider pin; absent when the runtime does not track it. */
   pinned?: boolean
+  /** Provider creation time; absent when the runtime does not report it. */
+  createdAt?: string
 }
 
 /** Which Session actions the selected runtime declares it performs. */
@@ -113,8 +136,6 @@ export type TodoItem = {
   label: string
   status: TodoStatus
 }
-
-export type AgentPatch = Partial<Pick<AgentSummary, "name" | "description">>
 
 export type SessionCreationOptions = {
   title: string
@@ -134,7 +155,7 @@ export type WorkspaceAdapter = {
     agentId: string,
     options?: SessionCreationOptions
   ): Promise<{ threadId: string }>
-  updateAgent?: (agentId: string, patch: AgentPatch) => Promise<void>
+  updateAgent?: (agentId: string, patch: AgentUpdate) => Promise<void>
   subscribeTodos?: (
     threadId: string,
     listener: (todos: TodoItem[]) => void,

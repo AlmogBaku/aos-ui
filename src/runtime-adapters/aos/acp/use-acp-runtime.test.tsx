@@ -148,7 +148,7 @@ function createFakeConnection(
     steer: unused,
     focus: unused,
     listAgents: unused,
-    setVisibility: unused,
+    updateAgent: unused,
     onSessionUpdate: (sessionId, listener) => {
       const listeners = updates.get(sessionId) ?? new Set()
       listeners.add(listener)
