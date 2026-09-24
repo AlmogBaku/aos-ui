@@ -14,7 +14,6 @@ import {
   useRemoteThreadListRuntime,
   type AssistantRuntime,
   type CompleteAttachment,
-  type ThreadRuntime,
 } from "@assistant-ui/react"
 import { VoiceMediaController } from "@/components/assistant-ui/voice/voice-media"
 import { projectSpeechText } from "@/components/assistant-ui/voice/speech-text"
@@ -48,6 +47,11 @@ import {
   createPushSubscriptionManager,
 } from "@/lib/notifications/push-subscription"
 import { AosDraftRegistry, createAosSessionDraft } from "./aos-drafts"
+import {
+  aosMessageRewind,
+  applyComposerPrefill,
+  rewindSource,
+} from "./conversation-controls"
 
 /**
  * The operator surface over one ACP connection to the proxy. The connection
@@ -65,21 +69,6 @@ const CLIENT_INFO = { name: "aos-ui", version: "1" }
  * localized.
  */
 const runtimeDictionaries = { en, he }
-
-/**
- * Shows the next turn the provider suggested, once the run that suggested it has
- * settled. Text the operator has already composed outranks the suggestion.
- */
-function applyComposerPrefill(thread: ThreadRuntime, text: string) {
-  let unsubscribe = () => {}
-  const applyWhenIdle = () => {
-    if (thread.getState().isRunning) return
-    unsubscribe()
-    if (thread.composer.getState().isEmpty) thread.composer.setText(text)
-  }
-  unsubscribe = thread.subscribe(applyWhenIdle)
-  applyWhenIdle()
-}
 
 function ReadyAosRuntimeProvider({
   children,
@@ -247,7 +236,7 @@ function ReadyAosRuntimeProvider({
         attach,
         resolveSessionId,
         stageAttachments,
-        messageRewind: (sourceUserId) => ({ rewindSourceId: sourceUserId }),
+        messageRewind: rewindSource,
         onComposerPrefill,
         describeRunError,
       })
@@ -410,16 +399,6 @@ function ReadyAosRuntimeProvider({
     attachedSessionId,
     capabilities
   )
-  // The Session projector rewinds locally from the `messageRewind` option; the
-  // run config is what the Thread carries into Edit and Retry.
-  const messageRewind = useMemo(
-    () => ({
-      runConfig(sourceUserId: string) {
-        return { custom: { "aos.rewindSourceId": sourceUserId } }
-      },
-    }),
-    []
-  )
   const capabilitiesReady = capabilities !== undefined
   const transcriptionAvailable =
     capabilities?.content.transcription.status === "available"
@@ -461,7 +440,7 @@ function ReadyAosRuntimeProvider({
     artifacts: { resolver: artifacts },
     mcpApps,
     composer,
-    messageRewind,
+    messageRewind: aosMessageRewind,
     media,
     activityCoverage: "workspace",
     push,

@@ -4,6 +4,7 @@ import {
   AssistantRuntimeProvider,
   useAui,
   useAuiState,
+  type AssistantRuntime,
   type AssistantState,
   type CompleteAttachment,
 } from "@assistant-ui/react"
@@ -43,6 +44,7 @@ import { WorkspaceConversationShell } from "@/components/workspace"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type { Locale } from "@/lib/i18n/config"
+import { runErrorMessage } from "@/lib/i18n/run-errors"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import {
   AOS_ACP_GUEST_PATH,
@@ -61,6 +63,11 @@ import {
 import { AosArtifactAdapter } from "./aos-artifacts"
 import { AosMcpAppAdapter } from "./aos-mcp-apps"
 import { AosRemoteClient } from "./aos-client"
+import {
+  aosMessageRewind,
+  applyComposerPrefill,
+  rewindSource,
+} from "./conversation-controls"
 
 /**
  * The invited guest surface: one ACP connection to the proxy's guest lane, one
@@ -258,7 +265,7 @@ function GuestConversationShell({
             ...threadLabels[locale],
             ...(message ? { welcome: message } : {}),
           }}
-          messageRewind={false}
+          messageRewind={aosMessageRewind}
           components={{ ToolFallback: AosToolPresentation, Composer: composer }}
         />
       </ToolUiLocaleProvider>
@@ -403,6 +410,16 @@ function ReadyGuestAosSurface({
       }),
     [media, rest, selectedLocale, sessionId]
   )
+  const describeRunError = useCallback(
+    (code: string | undefined, fallback: string) =>
+      runErrorMessage(dictionaries[selectedLocale], code, fallback),
+    [selectedLocale]
+  )
+  const threadRuntime = useRef<AssistantRuntime | undefined>(undefined)
+  const onComposerPrefill = useCallback((text: string) => {
+    const thread = threadRuntime.current?.thread
+    if (thread) applyComposerPrefill(thread, text)
+  }, [])
   const runtime = useAcpRuntime({
     connection,
     approvals,
@@ -413,13 +430,25 @@ function ReadyGuestAosSurface({
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,
     adapters: { attachments, ...mediaAdapters },
+    messageRewind: rewindSource,
+    onComposerPrefill,
+    describeRunError,
   })
-  const slashCommands =
-    config.composerSlashCommandsEnabled &&
-    capabilities?.workspace.slashCommands.status === "available"
-      ? capabilities.workspace.slashCommands.commands
-      : undefined
-  const composerFeatures = useMemo(() => ({ slashCommands }), [slashCommands])
+  useEffect(() => {
+    threadRuntime.current = runtime
+  }, [runtime])
+  // Guests get no slash commands; a run steers only when the Session allows it.
+  const steeringAvailable =
+    capabilities?.interactions.steering.status === "available"
+  const composerFeatures = useMemo<ComposerFeatureViewModel>(
+    () => ({
+      steer: steeringAvailable
+        ? (request: { requestId: string; text: string }) =>
+            connection.steer({ sessionId, ...request })
+        : undefined,
+    }),
+    [connection, sessionId, steeringAvailable]
+  )
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>
       function GuestPendingComposer({ fallback }) {

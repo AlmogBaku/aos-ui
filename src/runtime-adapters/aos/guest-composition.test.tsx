@@ -18,12 +18,14 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { z } from "zod"
 
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
+  AOS_METHODS,
 } from "@aos/protocol/acp"
 
 import { en } from "@/lib/i18n/dictionaries/en"
@@ -37,8 +39,16 @@ const BASE_PATH = "/api/guest/v1"
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
+const steeringAvailable = {
+  status: "available",
+  scope: "active-turn",
+  semantics: "visible-user-message",
+  input: "text",
+  fallback: "provider-queue",
+} as const
+
 /** What the guest lane reports for the invited Session on `session/resume`. */
-function capabilities() {
+function capabilities(options: { steering?: boolean } = {}) {
   return {
     workspace: {
       slashCommands: unavailable,
@@ -48,7 +58,7 @@ function capabilities() {
       activity: unavailable,
     },
     interactions: {
-      steering: unavailable,
+      steering: options.steering ? steeringAvailable : unavailable,
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
@@ -56,7 +66,17 @@ function capabilities() {
         choices: [{ value: "once", scope: "request" }],
         maxPending: 1,
       },
-      questions: unavailable,
+      questions: {
+        status: "available",
+        protocol: INTERACTION_PROTOCOL,
+        scope: "turn",
+        answerModes: ["single", "multiple", "free-text"],
+        cancellation: "native-cancel",
+        maxQuestions: 1,
+        maxChoicesPerQuestion: 4,
+        maxAnswerValuesPerQuestion: "complete-request",
+        maxStringBytes: 4096,
+      },
       reactions: unavailable,
     },
     content: {
@@ -96,21 +116,36 @@ const authenticationRequired = () =>
     "authentication_required"
   )
 
+type GuestProxyOptions = {
+  token?: string
+  /** Whether the invited Session reports steering as available. */
+  steering?: boolean
+  /** Keeps every run going until `finishRun` settles it. */
+  holdRuns?: boolean
+}
+
 /** The guest lane of the AOS proxy, in process: one invited conversation. */
-function createGuestProxyAgent(options: { token?: string } = {}) {
+function createGuestProxyAgent(options: GuestProxyOptions = {}) {
   const accepted = options.token ?? TOKEN
   const calls: string[] = []
   const prompts: PromptRequest[] = []
+  const steers: unknown[] = []
   let peer: AgentContext | undefined
   let redeemed = false
   // The proxy streams a Session only to a client attached to it, so updates
   // raised before the resume wait for the replay that carries them.
   const waiting: SessionUpdate[] = [
     {
+      sessionUpdate: "user_message",
+      messageId: "history-0",
+      content: [{ type: "text", text: "Earlier guest question" }],
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+    },
+    {
       sessionUpdate: "agent_message",
       messageId: "history-1",
       content: [{ type: "text", text: "Earlier guest answer" }],
-      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 0 } },
+      _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ]
   let attached = false
@@ -189,7 +224,7 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
           [AOS_META_KEY]: {
             session: sessionInfo,
             execution: { status: "idle" },
-            capabilities: capabilities(),
+            capabilities: capabilities(options),
           },
         },
       }
@@ -200,6 +235,11 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
       prompts.push(params)
       const messageId = `prompt-${prompts.length}`
       queueMicrotask(() => {
+        push({
+          sessionUpdate: "state_update",
+          state: "running",
+          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 0 } },
+        })
         push({
           sessionUpdate: "user_message",
           messageId,
@@ -214,14 +254,13 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
           content: [{ type: "text", text: "Guest-visible answer" }],
           _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
-        push({
-          sessionUpdate: "state_update",
-          state: "idle",
-          stopReason: "end_turn",
-          _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
-        })
+        if (!options.holdRuns) finishRun()
       })
       return { _meta: { [AOS_META_KEY]: { messageId } } }
+    })
+    .onRequest(AOS_METHODS.session.steer, z.unknown(), ({ params }) => {
+      steers.push(params)
+      return { status: "steered" as const }
     })
     .onNotification(methods.agent.session.cancel, () => {
       calls.push(methods.agent.session.cancel)
@@ -230,10 +269,29 @@ function createGuestProxyAgent(options: { token?: string } = {}) {
       peer = connection.client
     })
 
+  function finishRun() {
+    push({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+      _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 3 } },
+    })
+  }
+
   return {
     app,
     calls,
     prompts,
+    steers,
+    finishRun,
+    /** The provider's suggested next turn for the invited composer. */
+    suggestPrefill(text: string) {
+      void peer?.notify(AOS_METHODS.notify.composerPrefill, {
+        sessionId: REF,
+        turnId: "run-1",
+        text,
+      })
+    },
     askPermission(): Promise<RequestPermissionResponse> | undefined {
       return peer?.request(methods.client.session.requestPermission, {
         sessionId: REF,
@@ -301,11 +359,12 @@ function stubMatchMedia() {
   }))
 }
 
-function mount(options: { token?: string; inviteToken?: string } = {}) {
+function mount({
+  inviteToken,
+  ...options
+}: GuestProxyOptions & { inviteToken?: string } = {}) {
   stubMatchMedia()
-  const proxy = createGuestProxyAgent(
-    options.token === undefined ? {} : { token: options.token }
-  )
+  const proxy = createGuestProxyAgent(options)
   vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   const fetcher = vi.fn(async (input: RequestInfo | URL) =>
     String(input) === `${BASE_PATH}/runtime`
@@ -321,7 +380,7 @@ function mount(options: { token?: string; inviteToken?: string } = {}) {
         basePath: BASE_PATH,
         lane: "guest",
       }}
-      inviteToken={options.inviteToken ?? TOKEN}
+      inviteToken={inviteToken ?? TOKEN}
       locale="en"
     />
   )
@@ -466,5 +525,120 @@ describe("AOS guest browser composition", () => {
     } finally {
       Reflect.deleteProperty(navigator, "serviceWorker")
     }
+  })
+
+  /** Replaces whatever the composer holds with one guest turn. */
+  async function sendTurn(
+    user: ReturnType<typeof userEvent.setup>,
+    text: string
+  ) {
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      `{Control>}a{/Control}${text}`
+    )
+    await user.keyboard("{Enter}")
+  }
+
+  it("edits an earlier turn by rewinding the provider turn it replaces", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount()
+    await screen.findByText("Earlier guest answer")
+
+    // An earlier turn shows its actions while the guest points at it.
+    await user.hover(screen.getByText("Earlier guest question"))
+    await user.click(screen.getByRole("button", { name: "Edit message" }))
+    const editor = screen
+      .getAllByRole("textbox")
+      .find(
+        (box) => (box as HTMLTextAreaElement).value === "Earlier guest question"
+      )
+    expect(editor).toBeDefined()
+    await user.clear(editor!)
+    await user.type(editor!, "A better question")
+    await user.click(screen.getByRole("button", { name: "Update" }))
+
+    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
+    expect(proxy.prompts[0]).toMatchObject({
+      sessionId: REF,
+      prompt: [{ type: "text", text: "A better question" }],
+      _meta: { [AOS_META_KEY]: { rewindSourceId: "history-0" } },
+    })
+  })
+
+  it("steers the running turn when the invited Session allows steering", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount({ steering: true, holdRuns: true })
+    await screen.findByText("Earlier guest answer")
+    await sendTurn(user, "Start the interview")
+    expect(await screen.findByText("Guest-visible answer")).toBeVisible()
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Message input" }),
+      "Focus on pricing"
+    )
+    await user.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}")
+
+    await waitFor(() =>
+      expect(proxy.steers).toEqual([
+        {
+          sessionId: REF,
+          requestId: expect.any(String),
+          text: "Focus on pricing",
+        },
+      ])
+    )
+    expect(proxy.prompts).toHaveLength(1)
+  })
+
+  it("does not steer when the invited Session reports steering unavailable", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount({ holdRuns: true })
+    await screen.findByText("Earlier guest answer")
+    await sendTurn(user, "Start the interview")
+    expect(await screen.findByText("Guest-visible answer")).toBeVisible()
+
+    const composer = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(composer, "Focus on pricing")
+    await user.keyboard("{Control>}{Shift>}{Enter}{/Shift}{/Control}")
+
+    expect(proxy.steers).toEqual([])
+    expect(proxy.prompts).toHaveLength(1)
+    expect(composer).toHaveValue("Focus on pricing")
+  })
+
+  it("fills an empty composer with the suggested turn once the run settles", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount({ holdRuns: true })
+    await screen.findByText("Earlier guest answer")
+    await sendTurn(user, "Start the interview")
+    expect(await screen.findByText("Guest-visible answer")).toBeVisible()
+    const composer = screen.getByRole("textbox", { name: "Message input" })
+
+    proxy.suggestPrefill("What about pricing?")
+    // A suggestion waits for the run it came from to settle.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(composer).toHaveValue("")
+
+    proxy.finishRun()
+    await waitFor(() => expect(composer).toHaveValue("What about pricing?"))
+  })
+
+  it("never lets a suggested turn overwrite what the guest typed", async () => {
+    const user = userEvent.setup()
+    const { proxy } = mount({ holdRuns: true })
+    await screen.findByText("Earlier guest answer")
+    await sendTurn(user, "Start the interview")
+    expect(await screen.findByText("Guest-visible answer")).toBeVisible()
+    const composer = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(composer, "My own follow-up")
+
+    proxy.suggestPrefill("What about pricing?")
+    proxy.finishRun()
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /stop/iu })).toBeNull()
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(composer).toHaveValue("My own follow-up")
   })
 })
