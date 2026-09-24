@@ -180,7 +180,8 @@ export class HermesTurnEngine {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
     const prompt = isRepliesTurn(input) ? undefined : input
-    // Staged content arrives already appended to the prompt as text.
+    // Staged files arrive appended to the prompt as text; staged images are
+    // already attached to the live Session, so a turn of images alone is empty.
     const text = prompt?.prompt.trim()
     const rewindSourceId = prompt?.rewindSourceId
     if (
@@ -189,8 +190,6 @@ export class HermesTurnEngine {
         rewindSourceId.length > MAX_REWIND_SOURCE_LENGTH)
     )
       throw new Error("AOS received an invalid rewind source")
-    if (!replies && !text)
-      throw new Error("AOS turns require exactly one authorized user turn")
     if (text && new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
       throw new Error("The AOS user turn is too large")
 

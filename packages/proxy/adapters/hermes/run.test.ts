@@ -656,6 +656,21 @@ describe("HermesRunEngine", () => {
     ])
   })
 
+  it("submits a turn of attached images alone with empty text", async () => {
+    const submit = vi.fn(async () => ({
+      acknowledgement: "accepted" as const,
+      status: "streaming" as const,
+    }))
+    const engine = new HermesTurnEngine(runtime({ submit }))
+
+    await engine.start(scope, input({ prompt: "" }))
+
+    expect(submit).toHaveBeenCalledWith(
+      "live-secret",
+      expect.objectContaining({ text: "" })
+    )
+  })
+
   it("rejects browser-owned state, tools, context, forwarded properties, and non-standard run fields instead of forwarding them to Hermes", async () => {
     const submit = vi.fn(async () => ({
       acknowledgement: "accepted" as const,
