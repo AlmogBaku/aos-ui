@@ -10,6 +10,7 @@ import type { PendingRequest } from "../../core/events"
 import type { AcpOutbound, Lane } from "../types"
 import {
   answeredQuestionOutbound,
+  shownAnswers,
   pendingRequestToOutbound,
   replyFromElicitation,
   replyFromPermission,
@@ -542,10 +543,10 @@ describe("answeredQuestionOutbound", () => {
     expect(
       answeredQuestionOutbound(
         asking,
-        {
+        shownAnswers(asking, {
           action: "accept",
           content: { q0: "production", q1: ["logs", "metrics"] },
-        },
+        }),
         "operator"
       )
     ).toEqual({
@@ -570,7 +571,11 @@ describe("answeredQuestionOutbound", () => {
 
   it("records a declined question as an answer nobody gave", () => {
     expect(
-      answeredQuestionOutbound(asking, { action: "decline" }, "operator")
+      answeredQuestionOutbound(
+        asking,
+        shownAnswers(asking, { action: "decline" }),
+        "operator"
+      )
     ).toEqual({
       kind: "update",
       update: {
@@ -592,10 +597,10 @@ describe("answeredQuestionOutbound", () => {
     expect(
       answeredQuestionOutbound(
         questions,
-        {
+        shownAnswers(questions, {
           action: "accept",
           content: { q0: "production" },
-        },
+        }),
         "operator"
       )
     ).toBeUndefined()

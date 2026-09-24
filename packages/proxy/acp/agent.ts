@@ -5,7 +5,6 @@ import {
   type AgentApp,
   type AgentContext,
   type ResumeSessionRequest,
-  type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
@@ -42,22 +41,20 @@ import type { SessionExecutionState } from "../core/session-coordinator"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
-  commandsUpdate,
   createSessions,
   executionMeta,
   overlaidStatus,
   sessionInfoMeta,
   sessionInfoOf,
-  sessionInfoUpdate,
   decodeCursor,
   decodeHistoryCursor,
   encodeCursor,
   historyCursor,
 } from "./agent-sessions"
 import { isPromptBlock, promptParts, promptText } from "./prompt-content"
-import type { SessionMember } from "./session-member"
-import type { RoomTurn } from "../core/channel"
+import type { RoomTurn, Seat } from "../core/channel"
 import { promptText as roomPromptText } from "../core/member"
+import { createMemberEncoder } from "./member-encoder"
 import { beforeLiveTurn, lastPromptIndex } from "./translate/history"
 import type {
   AcpConnectionContext,
@@ -175,7 +172,7 @@ function showsPrompt(
  * the task fires on the next turn of the loop, so anything still pending in the
  * handler lets these notifications reach the client before the response does.
  */
-function afterResponse(member: SessionMember, task: () => Promise<void>) {
+function afterResponse(member: Seat, task: () => Promise<void>) {
   setTimeout(() => {
     void task().catch((cause: unknown) => member.report(cause))
   }, 0)
@@ -191,22 +188,6 @@ function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
   const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
   if (!parsed.success) throw invalidRequest()
   return parsed.data.cursor
-}
-
-/** One update of an older page, tagged with the cursor that asked for it. */
-function pageUpdate(update: SessionUpdate, cursor: string): SessionUpdate {
-  const meta = (update._meta ?? {}) as Record<string, unknown>
-  const aos = meta[AOS_META_KEY]
-  return {
-    ...update,
-    _meta: {
-      ...meta,
-      [AOS_META_KEY]: {
-        ...(typeof aos === "object" ? aos : {}),
-        historyPage: { cursor },
-      },
-    },
-  }
 }
 
 /** One authorized guest request: its connection policy and redeemed grant. */
@@ -228,7 +209,13 @@ function sameExposure(
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { lane, translators } = context
   const { runtime, sessions: coordinator } = context.runtimeInstance
-  const sessions = createSessions(context)
+  const sessions = createSessions(context, (client) =>
+    createMemberEncoder({
+      context,
+      client,
+      seat: (sessionId) => sessions.member(sessionId),
+    })
+  )
   const { workspace } = sessions
 
   const app = agent({ name: "aos-proxy" })
@@ -333,14 +320,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   }
 
-  /** A page as this lane shows it: projected for a guest, then translated. */
-  function historyOutbounds(history: SessionHistoryResponse) {
-    const shown = context.guest
-      ? context.guest.project.history(history)
-      : history
-    return translators.translateHistory(shown, lane)
-  }
-
   /** The Sessions this connection is reading an older page of. */
   const paging = new Set<string>()
 
@@ -369,7 +348,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * One older page of a Session this connection attached, however it did, as
    * tagged updates ahead of the reply. A page re-attaches nothing: the view
    * keeps its room, its follow, and its reports, and learns only where the
-   * next page starts. Only the newest page carries the plan.
+   * next page starts.
    */
   async function replayOlder(publicSessionId: string, cursor: string) {
     const member = sessions.member(publicSessionId)
@@ -383,18 +362,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // its end was: a runtime that estimates `total` learns the start only
       // by reading an empty page there.
       if (offset > history.total) throw invalidRequest()
-      const shown = beforeStreamedTurn(member.scope, history)
-      const updates = historyOutbounds(shown).flatMap((outbound) =>
-        outbound.kind === "update" &&
-        outbound.update.sessionUpdate !== "plan_update"
-          ? [pageUpdate(outbound.update, cursor)]
-          : []
-      )
-      for (const update of updates) await member.update(update)
-      log("acp.history.page", {
-        sessionId: publicSessionId,
+      await member.showHistory(beforeStreamedTurn(member.scope, history), {
+        cursor,
         offset,
-        count: updates.length,
       })
       return { _meta: { [AOS_META_KEY]: { history: historyCursor(history) } } }
     } finally {
@@ -413,7 +383,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * gone and a cursorless follow could only reset it. A turn that starts during
    * the read waits for the page and is replayed the same way.
    */
-  async function replayPage(member: SessionMember, scope: SessionScope) {
+  async function replayPage(member: Seat, scope: SessionScope) {
     const liveTurn = () => {
       const { state, turnId } = coordinator.snapshot(scope)
       return state === "idle" ? undefined : turnId
@@ -456,7 +426,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * it does a turn the hold kept `held` back.
    */
   async function recoverReplay(
-    member: SessionMember,
+    member: Seat,
     restarted: string | undefined,
     held: boolean
   ) {
@@ -472,14 +442,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * a guest. A page that cannot reach the view recovers as a failed read does,
    * so the room's turns still reach it.
    */
-  async function replayHistory(member: SessionMember, scope: SessionScope) {
+  async function replayHistory(member: Seat, scope: SessionScope) {
     const replay = await replayPage(member, scope)
     try {
       // Counted on the authoritative page, before the guest projection
       // rebuilds its messages: that projection keeps no user-turn metadata.
       const corrections = translators.persistedCorrections(replay.history)
-      for (const outbound of historyOutbounds(replay.history))
-        await member.send(outbound)
+      await member.showHistory(replay.history)
       return { ...replay, corrections }
     } catch (cause) {
       await recoverReplay(member, replay.restarted, replay.held)
@@ -493,7 +462,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * streams that turn; a view whose page could not be cut for it is `reset`.
    */
   async function followPositioned(
-    member: SessionMember,
+    member: Seat,
     scope: SessionScope,
     meta: { turnId?: string; after?: number },
     replay?: { corrections: number; restarted?: string; reset?: boolean }
@@ -675,7 +644,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const models = await workspace.models(scope)
     const member = sessions.join(client, scope)
     afterResponse(member, async () => {
-      await member.update(commandsUpdate(capabilities))
+      await member.emit({ kind: "commands", capabilities })
       await member.reportUsage()
     })
     return {
@@ -815,16 +784,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? {}
         : { rewindSourceId: meta.rewindSourceId }),
     }
+    const content = promptParts(params.prompt)
     const member = sessions.join(client, scope)
     afterResponse(member, async () => {
       // Seated before admission, so a turn that wins the race still reaches
       // this browser, and shown its own prompt as today.
       member.enterRoom()
-      await member.update({
-        sessionUpdate: "user_message",
-        messageId,
-        content: params.prompt,
-      })
+      await member.emit({ kind: "prompt", messageId, content, own: true })
       try {
         await member.startTurn(input, stage)
       } catch (cause) {
@@ -837,7 +803,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await member.announce({
         turnId: input.turnId,
         messageId,
-        content: promptParts(params.prompt),
+        content,
         at: Date.now(),
       })
     })
@@ -907,7 +873,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       const row = await workspace.session(scope)
       await sessions
         .join(client, scope)
-        .update(sessionInfoUpdate(row, sessions.status(row)))
+        .emit({ kind: "session-info", row, status: sessions.status(row) })
       // Archiving and pinning move the Session's membership and order in the
       // catalog, which only a relist settles; a provider's catalog watcher may
       // be debounced or absent. A rename or a read marker moves neither.
@@ -1004,7 +970,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
               const member = sessions.member(row.id)
               if (member)
                 void member
-                  .update(sessionInfoUpdate(row, sessions.status(row)))
+                  .emit({
+                    kind: "session-info",
+                    row,
+                    status: sessions.status(row),
+                  })
                   .catch(() => undefined)
             }),
             await runtime.subscribeCatalogChanges?.(() =>

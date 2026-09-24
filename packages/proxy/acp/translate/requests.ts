@@ -290,6 +290,21 @@ export const replyFromElicitation = ((request, response, lane) => {
 }) satisfies ReplyFromElicitation
 
 /**
+ * The values a member answered each question with, as it was shown them;
+ * none for a question it declined.
+ */
+export function shownAnswers(
+  request: PendingRequest,
+  response: CreateElicitationResponse
+): string[][] {
+  const content =
+    response.action === "accept" ? record(response.content) : undefined
+  return pendingQuestionsOf(request).map((_, index) =>
+    content ? answerValues(content[`q${index}`]) : []
+  )
+}
+
+/**
  * The record an answered question leaves on the tool call that asked it, in the
  * `{ status, responses }` shape an answered call already carries in history: the
  * provider settles the call only in its own history, so without this the live
@@ -300,16 +315,14 @@ export const replyFromElicitation = ((request, response, lane) => {
  */
 export function answeredQuestionOutbound(
   request: PendingRequest,
-  response: CreateElicitationResponse,
+  answers: readonly (readonly string[])[],
   lane: Lane
 ): AcpOutbound | undefined {
   const toolCallId = request.toolCallId
   if (toolCallId === undefined) return undefined
-  const content =
-    response.action === "accept" ? record(response.content) : undefined
   const responses = questionsOf(request, lane).map((question, index) => ({
     question: question.prompt,
-    answers: content ? answerValues(content[`q${index}`]) : [],
+    answers: [...(answers[index] ?? [])],
   }))
   return update({
     sessionUpdate: "tool_call_update",

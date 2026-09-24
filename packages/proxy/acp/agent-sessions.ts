@@ -21,9 +21,16 @@ import {
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import { createSessionMember } from "./session-member"
+import type { Seat } from "../core/channel"
+import type { Member, MemberConnection } from "../core/member"
+import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
-import { invalidRequest, notFound, publicRequestError } from "./validation"
+import {
+  errorNotificationOf,
+  invalidRequest,
+  notFound,
+  publicRequestError,
+} from "./validation"
 
 /**
  * The Session half of the ACP agent: the normalized runtime reads and writes
@@ -254,14 +261,31 @@ export type Workspace = ReturnType<typeof createWorkspace>
 /**
  * Per-connection Session registry. ACP addresses a Session by its public id
  * alone, so the connection remembers the Agent each listed or created Session
- * belongs to and refuses an id it has never been told about.
+ * belongs to and refuses an id it has never been told about. `connect` writes
+ * the connection's member events to its client.
  */
-export function createSessions(context: AcpConnectionContext) {
+export function createSessions(
+  context: AcpConnectionContext,
+  connect: (client: AgentContext) => MemberConnection
+) {
   const workspace = createWorkspace(context)
   const coordinator = context.runtimeInstance.sessions
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
-  const members = new Map<string, ReturnType<typeof createSessionMember>>()
+  const members = new Map<string, Seat>()
+  /** This connection as the Channel seats it, once it first joins. */
+  let member: Member | undefined
+
+  function memberOf(client: AgentContext): Member {
+    member ??= {
+      principal: {
+        id: context.guest?.grant()?.principalId ?? context.principalId,
+        role: context.lane,
+      },
+      connection: connect(client),
+    }
+    return member
+  }
 
   const remember = (rows: readonly Session[]) => {
     for (const row of rows) owners.set(row.id, row.agentId)
@@ -297,13 +321,29 @@ export function createSessions(context: AcpConnectionContext) {
       return workspace.scope(agentId, publicSessionId)
     },
 
-    /** The Session's member on this connection, created on first use. */
+    /** The Session's seat on this connection, taken on first use. */
     join(client: AgentContext, scope: SessionScope) {
       const existing = members.get(scope.threadId)
       if (existing) return existing
-      const member = createSessionMember({ context, scope, client })
-      members.set(scope.threadId, member)
-      return member
+      const { guest } = context
+      const seat = context.rooms.join(memberOf(client), scope, {
+        coordinator,
+        subscriberId: `${context.connectionId}:${scope.threadId}`,
+        ...(guest
+          ? { access: (base) => guest.project.access(base, scope) }
+          : {}),
+        log: (level, event, fields) =>
+          context.logger?.[level](
+            redactForLog({
+              event,
+              connectionId: context.connectionId,
+              ...fields,
+            })
+          ),
+        describe: (cause) => errorNotificationOf(runtime, cause),
+      })
+      members.set(scope.threadId, seat)
+      return seat
     },
 
     member(publicSessionId: string) {
