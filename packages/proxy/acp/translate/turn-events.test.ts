@@ -787,6 +787,20 @@ describe("provider facts", () => {
     })
   })
 
+  it("maps a failed turn's prompt to its saved id", () => {
+    const update = lastUpdate([
+      { kind: TurnEventKind.MessageChunk, messageId: "live-a", text: "hi" },
+      {
+        kind: TurnEventKind.TurnFailed,
+        message: "failed",
+        saved: { user: { messageId: "prompt-1", savedId: "hermes-row-7" } },
+      },
+    ])
+    expect(AosStateMetaSchema.parse(aosMeta(update)).savedIds).toEqual({
+      "prompt-1": "hermes-row-7",
+    })
+  })
+
   it("maps no reply when the turn streamed none", () => {
     const update = lastUpdate([
       {

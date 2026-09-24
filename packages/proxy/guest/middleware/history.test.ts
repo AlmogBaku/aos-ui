@@ -415,27 +415,45 @@ describe("guest Edit and Retry", () => {
       content: [{ kind: "text", text: "Next" }],
       own: true,
     })
-    const ended = (messageId: string, savedId: string): MemberEvent => ({
+    test.show({
+      sessionId: "ref",
+      kind: "prompt",
+      messageId: "failed-ask",
+      content: [{ kind: "text", text: "Again" }],
+      own: true,
+    })
+    const ended = (
+      messageId: string,
+      savedId: string,
+      failed = false
+    ): MemberEvent => ({
       sessionId: "ref",
       kind: "turn",
       stream: STREAM,
       sequence: 1,
       stopping: false,
-      event: {
-        kind: TurnEventKind.TurnEnded,
-        saved: { user: { messageId, savedId } },
-      },
+      event: failed
+        ? {
+            kind: TurnEventKind.TurnFailed,
+            message: "failed",
+            saved: { user: { messageId, savedId } },
+          }
+        : {
+            kind: TurnEventKind.TurnEnded,
+            saved: { user: { messageId, savedId } },
+          },
     })
     test.show(ended("live-ask", "row-7"))
+    test.show(ended("failed-ask", "row-8", true))
     test.show(ended("unseen-ask", "row-9"))
 
-    for (const id of ["stored-ask", "live-ask", "row-7"])
+    for (const id of ["stored-ask", "live-ask", "row-7", "row-8"])
       await expect(test.rewind(id), id).resolves.toEqual({
         messageId: "sent",
       })
     await expect(test.rewind("row-9")).rejects.toBeInstanceOf(
       CommandRefusedError
     )
-    expect(test.next).toHaveBeenCalledTimes(3)
+    expect(test.next).toHaveBeenCalledTimes(4)
   })
 })

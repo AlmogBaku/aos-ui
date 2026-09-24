@@ -320,6 +320,19 @@ describe("guest turn projection", () => {
     expect(JSON.stringify(projected)).not.toContain("ValidationException")
   })
 
+  it("keeps the id a failed turn's prompt was saved under", () => {
+    expect(
+      project({
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "Hermes could not complete this turn.",
+        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
+      })
+    ).toMatchObject({
+      saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
+    })
+  })
+
   it("keeps a guest run whose failure awaits Stop stoppable", () => {
     expect(
       project({

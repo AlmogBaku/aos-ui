@@ -166,7 +166,8 @@ export function createHistoryMiddleware({
         // A user message is saved under a new id only once it was shown.
         case "turn": {
           const user =
-            event.event.kind === TurnEventKind.TurnEnded
+            event.event.kind === TurnEventKind.TurnEnded ||
+            event.event.kind === TurnEventKind.TurnFailed
               ? event.event.saved?.user
               : undefined
           if (user && shown.has(user.messageId)) shown.add(user.savedId)

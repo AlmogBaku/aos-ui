@@ -231,10 +231,14 @@ function steerStep(
  * the wire contract refuses drops the whole map rather than part of it.
  */
 function savedIdsOf(
-  event: TurnEventOf<typeof TurnEventKind.TurnEnded>,
+  event: TurnEventOf<
+    typeof TurnEventKind.TurnEnded | typeof TurnEventKind.TurnFailed
+  >,
   replyMessageId: string | undefined
 ) {
-  const { user, replyId } = event.saved ?? {}
+  const { user } = event.saved ?? {}
+  const replyId =
+    event.kind === TurnEventKind.TurnEnded ? event.saved?.replyId : undefined
   const entries = [
     ...(user ? [[user.messageId, user.savedId]] : []),
     ...(replyId && replyMessageId ? [[replyMessageId, replyId]] : []),
@@ -301,6 +305,7 @@ function failedOutbound(
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.model ? { model: event.model } : {}),
   }
+  const savedIds = savedIdsOf(event, undefined)
   return [
     stateOutbound(
       context,
@@ -312,7 +317,7 @@ function failedOutbound(
               ? AOS_STOP_REASONS.uncertain
               : AOS_STOP_REASONS.error,
           },
-      failure
+      { ...failure, ...(savedIds ? { savedIds } : {}) }
     ),
   ]
 }

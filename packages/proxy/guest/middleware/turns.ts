@@ -101,6 +101,7 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
           code,
           message: guestErrorDescription(code),
           ...(candidate.awaitingStop ? { awaitingStop: true as const } : {}),
+          ...(candidate.saved ? { saved: candidate.saved } : {}),
         }
       }
       // Only an MCP App's card, from its start to its settling: its name, no

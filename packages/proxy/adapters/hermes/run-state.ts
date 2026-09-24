@@ -101,7 +101,10 @@ export type ActiveTurn = {
    * history opens the turn with it.
    */
   promptMessageId?: string
-  /** The ids Hermes' completion proved the turn was saved under. */
+  /**
+   * The ids Hermes proved the turn was saved under: the prompt's row from the
+   * submit answer, both rows from a complete completion receipt.
+   */
   saved?: TurnSaved
   usage?: TokenUsage[]
   cost?: Cost

@@ -396,6 +396,33 @@ describe("Hermes native submit outcomes", () => {
     })
   })
 
+  it("carries the row Hermes saved a submitted prompt under", async () => {
+    const { native } = runtime({
+      "prompt.submit": async () => ({ status: "streaming", user_row_id: 7 }),
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
+    ).resolves.toEqual({
+      acknowledgement: "accepted",
+      status: "streaming",
+      userRowId: 7,
+    })
+  })
+
+  it.each([0, -1, 7.5, "7", true, null])(
+    "claims no saved row from a submit answer naming %j",
+    async (user_row_id) => {
+      const { native } = runtime({
+        "prompt.submit": async () => ({ status: "streaming", user_row_id }),
+      })
+
+      await expect(
+        native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
+      ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
+    }
+  )
+
   it("reports an unusable native admission status as a lost acknowledgement", async () => {
     const { native, router } = runtime({
       "prompt.submit": async () => ({ accepted: true }),

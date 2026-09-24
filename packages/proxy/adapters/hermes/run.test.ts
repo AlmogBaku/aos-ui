@@ -313,12 +313,25 @@ describe("HermesRunEngine", () => {
       final_assistant_row_id: 10,
     }
 
-    async function endOf(persisted_turn: unknown) {
+    async function eventsOf(
+      persisted_turn: unknown,
+      {
+        userRowId,
+        status = "complete",
+      }: { userRowId?: number; status?: string } = {}
+    ) {
       const attachment = observation()
       const publish = (event: unknown) =>
         attachment.publish("live-secret", event)
       const engine = new HermesTurnEngine(
-        runtime({ observe: attachment.observe })
+        runtime({
+          observe: attachment.observe,
+          submit: async () => ({
+            acknowledgement: "accepted",
+            status: "streaming",
+            ...(userRowId === undefined ? {} : { userRowId }),
+          }),
+        })
       )
       const handle = await engine.start(scope, input())
       const t = nativeTurn("live-secret", 1)
@@ -328,12 +341,55 @@ describe("HermesRunEngine", () => {
         t.frame("message.complete", {
           message_id: "reply",
           text: "Done",
-          status: "complete",
+          status,
           persisted_turn,
         })
       )
-      return ofKind(await collect(handle), TurnEventKind.TurnEnded)[0]
+      publish(t.idle())
+      return collect(handle)
     }
+
+    async function endOf(
+      persisted_turn: unknown,
+      options?: Parameters<typeof eventsOf>[1]
+    ) {
+      return ofKind(
+        await eventsOf(persisted_turn, options),
+        TurnEventKind.TurnEnded
+      )[0]
+    }
+
+    it("names a stopped prompt by the row Hermes saved it under at submit", async () => {
+      // A stopped turn never earns a complete receipt, so only the submit
+      // answer proves where the prompt was saved; its reply has no proven row.
+      const ended = await endOf(
+        { ...receipt, complete: false },
+        { userRowId: 7, status: "interrupted" }
+      )
+      expect(ended).toMatchObject({
+        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
+      })
+      expect(ended).not.toHaveProperty("saved.replyId")
+    })
+
+    it("names a failed prompt by the row Hermes saved it under at submit", async () => {
+      const events = await eventsOf(undefined, {
+        userRowId: 7,
+        status: "error",
+      })
+      expect(ofKind(events, TurnEventKind.TurnFailed)[0]).toMatchObject({
+        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
+      })
+    })
+
+    it("prefers a complete receipt to the submit answer", async () => {
+      await expect(endOf(receipt, { userRowId: 7 })).resolves.toMatchObject({
+        saved: {
+          user: { messageId: "user-1", savedId: "hermes-row-7" },
+          replyId: "hermes-row-8",
+        },
+      })
+    })
 
     it("names the prompt and its reply by the rows a complete receipt committed", async () => {
       await expect(endOf(receipt)).resolves.toMatchObject({

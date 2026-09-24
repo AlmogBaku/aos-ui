@@ -544,6 +544,15 @@ export class HermesTurnEngine {
       // frame is a `message.start`, not the current turn's idle boundary; an
       // in-place `steered`/`redirected` prompt joins the turn already running.
       if (outcome.status === "queued") active.awaitingStart = true
+      // Hermes saves the prompt before the turn runs, so its row stands even
+      // when the turn is stopped, fails, or compacts and proves nothing more.
+      if (outcome.userRowId !== undefined && active.promptMessageId)
+        active.saved = {
+          user: {
+            messageId: active.promptMessageId,
+            savedId: hermesRowMessageId(outcome.userRowId),
+          },
+        }
       if (!outcome.completion) return
       if (outcome.completion.output) {
         active.messageId = `aos-command:${prompt.turnId}`
@@ -1207,6 +1216,7 @@ export class HermesTurnEngine {
       ...(active.model
         ? { provider: active.model.provider, model: active.model.model }
         : {}),
+      ...(active.saved?.user ? { saved: { user: active.saved.user } } : {}),
     }
   }
 

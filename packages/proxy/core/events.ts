@@ -271,6 +271,12 @@ function turnEvent<
   return z.strictObject({ kind: z.literal(kind), ...shape })
 }
 
+/** The prompt's user message, named by the input's `messageId`, as saved. */
+const SavedUserSchema = z.strictObject({
+  messageId: z.string().min(1),
+  savedId: z.string().min(1),
+})
+
 export const TurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.TurnStarted, {
     /** When the turn began, stamped by the coordinator that saw it start. */
@@ -291,12 +297,7 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
      */
     saved: z
       .strictObject({
-        user: z
-          .strictObject({
-            messageId: z.string().min(1),
-            savedId: z.string().min(1),
-          })
-          .optional(),
+        user: SavedUserSchema.optional(),
         replyId: z.string().min(1).optional(),
       })
       .optional(),
@@ -316,6 +317,8 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     /** The provider and model the turn ran on, when the failure names them. */
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    /** The id the provider saved the turn's prompt under, as on `TurnEnded`. */
+    saved: z.strictObject({ user: SavedUserSchema }).optional(),
   }),
   /** Assistant prose; `messageId` names the assistant message it belongs to. */
   turnEvent(TurnEventKind.MessageChunk, {

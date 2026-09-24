@@ -96,6 +96,8 @@ export type HermesSubmitOutcome =
       acknowledgement: "accepted"
       status: HermesSubmitStatus
       completion?: HermesSubmitCompletion
+      /** The row Hermes saved the prompt's user message under on admission. */
+      userRowId?: number
     }
   | {
       acknowledgement: "rejected"
@@ -242,8 +244,18 @@ function submittedOutcome(result: unknown): HermesSubmitOutcome {
     status === "queued" ||
     status === "steered" ||
     status === "redirected"
-  )
-    return { acknowledgement: "accepted", status }
+  ) {
+    const userRowId = isRecord(result) ? result.user_row_id : undefined
+    return {
+      acknowledgement: "accepted",
+      status,
+      ...(typeof userRowId === "number" &&
+      Number.isSafeInteger(userRowId) &&
+      userRowId > 0
+        ? { userRowId }
+        : {}),
+    }
+  }
   return { acknowledgement: "uncertain" }
 }
 
