@@ -362,6 +362,11 @@ export const translators: Translators = {
           },
         ],
       }
+    if (event.kind === TurnEventKind.ModelChanged)
+      return {
+        state,
+        outbound: [{ kind: "model-changed", modelId: event.modelId }],
+      }
     return { state, outbound: [] }
   },
   persistedCorrections,
@@ -629,15 +634,6 @@ export async function harness(options: HarnessOptions = {}) {
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
   const discover = vi.fn(options.discover ?? (async () => undefined))
   const engine: ServerTurnEngine = { start, recover, discover }
-  const coordinator = new SessionCoordinator({
-    engine,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
-    maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: options.maxReplayEvents ?? 64,
-    maxReplayBytes: 256 * 1024,
-  })
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
@@ -764,6 +760,16 @@ export async function harness(options: HarnessOptions = {}) {
     speak: unsupported,
   }
 
+  const coordinator = new SessionCoordinator({
+    engine,
+    readings: runtime,
+    maxActiveExecutions: 8,
+    maxGuestActiveExecutions: 2,
+    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
+    maxSubscriberBytes: 256 * 1024,
+    maxReplayEvents: options.maxReplayEvents ?? 64,
+    maxReplayBytes: 256 * 1024,
+  })
   const runtimeInstance: RuntimeInstance = {
     id: "test",
     runtime,

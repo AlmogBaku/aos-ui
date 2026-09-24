@@ -119,6 +119,7 @@ function harness(describeView: ServerMcpApps["describe"]) {
   } as unknown as ServerRuntime)
   const sessions = new SessionCoordinator({
     engine: runtime.turns,
+    readings: runtime,
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,

@@ -21,11 +21,20 @@ import {
   ServerTurnSteerUnavailableError,
   type RecoveryRequest,
   type ServerAttachmentStage,
+  type ServerRuntime,
   type ServerTurnEngine,
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
-import type { TurnSteerRequest, TurnSteerResponse } from "../../protocol"
+import {
+  SessionContextResponseSchema,
+  SessionModelsResponseSchema,
+  type SessionContextResponse,
+  type SessionModelsResponse,
+  type TurnSteerRequest,
+  type TurnSteerResponse,
+} from "../../protocol"
+import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
 export type SessionExecutionState =
@@ -74,6 +83,8 @@ export type CoordinatedTurnSubscription = {
 
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
+  /** Reads a Session's context window and model catalog for its reporters. */
+  readings: Pick<ServerRuntime, "context" | "models">
   maxActiveExecutions: number
   maxGuestActiveExecutions: number
   maxSubscriberEvents: number
@@ -81,6 +92,22 @@ export type SessionCoordinatorOptions = {
   maxReplayEvents: number
   maxReplayBytes: number
 }
+
+/** What one subscriber takes of its Session's readings. */
+export type SessionReadingListeners = {
+  usage: ReadingListener<SessionContextResponse>
+  /** The model options, once the subscriber reads that the model switched. */
+  model: ReadingListener<SessionModelsResponse>
+}
+
+/**
+ * What an unreadable context window waits before each re-read, in order. The
+ * budget is bounded: a provider that has not built its agent within half a
+ * minute is not building one, and the next turn owes a reading anyway.
+ */
+const USAGE_RETRY_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 4_000, 8_000, 16_000,
+]
 
 /** One journaled event and the memory its raw form occupies. */
 type JournalEntry = { value: SequencedTurnEvent; bytes: number }
@@ -413,8 +440,30 @@ export class SessionCoordinator {
     listener: (event: ExecutionEvent) => void
   }>()
   #closed = false
+  /** Owed after every turn, on joining, and after a config change. */
+  readonly #usage: SessionReporter<SessionContextResponse>
+  /** Owed when the provider switches a Session's model mid-turn. */
+  readonly #models: SessionReporter<SessionModelsResponse, string>
 
   constructor(private readonly options: SessionCoordinatorOptions) {
+    const { readings } = options
+    this.#usage = new SessionReporter({
+      read: async (scope) =>
+        SessionContextResponseSchema.parse(
+          await readings.context(scope.agentId, scope.threadId)
+        ),
+      retryDelaysMs: USAGE_RETRY_DELAYS_MS,
+    })
+    // An unreadable catalog leaves the options the client holds standing.
+    this.#models = new SessionReporter({
+      read: async (scope, selectedId: string) => ({
+        ...SessionModelsResponseSchema.parse(
+          await readings.models(scope.agentId, scope.threadId)
+        ),
+        selectedId,
+      }),
+      retryDelaysMs: [],
+    })
     for (const value of [
       options.maxActiveExecutions,
       options.maxGuestActiveExecutions,
@@ -425,6 +474,47 @@ export class SessionCoordinator {
     ])
       if (!Number.isSafeInteger(value) || value < 1)
         throw new Error("Invalid Session coordinator limits")
+  }
+
+  /** Subscribes one subscriber to its Session's readings, until it closes. */
+  subscribeReadings(
+    scope: SessionScope,
+    subscriberId: string,
+    listeners: SessionReadingListeners
+  ) {
+    const key = scopeKey(scope)
+    const leaveUsage = this.#usage.subscribe(
+      key,
+      scope,
+      subscriberId,
+      listeners.usage
+    )
+    const leaveModels = this.#models.subscribe(
+      key,
+      scope,
+      subscriberId,
+      listeners.model
+    )
+    return () => {
+      leaveUsage()
+      leaveModels()
+    }
+  }
+
+  /**
+   * Owes one subscriber, or every one, a current usage reading: the one a
+   * joining subscriber takes, or the one a config change moves. Resolves once
+   * the first attempt has delivered or deferred it.
+   */
+  reportUsage(
+    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    subscriberId?: string
+  ) {
+    return this.#usage.report(
+      scopeKey(scope),
+      undefined,
+      subscriberId === undefined ? undefined : [subscriberId]
+    )
   }
 
   state(scope: Pick<SessionScope, "agentId" | "sessionId">) {
@@ -1287,6 +1377,16 @@ export class SessionCoordinator {
       plan === "history"
         ? compactedReplay(segment.journal?.entries ?? [], after)
         : []
+    const { subscriberId } = access
+    const usage = this.#usage
+    const models = this.#models
+    // A reading follows what the subscriber has read, never overtakes it: the
+    // code after a `yield` runs once the reader asks for the next event.
+    const read = ({ event }: SequencedTurnEvent) => {
+      if (event.kind === TurnEventKind.ModelChanged)
+        void models.report(segment.cacheKey, event.modelId, [subscriberId])
+    }
+    let closed = false
     const events: AsyncIterable<SequencedTurnEvent> = {
       [Symbol.asyncIterator]: async function* () {
         let last = after
@@ -1296,12 +1396,19 @@ export class SessionCoordinator {
             if (!projected) continue
             last = projected.sequence
             yield projected
+            read(projected)
           }
           for await (const value of live.events) {
             if (value.sequence <= last) continue
             last = value.sequence
             yield value
+            read(value)
           }
+          // Read to its end, failed or not, the segment moved the window. A
+          // stream its reader closed, or dropped for falling behind, is owed
+          // nothing: the reader follows another or resyncs.
+          if (!closed)
+            void usage.report(segment.cacheKey, undefined, [subscriberId])
         } finally {
           live.close()
         }
@@ -1310,7 +1417,10 @@ export class SessionCoordinator {
     return {
       turnId: segment.turnId,
       events,
-      close: () => live.close(),
+      close: () => {
+        closed = true
+        live.close()
+      },
     }
   }
 

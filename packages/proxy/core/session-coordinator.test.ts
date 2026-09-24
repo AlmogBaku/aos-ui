@@ -135,6 +135,8 @@ function coordinator(
 ) {
   return new SessionCoordinator({
     engine,
+    // No test here subscribes anything to a reading.
+    readings: { context: vi.fn(), models: vi.fn() },
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 8,

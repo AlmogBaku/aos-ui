@@ -5,7 +5,6 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  SessionContextResponseSchema,
   SessionCreateResponseSchema,
   SessionModelsResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -243,12 +242,6 @@ export function createWorkspace(context: AcpConnectionContext) {
       ),
     updateModel: (scope: SessionScope, patch: SessionModelUpdateRequest) =>
       call(() => runtime.updateModel(scope.agentId, scope.threadId, patch)),
-    usage: (scope: SessionScope) =>
-      call(async () =>
-        SessionContextResponseSchema.parse(
-          await runtime.context(scope.agentId, scope.threadId)
-        )
-      ),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
     steer: (scope: SessionScope, request: TurnSteerRequest) =>
@@ -308,13 +301,7 @@ export function createSessions(context: AcpConnectionContext) {
     join(client: AgentContext, scope: SessionScope) {
       const existing = members.get(scope.threadId)
       if (existing) return existing
-      const member = createSessionMember({
-        context,
-        scope,
-        client,
-        readUsage: () => workspace.usage(scope),
-        readModels: () => workspace.models(scope),
-      })
+      const member = createSessionMember({ context, scope, client })
       members.set(scope.threadId, member)
       return member
     },

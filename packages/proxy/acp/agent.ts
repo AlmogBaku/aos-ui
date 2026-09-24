@@ -862,9 +862,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await workspace.models(scope)
     )
     // The window's size belongs to the model, so a switch restates the usage
-    // the browser is holding against the model the Session has just left.
+    // every browser on the Session holds against the model it has just left.
     const member = sessions.member(params.sessionId)
-    if (member) afterResponse(member, () => member.reportUsage())
+    if (member) afterResponse(member, () => coordinator.reportUsage(scope))
     return { configOptions }
   })
 

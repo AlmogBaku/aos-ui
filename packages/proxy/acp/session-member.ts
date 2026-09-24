@@ -5,10 +5,7 @@ import {
   type AgentContext,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type {
-  SessionContextResponse,
-  SessionModelsResponse,
-} from "../../protocol"
+import type { SessionContextResponse } from "../../protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
@@ -122,33 +119,18 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
   }
 }
 
-/**
- * What a deferred usage report waits before each re-read, in order. The budget
- * is bounded: a provider that has not built its agent within half a minute is
- * not building one, and the next turn owes the client a reading anyway.
- */
-const USAGE_RETRY_DELAYS_MS: readonly number[] = [
-  1_000, 2_000, 4_000, 8_000, 16_000,
-]
-
 export type SessionMemberOptions = {
   context: AcpConnectionContext
   /** The Session's Agent, provider identity, and public `threadId`. */
   scope: SessionScope
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
-  /** The Session's context usage, as the workspace reads and validates it. */
-  readUsage: () => Promise<SessionContextResponse>
-  /** The Session's model catalog, as the workspace reads and validates it. */
-  readModels: () => Promise<SessionModelsResponse>
 }
 
 class SessionMember {
   readonly #context: AcpConnectionContext
   readonly #scope: SessionScope
   readonly #client: AgentContext
-  readonly #readUsage: () => Promise<SessionContextResponse>
-  readonly #readModels: () => Promise<SessionModelsResponse>
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
@@ -174,16 +156,25 @@ class SessionMember {
   /** This member as the Session's room addresses it. */
   readonly #seat: RoomMember
   #leaveRoom: (() => void) | undefined
-  #usageRetry: ReturnType<typeof setTimeout> | undefined
-  /** Which usage report is live; a chain a newer trigger replaced stops. */
-  #usageChain = 0
+  readonly #leaveReadings: () => void
 
   constructor(options: SessionMemberOptions) {
     this.#context = options.context
     this.#scope = options.scope
     this.#client = options.client
-    this.#readUsage = options.readUsage
-    this.#readModels = options.readModels
+    this.#leaveReadings = this.#coordinator.subscribeReadings(
+      this.#scope,
+      this.#subscriberId,
+      {
+        usage: (usage) => this.#deliver(usageUpdate(usage)),
+        // ACP restates the whole option set on a model switch.
+        model: (models) =>
+          this.#deliver({
+            sessionUpdate: "config_option_update",
+            configOptions: this.#context.translators.configOptionsOf(models),
+          }),
+      }
+    )
     this.#seat = {
       sendTurn: (turn) => (this.#rebuilding ? undefined : this.#sendTurn(turn)),
       // A view being rebuilt is seated afresh and follows once its page lands.
@@ -367,24 +358,13 @@ class SessionMember {
   }
 
   /**
-   * Reports the Session's context usage. Every join and every settled turn
-   * owes the client one of these, because the window moves with the
-   * conversation and its size moves with the model the Session runs.
-   *
-   * A window that is unreadable right after joining is usually the provider's
-   * agent still being built, so the report is deferred through a bounded
-   * backoff rather than dropped. Each trigger replaces whatever the previous one
-   * left deferred, so one Session never has two reports in flight.
-   *
-   * A provider that cannot answer at all leaves the last reading standing: an
-   * unreadable window is not an outcome the operator is owed a notice about,
-   * and clearing the gauge would claim an empty context instead of an unknown
-   * one.
+   * Owes this member the Session's current context usage, which a joining
+   * client needs for its gauge. The coordinator's reporter defers a window that
+   * is unreadable right after joining, usually the provider's agent still being
+   * built, and leaves the last reading standing if it never becomes readable.
    */
-  async reportUsage() {
-    this.#cancelUsageRetry()
-    this.#usageChain += 1
-    await this.#sendUsage(this.#usageChain, 0)
+  reportUsage() {
+    return this.#coordinator.reportUsage(this.#scope, this.#subscriberId)
   }
 
   /** Re-issues the requests a recovered wait is still holding. */
@@ -448,7 +428,7 @@ class SessionMember {
   leave() {
     this.#left = true
     this.#leaveRoom?.()
-    this.#cancelUsageRetry()
+    this.#leaveReadings()
     this.#subscription?.close()
     this.#subscription = undefined
     for (const requestId of [...this.#pending.keys()]) this.#withdraw(requestId)
@@ -534,37 +514,11 @@ class SessionMember {
   }
 
   /**
-   * One reading of the window, or one deferred attempt at the next. A chain a
-   * newer trigger replaced stops here rather than sending a reading the client
-   * has already moved past.
+   * Sends one reading the coordinator reported. Nothing awaits a deferred one,
+   * so this reports its own failure rather than rejecting into nowhere.
    */
-  async #sendUsage(chain: number, attempt: number) {
-    if (this.#left || chain !== this.#usageChain) return
-    const usage = await this.#readUsage().catch(() => undefined)
-    if (this.#left || chain !== this.#usageChain) return
-    if (!usage) {
-      this.#scheduleUsageRetry(chain, attempt)
-      return
-    }
-    await this.update(usageUpdate(usage))
-  }
-
-  /** Defers one chain's next attempt, while its backoff budget lasts. */
-  #scheduleUsageRetry(chain: number, attempt: number) {
-    if (attempt >= USAGE_RETRY_DELAYS_MS.length) return
-    this.#usageRetry = setTimeout(() => {
-      this.#usageRetry = undefined
-      // Nothing awaits a deferred report, so it reports its own failure rather
-      // than rejecting into nowhere, exactly as the turn pump's report does.
-      void this.#sendUsage(chain, attempt + 1).catch((cause: unknown) =>
-        this.report(cause)
-      )
-    }, USAGE_RETRY_DELAYS_MS[attempt])
-  }
-
-  #cancelUsageRetry() {
-    clearTimeout(this.#usageRetry)
-    this.#usageRetry = undefined
+  #deliver(update: SessionUpdate) {
+    return this.update(update).catch((cause: unknown) => this.report(cause))
   }
 
   get #coordinator() {
@@ -681,11 +635,6 @@ class SessionMember {
     // The stream that replaced a dropped one settles the segment instead.
     if (this.#dropped.has(subscription)) return
     if (overflow) return this.#resync(subscription.turnId, overflow)
-    // The turn this segment carried has settled, so the window it grew is now
-    // readable. A failed or cancelled turn still consumed context, so this
-    // follows the drain rather than a successful outcome. Nothing awaits the
-    // pump, so this reports its own failure rather than rejecting into nowhere.
-    await this.reportUsage().catch((cause: unknown) => this.report(cause))
   }
 
   /**
@@ -728,28 +677,12 @@ class SessionMember {
           text: outbound.text,
         })
       case "model-changed":
-        return this.#reportModel(outbound.modelId)
+        // The coordinator's model reporter restates the options.
+        return
       case "request-permission":
       case "elicitation":
         return this.#ask(outbound)
     }
-  }
-
-  /**
-   * ACP restates the whole option set on a model switch, so the catalog is
-   * read and the model the provider reported is selected in it. An unreadable
-   * catalog leaves the options the client holds standing, as usage does.
-   */
-  async #reportModel(modelId: string) {
-    const models = await this.#readModels().catch(() => undefined)
-    if (!models) return
-    await this.update({
-      sessionUpdate: "config_option_update",
-      configOptions: this.#context.translators.configOptionsOf({
-        ...models,
-        selectedId: modelId,
-      }),
-    })
   }
 
   /**

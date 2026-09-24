@@ -202,6 +202,7 @@ function harness(options: { existing?: boolean } = {}) {
     runtime,
     sessions: new SessionCoordinator({
       engine,
+      readings: runtime,
       maxActiveExecutions: 8,
       maxGuestActiveExecutions: 4,
       maxSubscriberEvents: 32,

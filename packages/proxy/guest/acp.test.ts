@@ -349,15 +349,6 @@ function harness(options: HarnessOptions = {}) {
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
   }
-  const coordinator = new SessionCoordinator({
-    engine,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 4,
-    maxSubscriberEvents: 64,
-    maxSubscriberBytes: 256 * 1_024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1_024,
-  })
   const resolveInvitedSession = vi.fn(
     async (_agentId: string, _ref: string, create?: object) =>
       options.existing || create
@@ -413,6 +404,16 @@ function harness(options: HarnessOptions = {}) {
     transcribe: unsupported,
     speak: unsupported,
   }
+  const coordinator = new SessionCoordinator({
+    engine,
+    readings: runtime,
+    maxActiveExecutions: 8,
+    maxGuestActiveExecutions: 4,
+    maxSubscriberEvents: 64,
+    maxSubscriberBytes: 256 * 1_024,
+    maxReplayEvents: 64,
+    maxReplayBytes: 256 * 1_024,
+  })
   const runtimeInstance: RuntimeInstance = {
     id: RUNTIME_ID,
     runtime,

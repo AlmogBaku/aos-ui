@@ -279,15 +279,6 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
   }
-  const coordinator = new SessionCoordinator({
-    engine,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: 64,
-    maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
-  })
   const rows = new Map([[SESSION_ID, sessionRow()]])
   let models = MODELS
   const updateModel = vi.fn(
@@ -379,6 +370,16 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     transcribe: unsupported,
     speak: unsupported,
   }
+  const coordinator = new SessionCoordinator({
+    engine,
+    readings: runtime,
+    maxActiveExecutions: 8,
+    maxGuestActiveExecutions: 2,
+    maxSubscriberEvents: 64,
+    maxSubscriberBytes: 256 * 1024,
+    maxReplayEvents: 64,
+    maxReplayBytes: 256 * 1024,
+  })
   const runtimeInstance: RuntimeInstance = {
     id: "hermes-main",
     runtime,

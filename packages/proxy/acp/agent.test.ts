@@ -720,6 +720,56 @@ describe("AOS ACP agent", () => {
     }
   })
 
+  it("brings every operator browser each usage and model reading exactly once", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await open(test)
+    await usageOf(test)
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    await usageOf(other)
+
+    await prompt(test, "Summarize")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const source = test.sources[0]
+    source?.emit(turnStarted())
+    source?.emit({ kind: TurnEventKind.ModelChanged, modelId: "opus" })
+    source?.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "Done",
+    })
+    source?.emit({ kind: TurnEventKind.TurnEnded })
+    for (const browser of [test, other]) {
+      await browser.recorder.wait(endedTurn, "the turn to end")
+      await usageOf(browser, 2)
+    }
+
+    await test.agent.request(methods.agent.session.setConfigOption, {
+      sessionId: SESSION,
+      configId: "model",
+      type: "id",
+      value: "sonnet",
+    })
+    await usageOf(test, 3)
+    await usageOf(other, 3)
+    await settled()
+
+    // One reading on joining, one after the turn, and one after the config
+    // change, which moved the window every browser on the Session holds.
+    for (const browser of [test, other]) {
+      expect(usages(browser.recorder)).toHaveLength(3)
+      expect(
+        updates(browser.recorder).filter((update) =>
+          JSON.stringify(update).includes("config_option_update")
+        )
+      ).toHaveLength(1)
+    }
+    test.close()
+    other.close()
+  })
+
   it("renames a Session and reports the new row", async () => {
     const test = await harness()
     await test.list()
