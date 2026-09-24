@@ -297,10 +297,18 @@ standard component cannot express and record that reason.
 - **Sessions:** render as tabs with a clear active underline, never pills or
   badges.
 - **Agents:** retain a persistent distinctive icon plus a separate status
-  indicator; status must not be conveyed by icon color alone.
-- **Draft Agent rows:** a `New Agent` draft row uses the neutral `unassigned`
-  glyph, carries the accessible name "New Agent, draft", and shows the status
-  dot of its single creator-owned Session.
+  indicator; status must not be conveyed by icon color alone. The icon is a
+  generated robot tile from `src/components/agent-icons`: one of 34 flat
+  silhouettes in one of 8 muted tones, with a two-bar pair sensor. Every
+  visible Agent's pair is unique, silhouettes first, until more than 272 are
+  visible. The tile is decorative (`aria-hidden`); the Agent name carries the
+  accessible label. A hidden Agent in Manage Agents shows one neutral outline
+  tile with no sensor.
+- **Draft Agent rows:** every draft shares one dashed tile. It is named by its
+  creator Session's title, or `New Agent` while that title is empty or generic,
+  and its second line reads "Draft · <start time>", or "Draft" when the runtime
+  reports no start. Its accessible name is "<title>, draft", and it shows the
+  status dot of its single creator-owned Session.
 - **Narrow capacity:** below 64rem the tab strip is hidden and a two-level
   logical-start drawer (Agent roster → Sessions for the selected Agent)
   provides Session navigation. Choosing a Session dismisses the drawer
@@ -502,6 +510,10 @@ assistant's answer.
 - **Reduced preference:** alert dialogs, accordions, Todos progress, workspace
   controls, and rich presentation fallbacks intentionally remove animation or
   transitions while preserving visible state and focus behavior.
+
+- **Agent tile:** the pair sensor follows a fine pointer and blinks while the
+  Agent runs. Both stop under reduced motion, and the status indicator still
+  states the run.
 
 **The Motion-Is-Optional Rule.** Motion may confirm a change, but the changed
 state must be legible without it. Do not make progress, errors, or focus depend
