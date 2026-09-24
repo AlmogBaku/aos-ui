@@ -596,6 +596,14 @@ export class HermesServerAdapter implements ServerRuntime {
                     instruction: create.firstTurnInstruction,
                   }),
                 },
+                // Hermes merges consecutive user rows, which would erase the
+                // guest's first message id and so its Edit target. A hidden
+                // row is model-facing only: no client, AOS included, shows it.
+                {
+                  role: "assistant",
+                  content: "Understood.",
+                  display_kind: "hidden",
+                },
               ],
             }),
       })

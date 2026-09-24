@@ -1238,6 +1238,13 @@ describe("Hermes server adapter", () => {
                 instruction: "Load the interview skill.",
               }),
             },
+            // Hermes merges consecutive user rows, which would erase the
+            // guest's first message id and so its Edit target.
+            {
+              role: "assistant",
+              content: "Understood.",
+              display_kind: "hidden",
+            },
           ],
         },
       ],
