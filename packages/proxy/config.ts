@@ -335,12 +335,6 @@ export type McpAppsConfig = NonNullable<ProxyConfig["mcpApps"]>
 export type VoiceTranscriptionConfig = NonNullable<VoiceConfig["transcription"]>
 export type VoiceSpeechConfig = NonNullable<VoiceConfig["speech"]>
 
-export function parseGuestComposerSlashCommandsEnabled(
-  value: string | undefined
-) {
-  return value?.trim().toLowerCase() === "true"
-}
-
 /** Parser issues are hidden because rejected input may contain secrets. */
 export function parseProxyConfig(input: unknown): ProxyConfig {
   const result = ProxyConfigSchema.safeParse(input)

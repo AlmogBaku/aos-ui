@@ -4,8 +4,6 @@
 services:
   web:
     user: "${AOS_UI_HOST_UID:-1000}:${AOS_UI_HOST_GID:-1000}"
-    environment:
-      AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED: ${AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED:-false}
     command:
       - bun
       - run

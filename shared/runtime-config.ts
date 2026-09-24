@@ -42,7 +42,6 @@ export type GuestSurfaceConfiguration = {
   surface: "guest"
   basePath: string
   lane: "guest"
-  composerSlashCommandsEnabled?: boolean
 }
 
 export type ApplicationConfiguration =
@@ -168,7 +167,6 @@ const guestSurfaceSchema = z
       .regex(/^\/(?!\/)[A-Za-z0-9/_-]+$/u)
       .transform((value) => value.replace(/\/+$/u, "")),
     lane: z.literal("guest"),
-    composerSlashCommandsEnabled: z.boolean().optional().default(false),
   })
   .strict()
 

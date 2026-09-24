@@ -41,12 +41,9 @@ controls catalog presentation; it does not restrict what the Agent can access.
 Likewise, invitation scope restricts the guest to one Agent and conversation,
 but it does not sandbox the Agent itself.
 
-Slash-command suggestions are hidden in the guest composer by default. Set
-`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them. This
-flag is forwarded only by `compose.hermes.yaml`; other overlays do not pass it.
-It is only a presentation flag: the guest lane refuses any guest message or
-steer whose text starts with `/`, even after leading whitespace, whatever the
-flag says.
+Guests get no slash commands. The guest lane advertises none, and it refuses
+any guest message or steer whose text starts with `/`, even after leading
+whitespace.
 
 The `limits.guestActiveExecutions` proxy config field caps concurrent guest
 runs. It must not exceed `limits.activeExecutions`.

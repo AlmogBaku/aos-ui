@@ -59,22 +59,6 @@ describe("browser runtime configuration", () => {
       surface: "guest",
       basePath: "/api/guest/v1",
       lane: "guest",
-      composerSlashCommandsEnabled: false,
-    })
-  })
-
-  it("enables guest slash-command suggestions only when the public guest flag is true", () => {
-    expect(
-      parsePublicApplicationConfiguration({
-        surface: "guest",
-        basePath: "/api/guest/v1",
-        lane: "guest",
-        composerSlashCommandsEnabled: true,
-      })
-    ).toMatchObject({
-      status: "ready",
-      surface: "guest",
-      composerSlashCommandsEnabled: true,
     })
   })
 })

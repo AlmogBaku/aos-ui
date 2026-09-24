@@ -124,165 +124,155 @@ describe("proxy executable", () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  it.each([
-    [undefined, undefined],
-    ["true", true],
-  ] as const)(
-    "starts both listeners with guest slash commands %s and closes the runtime exactly once",
-    async (environmentValue, expectedFlag) => {
-      const shutdowns: Array<ReturnType<typeof vi.fn>> = []
-      const transportClose = vi.fn(async () => undefined)
-      const staticHandler = vi.fn(async () => new Response("shell"))
-      const exit = vi.fn()
-      const logger = { info: vi.fn(), error: vi.fn() }
-      /** Models one listener: shutdown announces, closes resources, settles. */
-      const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
-        const shutdown = vi.fn(async () => {
-          options.onShutdownStarted?.()
-          await options.close?.()
-          options.onSettled?.({ forced: false })
-        })
-        shutdowns.push(shutdown)
-        return { server: { stop: vi.fn() }, shutdown }
+  it("starts both listeners and closes the runtime exactly once", async () => {
+    const shutdowns: Array<ReturnType<typeof vi.fn>> = []
+    const transportClose = vi.fn(async () => undefined)
+    const staticHandler = vi.fn(async () => new Response("shell"))
+    const exit = vi.fn()
+    const logger = { info: vi.fn(), error: vi.fn() }
+    /** Models one listener: shutdown announces, closes resources, settles. */
+    const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
+      const shutdown = vi.fn(async () => {
+        options.onShutdownStarted?.()
+        await options.close?.()
+        options.onSettled?.({ forced: false })
       })
-      const lifecycle = await runProxyCli(
-        ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
-        {
-          runtimeFactory: (config, limits) =>
-            createHermesRuntime(config, limits, {
-              transportFactory: () => ({
-                request: vi.fn(),
-                close: transportClose,
-              }),
+      shutdowns.push(shutdown)
+      return { server: { stop: vi.fn() }, shutdown }
+    })
+    const lifecycle = await runProxyCli(
+      ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
+      {
+        runtimeFactory: (config, limits) =>
+          createHermesRuntime(config, limits, {
+            transportFactory: () => ({
+              request: vi.fn(),
+              close: transportClose,
             }),
-          logger,
-          getenv: (name) =>
-            name === "AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED"
-              ? environmentValue
-              : undefined,
-          start,
-          staticHandler,
-          exit,
-        }
-      )
-
-      expect(start).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          host: "0.0.0.0",
-          port: 4100,
-          sockets: [
-            expect.objectContaining({ path: "/api/aos/v1/acp", maxPeers: 256 }),
-          ],
-        })
-      )
-      expect(start).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({
-          host: "127.0.0.1",
-          port: 4101,
-          sockets: [
-            expect.objectContaining({
-              path: "/api/guest/v1/acp",
-              maxPeers: 256,
-            }),
-          ],
-        })
-      )
-      expect(start.mock.calls[0]![0].close).toBeInstanceOf(Function)
-      expect(start.mock.calls[1]![0].close).toBeInstanceOf(Function)
-      const guestApp = start.mock.calls[1]![0].app
-      expect(
-        await (
-          await guestApp.fetch(
-            new Request("https://guest.example.test/runtime-config.json")
-          )
-        )?.json()
-      ).toEqual({
-        surface: "guest",
-        basePath: "/api/guest/v1",
-        lane: "guest",
-        ...(expectedFlag ? { composerSlashCommandsEnabled: true } : {}),
-      })
-      const guestDocument = await guestApp.fetch(
-        new Request("https://guest.example.test/")
-      )
-      expect(guestDocument?.headers.get("content-security-policy")).toContain(
-        "frame-ancestors 'none'"
-      )
-      expect(guestDocument?.headers.get("content-security-policy")).toContain(
-        "img-src 'self' https: data: blob:"
-      )
-      expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
-      // The guest page frames the MCP App sandbox proxy, which is served on
-      // both listeners with its own policy: the relay script runs, only this
-      // origin may frame it, and the guest page's policy does not apply.
-      expect(guestDocument?.headers.get("content-security-policy")).toContain(
-        "frame-src 'self'"
-      )
-      for (const app of [guestApp, start.mock.calls[0]![0].app!]) {
-        const sandbox = await app.fetch(
-          new Request(
-            `https://aos.example.test${MCP_APP_SANDBOX_PATH}?allow=camera`
-          )
-        )
-        const policy = sandbox?.headers.get("content-security-policy")
-        expect(policy).toBe(MCP_APP_SANDBOX_CSP)
-        expect(policy).toContain("script-src 'self'")
-        expect(policy).toContain("frame-ancestors 'self'")
-        expect(sandbox?.headers.get("x-frame-options")).toBeNull()
+          }),
+        logger,
+        getenv: () => undefined,
+        start,
+        staticHandler,
+        exit,
       }
-      for (const reservedPath of [
-        "/auth",
-        "/auth/callback",
-        // A guest installs no workspace and registers no service worker, and an
-        // encoded path reaches the same file the static handler would decode.
-        "/sw.js",
-        "/sw%2Ejs",
-        "/manifest.webmanifest",
-      ]) {
-        const response = await guestApp.fetch(
-          new Request(`https://guest.example.test${reservedPath}`)
-        )
-        expect(response?.status).toBe(404)
-        expect(response?.headers.get("x-content-type-options")).toBe("nosniff")
-      }
-      const operatorApp = start.mock.calls[0]![0].app!
-      for (const installable of ["/sw.js", "/manifest.webmanifest"])
-        expect(
-          (
-            await operatorApp.fetch(
-              new Request(`https://aos.example.test${installable}`)
-            )
-          )?.status
-        ).toBe(200)
+    )
 
-      await lifecycle!.shutdown()
-      await lifecycle!.shutdown()
-      expect(shutdowns).toHaveLength(2)
-      expect(shutdowns[0]).toHaveBeenCalledOnce()
-      expect(shutdowns[1]).toHaveBeenCalledOnce()
-      expect(transportClose).toHaveBeenCalledOnce()
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: "proxy.shutdown.started",
-          graceMs: 5_000,
-        })
-      )
-      expect(logger.info).toHaveBeenCalledWith({
-        event: "proxy.shutdown.completed",
-        forced: false,
+    expect(start).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        host: "0.0.0.0",
+        port: 4100,
+        sockets: [
+          expect.objectContaining({ path: "/api/aos/v1/acp", maxPeers: 256 }),
+        ],
       })
-      expect(
-        logger.info.mock.calls.filter(
-          ([entry]) =>
-            (entry as { event: string }).event === "proxy.shutdown.started"
+    )
+    expect(start).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        host: "127.0.0.1",
+        port: 4101,
+        sockets: [
+          expect.objectContaining({
+            path: "/api/guest/v1/acp",
+            maxPeers: 256,
+          }),
+        ],
+      })
+    )
+    expect(start.mock.calls[0]![0].close).toBeInstanceOf(Function)
+    expect(start.mock.calls[1]![0].close).toBeInstanceOf(Function)
+    const guestApp = start.mock.calls[1]![0].app
+    expect(
+      await (
+        await guestApp.fetch(
+          new Request("https://guest.example.test/runtime-config.json")
         )
-      ).toHaveLength(1)
-      expect(logger.error).not.toHaveBeenCalled()
-      expect(exit).toHaveBeenCalledExactlyOnceWith(0)
+      )?.json()
+    ).toEqual({
+      surface: "guest",
+      basePath: "/api/guest/v1",
+      lane: "guest",
+    })
+    const guestDocument = await guestApp.fetch(
+      new Request("https://guest.example.test/")
+    )
+    expect(guestDocument?.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'none'"
+    )
+    expect(guestDocument?.headers.get("content-security-policy")).toContain(
+      "img-src 'self' https: data: blob:"
+    )
+    expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
+    // The guest page frames the MCP App sandbox proxy, which is served on
+    // both listeners with its own policy: the relay script runs, only this
+    // origin may frame it, and the guest page's policy does not apply.
+    expect(guestDocument?.headers.get("content-security-policy")).toContain(
+      "frame-src 'self'"
+    )
+    for (const app of [guestApp, start.mock.calls[0]![0].app!]) {
+      const sandbox = await app.fetch(
+        new Request(
+          `https://aos.example.test${MCP_APP_SANDBOX_PATH}?allow=camera`
+        )
+      )
+      const policy = sandbox?.headers.get("content-security-policy")
+      expect(policy).toBe(MCP_APP_SANDBOX_CSP)
+      expect(policy).toContain("script-src 'self'")
+      expect(policy).toContain("frame-ancestors 'self'")
+      expect(sandbox?.headers.get("x-frame-options")).toBeNull()
     }
-  )
+    for (const reservedPath of [
+      "/auth",
+      "/auth/callback",
+      // A guest installs no workspace and registers no service worker, and an
+      // encoded path reaches the same file the static handler would decode.
+      "/sw.js",
+      "/sw%2Ejs",
+      "/manifest.webmanifest",
+    ]) {
+      const response = await guestApp.fetch(
+        new Request(`https://guest.example.test${reservedPath}`)
+      )
+      expect(response?.status).toBe(404)
+      expect(response?.headers.get("x-content-type-options")).toBe("nosniff")
+    }
+    const operatorApp = start.mock.calls[0]![0].app!
+    for (const installable of ["/sw.js", "/manifest.webmanifest"])
+      expect(
+        (
+          await operatorApp.fetch(
+            new Request(`https://aos.example.test${installable}`)
+          )
+        )?.status
+      ).toBe(200)
+
+    await lifecycle!.shutdown()
+    await lifecycle!.shutdown()
+    expect(shutdowns).toHaveLength(2)
+    expect(shutdowns[0]).toHaveBeenCalledOnce()
+    expect(shutdowns[1]).toHaveBeenCalledOnce()
+    expect(transportClose).toHaveBeenCalledOnce()
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "proxy.shutdown.started",
+        graceMs: 5_000,
+      })
+    )
+    expect(logger.info).toHaveBeenCalledWith({
+      event: "proxy.shutdown.completed",
+      forced: false,
+    })
+    expect(
+      logger.info.mock.calls.filter(
+        ([entry]) =>
+          (entry as { event: string }).event === "proxy.shutdown.started"
+      )
+    ).toHaveLength(1)
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0)
+  })
 
   it("documents the invite command and flags", async () => {
     let output = ""

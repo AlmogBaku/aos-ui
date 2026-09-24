@@ -258,12 +258,9 @@ name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
 
-Runtime slash-command suggestions are enabled on the operator surface. The
-guest surface hides them by default; set
-`AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED=true` on the proxy to show them there.
-This flag is forwarded only by `compose.hermes.yaml`; other runtime overlays
-do not pass it. This flag changes presentation only. The guest lane refuses
-any guest message or steer whose text starts with `/`, whatever the flag says.
+Runtime slash-command suggestions are enabled on the operator surface only.
+The guest lane advertises none and refuses any guest message or steer whose
+text starts with `/`.
 
 ### Voice providers {#voice-providers}
 

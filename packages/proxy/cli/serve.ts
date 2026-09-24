@@ -4,7 +4,6 @@ import {
   MCP_APP_SANDBOX_PATH,
 } from "../../protocol/mcp-apps"
 import { createConfiguredProxy } from "../composition"
-import { parseGuestComposerSlashCommandsEnabled } from "../config"
 import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
 import {
   startProxyServer,
@@ -125,10 +124,6 @@ export async function serveProxy(
     ...nodeConfigFileAccess(dependencies),
   })
   const configured = await createConfiguredProxy(input, dependencies)
-  const guestComposerSlashCommandsEnabled =
-    parseGuestComposerSlashCommandsEnabled(
-      getenv("AOS_UI_COMPOSER_SLASH_COMMANDS_ENABLED")
-    )
   const start = dependencies.start ?? startProxyServer
   const graceMs = configured.config.shutdownGraceMs
   const listenerCount = configured.guest ? 2 : 1
@@ -199,9 +194,6 @@ export async function serveProxy(
             surface: "guest",
             basePath: "/api/guest/v1",
             lane: "guest",
-            ...(guestComposerSlashCommandsEnabled
-              ? { composerSlashCommandsEnabled: true }
-              : {}),
           },
           true
         ),
