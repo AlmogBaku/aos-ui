@@ -119,8 +119,8 @@ const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
 
 /**
  * A failure as a public client may read it: a public code, and never the
- * detail a failure carries. Any other failure is reported temporarily
- * unavailable, as a reply and as a notification alike.
+ * detail a failure carries. Any other reply is reported temporarily
+ * unavailable, and any other notice code as an internal error.
  */
 export const PUBLIC_ERRORS: PublicErrors = {
   reply({ code }) {
@@ -133,7 +133,9 @@ export const PUBLIC_ERRORS: PublicErrors = {
       : { code, message: name }
   },
   notice: (code) =>
-    PUBLIC_NOTICE_CODES.has(code) ? code : "temporarily_unavailable",
+    typeof code === "string" && PUBLIC_NOTICE_CODES.has(code)
+      ? code
+      : "internal_error",
 }
 
 /** Coordinator control failures, mirroring the normalized HTTP error map. */

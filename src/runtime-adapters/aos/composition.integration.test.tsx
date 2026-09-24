@@ -40,6 +40,7 @@ import type {
   SessionScope,
 } from "../../../packages/proxy/core/runtime"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
+import { EVERY_FEED } from "../../../packages/proxy/core/member"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
 
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
@@ -395,6 +396,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     connectionId: "connection-1",
     principalId: "operator",
     lane,
+    feeds: EVERY_FEED,
     runtimeInstance,
     sessionRows,
     translators,

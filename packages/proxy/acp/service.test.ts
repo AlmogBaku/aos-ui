@@ -1,6 +1,7 @@
 import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
+import { EVERY_FEED } from "../core/member"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
@@ -28,6 +29,7 @@ function connectionContext(
     connectionId,
     principalId,
     lane: "operator",
+    feeds: EVERY_FEED,
     runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
     sessionRows: {} as AcpConnectionContext["sessionRows"],
     readState: {} as AcpConnectionContext["readState"],

@@ -26,11 +26,11 @@ export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
 /**
  * How a lane shows its failures: an error reply as a public reply, and an
- * `_aos/error` notification's code as a public code.
+ * `_aos/error` notification's code, whatever it is, as a public code.
  */
 export type PublicErrors = {
   reply(error: AcpErrorReply): AcpErrorReply
-  notice(code: string): string
+  notice(code: unknown): string
 }
 
 export type AcpSocketOptions = {
@@ -243,8 +243,8 @@ function frameSize(raw: string | Uint8Array) {
 
 /**
  * One serialized frame as `shown` makes it public: an error reply, and an
- * error notification, which carries its code as its message too. Any other
- * frame is written as it is.
+ * error notification rebuilt from its Session and its code, which is its
+ * message too. Any other frame is written as it is.
  */
 function publicFrame(raw: string, shown: PublicErrors) {
   const frame = JSON.parse(raw) as unknown
@@ -260,19 +260,23 @@ function publicFrame(raw: string, shown: PublicErrors) {
       ...frame,
       error: shown.reply(frame.error as AcpErrorReply),
     })
-  if (
-    "method" in frame &&
-    frame.method === AOS_METHODS.notify.error &&
-    "params" in frame &&
-    typeof frame.params === "object" &&
-    frame.params !== null &&
-    "code" in frame.params &&
-    typeof frame.params.code === "string"
-  ) {
-    const code = shown.notice(frame.params.code)
+  if ("method" in frame && frame.method === AOS_METHODS.notify.error) {
+    const params: Record<string, unknown> =
+      "params" in frame &&
+      typeof frame.params === "object" &&
+      frame.params !== null
+        ? { ...frame.params }
+        : {}
+    const code = shown.notice(params.code)
     return JSON.stringify({
       ...frame,
-      params: { ...frame.params, code, message: code },
+      params: {
+        ...(typeof params.sessionId === "string"
+          ? { sessionId: params.sessionId }
+          : {}),
+        code,
+        message: code,
+      },
     })
   }
   return raw

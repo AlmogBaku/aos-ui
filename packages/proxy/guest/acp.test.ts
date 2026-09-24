@@ -518,7 +518,12 @@ function harness(options: HarnessOptions = {}) {
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
   const clock = { now: NOW }
   const invitations = invitationService(options.ttlSeconds)
+  const logs: unknown[] = []
   const lane: GuestAcpServiceOptions = {
+    logger: {
+      info: (line) => logs.push(line),
+      error: (line) => logs.push(line),
+    },
     publicOrigin: ORIGIN,
     runtimeInstance,
     invitations,
@@ -549,6 +554,7 @@ function harness(options: HarnessOptions = {}) {
     closed: connection.closed,
     close: () => connection.close(),
     recorder,
+    logs,
     scheduled,
     clock,
     invitations,
@@ -776,6 +782,69 @@ describe("guest ACP lane", () => {
       test.agent.request(AOS_METHODS.agents.list, undefined)
     ).rejects.toMatchObject(required)
     expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("stops nothing, reports no focus and sends no feed before login", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    const invited = { agentId: AGENT, sessionId: STORED, threadId: REF }
+    await test.coordinator.start(
+      invited,
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        subscriberId: "operator",
+        controllerId: "operator",
+        lane: "operator",
+        canControl: true,
+      }
+    )
+    const socket = await wire(test.lane)
+    await socket.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+    })
+    const before = socket.frames.length
+
+    socket.send({
+      method: methods.agent.session.cancel,
+      params: { sessionId: REF },
+    })
+    socket.send({
+      method: AOS_METHODS.session.focus,
+      params: { sessionId: REF },
+    })
+    await settled()
+
+    expect(test.handles.at(0)?.stop).not.toHaveBeenCalled()
+    expect(test.coordinator.state(invited)).toBe("running")
+    expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+    expect(test.listAllSessions).not.toHaveBeenCalled()
+    expect(test.updateSession).not.toHaveBeenCalled()
+    // No activity, usage, Session row or catalog signal reaches it either.
+    expect(socket.frames.slice(before)).toEqual([])
+    socket.close()
+  })
+
+  it("logs neither a token nor the setup instruction as a guest logs in", async () => {
+    const test = harness({ existing: true })
+    const token = await invite(test.invitations)
+    await test.initialize()
+
+    await expect(test.login(`${token}x`)).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+    await test.login(token)
+    await test.resume(REF)
+    await test.prompt("Start the interview")
+    await settled()
+
+    expect(test.logs).not.toEqual([])
+    const logged = JSON.stringify(test.logs)
+    expect(logged).not.toContain(token)
+    expect(logged).not.toContain(INSTRUCTION)
     test.close()
   })
 
@@ -1202,6 +1271,39 @@ describe("guest ACP lane", () => {
         },
       ],
     })
+    test.close()
+  })
+
+  it("settles no call the guest was not shown when it answers that call's question", async () => {
+    const asked: PendingRequest = { ...QUESTION, toolCallId: "ask-tool" }
+    const test = harness({
+      existing: true,
+      handle: () =>
+        test.start.mock.calls.length > 1
+          ? terminalHandle(RUN_EVENTS)
+          : terminalHandle([
+              { kind: TurnEventKind.TurnStarted },
+              {
+                kind: TurnEventKind.ToolCallStarted,
+                toolCallId: "ask-tool",
+                title: "ask_user",
+              },
+              { kind: TurnEventKind.TurnRequiresAction, requests: [asked] },
+            ]),
+      question: async () => ({ action: "accept", content: { q0: "later" } }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Export the notes")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
+      "an update carrying Guest-visible answer"
+    )
+
+    expect(JSON.stringify(updates(test.recorder))).not.toContain("ask-tool")
     test.close()
   })
 
@@ -2079,8 +2181,8 @@ describe("guest scope and commands", () => {
 
     expect(failure.params).toEqual({
       sessionId: REF,
-      code: "temporarily_unavailable",
-      message: "temporarily_unavailable",
+      code: "internal_error",
+      message: "internal_error",
     })
     socket.close()
   })

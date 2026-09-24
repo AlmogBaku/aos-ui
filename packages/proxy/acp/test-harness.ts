@@ -45,6 +45,7 @@ import type {
 } from "../core/runtime"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannel } from "../core/channel"
@@ -857,6 +858,7 @@ export async function harness(options: HarnessOptions = {}) {
       presence,
       logger,
       lane: "operator",
+      feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
 

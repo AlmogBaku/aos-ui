@@ -66,6 +66,8 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
+  /** The feeds this connection's member is given, chosen at join. */
+  feeds: ReadonlySet<Feed>
 }
 
 /**
@@ -104,8 +106,6 @@ export type ConnectionAuthentication = {
   authenticate(token: string): Promise<boolean>
   /** Who the credential acts as, and its stack; absent before it is redeemed. */
   member(): Omit<Member, "connection"> | undefined
-  /** The readings the credential is given. */
-  feeds: ReadonlySet<Feed>
   /** Whether a redeemed credential still holds, before its close arrives. */
   live(): boolean
   /**

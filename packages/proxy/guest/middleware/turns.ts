@@ -180,6 +180,8 @@ export function createTurnsMiddleware(): Middleware {
             shown.has(event.request.toolCallId)
             ? event
             : undefined
+        // A Session row arrives only through the Session-rows feed, which a
+        // guest is not given.
         case "request-asked":
         case "history":
         case "request-withdrawn":
@@ -188,10 +190,9 @@ export function createTurnsMiddleware(): Middleware {
         case "model":
         case "invalidated":
         case "error":
-          return event
-        // A Session row and a command list come from the operator's catalog
-        // and its Session creation, which are never a guest's.
         case "session-info":
+          return event
+        // A command list comes from Session creation, which is never a guest's.
         case "commands":
           return undefined
       }

@@ -151,9 +151,6 @@ function createGuestAuthentication(
 
     member: () => redeemed?.member,
 
-    // A guest is given no reading: no usage and no model.
-    feeds: new Set(),
-
     live: () => redeemed !== undefined && !lapsed(),
 
     lapsed,
@@ -197,6 +194,9 @@ export function createGuestConnection(
     attachmentStages: options.attachmentStages,
     rooms: options.rooms,
     logger: options.logger,
+    // A guest is given no feed: no reading, activity, read state, Session row
+    // or catalog signal.
+    feeds: new Set(),
     authentication,
   }
 }

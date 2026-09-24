@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { AOS_JSONRPC_ERRORS } from "../../protocol/acp"
+import { AOS_JSONRPC_ERRORS, AOS_METHODS } from "../../protocol/acp"
 
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
+import { PUBLIC_ERRORS } from "./validation"
 
 const NOW = 1_700_000_000_000
 
@@ -94,6 +95,44 @@ describe("ACP WebSocket shim", () => {
     expect(socket.drain(1)).toEqual(["first"])
     expect(socket.drain()).toEqual(["second"])
     expect(socket.drain()).toEqual([])
+  })
+
+  it("writes a lane's error notice as its Session and a public code alone", () => {
+    const { socket } = harness({ publicErrors: PUBLIC_ERRORS })
+    const notice = (params: Record<string, unknown>) =>
+      socket.socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: AOS_METHODS.notify.error,
+          params,
+        })
+      )
+
+    notice({ sessionId: "ref", code: "not_found", message: "not_found" })
+    notice({ sessionId: "ref", code: "private detail", detail: "private" })
+    notice({ code: 7, message: "private" })
+
+    expect(socket.drain().map((raw) => JSON.parse(raw) as unknown)).toEqual([
+      {
+        jsonrpc: "2.0",
+        method: AOS_METHODS.notify.error,
+        params: { sessionId: "ref", code: "not_found", message: "not_found" },
+      },
+      {
+        jsonrpc: "2.0",
+        method: AOS_METHODS.notify.error,
+        params: {
+          sessionId: "ref",
+          code: "internal_error",
+          message: "internal_error",
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        method: AOS_METHODS.notify.error,
+        params: { code: "internal_error", message: "internal_error" },
+      },
+    ])
   })
 
   it("closes with 1013 when the outbound queue overflows its byte budget", () => {

@@ -391,22 +391,49 @@ describe("guest turns layer", () => {
   const shown = (event: MemberEvent) =>
     runEvents([createTurnsMiddleware()], event, { decline: () => undefined })
 
-  it("drops a Session row, which only an operator's feed emits", () => {
-    expect(
-      shown({
+  it("drops the answer to a question asked by a call the guest was not shown", () => {
+    const layer = [createTurnsMiddleware()]
+    const act = { decline: () => undefined }
+    const answered = (toolCallId: string) =>
+      runEvents(
+        layer,
+        {
+          sessionId: "ref",
+          kind: "question-answered",
+          request: {
+            requestId: `question-${toolCallId}`,
+            kind: PendingRequestKind.Elicitation,
+            message: "Which?",
+            toolCallId,
+          },
+          answers: [["yes"]],
+        } as MemberEvent,
+        act
+      )
+    runEvents(
+      layer,
+      {
         sessionId: "ref",
-        kind: "session-info",
-        row: {
-          id: "ref",
-          agentId: "agent",
-          title: "Operator-owned title",
-          archived: false,
-          updatedAt: "2026-09-15T00:00:00.000Z",
-          status: "idle",
+        kind: "turn",
+        stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
+        sequence: 1,
+        stopping: false,
+        event: {
+          kind: TurnEventKind.ToolCallStarted,
+          toolCallId: "app-call",
+          title: "render_chart",
+          name: "render_chart",
+          app: true,
         },
-        status: "idle",
-      } as MemberEvent)
-    ).toBeUndefined()
+      } as MemberEvent,
+      act
+    )
+
+    expect(answered("hidden-call")).toBeUndefined()
+    expect(answered("app-call")).toMatchObject({
+      kind: "question-answered",
+      request: { toolCallId: "app-call" },
+    })
   })
 
   it("drops a command list, which only an operator's feed emits", () => {

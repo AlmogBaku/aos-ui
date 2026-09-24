@@ -137,7 +137,9 @@ function sameExposure(
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { lane, translators } = context
+  const { lane, translators, feeds } = context
+  const readState = feeds.has("read-state") ? context.readState : undefined
+  const activityFeed = feeds.has("activity") ? context.activityFeed : undefined
   const { runtime, sessions: coordinator } = context.runtimeInstance
   const sessions = createSessions(context, (client) =>
     createMemberEncoder({
@@ -641,7 +643,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           const scope = sessions.scope(command.sessionId)
           if ("unread" in command.patch && !command.patch.unread) {
-            await context.readState?.markRead(scope.agentId, scope.threadId)
+            await readState?.markRead(scope.agentId, scope.threadId)
             return
           }
           await workspace.update(scope, command.patch)
@@ -716,7 +718,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           if (report.sessionId === null) {
             exposure = undefined
-            return context.readState?.blur()
+            return readState?.blur()
           }
           // A heartbeat re-sends an exposure this connection already
           // acknowledged.
@@ -724,7 +726,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           const agentId = sessions.owner(report.sessionId)
           if (agentId === undefined) return
           exposure = report
-          context.readState?.focus(agentId, report.sessionId)
+          readState?.focus(agentId, report.sessionId)
         }
       )
     }
@@ -771,32 +773,32 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const notify = (method: `_${string}`, params?: unknown) => {
       void client.notify(method, params).catch(() => undefined)
     }
-    for (const event of context.activityFeed?.snapshot() ?? [])
+    for (const event of activityFeed?.snapshot() ?? [])
       notify(AOS_METHODS.notify.activity, event)
     const stops = [
-      context.activityFeed?.subscribe((event) =>
+      activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
-      // A connection that authenticated over ACP is shown no roster and no
-      // catalog, and ends with the credential it redeemed.
-      ...(context.authentication
-        ? [context.authentication.expire(() => connection.close())]
-        : [
-            context.sessionRows.subscribe((row) => {
-              const member = sessions.member(row.id)
-              if (member)
-                void member
-                  .emit({
-                    kind: "session-info",
-                    row,
-                    status: sessions.status(row),
-                  })
-                  .catch(() => undefined)
-            }),
-            await runtime.subscribeCatalogChanges?.(() =>
-              notify(AOS_METHODS.notify.catalogInvalidated)
-            ),
-          ]),
+      feeds.has("session-rows")
+        ? context.sessionRows.subscribe((row) => {
+            const member = sessions.member(row.id)
+            if (member)
+              void member
+                .emit({
+                  kind: "session-info",
+                  row,
+                  status: sessions.status(row),
+                })
+                .catch(() => undefined)
+          })
+        : undefined,
+      feeds.has("catalog")
+        ? await runtime.subscribeCatalogChanges?.(() =>
+            notify(AOS_METHODS.notify.catalogInvalidated)
+          )
+        : undefined,
+      // A connection that authenticated over ACP ends with its credential.
+      context.authentication?.expire(() => connection.close()),
     ]
     await connection.closed
     log("acp.connection.closed")

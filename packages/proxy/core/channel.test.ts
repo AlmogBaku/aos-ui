@@ -772,7 +772,7 @@ describe("a seat's declines", () => {
   })
 
   it("leaves a request alone in a turn the member did not start", async () => {
-    for (const startedBy of ["operator:almog", undefined]) {
+    for (const startedBy of ["operator:owner", undefined]) {
       const test = seated({
         decline: declining,
         hide: true,

@@ -49,13 +49,22 @@ export type Principal = {
 }
 
 /**
- * A proxy-owned reading the Channel sends only a member given it. A feature
- * the proxy owns is off unless authentication gives it.
+ * A proxy-owned feed a connection subscribes to only when its member is given
+ * it: a Session's usage and model readings, the Agent's activity, read state,
+ * the Session rows, and the catalog's changes.
  */
-export type Feed = "usage" | "model"
+export type Feed =
+  "usage" | "model" | "activity" | "read-state" | "session-rows" | "catalog"
 
 /** What an operator is given: every feed. */
-export const EVERY_FEED: ReadonlySet<Feed> = new Set<Feed>(["usage", "model"])
+export const EVERY_FEED: ReadonlySet<Feed> = new Set<Feed>([
+  "usage",
+  "model",
+  "activity",
+  "read-state",
+  "session-rows",
+  "catalog",
+])
 
 /**
  * One coordinator subscription as a member reads it. An encoder keys the

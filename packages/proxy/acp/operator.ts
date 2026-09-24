@@ -1,3 +1,4 @@
+import { EVERY_FEED } from "../core/member"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
@@ -60,6 +61,7 @@ export function createOperatorAcpService({
       rooms,
       logger,
       presence,
+      feeds: EVERY_FEED,
       readState: createReadState({
         runtimeInstance,
         sessionRows,
