@@ -93,7 +93,7 @@ export function chunkOutbound(
 /**
  * A published artifact as a `resource_link` chunk on the turn it belongs to.
  * The link names only the artifact; the reader fetches it through the Session
- * and lane it already reads.
+ * it already reads.
  */
 export function artifactOutbound(
   context: TranslateContext,

@@ -124,7 +124,6 @@ export type AosAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 export type TranslateContext = {
   turnId: string
   sequence: number
-  lane: Lane
   /** Stop was acknowledged for this turn and the provider has not settled. */
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */
@@ -235,8 +234,7 @@ export type TranslateTurnEvent = (
  * same `resource_link` chunk the live one did.
  */
 export type TranslateHistory = (
-  history: SessionHistoryResponse,
-  lane: Lane
+  history: SessionHistoryResponse
 ) => AcpOutbound[]
 
 /**
@@ -247,8 +245,7 @@ export type PersistedCorrections = (history: SessionHistoryResponse) => number
 
 /** `translate/requests.ts` → `pendingRequestToOutbound` */
 export type PendingRequestToOutbound = (
-  request: PendingRequest,
-  lane: Lane
+  request: PendingRequest
 ) => Extract<AcpOutbound, { kind: "request-permission" | "elicitation" }>
 
 /** `translate/requests.ts` → `replyFromPermission` */
@@ -260,8 +257,7 @@ export type ReplyFromPermission = (
 /** `translate/requests.ts` → `replyFromElicitation` */
 export type ReplyFromElicitation = (
   request: PendingRequest,
-  response: CreateElicitationResponse,
-  lane: Lane
+  response: CreateElicitationResponse
 ) => RequestReply
 
 /** `config-options.ts` → `configOptionsOf` */

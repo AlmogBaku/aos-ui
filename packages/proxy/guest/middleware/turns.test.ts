@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 
-import type { VerifiedGuestAuthorization } from "../../auth/guest-invitation"
 import { guestErrorDescription } from "../../auth/guest-projection"
 import {
   CompactionStatus,
@@ -12,36 +11,8 @@ import {
 } from "../../core/events"
 import { createTurnProjector } from "./turns"
 
-const authorization: VerifiedGuestAuthorization = {
-  version: 1,
-  lane: "guest",
-  issuer: "aos-invite",
-  audience: "aos-guest",
-  deploymentId: "deployment",
-  principalId: "guest_ref",
-  invitationId: "invite_ref",
-  runtimeId: "runtime",
-  agentId: "agent",
-  sessionId: "ref",
-  ref: "ref",
-  capabilities: [
-    "artifact-metadata",
-    "attachment-metadata",
-    "custom-ui",
-    "message-text",
-    "safe-errors",
-  ],
-  tokenId: "token",
-  issuedAt: 1,
-  notBefore: 1,
-  expiresAt: 100,
-  authorizationExpiresAt: 100,
-  operation: "messages:read",
-}
-
 /** One guest member's projector. */
-const projectorOf = () =>
-  createTurnProjector({ agentId: "agent", threadId: "ref" }, authorization)
+const projectorOf = () => createTurnProjector()
 
 /** One turn event, validated the way the projector validates it. */
 const project = (event: TurnEvent) =>
@@ -231,33 +202,27 @@ describe("guest turn projection", () => {
     ).not.toMatchObject({ provider: expect.anything() })
   })
 
-  it("projects pending requests without approval internals", () => {
-    expect(
-      project({
-        kind: TurnEventKind.TurnRequiresAction,
-        requests: [
-          {
-            requestId: "approval-1",
-            kind: PendingRequestKind.Permission,
-            message: "Run the command?",
-            responseSchema: {
-              type: "string",
-              enum: ["once", "always", "deny"],
-            },
-          },
-        ],
-      })
-    ).toEqual({
+  it("passes a pending question whole", () => {
+    const event: TurnEvent = {
       kind: TurnEventKind.TurnRequiresAction,
       requests: [
         {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "Run the command?",
-          responseSchema: { type: "string", enum: ["once", "deny"] },
+          requestId: "question-1",
+          kind: PendingRequestKind.Elicitation,
+          message: "Which folder? Not /srv/aos/repo.",
+          questions: [
+            {
+              label: "Folder under /srv/aos",
+              choices: ["/home/operator/exports", "later"],
+              multiple: false,
+              custom: true,
+            },
+          ],
         },
       ],
-    })
+    }
+
+    expect(project(event)).toEqual(event)
   })
 
   it("preserves the normalized Todo list", () => {

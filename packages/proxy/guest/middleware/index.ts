@@ -1,4 +1,3 @@
-import type { VerifiedGuestAuthorization } from "../../auth/guest-invitation"
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
 import { createHistoryMiddleware } from "./history"
@@ -22,9 +21,7 @@ export type GuestGrant = {
   firstTurnInstruction?: string
 }
 
-export type GuestMiddlewareOptions = GuestScopeOptions & {
-  read: VerifiedGuestAuthorization
-}
+export type GuestMiddlewareOptions = GuestScopeOptions
 
 /**
  * A guest member's stack, outermost first. A refused command never reaches
@@ -38,7 +35,7 @@ export function createGuestMiddleware(
     createCommandsMiddleware(),
     createScopeMiddleware(options),
     createHistoryMiddleware(options),
-    createTurnsMiddleware(options),
-    createPermissionsMiddleware(),
+    createTurnsMiddleware(),
+    createPermissionsMiddleware(options),
   ]
 }

@@ -142,13 +142,13 @@ function updatesOf(outbound: readonly AcpOutbound[]) {
 
 describe("translateHistory", () => {
   it("replays a published artifact as a link on the message that stored it", () => {
-    expect(translateHistory(history, "operator")[6]).toEqual(
+    expect(translateHistory(history)[6]).toEqual(
       artifactLink("agent_message_chunk", "a1", ARTIFACT)
     )
   })
 
   it("upserts the user turn with its text and inline image", () => {
-    const [update] = updatesOf(translateHistory(history, "operator"))
+    const [update] = updatesOf(translateHistory(history))
 
     expect(update).toEqual({
       sessionUpdate: "user_message",
@@ -167,23 +167,20 @@ describe("translateHistory", () => {
       mimeType: "image/png",
       source: { type: "provider" as const, reference: "att-1" },
     }
-    const outbound = translateHistory(
-      {
-        ...history,
-        messages: [
-          {
-            id: "u9",
-            role: "user",
-            content: [
-              { type: "text", text: "do u see it?" },
-              { type: "data", name: "aos.artifact", data: attached },
-            ],
-            createdAt: "2026-09-19T09:00:03.000Z",
-          },
-        ],
-      },
-      "operator"
-    )
+    const outbound = translateHistory({
+      ...history,
+      messages: [
+        {
+          id: "u9",
+          role: "user",
+          content: [
+            { type: "text", text: "do u see it?" },
+            { type: "data", name: "aos.artifact", data: attached },
+          ],
+          createdAt: "2026-09-19T09:00:03.000Z",
+        },
+      ],
+    })
 
     expect(kinds(outbound)).toEqual(["user_message", "user_message_chunk"])
     expect(outbound[1]).toEqual(
@@ -192,7 +189,7 @@ describe("translateHistory", () => {
   })
 
   it("brackets the turn with the states its run reported, and their moments", () => {
-    const updates = updatesOf(translateHistory(history, "operator"))
+    const updates = updatesOf(translateHistory(history))
     const states = updates.filter(
       (update) => update.sessionUpdate === "state_update"
     )
@@ -212,21 +209,18 @@ describe("translateHistory", () => {
 
   it("ends the turn where the provider recorded its last part", () => {
     const updates = updatesOf(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a4",
-              role: "assistant",
-              content: [{ type: "text", text: "Shipped." }],
-              createdAt: "2026-09-19T09:00:01.000Z",
-              completedAt: "2026-09-19T09:00:42.000Z",
-            },
-          ],
-        },
-        "operator"
-      )
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a4",
+            role: "assistant",
+            content: [{ type: "text", text: "Shipped." }],
+            createdAt: "2026-09-19T09:00:01.000Z",
+            completedAt: "2026-09-19T09:00:42.000Z",
+          },
+        ],
+      })
     )
 
     // A page that opens on the turn has only the turn's own moment to start it.
@@ -239,7 +233,7 @@ describe("translateHistory", () => {
   })
 
   it("replays a settled tool call with parseable history metadata", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[4]
+    const update = updatesOf(translateHistory(history))[4]
 
     expect(update).toMatchObject({
       sessionUpdate: "tool_call_update",
@@ -280,7 +274,7 @@ describe("translateHistory", () => {
         },
       ],
     }
-    const update = updatesOf(translateHistory(withApp, "operator")).find(
+    const update = updatesOf(translateHistory(withApp)).find(
       (item) => item.sessionUpdate === "tool_call_update"
     )
 
@@ -290,7 +284,7 @@ describe("translateHistory", () => {
   })
 
   it("replays a failed tool call without an output", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[5]
+    const update = updatesOf(translateHistory(history))[5]
 
     expect(update).toMatchObject({ toolCallId: "c2", status: "failed" })
     expect(update).not.toHaveProperty("rawOutput")
@@ -298,40 +292,37 @@ describe("translateHistory", () => {
 
   it("replays the kind, locations, diffs and timing a stored call kept", () => {
     const [update] = updatesOf(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a6",
-              role: "assistant",
-              content: [
-                {
-                  type: "tool-call",
-                  toolCallId: "c6",
-                  toolName: "edit_file",
-                  args: { path: "/work/a.ts" },
-                  argsText: '{"path":"/work/a.ts"}',
-                  result: "ok",
-                  kind: "edit",
-                  locations: [{ path: "/work/a.ts", line: 3 }],
-                  diffs: [
-                    {
-                      changes: [{ operation: "modify", path: "/work/a.ts" }],
-                      patch: "--- a/work/a.ts\n+++ b/work/a.ts\n",
-                    },
-                  ],
-                  startedAt: "2026-09-19T09:00:05.000Z",
-                  completedAt: "2026-09-19T09:00:06.500Z",
-                  durationMs: 1500,
-                },
-              ],
-              createdAt: "2026-09-19T09:00:05.000Z",
-            },
-          ],
-        },
-        "operator"
-      ).filter(
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a6",
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "c6",
+                toolName: "edit_file",
+                args: { path: "/work/a.ts" },
+                argsText: '{"path":"/work/a.ts"}',
+                result: "ok",
+                kind: "edit",
+                locations: [{ path: "/work/a.ts", line: 3 }],
+                diffs: [
+                  {
+                    changes: [{ operation: "modify", path: "/work/a.ts" }],
+                    patch: "--- a/work/a.ts\n+++ b/work/a.ts\n",
+                  },
+                ],
+                startedAt: "2026-09-19T09:00:05.000Z",
+                completedAt: "2026-09-19T09:00:06.500Z",
+                durationMs: 1500,
+              },
+            ],
+            createdAt: "2026-09-19T09:00:05.000Z",
+          },
+        ],
+      }).filter(
         (item) =>
           item.kind === "update" &&
           item.update.sessionUpdate === "tool_call_update"
@@ -361,21 +352,18 @@ describe("translateHistory", () => {
 
   it("ends a turn with the stop reason the provider stored for it", () => {
     const updates = updatesOf(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a7",
-              role: "assistant",
-              content: [{ type: "text", text: "The list goes on" }],
-              createdAt: "2026-09-19T09:00:07.000Z",
-              stopReason: "max-tokens",
-            },
-          ],
-        },
-        "operator"
-      )
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a7",
+            role: "assistant",
+            content: [{ type: "text", text: "The list goes on" }],
+            createdAt: "2026-09-19T09:00:07.000Z",
+            stopReason: "max-tokens",
+          },
+        ],
+      })
     )
 
     expect(updates.at(-1)).toMatchObject({
@@ -386,7 +374,7 @@ describe("translateHistory", () => {
   })
 
   it("replays the Session Todos as the one plan", () => {
-    const update = updatesOf(translateHistory(history, "operator"))[8]
+    const update = updatesOf(translateHistory(history))[8]
 
     expect(update).toMatchObject({
       sessionUpdate: "plan_update",
@@ -406,25 +394,22 @@ describe("translateHistory", () => {
 
   it("replays a failed turn that streamed nothing, carrying its failure", () => {
     const updates = updatesOf(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a3",
-              role: "assistant",
-              content: [],
-              createdAt: "2026-09-19T09:00:04.000Z",
-              status: {
-                type: "incomplete",
-                reason: "error",
-                error: "The model provider rejected this turn.",
-              },
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a3",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-19T09:00:04.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "The model provider rejected this turn.",
             },
-          ],
-        },
-        "operator"
-      )
+          },
+        ],
+      })
     )
 
     // A failed turn replays the way a live run reports failure: the turn's
@@ -446,21 +431,18 @@ describe("translateHistory", () => {
     // The wait itself is reissued as the pending request the browser answers,
     // so the replayed turn only says the turn stopped here.
     const updates = updatesOf(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a5",
-              role: "assistant",
-              content: [{ type: "text", text: "Which branch?" }],
-              createdAt: "2026-09-19T09:00:05.000Z",
-              status: { type: "requires-action", reason: "interrupt" },
-            },
-          ],
-        },
-        "operator"
-      )
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a5",
+            role: "assistant",
+            content: [{ type: "text", text: "Which branch?" }],
+            createdAt: "2026-09-19T09:00:05.000Z",
+            status: { type: "requires-action", reason: "interrupt" },
+          },
+        ],
+      })
     )
 
     expect(updates.at(-1)).toMatchObject({
@@ -472,22 +454,19 @@ describe("translateHistory", () => {
 
   it("replays a message with no renderable content and no artifact as nothing", () => {
     expect(
-      translateHistory(
-        {
-          ...history,
-          messages: [
-            {
-              id: "a2",
-              role: "assistant",
-              content: [
-                { type: "data", name: "aos.artifact", data: { id: "art-2" } },
-              ],
-              createdAt: "2026-09-19T09:00:03.000Z",
-            },
-          ],
-        },
-        "operator"
-      )
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a2",
+            role: "assistant",
+            content: [
+              { type: "data", name: "aos.artifact", data: { id: "art-2" } },
+            ],
+            createdAt: "2026-09-19T09:00:03.000Z",
+          },
+        ],
+      })
     ).toEqual([])
   })
 })

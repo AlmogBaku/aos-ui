@@ -1,8 +1,4 @@
-import {
-  guestErrorDescription,
-  projectGuestOutbound,
-} from "../../auth/guest-projection"
-import type { VerifiedGuestAuthorization } from "../../auth/guest-invitation"
+import { guestErrorDescription } from "../../auth/guest-projection"
 import { publicTurnError } from "../../auth/guest-runtime-projection"
 import {
   isTurnEvent,
@@ -17,13 +13,11 @@ import {
   type Middleware,
 } from "../../core/member"
 import { validIdentifier } from "../../routes/http"
-import type { GuestGrant } from "./index"
 
 /**
  * What a guest is shown of a live turn: the conversation's own text whole,
  * under the runtime's ids, an MCP App's card, and nothing of how the turn ran.
- * Another member's prompt reaches it as its history shows a user turn, and
- * each request it is asked without approval internals.
+ * Another member's prompt reaches it as its history shows a user turn.
  */
 
 /** Passes a provider-held artifact only; guests never receive inline data. */
@@ -49,18 +43,11 @@ function projectArtifact(
   }
 }
 
-/** The invited conversation a projected event describes. */
-type InvitedScope = { agentId: string; threadId: string }
-
 /**
  * One turn stream's projector. `shown` collects the calls whose card a guest
  * was shown, across every stream of the member.
  */
-export function createTurnProjector(
-  scope: InvitedScope,
-  read: VerifiedGuestAuthorization,
-  shown: Set<string> = new Set()
-) {
+export function createTurnProjector(shown: Set<string> = new Set()) {
   return (candidate: TurnEvent): TurnEvent | undefined => {
     if (!isTurnEvent(candidate)) return undefined
     switch (candidate.kind) {
@@ -90,23 +77,9 @@ export function createTurnProjector(
               text: candidate.text,
             }
           : undefined
-      case TurnEventKind.TurnRequiresAction: {
-        const projected = projectGuestOutbound(
-          {
-            transport: "turn",
-            agentId: scope.agentId,
-            sessionId: scope.threadId,
-            payload: { type: "requests", requests: candidate.requests },
-          },
-          read
-        )
-        return projected?.payload.type === "requests"
-          ? {
-              kind: TurnEventKind.TurnRequiresAction,
-              requests: [...projected.payload.requests],
-            }
-          : undefined
-      }
+      // The permissions layer already took the permissions out.
+      case TurnEventKind.TurnRequiresAction:
+        return candidate
       case TurnEventKind.TurnFailed: {
         const { code } = publicTurnError(candidate.code)
         return {
@@ -166,19 +139,10 @@ export function createTurnProjector(
   }
 }
 
-export type GuestTurnsOptions = {
-  grant: GuestGrant
-  read: VerifiedGuestAuthorization
-}
-
-export function createTurnsMiddleware({
-  grant,
-  read,
-}: GuestTurnsOptions): Middleware {
-  const scope = { agentId: grant.agentId, threadId: grant.ref }
+export function createTurnsMiddleware(): Middleware {
   /** Every call whose card this guest was shown. */
   const shown = new Set<string>()
-  const project = createTurnProjector(scope, read, shown)
+  const project = createTurnProjector(shown)
 
   return {
     event(event): MemberEvent | undefined {
@@ -202,22 +166,7 @@ export function createTurnsMiddleware({
             shown.has(event.request.toolCallId)
             ? event
             : undefined
-        case "request-asked": {
-          const projected = projectGuestOutbound(
-            {
-              transport: "turn",
-              agentId: scope.agentId,
-              sessionId: scope.threadId,
-              payload: { type: "requests", requests: [event.request] },
-            },
-            read
-          )
-          const request =
-            projected?.payload.type === "requests"
-              ? projected.payload.requests[0]
-              : undefined
-          return request && { ...event, request }
-        }
+        case "request-asked":
         case "history":
         case "request-withdrawn":
         case "execution":

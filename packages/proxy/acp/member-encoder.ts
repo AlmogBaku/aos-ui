@@ -178,7 +178,7 @@ export function createMemberEncoder({
   seat,
   answer,
 }: MemberEncoderOptions): MemberConnection {
-  const { lane, translators } = context
+  const { translators } = context
   const states = new WeakMap<TurnStream, TranslateState>()
   /** The requests asked and not settled, by Session and requestId. */
   const asked = new Map<string, AbortController>()
@@ -252,7 +252,7 @@ export function createMemberEncoder({
     request: PendingRequest,
     signal: AbortSignal
   ) {
-    const outbound = translators.pendingRequestToOutbound(request, lane)
+    const outbound = translators.pendingRequestToOutbound(request)
     if (outbound.kind !== "request-permission") return
     const response = await client.request(
       methods.client.session.requestPermission,
@@ -276,7 +276,7 @@ export function createMemberEncoder({
     request: PendingRequest,
     signal: AbortSignal
   ) {
-    const outbound = translators.pendingRequestToOutbound(request, lane)
+    const outbound = translators.pendingRequestToOutbound(request)
     if (outbound.kind !== "elicitation") return
     if (!hasMode(outbound.request))
       throw new Error("The elicitation carries no mode")
@@ -294,7 +294,7 @@ export function createMemberEncoder({
     await answer({
       sessionId,
       request: target.request,
-      reply: translators.replyFromElicitation(target.request, response, lane),
+      reply: translators.replyFromElicitation(target.request, response),
       answers: shownAnswers(target.request, response),
     })
   }
@@ -331,7 +331,7 @@ export function createMemberEncoder({
         replayedCorrections: stream.replayedCorrections,
       },
       event.event,
-      { turnId: stream.turnId, sequence, lane, stopping: event.stopping }
+      { turnId: stream.turnId, sequence, stopping: event.stopping }
     )
     states.set(stream, translated.state)
     for (const outbound of translated.outbound) {
@@ -341,7 +341,7 @@ export function createMemberEncoder({
   }
 
   function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
-    return translators.translateHistory(event.page, lane)
+    return translators.translateHistory(event.page)
   }
 
   /**
@@ -360,7 +360,6 @@ export function createMemberEncoder({
     )
     for (const value of updates) await update(event.sessionId, value)
     log("info", "acp.history.page", {
-      lane,
       sessionId: event.sessionId,
       offset: older.offset,
       count: updates.length,
@@ -393,11 +392,7 @@ export function createMemberEncoder({
       case "request-withdrawn":
         return withdraw(sessionId, event.requestId)
       case "question-answered": {
-        const record = answeredQuestionOutbound(
-          event.request,
-          event.answers,
-          lane
-        )
+        const record = answeredQuestionOutbound(event.request, event.answers)
         if (record) await send(sessionId, record, 0)
         return
       }

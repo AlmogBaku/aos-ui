@@ -2,7 +2,7 @@
 
 import {
   methods,
-  type RequestPermissionResponse,
+  type CreateElicitationResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
@@ -25,6 +25,7 @@ import type { ConnectionAuthentication } from "../acp/types"
 import {
   connectClient,
   MODELS,
+  said,
   settled,
   updates,
   USAGE,
@@ -357,10 +358,38 @@ const RUN_EVENTS: TurnEvent[] = [
   { kind: TurnEventKind.TurnEnded },
 ]
 
-const REQUEST_EVENTS: TurnEvent[] = [
-  { kind: TurnEventKind.TurnStarted },
-  { kind: TurnEventKind.TurnRequiresAction, requests: [APPROVAL] },
-]
+/** The same approval from a provider that offers a one-time refusal. */
+const DENIABLE: PendingRequest = {
+  ...APPROVAL,
+  responseSchema: { type: "string", enum: ["once", "deny"] },
+}
+
+/** A question whose words name paths on the operator's machine. */
+const QUESTION: PendingRequest = {
+  requestId: "question-1",
+  kind: PendingRequestKind.Elicitation,
+  message: "Where should exports live? Not under /srv/aos/repo.",
+  questions: [
+    {
+      label: "Folder under /srv/aos",
+      text: "Where should exports live? Not under /srv/aos/repo.",
+      choices: ["/home/operator/exports", "later"],
+      multiple: false,
+      custom: true,
+    },
+  ],
+}
+
+/** A turn that stops to ask `request`, then its reply once answered. */
+const asking = (request: PendingRequest, calls: number) =>
+  terminalHandle(
+    calls > 1
+      ? RUN_EVENTS
+      : [
+          { kind: TurnEventKind.TurnStarted },
+          { kind: TurnEventKind.TurnRequiresAction, requests: [request] },
+        ]
+  )
 
 const unsupported = () => {
   throw new Error("The guest ACP lane does not reach this operation")
@@ -372,11 +401,11 @@ type HarnessOptions = {
   handle?: () => ServerTurnHandle
   /** The page the runtime serves `offset` rows back; the one stored page by default. */
   history?: (offset: number) => SessionHistoryResponse
-  /** The guest's answer; `signal` aborts as the proxy withdraws the request. */
-  permission?: (
+  /** The guest's answer to a question; `signal` aborts on its withdrawal. */
+  question?: (
     params: unknown,
     signal: AbortSignal
-  ) => Promise<RequestPermissionResponse>
+  ) => Promise<CreateElicitationResponse>
   /** The Session's usage and model readings are readable, as an operator's are. */
   readings?: boolean
   /** The longest invitation the service issues; three days by default. */
@@ -505,7 +534,7 @@ function harness(options: HarnessOptions = {}) {
 
   const { connection, recorder } = connectClient(context, {
     name: "aos-guest-browser",
-    ...(options.permission ? { permission: options.permission } : {}),
+    ...(options.question ? { question: options.question } : {}),
   })
 
   return {
@@ -1014,66 +1043,93 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
-  it("offers an approval without its Agent-wide or Session-wide scopes", async () => {
+  it.each([
+    ["offers a deny", DENIABLE, { status: "resolved", payload: "deny" }],
+    ["offers none", APPROVAL, { status: "cancelled" }],
+  ])(
+    "declines a permission its own turn raises, silently, when it %s",
+    async (_offer, request, reply) => {
+      const test = harness({
+        existing: true,
+        handle: () => asking(request, test.start.mock.calls.length),
+      })
+      await test.initialize()
+      await test.login(await invite(test.invitations))
+      await test.resume(REF)
+
+      await test.prompt("Delete the notes")
+
+      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+      expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+        replies: [{ requestId: request.requestId, ...reply }],
+      })
+      await test.recorder.wait(said("Guest-visible answer"), "the reply")
+      expect(
+        test.recorder.of(methods.client.session.requestPermission)
+      ).toEqual([])
+      expect(JSON.stringify(test.recorder.entries)).not.toContain(
+        request.requestId
+      )
+      test.close()
+    }
+  )
+
+  it("asks a question in the operator's own words and gives the runtime its answer as sent", async () => {
     const test = harness({
       existing: true,
-      handle: () => terminalHandle(REQUEST_EVENTS),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Delete the notes")
-
-    const asked = await test.recorder.wait(
-      (entry) => entry.method === methods.client.session.requestPermission,
-      "the permission request"
-    )
-    expect(asked.params).toMatchObject({
-      sessionId: REF,
-      options: [{ optionId: "once", kind: "allow_once" }],
-    })
-    expect(JSON.stringify(asked.params)).not.toContain("allow_always")
-    expect(JSON.stringify(asked.params)).not.toContain("allow_session")
-    test.close()
-  })
-
-  it("refuses an approval answer that widens the grant", async () => {
-    const test = harness({
-      existing: true,
-      handle: () => terminalHandle(REQUEST_EVENTS),
-      permission: async () => ({
-        outcome: { outcome: "selected", optionId: "always" },
+      handle: () => asking(QUESTION, test.start.mock.calls.length),
+      question: async () => ({
+        action: "accept",
+        content: { q0: "/home/operator/exports" },
       }),
     })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF)
 
-    await test.prompt("Delete the notes")
+    await test.prompt("Export the notes")
 
-    const reported = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
+    const asked = await test.recorder.wait(
+      (entry) => entry.method === methods.client.elicitation.create,
+      "the question"
     )
-    expect(reported.params).toMatchObject({
+    expect(asked.params).toMatchObject({
       sessionId: REF,
-      code: "invalid_request",
+      message: QUESTION.message,
+      _meta: {
+        [AOS_META_KEY]: {
+          questions: [
+            {
+              header: "Folder under /srv/aos",
+              prompt: QUESTION.message,
+              options: [
+                { label: "/home/operator/exports" },
+                { label: "later" },
+              ],
+            },
+          ],
+        },
+      },
     })
-    // The refused answer starts no reply segment.
-    expect(test.start).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [
+        {
+          requestId: QUESTION.requestId,
+          status: "resolved",
+          payload: { answers: [["/home/operator/exports"]] },
+        },
+      ],
+    })
     test.close()
   })
 
-  it("withdraws its request once an operator answers it", async () => {
+  it("withdraws its question once an operator answers it", async () => {
     const withdrawal = Promise.withResolvers<AbortSignal>()
     const test = harness({
       existing: true,
-      handle: () =>
-        terminalHandle(
-          test.start.mock.calls.length > 1 ? RUN_EVENTS : REQUEST_EVENTS
-        ),
-      permission: (_params, signal) => {
+      handle: () => asking(QUESTION, test.start.mock.calls.length),
+      question: (_params, signal) => {
         withdrawal.resolve(signal)
         return new Promise((_resolve, reject) => {
           signal.addEventListener("abort", () => reject(signal.reason))
@@ -1083,13 +1139,17 @@ describe("guest ACP lane", () => {
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF)
-    await test.prompt("Delete the notes")
+    await test.prompt("Export the notes")
     const signal = await withdrawal.promise
 
     // The operator's answer names the Session by its provider scope alone.
     await test.coordinator.answer(
       { agentId: AGENT, sessionId: STORED },
-      { requestId: APPROVAL.requestId, status: "resolved" }
+      {
+        requestId: QUESTION.requestId,
+        status: "resolved",
+        payload: { answers: [["later"]] },
+      }
     )
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))

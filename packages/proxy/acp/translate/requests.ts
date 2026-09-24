@@ -19,7 +19,6 @@ import {
 } from "../../core/events"
 import type {
   AcpOutbound,
-  Lane,
   PendingRequestToOutbound,
   ReplyFromElicitation,
   ReplyFromPermission,
@@ -36,32 +35,6 @@ const PERMISSION_KINDS = new Map([
   ],
   ["deny", { kind: "reject_once", name: "Deny" }],
 ])
-
-/** A guest may not widen permission past the request in front of them. */
-const GUEST_DENIED_CHOICES = new Set(["always", "session"])
-
-/**
- * A filesystem location, not every slash in prose: a POSIX path needs a second
- * separator (`/etc/passwd`) or a dot-extension (`/run.sh`), so `X / twitter`,
- * `and/or`, `24/7` and a lone `/` stay the text the agent wrote.
- */
-const providerPathText =
-  /(^|[\s("'=,:;\x5b])(?:\/(?!\/)(?:[^\s"'<>/]+\/|[^\s"'<>/]*\.[A-Za-z0-9])|[A-Za-z]:[\\/]|\\\\)[^\s"'<>]*/gu
-
-const PATH_REDACTED = "[provider path redacted]"
-
-/**
- * What a lane may read of the operator's machine. The adapters already strip
- * credentials for everyone; a filesystem path is the one other thing the
- * agent's own words reveal, and it is the operator's to see and a guest's not
- * to. The projection is deterministic, so a guest's answer maps back to the
- * native choice it stood for.
- */
-function laneText(lane: Lane, text: string) {
-  return lane === "guest"
-    ? text.replace(providerPathText, `$1${PATH_REDACTED}`)
-    : text
-}
 
 /**
  * `Omit` over `CreateElicitationRequest` drops the whole mode union, so the
@@ -92,12 +65,8 @@ function enumValues(schema: Record<string, unknown> | undefined): string[] {
   )
 }
 
-function permissionOptions(
-  request: PendingRequest,
-  lane: Lane
-): PermissionOption[] {
+function permissionOptions(request: PendingRequest): PermissionOption[] {
   return enumValues(record(request.responseSchema)).flatMap((choice) => {
-    if (lane === "guest" && GUEST_DENIED_CHOICES.has(choice)) return []
     const known = PERMISSION_KINDS.get(choice)
     return known
       ? [{ optionId: choice, name: known.name, kind: known.kind }]
@@ -105,17 +74,14 @@ function permissionOptions(
   })
 }
 
-function permissionOutbound(
-  request: PendingRequest,
-  lane: Lane
-): RequestOutbound {
+function permissionOutbound(request: PendingRequest): RequestOutbound {
   // The schema's `title` names the operation and the message explains it; a
   // request with only one of the two titles itself with it.
   const label = record(request.responseSchema)?.title
-  const words = request.message && laneText(lane, request.message)
+  const words = request.message
   const title =
     typeof label === "string" && label
-      ? laneText(lane, label)
+      ? label
       : (words ?? "Permission required")
   return {
     kind: "request-permission",
@@ -135,7 +101,7 @@ function permissionOutbound(
             },
           }
         : {}),
-      options: permissionOptions(request, lane),
+      options: permissionOptions(request),
       _meta: {
         [AOS_META_KEY]: {
           requestId: request.requestId,
@@ -159,18 +125,11 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
  * leaves it unset rather than have the proxy invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
-function questionsOf(request: PendingRequest, lane: Lane): AosQuestion[] {
+function questionsOf(request: PendingRequest): AosQuestion[] {
   return pendingQuestionsOf(request).map((question) => ({
-    ...(question.label
-      ? { header: laneText(lane, question.label).slice(0, 256) }
-      : {}),
-    prompt: laneText(
-      lane,
-      question.text ?? question.label ?? request.message ?? "Question"
-    ),
-    options: question.choices.map((label) => ({
-      label: laneText(lane, label),
-    })),
+    ...(question.label ? { header: question.label.slice(0, 256) } : {}),
+    prompt: question.text ?? question.label ?? request.message ?? "Question",
+    options: question.choices.map((label) => ({ label })),
     multiple: question.multiple,
     custom: question.custom,
   }))
@@ -202,14 +161,11 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
   }
 }
 
-function elicitationOutbound(
-  request: PendingRequest,
-  lane: Lane
-): RequestOutbound {
-  const questions = questionsOf(request, lane)
+function elicitationOutbound(request: PendingRequest): RequestOutbound {
+  const questions = questionsOf(request)
   const form: ElicitationForm = {
     mode: "form",
-    message: laneText(lane, request.message ?? "Input required"),
+    message: request.message ?? "Input required",
     requestedSchema: {
       type: "object",
       properties: Object.fromEntries(
@@ -239,10 +195,10 @@ function answerValues(value: unknown): string[] {
   return []
 }
 
-export const pendingRequestToOutbound = ((request, lane) =>
+export const pendingRequestToOutbound = ((request) =>
   request.kind === PendingRequestKind.Permission
-    ? permissionOutbound(request, lane)
-    : elicitationOutbound(request, lane)) satisfies PendingRequestToOutbound
+    ? permissionOutbound(request)
+    : elicitationOutbound(request)) satisfies PendingRequestToOutbound
 
 /** `optionId` is the adapter's own choice value, which is what the reply expects. */
 export const replyFromPermission = ((request, response) => {
@@ -260,27 +216,13 @@ export const replyFromPermission = ((request, response) => {
       }
 }) satisfies ReplyFromPermission
 
-/**
- * The native choice a displayed one stood for. A guest picks the projected
- * label, so the choice whose projection it is goes back to the adapter; free
- * text, and everything the operator sees unprojected, travels as typed.
- */
-function nativeAnswer(lane: Lane, question: PendingQuestion, answer: string) {
-  if (lane !== "guest") return answer
-  return (
-    question.choices.find((choice) => laneText(lane, choice) === answer) ??
-    answer
-  )
-}
-
-export const replyFromElicitation = ((request, response, lane) => {
+/** Every member answers the choices as the runtime wrote them. */
+export const replyFromElicitation = ((request, response) => {
   if (response.action !== "accept")
     return { requestId: request.requestId, status: ReplyStatus.Cancelled }
   const content = record(response.content)
-  const answers = pendingQuestionsOf(request).map((question, index) =>
-    answerValues(content?.[`q${index}`]).map((answer) =>
-      nativeAnswer(lane, question, answer)
-    )
+  const answers = pendingQuestionsOf(request).map((_, index) =>
+    answerValues(content?.[`q${index}`])
   )
   return {
     requestId: request.requestId,
@@ -315,12 +257,11 @@ export function shownAnswers(
  */
 export function answeredQuestionOutbound(
   request: PendingRequest,
-  answers: readonly (readonly string[])[],
-  lane: Lane
+  answers: readonly (readonly string[])[]
 ): AcpOutbound | undefined {
   const toolCallId = request.toolCallId
   if (toolCallId === undefined) return undefined
-  const responses = questionsOf(request, lane).map((question, index) => ({
+  const responses = questionsOf(request).map((question, index) => ({
     question: question.prompt,
     answers: [...(answers[index] ?? [])],
   }))

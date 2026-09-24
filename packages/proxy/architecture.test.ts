@@ -181,18 +181,13 @@ function importsFrom(directory: string) {
   )
 }
 
-/** The `lane` reads left in `acp/`, each a guest branch still to remove. */
-const ACP_LANE_READS: Record<string, number> = {
-  "acp/agent-sessions.ts": 1,
-  "acp/agent.ts": 3,
-  "acp/member-encoder.ts": 8,
-  "acp/operator.ts": 3,
-  "acp/service.ts": 4,
-  "acp/translate/history.ts": 4,
-  "acp/translate/requests.ts": 25,
-  "acp/translate/turn-events.ts": 1,
-  "acp/types.ts": 6,
-}
+/**
+ * A lane compared, in either order: the one way a file could branch on it.
+ * The lane stays the connection's identity, written to the browser's
+ * `initialize` meta and to the member's principal, and nothing reads it back.
+ */
+const LANE_BRANCH =
+  /\blane\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?lane\b|\bcase\s+["'](?:guest|operator)["']/u
 
 describe("member boundary", () => {
   const proxyRoot = import.meta.dirname
@@ -243,19 +238,18 @@ describe("member boundary", () => {
     ])
   })
   /**
-   * A2: every `lane` the ACP transport still reads, per file. The guest
-   * branches leave task by task, so a new one fails here; the count may only
-   * shrink.
+   * A2: the ACP transport never branches on the lane. The translators and
+   * the member encoder never name it, and the files that carry it as the
+   * connection's identity never compare it.
    */
-  it("reads the lane in the ACP transport only where it is allowed", async () => {
-    const counts: Record<string, number> = {}
+  it("never branches the ACP transport on the lane", async () => {
     for (const path of await productionFiles(join(proxyRoot, "acp"))) {
-      if (path.endsWith("test-harness.ts")) continue
       const source = stripComments(await readFile(path, "utf8"))
-      const reads = source.match(/\blane\b/gu)?.length ?? 0
-      if (reads > 0) counts[relative(proxyRoot, path)] = reads
+      expect(source, path).not.toMatch(LANE_BRANCH)
+      const translates =
+        relative(proxyRoot, path).startsWith("acp/translate/") ||
+        path.endsWith("member-encoder.ts")
+      if (translates) expect(source, path).not.toMatch(/\blane\b/u)
     }
-
-    expect(counts).toEqual(ACP_LANE_READS)
   })
 })

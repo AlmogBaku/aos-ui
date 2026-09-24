@@ -1,9 +1,6 @@
 // @vitest-environment node
 
-import {
-  methods,
-  type RequestPermissionResponse,
-} from "@agentclientprotocol/sdk/experimental/v2"
+import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -18,19 +15,23 @@ import {
   SESSION,
   chunk,
   connectClient,
+  EventSource,
   endedTurn,
   flow,
   gate,
   harness,
+  heldUntilWithdrawn,
   liveTurn,
   open,
   prompt,
   prompts,
   replyWhileWatched,
+  settled,
   storedLiveTurn,
   turnStarted,
   waitFor,
   withoutStates,
+  type ClientAnswers,
 } from "../acp/test-harness"
 import { createGuestInvitationService } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
@@ -53,19 +54,19 @@ const APPROVAL: PendingRequest = {
   requestId: "approval-1",
   kind: PendingRequestKind.Permission,
   message: "permission-required",
-  responseSchema: { type: "string", enum: ["once", "session", "always"] },
+  responseSchema: { type: "string", enum: ["once", "deny"] },
 }
+
+const question = (requestId: string): PendingRequest => ({
+  requestId,
+  kind: PendingRequestKind.Elicitation,
+  message: `Which folder for ${requestId}?`,
+})
 
 type Operator = Awaited<ReturnType<typeof harness>>
 
-/** A guest browser that redeemed an invitation to the seeded Session. */
-async function connectGuest(
-  test: Operator,
-  permission?: (
-    params: unknown,
-    signal: AbortSignal
-  ) => Promise<RequestPermissionResponse>
-) {
+/** One invitation to the seeded Session, which every tab it opens acts as. */
+async function invite(test: Operator) {
   const invitations = createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
@@ -74,6 +75,19 @@ async function connectGuest(
     keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
     ttlSeconds: 259_200,
   })
+  const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
+  return { invitations, token }
+}
+
+type Invitation = Awaited<ReturnType<typeof invite>>
+
+/** A guest browser that redeemed an invitation to the seeded Session. */
+async function connectGuest(
+  test: Operator,
+  answers: ClientAnswers = {},
+  invitation?: Invitation
+) {
+  const { invitations, token } = invitation ?? (await invite(test))
   const context = createGuestConnection(
     {
       publicOrigin: "https://guest.example.test",
@@ -87,14 +101,13 @@ async function connectGuest(
   )
   const { connection, recorder } = connectClient(context, {
     name: "aos-guest-browser",
-    ...(permission ? { permission } : {}),
+    ...answers,
   })
   await connection.agent.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
     capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
   })
-  const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   await connection.agent.request(methods.agent.auth.login, {
     methodId: AOS_AUTH_METHOD_INVITE,
     _meta: { [AOS_META_KEY]: { token } },
@@ -206,23 +219,62 @@ describe("guest in a Session room", () => {
     guest.close()
   })
 
-  it("lets a guest answer an operator's approval once only within its grant", async () => {
-    const unanswered = gate()
+  it("leaves an operator's approval pending for the operator and shows the guest nothing", async () => {
+    const answered = gate()
     const test = await harness({
       providerIds: true,
-      // The operator's own browser never answers, so the guest's answer decides.
       permission: async () => {
-        await unanswered.held
-        return { outcome: { outcome: "cancelled" } }
+        await answered.held
+        return { outcome: { outcome: "selected", optionId: "once" } }
       },
     })
     await test.list()
     await open(test)
-    const guest = await connectGuest(test, async () => ({
-      outcome: { outcome: "selected", optionId: "once" },
-    }))
+    const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
     await prompt(test, "Delete it")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the operator's permission request"
+    )
+    await settled()
+
+    expect(test.coordinator.snapshot(test.scope).requests).toEqual([APPROVAL])
+    expect(test.start).toHaveBeenCalledTimes(1)
+    answered.release()
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+    })
+    expect(guest.recorder.of(methods.client.session.requestPermission)).toEqual(
+      []
+    )
+    test.close()
+    guest.close()
+  })
+
+  it("declines a guest's own permission and leaves an operator who joined after it nothing pending", async () => {
+    const pending = new Set<AbortSignal>()
+    const test = await harness({
+      providerIds: true,
+      permission: async (_params, signal) => {
+        pending.add(signal)
+        signal.addEventListener("abort", () => pending.delete(signal))
+        return heldUntilWithdrawn(signal)
+      },
+    })
+    await test.list()
+    const guest = await connectGuest(test)
+    await open(guest, { sessionId: GUEST_REF })
+    await open(test)
+    await prompt(guest, "Delete it", GUEST_REF)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     test.sources[0]?.emit({
@@ -233,9 +285,227 @@ describe("guest in a Session room", () => {
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
-      replies: [{ requestId: APPROVAL.requestId, status: "resolved" }],
+      replies: [
+        { requestId: APPROVAL.requestId, status: "resolved", payload: "deny" },
+      ],
     })
-    unanswered.release()
+    await settled()
+    expect(pending.size).toBe(0)
+    expect(test.coordinator.snapshot(test.scope).requests).toEqual([])
+    expect(guest.recorder.of(methods.client.session.requestPermission)).toEqual(
+      []
+    )
+    test.close()
+    guest.close()
+  })
+
+  it("declines a guest's own permission after the guest answered a question in it", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const guest = await connectGuest(test)
+    await open(guest, { sessionId: GUEST_REF })
+    await prompt(guest, "Delete it", GUEST_REF)
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [question("question-1")],
+    })
+    test.sources[0]?.finish()
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+
+    test.sources[1]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[1]?.finish()
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(3))
+    expect(test.start.mock.calls[2]?.[1]).toMatchObject({
+      replies: [{ requestId: APPROVAL.requestId, payload: "deny" }],
+    })
+    test.close()
+    guest.close()
+  })
+
+  it("declines a guest's own permission reissued when it reconnects", async () => {
+    // The runtime still waits on the request whenever a resume asks.
+    const test: Operator = await harness({
+      providerIds: true,
+      discover: async () => ({
+        handle: new EventSource(),
+        state: "waiting-for-input",
+        requests: [APPROVAL],
+      }),
+    })
+    await test.list()
+    const invitation = await invite(test)
+    const first = await connectGuest(test, {}, invitation)
+    await open(first, { sessionId: GUEST_REF })
+    await prompt(first, "Delete it", GUEST_REF)
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    first.close()
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+    await waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("waiting-for-input")
+    )
+    await settled()
+    expect(test.start).toHaveBeenCalledTimes(1)
+
+    const reconnected = await connectGuest(test, {}, invitation)
+    await open(reconnected, { sessionId: GUEST_REF })
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [{ requestId: APPROVAL.requestId, payload: "deny" }],
+    })
+    test.close()
+    reconnected.close()
+  })
+
+  it("declines a guest's own permission once from two tabs", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const invitation = await invite(test)
+    const tabs = [
+      await connectGuest(test, {}, invitation),
+      await connectGuest(test, {}, invitation),
+    ]
+    for (const tab of tabs) await open(tab, { sessionId: GUEST_REF })
+    await prompt(tabs[1]!, "Delete it", GUEST_REF)
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[0]?.finish()
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    await settled()
+    expect(test.start).toHaveBeenCalledTimes(2)
+    expect(test.start.mock.calls[1]?.[1]).toMatchObject({
+      replies: [{ requestId: APPROVAL.requestId, payload: "deny" }],
+    })
+    for (const tab of tabs) {
+      expect(tab.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+      tab.close()
+    }
+    test.close()
+  })
+
+  it("leaves an operator's turn the operator's after a guest answers its last question", async () => {
+    const test = await harness({
+      providerIds: true,
+      question: async (_params, signal) => heldUntilWithdrawn(signal),
+      permission: async (_params, signal) => heldUntilWithdrawn(signal),
+    })
+    await test.list()
+    await open(test)
+    const guest = await connectGuest(test, {
+      question: async () => ({ action: "accept", content: { q0: "exports" } }),
+    })
+    await open(guest, { sessionId: GUEST_REF })
+    await prompt(test, "Delete it")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [question("question-1")],
+    })
+    test.sources[0]?.finish()
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+
+    test.sources[1]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [APPROVAL],
+    })
+    test.sources[1]?.finish()
+    await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the operator's permission request"
+    )
+    await settled()
+
+    expect(test.coordinator.snapshot(test.scope).requests).toEqual([APPROVAL])
+    expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+    guest.close()
+  })
+
+  it("leaves a turn a guest recovered after a restart undeclined", async () => {
+    const test = await harness({
+      providerIds: true,
+      discover: async () => ({
+        handle: new EventSource(),
+        state: "waiting-for-input",
+        requests: [APPROVAL],
+      }),
+    })
+    await test.list()
+    // A restart lost the operator's turn; the runtime still waits on it.
+    await test.coordinator.discover(test.scope, "guest")
+    const guest = await connectGuest(test)
+
+    await open(guest, { sessionId: GUEST_REF })
+    await settled()
+
+    expect(test.discover).toHaveBeenCalled()
+    expect(test.coordinator.snapshot(test.scope).requests).toEqual([APPROVAL])
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+    guest.close()
+  })
+
+  it("continues a turn once a guest and an operator each answered one of its questions", async () => {
+    const answerOnly =
+      (requestId: string, answer: string): ClientAnswers["question"] =>
+      async (params, signal) =>
+        (params as { message?: string }).message === question(requestId).message
+          ? { action: "accept", content: { q0: answer } }
+          : heldUntilWithdrawn(signal)
+    const test = await harness({
+      providerIds: true,
+      question: answerOnly("question-1", "operator's folder"),
+    })
+    await test.list()
+    await open(test)
+    const guest = await connectGuest(test, {
+      question: answerOnly("question-2", "guest's folder"),
+    })
+    await open(guest, { sessionId: GUEST_REF })
+    await prompt(test, "Export it")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.sources[0]?.emit(turnStarted())
+    test.sources[0]?.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [question("question-1"), question("question-2")],
+    })
+    test.sources[0]?.finish()
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    const { replies } = test.start.mock.calls[1]?.[1] as {
+      replies: Array<{ requestId: string; status: string }>
+    }
+    expect(replies).toHaveLength(2)
+    expect(replies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requestId: "question-1",
+          status: "resolved",
+        }),
+        {
+          requestId: "question-2",
+          status: "resolved",
+          payload: { answers: [["guest's folder"]] },
+        },
+      ])
+    )
     test.close()
     guest.close()
   })

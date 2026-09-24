@@ -140,7 +140,6 @@ function createGuestAuthentication(
           principal: { id: grant.principalId, role: "guest" },
           middleware: createGuestMiddleware({
             grant,
-            read,
             invited: workspace.invited,
             capabilities: workspace.capabilities,
           }),

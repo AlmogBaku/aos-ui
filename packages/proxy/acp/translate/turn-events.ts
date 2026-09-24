@@ -287,9 +287,7 @@ function requiresActionOutbound(
 ): AcpOutbound[] {
   return [
     stateOutbound(context, { state: "requires_action" }),
-    ...event.requests.map((request) =>
-      pendingRequestToOutbound(request, context.lane)
-    ),
+    ...event.requests.map((request) => pendingRequestToOutbound(request)),
   ]
 }
 

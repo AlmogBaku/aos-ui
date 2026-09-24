@@ -35,7 +35,6 @@ const AT = "2026-09-22T10:00:00.000Z"
 const context: TranslateContext = {
   turnId: "run-1",
   sequence: 7,
-  lane: "operator",
   stopping: false,
   now: () => Date.parse(AT),
 }

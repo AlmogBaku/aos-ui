@@ -849,12 +849,9 @@ export async function harness(options: HarnessOptions = {}) {
       readState: composed?.readState ?? readState,
       translators: {
         ...base,
-        translateHistory: (history, lane) => {
+        translateHistory: (history) => {
           options.onReplay?.()
-          return (options.translateHistory ?? base.translateHistory)(
-            history,
-            lane
-          )
+          return (options.translateHistory ?? base.translateHistory)(history)
         },
       },
       attachmentStages,

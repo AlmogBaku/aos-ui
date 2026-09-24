@@ -11,7 +11,6 @@ import {
 } from "../../../protocol/acp"
 import type {
   AcpOutbound,
-  Lane,
   PersistedCorrections,
   TranslateContext,
   TranslateHistory,
@@ -43,8 +42,10 @@ const ARTIFACT_PART_NAME = "aos.artifact"
  * of its own. Reusing them is what makes a stored turn and a watched turn one stream,
  * so the browser reads both through one code path.
  */
-function historyContext(lane: Lane): TranslateContext {
-  return { turnId: HISTORY_TURN_ID, sequence: 0, lane, stopping: false }
+const HISTORY_CONTEXT: TranslateContext = {
+  turnId: HISTORY_TURN_ID,
+  sequence: 0,
+  stopping: false,
 }
 
 function imageBlock(image: string): ContentBlock | undefined {
@@ -203,7 +204,7 @@ function agentOutbound(
   // A notice the provider wrote is no turn: no turn produced it, so no turn state
   // brackets it.
   if (message.role !== "assistant") return parts
-  // A turn this lane shows nothing of is no turn either. Only a failure the
+  // A turn that shows nothing is no turn either. Only a failure the
   // provider persisted is worth bracketing alone, because the browser shows it.
   if (parts.length === 0 && message.status === undefined) return []
   return [
@@ -213,8 +214,8 @@ function agentOutbound(
   ]
 }
 
-export const translateHistory = ((history, lane) => {
-  const context = historyContext(lane)
+export const translateHistory = ((history) => {
+  const context = HISTORY_CONTEXT
   const outbound: AcpOutbound[] = []
   // What live's TurnStarted approximates: the turn started when its prompt
   // landed. A page that opens mid-conversation has only the turn's own time.

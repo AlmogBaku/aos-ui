@@ -41,7 +41,6 @@ const FINISHED_AT = "2026-09-22T10:00:09.000Z"
 const liveContext: TranslateContext = {
   turnId: "run-1",
   sequence: 4,
-  lane: "operator",
   stopping: false,
   now: () => Date.parse(FINISHED_AT),
 }
@@ -268,9 +267,7 @@ function live(): AcpOutbound[] {
 
 describe("replay parity", () => {
   it("replays a turn as the stream the live run sent", () => {
-    expect(stream(translateHistory(storedHistory, "operator"))).toEqual(
-      stream(live())
-    )
+    expect(stream(translateHistory(storedHistory))).toEqual(stream(live()))
   })
 
   it("keeps the execution order the turn was produced in", () => {
