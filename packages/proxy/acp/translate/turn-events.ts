@@ -402,6 +402,7 @@ function toolFinished(
   )
   const call = {
     toolCallId: event.toolCallId,
+    ...(event.name ? { title: event.name, name: event.name } : {}),
     status: event.failed ? "failed" : "completed",
     rawOutput: jsonOr(event.output, event.output),
     content: [
@@ -416,9 +417,13 @@ function toolFinished(
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
     ...(event.app ? { app: {} } : {}),
   }
+  // A named finish opens its card, and so may open the segment it sits in.
+  const segment = event.name
+    ? segmentMessage(state, context.turnId)
+    : { state, messageId: attachedTo(state, context) }
   return {
-    state,
-    outbound: [toolOutbound(context, attachedTo(state, context), call, extra)],
+    state: segment.state,
+    outbound: [toolOutbound(context, segment.messageId, call, extra)],
   }
 }
 

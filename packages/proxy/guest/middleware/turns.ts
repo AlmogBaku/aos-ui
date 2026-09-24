@@ -48,6 +48,8 @@ function projectArtifact(
  * was shown, across every stream of the member.
  */
 export function createTurnProjector(shown: Set<string> = new Set()) {
+  /** The name of every call whose start was hidden, until it finishes. */
+  const hidden = new Map<string, string>()
   return (candidate: TurnEvent): TurnEvent | undefined => {
     if (!isTurnEvent(candidate)) return undefined
     switch (candidate.kind) {
@@ -93,9 +95,12 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
       // arguments, no output, and no other tool call. The App's input and
       // result reach the guest through its view.
       case TurnEventKind.ToolCallStarted: {
-        if (!candidate.app || candidate.subagentId !== undefined)
-          return undefined
+        if (candidate.subagentId !== undefined) return undefined
         const name = candidate.name ?? candidate.title
+        if (!candidate.app) {
+          hidden.set(candidate.toolCallId, name)
+          return undefined
+        }
         shown.add(candidate.toolCallId)
         return {
           kind: TurnEventKind.ToolCallStarted,
@@ -105,17 +110,23 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
           app: true,
         }
       }
-      // A settling whose start the guest was not shown has no card to settle.
-      case TurnEventKind.ToolCallFinished:
-        return shown.has(candidate.toolCallId)
-          ? {
-              kind: TurnEventKind.ToolCallFinished,
-              toolCallId: candidate.toolCallId,
-              output: "",
-              failed: candidate.failed,
-              app: true,
-            }
-          : undefined
+      // A call flagged an App only at its finish shows its card there, under
+      // the name its hidden start carried. Any other hidden call stays hidden.
+      case TurnEventKind.ToolCallFinished: {
+        const name = hidden.get(candidate.toolCallId)
+        hidden.delete(candidate.toolCallId)
+        const opens = candidate.app && name !== undefined
+        if (opens) shown.add(candidate.toolCallId)
+        else if (!shown.has(candidate.toolCallId)) return undefined
+        return {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: candidate.toolCallId,
+          ...(opens ? { name } : {}),
+          output: "",
+          failed: candidate.failed,
+          app: true,
+        }
+      }
       case TurnEventKind.PlanUpdated:
         return { kind: TurnEventKind.PlanUpdated, todos: candidate.todos }
       case TurnEventKind.ArtifactPublished:

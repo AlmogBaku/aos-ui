@@ -373,6 +373,8 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     durationMs: CountSchema.optional(),
     /** The tool declares an MCP App view the browser may open for this call. */
     app: z.literal(true).optional(),
+    /** The call's name, when this finish is the first its reader sees of it. */
+    name: z.string().min(1).optional(),
   }),
   /**
    * One step of a terminal a tool call runs, after that call started: the

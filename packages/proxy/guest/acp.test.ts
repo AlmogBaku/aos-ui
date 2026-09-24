@@ -1039,6 +1039,65 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
+  it("shows an App card flagged only at its finish as a settled card", async () => {
+    const test = harness({
+      handle: () =>
+        terminalHandle([
+          { kind: TurnEventKind.TurnStarted },
+          {
+            kind: TurnEventKind.ToolCallStarted,
+            toolCallId: "late-app",
+            title: "private title",
+            name: APP_TOOL,
+            parentMessageId: "assistant-native",
+          },
+          {
+            kind: TurnEventKind.ToolCallInputChunk,
+            toolCallId: "late-app",
+            delta: '{"title":"private app input"}',
+          },
+          {
+            kind: TurnEventKind.ToolCallFinished,
+            toolCallId: "late-app",
+            output: "private app output",
+            failed: false,
+            app: true,
+          },
+          {
+            kind: TurnEventKind.MessageChunk,
+            messageId: "assistant-native",
+            text: "Guest-visible answer",
+          },
+          { kind: TurnEventKind.TurnEnded },
+        ]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Start the interview")
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
+      "an update carrying Guest-visible answer"
+    )
+    expect(
+      updates(test.recorder).flatMap(({ update }) =>
+        "toolCallId" in update ? [update] : []
+      )
+    ).toMatchObject([
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "late-app",
+        title: APP_TOOL,
+        status: "completed",
+        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
+      },
+    ])
+    expect(JSON.stringify(updates(test.recorder))).not.toContain("private")
+    test.close()
+  })
+
   it("streams a failed turn without the location its provider detail names", async () => {
     const test = harness({
       handle: () =>

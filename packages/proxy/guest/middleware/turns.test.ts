@@ -151,16 +151,6 @@ describe("guest turn projection", () => {
       failed: false,
       app: true,
     })
-    // A call flagged only at its settling had no card to settle.
-    expect(
-      projectOne({
-        kind: TurnEventKind.ToolCallFinished,
-        toolCallId: "chart-2",
-        output: "private data",
-        failed: false,
-        app: true,
-      })
-    ).toBeUndefined()
     expect(
       projectOne({
         kind: TurnEventKind.ToolCallStarted,
@@ -344,6 +334,55 @@ describe("guest turn projection", () => {
       message: guestErrorDescription("request_failed"),
       awaitingStop: true,
     })
+  })
+})
+
+describe("a tool call flagged an MCP App only at its finish", () => {
+  /** A hidden start, then its finish, through one guest's projector. */
+  const settled = (app: boolean) => {
+    const projector = projectorOf()
+    const projectOne = (event: TurnEvent) =>
+      projector(TurnEventSchema.parse(event))
+    const started = projectOne({
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId: "chart-2",
+      title: "Render private chart",
+      name: "render_chart",
+      parentMessageId: "assistant-native",
+      locations: [{ path: "/srv/private" }],
+    })
+    const input = projectOne({
+      kind: TurnEventKind.ToolCallInputChunk,
+      toolCallId: "chart-2",
+      delta: '{"title":"private input"}',
+    })
+    const finished = projectOne({
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "chart-2",
+      output: "private data",
+      failed: true,
+      ...(app ? { app: true as const } : {}),
+    })
+    return { started, input, finished }
+  }
+
+  it("reaches the guest at its finish as a settled card under its name alone", () => {
+    expect(settled(true)).toEqual({
+      started: undefined,
+      input: undefined,
+      finished: {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "chart-2",
+        name: "render_chart",
+        output: "",
+        failed: true,
+        app: true,
+      },
+    })
+  })
+
+  it("stays hidden when its finish is not flagged either", () => {
+    expect(settled(false).finished).toBeUndefined()
   })
 })
 
