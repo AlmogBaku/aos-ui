@@ -182,9 +182,10 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
             version: 1,
             lane: "guest",
             extensions: {
-              steer: false,
-              rewind: false,
-              composerPrefill: false,
+              // The guest lane carries the operator's conversation controls.
+              steer: true,
+              rewind: true,
+              composerPrefill: true,
               agents: false,
               invalidation: false,
               activity: false,
