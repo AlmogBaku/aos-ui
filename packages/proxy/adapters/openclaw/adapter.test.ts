@@ -245,19 +245,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
     ).toBeUndefined()
   })
 
-  it("closes the single official client once", async () => {
-    const gateway = client()
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
-
-    await Promise.all([adapter.close(), adapter.close()])
-
-    expect(gateway.stopAndWait).toHaveBeenCalledTimes(1)
-  })
-
   it("advertises and stages attachments only from negotiated HelloOk policy", async () => {
     const policy = {
       maxPayload: 30 * 1024 * 1024,

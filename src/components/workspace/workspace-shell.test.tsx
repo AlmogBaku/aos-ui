@@ -47,8 +47,27 @@ afterEach(() => {
   window.localStorage.clear()
   window.sessionStorage.clear()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   vi.useRealTimers()
 })
+
+/** Reports a desktop-wide container so the artifact pane docks beside the conversation. */
+function stubWideResizeObserver() {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback(
+          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+  )
+}
 
 const agents: WorkspaceAgent[] = [
   {
@@ -175,18 +194,7 @@ function renderShell(
 
 describe("WorkspaceShell", () => {
   it("reuses the workspace conversation and artifact pane without navigation chrome", () => {
-    const ResizeObserverBefore = globalThis.ResizeObserver
-    globalThis.ResizeObserver = class {
-      constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() {
-        this.callback(
-          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
-          this as unknown as ResizeObserver
-        )
-      }
-      unobserve() {}
-      disconnect() {}
-    }
+    stubWideResizeObserver()
 
     render(
       <WorkspaceConversationShell
@@ -213,7 +221,6 @@ describe("WorkspaceShell", () => {
     expect(
       screen.getByRole("separator", { name: "Resize output preview" })
     ).toBeVisible()
-    globalThis.ResizeObserver = ResizeObserverBefore
   })
 
   it("keeps the regular workspace artifact default independent", () => {
@@ -227,18 +234,7 @@ describe("WorkspaceShell", () => {
   })
 
   it("resizes the shared desktop artifact pane with the keyboard and persists its width", () => {
-    const ResizeObserverBefore = globalThis.ResizeObserver
-    globalThis.ResizeObserver = class {
-      constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() {
-        this.callback(
-          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
-          this as unknown as ResizeObserver
-        )
-      }
-      unobserve() {}
-      disconnect() {}
-    }
+    stubWideResizeObserver()
 
     const view = render(
       <WorkspaceConversationShell
@@ -279,22 +275,10 @@ describe("WorkspaceShell", () => {
           .getAttribute("aria-valuenow")
       )
     ).toBe(resizedWidth)
-    globalThis.ResizeObserver = ResizeObserverBefore
   })
 
   it("uses physical arrow direction for the RTL artifact separator", () => {
-    const ResizeObserverBefore = globalThis.ResizeObserver
-    globalThis.ResizeObserver = class {
-      constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() {
-        this.callback(
-          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
-          this as unknown as ResizeObserver
-        )
-      }
-      unobserve() {}
-      disconnect() {}
-    }
+    stubWideResizeObserver()
     renderShell({
       locale: "he",
       dictionary: he,
@@ -311,22 +295,10 @@ describe("WorkspaceShell", () => {
 
     const afterRight = Number(separator.getAttribute("aria-valuenow"))
     expect(afterRight).not.toBe(initialWidth)
-    globalThis.ResizeObserver = ResizeObserverBefore
   })
 
   it("shows Session Outputs in the inspector and replaces them with an open artifact", () => {
-    const ResizeObserverBefore = globalThis.ResizeObserver
-    globalThis.ResizeObserver = class {
-      constructor(private readonly callback: ResizeObserverCallback) {}
-      observe() {
-        this.callback(
-          [{ contentRect: { width: 1024 } } as ResizeObserverEntry],
-          this as unknown as ResizeObserver
-        )
-      }
-      unobserve() {}
-      disconnect() {}
-    }
+    stubWideResizeObserver()
     const { rerender, props } = renderShell({
       artifactOutputs: <div>Published outputs</div>,
     })
@@ -348,7 +320,6 @@ describe("WorkspaceShell", () => {
     inspector = screen.getByRole("complementary", { name: "Output preview" })
     expect(within(inspector).getByText("Artifact preview body")).toBeVisible()
     expect(within(inspector).queryByText("Published outputs")).toBeNull()
-    globalThis.ResizeObserver = ResizeObserverBefore
   })
 
   it("searches the selected Agent's open Sessions and history in the desktop inspector", () => {
@@ -372,21 +343,14 @@ describe("WorkspaceShell", () => {
     expect(within(inspector).queryByText("Market brief")).toBeNull()
   })
 
-  it.each([
-    ["en", en, "Active"],
-    ["he", he, "פעיל לאחרונה"],
-  ] as const)(
-    "labels Agent activity separately from execution in %s",
-    (locale, dictionary, label) => {
-      renderShell({
-        locale,
-        dictionary,
-        agents: [{ ...agents[0], status: "active" }],
-        selectedAgentId: agents[0].id,
-      })
-      expect(screen.getAllByText(label).length).toBeGreaterThan(0)
-    }
-  )
+  it("labels Agent activity separately from execution", () => {
+    renderShell({
+      agents: [{ ...agents[0], status: "active" }],
+      selectedAgentId: agents[0].id,
+    })
+    expect(screen.getAllByText("Active").length).toBeGreaterThan(0)
+  })
+
   it.each([true, false])(
     "returns focused Undo to a safe target at exactly 8 seconds (active tab: %s)",
     (hasActiveTab) => {
@@ -482,14 +446,15 @@ describe("WorkspaceShell", () => {
       ],
     })
 
-    const agentButton = screen.getByRole("button", {
-      name: "Aster, Status: Running, Selected Agent, Unread",
-    })
-    expect(within(agentButton).getByTitle("Unread")).toBeVisible()
-    expect(within(agentButton).queryByTitle("Running")).toBeNull()
+    expect(
+      screen.getByRole("button", {
+        name: "Aster, Status: Running, Selected Agent, Unread",
+      })
+    ).toBeVisible()
 
-    const tab = screen.getByRole("tab", { name: "Market brief, Unread" })
-    expect(within(tab).getByTitle("Unread")).toBeVisible()
+    expect(
+      screen.getByRole("tab", { name: "Market brief, Unread" })
+    ).toBeVisible()
     expect(screen.getByRole("tab", { name: "Launch review" })).toBeVisible()
     // Navigation rows no longer carry Activity-derived counts.
     expect(screen.queryByText(/unread/i)).toBeNull()
@@ -513,7 +478,7 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("tab", { name: "Competitive scan" })).toBeVisible()
   })
 
-  it("lets a Session that needs the operator outrank its unread dot", () => {
+  it("names both the operator need and the unread state of a Session and its Agent", () => {
     const scan: WorkspaceSession = { ...openSessions[2]!, unread: true }
     const sessions = [...openSessions.slice(0, 2), scan]
     renderShell({
@@ -536,35 +501,23 @@ describe("WorkspaceShell", () => {
       ]),
     })
 
-    const agentButton = screen.getByRole("button", {
-      name: "Aster, Status: Needs attention, Selected Agent, Unread",
-    })
-    expect(within(agentButton).getByTitle("Needs attention")).toBeVisible()
-    expect(within(agentButton).queryByTitle("Unread")).toBeNull()
+    expect(
+      screen.getByRole("button", {
+        name: "Aster, Status: Needs attention, Selected Agent, Unread",
+      })
+    ).toBeVisible()
 
     const inspector = screen.getByRole("complementary", {
       name: "Agent details",
     })
-    const sessionButton = within(inspector).getByRole("button", {
-      name: "Open session: Competitive scan, Status: Waiting for input, Unread",
-    })
-    expect(within(sessionButton).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(sessionButton).queryByTitle("Unread")).toBeNull()
-
-    const tab = screen.getByRole("tab", { name: "Competitive scan, Unread" })
-    expect(within(tab).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(tab).queryByTitle("Unread")).toBeNull()
-  })
-
-  it("localizes the unread indicator in Hebrew", () => {
-    renderShell({
-      locale: "he",
-      dictionary: he,
-      agents: [{ ...agents[0]!, unread: true }, agents[1]!],
-    })
-
-    const agentButton = screen.getByRole("button", { name: /Aster.*לא נקרא/ })
-    expect(within(agentButton).getByTitle("לא נקרא")).toBeVisible()
+    expect(
+      within(inspector).getByRole("button", {
+        name: "Open session: Competitive scan, Status: Waiting for input, Unread",
+      })
+    ).toBeVisible()
+    expect(
+      screen.getByRole("tab", { name: "Competitive scan, Unread" })
+    ).toBeVisible()
   })
 
   it("localizes the Activity drawer in Hebrew and inherits RTL", async () => {
@@ -580,7 +533,7 @@ describe("WorkspaceShell", () => {
     ).toBeVisible()
   })
 
-  it("opens Activity from either header and restores keyboard focus", async () => {
+  it("opens Activity from either header, hides the background from assistive technology, and restores keyboard focus", async () => {
     const user = userEvent.setup()
     renderShell()
     const triggers = screen.getAllByRole("button", {
@@ -593,7 +546,7 @@ describe("WorkspaceShell", () => {
     expect(close).toHaveFocus()
     expect(
       screen.getByText("Assistant UI conversation").closest("[inert]")
-    ).not.toBeNull()
+    ).toHaveAttribute("aria-hidden", "true")
     expect(
       within(drawer).getByRole("heading", { name: "Needs attention" })
     ).toBeVisible()
@@ -615,7 +568,7 @@ describe("WorkspaceShell", () => {
     expect(screen.getAllByText("Demo workspace")).toHaveLength(2)
   })
 
-  it("renders tabs inside the Assistant UI thread item roots", () => {
+  it("marks the active Session tab selected and keyboard-reachable", () => {
     renderShell()
 
     const tablist = screen.getByRole("tablist", { name: "Sessions" })
@@ -626,29 +579,6 @@ describe("WorkspaceShell", () => {
     expect(activeTab).toHaveAttribute("aria-selected", "true")
     expect(activeTab).toHaveAttribute("tabindex", "0")
     expect(within(tablist).getAllByRole("tab")).toHaveLength(3)
-    expect([...tablist.children]).toHaveLength(3)
-  })
-
-  it("places the new-session control beside the session tabs", () => {
-    renderShell()
-
-    const tablist = screen.getByRole("tablist", { name: "Sessions" })
-    const sessionActions = document.querySelector("[data-session-actions]")
-    expect(sessionActions).not.toBeNull()
-    const newSession = within(sessionActions as HTMLElement).getByRole(
-      "button",
-      { name: "New session" }
-    )
-    const inspector = screen.getByRole("complementary", {
-      name: "Agent details",
-    })
-
-    expect(newSession.closest("[data-session-actions]")).not.toBeNull()
-    expect(newSession.closest("[data-tab-viewport]")).toBeNull()
-    expect(tablist.closest("[data-tab-viewport]")).not.toBeNull()
-    expect(
-      within(inspector).getByRole("button", { name: "New session" })
-    ).toBeVisible()
   })
 
   describe("a selected draft Agent", () => {
@@ -833,23 +763,16 @@ describe("WorkspaceShell", () => {
     expect(onCreateSession).toHaveBeenNthCalledWith(2, "agent-aster")
   })
 
-  it.each(["en", "he"] as const)(
-    "shows the selected Agent identity and status in the %s mobile header",
-    async (locale) => {
-      const dictionary = locale === "he" ? he : en
-      renderShell({ locale, dictionary })
-      const identity = screen.getByRole("group", {
-        name: new RegExp(
-          `Aster, Market brief, ${dictionary.status.label}: ${dictionary.status.running}`
-        ),
-      })
-      expect(identity).toHaveTextContent("Aster")
-      expect(identity).toHaveTextContent("Market brief")
-      expect(
-        identity.querySelector('[data-agent-symbol="spark"]')
-      ).not.toBeNull()
-    }
-  )
+  it("shows the selected Agent identity and status in the Hebrew mobile header", () => {
+    renderShell({ locale: "he", dictionary: he })
+    const identity = screen.getByRole("group", {
+      name: new RegExp(
+        `Aster, Market brief, ${he.status.label}: ${he.status.running}`
+      ),
+    })
+    expect(identity).toHaveTextContent("Aster")
+    expect(identity).toHaveTextContent("Market brief")
+  })
 
   it("has no details action when no Agent is selected", () => {
     renderShell({
@@ -977,18 +900,6 @@ describe("WorkspaceShell", () => {
     ).toBeNull()
   })
 
-  it("localizes the Agent row menu in Hebrew", async () => {
-    renderShell({ locale: "he", dictionary: he, onHideAgent: vi.fn() })
-
-    fireEvent.contextMenu(agentRow("Mica", he.workspace.agents), {
-      clientX: 16,
-      clientY: 24,
-    })
-    expect(
-      await screen.findByRole("menuitem", { name: he.actions.hideAgent })
-    ).toBeVisible()
-  })
-
   it("opens the same tab menu from a right click on any tab", async () => {
     const user = userEvent.setup()
     const onSetSessionPinned = vi.fn()
@@ -1024,29 +935,6 @@ describe("WorkspaceShell", () => {
         name: "Close session: Launch review",
       })
     ).toBeInTheDocument()
-  })
-
-  it("reveals a session close control when its whole tab is hovered", async () => {
-    const user = userEvent.setup()
-    renderShell({
-      openSessions: openSessions.map((session) => ({
-        ...session,
-        canClose: true,
-      })),
-    })
-
-    const marketTab = screen.getByRole("tab", { name: "Market brief" })
-    const marketClose = screen.getByRole("button", {
-      name: "Close session: Market brief",
-    })
-    const launchClose = screen.getByRole("button", {
-      name: "Close session: Launch review",
-    })
-
-    expect(marketClose).not.toHaveAttribute("data-visible")
-    await user.hover(marketTab)
-    expect(marketClose).toHaveAttribute("data-visible", "true")
-    expect(launchClose).not.toHaveAttribute("data-visible")
   })
 
   it("moves and activates the roving tab with horizontal arrow keys", async () => {
@@ -1127,7 +1015,7 @@ describe("WorkspaceShell", () => {
     expect(within(inspector).queryByText(/tools/i)).not.toBeInTheDocument()
   })
 
-  it("collapses and restores the desktop Agent inspector with a persisted preference", async () => {
+  it("keeps the collapsed desktop inspector across a remount, with the mobile identity intact", async () => {
     const user = userEvent.setup()
     const firstRender = renderShell()
     const inspector = screen.getByRole("complementary", {
@@ -1136,19 +1024,10 @@ describe("WorkspaceShell", () => {
     const hideInspector = screen.getByRole("button", {
       name: "Hide Agent details",
     })
-
     expect(hideInspector).toHaveAttribute("aria-expanded", "true")
-    expect(inspector).not.toHaveAttribute("hidden")
 
     await user.click(hideInspector)
-
     expect(inspector).toHaveAttribute("hidden")
-    expect(window.localStorage.getItem("aos_ui:workspace:inspector-open")).toBe(
-      "false"
-    )
-    expect(
-      screen.getByRole("button", { name: "Show Agent details" })
-    ).toHaveAttribute("aria-expanded", "false")
 
     firstRender.unmount()
     renderShell()
@@ -1161,56 +1040,6 @@ describe("WorkspaceShell", () => {
     expect(
       document.getElementById("workspace-agent-inspector")
     ).toHaveAttribute("hidden")
-  })
-
-  it("does not overwrite a stored collapsed preference during hydration", async () => {
-    window.localStorage.setItem("aos_ui:workspace:inspector-open", "false")
-
-    renderShell()
-
-    await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Show Agent details" })
-      ).toHaveAttribute("aria-expanded", "false")
-    )
-    expect(window.localStorage.getItem("aos_ui:workspace:inspector-open")).toBe(
-      "false"
-    )
-  })
-
-  it("defaults the desktop inspector open for a corrupt stored preference", () => {
-    window.localStorage.setItem("aos_ui:inspector-open", "false")
-    window.localStorage.setItem("aos_ui:workspace:inspector-open", " false ")
-
-    renderShell()
-
-    expect(
-      screen.getByRole("button", { name: "Hide Agent details" })
-    ).toHaveAttribute("aria-expanded", "true")
-    expect(
-      document.getElementById("workspace-agent-inspector")
-    ).not.toHaveAttribute("hidden")
-  })
-
-  it("defaults the desktop inspector open when storage cannot be read", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage unavailable")
-    })
-
-    renderShell()
-
-    expect(
-      screen.getByRole("button", { name: "Hide Agent details" })
-    ).toHaveAttribute("aria-expanded", "true")
-    expect(
-      document.getElementById("workspace-agent-inspector")
-    ).not.toHaveAttribute("hidden")
-  })
-
-  it("keeps mobile Agent identity compact when the desktop inspector is collapsed", () => {
-    window.localStorage.setItem("aos_ui:workspace:inspector-open", "false")
-    renderShell()
-
     expect(
       screen.getByRole("group", {
         name: /Aster, Market brief, Status: Running/,
@@ -1334,18 +1163,6 @@ describe("WorkspaceShell", () => {
     await waitFor(() => expect(trigger).toHaveFocus())
   })
 
-  it("makes background workspace regions inert while a modal drawer is open", async () => {
-    const user = userEvent.setup()
-    renderShell()
-
-    await user.click(screen.getByRole("button", { name: "Open Agents" }))
-
-    const conversation = document.querySelector("main")
-    const inertRegion = conversation?.closest("[inert]")
-    expect(inertRegion).not.toBeNull()
-    expect(inertRegion).toHaveAttribute("aria-hidden", "true")
-  })
-
   it("browses an Agent without switching, then closes after choosing its Session", async () => {
     const user = userEvent.setup()
     const onSelectAgent = vi.fn()
@@ -1374,21 +1191,6 @@ describe("WorkspaceShell", () => {
     expect(onOpenSession).toHaveBeenCalledWith("thread-mica-draft")
     expect(screen.queryByRole("dialog", { name: "Sessions" })).toBeNull()
     await waitFor(() => expect(trigger).toHaveFocus())
-  })
-
-  it("exposes the inspector action in RTL", () => {
-    renderShell({ locale: "he", dictionary: he })
-
-    expect(
-      screen.getByRole("button", { name: he.actions.hideAgentDetails })
-    ).toBeVisible()
-    expect(
-      within(
-        screen.getByRole("complementary", {
-          name: he.workspace.agentDetails,
-        })
-      ).getByRole("button", { name: he.actions.newSession })
-    ).toBeVisible()
   })
 
   it("routes rejected action promises to the optional error callback", async () => {

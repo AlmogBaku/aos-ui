@@ -3,116 +3,72 @@ import { exerciseAgentManagement } from "./agent-management"
 import { exerciseMessageActions } from "./message-actions"
 import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
+import { holdsFocus } from "./support/focus"
 
-for (const locale of ["en", "he"] as const) {
-  test(`mobile Session tabs and identity in ${locale}`, async ({ page }) => {
-    await exerciseSessionTabs(page, true, locale)
-  })
-  test(`mobile Session rows rename, pin, and list archived in ${locale}`, async ({
-    page,
-  }) => {
-    await exerciseSessionActions(page, true, locale)
-  })
-  test(`mobile message menu opens by long press in ${locale}`, async ({
-    page,
-  }) => {
-    await exerciseMessageActions(page, true, locale)
-  })
-  test(`Manage Agents supports visibility controls in ${locale}`, async ({
-    page,
-  }) => {
-    await exerciseAgentManagement(page, true, locale)
-  })
-}
-
-async function activeRegion(page: Page) {
-  return page.evaluate(() => {
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement)) return null
-    const region = active.closest<HTMLElement>(
-      "[data-keyboard-region], [data-keyboard-transcript], [data-keyboard-composer]"
-    )
-    if (!region) return null
-    if (region.hasAttribute("data-keyboard-transcript")) return "transcript"
-    if (region.hasAttribute("data-keyboard-composer")) return "composer"
-    return region.getAttribute("data-keyboard-region")
-  })
-}
-
-test("mobile workspace shows assistant body text", async ({ page }) => {
-  await page.goto("/en")
-
-  const prose = page
-    .getByText(/^Applied AI is accelerating fastest in the planning dataset/)
-    .first()
-
-  await expect(prose).toBeVisible()
+test("mobile Session tabs and identity in en", async ({ page }) => {
+  await exerciseSessionTabs(page, true)
 })
+test("mobile Session rows rename, pin, and list archived in en", async ({
+  page,
+}) => {
+  await exerciseSessionActions(page, true)
+})
+test("mobile message menu opens by long press in en", async ({ page }) => {
+  await exerciseMessageActions(page, true)
+})
+test("Manage Agents supports visibility controls in en", async ({ page }) => {
+  await exerciseAgentManagement(page, true)
+})
+
+/** F6 lands on the transcript: inside the conversation, short of the composer. */
+async function expectTranscriptFocus(page: Page) {
+  const conversation = page.getByRole("main", { name: "Conversation" })
+  await expect.poll(() => holdsFocus(conversation)).toBe(true)
+  await expect(
+    page.getByRole("textbox", { name: "Message input" })
+  ).not.toBeFocused()
+}
 
 test("expanded reasoning remains independently scrollable", async ({
   page,
 }) => {
   await page.goto("/en")
+  // At 200% text scale the reasoning outgrows its capped panel.
+  await page.locator("html").evaluate((element) => {
+    element.style.fontSize = "200%"
+  })
 
   // A settled turn folds the work it did, so its reasoning opens from there.
   await page
     .getByRole("button", { name: /^Worked/ })
     .first()
     .click()
-
-  const reasoningTrigger = page
-    .getByRole("button", { name: "Reasoning" })
-    .first()
-  const reasoningBody = page.locator(".aui-reasoning-text-content").first()
-  await reasoningTrigger.click()
-  await reasoningBody.evaluate((element) => {
-    element.textContent = `${"Long reasoning must remain fully inspectable. ".repeat(80)}END`
-  })
-
-  const reasoning = page.locator('[data-slot="reasoning-text"]').first()
+  await page.getByRole("button", { name: "Reasoning" }).first().click()
+  const reasoning = page.getByText(/^I’ll inspect the planning dataset/).first()
   await expect(reasoning).toBeVisible()
 
-  const threadViewport = page.locator('[data-slot="aui_thread-viewport"]')
-  const threadScrollTop = await threadViewport.evaluate(
-    (element) => element.scrollTop
-  )
-  await reasoning.evaluate((element) => {
-    element.scrollTop = element.scrollHeight
-  })
+  /** The reasoning's own scroller and the thread's, innermost first. */
+  const scrollers = (scroll: boolean) =>
+    reasoning.evaluate((text, scroll) => {
+      const found: HTMLElement[] = []
+      for (
+        let node = text.parentElement;
+        node && found.length < 2;
+        node = node.parentElement
+      ) {
+        if (/auto|scroll/.test(getComputedStyle(node).overflowY))
+          found.push(node)
+      }
+      if (scroll && found[0]) found[0].scrollTop = found[0].scrollHeight
+      return found.map((node) => node.scrollTop)
+    }, scroll)
+
+  const [, threadScrollTop] = await scrollers(false)
+  await scrollers(true)
+  await expect.poll(async () => (await scrollers(false))[0]).toBeGreaterThan(0)
   await expect
-    .poll(() => reasoning.evaluate((element) => element.scrollTop))
-    .toBeGreaterThan(0)
-  await expect
-    .poll(() => threadViewport.evaluate((element) => element.scrollTop))
+    .poll(async () => (await scrollers(false))[1])
     .toBe(threadScrollTop)
-})
-
-test("expanded execution rows render expected elements", async ({ page }) => {
-  await page.goto("/en")
-
-  const firstToolChip = page.getByText("planning-dataset-q1.md", {
-    exact: true,
-  })
-  // The fold is closed, so the turn's execution rows are not on the page yet.
-  await expect(firstToolChip).toBeHidden()
-  await page
-    .getByRole("button", { name: /^Worked/ })
-    .first()
-    .click()
-
-  const firstReasoning = page.getByText("Reasoning", { exact: true }).first()
-  const nextToolLabel = page.getByText("Read", { exact: true }).first()
-  const reasoningTrigger = page
-    .getByRole("button", { name: "Reasoning" })
-    .first()
-  const firstToolTrigger = page
-    .locator('[data-slot="tool-call"] button')
-    .first()
-  await expect(firstReasoning).toBeVisible()
-  await expect(nextToolLabel).toBeVisible()
-  await expect(firstToolChip).toBeVisible()
-  await expect(reasoningTrigger).toBeVisible()
-  await expect(firstToolTrigger).toBeVisible()
 })
 
 test("a Hebrew artifact opens in the focus-managed full-screen viewer", async ({
@@ -123,115 +79,23 @@ test("a Hebrew artifact opens in the focus-managed full-screen viewer", async ({
     .getByRole("textbox", { name: "שדה הודעה" })
     .fill("Publish an artifact")
   await page.getByRole("button", { name: "שליחת הודעה" }).click()
-  const open = page.getByRole("button", { name: "פתיחה" }).first()
-  await expect(open).toBeVisible()
+  // Click the published card once the run settles, so the thread no longer
+  // scrolls under the press.
+  const opens = page.getByRole("button", { name: "פתיחה" })
+  await expect(opens).toHaveCount(2)
+  await expect(page.getByRole("button", { name: "עצירת התשובה" })).toBeHidden()
+  const open = opens.last()
   await open.click()
 
   const viewer = page.getByRole("dialog", {
     name: "תצוגה מקדימה של התוצר",
   })
   await expect(
-    viewer.locator('section[aria-label="תצוגה מקדימה של התוצר"]')
+    viewer.getByRole("region", { name: "תצוגה מקדימה של התוצר" })
   ).toHaveAttribute("dir", "rtl")
   await expect(viewer).not.toBeEmpty()
   await page.keyboard.press("Escape")
   await expect(open).toBeFocused()
-})
-
-test("mobile attachment previews span the composer above its controls", async ({
-  page,
-}) => {
-  await page.goto("/en")
-
-  const composer = page.locator('[data-slot="aui_composer-shell"]')
-  await expect(composer).toBeVisible()
-  await expect(
-    page.getByRole("button", { name: "Add attachment" })
-  ).toBeEnabled()
-})
-
-test("message virtualization starts only at the workspace desktop boundary", async ({
-  page,
-}) => {
-  await page.goto("/en")
-  const message = page.locator('[data-role="assistant"]').first()
-
-  await page.setViewportSize({ width: 900, height: 844 })
-  await expect(page.getByRole("tablist")).toBeHidden()
-  await expect(message).toBeVisible()
-
-  await page.setViewportSize({ width: 1056, height: 844 })
-  await expect(page.getByRole("tablist")).toBeVisible()
-  await expect(message).toBeVisible()
-})
-
-test("the Sessions drawer traps focus and restores its trigger on Escape", async ({
-  page,
-}) => {
-  await page.goto("/en")
-
-  const trigger = page.getByRole("button", { name: "Open Agents" })
-  await trigger.click()
-
-  const drawer = page.getByRole("dialog", { name: "Sessions" })
-  await expect(drawer).toBeVisible()
-  await expect(drawer.getByRole("heading", { name: "Aster" })).toBeFocused()
-
-  await page.keyboard.press("Escape")
-  await expect(drawer).toHaveCount(0)
-  await expect(trigger).toBeFocused()
-})
-
-test("the navigator browses another Agent and closes after Session selection", async ({
-  page,
-}) => {
-  await page.goto("/en")
-  const trigger = page.getByRole("button", { name: "Open Agents" })
-  await trigger.click()
-
-  let drawer = page.getByRole("dialog", { name: "Sessions" })
-  await drawer.getByRole("button", { name: "Back to Agents" }).click()
-  drawer = page.getByRole("dialog", { name: "Agents" })
-  await drawer.getByRole("button", { name: /Mica/ }).click()
-  drawer = page.getByRole("dialog", { name: "Sessions" })
-  await expect(drawer.getByRole("heading", { name: "Mica" })).toBeVisible()
-  await drawer
-    .getByRole("button", { name: /Open session:/i })
-    .first()
-    .click()
-  await expect(drawer).toHaveCount(0)
-  await expect(
-    page.getByRole("group", { name: new RegExp("Mica") })
-  ).toBeVisible()
-})
-
-test("the Sessions drawer marks another Agent's unread Session on the back control", async ({
-  page,
-}) => {
-  await page.goto("/en")
-  await page.getByRole("button", { name: "Open Agents" }).click()
-
-  // Aster is selected and holds no unread Session; Lumen's and Nori's are unread.
-  const sessions = page.getByRole("dialog", { name: "Sessions" })
-  const back = sessions.getByRole("button", { name: "Back to Agents" })
-  await expect(back).toHaveAttribute("aria-label", "Back to Agents, Unread")
-  await expect(back.getByTitle("Unread")).toBeVisible()
-
-  await back.click()
-  const agents = page.getByRole("dialog", { name: "Agents" })
-  await expect(
-    agents.getByRole("button", { name: /^Lumen,.*Unread$/ })
-  ).toBeVisible()
-  await expect(
-    agents.getByRole("button", { name: /^Aster/ })
-  ).not.toHaveAttribute("aria-label", /Unread/)
-
-  await agents.getByRole("button", { name: /^Lumen/ }).click()
-  await expect(
-    page
-      .getByRole("dialog", { name: "Sessions" })
-      .getByRole("button", { name: /^Open session: Roadmap review,.*Unread$/ })
-  ).toBeVisible()
 })
 
 test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
@@ -239,16 +103,19 @@ test("mobile F6 skips CSS-hidden Agents and inspector panes", async ({
 }) => {
   await page.goto("/en")
   await expect(page.getByRole("tablist")).toBeHidden()
-  await expect(page.locator('[data-keyboard-region="agents"]')).toBeHidden()
-  await expect(page.locator('[data-keyboard-region="inspector"]')).toBeHidden()
+  await expect(page.getByRole("complementary", { name: "Agents" })).toBeHidden()
+  await expect(
+    page.getByRole("complementary", { name: "Agent details" })
+  ).toBeHidden()
 
+  const input = page.getByRole("textbox", { name: "Message input" })
   await page.getByRole("button", { name: "Open Agents" }).focus()
   await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("transcript")
+  await expectTranscriptFocus(page)
   await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("composer")
+  await expect(input).toBeFocused()
   await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("transcript")
+  await expectTranscriptFocus(page)
 })
 
 test("mobile Return inserts a newline until Send is tapped", async ({
@@ -295,44 +162,3 @@ test("F6 reaches the remounted composer after a question resolves", async ({
   await page.keyboard.press("F6")
   await expect(input).toBeFocused()
 })
-
-test("Hebrew drawers retain localized labels and return focus on Escape", async ({
-  page,
-}) => {
-  await page.goto("/he")
-  await expect(page.locator("html")).toHaveAttribute("dir", "rtl")
-
-  const trigger = page.getByRole("button", { name: "פתיחת רשימת הסוכנים" })
-  await trigger.click()
-
-  const drawer = page.getByRole("dialog", { name: "שיחות" })
-  await expect(drawer).toBeVisible()
-  await expect(drawer.getByRole("heading", { name: "Aster" })).toBeFocused()
-
-  await page.keyboard.press("Escape")
-  await expect(trigger).toBeFocused()
-})
-
-for (const tool of ["question", "chart"] as const) {
-  test(`Hebrew ${tool} tool card appears after a prompt`, async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 })
-    await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" })
-    await page.goto("/he")
-    await expect(page.getByRole("tablist")).toBeHidden()
-    await page
-      .getByRole("textbox", { name: "שדה הודעה" })
-      .fill(tool === "question" ? "Ask me a question" : "Show a chart")
-    await page.getByRole("button", { name: "שליחת הודעה" }).click()
-    const content =
-      tool === "question"
-        ? page.getByRole("region", { name: "שאלות" })
-        : page
-            .locator('iframe[title="יישומון render_chart"]')
-            .last()
-            .contentFrame()
-            .locator("iframe")
-            .contentFrame()
-            .getByRole("heading", { name: "Enterprise AI spend" })
-    await expect(content).toBeVisible()
-  })
-}

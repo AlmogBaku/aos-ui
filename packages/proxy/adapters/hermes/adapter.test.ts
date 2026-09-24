@@ -591,54 +591,7 @@ describe("Hermes server adapter", () => {
     })
   })
 
-  it("restores pending interactions from authoritative owned Session state", async () => {
-    // Hermes re-delivers a server request still waiting on this Session as an
-    // `open_requests` entry of the resume that rebinds it.
-    const router = rpcRouter({
-      "session.resume": async () => ({
-        session_id: "live-secret",
-        running: true,
-        open_requests: [
-          {
-            id: "srq-00000000000b",
-            method: "approval",
-            params: {
-              session_id: "live-secret",
-              request_id: "approval-1",
-              command: "Allow this action?",
-            },
-          },
-        ],
-      }),
-    })
-    const http = vi.fn(async (path: string) => {
-      if (path.startsWith("/api/sessions/stored?"))
-        return { id: "stored", profile: "researcher", title: "Owned" }
-      throw new Error(`unexpected ${path}`)
-    })
-    const adapter = new HermesServerAdapter({ ...router, http })
-
-    await expect(
-      adapter.pendingInteractions("researcher", "stored")
-    ).resolves.toMatchObject({
-      turnId: "aos-hermes-restored-interaction",
-      running: true,
-      status: "waiting-for-input",
-      requests: [
-        { requestId: "srq-00000000000b", kind: PendingRequestKind.Permission },
-      ],
-    })
-    expect(router.calls("session.resume")[0]?.params).toEqual({
-      session_id: "stored",
-      profile: "researcher",
-      omit_messages: true,
-    })
-    // The re-delivered request is never answered on AOS' behalf.
-    expect(router.requests.answer("srq-00000000000b")).toBeUndefined()
-    expect(router.requests.refusal("srq-00000000000b")).toBeUndefined()
-  })
-
-  it("reconciles interactions through a fresh resume that re-delivers what is still open", async () => {
+  it("restores pending interactions from owned Session state and reconciles them through a fresh resume that re-delivers what is still open", async () => {
     // A heal rebinds the Session, so reconciliation must ask Hermes again: only
     // its own `open_requests` re-delivery confirms the request is still open,
     // and a cached binding would expire a card the user can still answer.
@@ -666,12 +619,21 @@ describe("Hermes server adapter", () => {
     const reconciled = await adapter.pendingInteractions("researcher", "stored")
 
     expect(router.calls("session.resume")).toHaveLength(2)
+    expect(router.calls("session.resume")[0]?.params).toEqual({
+      session_id: "stored",
+      profile: "researcher",
+      omit_messages: true,
+    })
     expect(reconciled).toMatchObject({
+      turnId: "aos-hermes-restored-interaction",
+      running: true,
       status: "waiting-for-input",
       requests: [
         { requestId: "srq-00000000000c", kind: PendingRequestKind.Elicitation },
       ],
     })
+    // The re-delivered request is never answered on AOS' behalf.
+    expect(router.requests.answer("srq-00000000000c")).toBeUndefined()
     expect(router.requests.refusal("srq-00000000000c")).toBeUndefined()
   })
 
@@ -1551,17 +1513,24 @@ describe("Hermes server adapter", () => {
     ).resolves.toMatchObject({ status: "idle" })
   })
 
-  it("projects the native derived read state per catalog row and omits it when absent", async () => {
+  it("projects the native derived read state and pin per catalog row and omits each when absent", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(),
       http: vi.fn(async () => ({
         sessions: [
-          { id: "stored/1", profile: "researcher", title: "One", unread: true },
+          {
+            id: "stored/1",
+            profile: "researcher",
+            title: "One",
+            unread: true,
+            pinned: true,
+          },
           {
             id: "stored/2",
             profile: "researcher",
             title: "Two",
             unread: false,
+            pinned: false,
           },
           { id: "stored/3", profile: "researcher", title: "Three" },
         ],
@@ -1576,67 +1545,31 @@ describe("Hermes server adapter", () => {
       false,
       undefined,
     ])
-    expect(Object.keys(page.sessions[2])).not.toContain("unread")
-  })
-
-  it("treats a non-boolean native read state as a malformed catalog payload", async () => {
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(),
-      http: vi.fn(async () => ({
-        sessions: [
-          { id: "stored/1", profile: "researcher", title: "One", unread: 1 },
-        ],
-        total: 1,
-      })),
-    })
-
-    await expect(
-      adapter.listSessions("researcher", 50, 0)
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
-  })
-
-  it("projects the native pin per catalog row and omits it when absent", async () => {
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(),
-      http: vi.fn(async () => ({
-        sessions: [
-          { id: "stored/1", profile: "researcher", title: "One", pinned: true },
-          {
-            id: "stored/2",
-            profile: "researcher",
-            title: "Two",
-            pinned: false,
-          },
-          { id: "stored/3", profile: "researcher", title: "Three" },
-        ],
-        total: 3,
-      })),
-    })
-
-    const page = await adapter.listSessions("researcher", 50, 0)
-
     expect(page.sessions.map((entry) => entry.pinned)).toEqual([
       true,
       false,
       undefined,
     ])
+    expect(Object.keys(page.sessions[2])).not.toContain("unread")
     expect(Object.keys(page.sessions[2])).not.toContain("pinned")
   })
 
-  it("treats a non-boolean native pin as a malformed catalog payload", async () => {
-    const adapter = new HermesServerAdapter({
-      request: vi.fn(),
-      http: vi.fn(async () => ({
-        sessions: [
-          { id: "stored/1", profile: "researcher", title: "One", pinned: 1 },
-        ],
-        total: 1,
-      })),
-    })
+  it("treats a non-boolean native read state or pin as a malformed catalog payload", async () => {
+    for (const flag of [{ unread: 1 }, { pinned: 1 }]) {
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(),
+        http: vi.fn(async () => ({
+          sessions: [
+            { id: "stored/1", profile: "researcher", title: "One", ...flag },
+          ],
+          total: 1,
+        })),
+      })
 
-    await expect(
-      adapter.listSessions("researcher", 50, 0)
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
+      await expect(
+        adapter.listSessions("researcher", 50, 0)
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    }
   })
 
   it("reads the stored flags the Session detail read reports as integers", async () => {
@@ -1680,7 +1613,7 @@ describe("Hermes server adapter", () => {
     expect(Object.keys(session)).not.toContain("unread")
   })
 
-  it("marks a Session read with the exact native profile-scoped patch body", async () => {
+  it("marks a Session read and pins it with the exact native profile-scoped patch bodies", async () => {
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions/stored%2F1?"))
         return { id: "stored/1", profile: "researcher", title: "One" }
@@ -1696,15 +1629,6 @@ describe("Hermes server adapter", () => {
       "/api/sessions/stored%2F1?profile=researcher",
       { method: "PATCH", body: { unread: false, profile: "researcher" } }
     )
-  })
-
-  it("pins a Session with the exact native profile-scoped patch body", async () => {
-    const http = vi.fn(async (path: string) => {
-      if (path.startsWith("/api/sessions/stored%2F1?"))
-        return { id: "stored/1", profile: "researcher", title: "One" }
-      throw new Error(`unexpected ${path}`)
-    })
-    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
 
     await adapter.updateSession("researcher", "stored/1", {
       pinned: true,
@@ -1716,23 +1640,13 @@ describe("Hermes server adapter", () => {
     )
   })
 
-  it("declares the native pin available", async () => {
+  it("declares the native pin and read state available, and read state temporarily unavailable during an outage", async () => {
     const ready = new HermesServerAdapter({
       request: vi.fn(async () => ({ profiles: [profile()] })),
     })
-
-    expect((await ready.runtimeInfo()).capabilities.sessionPin).toEqual({
-      status: "available",
-    })
-  })
-
-  it("declares native read state available and temporarily unavailable during an outage", async () => {
-    const ready = new HermesServerAdapter({
-      request: vi.fn(async () => ({ profiles: [profile()] })),
-    })
-    expect((await ready.runtimeInfo()).capabilities.sessionReadState).toEqual({
-      status: "available",
-    })
+    const { capabilities } = await ready.runtimeInfo()
+    expect(capabilities.sessionPin).toEqual({ status: "available" })
+    expect(capabilities.sessionReadState).toEqual({ status: "available" })
 
     const offline = new HermesServerAdapter({
       request: vi.fn(async () => {
@@ -2596,14 +2510,6 @@ describe("Hermes server adapter", () => {
       status: "unavailable",
       reason: "temporarily-unavailable",
     })
-  })
-
-  it("refuses to observe a native Session that was never attached", async () => {
-    const adapter = new HermesServerAdapter({ request: vi.fn() })
-
-    await expect(
-      adapter.native.observe("live-session", vi.fn())
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
   it("rejects an oversized native live Session identity", async () => {

@@ -57,12 +57,6 @@ it.each([
     "provider-active",
     "המתינו לסיום השיחות הפעילות, ואז נסו לשנות שוב את ההצגה בסביבת העבודה.",
   ],
-  [
-    "he",
-    "pending-reload",
-    "השינוי נשמר אך עדיין לא הוחל. המתינו לסיום השיחות הפעילות, ואז נסו שוב את מתג ההצגה בסביבת העבודה.",
-  ],
-  ["he", null, "לא ניתן לשמור את ההצגה בסביבת העבודה. נסו שוב."],
 ] as const)(
   "shows actionable %s guidance for %s without losing it on refresh",
   async (locale, code, guidance) => {

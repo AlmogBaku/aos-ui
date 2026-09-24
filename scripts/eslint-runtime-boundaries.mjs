@@ -16,7 +16,7 @@ const portable = (path) => path.split(sep).join("/")
 // Exempt only the named fixture modules in these exact test-only consumers.
 const fixtureTestImports = new Map([
   [
-    "src/components/aos-ui-workspace.test.tsx",
+    "src/components/aos-ui-workspace.test-helpers.tsx",
     new Set(["fixture-runtime", "fixture-workspace", "composition"]),
   ],
   [

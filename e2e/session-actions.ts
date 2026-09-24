@@ -57,33 +57,6 @@ const english: SessionActionsCopy = {
   selected: "Current Session",
 }
 
-const hebrew: SessionActionsCopy = {
-  sessions: "שיחות",
-  agents: "סוכנים",
-  openAgents: "פתיחת רשימת הסוכנים",
-  backToAgents: "חזרה לסוכנים",
-  agentDetails: "פרטי הסוכן",
-  openSessions: "שיחות פתוחות",
-  history: "היסטוריה",
-  archived: "ארכיון",
-  openSession: "פתיחת שיחה",
-  actions: "פעולות שיחה",
-  rename: "שינוי שם",
-  pin: "הצמדה",
-  archive: "העברה לארכיון",
-  unarchive: "הוצאה מהארכיון",
-  closeTab: "סגירת לשונית",
-  delete: "מחיקה",
-  renameTitle: "שינוי שם השיחה",
-  sessionTitle: "שם השיחה",
-  save: "שמירה",
-  cancel: "ביטול",
-  deleteTitle: "למחוק את השיחה?",
-  deleteConfirm: "מחיקת השיחה",
-  pinned: "מוצמדת",
-  selected: "השיחה הנוכחית",
-}
-
 /** Rows append status, selection, and state to their Session title. */
 function rowName(copy: SessionActionsCopy, title: string) {
   return new RegExp(`^${copy.openSession}: ${title}(?:,|$)`, "i")
@@ -276,14 +249,9 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   )
 }
 
-export async function exerciseSessionActions(
-  page: Page,
-  mobile: boolean,
-  locale: "en" | "he"
-) {
-  const copy = locale === "en" ? english : hebrew
+export async function exerciseSessionActions(page: Page, mobile: boolean) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto(`/${locale}`)
-  if (mobile) await exerciseMobile(page, copy)
-  else await exerciseDesktop(page, copy)
+  await page.goto("/en")
+  if (mobile) await exerciseMobile(page, english)
+  else await exerciseDesktop(page, english)
 }

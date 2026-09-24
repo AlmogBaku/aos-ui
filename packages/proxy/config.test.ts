@@ -226,6 +226,12 @@ describe("proxy configuration and secret boundary", () => {
         publicOrigin: "http://127.0.0.1:3000",
       }).publicOrigin
     ).toBe("http://127.0.0.1:3000")
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        publicOrigin: "http://localhost:3000",
+      }).publicOrigin
+    ).toBe("http://localhost:3000")
     expect(() =>
       parseProxyConfig({
         ...validConfig(),
@@ -324,21 +330,6 @@ describe("proxy configuration and secret boundary", () => {
       url: "https://example.test/path",
     })
   })
-
-  it("accepts http://localhost:3000 and rejects http://example.test as publicOrigin", () => {
-    expect(
-      parseProxyConfig({
-        ...validConfig(),
-        publicOrigin: "http://localhost:3000",
-      }).publicOrigin
-    ).toBe("http://localhost:3000")
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        publicOrigin: "http://example.test",
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
 })
 
 describe("voice configuration", () => {
@@ -401,61 +392,40 @@ describe("voice configuration", () => {
     expect(parsed.voice?.transcription).toBeUndefined()
   })
 
-  it("rejects an empty voice block", () => {
-    expect(() => parseProxyConfig({ ...validConfig(), voice: {} })).toThrow(
+  it.each([
+    ["an empty voice block", {}],
+    [
+      "an unknown provider",
+      { transcription: { ...validTranscription(), provider: "azure" } },
+    ],
+    [
+      "an unknown key inside a voice child",
+      { transcription: { ...validTranscription(), extra: true } },
+    ],
+    [
+      "a relative apiKeyFile",
+      {
+        transcription: { ...validTranscription(), apiKeyFile: "relative/path" },
+      },
+    ],
+    [
+      "speech without the speaker voice field",
+      {
+        speech: {
+          provider: "openai-compatible",
+          baseUrl: "https://tts.example.test/v1",
+          model: "tts-1",
+        },
+      },
+    ],
+    [
+      "timeoutMs below minimum",
+      { transcription: { ...validTranscription(), timeoutMs: 500 } },
+    ],
+  ])("rejects %s", (_case, voice) => {
+    expect(() => parseProxyConfig({ ...validConfig(), voice })).toThrow(
       "Invalid proxy configuration"
     )
-  })
-
-  it("rejects an unknown provider", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          transcription: { ...validTranscription(), provider: "azure" },
-        },
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
-
-  it("rejects unknown keys inside a voice child", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          transcription: { ...validTranscription(), extra: true },
-        },
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
-
-  it("rejects a relative apiKeyFile", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          transcription: {
-            ...validTranscription(),
-            apiKeyFile: "relative/path",
-          },
-        },
-      })
-    ).toThrow("Invalid proxy configuration")
-  })
-
-  it("rejects speech without the speaker voice field", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          speech: {
-            provider: "openai-compatible",
-            baseUrl: "https://tts.example.test/v1",
-            model: "tts-1",
-          },
-        },
-      })
-    ).toThrow("Invalid proxy configuration")
   })
 
   it("validates language: rejects 'english', accepts 'he' and 'en-US'", () => {
@@ -477,17 +447,6 @@ describe("voice configuration", () => {
         }).voice?.transcription?.language
       ).toBe(language)
     }
-  })
-
-  it("rejects timeoutMs below minimum", () => {
-    expect(() =>
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          transcription: { ...validTranscription(), timeoutMs: 500 },
-        },
-      })
-    ).toThrow("Invalid proxy configuration")
   })
 
   it("enforces HTTPS or loopback when apiKeyFile is set", () => {

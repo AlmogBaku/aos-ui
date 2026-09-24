@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./test"
+import { holdsFocus } from "./support/focus"
 
 async function openWorkspace(page: Page) {
   await page.goto("/en")
@@ -31,19 +32,7 @@ async function runCommand(page: Page, title: string, shortcut = "Control+k") {
   await expect(dialog).toBeHidden()
 }
 
-async function activeRegion(page: Page) {
-  return page.evaluate(() => {
-    const active = document.activeElement
-    if (!(active instanceof HTMLElement)) return null
-    return active
-      .closest<HTMLElement>(
-        "[data-keyboard-region], [data-keyboard-transcript], [data-keyboard-composer]"
-      )
-      ?.getAttribute("data-keyboard-region")
-  })
-}
-
-test("Commands search and execute, and Mod+/ opens the shortcut reference", async ({
+test("Commands search and execute, Mod+/ opens the shortcut reference, Escape closes only the active overlay with the draft intact, and F6 traverses the visible desktop regions", async ({
   page,
 }) => {
   await openWorkspace(page)
@@ -51,18 +40,50 @@ test("Commands search and execute, and Mod+/ opens the shortcut reference", asyn
   await expect(
     page.getByRole("button", { name: /^Commands \((?:⌘|❖)\+K\)$/ })
   ).toBeVisible()
-  await runCommand(page, "Open Session: Launch review")
-  await expect(
-    page.getByRole("tab", { name: "Launch review" })
-  ).toHaveAttribute("aria-selected", "true")
-
+  const input = page.getByRole("textbox", { name: "Message input" })
+  await input.fill("Draft survives overlay dismissal")
   await commandsTrigger(page).focus()
+  await page.keyboard.press("Control+k")
+  const commands = page.getByRole("dialog", { name: "Commands" })
+  await expect(commands).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(commands).toBeHidden()
+  await expect(commandsTrigger(page)).toBeFocused()
+  await expect(input).toHaveValue("Draft survives overlay dismissal")
+
   await page.keyboard.press("Control+/")
   const reference = page.getByRole("dialog", { name: "Keyboard reference" })
   await expect(reference).toBeVisible()
   await expect(reference).toContainText("Open Commands")
   await page.keyboard.press("Escape")
   await expect(reference).toBeHidden()
+  await expect(commandsTrigger(page)).toBeFocused()
+  await expect(input).toHaveValue("Draft survives overlay dismissal")
+
+  await runCommand(page, "Open Session: Launch review")
+  await expect(
+    page.getByRole("tab", { name: "Launch review" })
+  ).toHaveAttribute("aria-selected", "true")
+
+  // Only the real desktop layout shows every region F6 visits.
+  await page.getByRole("button", { name: /^Aster,/ }).focus()
+  await page.keyboard.press("F6")
+  await expect
+    .poll(() => holdsFocus(page.getByRole("tablist", { name: "Sessions" })))
+    .toBe(true)
+  await page.keyboard.press("F6")
+  await expect
+    .poll(() => holdsFocus(page.getByRole("main", { name: "Conversation" })))
+    .toBe(true)
+  await expect(input).not.toBeFocused()
+  await page.keyboard.press("F6")
+  await expect(input).toBeFocused()
+  await page.keyboard.press("F6")
+  await expect
+    .poll(() =>
+      holdsFocus(page.getByRole("complementary", { name: "Agent details" }))
+    )
+    .toBe(true)
 })
 
 test("a captured shortcut drives its new behavior and Reset restores the default", async ({
@@ -108,43 +129,32 @@ test("a captured shortcut drives its new behavior and Reset restores the default
   await expect(page.getByRole("dialog", { name: "Commands" })).toBeVisible()
 })
 
-test("Shift+F10 opens the Session menu on the focused tab and Escape closes it", async ({
+test("Shift+F10 opens the menu on the focused Session tab and on the focused message action, and Escape closes each", async ({
   page,
 }) => {
   await openWorkspace(page)
+  const menu = page.getByRole("menu")
 
   const tab = page.getByRole("tab", { name: "Launch review" })
   await tab.focus()
   await page.keyboard.press("Shift+F10")
-
-  const menu = page.getByRole("menu")
   await expect(menu).toBeVisible()
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible()
   await expect(menu.getByRole("menuitem", { name: "Close tab" })).toBeVisible()
-
   await page.keyboard.press("Escape")
   await expect(menu).toHaveCount(0)
   await expect(tab).toBeFocused()
-})
-
-test("Shift+F10 opens the menu on the focused message action and Escape closes it", async ({
-  page,
-}) => {
-  await openWorkspace(page)
 
   // The last assistant turn keeps its action bar without a hover, so its Copy
   // button is the keyboard's way into that message's own menu.
   const copyAction = page.getByRole("button", { name: "Copy", exact: true })
   await copyAction.focus()
   await page.keyboard.press("Shift+F10")
-
-  const menu = page.getByRole("menu")
   await expect(menu).toBeVisible()
   await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeVisible()
   await expect(
     menu.getByRole("menuitem", { name: "Retry response" })
   ).toBeVisible()
-
   await page.keyboard.press("Escape")
   await expect(menu).toHaveCount(0)
   await expect(copyAction).toBeFocused()
@@ -167,22 +177,6 @@ test("desktop Shift+Enter inserts a newline while Enter sends the draft", async 
   await expect(
     page.getByText("Keyboard draft\ncontinued", { exact: true })
   ).toBeVisible()
-})
-
-test("F6 traverses the visible Agents, Sessions, conversation, composer, and inspector regions", async ({
-  page,
-}) => {
-  await openWorkspace(page)
-
-  await page.getByRole("button", { name: /^Aster,/ }).focus()
-  await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("sessions")
-  await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("transcript")
-  await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("composer")
-  await page.keyboard.press("F6")
-  await expect.poll(() => activeRegion(page)).toBe("inspector")
 })
 
 test("Session and Agent switches retain the unsent draft in its owning Session", async ({
@@ -251,31 +245,6 @@ test("wrapped history navigation restores a nonempty draft at both visual bounda
   await expect(input).toBeFocused()
 })
 
-test("Escape closes only the active overlay and leaves the composer draft intact", async ({
-  page,
-}) => {
-  await openWorkspace(page)
-
-  const input = page.getByRole("textbox", { name: "Message input" })
-  await input.fill("Draft survives overlay dismissal")
-  await commandsTrigger(page).focus()
-  await page.keyboard.press("Control+k")
-  const commands = page.getByRole("dialog", { name: "Commands" })
-  await expect(commands).toBeVisible()
-  await page.keyboard.press("Escape")
-  await expect(commands).toBeHidden()
-  await expect(commandsTrigger(page)).toBeFocused()
-  await expect(input).toHaveValue("Draft survives overlay dismissal")
-
-  await commandsTrigger(page).focus()
-  await page.keyboard.press("Control+/")
-  const reference = page.getByRole("dialog", { name: "Keyboard reference" })
-  await expect(reference).toBeVisible()
-  await page.keyboard.press("Escape")
-  await expect(reference).toBeHidden()
-  await expect(commandsTrigger(page)).toBeFocused()
-})
-
 test("Escape cancels a busy turn without dropping queued work, which re-arms on an explicit send", async ({
   page,
 }) => {
@@ -298,7 +267,7 @@ test("Escape cancels a busy turn without dropping queued work, which re-arms on 
   await expect(queued).toContainText("Queued follow-up")
 
   const transcriptControl = page
-    .locator('[data-slot="aui_thread-viewport"]')
+    .getByRole("main", { name: "Conversation" })
     .getByRole("button")
     .first()
   await transcriptControl.focus()
@@ -319,7 +288,7 @@ test("Escape cancels a busy turn without dropping queued work, which re-arms on 
   await expect(queued).toContainText("Explicit follow-up")
   await expect(
     page
-      .locator('[data-slot="aui_thread-viewport"]')
+      .getByRole("main", { name: "Conversation" })
       .getByText("Queued follow-up", { exact: true })
   ).toBeVisible()
 })

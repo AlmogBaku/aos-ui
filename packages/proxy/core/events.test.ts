@@ -251,24 +251,28 @@ describe("the proxy-owned turn vocabulary", () => {
     )
   })
 
-  it.each(fixtures)("parses a full %s unchanged", (_kind, fixture) => {
-    expect(TurnEventSchema.parse(fixture)).toEqual(fixture)
-    expect(isTurnEvent(fixture)).toBe(true)
+  it("parses a full fixture of every kind unchanged", () => {
+    for (const [kind, fixture] of fixtures) {
+      expect(TurnEventSchema.parse(fixture), kind).toEqual(fixture)
+      expect(isTurnEvent(fixture), kind).toBe(true)
+    }
   })
 
-  it.each(fixtures)("rejects an unknown field on %s", (_kind, fixture) => {
-    expect(isTurnEvent({ ...fixture, rawEvent: { provider: "native" } })).toBe(
-      false
-    )
+  it("rejects an unknown field on every kind", () => {
+    for (const [kind, fixture] of fixtures)
+      expect(
+        isTurnEvent({ ...fixture, rawEvent: { provider: "native" } }),
+        kind
+      ).toBe(false)
   })
 
-  it.each(fixtures)("requires the %s discriminator", (_kind, fixture) => {
-    expect(isTurnEvent(without(fixture, "kind"))).toBe(false)
+  it("requires the discriminator on every kind", () => {
+    for (const [kind, fixture] of fixtures)
+      expect(isTurnEvent(without(fixture, "kind")), kind).toBe(false)
   })
 
-  it.each(fixtures)(
-    "rejects a %s missing a required field and accepts every other omission",
-    (kind, fixture) => {
+  it("rejects every kind missing a required field and accepts every other omission", () => {
+    for (const [kind, fixture] of fixtures) {
       const required = requiredFields[kind as TurnEventKind]
       expect(
         required.filter((field) => field in fixture),
@@ -283,7 +287,7 @@ describe("the proxy-owned turn vocabulary", () => {
         ).toBe(!required.includes(key))
       }
     }
-  )
+  })
 
   it("rejects a kind outside the proxy vocabulary", () => {
     expect(isTurnEvent({ kind: "STEP_STARTED", stepName: "one" })).toBe(false)

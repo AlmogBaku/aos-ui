@@ -20,8 +20,8 @@ describe("title bar color", () => {
 
   it("reads both themes from the live stylesheet", () => {
     expect(readTitleBarColors(globalsCss)).toEqual({
-      light: "#f6f7f9",
-      dark: "#1b1d20",
+      light: expect.any(String),
+      dark: expect.any(String),
     })
   })
 

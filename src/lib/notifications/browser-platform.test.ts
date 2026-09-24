@@ -140,25 +140,27 @@ describe("browser adapters", () => {
         close = close
       }
     )
+    const setItem = vi.spyOn(Storage.prototype, "setItem")
     const platform = createActivityBrowserPlatform()
     const listener = vi.fn()
     const cleanup = platform.subscribe(listener)
     platform.send({ snapshot: "test" })
     expect(messages).toEqual([{ snapshot: "test" }])
-    expect(localStorage.getItem("aos-ui.activity.message.v1")).toContain("test")
+    const [key, sent] = setItem.mock.calls.at(-1)!
+    expect(sent).toContain("test")
     receive({ data: { snapshot: "other" } })
     expect(listener).toHaveBeenCalledWith({ snapshot: "other" })
     listener.mockClear()
     window.dispatchEvent(
       new StorageEvent("storage", {
-        key: "aos-ui.activity.message.v1",
-        newValue: localStorage.getItem("aos-ui.activity.message.v1"),
+        key,
+        newValue: sent,
       })
     )
     expect(listener).not.toHaveBeenCalled()
     window.dispatchEvent(
       new StorageEvent("storage", {
-        key: "aos-ui.activity.message.v1",
+        key,
         newValue: JSON.stringify({
           channelSent: false,
           value: { snapshot: "fallback-peer" },
@@ -171,15 +173,16 @@ describe("browser adapters", () => {
   })
   it("falls back to storage messages and removes listeners", () => {
     vi.stubGlobal("BroadcastChannel", undefined)
+    const setItem = vi.spyOn(Storage.prototype, "setItem")
     const platform = createActivityBrowserPlatform()
     const receive = vi.fn()
     const cleanup = platform.subscribe(receive)
     platform.send({ snapshot: "test", preferencesChanged: false })
-    const value = localStorage.getItem("aos-ui.activity.message.v1")
+    const [key, value] = setItem.mock.calls.at(-1)!
     expect(value).toContain("test")
     window.dispatchEvent(
       new StorageEvent("storage", {
-        key: "aos-ui.activity.message.v1",
+        key,
         newValue: value,
       })
     )
@@ -191,7 +194,7 @@ describe("browser adapters", () => {
     receive.mockClear()
     window.dispatchEvent(
       new StorageEvent("storage", {
-        key: "aos-ui.activity.message.v1",
+        key,
         newValue: value,
       })
     )

@@ -156,7 +156,7 @@ describe("runtime package import boundaries", () => {
     ).toHaveLength(1)
     expect(
       await boundaryErrors(
-        "src/components/aos-ui-workspace.test.tsx",
+        "src/components/aos-ui-workspace.test-helpers.tsx",
         'import { AosRemoteClient } from "@/runtime-adapters/aos/aos-client"'
       )
     ).toHaveLength(1)

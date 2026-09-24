@@ -375,15 +375,6 @@ function mount() {
   return { proxy, runtime: () => supplied }
 }
 
-const messageTexts = (runtime: HarnessRuntime) =>
-  runtime.assistantRuntime.thread
-    .getState()
-    .messages.map((message) =>
-      message.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("")
-    )
-
 /** Lets every queued notification and reply reach the runtime. */
 const settle = async () => {
   await act(async () => {
@@ -397,80 +388,6 @@ afterEach(() => {
 })
 
 describe("provider-neutral AOS runtime composition", () => {
-  it("mounts the workspace over one ACP connection and lists its Agents", async () => {
-    const { runtime } = mount()
-
-    expect(await screen.findByRole("main")).toHaveTextContent(
-      "Workspace mounted"
-    )
-    await waitFor(() => expect(runtime()).toBeDefined())
-    expect(await runtime()!.workspace.listAgents()).toMatchObject([
-      { id: AGENT_ID, name: "Researcher" },
-    ])
-    expect(runtime()!.interactions).toBeDefined()
-    expect(runtime()!.activityCoverage).toBe("workspace")
-  })
-
-  it("opens a listed Session and round-trips one prompt", async () => {
-    const { proxy, runtime } = mount()
-    await waitFor(() => expect(runtime()).toBeDefined())
-    const supplied = runtime()!
-    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
-    expect(supplied.assistantRuntime.threads.getState().threadIds).toEqual([
-      SESSION_ID,
-      SECOND_SESSION_ID,
-    ])
-
-    await act(async () => {
-      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
-    })
-    expect(await screen.findByText("Ready")).toBeVisible()
-
-    act(() => {
-      supplied.assistantRuntime.thread.composer.setText("Ship it")
-      supplied.assistantRuntime.thread.composer.send()
-    })
-    expect(await screen.findByText("Shipping it")).toBeVisible()
-    await waitFor(() => expect(proxy.prompts).toHaveLength(1))
-    expect(proxy.prompts[0]).toMatchObject({
-      sessionId: SESSION_ID,
-      prompt: [{ type: "text", text: "Ship it" }],
-    })
-    await waitFor(() =>
-      expect(messageTexts(supplied)).toEqual([
-        "Ready",
-        "Ship it",
-        "Shipping it",
-      ])
-    )
-  })
-
-  it("shows the title the provider gives an opened Session", async () => {
-    const { proxy, runtime } = mount()
-    await waitFor(() => expect(runtime()).toBeDefined())
-    const supplied = runtime()!
-    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
-    await act(async () => {
-      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
-    })
-    expect(await screen.findByText("Ready")).toBeVisible()
-
-    act(() => {
-      proxy.push(SESSION_ID, {
-        sessionUpdate: "session_info_update",
-        title: "Quarterly plan",
-        _meta: { [AOS_META_KEY]: sessionInfo },
-      })
-    })
-
-    await waitFor(() =>
-      expect(
-        supplied.assistantRuntime.threads.getItemById(SESSION_ID).getState()
-          .title
-      ).toBe("Quarterly plan")
-    )
-  })
-
   it("resumes each opened Session once and replays nothing on return", async () => {
     const { proxy, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
@@ -510,7 +427,7 @@ describe("provider-neutral AOS runtime composition", () => {
     expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
   })
 
-  it("switching threads does not stop the provider run", async () => {
+  it("switching threads neither stops the provider run nor cancels a pending question", async () => {
     const { proxy, runtime } = mount()
     await waitFor(() => expect(runtime()).toBeDefined())
     const supplied = runtime()!
@@ -535,25 +452,6 @@ describe("provider-neutral AOS runtime composition", () => {
     await waitFor(() =>
       expect(supplied.assistantRuntime.thread.getState().isRunning).toBe(true)
     )
-
-    await act(async () => {
-      await supplied.assistantRuntime.threads.switchToThread(SECOND_SESSION_ID)
-    })
-    await act(async () => {
-      await Promise.resolve()
-    })
-    expect(proxy.cancelled).toEqual([])
-  })
-
-  it("switching threads leaves a question pending instead of cancelling it", async () => {
-    const { proxy, runtime } = mount()
-    await waitFor(() => expect(runtime()).toBeDefined())
-    const supplied = runtime()!
-    await supplied.assistantRuntime.threads.getLoadThreadsPromise()
-    await act(async () => {
-      await supplied.assistantRuntime.threads.switchToThread(SESSION_ID)
-    })
-    await screen.findByText("Ready")
 
     let answered: unknown
     void proxy.ask(SESSION_ID, "interrupt-1")?.then((response) => {

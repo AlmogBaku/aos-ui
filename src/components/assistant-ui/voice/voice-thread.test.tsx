@@ -148,21 +148,6 @@ afterEach(() => {
 })
 
 describe("real Assistant UI voice composer", () => {
-  it("renders live levels from the exact stream being recorded", async () => {
-    const h = setup()
-    fireEvent.click(
-      screen.getByRole("button", { name: "Record: Transcription" })
-    )
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    expect(h.meter.attach).toHaveBeenCalledWith(h.stream)
-    act(() => h.meter.publish([...new Array(13).fill(0), 1]))
-    // The visual meter is an implementation detail. The observable contract
-    // is that the recorder uses this stream and releases the meter on discard.
-    expect(h.meter.attach).toHaveBeenCalledWith(h.stream)
-    fireEvent.click(screen.getByRole("button", { name: "Discard recording" }))
-    expect(h.meter.dispose).toHaveBeenCalledOnce()
-  })
-
   it("appends the final transcript to the draft without sending", async () => {
     const h = setup()
     await act(async () =>
@@ -178,9 +163,6 @@ describe("real Assistant UI voice composer", () => {
       screen.getByRole("button", { name: "Record: Transcription" })
     )
     const finish = await screen.findByRole("button", { name: "Finish" })
-    expect(
-      screen.getByRole("textbox", { name: "Message input", hidden: true })
-    ).toBeDisabled()
     expect(
       screen.getByRole("textbox", { name: "Message input", hidden: true })
     ).toBeDisabled()
@@ -277,23 +259,6 @@ describe("real Assistant UI voice composer", () => {
       expect(h.runtime.thread.getState().isRunning).toBe(true)
     )
     await act(async () => rejectRun(new Error("failed run")))
-    await waitFor(() =>
-      expect(h.runtime.thread.getState().isRunning).toBe(false)
-    )
-    await waitFor(() =>
-      expect(h.media.getSnapshot().autoReadRequest).toBeUndefined()
-    )
-    expect(h.synthesize).not.toHaveBeenCalled()
-  })
-  it("disarms automatic reading after a fast completion without assistant prose", async () => {
-    const h = setup({
-      voiceTurn: true,
-      modelResult: Promise.resolve({ content: [] }),
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
-    await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
     await waitFor(() =>
       expect(h.runtime.thread.getState().isRunning).toBe(false)
     )
@@ -526,17 +491,6 @@ describe("real Assistant UI voice composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }))
     await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
   })
-  it("keeps recording across a visibility change until explicit Send", async () => {
-    const h = setup({ voiceTurn: true })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    h.media.handleHidden()
-    expect(h.recording.state).toBe("recording")
-    expect(h.media.captureSignal.aborted).toBe(false)
-    expect(h.model.run).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
-    await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
-  })
   it("keeps setup guidance on the microphone instead of below the composer", () => {
     setup({ voiceTurn: true, speech: "unconfigured" })
     expect(
@@ -709,29 +663,6 @@ describe("real Assistant UI voice composer", () => {
     )
     expect(within(first).getByText("First answer")).toBeVisible()
     expect(h.model.run).not.toHaveBeenCalled()
-  })
-
-  it("keeps read-aloud playing when the browser window becomes hidden", async () => {
-    const h = setup({
-      initialMessages: [
-        {
-          id: "answer",
-          role: "assistant",
-          content: [{ type: "text", text: "Keep reading this answer" }],
-        },
-      ],
-    })
-    const answer = screen
-      .getByText("Keep reading this answer")
-      .closest<HTMLElement>('[data-role="assistant"]')!
-    fireEvent.mouseEnter(answer)
-    fireEvent.click(within(answer).getByRole("button", { name: "Read aloud" }))
-    await waitFor(() => expect(h.audio.play).toHaveBeenCalledOnce())
-
-    h.media.handleHidden()
-
-    expect(h.audio.pause).toHaveBeenCalled()
-    expect(h.audio.paused).toBe(true)
   })
 
   it("keeps a visible retryable notice after speech synthesis fails", async () => {

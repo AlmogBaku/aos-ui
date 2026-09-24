@@ -14,6 +14,9 @@
 //   3. Update vendor/hermes-shared/UPSTREAM.md with the new pin and hashes.
 //
 // DO NOT edit the hash constants here without re-fetching the upstream source.
+//
+// Upstream's own tests are deliberately not vendored: the adapter tests in
+// `packages/proxy/adapters/hermes` cover the behavior `gateway.ts` uses.
 
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
@@ -30,12 +33,6 @@ const UPSTREAM_HASHES: Record<string, string> = {
     "9ab20d7e9ab8829650a98dc8967283439ae13b11b46f36f4d64ea1243a5250d8",
   "reconnect-backoff.ts":
     "323c4cd02b95010a6fd7a197f2ccb5182507142677d01fa506b08c055c5ff1f8",
-  "json-rpc-channel.test.ts":
-    "bb49e96d31602af46c9787fc35f8c8e6a7600409f09c9592faa40cd259dbc343",
-  "json-rpc-gateway-replay.test.ts":
-    "58e0edbaf4b166f02a482dbacc74ac55e8df6740914e30dda74e6bb89dcbdfd6",
-  "reconnect-backoff.test.ts":
-    "149cb74814b5bfde1249dd75490a7bb7131e6ce4151e0cce247aa432d519323f",
   LICENSE: "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
 }
 

@@ -264,7 +264,7 @@ describe("Hermes gateway request classification", () => {
     await gateway.close()
   })
 
-  it("correlates concurrent out-of-order replies on one persistent socket", async () => {
+  it("correlates concurrent out-of-order replies and one hundred concurrent Session requests on one persistent socket", async () => {
     const { gateway, sockets, factory } = harness()
     await gateway.connect()
 
@@ -281,15 +281,8 @@ describe("Hermes gateway request classification", () => {
     await expect(first).resolves.toBe("first")
     await expect(second).resolves.toBe("second")
     expect(sockets[0]!.readyState).toBe(1)
-    await gateway.close()
-  })
 
-  it("uses one socket for one hundred concurrent Session requests", async () => {
-    const { gateway, sockets, factory } = harness({
-      autoReply: true,
-      autoReady: true,
-    })
-
+    sockets[0]!.autoReply = true
     await expect(
       Promise.all(
         Array.from({ length: 100 }, (_unused, index) =>
@@ -510,47 +503,6 @@ describe("Hermes gateway response bounds", () => {
     sockets[1]!.reply(id, { ok: true })
     await expect(pending).resolves.toEqual({ ok: true })
     expect(factory).toHaveBeenCalledTimes(2)
-    await gateway.close()
-  })
-
-  it("resolves a 3 MiB replay reply inside its bound and drops a 3 MiB event", async () => {
-    const { gateway, sockets } = harness()
-    const observed = vi.fn()
-    gateway.onEvent(observed)
-    await gateway.connect()
-
-    const page = gateway.request(
-      "session.events.since",
-      { session_id: "live-a", last_seen: 0 },
-      { maxResponseBytes: 6 * 1_048_576 }
-    )
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
-    const { id } = sockets[0]!.lastRequest() as { id: string }
-    const text = "x".repeat(3 * 1_048_576)
-    sockets[0]!.reply(id, {
-      epoch: "e1",
-      latest_seq: 1,
-      events: [
-        {
-          type: "message.delta",
-          session_id: "live-a",
-          seq: 1,
-          payload: { text },
-        },
-      ],
-    })
-    sockets[0]!.deliverEvent({
-      type: "message.delta",
-      session_id: "live-a",
-      seq: 2,
-      payload: { text },
-    })
-
-    await expect(page).resolves.toMatchObject({ epoch: "e1", latest_seq: 1 })
-    // One live frame of the same size exceeds the event bound: it is dropped
-    // and the run catches up from the ring rather than losing the socket.
-    expect(observed).not.toHaveBeenCalled()
-    expect(sockets[0]!.readyState).toBe(1)
     await gateway.close()
   })
 

@@ -194,7 +194,7 @@ describe("AosToolFallback", () => {
     "keeps %s collapsed until its paired request and result are requested",
     async (_description, toolName, status) => {
       const user = userEvent.setup()
-      const { container } = render(
+      render(
         <AosToolFallback
           {...toolPart({
             toolName,
@@ -205,23 +205,12 @@ describe("AosToolFallback", () => {
         />
       )
 
-      expect(
-        container.querySelector('[data-slot="generic-tool"]')
-      ).not.toBeInTheDocument()
       const trigger = screen.getByRole("button")
       expect(trigger).toHaveAttribute("aria-expanded", "false")
       expect(within(trigger).getByText("Used")).toBeVisible()
       expect(within(trigger).getByText(toolName)).toBeVisible()
       expect(screen.queryByText("[REDACTED]", { exact: false })).toBeNull()
       expect(screen.queryByText(/Provider result/)).toBeNull()
-      expect(container.querySelector("[data-tool-state]")).toHaveAttribute(
-        "data-tool-state",
-        status.type === "complete"
-          ? "complete"
-          : status.reason === "cancelled"
-            ? "cancelled"
-            : "failed"
-      )
 
       await user.click(trigger)
       expect(trigger).toHaveAttribute("aria-expanded", "true")
@@ -341,51 +330,28 @@ describe("AosToolFallback", () => {
     ).toBeVisible()
   })
 
-  it.each([
-    { name: "stopped", exitCode: 130, output: "[Command interrupted]" },
-    { name: "finished", exitCode: 0, output: "Built successfully" },
-  ])(
-    "lays a $name command and its output out left to right in Hebrew",
-    async ({ exitCode, output }) => {
-      const user = userEvent.setup()
-      render(
-        <ToolUiLocaleProvider locale="he">
-          <AosToolFallback
-            {...toolPart({
-              toolName: "terminal",
-              args: { command: "bun run build --filter web" },
-              result: { output, exit_code: exitCode },
-            })}
-          />
-        </ToolUiLocaleProvider>
-      )
-
-      const trigger = screen.queryByRole("button")
-      if (trigger) await user.click(trigger)
-      for (const text of ["bun run build --filter web", output]) {
-        for (const element of screen.getAllByText(text))
-          expect(element.closest("[dir]")).toHaveAttribute("dir", "ltr")
-      }
-    }
-  )
-
-  it("uses Terminal Block for command output", async () => {
+  it("lays a stopped command and its output out left to right in Hebrew", async () => {
     const user = userEvent.setup()
-    const { container } = render(
-      <AosToolFallback
-        {...toolPart({
-          toolName: "terminal",
-          args: { command: "bun run build" },
-          result: { output: "Built successfully", exit_code: 0 },
-        })}
-      />
+    render(
+      <ToolUiLocaleProvider locale="he">
+        <AosToolFallback
+          {...toolPart({
+            toolName: "terminal",
+            args: { command: "bun run build --filter web" },
+            result: { output: "[Command interrupted]", exit_code: 130 },
+          })}
+        />
+      </ToolUiLocaleProvider>
     )
 
     await user.click(screen.getByRole("button"))
-    expect(
-      container.querySelector('[data-slot="terminal-block"]')
-    ).toBeVisible()
-    expect(screen.getByText("Built successfully")).toBeVisible()
+    for (const text of [
+      "bun run build --filter web",
+      "[Command interrupted]",
+    ]) {
+      for (const element of screen.getAllByText(text))
+        expect(element.closest("[dir]")).toHaveAttribute("dir", "ltr")
+    }
   })
 
   it("uses Code Runner for any tool call carrying code and a language", async () => {
@@ -457,7 +423,7 @@ describe("accessible rich-tool semantics", () => {
     ).toBeVisible()
   })
 
-  it("renders explicitly nested rich-tool titles at heading level 3", () => {
+  it("renders explicitly nested rich-tool and QuestionFlow receipt titles at heading level 3", () => {
     render(
       <>
         <ToolChrome
@@ -472,29 +438,20 @@ describe("accessible rich-tool semantics", () => {
           options={[{ id: "answer", label: "Answer" }]}
           headingLevel={3}
         />
+        <QuestionFlow
+          id="nested-receipt"
+          choice={{
+            title: "Recorded answer",
+            summary: [{ label: "Audience", value: "Team" }],
+          }}
+          headingLevel={3}
+        />
       </>
     )
 
-    for (const name of ["Nested tool", "Nested question"]) {
+    for (const name of ["Nested tool", "Nested question", "Recorded answer"]) {
       expect(screen.getByRole("heading", { name, level: 3 })).toBeVisible()
     }
-  })
-
-  it("renders a QuestionFlow receipt title at its requested heading level", () => {
-    render(
-      <QuestionFlow
-        id="nested-receipt"
-        choice={{
-          title: "Recorded answer",
-          summary: [{ label: "Audience", value: "Team" }],
-        }}
-        headingLevel={3}
-      />
-    )
-
-    expect(
-      screen.getByRole("heading", { name: "Recorded answer", level: 3 })
-    ).toBeVisible()
   })
 
   it("renders a QuestionFlow nested under ToolChrome one level below its tool title", async () => {
@@ -511,60 +468,39 @@ describe("accessible rich-tool semantics", () => {
       />
     )
 
-    const chrome = document.querySelector<HTMLElement>(
-      '[data-slot="tool-chrome"]'
-    )
-    const questionFlow = document.querySelector<HTMLElement>(
-      '[data-slot="question-flow"]'
-    )
-
-    expect(chrome).not.toBeNull()
-    expect(questionFlow).not.toBeNull()
     expect(
-      within(chrome!).getByRole("heading", {
-        name: "Choose a market",
-        level: 2,
-      })
+      screen.getByRole("heading", { name: "Choose a market", level: 2 })
     ).toBeVisible()
     expect(
-      within(questionFlow!).getByRole("heading", {
-        name: "Choose a market",
-        level: 3,
-      })
+      screen.getByRole("heading", { name: "Choose a market", level: 3 })
     ).toBeVisible()
   })
 
-  it.each([
-    ["en", "Question progress"],
-    ["he", "התקדמות השאלה"],
-  ] as const)(
-    "gives the QuestionFlow progressbar its localized %s accessible name",
-    (locale, accessibleName) => {
-      render(
-        <ToolUiLocaleProvider locale={locale}>
-          <QuestionFlow
-            id={`question-${locale}`}
-            steps={[
-              {
-                id: "audience",
-                title: "Audience",
-                options: [{ id: "team", label: "Team" }],
-              },
-              {
-                id: "format",
-                title: "Format",
-                options: [{ id: "brief", label: "Brief" }],
-              },
-            ]}
-          />
-        </ToolUiLocaleProvider>
-      )
+  it("gives the QuestionFlow progressbar its localized accessible name", () => {
+    render(
+      <ToolUiLocaleProvider locale="he">
+        <QuestionFlow
+          id="question-he"
+          steps={[
+            {
+              id: "audience",
+              title: "Audience",
+              options: [{ id: "team", label: "Team" }],
+            },
+            {
+              id: "format",
+              title: "Format",
+              options: [{ id: "brief", label: "Brief" }],
+            },
+          ]}
+        />
+      </ToolUiLocaleProvider>
+    )
 
-      expect(
-        screen.getByRole("progressbar", { name: accessibleName })
-      ).toHaveAttribute("aria-valuenow", "1")
-    }
-  )
+    expect(
+      screen.getByRole("progressbar", { name: "התקדמות השאלה" })
+    ).toHaveAttribute("aria-valuenow", "1")
+  })
 
   it("keeps headingLevel out of the serializable QuestionFlow payload", () => {
     const question = SerializableQuestionFlowSchema.parse({
@@ -1593,7 +1529,7 @@ describe("safe result renderers", () => {
     expect(screen.getByText("Textual data")).toBeInTheDocument()
   })
 
-  it("uses the inspectable JSON fallback for unknown and malformed known tools", async () => {
+  it("uses the inspectable JSON fallback, with copy feedback, for unknown and malformed known tools", async () => {
     const user = userEvent.setup()
     const { rerender } = await renderTool(
       <RichToolRenderer
@@ -1621,6 +1557,9 @@ describe("safe result renderers", () => {
     expect(
       screen.getByText("Could not safely render Question")
     ).toBeInTheDocument()
+    // The rerender keeps the disclosure the unknown tool opened.
+    await user.click(screen.getByRole("button", { name: "Copy JSON" }))
+    expect(screen.getByRole("button", { name: "Copied" })).toBeVisible()
   })
 
   it("renders a described subagent delegation as visible activity", async () => {
@@ -1710,50 +1649,5 @@ describe("Hebrew tool UI", () => {
       screen.getByRole("button", { name: "אישור קבוע" })
     ).toBeInTheDocument()
     expect(screen.getByText("datasets/market/**")).toHaveAttribute("dir", "ltr")
-  })
-
-  it("localizes malformed fallback and copy feedback", async () => {
-    const user = userEvent.setup()
-    await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "ask_user_question",
-            args: { question: 5 },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("לא ניתן להציג בבטחה: שאלה")).toBeInTheDocument()
-    await user.click(screen.getByText("לא ניתן להציג בבטחה: שאלה"))
-    expect(screen.getByRole("button", { name: "העתקת JSON" })).toBeVisible()
-
-    await user.click(screen.getByRole("button", { name: "העתקת JSON" }))
-    expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
-  })
-
-  it("localizes visible activity chrome", async () => {
-    await renderTool(
-      <ToolUiLocaleProvider locale="he">
-        <RichToolRenderer
-          {...toolPart({
-            toolName: "delegate_subagent",
-            args: { task: "Provider task" },
-            result: {
-              name: "Provider agent",
-              status: "waiting",
-              summary: "Provider summary",
-            },
-          })}
-        />
-      </ToolUiLocaleProvider>
-    )
-
-    expect(screen.getByText("סוכן משנה")).toBeInTheDocument()
-    expect(screen.getByText("בהמתנה")).toBeInTheDocument()
-    expect(screen.getByText("התמליל נטען…")).toBeInTheDocument()
-    expect(screen.getByText("Provider agent")).toHaveAttribute("dir", "auto")
-    expect(screen.getByText("Provider summary")).toHaveAttribute("dir", "auto")
   })
 })

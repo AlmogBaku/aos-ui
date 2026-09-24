@@ -25,34 +25,17 @@ declare global {
   }
 }
 
-export type MockPermission = NotificationPermission | "unsupported"
+type MockPermission = NotificationPermission | "unsupported"
 
 /** Accessible names the notification journeys depend on. */
 export const english = {
   activityBell: /^Activity, /,
   askTitle: "Get told when Agents finish or need you",
   askAccept: "Turn on",
-  askDecline: "Not now",
   settings: "Notification settings",
   device: "Notifications on this device",
-  sound: "Sound for input requests and failures",
-  whenClosed: "Also when AOS is closed",
-  pushNotConfigured:
-    "Not set up on this deployment; alerts need an open AOS tab.",
   messageInput: "Message input",
   sendMessage: "Send message",
-  inputRequested: "Your Agent needs input",
-} as const
-
-export const hebrew = {
-  activityBell: /^פעילות, /,
-  askTitle: "קבלו עדכון כשסוכן מסיים או ממתין לתשובה שלכם",
-  askAccept: "הפעלה",
-  askDecline: "לא עכשיו",
-  settings: "הגדרות התראות",
-  device: "התראות במכשיר הזה",
-  whenClosed: "גם כש-AOS סגור",
-  pushNotConfigured: "לא הוגדר בפריסה הזו; התראות דורשות לשונית AOS פתוחה.",
 } as const
 
 /**
@@ -61,7 +44,7 @@ export const hebrew = {
  * The script is reinstalled on every navigation, so a reload restores the
  * starting permission while stored preferences stay the operator's own.
  */
-export async function installNotificationMock(
+async function installNotificationMock(
   page: Page,
   permission: MockPermission = "default"
 ) {
@@ -107,22 +90,20 @@ export async function installNotificationMock(
 }
 
 /** The Activity bell is the one control both layouts always render. */
-export async function openWorkspace(page: Page, locale: "en" | "he" = "en") {
-  const copy = locale === "he" ? hebrew : english
-  await page.goto(`/${locale}`)
+async function openWorkspace(page: Page) {
+  await page.goto("/en")
   await expect(
-    page.getByRole("button", { name: copy.activityBell })
+    page.getByRole("button", { name: english.activityBell })
   ).toBeVisible()
   await page.waitForFunction(() => Boolean(window.__AOS_UI_FIXTURE_WORKSPACE__))
 }
 
 export async function prepare(
   page: Page,
-  permission: MockPermission = "default",
-  locale: "en" | "he" = "en"
+  permission: MockPermission = "default"
 ) {
   await installNotificationMock(page, permission)
-  await openWorkspace(page, locale)
+  await openWorkspace(page)
 }
 
 export async function publish(
@@ -136,14 +117,6 @@ export async function publish(
   )
 }
 
-/**
- * The selected Session's own run, which is the proof the operator is watching
- * this Agent work and the moment the ask becomes due.
- */
-export async function startSelectedRun(page: Page) {
-  await publish(page, "turn-completed")
-}
-
 /** Leaves the window unfocused, hidden or merely covered by another app. */
 export async function background(page: Page, hidden: boolean) {
   await page.evaluate((hidden) => {
@@ -152,16 +125,6 @@ export async function background(page: Page, hidden: boolean) {
     document.dispatchEvent(new Event("visibilitychange"))
     window.dispatchEvent(new Event("blur"))
   }, hidden)
-}
-
-/** Returns the operator to the workspace, visible and focused. */
-export async function foreground(page: Page) {
-  await page.evaluate(() => {
-    window.__notificationTest.visible = true
-    window.__notificationTest.focused = true
-    document.dispatchEvent(new Event("visibilitychange"))
-    window.dispatchEvent(new Event("focus"))
-  })
 }
 
 export function notificationCount(page: Page) {
@@ -173,25 +136,24 @@ export function permissionRequests(page: Page) {
 }
 
 /** Opens the Activity drawer and expands the notification settings inside it. */
-export async function openSettings(page: Page, locale: "en" | "he" = "en") {
-  const copy = locale === "he" ? hebrew : english
-  await page.getByRole("button", { name: copy.activityBell }).click()
+export async function openSettings(page: Page) {
+  await page.getByRole("button", { name: english.activityBell }).click()
   await expect(page.getByRole("dialog")).toBeVisible()
-  const summary = page.getByText(copy.settings, { exact: true })
+  const summary = page.getByText(english.settings, { exact: true })
   await summary.click()
   return page.getByRole("dialog")
 }
 
-export function deviceCheckbox(page: Page, locale: "en" | "he" = "en") {
+export function deviceCheckbox(page: Page) {
   return page.getByRole("checkbox", {
-    name: locale === "he" ? hebrew.device : english.device,
+    name: english.device,
     exact: true,
   })
 }
 
-export function askHeading(page: Page, locale: "en" | "he" = "en") {
+export function askHeading(page: Page) {
   return page.getByRole("heading", {
-    name: locale === "he" ? hebrew.askTitle : english.askTitle,
+    name: english.askTitle,
     exact: true,
   })
 }

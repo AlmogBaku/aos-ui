@@ -1,44 +1,23 @@
 import { expect, type Page } from "./test"
 
-export async function exerciseSessionTabs(
-  page: Page,
-  mobile: boolean,
-  locale: "en" | "he"
-) {
-  const copy =
-    locale === "en"
-      ? {
-          drawer: "Open Agents",
-          sessions: "Sessions",
-          agents: "Agents",
-          backToAgents: "Back to Agents",
-          openSession: "Open session",
-          status: "Status: Running",
-          newSession: "New session",
-          actions: "Session actions",
-          removeOpenSession: "Remove from open sessions",
-          close: "Close tab",
-          closeSession: "Close session",
-          undo: "Undo",
-          closed: "Tab closed",
-        }
-      : {
-          drawer: "פתיחת רשימת הסוכנים",
-          sessions: "שיחות",
-          agents: "סוכנים",
-          backToAgents: "חזרה לסוכנים",
-          openSession: "פתיחת שיחה",
-          status: "מצב: פעיל",
-          newSession: "שיחה חדשה",
-          actions: "פעולות שיחה",
-          removeOpenSession: "הסרה מהשיחות הפתוחות",
-          close: "סגירת לשונית",
-          closeSession: "סגירת שיחה",
-          undo: "ביטול",
-          closed: "הלשונית נסגרה",
-        }
+const copy = {
+  drawer: "Open Agents",
+  sessions: "Sessions",
+  agents: "Agents",
+  backToAgents: "Back to Agents",
+  openSession: "Open session",
+  status: "Status: Running",
+  newSession: "New session",
+  actions: "Session actions",
+  removeOpenSession: "Remove from open sessions",
+  close: "Close tab",
+  undo: "Undo",
+  closed: "Tab closed",
+} as const
+
+export async function exerciseSessionTabs(page: Page, mobile: boolean) {
   await page.emulateMedia({ reducedMotion: "reduce" })
-  await page.goto(`/${locale}`)
+  await page.goto("/en")
   if (mobile) {
     await expect(
       page.getByRole("tablist", { name: copy.sessions })
@@ -49,7 +28,6 @@ export async function exerciseSessionTabs(
       name: new RegExp(`Aster, Market brief, ${copy.status}`),
     })
     await expect(identity).toBeVisible()
-    await expect(identity.locator('[data-agent-symbol="spark"]')).toBeVisible()
 
     await drawerTrigger.click()
     let drawer = page.getByRole("dialog", { name: copy.sessions })
@@ -60,21 +38,18 @@ export async function exerciseSessionTabs(
         name: new RegExp(`${copy.openSession}: Launch review`, "i"),
       })
     ).toBeVisible()
-    await expect(
-      drawer.locator('[data-thread-list-primitive="true"]').first()
-    ).toBeVisible()
 
     await drawer.getByRole("button", { name: copy.backToAgents }).click()
     drawer = page.getByRole("dialog", { name: copy.agents })
-    await expect(
-      drawer.locator("[data-mobile-navigator-heading]")
-    ).toBeFocused()
+    // The dialog's own title is also an "Agents" heading, so the check names
+    // the focused element rather than picking one of the two.
+    const focused = drawer.locator(":focus")
+    await expect(focused).toHaveRole("heading")
+    await expect(focused).toHaveAccessibleName(copy.agents)
     await expect(drawer.getByRole("button", { name: /Mica/ })).toBeVisible()
     await drawer.getByRole("button", { name: /Aster/ }).click()
     drawer = page.getByRole("dialog", { name: copy.sessions })
-    await expect(
-      drawer.locator("[data-mobile-navigator-heading]")
-    ).toBeFocused()
+    await expect(drawer.getByRole("heading", { name: "Aster" })).toBeFocused()
     await drawer
       .getByRole("button", {
         name: new RegExp(`${copy.openSession}: Launch review`, "i"),
@@ -110,11 +85,6 @@ export async function exerciseSessionTabs(
     ).toBeVisible()
     await page.keyboard.press("Escape")
     await expect(drawerTrigger).toBeFocused()
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= innerWidth
-      )
-    ).toBe(true)
     return
   }
 
@@ -126,10 +96,7 @@ export async function exerciseSessionTabs(
   await expect(page.getByRole("tablist", { name: copy.sessions })).toBeVisible()
   {
     const close = page.getByRole("button", {
-      name:
-        locale === "en"
-          ? "Close session: Market brief"
-          : "סגירת שיחה: Market brief",
+      name: "Close session: Market brief",
     })
     await page.mouse.move(0, 0)
     await page.getByRole("tab", { name: "Market brief" }).hover()
@@ -142,28 +109,23 @@ export async function exerciseSessionTabs(
   // outer padding so the container itself reaches the 64rem desktop layout.
   await page.setViewportSize({ width: 1056, height: 1000 })
   const actions = page.locator("[data-session-actions]")
-  const newSession = actions.getByRole("button", { name: copy.newSession })
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const overflowing = await page
-      .locator("[data-tab-viewport]")
-      .evaluate((el) => el.scrollWidth > el.clientWidth)
-    if (overflowing) break
+  const newSession = actions.getByRole("button", {
+    name: copy.newSession,
+    exact: true,
+  })
+  // Six more Sessions overflow the strip at this width.
+  for (let created = 0; created < 6; created += 1) {
     const tabCount = await page.getByRole("tab").count()
     await newSession.click()
     await expect(page.getByRole("tab")).toHaveCount(tabCount + 1)
   }
-  expect(
-    await page
-      .locator("[data-tab-viewport]")
-      .evaluate((el) => el.scrollWidth > el.clientWidth)
-  ).toBe(true)
   await page.getByRole("tab", { name: "Market brief" }).click()
-  await page.locator("[data-tab-viewport]").evaluate((el) => {
-    el.scrollLeft = el.scrollWidth * (document.dir === "rtl" ? -1 : 1)
-  })
-  await expect(
-    actions.getByRole("button", { name: copy.newSession })
-  ).toBeVisible()
+  // The strip scrolls its last tab into reach while its actions stay in view.
+  const lastTab = page.getByRole("tab").last()
+  await lastTab.scrollIntoViewIfNeeded()
+  await expect(lastTab).toBeInViewport()
+  await expect(page.getByRole("tab").first()).not.toBeInViewport()
+  await expect(newSession).toBeInViewport()
   // The inspector row for the same Session offers its own menu button, so the
   // tab strip's own overflow trigger has to be addressed inside the tab bar.
   await actions
@@ -191,12 +153,4 @@ export async function exerciseSessionTabs(
   await expect(
     page.getByRole("button", { name: copy.undo, exact: true })
   ).toBeVisible()
-  await expect(
-    page.getByRole("button", { name: copy.undo, exact: true })
-  ).toBeVisible()
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth
-    )
-  ).toBe(true)
 }

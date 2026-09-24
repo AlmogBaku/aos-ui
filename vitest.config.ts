@@ -2,6 +2,13 @@ import { configDefaults, defineConfig } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import path from "node:path"
 
+const nodeTests = [
+  "packages/**/*.test.ts",
+  "shared/**/*.test.ts",
+  "test/**/*.test.ts",
+  "scripts/**/*.test.ts",
+]
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -26,10 +33,9 @@ export default defineConfig({
       ),
     },
   },
+  // Every setting here, plugins and aliases included, is inherited by both
+  // projects below; each project adds only its files and its environment.
   test: {
-    environment: "jsdom",
-    setupFiles: ["./test/setup.ts"],
-    include: ["**/*.test.{ts,tsx}"],
     // Agent worktrees nest a full checkout under `.claude`; sweeping them
     // reports every test twice and the stale copy's failures as ours.
     exclude: [...configDefaults.exclude, ".worktrees/**", "**/.claude/**"],
@@ -47,5 +53,24 @@ export default defineConfig({
     // cores keeps a concurrent sweep survivable; a machine running one sweep
     // alone can raise it.
     maxWorkers: Number(process.env.AOS_UI_TEST_WORKERS) || "50%",
+    // Server, protocol, and tooling tests need no DOM, so they skip jsdom and
+    // the Testing Library setup. The `dom` project excludes exactly these globs,
+    // so every test file lands in one project and no file can fall between.
+    projects: [
+      {
+        extends: true,
+        test: { name: "node", environment: "node", include: nodeTests },
+      },
+      {
+        extends: true,
+        test: {
+          name: "dom",
+          environment: "jsdom",
+          setupFiles: ["./test/setup.ts"],
+          include: ["**/*.test.{ts,tsx}"],
+          exclude: nodeTests,
+        },
+      },
+    ],
   },
 })

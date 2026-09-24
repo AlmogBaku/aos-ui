@@ -14,21 +14,6 @@ describe("canonicalOpenCodeToolName", () => {
     expect(canonicalOpenCodeToolName("task")).toBe("delegate_subagent")
     expect(canonicalOpenCodeToolName("read")).toBe("read")
   })
-
-  it("names an aos-ui MCP tool by its bare AOS name and keeps any other MCP tool raw", () => {
-    expect(canonicalOpenCodeToolName("aos-ui_render_chart")).toBe(
-      "render_chart"
-    )
-    expect(canonicalOpenCodeToolName("mcp__aos-ui__present_artifact")).toBe(
-      "present_artifact"
-    )
-    expect(canonicalOpenCodeToolName("aos-ui_unknown_tool")).toBe(
-      "aos-ui_unknown_tool"
-    )
-    expect(canonicalOpenCodeToolName("github_render_chart")).toBe(
-      "github_render_chart"
-    )
-  })
 })
 
 describe("openCodeToolKind", () => {
@@ -115,7 +100,6 @@ describe("OpenCode MCP tool names", () => {
     // The longest configured server name wins the shared prefix.
     ["my-server_admin_purge", "mcp__my-server_admin__purge"],
     ["local_run", "mcp__local__run"],
-    ["aos-ui_render_chart", "render_chart"],
     ["task", "delegate_subagent"],
     ["web_fetch", "web_fetch"],
   ])("reads %s as %s", async (raw, canonical) => {

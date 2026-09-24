@@ -19,7 +19,7 @@ import {
   type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
-import type { SessionMetadata, WorkspaceAdapter } from "../../contracts"
+import type { SessionMetadata } from "../../contracts"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,
@@ -391,12 +391,6 @@ async function settle() {
 }
 
 describe("ACP workspace client", () => {
-  it("is a workspace adapter", () => {
-    const { client } = createClient()
-    const adapter: WorkspaceAdapter = client
-    expect(adapter.listAgents).toBeTypeOf("function")
-  })
-
   it("caches Session rows from the list and keeps provider read state", async () => {
     const { client, argsOf, calls } = createClient()
 

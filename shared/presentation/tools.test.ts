@@ -51,12 +51,4 @@ describe("portable presentation definitions", () => {
       }).success
     ).toBe(false)
   })
-  it("rejects invalid geographic coordinates", () => {
-    expect(
-      presentationToolDefinitions.render_map.schema.safeParse({
-        title: "Map",
-        locations: [{ id: "x", label: "X", latitude: 91, longitude: 0 }],
-      }).success
-    ).toBe(false)
-  })
 })

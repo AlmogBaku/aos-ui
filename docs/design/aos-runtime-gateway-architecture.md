@@ -460,7 +460,7 @@ stack traces never cross either listener.
 | `packages/proxy/architecture.test.ts:46-53`                  | AG-UI absent from the proxy                            |
 | `packages/proxy/architecture.test.ts:55-69`                  | Each runtime selected in exactly one module            |
 | `test/architecture/runtime-import-boundaries.test.ts:19-116` | Provider packages do not import each other             |
-| `test/architecture/startup-bundle.test.ts:7-37`              | Browser bundle does not contain server code            |
+| `test/architecture/startup-bundle.test.ts:16-54`             | Browser bundle does not contain server code            |
 | `packages/proxy/core/session-coordinator.test.ts`            | Coordinator admission, capacity, conflict              |
 | `packages/proxy/acp/*.test.ts`                               | ACP protocol, read state, activity feed, socket limits |
 

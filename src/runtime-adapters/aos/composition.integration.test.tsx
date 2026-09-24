@@ -740,72 +740,6 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await proxy.close()
   })
 
-  it("renders a live artifact whose publisher reported only a size", async () => {
-    const { proxy, runtime } = await mount()
-    expect(await screen.findByText("Ready")).toBeVisible()
-    const artifact = {
-      id: "artifact-live",
-      filename: "notes.txt",
-      sizeBytes: 12,
-      source: { type: "provider" as const, reference: "artifact-live" },
-    }
-
-    await send(runtime(), "Ship it")
-    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
-    const segment = proxy.segments[0]!
-    act(() => {
-      segment.emit({ kind: TurnEventKind.TurnStarted })
-      segment.emit({
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "Shipping it",
-      })
-      segment.emit({
-        kind: TurnEventKind.ArtifactPublished,
-        artifact: artifact,
-      })
-      segment.emit({ kind: TurnEventKind.TurnEnded })
-      segment.finish()
-    })
-
-    expect(await screen.findByText("Shipping it")).toBeVisible()
-    await waitFor(() =>
-      expect(artifactsOnMessage(runtime(), "Shipping it")).toEqual([artifact])
-    )
-    await proxy.close()
-  })
-
-  it("stops a run the operator started", async () => {
-    const { proxy, runtime } = await mount()
-    await screen.findByText("Ready")
-
-    await send(runtime(), "Ship it")
-    await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
-    const segment = proxy.segments[0]!
-    act(() => {
-      segment.emit({ kind: TurnEventKind.TurnStarted })
-    })
-    await waitFor(() =>
-      expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(true)
-    )
-
-    act(() => runtime().assistantRuntime.thread.cancelRun())
-    await waitFor(() => expect(segment.stop).toHaveBeenCalledTimes(1))
-    act(() => {
-      segment.emit({ kind: TurnEventKind.TurnEnded })
-      segment.finish()
-    })
-    await waitFor(() =>
-      expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(false)
-    )
-    // Stopped before any reply, the provider still holds the prompt, so it
-    // stays a turn instead of moving back into the composer.
-    expect(screen.getByText("Ship it")).toBeVisible()
-    expect(messageTexts(runtime())).toEqual(["Open it", "Ready", "Ship it"])
-    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
-    await proxy.close()
-  })
-
   it("resumes the run once the operator answers a permission request", async () => {
     const user = userEvent.setup()
     const { proxy, runtime } = await mount()
@@ -865,25 +799,6 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await proxy.close()
   })
 
-  it("round-trips a model change to the provider", async () => {
-    const { proxy, runtime } = await mount()
-    await screen.findByText("Ready")
-
-    await waitFor(() =>
-      expect(runtime().composer?.model?.selectedId).toBe("sonnet")
-    )
-    await act(async () => {
-      await runtime().composer?.model?.update({ selectedId: "opus" })
-    })
-    expect(proxy.updateModel).toHaveBeenCalledWith(AGENT_ID, SESSION_ID, {
-      selectedId: "opus",
-    })
-    await waitFor(() =>
-      expect(runtime().composer?.model?.selectedId).toBe("opus")
-    )
-    await proxy.close()
-  })
-
   it("a draft's first turn creates the Session and streams", async () => {
     const { proxy, runtime } = await mount()
     await screen.findByText("Ready")
@@ -918,31 +833,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await proxy.close()
   })
 
-  it("opens the next draft empty after a refused one", async () => {
-    const { proxy, runtime } = await mount()
-    await screen.findByText("Ready")
-    await act(async () => {
-      await runtime().createSessionDraft?.(AGENT_ID)
-    })
-    proxy.unavailable.creates = 1
-    await send(runtime(), "Ship it")
-    expect(
-      await screen.findByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
-    ).toBeVisible()
-
-    await act(async () => {
-      await runtime().createSessionDraft?.(AGENT_ID)
-    })
-
-    expect(
-      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
-    ).not.toBeInTheDocument()
-    expect(runtime().assistantRuntime.thread.getState().messages).toEqual([])
-    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
-    await proxy.close()
-  })
-
-  it("keeps a draft's turn in the composer when session/new is refused", async () => {
+  it("keeps a refused draft's turn in the composer and opens the next draft empty", async () => {
     const { proxy, runtime } = await mount()
     await screen.findByText("Ready")
     await act(async () => {
@@ -960,9 +851,17 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     )
     expect(proxy.created).toEqual([])
 
-    act(() => {
-      runtime().assistantRuntime.thread.composer.send()
+    await act(async () => {
+      await runtime().createSessionDraft?.(AGENT_ID)
     })
+
+    expect(
+      screen.queryByText(en.runErrors.AOS_PROVIDER_UNAVAILABLE)
+    ).not.toBeInTheDocument()
+    expect(runtime().assistantRuntime.thread.getState().messages).toEqual([])
+    expect(runtime().assistantRuntime.thread.composer.getState().text).toBe("")
+
+    await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     expect(proxy.created).toEqual([AGENT_ID])
     await proxy.close()

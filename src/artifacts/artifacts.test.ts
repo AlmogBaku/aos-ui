@@ -6,55 +6,50 @@ import {
 } from "./artifacts"
 
 describe("parseArtifactDescriptor", () => {
-  it("accepts an inline UTF-8 artifact descriptor", () => {
-    const descriptor = {
-      id: "report",
-      filename: "report.txt",
-      mimeType: "text/plain",
-      sizeBytes: 12,
-      source: { type: "inline", encoding: "utf8", data: "hello world!" },
-    }
-
-    expect(parseArtifactDescriptor(descriptor)).toEqual(descriptor)
-  })
-
-  it("accepts an inline base64 artifact descriptor", () => {
-    const descriptor = {
-      id: "image",
-      filename: "image.png",
-      source: { type: "inline", encoding: "base64", data: "iVBORw0KGgo=" },
-    }
-
-    expect(parseArtifactDescriptor(descriptor)).toEqual(descriptor)
-  })
-
-  it("accepts an HTTPS artifact descriptor", () => {
-    const descriptor = {
-      id: "export",
-      filename: "export.csv",
-      source: { type: "url", url: "https://files.example.com/export.csv" },
-    }
-
-    expect(parseArtifactDescriptor(descriptor)).toEqual(descriptor)
-  })
-
-  it("accepts an HTTP artifact descriptor", () => {
-    const descriptor = {
-      id: "local-export",
-      filename: "export.csv",
-      source: { type: "url", url: "http://localhost:3001/export.csv" },
-    }
-
-    expect(parseArtifactDescriptor(descriptor)).toEqual(descriptor)
-  })
-
-  it("accepts an opaque provider reference", () => {
-    const descriptor = {
-      id: "native-output",
-      filename: "analysis.pdf",
-      source: { type: "provider", reference: "file_01J9ABC" },
-    }
-
+  it.each([
+    [
+      "an inline UTF-8",
+      {
+        id: "report",
+        filename: "report.txt",
+        mimeType: "text/plain",
+        sizeBytes: 12,
+        source: { type: "inline", encoding: "utf8", data: "hello world!" },
+      },
+    ],
+    [
+      "an inline base64",
+      {
+        id: "image",
+        filename: "image.png",
+        source: { type: "inline", encoding: "base64", data: "iVBORw0KGgo=" },
+      },
+    ],
+    [
+      "an HTTPS",
+      {
+        id: "export",
+        filename: "export.csv",
+        source: { type: "url", url: "https://files.example.com/export.csv" },
+      },
+    ],
+    [
+      "an HTTP",
+      {
+        id: "local-export",
+        filename: "export.csv",
+        source: { type: "url", url: "http://localhost:3001/export.csv" },
+      },
+    ],
+    [
+      "an opaque provider-reference",
+      {
+        id: "native-output",
+        filename: "analysis.pdf",
+        source: { type: "provider", reference: "file_01J9ABC" },
+      },
+    ],
+  ])("accepts %s artifact descriptor", (_label, descriptor) => {
     expect(parseArtifactDescriptor(descriptor)).toEqual(descriptor)
   })
 

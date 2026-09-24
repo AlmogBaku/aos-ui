@@ -182,4 +182,42 @@ describe("voice ownership", () => {
     session.cancel()
     expect(track.stop).toHaveBeenCalledOnce()
   })
+
+  it("pauses read-aloud when the page becomes hidden", async () => {
+    const audio = new (class extends EventTarget {
+      src = ""
+      currentTime = 0
+      duration = 30
+      playbackRate = 1
+      paused = true
+      play = vi.fn(async () => {
+        this.paused = false
+        this.dispatchEvent(new Event("play"))
+      })
+      pause = vi.fn(() => {
+        this.paused = true
+        this.dispatchEvent(new Event("pause"))
+      })
+      load = vi.fn()
+      removeAttribute = vi.fn()
+    })()
+    const media = new VoiceMediaController({
+      createAudio: () => audio as unknown as HTMLAudioElement,
+    })
+    media.setScope("one")
+    media.setAvailability("one", { transcription: "ready", speech: "ready" })
+    const adapters = media.createAdapters("one", {
+      transcribe: vi.fn(),
+      synthesize: async () => new Blob(["audio"]),
+      projectText: (text) => text,
+    })
+    adapters.speech.speak("Keep reading this answer")
+    await vi.waitFor(() => expect(audio.play).toHaveBeenCalledOnce())
+
+    media.handleHidden()
+
+    expect(audio.pause).toHaveBeenCalled()
+    expect(audio.paused).toBe(true)
+    media.dispose()
+  })
 })
