@@ -12,7 +12,9 @@ as `'\''`.
    `$HERMES_SESSION_ID` is empty:
 
    ```bash
-   [ -n "$HERMES_SESSION_ID" ] && hermes sessions rename "$HERMES_SESSION_ID" '<name>'
+   if [ -n "$HERMES_SESSION_ID" ]; then
+     hermes sessions rename -- "$HERMES_SESSION_ID" '<name>'
+   fi
    ```
 
 2. Check the id is free: `hermes profile list`. Ids are lowercase letters,

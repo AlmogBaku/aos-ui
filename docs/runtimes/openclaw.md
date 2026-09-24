@@ -158,11 +158,18 @@ avatar in the Control UI.
 
 Session `createdAt` comes from the native millisecond timestamp in `createdAt`.
 
-Before deploying Agent icons, copy the Gateway config file owner-only under
-`/etc/aos-ui/backups` with `cp -p`, so it keeps its mode. The first workspace
-open after the deploy writes an icon into every Agent with an authored entry.
-To restore, roll the proxy back first and then restore the file; otherwise the
-next open saves the icons again.
+Before deploying Agent icons, back up the Gateway config file. It holds
+credentials, so copy it into an owner-only directory:
+
+```bash
+backup=/etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
+sudo install -d -m 700 "$backup"
+sudo cp -p <gateway-config-file> "$backup/"
+```
+
+The first workspace open after the deploy writes an icon into every Agent with
+an authored entry. To restore, roll the proxy back first and then restore the
+file; otherwise the next open saves the icons again.
 
 ## Capability limits
 

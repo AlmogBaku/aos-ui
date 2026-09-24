@@ -310,17 +310,18 @@ icon into every visible, editable Agent. Back up the affected files first.
    sudo install -d -m 700 /etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
    ```
 
-2. Copy every profile's `profile.yaml`, preserving its mode:
+2. Copy every profile's `profile.yaml`, preserving its mode. The default
+   profile keeps its file in the Hermes home itself, not under `profiles/`:
 
    ```bash
+   backup=/etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
+   sudo cp -p ~/.hermes/profile.yaml "$backup/default.profile.yaml"
    for f in ~/.hermes/profiles/*/profile.yaml; do
-     sudo cp -p "$f" \
-       /etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)/$(basename "$(dirname "$f")").profile.yaml
+     sudo cp -p "$f" "$backup/$(basename "$(dirname "$f")").profile.yaml"
    done
    ```
 
-   Check the path pattern against Hermes documentation or the adapter comments
-   if the Hermes home is not the default `~/.hermes`.
+   Use the Hermes home in place of `~/.hermes` when it is not the default.
 
 3. After the backup, deploy the updated proxy. The next workspace open writes
    icons.
