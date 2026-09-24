@@ -18,7 +18,6 @@ describe("workspace capabilities", () => {
   it("reports optional features honestly from the adapter surface", () => {
     expect(getWorkspaceCapabilities(minimumAdapter)).toEqual({
       agentCatalog: false,
-      agentVisibilityUpdates: false,
       agentUpdates: false,
       todos: false,
       agentCreation: false,
@@ -36,7 +35,6 @@ describe("workspace capabilities", () => {
           ...minimumAdapter,
           updateAgent: async () => undefined,
           listAgentCatalog: async () => [],
-          updateAgentVisibility: async () => undefined,
           subscribeTodos: () => () => undefined,
           subscribeActivity: () => () => undefined,
         },
@@ -44,7 +42,6 @@ describe("workspace capabilities", () => {
       )
     ).toEqual({
       agentCatalog: true,
-      agentVisibilityUpdates: true,
       agentUpdates: true,
       todos: true,
       agentCreation: true,

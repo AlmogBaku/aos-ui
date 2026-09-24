@@ -1,3 +1,6 @@
+import { en } from "@/lib/i18n/dictionaries/en"
+import { he } from "@/lib/i18n/dictionaries/he"
+
 import type { AgentSummary, SessionMetadata } from "./contracts"
 
 /**
@@ -47,7 +50,14 @@ type ProjectDraftAgentsInput = {
   sessions: readonly SessionMetadata[]
   resolvedThreadIds: ReadonlySet<string>
   now: number
+  /** The generic name of a draft whose Session has no title of its own. */
   name: string
+  /** Leads every draft description, with the Session's start time after it. */
+  draftLabel: string
+  /** Formats the start time for the active locale. */
+  locale: string
+  /** Session titles by thread id, as the thread list reports them. */
+  titles: ReadonlyMap<string, string | undefined>
   /**
    * Row id for a creator interview the provider has not listed yet: the
    * sentinel while the thread is local, then its Session id once it has one,
@@ -56,37 +66,65 @@ type ProjectDraftAgentsInput = {
   pendingDraftAgentId?: string
 }
 
-const draftAgent = (id: string, name: string): AgentSummary => ({
-  kind: "ready",
-  id,
-  name,
-  icon: { kind: "symbol", symbol: "unassigned", tone: "slate" },
-  visibility: "visible",
-})
+/**
+ * Titles that say nothing about the Agent being made. Both locales' names
+ * count, since a Session titled in one locale can be read in the other.
+ */
+const genericTitles = new Set(["", en.actions.newAgent, he.actions.newAgent])
+
+function draftName(title: string | undefined, name: string) {
+  const trimmed = title?.trim() ?? ""
+  return genericTitles.has(trimmed) ? name : trimmed
+}
+
+function draftDescription(
+  createdAt: string | undefined,
+  { draftLabel, locale }: Pick<ProjectDraftAgentsInput, "draftLabel" | "locale">
+) {
+  const started = createdAt ? new Date(createdAt) : undefined
+  if (!started || Number.isNaN(started.getTime())) return draftLabel
+  const time = new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(started)
+  return `${draftLabel} · ${time}`
+}
 
 /**
  * Presents every unresolved creator interview as its own temporary Agent that
  * owns exactly that one Session, so the workspace never exposes the creator.
  */
-export function projectDraftAgents({
-  creator,
-  agents,
-  sessions,
-  resolvedThreadIds,
-  now,
-  name,
-  pendingDraftAgentId,
-}: ProjectDraftAgentsInput): {
+export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   agents: AgentSummary[]
   sessions: SessionMetadata[]
 } {
+  const {
+    creator,
+    agents,
+    sessions,
+    resolvedThreadIds,
+    now,
+    name,
+    titles,
+    pendingDraftAgentId,
+  } = input
   if (!creator) return { agents: [...agents], sessions: [...sessions] }
 
+  const draftAgent = (id: string, createdAt?: string): AgentSummary => {
+    const threadId = draftThreadId(id)
+    return {
+      kind: "ready",
+      id,
+      name: draftName(threadId && titles.get(threadId), name),
+      description: draftDescription(createdAt, input),
+      visibility: "visible",
+    }
+  }
   const drafts: AgentSummary[] = []
   const projected = sessions.map((session) => {
     if (!isEligible(session, creator.id, resolvedThreadIds, now)) return session
     const id = draftAgentId(session.threadId)
-    drafts.push(draftAgent(id, name))
+    drafts.push(draftAgent(id, session.createdAt))
     return { ...session, agentId: id }
   })
   // The pending interview is a row without a Session, never a Session itself,
@@ -95,7 +133,7 @@ export function projectDraftAgents({
     pendingDraftAgentId &&
     !drafts.some(({ id }) => id === pendingDraftAgentId)
   )
-    drafts.push(draftAgent(pendingDraftAgentId, name))
+    drafts.push(draftAgent(pendingDraftAgentId))
 
   return { agents: [...agents, ...drafts], sessions: projected }
 }

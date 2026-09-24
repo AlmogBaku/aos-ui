@@ -69,7 +69,7 @@ it.each([
         return () => true
       }
     )
-    vi.spyOn(workspace, "updateAgentVisibility").mockRejectedValueOnce(
+    vi.spyOn(workspace, "updateAgent").mockRejectedValueOnce(
       code
         ? new AgentVisibilityUpdateError(code, "Provider wording")
         : new Error("pending-reload")
@@ -104,7 +104,7 @@ it("preserves mutation failure after a successful catalog notification refresh",
     }
   )
   const update = vi
-    .spyOn(workspace, "updateAgentVisibility")
+    .spyOn(workspace, "updateAgent")
     .mockRejectedValueOnce(new Error("Rejected"))
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
@@ -145,7 +145,7 @@ it("locks the switch until a delayed authoritative catalog refresh completes", a
     .spyOn(workspace, "listAgentCatalog")
     .mockResolvedValueOnce(await readCatalog())
     .mockImplementationOnce(() => delayedCatalog)
-  const update = vi.spyOn(workspace, "updateAgentVisibility")
+  const update = vi.spyOn(workspace, "updateAgent")
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
     name: "Show in workspace: Aster",
@@ -162,7 +162,50 @@ it("locks the switch until a delayed authoritative catalog refresh completes", a
   expect(toggle).not.toHaveAttribute("aria-disabled", "true")
   await user.click(toggle)
   await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"))
-  expect(update).toHaveBeenNthCalledWith(2, "agent-aster", "visible")
+  expect(update).toHaveBeenNthCalledWith(
+    2,
+    "agent-aster",
+    expect.objectContaining({ visibility: "visible" })
+  )
+})
+
+it("hiding sends {visibility: hidden, avatar: null}; showing sends visible with an avatar no visible Agent shows", async () => {
+  const user = userEvent.setup()
+  const workspace = new FixtureWorkspace({
+    agents: [
+      { kind: "ready", id: "agent-a", name: "Alpha", avatar: "ring/blue" },
+      { kind: "ready", id: "agent-b", name: "Bravo", avatar: "disc/rose" },
+      { kind: "ready", id: "agent-c", name: "Charlie", visibility: "hidden" },
+    ],
+  })
+  const update = vi.spyOn(workspace, "updateAgent")
+  renderCatalog(workspace)
+
+  await user.click(
+    await screen.findByRole("switch", { name: "Show in workspace: Alpha" })
+  )
+  await waitFor(() =>
+    expect(update).toHaveBeenCalledWith("agent-a", {
+      visibility: "hidden",
+      avatar: null,
+    })
+  )
+  const charlie = await screen.findByRole("switch", {
+    name: "Show in workspace: Charlie",
+  })
+  await waitFor(() => expect(charlie).not.toHaveAttribute("aria-disabled"))
+  await user.click(charlie)
+  await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+
+  const [agentId, patch] = update.mock.calls[1]
+  expect(agentId).toBe("agent-c")
+  expect(patch.visibility).toBe("visible")
+  const shown = (await workspace.listAgentCatalog())
+    .filter((entry) => entry.visibility === "visible")
+    .filter((entry) => entry.summary.id !== "agent-c")
+    .map((entry) => entry.summary.avatar)
+  expect(typeof patch.avatar).toBe("string")
+  expect(shown).not.toContain(patch.avatar)
 })
 
 function renderCatalog(
@@ -197,7 +240,7 @@ it("does not reconcile a completed mutation after the workspace unmounts", async
   const user = userEvent.setup()
   const workspace = new FixtureWorkspace()
   let finish!: () => void
-  vi.spyOn(workspace, "updateAgentVisibility").mockImplementation(
+  vi.spyOn(workspace, "updateAgent").mockImplementation(
     () =>
       new Promise<void>((resolve) => {
         finish = resolve
@@ -226,7 +269,7 @@ it("keeps a stale switch locked after reconciliation fails until catalog retry s
   vi.spyOn(workspace, "listAgentCatalog")
     .mockResolvedValueOnce(initial)
     .mockRejectedValueOnce(new Error("Read failed"))
-  const update = vi.spyOn(workspace, "updateAgentVisibility")
+  const update = vi.spyOn(workspace, "updateAgent")
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
     name: "Show in workspace: Aster",
@@ -247,7 +290,7 @@ it("waits for provider confirmation and retains the switch state on failure", as
   const user = userEvent.setup()
   const workspace = new FixtureWorkspace()
   let reject!: (error: Error) => void
-  vi.spyOn(workspace, "updateAgentVisibility").mockImplementation(
+  vi.spyOn(workspace, "updateAgent").mockImplementation(
     () =>
       new Promise((_, rejectPromise) => {
         reject = rejectPromise

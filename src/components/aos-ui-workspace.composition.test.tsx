@@ -156,14 +156,12 @@ describe("AosUiApp fixture composition", () => {
               id: "agent-primary",
               name: "Primary",
               status: "idle",
-              icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
             },
             {
               kind: "ready",
               id: "agent-secondary",
               name: "Secondary",
               status: "idle",
-              icon: { kind: "symbol", symbol: "layers", tone: "purple" },
             },
           ],
           sessions: [

@@ -13,17 +13,6 @@ export type { RuntimeMode } from "@shared/runtime-modes"
 export type AgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
 
-export type AgentIconName =
-  "spark" | "layers" | "compass" | "chart" | "pen" | "unassigned"
-
-export type AgentIcon =
-  | {
-      kind: "symbol"
-      symbol: AgentIconName
-      tone: "indigo" | "purple" | "teal" | "ochre" | "slate"
-    }
-  | { kind: "image"; src: string; alt?: string }
-
 type AgentSummaryBase = {
   id: string
   name: string
@@ -31,7 +20,6 @@ type AgentSummaryBase = {
   status?: AgentStatus
   /** Native roster activity, distinct from exact Session execution. */
   activity?: "active" | "idle" | "unknown"
-  icon?: AgentIcon
   /** Generated robot avatar token, `shape/palette`; absent when unset. */
   avatar?: string
   visibility?: AgentVisibility
@@ -146,10 +134,6 @@ export type WorkspaceAdapter = {
   listAgents(): Promise<AgentSummary[]>
   refreshAgents(): Promise<AgentSummary[]>
   listAgentCatalog?: () => Promise<AgentCatalogEntry[]>
-  updateAgentVisibility?: (
-    agentId: string,
-    visibility: AgentVisibility
-  ) => Promise<void>
   getSessionMetadata(threadIds: string[]): Promise<SessionMetadata[]>
   createSession(
     agentId: string,
@@ -321,7 +305,6 @@ export type HarnessRuntime = {
 
 export type WorkspaceCapabilities = {
   agentCatalog: boolean
-  agentVisibilityUpdates: boolean
   agentUpdates: boolean
   todos: boolean
   agentCreation: boolean

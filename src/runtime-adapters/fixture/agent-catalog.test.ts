@@ -15,14 +15,16 @@ describe("Agent catalog and visibility contract", () => {
     const listener = vi.fn()
     workspace.subscribeAgentCatalog(listener)
     for (const entry of catalog)
-      await workspace.updateAgentVisibility(entry.summary.id, "hidden")
+      await workspace.updateAgent(entry.summary.id, { visibility: "hidden" })
     expect((await workspace.listAgents()).filter(isRosterAgent)).toEqual([])
     expect(listener).toHaveBeenCalled()
-    await workspace.updateAgentVisibility(catalog[0].summary.id, "visible")
+    await workspace.updateAgent(catalog[0].summary.id, {
+      visibility: "visible",
+    })
     expect((await workspace.listAgents()).filter(isRosterAgent)).toHaveLength(1)
     expect(getWorkspaceCapabilities(workspace)).toMatchObject({
       agentCatalog: true,
-      agentVisibilityUpdates: true,
+      agentUpdates: true,
     })
   })
 
@@ -37,7 +39,7 @@ describe("Agent catalog and visibility contract", () => {
       ])
     )
     await expect(
-      workspace.updateAgentVisibility(creator.id, "hidden")
+      workspace.updateAgent(creator.id, { visibility: "hidden" })
     ).rejects.toThrow()
   })
 

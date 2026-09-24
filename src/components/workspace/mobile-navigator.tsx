@@ -420,7 +420,9 @@ export function MobileNavigator({
                     }}
                   >
                     <span className={styles.agentIcon}>
-                      {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" />}
+                      {renderAgentIcon?.(agent) ?? (
+                        <Bot aria-hidden="true" size={20} />
+                      )}
                     </span>
                     <span className={styles.rowText}>
                       <bdi className={styles.rowTitle}>{agent.name}</bdi>
@@ -602,7 +604,7 @@ function SessionsView({
 
       <div className={styles.agentIdentity}>
         <span className={styles.agentIcon}>
-          {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" />}
+          {renderAgentIcon?.(agent) ?? <Bot aria-hidden="true" size={20} />}
         </span>
         <span className={styles.rowText}>
           <h2 tabIndex={-1} data-mobile-navigator-heading>

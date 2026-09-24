@@ -243,6 +243,7 @@ export const he = {
   creator: {
     kickoff: "בוא ניצור סוכן חדש.",
     draftLabel: "טיוטה",
+    draftDescription: "טיוטה",
     discardTitle: "למחוק את הטיוטה?",
     discardDescription: "שיחת הראיון תימחק. לא ניתן לבטל את הפעולה.",
     createdPending: "הסוכן נוצר. הוא יופיע ברשימה בקרוב.",

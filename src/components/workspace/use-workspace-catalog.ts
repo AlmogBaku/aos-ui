@@ -5,12 +5,19 @@ import type {
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
 
-/** Catalog observation is independent of streaming message subscriptions. */
+const noIds: readonly string[] = []
+
+/**
+ * Catalog observation is independent of streaming message subscriptions. A
+ * runtime that stores avatars also reports which Agents it can store them for,
+ * since that decides how their icons resolve.
+ */
 export function useWorkspaceCatalog(
   workspace: WorkspaceAdapter,
   refreshKey: number
 ) {
   const [agents, setAgents] = useState<AgentSummary[]>([])
+  const [avatarEditableIds, setAvatarEditableIds] = useState(noIds)
   const [agentsLoading, setAgentsLoading] = useState(true)
   const [agentError, setAgentError] = useState<Error | null>(null)
   useEffect(() => {
@@ -21,13 +28,21 @@ export function useWorkspaceCatalog(
     const load = async (refresh: boolean) => {
       const requestGeneration = ++generation
       try {
-        const next = await (refresh
-          ? workspace.refreshAgents()
-          : workspace.listAgents())
+        const [next, entries] = await Promise.all([
+          refresh ? workspace.refreshAgents() : workspace.listAgents(),
+          workspace.updateAgent ? workspace.listAgentCatalog?.() : undefined,
+        ])
+        const editable =
+          entries?.flatMap((entry) =>
+            entry.avatarEditable ? [entry.summary.id] : []
+          ) ?? noIds
         if (active && requestGeneration === generation) {
           // Every catalog invalidation re-reads the roster, and most leave it
           // as it was: keeping the value spares the workspace a re-render.
           setAgents((previous) => (sameData(previous, next) ? previous : next))
+          setAvatarEditableIds((previous) =>
+            sameData(previous, editable) ? previous : editable
+          )
           setAgentError(null)
           setAgentsLoading(false)
         }
@@ -85,6 +100,7 @@ export function useWorkspaceCatalog(
   return {
     agents,
     setAgents,
+    avatarEditableIds,
     agentsLoading,
     setAgentsLoading,
     agentError,

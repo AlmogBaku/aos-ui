@@ -1,9 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Switch } from "@base-ui/react/switch"
 import { Plus, X } from "lucide-react"
 
+import {
+  resolveAgentIcons,
+  visibilityPatch,
+} from "@/components/agent-icons/allocation"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -22,7 +26,7 @@ import {
   type AgentVisibility,
   type WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
-import { AgentGlyph } from "./workspace-shell"
+import { WorkspaceAgentTile } from "./workspace-agent-tile"
 
 export function ManageAgents({
   open,
@@ -125,10 +129,24 @@ export function ManageAgents({
     }
   }, [load, open, workspace])
 
-  async function update(agentId: string, visibility: AgentVisibility) {
+  const shownEntries = useMemo(
+    () =>
+      (entries ?? [])
+        .filter((entry) => entry.visibility === "visible")
+        .map(({ summary, avatarEditable }) => ({
+          id: summary.id,
+          avatar: summary.avatar,
+          avatarEditable,
+        })),
+    [entries]
+  )
+  const icons = useMemo(() => resolveAgentIcons(shownEntries), [shownEntries])
+
+  async function update(entry: AgentCatalogEntry, visibility: AgentVisibility) {
+    const agentId = entry.summary.id
     const scope = lifetime.current
     if (
-      !workspace.updateAgentVisibility ||
+      !workspace.updateAgent ||
       !scope?.active ||
       scope.mutating ||
       loadFailed
@@ -139,7 +157,13 @@ export function ManageAgents({
     setPending(agentId)
     setUpdateFailure(null)
     try {
-      await workspace.updateAgentVisibility(agentId, visibility)
+      // Hiding frees the Agent's icon; showing it again claims one no visible
+      // Agent shows. A runtime that cannot store avatars only moves visibility.
+      const patch = visibilityPatch(visibility, shownEntries, Math.random)
+      await workspace.updateAgent(
+        agentId,
+        entry.avatarEditable ? patch : { visibility }
+      )
       if (!scope.active) return
       await onVisibilityChanged()
     } catch (error) {
@@ -244,9 +268,11 @@ export function ManageAgents({
                 key={entry.summary.id}
                 className="flex items-start gap-3 py-4 first:pt-0"
               >
-                <AgentGlyph
-                  agent={entry.summary}
-                  className="!size-10 !rounded-xl [&_svg]:!size-5"
+                <WorkspaceAgentTile
+                  agent={{
+                    ...entry.summary,
+                    avatar: icons.get(entry.summary.id)?.token,
+                  }}
                 />
                 <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-4">
                   <div className="min-w-0 flex-1">
@@ -259,7 +285,7 @@ export function ManageAgents({
                       </bdi>
                     ) : null}
                   </div>
-                  {entry.editable && workspace.updateAgentVisibility ? (
+                  {entry.editable && workspace.updateAgent ? (
                     <div className="mt-2 flex min-h-11 items-center justify-between gap-4 text-sm sm:mt-0 sm:max-w-44 sm:gap-2">
                       <span>{copy.showInWorkspace}</span>
                       <Switch.Root
@@ -267,10 +293,7 @@ export function ManageAgents({
                         disabled={pending !== null || loadFailed}
                         aria-label={`${copy.showInWorkspace}: ${entry.summary.name}`}
                         onCheckedChange={(checked) =>
-                          void update(
-                            entry.summary.id,
-                            checked ? "visible" : "hidden"
-                          )
+                          void update(entry, checked ? "visible" : "hidden")
                         }
                         className="group inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring data-disabled:cursor-wait data-disabled:opacity-60"
                       >

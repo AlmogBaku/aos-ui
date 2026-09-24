@@ -237,6 +237,8 @@ export type Dictionary = {
   creator: {
     kickoff: string
     draftLabel: string
+    /** Leads a draft Agent's description, before its start time. */
+    draftDescription: string
     discardTitle: string
     discardDescription: string
     createdPending: string

@@ -75,14 +75,12 @@ const agents: WorkspaceAgent[] = [
     name: "Aster",
     description: "General analysis and synthesis",
     status: "running",
-    icon: { kind: "symbol", symbol: "spark", tone: "indigo" },
   },
   {
     id: "agent-mica",
     name: "Mica",
     description: "Long-form synthesis",
     status: "idle",
-    icon: { kind: "symbol", symbol: "layers", tone: "purple" },
   },
 ]
 
@@ -1122,30 +1120,6 @@ describe("WorkspaceShell", () => {
       })
     ).toBeInTheDocument()
     expect(within(inspector).queryByRole("img")).not.toBeInTheDocument()
-  })
-
-  it("uses deterministic icon fallbacks and refuses remote provider image URLs", () => {
-    const { container } = renderShell({
-      agents: [
-        { id: "agent-alpha", name: "Alpha", status: "idle" },
-        {
-          id: "agent-beta",
-          name: "Beta",
-          status: "idle",
-          icon: {
-            kind: "image",
-            src: "https://tracking.example/agent.png",
-          },
-        },
-      ],
-      selectedAgentId: "agent-alpha",
-    })
-
-    expect(
-      container.querySelector('img[src^="https://tracking.example"]')
-    ).toBeNull()
-    expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /Beta/ })).toBeInTheDocument()
   })
 
   it("traps focus in a narrow-screen drawer and restores it on Escape", async () => {

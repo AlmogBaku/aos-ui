@@ -7,7 +7,6 @@ import type {
 
 import type {
   AgentUpdate,
-  AgentVisibility,
   SessionActionCapabilities,
   SessionCreationOptions,
 } from "../../contracts"
@@ -107,7 +106,17 @@ export function createAcpWorkspaceClient({
     return agentId
   }
 
-  async function catalog() {
+  let catalogRead: ReturnType<typeof readCatalog> | undefined
+
+  /** Overlapping catalog reads, such as roster and entries, share one request. */
+  function catalog() {
+    catalogRead ??= readCatalog().finally(() => {
+      catalogRead = undefined
+    })
+    return catalogRead
+  }
+
+  async function readCatalog() {
     const response = await connection.listAgents()
     revisions.clear()
     for (const entry of response.agents)
@@ -244,8 +253,6 @@ export function createAcpWorkspaceClient({
       )
     },
     updateAgent,
-    updateAgentVisibility: (agentId: string, visibility: AgentVisibility) =>
-      updateAgent(agentId, { visibility }),
     subscribeAgentCatalog: (listener: () => void) =>
       connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () =>
         listener()

@@ -254,6 +254,7 @@ export const en = {
   creator: {
     kickoff: "Let's create a new Agent.",
     draftLabel: "draft",
+    draftDescription: "Draft",
     discardTitle: "Discard this draft?",
     discardDescription:
       "Its interview Session is deleted. This cannot be undone.",

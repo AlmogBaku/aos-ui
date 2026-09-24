@@ -422,8 +422,7 @@ export function CatalogFixture({
               ]
             : entries
         },
-        updateAgentVisibility: (id, visibility) =>
-          fixture.workspace.updateAgentVisibility!(id, visibility),
+        updateAgent: (id, patch) => fixture.workspace.updateAgent(id, patch),
       }),
     [
       creatorFirst,
@@ -585,11 +584,6 @@ export function BuilderSignalFixture({
                 name: "Sora",
                 description: "Customer insight",
                 status: "idle" as const,
-                icon: {
-                  kind: "symbol" as const,
-                  symbol: "spark" as const,
-                  tone: "teal" as const,
-                },
               },
             ]
           : []),

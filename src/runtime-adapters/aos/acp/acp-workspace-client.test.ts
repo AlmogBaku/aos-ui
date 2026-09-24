@@ -814,6 +814,18 @@ describe("ACP workspace client", () => {
     ])
   })
 
+  it("shares one catalog request between an overlapping roster and entries read", async () => {
+    const { client, setAgents, calls } = createClient()
+    setAgents([catalogEntry()])
+
+    await Promise.all([client.listAgents(), client.listAgentCatalog()])
+    await client.listAgents()
+
+    expect(calls.filter(({ method }) => method === "listAgents")).toHaveLength(
+      2
+    )
+  })
+
   it("reports nothing when a creator run stops without a new Agent", async () => {
     const { client, emitUpdate, setAgents, calls } = createClient()
     const events: unknown[] = []
@@ -1024,7 +1036,7 @@ describe("ACP workspace client", () => {
       },
     ])
     await client.updateAgent(AGENT_ID, { visibility: "hidden", avatar: null })
-    await client.updateAgentVisibility(AGENT_ID, "visible")
+    await client.updateAgent(AGENT_ID, { visibility: "visible" })
     expect(
       calls
         .filter((call) => call.method === "updateAgent")
