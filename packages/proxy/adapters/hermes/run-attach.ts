@@ -41,11 +41,14 @@ const MAX_RECOVERY_BYTES = 4_194_304
  * `barrier`: a new turn, so only frames past Hermes' watermark are its own.
  * `position`: a browser reconnect from the cursor the run already published.
  * `discover`: a proxy restart where only Hermes' own open turn is this run's.
+ * `adopt`: a turn Hermes started on its own, which ending first leaves nothing
+ * to join.
  */
 type AttachMode =
   | { kind: "barrier" }
   | { kind: "position"; epoch: string; after: number }
   | { kind: "discover" }
+  | { kind: "adopt" }
 
 /**
  * Where a run's frames start once it is bound. `head` is Hermes' watermark when
@@ -57,6 +60,8 @@ type AttachCursor = {
   head?: number
   replayed?: readonly HermesNativeEvent[]
   reconcile?: boolean
+  /** An adopted turn Hermes already ended: there is no run to bind. */
+  ended?: boolean
   /** `replayed` begins at the open native turn's own `message.start`. */
   fromStart?: boolean
 }
@@ -68,13 +73,14 @@ type LostReason = "disconnected" | "rebound" | "restart"
  * The one path that binds a run to a live Hermes Session: a new turn, a
  * reconnect, discovery and an in-place reattach differ only in `mode`. Resolves
  * whether the run's frames begin at the native turn's first frame, which only a
- * discovery that found Hermes' open turn in its ring can say.
+ * discovery that found Hermes' open turn in its ring can say, or `undefined`
+ * when an adopted turn had already ended.
  */
 export async function attachTurn(
   host: TurnEngineHost,
   active: ActiveTurn,
   mode: AttachMode
-): Promise<boolean> {
+): Promise<boolean | undefined> {
   const buffered = nativeEventBuffer()
   let accepting = false
   let reattached = false
@@ -132,6 +138,11 @@ export async function attachTurn(
   active.catchUp = undefined
   active.deferredEdge = undefined
   host.turns.set(sessionKey(active.scope), active)
+  if (cursor.ended) {
+    drainBufferedEvents(buffered)
+    host.settle(active)
+    return undefined
+  }
   if (cursor.reconcile || buffered.overflow) {
     drainBufferedEvents(buffered)
     failReset(
@@ -204,7 +215,9 @@ async function attachCursor(
     return {
       epoch: recovery.epoch,
       barrier: recovery.lastSeen,
-      reconcile: true,
+      ...(events && mode.kind === "adopt"
+        ? { ended: true }
+        : { reconcile: true }),
     }
   // Hermes is working but its ring no longer holds this turn's start;
   // authoritative history restores the earlier frames.

@@ -268,14 +268,21 @@ export class HermesTurnEngine {
     scope: HermesTurnScope,
     request: HermesReconnectRequest
   ): Promise<HermesTurnHandle> {
-    return (await this.#recover(scope, request)).handle
+    const recovered = await this.#recover(scope, request, false)
+    // Only an adopted turn can have ended before it was joined.
+    if (!recovered) throw providerUnavailable()
+    return recovered.handle
   }
 
-  /** `fromStart`: the handle's frames begin at the native turn's first one. */
+  /**
+   * `fromStart`: the handle's frames begin at the native turn's first one.
+   * `undefined`: the adopted turn had already ended.
+   */
   async #recover(
     scope: HermesTurnScope,
-    request: HermesReconnectRequest
-  ): Promise<{ handle: HermesTurnHandle; fromStart: boolean }> {
+    request: HermesReconnectRequest,
+    adopt: boolean
+  ): Promise<{ handle: HermesTurnHandle; fromStart: boolean } | undefined> {
     if (request.threadId !== scope.threadId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
@@ -301,7 +308,7 @@ export class HermesTurnEngine {
     this.#admissions.add(key)
 
     const active = createActiveTurn(scope, request.turnId)
-    let fromStart: boolean
+    let fromStart: boolean | undefined
     try {
       fromStart = await attachTurn(
         this.#host,
@@ -314,11 +321,12 @@ export class HermesTurnEngine {
             }
           : // Nothing published a cursor for this run: only Hermes' own open
             // turn identifies it.
-            { kind: "discover" }
+            { kind: adopt ? "adopt" : "discover" }
       )
     } finally {
       this.#admissions.delete(key)
     }
+    if (fromStart === undefined) return undefined
     return { handle: this.#handle(active), fromStart }
   }
 
@@ -349,12 +357,15 @@ export class HermesTurnEngine {
       }
     }
     if (snapshot.status !== "running") return undefined
-    const { handle, fromStart } = await this.#recover(scope, {
-      threadId: scope.threadId,
-      turnId,
-    })
+    // Hermes reports a turn it just finished as running for a moment.
+    const recovered = await this.#recover(
+      scope,
+      { threadId: scope.threadId, turnId },
+      true
+    )
+    if (!recovered) return undefined
     this.#watchLostInteraction(scope)
-    return { state: "running" as const, handle, fromStart }
+    return { state: "running" as const, ...recovered }
   }
 
   /**

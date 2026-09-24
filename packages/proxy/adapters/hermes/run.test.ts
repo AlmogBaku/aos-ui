@@ -2851,6 +2851,7 @@ describe("HermesRunEngine", () => {
           running: true,
           status: "running" as const,
         }),
+        status: async () => "working",
         observe: async () => {
           observations += 1
           return () => undefined
@@ -4118,11 +4119,37 @@ describe("HermesRunEngine", () => {
     expect(cursors).toEqual([0])
   })
 
-  it("requires reconciliation when a discovered idle Session has no open turn", async () => {
+  it("discovers nothing when Hermes' turn ended before it could be joined", async () => {
+    const closed = nativeTurn("live-secret", 1)
+    const warn = vi.fn()
+    const engine = new HermesTurnEngine(
+      runtime({
+        // Hermes still reports the turn it just finished as running.
+        inspectExecution: async () => ({ running: true, status: "running" }),
+        status: async () => "idle",
+        replay: async () => ({
+          epoch: "epoch-1",
+          lastSeen: 3,
+          events: [
+            closed.messageStart("old-message"),
+            closed.delta("old"),
+            closed.complete("old-message", "old", "complete"),
+          ],
+        }),
+      }),
+      { log: { warn } }
+    )
+
+    await expect(
+      engine.discover(scope, "recovered-run")
+    ).resolves.toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it("requires reconciliation when a recovered idle Session has no open turn", async () => {
     const closed = nativeTurn("live-secret", 1)
     const engine = new HermesTurnEngine(
       runtime({
-        inspectExecution: async () => ({ running: true, status: "running" }),
         status: async () => "idle",
         replay: async () => ({
           epoch: "epoch-1",
@@ -4136,9 +4163,12 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const discovered = await engine.discover(scope, "recovered-run")
+    const recovered = await engine.recover(scope, {
+      threadId: scope.threadId,
+      turnId: "recovered-run",
+    })
 
-    await expect(collect(discovered!.handle)).resolves.toEqual([
+    await expect(collect(recovered)).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.TurnFailed,
