@@ -385,6 +385,75 @@ describe("a tool call flagged an MCP App only at its finish", () => {
     expect(settled(false).finished).toBeUndefined()
   })
 
+  it.each([
+    [
+      "a failure it recovers from",
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_CONNECTION_INTERRUPTED",
+        message: "The connection dropped.",
+      },
+    ],
+    [
+      "a failure still awaiting Stop",
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "The run failed.",
+        awaitingStop: true,
+      },
+    ],
+    [
+      "a pause for an answer",
+      {
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [
+          {
+            requestId: "question-2",
+            kind: PendingRequestKind.Elicitation,
+            message: "Which chart?",
+            questions: [
+              {
+                label: "Chart",
+                choices: ["bar", "line"],
+                multiple: false,
+                custom: false,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  ] as [string, TurnEvent][])(
+    "still reaches the guest under its name after %s",
+    (_, between) => {
+      const projector = projectorOf()
+      const projectOne = (event: TurnEvent) =>
+        projector(TurnEventSchema.parse(event))
+      projectOne({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "chart-4",
+        title: "Render chart",
+        name: "render_chart",
+      })
+      projectOne(between)
+
+      expect(
+        projectOne({
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "chart-4",
+          output: "",
+          failed: false,
+          app: true,
+        })
+      ).toMatchObject({
+        toolCallId: "chart-4",
+        name: "render_chart",
+        app: true,
+      })
+    }
+  )
+
   it("stays hidden when it finishes after its turn ended or failed", () => {
     for (const done of [
       { kind: TurnEventKind.TurnEnded },

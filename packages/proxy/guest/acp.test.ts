@@ -2002,29 +2002,29 @@ describe("guest scope and commands", () => {
   describe("a staged attachment", () => {
     /** Stages one attachment for the invited conversation, as the REST route does. */
     const staged = (test: ReturnType<typeof harness>) => {
-      const cleanup = vi.fn(async () => undefined)
       const stageId = test.lane.attachmentStages.create(AGENT, REF, {
         public: [],
         appendTo: (text) => `${text}\n[attached notes.txt]`,
-        cleanup,
+        cleanup: async () => undefined,
       })
       if (!stageId) throw new Error("The stage was refused")
-      return { stageId, cleanup }
+      return stageId
     }
     const send = (
       test: ReturnType<typeof harness>,
       attachmentStageId: string
-    ) => {
-      // The browser's prompt `_meta` is the shape this lane accepts.
-      expect(AosPromptMetaSchema.safeParse({ attachmentStageId }).success).toBe(
-        true
-      )
-      return test.agent.request(methods.agent.session.prompt, {
+    ) =>
+      test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Read this" }],
         _meta: { [AOS_META_KEY]: { attachmentStageId } },
       })
-    }
+
+    it("is named in the prompt `_meta` the browser sends", () => {
+      expect(
+        AosPromptMetaSchema.safeParse({ attachmentStageId: "stage-1" }).success
+      ).toBe(true)
+    })
 
     for (const [name, existing] of [
       ["reaches the runtime with a guest's send", true],
@@ -2038,7 +2038,7 @@ describe("guest scope and commands", () => {
         await test.initialize()
         await test.login(await invite(test.invitations))
         await test.resume(REF)
-        const { stageId } = staged(test)
+        const stageId = staged(test)
 
         await send(test, stageId)
 

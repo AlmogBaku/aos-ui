@@ -10,9 +10,10 @@ import type {
   ConnectionAuthentication,
 } from "../acp/types"
 import { PUBLIC_ERRORS } from "../acp/validation"
-import type {
-  GuestCapability,
-  GuestInvitationService,
+import {
+  guestCapabilities,
+  type GuestCapability,
+  type GuestInvitationService,
 } from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
@@ -24,14 +25,19 @@ import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { AOS_AUTH_METHOD_INVITE, type AosExtensions } from "../../protocol/acp"
 import { createGuestMiddleware, type GuestGrant } from "./middleware"
 
-/** What an invitation must allow for this lane to serve it at all. */
-const ACP_LANE_CAPABILITIES: readonly GuestCapability[] = [
-  "message-text",
-  "custom-ui",
-  "artifact-metadata",
-  "attachment-metadata",
-  "safe-errors",
-]
+/** The capabilities only the guest voice routes use. */
+const VOICE_CAPABILITIES: ReadonlySet<GuestCapability> = new Set([
+  "audio-speech",
+  "audio-transcription",
+])
+
+/**
+ * What an invitation must allow for this lane to serve it at all: every
+ * capability but voice, so a new one is required until it is exempted here.
+ */
+const ACP_LANE_CAPABILITIES = guestCapabilities.filter(
+  (capability) => !VOICE_CAPABILITIES.has(capability)
+)
 
 /**
  * The guest lane's ACP service: one invited conversation per connection, with

@@ -1,6 +1,8 @@
 import { guestErrorDescription } from "../../auth/guest-projection"
 import { publicTurnError } from "../../auth/guest-runtime-projection"
 import {
+  isAwaitingStopFailure,
+  isRedialableFailure,
   isTurnEvent,
   TurnEventKind,
   type TurnEvent,
@@ -50,7 +52,8 @@ function projectArtifact(
 export function createTurnProjector(shown: Set<string> = new Set()) {
   /**
    * The name of every call whose start was hidden, until it finishes or its
-   * turn ends. The conversation runs one turn at a time.
+   * turn ends. The conversation runs one turn at a time, and a failure it
+   * recovers from or still has to stop leaves that turn running.
    */
   const hidden = new Map<string, string>()
   return (candidate: TurnEvent): TurnEvent | undefined => {
@@ -87,7 +90,11 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
       case TurnEventKind.TurnRequiresAction:
         return candidate
       case TurnEventKind.TurnFailed: {
-        hidden.clear()
+        if (
+          !isRedialableFailure(candidate) &&
+          !isAwaitingStopFailure(candidate)
+        )
+          hidden.clear()
         const { code } = publicTurnError(candidate.code)
         return {
           kind: TurnEventKind.TurnFailed,
