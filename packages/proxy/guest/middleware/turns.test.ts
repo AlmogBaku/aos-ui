@@ -384,6 +384,38 @@ describe("a tool call flagged an MCP App only at its finish", () => {
   it("stays hidden when its finish is not flagged either", () => {
     expect(settled(false).finished).toBeUndefined()
   })
+
+  it("stays hidden when it finishes after its turn ended or failed", () => {
+    for (const done of [
+      { kind: TurnEventKind.TurnEnded },
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_PROVIDER_RUN_FAILED",
+        message: "The run failed.",
+      },
+    ] as TurnEvent[]) {
+      const projector = projectorOf()
+      const projectOne = (event: TurnEvent) =>
+        projector(TurnEventSchema.parse(event))
+      projectOne({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "chart-3",
+        title: "render_chart",
+      })
+      projectOne(done)
+
+      expect(
+        projectOne({
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "chart-3",
+          output: "",
+          failed: false,
+          app: true,
+        }),
+        done.kind
+      ).toBeUndefined()
+    }
+  })
 })
 
 describe("guest turns layer", () => {

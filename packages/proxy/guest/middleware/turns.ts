@@ -48,7 +48,10 @@ function projectArtifact(
  * was shown, across every stream of the member.
  */
 export function createTurnProjector(shown: Set<string> = new Set()) {
-  /** The name of every call whose start was hidden, until it finishes. */
+  /**
+   * The name of every call whose start was hidden, until it finishes or its
+   * turn ends. The conversation runs one turn at a time.
+   */
   const hidden = new Map<string, string>()
   return (candidate: TurnEvent): TurnEvent | undefined => {
     if (!isTurnEvent(candidate)) return undefined
@@ -61,6 +64,7 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
       // How the turn stopped, what it was saved as, and what the runtime asks
       // the composer to start with are the guest's; what it spent is not.
       case TurnEventKind.TurnEnded: {
+        hidden.clear()
         const { stopReason, composerPrefill, saved } = candidate
         return {
           kind: TurnEventKind.TurnEnded,
@@ -83,6 +87,7 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
       case TurnEventKind.TurnRequiresAction:
         return candidate
       case TurnEventKind.TurnFailed: {
+        hidden.clear()
         const { code } = publicTurnError(candidate.code)
         return {
           kind: TurnEventKind.TurnFailed,
