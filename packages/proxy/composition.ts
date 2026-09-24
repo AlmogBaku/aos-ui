@@ -1,5 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
-import { createSessionRooms } from "./acp/session-rooms"
+import { createChannel } from "./core/channel"
 import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
@@ -214,7 +214,7 @@ export async function createConfiguredProxy(
    */
   const { sessions } = runtimeInstance
   const { turns } = runtimeInstance.runtime
-  const rooms = createSessionRooms({
+  const rooms = createChannel({
     snapshot: (scope) => sessions.snapshot(scope),
     // A room adopts what the runtime starts only where the runtime reports it.
     ...(turns.watch

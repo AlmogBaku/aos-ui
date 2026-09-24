@@ -47,7 +47,7 @@ import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import { createSessionRooms } from "./session-rooms"
+import { createChannel } from "../core/channel"
 import { persistedCorrections } from "./translate/history"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
@@ -809,7 +809,7 @@ export async function harness(options: HarnessOptions = {}) {
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
   const { watch } = options
-  const rooms = createSessionRooms({
+  const rooms = createChannel({
     snapshot: (roomScope) => coordinator.snapshot(roomScope),
     ...(watch
       ? {

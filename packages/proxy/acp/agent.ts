@@ -54,9 +54,10 @@ import {
   encodeCursor,
   historyCursor,
 } from "./agent-sessions"
-import { isPromptBlock, promptText } from "./prompt-content"
+import { isPromptBlock, promptParts, promptText } from "./prompt-content"
 import type { SessionMember } from "./session-member"
-import type { RoomTurn } from "./session-rooms"
+import type { RoomTurn } from "../core/channel"
+import { promptText as roomPromptText } from "../core/member"
 import { beforeLiveTurn, lastPromptIndex } from "./translate/history"
 import type {
   AcpConnectionContext,
@@ -150,7 +151,7 @@ function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join("\n")
   // A prompt without text matches any other, so it never names the live one.
-  const expected = promptText(turn.content).trim()
+  const expected = roomPromptText(turn.content).trim()
   return expected && text.trim() === expected ? index : -1
 }
 
@@ -836,7 +837,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await member.announce({
         turnId: input.turnId,
         messageId,
-        content: params.prompt,
+        content: promptParts(params.prompt),
         at: Date.now(),
       })
     })

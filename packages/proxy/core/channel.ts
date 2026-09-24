@@ -1,11 +1,10 @@
-import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
-
-import type { ExecutionEvent } from "../core/events"
+import type { ExecutionEvent } from "./events"
+import type { PromptPart } from "./member"
 import {
   ServerTurnConflictError,
   type ServerTurnWatcher,
   type SessionScope,
-} from "../core/runtime"
+} from "./runtime"
 
 /**
  * A room is one provider Session; its members are the connections that have
@@ -21,7 +20,7 @@ export type RoomScope = Pick<SessionScope, "agentId" | "sessionId">
 export type RoomTurn = {
   turnId: string
   messageId: string
-  content: readonly ContentBlock[]
+  content: readonly PromptPart[]
   /** Epoch ms when the turn was admitted. */
   at: number
 }
@@ -39,7 +38,7 @@ export type RoomMember = {
   report(cause: unknown): void
 }
 
-export type SessionRooms = ReturnType<typeof createSessionRooms>
+export type Channel = ReturnType<typeof createChannel>
 
 type Lane = "operator" | "guest"
 
@@ -109,7 +108,7 @@ function adopter(room: Room) {
   return members.find(([, { lane }]) => lane === "operator") ?? members[0]
 }
 
-export function createSessionRooms({
+export function createChannel({
   snapshot,
   adoption,
   now = Date.now,

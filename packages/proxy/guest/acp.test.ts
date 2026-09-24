@@ -18,7 +18,7 @@ import {
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
 } from "../../protocol/acp"
-import { createSessionRooms } from "../acp/session-rooms"
+import { createChannel } from "../core/channel"
 import { connectClient, updates, type Recorder } from "../acp/test-harness"
 import {
   createGuestInvitationService,
@@ -429,7 +429,7 @@ function harness(options: HarnessOptions = {}) {
       runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
-      rooms: createSessionRooms({
+      rooms: createChannel({
         snapshot: (scope) => coordinator.snapshot(scope),
       }),
       now: () => clock.now,

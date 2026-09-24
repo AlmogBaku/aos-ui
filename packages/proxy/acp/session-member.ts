@@ -21,8 +21,9 @@ import type { ServerAttachmentStage, SessionScope } from "../core/runtime"
 import type { CoordinatedTurnSubscription } from "../core/session-coordinator"
 import { FanoutOverflowError } from "../core/subscriber-fanout"
 import { redactForLog } from "../redaction"
-import { promptCopy, promptText } from "./prompt-content"
-import type { RoomMember, RoomTurn } from "./session-rooms"
+import type { RoomMember, RoomTurn } from "../core/channel"
+import { promptText } from "../core/member"
+import { promptBlocks } from "./prompt-content"
 import { answeredQuestionOutbound } from "./translate/requests"
 import {
   initialTranslateState,
@@ -497,7 +498,7 @@ class SessionMember {
       sessionUpdate: "user_message",
       messageId,
       content:
-        text === undefined ? promptCopy(content) : [{ type: "text", text }],
+        text === undefined ? promptBlocks(content) : [{ type: "text", text }],
     })
   }
 

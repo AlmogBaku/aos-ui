@@ -29,7 +29,7 @@ import type {
 import type { CoordinatorAccess } from "../core/session-coordinator"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
-import type { SessionRooms } from "./session-rooms"
+import type { Channel } from "../core/channel"
 
 export type Lane = "operator" | "guest"
 
@@ -62,7 +62,7 @@ type AcpConnectionBase = {
    * The one room registry per proxy process, shared by both lanes so an
    * operator and a guest on the same provider Session land in one room.
    */
-  rooms: SessionRooms
+  rooms: Channel
   /**
    * Where this connection reports the workspace it shows, shared across the
    * principal's connections. Absent means nothing observes presence, which is

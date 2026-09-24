@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest"
 
-import type { ExecutionEvent } from "../core/events"
+import type { ExecutionEvent } from "./events"
 import {
   ServerTurnConflictError,
   type ServerTurnWatcher,
   type SessionScope,
-} from "../core/runtime"
+} from "./runtime"
 import {
-  createSessionRooms,
+  createChannel,
   type RoomMember,
   type RoomScope,
   type RoomTurn,
-} from "./session-rooms"
+} from "./channel"
 
 const SCOPE: SessionScope = {
   agentId: "researcher",
@@ -23,7 +23,7 @@ function turn(turnId: string, at = 0): RoomTurn {
   return {
     turnId,
     messageId: `message-${turnId}`,
-    content: [{ type: "text", text: `prompt ${turnId}` }],
+    content: [{ kind: "text", text: `prompt ${turnId}` }],
     at,
   }
 }
@@ -69,7 +69,7 @@ function harness() {
   const snapshots = new Map<string, { state: string; turnId?: string }>()
   const clock = { now: 0 }
   const key = (scope: RoomScope) => `${scope.agentId}/${scope.sessionId}`
-  const rooms = createSessionRooms({
+  const rooms = createChannel({
     snapshot: (scope) => snapshots.get(key(scope)) ?? { state: "idle" },
     now: () => clock.now,
     backstopMs: 1_000,
@@ -94,7 +94,7 @@ function failOnce() {
 /** Lets fire-and-forget sends from `add` settle. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
-describe("createSessionRooms", () => {
+describe("createChannel", () => {
   it("broadcasts a turn to every member but the sender, once each", async () => {
     const { rooms, setSnapshot } = harness()
     const sender = member()
@@ -428,7 +428,7 @@ function adoptingHarness() {
   const discovered: Array<{ scope: SessionScope; lane: string }> = []
   let stopped = 0
   let discover: () => Promise<unknown> = async () => undefined
-  const rooms = createSessionRooms({
+  const rooms = createChannel({
     snapshot: () => state,
     adoption: {
       watch(_scope, watcher) {
@@ -480,7 +480,7 @@ function adoptingHarness() {
 
 const GUEST_SCOPE: SessionScope = { ...SCOPE, threadId: "thread-guest" }
 
-describe("createSessionRooms adopting runtime-started turns", () => {
+describe("createChannel adopting runtime-started turns", () => {
   it("watches while the room has members and stops when the last leaves", () => {
     const runtime = adoptingHarness()
     const removeFirst = runtime.rooms.add(SCOPE, member().fake, {

@@ -6,7 +6,7 @@ import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
-import type { SessionRooms } from "./session-rooms"
+import type { Channel } from "../core/channel"
 import * as translators from "./translate"
 import type { AcpConnectionContext, AcpLogger } from "./types"
 
@@ -16,7 +16,7 @@ export type OperatorAcpServiceOptions = {
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
   /** The one room registry the guest lane shares, so both see one room. */
-  rooms: SessionRooms
+  rooms: Channel
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */

@@ -5,7 +5,7 @@ import {
 import { createAosAcpAgent } from "../acp/agent"
 import { createReadState } from "../acp/read-state"
 import { createAcpService } from "../acp/service"
-import type { SessionRooms } from "../acp/session-rooms"
+import type { Channel } from "../core/channel"
 import * as translators from "../acp/translate"
 import type {
   AcpConnectionContext,
@@ -48,7 +48,7 @@ export type GuestAcpServiceOptions = {
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
   attachmentStages: ServerAttachmentStages
   /** The one room registry the operator lane shares, so both see one room. */
-  rooms: SessionRooms
+  rooms: Channel
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
   now?: () => number
