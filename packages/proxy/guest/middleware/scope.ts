@@ -49,6 +49,8 @@ export function createScopeMiddleware({
   }
 
   return {
+    // Nothing about another Session reaches a guest, however it was routed.
+    event: (event) => (event.sessionId === grant.ref ? event : undefined),
     commands: {
       // A fresh invitation has no Session yet: resuming it creates nothing and
       // replays nothing, the way the guest history route serves an empty page,

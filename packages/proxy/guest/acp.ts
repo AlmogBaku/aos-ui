@@ -10,7 +10,10 @@ import type {
   ConnectionAuthentication,
 } from "../acp/types"
 import { PUBLIC_ERRORS } from "../acp/validation"
-import type { GuestInvitationService } from "../auth/guest-invitation"
+import type {
+  GuestCapability,
+  GuestInvitationService,
+} from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
   guestAuthorizationActive,
@@ -20,6 +23,15 @@ import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { AOS_AUTH_METHOD_INVITE, type AosExtensions } from "../../protocol/acp"
 import { createGuestMiddleware, type GuestGrant } from "./middleware"
+
+/** What an invitation must allow for this lane to serve it at all. */
+const ACP_LANE_CAPABILITIES: readonly GuestCapability[] = [
+  "message-text",
+  "custom-ui",
+  "artifact-metadata",
+  "attachment-metadata",
+  "safe-errors",
+]
 
 /**
  * The guest lane's ACP service: one invited conversation per connection, with
@@ -113,6 +125,14 @@ function createGuestAuthentication(
     async authenticate(token) {
       const identity = await options.invitations.verify(token)
       if (!identity || !guestAuthorizationActive(identity, now)) return false
+      // The lane shows the conversation's text, App cards, artifacts, the
+      // guest's own attachments and public errors without asking again.
+      if (
+        !ACP_LANE_CAPABILITIES.every((capability) =>
+          identity.capabilities.includes(capability)
+        )
+      )
+        return false
       const target = { agentId: identity.agentId, sessionId: identity.ref }
       const read = authorizer.authorize(identity, {
         ...target,

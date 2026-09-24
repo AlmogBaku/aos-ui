@@ -848,6 +848,33 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
+  it("refuses an invitation narrower than what the lane shows", async () => {
+    const test = harness({ existing: true })
+    const verify = test.invitations.verify.bind(test.invitations)
+    vi.spyOn(test.invitations, "verify").mockImplementation(async (token) => {
+      const identity = await verify(token)
+      return (
+        identity && {
+          ...identity,
+          capabilities: identity.capabilities.filter(
+            (capability) => capability !== "custom-ui"
+          ),
+        }
+      )
+    })
+    await test.initialize()
+
+    await expect(
+      test.login(await invite(test.invitations))
+    ).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+    await expect(test.resume(REF)).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+    })
+    test.close()
+  })
+
   it("refuses a token the invitation service cannot verify", async () => {
     const test = harness()
     await test.initialize()
