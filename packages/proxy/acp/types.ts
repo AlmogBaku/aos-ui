@@ -21,15 +21,11 @@ import type {
   RequestReply,
   TurnEvent,
 } from "../core/events"
-import type {
-  RuntimeInstance,
-  ServerAttachmentStages,
-  SessionScope,
-} from "../core/runtime"
-import type { CoordinatorAccess } from "../core/session-coordinator"
+import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channel } from "../core/channel"
+import type { Member } from "../core/member"
 
 export type Lane = "operator" | "guest"
 
@@ -84,45 +80,14 @@ export type AcpConnectionContext = AcpConnectionBase &
   )
 
 /**
- * One redeemed invitation, shaped after the claims `GuestInvitationService`
- * verifies: the single Agent and conversation reference it grants, the
- * controller identity the coordinator knows this guest by, and the moment the
- * connection must close.
- */
-export type GuestGrant = {
-  agentId: string
-  ref: string
-  principalId: string
-  /** Unix milliseconds; the connection closes when it passes. */
-  expiresAt: number
-  /** Non-secret setup text the runtime receives once, on creation. */
-  firstTurnInstruction?: string
-}
-
-/**
- * The guest lane's per-connection authorization and projection, implemented in
- * `guest/acp.ts`. Every projection fails closed before an invitation is
- * redeemed.
+ * The guest lane's per-connection authorization, implemented in
+ * `guest/acp.ts`. Nothing is reachable before an invitation is redeemed.
  */
 export type GuestPolicy = {
-  /** Redeems one invitation token; `undefined` means it is not usable. */
-  authenticate(token: string): Promise<GuestGrant | undefined>
-  grant(): GuestGrant | undefined
-  /** Whether the redeemed invitation still authorizes reading, by the clock. */
-  active(): boolean
-  project: {
-    /** Wraps one coordinator subscription in the guest run projection. */
-    access(base: CoordinatorAccess, scope: SessionScope): CoordinatorAccess
-    history(value: SessionHistoryResponse): SessionHistoryResponse
-    /**
-     * Another member's prompt text as the guest may see it, projected as a
-     * history user turn is; `undefined` means the guest sees no copy.
-     */
-    turn(text: string): string | undefined
-    capabilities(value: WorkspaceCapabilities): WorkspaceCapabilities
-    /** Refuses an approval answer that would widen the grant past this request. */
-    permissionReply(request: PendingRequest, reply: RequestReply): RequestReply
-  }
+  /** Redeems one invitation token; `false` means it is not usable. */
+  authenticate(token: string): Promise<boolean>
+  /** Who the redeemed invitation acts as, and its stack; absent before login. */
+  member(): Omit<Member, "connection"> | undefined
   /** Schedules the close the invitation's expiry owes, returning its canceller. */
   expire(close: () => void): () => void
 }

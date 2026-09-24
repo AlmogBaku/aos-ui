@@ -1,38 +1,20 @@
-import {
-  SessionWorkspaceCapabilitiesResponseSchema,
-  type SessionHistoryResponse,
-} from "../../protocol"
 import { createAosAcpAgent } from "../acp/agent"
+import { createWorkspace, type Workspace } from "../acp/agent-sessions"
 import { createReadState } from "../acp/read-state"
 import { createAcpService } from "../acp/service"
 import type { Channel } from "../core/channel"
+import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
-import type {
-  AcpConnectionContext,
-  AcpLogger,
-  GuestGrant,
-  GuestPolicy,
-  WorkspaceCapabilities,
-} from "../acp/types"
-import { authenticationRequired, invalidRequest } from "../acp/validation"
-import type {
-  GuestInvitationService,
-  VerifiedGuestAuthorization,
-} from "../auth/guest-invitation"
+import type { AcpConnectionContext, AcpLogger, GuestPolicy } from "../acp/types"
+import type { GuestInvitationService } from "../auth/guest-invitation"
 import {
   createGuestRequestAuthorizer,
   guestAuthorizationActive,
   guestControllerId,
 } from "../auth/guest-request"
-import {
-  createGuestTurnAccess,
-  projectGuestCapabilities,
-  projectGuestHistory,
-  projectGuestText,
-} from "../auth/guest-runtime-projection"
-import { PendingRequestKind } from "../core/events"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
+import { createGuestMiddleware, type GuestGrant } from "./middleware"
 
 /**
  * The guest lane's ACP service: one invited conversation per connection, with
@@ -56,51 +38,15 @@ export type GuestAcpServiceOptions = {
   cancel?: (timer: unknown) => void
 }
 
-/** What a guest may observe but never operate, in the shape ACP carries. */
-const OPERATOR_ONLY = {
-  status: "unavailable",
-  reason: "operator-session-controls-required",
-} as const
-
-/** The approval scopes the guest lane never carries, as the adapters name them. */
-const GUEST_DENIED_CHOICES = new Set(["always", "session"])
-
 /**
- * The invited Session's capabilities, projected to what the guest lane serves.
- * The ACP contract carries the workspace shape, so the fields the REST
- * projection drops outright are reported unavailable here instead.
+ * One connection's invitation. Nothing is reachable before `auth/login`
+ * redeems a token, and the redeemed member acts as the controller identity the
+ * coordinator already knows guests by, through the guest middleware.
  */
-function projectCapabilities(
-  value: WorkspaceCapabilities
-): WorkspaceCapabilities {
-  const projected = projectGuestCapabilities(value)
-  if (!projected)
-    throw new Error("The invited Session reported unusable capabilities")
-  return SessionWorkspaceCapabilitiesResponseSchema.parse({
-    workspace: {
-      slashCommands: projected.workspace.slashCommands,
-      models: OPERATOR_ONLY,
-      context: OPERATOR_ONLY,
-      todos: value.workspace.todos,
-      activity: value.workspace.activity,
-    },
-    interactions: projected.interactions,
-    content: projected.content,
-  })
-}
-
-type Redeemed = {
-  grant: GuestGrant
-  read: VerifiedGuestAuthorization
-  errors: VerifiedGuestAuthorization
-}
-
-/**
- * One connection's invitation. Nothing is projected before `auth/login`
- * redeems a token, and the redeemed grant carries the controller identity the
- * coordinator already knows guests by.
- */
-function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
+function createGuestPolicy(
+  options: GuestAcpServiceOptions,
+  workspace: Pick<Workspace, "invited" | "capabilities">
+): GuestPolicy {
   const now = options.now ?? Date.now
   const schedule =
     options.schedule ??
@@ -112,7 +58,8 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
     invitations: options.invitations,
     now,
   })
-  let redeemed: Redeemed | undefined
+  let redeemed:
+    { grant: GuestGrant; member: Omit<Member, "connection"> } | undefined
   let close: (() => void) | undefined
   let timer: unknown
 
@@ -123,16 +70,10 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
     timer = schedule(delayMs, () => close?.())
   }
 
-  const authorized = () => {
-    if (!redeemed) throw authenticationRequired()
-    return redeemed
-  }
-
   return {
     async authenticate(token) {
       const identity = await options.invitations.verify(token)
-      if (!identity || !guestAuthorizationActive(identity, now))
-        return undefined
+      if (!identity || !guestAuthorizationActive(identity, now)) return false
       const target = { agentId: identity.agentId, sessionId: identity.ref }
       const read = authorizer.authorize(identity, {
         ...target,
@@ -142,7 +83,7 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
         ...target,
         operation: "errors:read",
       })
-      if (!read || !errors) return undefined
+      if (!read || !errors) return false
       const grant: GuestGrant = {
         agentId: identity.agentId,
         ref: identity.ref,
@@ -152,51 +93,25 @@ function createGuestPolicy(options: GuestAcpServiceOptions): GuestPolicy {
           ? { firstTurnInstruction: identity.firstTurn.instruction }
           : {}),
       }
-      redeemed = { grant, read, errors }
+      redeemed = {
+        grant,
+        member: {
+          principal: { id: grant.principalId, role: "guest" },
+          middleware: createGuestMiddleware({
+            grant,
+            read,
+            errors,
+            now,
+            invited: workspace.invited,
+            capabilities: workspace.capabilities,
+          }),
+        },
+      }
       arm()
-      return grant
+      return true
     },
 
-    grant: () => redeemed?.grant,
-
-    active: () =>
-      redeemed !== undefined && guestAuthorizationActive(redeemed.read, now),
-
-    project: {
-      access(base, scope) {
-        const { read, errors } = authorized()
-        return createGuestTurnAccess(
-          read,
-          errors,
-          scope,
-          now,
-          base.subscriberId
-        )
-      },
-      history(value: SessionHistoryResponse) {
-        const { read, grant } = authorized()
-        return projectGuestHistory(value, read, grant.ref)
-      },
-      turn(text) {
-        const { read } = authorized()
-        return guestAuthorizationActive(read, now)
-          ? projectGuestText(read, "guest", text)
-          : undefined
-      },
-      capabilities: projectCapabilities,
-      permissionReply(request, reply) {
-        authorized()
-        // Mirrors `guestResumeAllowed`: an answer may not carry a Session-wide
-        // or Agent-wide approval even when the guest client names one.
-        if (
-          request.kind === PendingRequestKind.Permission &&
-          typeof reply.payload === "string" &&
-          GUEST_DENIED_CHOICES.has(reply.payload)
-        )
-          throw invalidRequest()
-        return reply
-      },
-    },
+    member: () => redeemed?.member,
 
     expire(closeConnection) {
       close = closeConnection
@@ -223,7 +138,10 @@ export function createGuestConnection(
   const lane = "guest" as const
   const now = options.now ?? Date.now
   const { runtimeInstance } = options
-  const guest = createGuestPolicy(options)
+  const guest = createGuestPolicy(
+    options,
+    createWorkspace({ runtimeInstance, sessionRows, principalId: lane })
+  )
   return {
     connectionId,
     // The connection's real principal arrives with its redeemed invitation.

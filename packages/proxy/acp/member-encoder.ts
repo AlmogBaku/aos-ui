@@ -14,11 +14,11 @@ import {
 } from "../../protocol/acp"
 import type { Seat } from "../core/channel"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
-import {
-  promptText,
-  type MemberConnection,
-  type MemberEvent,
-  type TurnStream,
+import type {
+  MemberCommands,
+  MemberConnection,
+  MemberEvent,
+  TurnStream,
 } from "../core/member"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import { redactForLog } from "../redaction"
@@ -165,14 +165,17 @@ export type MemberEncoderOptions = {
   context: AcpConnectionContext
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
-  /** The seat an answer is given through, while the Session is attached. */
+  /** The seat a request is open on, while the Session is attached. */
   seat(sessionId: string): Seat | undefined
+  /** Gives one answer through the member's stack. */
+  answer(command: MemberCommands["answer"]): Promise<void>
 }
 
 export function createMemberEncoder({
   context,
   client,
   seat,
+  answer,
 }: MemberEncoderOptions): MemberConnection {
   const { lane, translators } = context
   const states = new WeakMap<TurnStream, TranslateState>()
@@ -236,10 +239,10 @@ export function createMemberEncoder({
     return seat(sessionId)?.report(cause)
   }
 
-  /** The seat and open request one answer belongs to. */
+  /** The open request one answer belongs to. */
   function answering(sessionId: string, requestId: string) {
     const attached = seat(sessionId)
-    return attached && { attached, request: attached.request(requestId) }
+    return attached && { request: attached.request(requestId) }
   }
 
   async function askPermission(
@@ -259,14 +262,11 @@ export function createMemberEncoder({
     asked.delete(askedKey(sessionId, request.requestId))
     const target = answering(sessionId, request.requestId)
     if (!target) return
-    const reply = translators.replyFromPermission(target.request, response)
-    // A guest may answer only within the scope it was offered, so its
-    // projection refuses a widened grant the way the guest turn route does.
-    const { guest } = context
-    await target.attached.answer(
-      target.request,
-      guest ? guest.project.permissionReply(target.request, reply) : reply
-    )
+    await answer({
+      sessionId,
+      request: target.request,
+      reply: translators.replyFromPermission(target.request, response),
+    })
   }
 
   async function askElicitation(
@@ -289,11 +289,12 @@ export function createMemberEncoder({
     asked.delete(askedKey(sessionId, request.requestId))
     const target = answering(sessionId, request.requestId)
     if (!target) return
-    await target.attached.answer(
-      target.request,
-      translators.replyFromElicitation(target.request, response, lane),
-      shownAnswers(target.request, response)
-    )
+    await answer({
+      sessionId,
+      request: target.request,
+      reply: translators.replyFromElicitation(target.request, response, lane),
+      answers: shownAnswers(target.request, response),
+    })
   }
 
   /** Issues one server→client request and settles it as the member's answer. */
@@ -337,12 +338,8 @@ export function createMemberEncoder({
     }
   }
 
-  /** A page as this lane shows it: projected for a guest, then translated. */
   function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
-    const shown = context.guest
-      ? context.guest.project.history(event.page)
-      : event.page
-    return translators.translateHistory(shown, lane)
+    return translators.translateHistory(event.page, lane)
   }
 
   /**
@@ -368,25 +365,12 @@ export function createMemberEncoder({
     })
   }
 
-  /**
-   * Shows the member another member's prompt. A guest sees only the text its
-   * projection allows, and nothing when that is none of it; an operator sees
-   * the blocks rebuilt from the fields a browser writes.
-   */
+  /** Shows the member a prompt, as blocks rebuilt from its parts. */
   function prompt(event: Extract<MemberEvent, { kind: "prompt" }>) {
-    const { guest } = context
-    const text =
-      event.own || !guest
-        ? undefined
-        : guest.project.turn(promptText(event.content))
-    if (guest && !event.own && text === undefined) return
     return update(event.sessionId, {
       sessionUpdate: "user_message",
       messageId: event.messageId,
-      content:
-        text === undefined
-          ? promptBlocks(event.content)
-          : [{ type: "text", text }],
+      content: promptBlocks(event.content),
     })
   }
 

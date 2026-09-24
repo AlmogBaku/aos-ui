@@ -60,7 +60,6 @@ export type CoordinatorAccess = {
   controllerId: string
   lane: "operator" | "guest"
   canControl: boolean
-  project?(event: TurnEvent): TurnEvent | undefined
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
   onTerminal?(event: TurnEvent): void | Promise<void>
@@ -806,8 +805,7 @@ export class SessionCoordinator {
       const plan = request.reset
         ? "reset"
         : replayPlan(existing.segment, request.after)
-      if (plan === "reset")
-        return this.#resetSubscription(existing.segment, access)
+      if (plan === "reset") return this.#resetSubscription(existing.segment)
       if (access.canControl) existing.controllers.add(access.controllerId)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
@@ -823,8 +821,7 @@ export class SessionCoordinator {
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
-    if (plan === "reset")
-      return this.#resetSubscription(recovered.segment, access)
+    if (plan === "reset") return this.#resetSubscription(recovered.segment)
     if (access.canControl) recovered.controllers.add(access.controllerId)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
@@ -1368,11 +1365,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess,
     plan: Exclude<ReplayPlan, "reset"> = "history"
   ) {
-    const project = (value: SequencedTurnEvent) => {
-      const event = access.project ? access.project(value.event) : value.event
-      return event ? { sequence: value.sequence, event } : undefined
-    }
-    const live = segment.fanout.subscribe(project, access.onDetach)
+    const live = segment.fanout.subscribe(access.onDetach)
     const replay =
       plan === "history"
         ? compactedReplay(segment.journal?.entries ?? [], after)
@@ -1392,11 +1385,9 @@ export class SessionCoordinator {
         let last = after
         try {
           for (const value of replay) {
-            const projected = project(value)
-            if (!projected) continue
-            last = projected.sequence
-            yield projected
-            read(projected)
+            last = value.sequence
+            yield value
+            read(value)
           }
           for await (const value of live.events) {
             if (value.sequence <= last) continue
@@ -1424,7 +1415,7 @@ export class SessionCoordinator {
     }
   }
 
-  #resetSubscription(segment: Segment, access: CoordinatorAccess) {
+  #resetSubscription(segment: Segment) {
     const candidate: SequencedTurnEvent = {
       sequence: segment.nextSequence + 1,
       event: {
@@ -1433,12 +1424,9 @@ export class SessionCoordinator {
         message: "AOS turn history must be reloaded before continuing.",
       },
     }
-    const event = access.project
-      ? access.project(candidate.event)
-      : candidate.event
     const events: AsyncIterable<SequencedTurnEvent> = {
       async *[Symbol.asyncIterator]() {
-        if (event) yield { sequence: candidate.sequence, event }
+        yield candidate
       },
     }
     return { turnId: segment.turnId, events, close: () => undefined }

@@ -1,13 +1,18 @@
 import type { z } from "zod"
 
 import type {
+  AgentCatalogResponse,
   Session,
   SessionContextResponse,
   SessionHistoryResponse,
   SessionModelsResponse,
+  SessionModelUpdateRequest,
   SessionWorkspaceCapabilitiesResponseSchema,
+  TurnSteerResponse,
+  VisibilityUpdateResponse,
 } from "../../protocol"
-import type { PendingRequest, TurnEvent } from "./events"
+import type { PendingRequest, RequestReply, TurnEvent } from "./events"
+import type { SessionPatch, SessionScope } from "./runtime"
 import type { SessionExecutionState } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
 
@@ -115,7 +120,170 @@ export type MemberConnection = {
   send(event: MemberEvent): Promise<void>
 }
 
+/**
+ * Everything a member may ask of its Sessions, by kind. A `scope` names the
+ * Session outside this connection's own catalog, as a middleware resolved it.
+ */
+export type MemberCommands = {
+  resume: {
+    sessionId: string
+    agentId?: string
+    scope?: SessionScope
+    /** Replay the Session's history before following it. */
+    fromStart: boolean
+    /** Where the member's view already reaches in the live turn. */
+    turnId?: string
+    after?: number
+  }
+  "older-page": { sessionId: string; cursor: string }
+  send: {
+    sessionId: string
+    scope?: SessionScope
+    content: readonly PromptPart[]
+    text: string
+    /** The message an Edit or Retry replaces. */
+    rewindSourceId?: string
+    attachmentStageId?: string
+  }
+  steer: { sessionId: string; requestId: string; text: string }
+  stop: { sessionId: string }
+  close: { sessionId: string }
+  /** One reply to a request the member was asked, with the answers it saw. */
+  answer: {
+    sessionId: string
+    request: PendingRequest
+    reply: RequestReply
+    answers?: string[][]
+  }
+  focus: { sessionId: string | null; foreground: boolean; idle: boolean }
+  list: { agentId?: string; offset: number }
+  new: { agentId: string; title?: string }
+  delete: { sessionId: string }
+  /** `{ unread: false }` marks the Session read. */
+  update: { sessionId: string; patch: SessionPatch }
+  /** `write` is absent when the option is not one the Session has. */
+  "set-config": { sessionId: string; write?: SessionModelUpdateRequest }
+  agents: Record<string, never>
+  "set-visibility": {
+    agentId: string
+    visibility: "visible" | "hidden"
+    revision: string
+  }
+}
+
+export type CommandKind = keyof MemberCommands
+
+/** What each command answers, before a transport encodes it. */
+export type CommandResults = {
+  resume: {
+    agentId: string
+    /** The Session's row, read only for a Session in this connection's catalog. */
+    row?: SessionRow
+    execution: { state: SessionExecutionState; turnId?: string }
+    capabilities: WorkspaceCapabilities
+    models?: SessionModelsResponse
+    /** The view must rebuild itself from history. */
+    resync?: true
+    /** The page a from-start resume replayed. */
+    history?: SessionHistoryResponse
+  }
+  "older-page": { page: SessionHistoryResponse }
+  send: { messageId: string }
+  steer: TurnSteerResponse
+  stop: void
+  close: void
+  answer: void
+  focus: void
+  list: { rows: readonly Session[]; nextOffset?: number }
+  new: {
+    sessionId: string
+    row: SessionRow
+    capabilities: WorkspaceCapabilities
+    models: SessionModelsResponse
+  }
+  delete: void
+  update: void
+  "set-config": { models: SessionModelsResponse }
+  agents: AgentCatalogResponse
+  "set-visibility": VisibilityUpdateResponse
+}
+
+/** Runs the command further down the stack, ending at its execution. */
+export type CommandNext<K extends CommandKind> = (
+  command: MemberCommands[K]
+) => Promise<CommandResults[K]>
+
+/** One middleware's handling of one command kind. */
+export type CommandStep<K extends CommandKind> = (
+  command: MemberCommands[K],
+  next: CommandNext<K>
+) => Promise<CommandResults[K]>
+
+/**
+ * One layer of a member's stack. Commands pass the stack in order and events
+ * come back through it in reverse. A layer may refuse a command, rewrite it,
+ * answer it itself, or pass it on; it returns an event, a rewritten one, or
+ * nothing to hide it.
+ */
+export type Middleware = {
+  /**
+   * Whether the member may run this kind of command at all. Checked before a
+   * transport decodes the frame, so a refused kind is refused however it is
+   * spelled.
+   */
+  admits?(kind: CommandKind): boolean
+  commands?: { [K in CommandKind]?: CommandStep<K> }
+  event?(event: MemberEvent): MemberEvent | undefined
+}
+
+/** Why a middleware refused a command, in words a transport maps to its wire. */
+export type CommandRefusal = "invalid" | "not-found" | "authentication-required"
+
+export class CommandRefusedError extends Error {
+  constructor(readonly refusal: CommandRefusal) {
+    super(`The command was refused: ${refusal}`)
+    this.name = "CommandRefusedError"
+  }
+}
+
+export function admits(stack: readonly Middleware[], kind: CommandKind) {
+  return stack.every((layer) => layer.admits?.(kind) ?? true)
+}
+
+/** Runs one command down the stack to `execute`, its terminal step. */
+export function runCommand<K extends CommandKind>(
+  stack: readonly Middleware[],
+  kind: K,
+  command: MemberCommands[K],
+  execute: CommandNext<K>
+): Promise<CommandResults[K]> {
+  const from =
+    (index: number): CommandNext<K> =>
+    (current) => {
+      const layer = stack[index]
+      if (!layer) return execute(current)
+      const step = layer.commands?.[kind] as CommandStep<K> | undefined
+      return step ? step(current, from(index + 1)) : from(index + 1)(current)
+    }
+  return from(0)(command)
+}
+
+/** Runs one event up the stack; `undefined` means a layer hid it. */
+export function runEvents(
+  stack: readonly Middleware[],
+  event: MemberEvent
+): MemberEvent | undefined {
+  let shown: MemberEvent | undefined = event
+  for (const layer of [...stack].reverse()) {
+    if (!shown) return undefined
+    if (layer.event) shown = layer.event(shown)
+  }
+  return shown
+}
+
 export type Member = {
   principal: Principal
+  /** The member's stack, outermost first; the operator's is empty. */
+  middleware: readonly Middleware[]
   connection: MemberConnection
 }

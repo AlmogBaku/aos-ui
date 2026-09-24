@@ -6,7 +6,13 @@ import {
   type PromptTurnInput,
   type RequestReply,
 } from "./events"
-import type { Member, PromptPart, SessionEvent, TurnStream } from "./member"
+import {
+  runEvents,
+  type Member,
+  type PromptPart,
+  type SessionEvent,
+  type TurnStream,
+} from "./member"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
@@ -402,11 +408,6 @@ export type SeatOptions = {
   coordinator: SessionCoordinator
   /** The subscriber the coordinator knows this member's stream by. */
   subscriberId: string
-  /**
-   * Wraps the coordinator's view of each subscription. The guest lane still
-   * projects its turn stream there.
-   */
-  access?: (base: CoordinatorAccess) => CoordinatorAccess
   /** One structured line per Session-level event; the transport redacts it. */
   log: (
     level: "info" | "error",
@@ -513,16 +514,19 @@ class Seat {
   }
 
   /**
-   * Shows this member one event of its Session. A member that left is shown
-   * nothing: a resolved promise rather than `undefined`, because callers chain
-   * on what this returns.
+   * Shows this member one event of its Session, through its stack. A member
+   * that left is shown nothing, and neither is one whose stack hides it: a
+   * resolved promise rather than `undefined`, because callers chain on what
+   * this returns, and never an extra await, because a turn's delivery order
+   * rides on the send starting now.
    */
   emit(event: SessionEvent): Promise<void> {
     if (this.#left) return Promise.resolve()
-    return this.#member.connection.send({
+    const shown = runEvents(this.#member.middleware, {
       sessionId: this.#scope.threadId,
       ...event,
     })
+    return shown ? this.#member.connection.send(shown) : Promise.resolve()
   }
 
   /** Shows this member a history page at the cursor it has reached. */
@@ -835,14 +839,13 @@ class Seat {
    * How the coordinator sees one subscription of this member. A member may
    * Stop any turn in its Session, not only one it started.
    */
-  #access() {
-    const base: CoordinatorAccess = {
+  #access(): CoordinatorAccess {
+    return {
       subscriberId: this.#options.subscriberId,
       controllerId: this.#member.principal.id,
       lane: this.#member.principal.role,
       canControl: true,
     }
-    return this.#options.access ? this.#options.access(base) : base
   }
 
   #consume(

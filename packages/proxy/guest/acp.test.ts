@@ -19,6 +19,8 @@ import {
   AOS_REPLAY_BEFORE,
 } from "../../protocol/acp"
 import { createChannel } from "../core/channel"
+import { promptText, runEvents, type MemberEvent } from "../core/member"
+import type { GuestPolicy } from "../acp/types"
 import { connectClient, updates, type Recorder } from "../acp/test-harness"
 import {
   createGuestInvitationService,
@@ -51,6 +53,23 @@ const KEY = new Uint8Array(32).fill(7)
 const INSTRUCTION = "Load the interview skill."
 /** JSON-RPC reserves this code; the SDK's `methodNotFound` returns it. */
 const METHOD_NOT_FOUND = -32601
+
+/** What the redeemed member's stack shows it of one event, if anything. */
+function shown(policy: GuestPolicy | undefined, event: MemberEvent) {
+  return runEvents(policy?.member()?.middleware ?? [], event)
+}
+
+/** The text another member's prompt reaches this member with, if any. */
+function shownPrompt(policy: GuestPolicy | undefined, text: string) {
+  const event = shown(policy, {
+    sessionId: REF,
+    kind: "prompt",
+    messageId: "prompt-1",
+    content: [{ kind: "text", text }],
+    own: false,
+  })
+  return event?.kind === "prompt" ? promptText(event.content) : undefined
+}
 
 const APPROVAL: PendingRequest = {
   requestId: "approval-1",
@@ -623,13 +642,13 @@ describe("guest ACP lane", () => {
     const test = harness()
     // One byte past the guest message text bound, which history drops too.
     const oversized = "x".repeat(16_385)
-    expect(() => test.policy?.project.turn("Hello")).toThrow()
+    expect(test.policy?.member()).toBeUndefined()
     await test.initialize()
     await test.login(await invite(test.invitations))
 
-    expect(test.policy?.project.turn("Hello")).toBe("Hello")
-    expect(test.policy?.project.turn(oversized)).toBeUndefined()
-    const history = test.policy?.project.history({
+    expect(shownPrompt(test.policy, "Hello")).toBe("Hello")
+    expect(shownPrompt(test.policy, oversized)).toBeUndefined()
+    const page: SessionHistoryResponse = {
       sessionId: REF,
       messages: [
         {
@@ -649,10 +668,17 @@ describe("guest ACP lane", () => {
       limit: 500,
       offset: 0,
       nextOffset: 0,
+    }
+    const history = shown(test.policy, {
+      sessionId: REF,
+      kind: "history",
+      page,
+      sequence: 0,
     })
-    expect(history?.messages.map(({ content }) => content)).toEqual([
-      [{ type: "text", text: "Hello" }],
-    ])
+    expect(
+      history?.kind === "history" &&
+        history.page.messages.map(({ content }) => content)
+    ).toEqual([[{ type: "text", text: "Hello" }]])
     test.close()
   })
 
@@ -662,7 +688,7 @@ describe("guest ACP lane", () => {
     await test.login(await invite(test.invitations))
 
     test.clock.now = NOW + 259_200_000
-    expect(test.policy?.project.turn("Hello")).toBeUndefined()
+    expect(shownPrompt(test.policy, "Hello")).toBeUndefined()
     test.close()
   })
 

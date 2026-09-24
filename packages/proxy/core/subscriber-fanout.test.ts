@@ -29,30 +29,6 @@ describe("SubscriberFanout", () => {
     })
   })
 
-  it("projects an event before it enters a subscriber queue", async () => {
-    const order: string[] = []
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 1,
-      maxBytes: 4,
-      sizeOf: (value) => {
-        order.push(`size:${value}`)
-        return value.length
-      },
-    })
-    const guest = fanout.subscribe((value) => {
-      order.push(`project:${value}`)
-      return value === "private-value" ? "safe" : undefined
-    })
-
-    fanout.publish("private-value")
-
-    await expect(next(guest.events)).resolves.toEqual({
-      done: false,
-      value: "safe",
-    })
-    expect(order).toEqual(["project:private-value", "size:safe"])
-  })
-
   it("detaches only a subscriber whose bounded queue overflows", async () => {
     const detached = vi.fn()
     const fanout = new SubscriberFanout<string>({
@@ -60,7 +36,7 @@ describe("SubscriberFanout", () => {
       maxBytes: 64,
       sizeOf: (value) => value.length,
     })
-    const slow = fanout.subscribe(undefined, detached)
+    const slow = fanout.subscribe(detached)
     const fast = fanout.subscribe()
 
     fanout.publish("one")

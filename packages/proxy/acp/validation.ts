@@ -13,6 +13,7 @@ import {
   type ServerRuntime,
   type ServerRuntimePublicError,
 } from "../core/runtime"
+import type { CommandRefusal } from "../core/member"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
@@ -50,6 +51,18 @@ export function authenticationRequired() {
 
 export function notFound() {
   return new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+}
+
+/** The JSON-RPC error a member stack's refusal travels as. */
+export function refusalError(refusal: CommandRefusal) {
+  switch (refusal) {
+    case "invalid":
+      return invalidRequest()
+    case "not-found":
+      return notFound()
+    case "authentication-required":
+      return authenticationRequired()
+  }
 }
 
 export function turnInProgress() {

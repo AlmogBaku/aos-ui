@@ -1317,74 +1317,25 @@ describe("SessionCoordinator", () => {
     source.emit(turnStarted)
     await reader(initial)()
     initial.close()
-    let published = false
     const refreshed = await sessions.recover(
       scope,
       { threadId: scope.threadId, turnId: "run-1" },
-      {
-        ...access("refreshed"),
-        project(event) {
-          if (!published && event.kind === TurnEventKind.TurnStarted) {
-            published = true
-            source.emit({
-              kind: TurnEventKind.MessageChunk,
-              messageId: "assistant-1",
-              text: "tail",
-            })
-          }
-          return event
-        },
-      }
+      access("refreshed")
     )
     const readRefreshed = reader(refreshed)
 
     await expect(readRefreshed()).resolves.toMatchObject({
       value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
     })
+    source.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "tail",
+    })
     await expect(readRefreshed()).resolves.toMatchObject({
       value: {
         sequence: 2,
         event: { kind: TurnEventKind.MessageChunk, text: "tail" },
-      },
-    })
-  })
-
-  it("projects every event in a fresh replay through the subscriber access", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
-    }
-    const sessions = coordinator(engine)
-    const initial = await sessions.start(
-      scope,
-      input("run-1"),
-      access("initial")
-    )
-    source.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "private",
-    })
-    await reader(initial)()
-    initial.close()
-
-    const refreshed = await sessions.recover(
-      scope,
-      { threadId: scope.threadId, turnId: "run-1" },
-      {
-        ...access("guest", "guest"),
-        project(event) {
-          return event.kind === TurnEventKind.MessageChunk
-            ? { ...event, text: "public" }
-            : event
-        },
-      }
-    )
-
-    await expect(reader(refreshed)()).resolves.toMatchObject({
-      value: {
-        event: { kind: TurnEventKind.MessageChunk, text: "public" },
       },
     })
   })

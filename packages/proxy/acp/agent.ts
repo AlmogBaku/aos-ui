@@ -9,7 +9,6 @@ import {
 
 import {
   SESSION_CATALOG_MAX_WINDOW,
-  SessionHistoryResponseSchema,
   type SessionHistoryResponse,
 } from "../../protocol"
 import {
@@ -35,9 +34,9 @@ import type { PromptTurnInput } from "../core/events"
 import {
   ServerTurnConflictError,
   type ServerRuntime,
+  type SessionPatch,
   type SessionScope,
 } from "../core/runtime"
-import type { SessionExecutionState } from "../core/session-coordinator"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
@@ -53,20 +52,26 @@ import {
 } from "./agent-sessions"
 import { isPromptBlock, promptParts, promptText } from "./prompt-content"
 import type { RoomTurn, Seat } from "../core/channel"
-import { promptText as roomPromptText } from "../core/member"
+import {
+  admits,
+  CommandRefusedError,
+  promptText as roomPromptText,
+  runCommand,
+  type CommandKind,
+  type CommandNext,
+  type CommandResults,
+  type Middleware,
+  type MemberCommands,
+} from "../core/member"
 import { createMemberEncoder } from "./member-encoder"
 import { beforeLiveTurn, lastPromptIndex } from "./translate/history"
-import type {
-  AcpConnectionContext,
-  AosAcpAgentFactory,
-  GuestGrant,
-  GuestPolicy,
-} from "./types"
+import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
   invalidRequest,
   notFound,
   parseMeta,
+  refusalError,
   turnInProgress,
 } from "./validation"
 
@@ -103,15 +108,6 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
     historyPages: true,
   }
 }
-
-/** What a redeemed invitation may call; every other method is unavailable. */
-const GUEST_METHODS = new Set<string>([
-  methods.agent.session.resume,
-  methods.agent.session.prompt,
-  methods.agent.session.cancel,
-  methods.agent.session.close,
-  AOS_METHODS.session.focus,
-])
 
 /**
  * The guest lane streams one invited conversation and manages no workspace: it
@@ -190,9 +186,6 @@ function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
   return parsed.data.cursor
 }
 
-/** One authorized guest request: its connection policy and redeemed grant. */
-type GuestRequest = { policy: GuestPolicy; grant: GuestGrant }
-
 /** True when a focus report repeats the exposure the connection last sent. */
 function sameExposure(
   previous: PresenceReport | undefined,
@@ -214,6 +207,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       context,
       client,
       seat: (sessionId) => sessions.member(sessionId),
+      answer: (command) =>
+        perform("answer", command, async ({ sessionId, ...answer }) => {
+          await sessions
+            .member(sessionId)
+            ?.answer(answer.request, answer.reply, answer.answers)
+        }),
     })
   )
   const { workspace } = sessions
@@ -240,55 +239,41 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
-   * Gates one method on the guest lane and returns what its handler runs under.
-   * An operator connection has no grant and passes straight through.
+   * This connection's member stack. A guest that has not redeemed an
+   * invitation reaches nothing.
    */
-  function guestFor(method: string): GuestRequest | undefined {
-    const policy = context.guest
-    if (!policy) return undefined
-    const grant = policy.grant()
-    if (!grant) throw authenticationRequired()
-    if (!GUEST_METHODS.has(method)) throw RequestError.methodNotFound(method)
-    return { policy, grant }
+  function stack(): readonly Middleware[] {
+    const identity = sessions.identity()
+    if (!identity) throw authenticationRequired()
+    return identity.middleware
   }
 
   /**
-   * The invited Session as a coordinator scope. A guest addresses its one
-   * conversation by reference alone, so no other Session is reachable, and
-   * `undefined` means the runtime has not created this one yet.
+   * Refuses a method the stack does not admit, before its params are decoded,
+   * so a refused method is unavailable however its params are spelled.
    */
-  async function invitedScope(
-    grant: GuestGrant,
-    publicSessionId: string,
-    create?: { firstTurnInstruction?: string }
-  ): Promise<SessionScope | undefined> {
-    if (publicSessionId !== grant.ref) throw notFound()
-    const resolved = await workspace.invited(grant.agentId, grant.ref, create)
-    return resolved
-      ? {
-          agentId: grant.agentId,
-          sessionId: resolved.sessionId,
-          threadId: grant.ref,
-        }
-      : undefined
+  function admit(method: string, kind: CommandKind) {
+    if (!admits(stack(), kind)) throw RequestError.methodNotFound(method)
   }
 
-  /** A guest sees the invited Session's live state, not the operator's row. */
-  function invitedSessionMeta(grant: GuestGrant, state: SessionExecutionState) {
-    return {
-      agentId: grant.agentId,
-      status: overlaidStatus(state, "idle"),
-      archived: false,
+  /** Runs one decoded command through the stack, its refusals as ACP errors. */
+  async function perform<K extends CommandKind>(
+    kind: K,
+    command: MemberCommands[K],
+    execute: CommandNext<K>
+  ): Promise<CommandResults[K]> {
+    try {
+      return await runCommand(stack(), kind, command, execute)
+    } catch (cause) {
+      throw cause instanceof CommandRefusedError
+        ? refusalError(cause.refusal)
+        : cause
     }
   }
 
-  /**
-   * One history page, `offset` rows back from the newest. The guest lane
-   * validates its authoritative page before anything reads it.
-   */
-  async function readHistory(scope: SessionScope, offset = 0) {
-    const read = await workspace.history(scope, HISTORY_REPLAY_LIMIT, offset)
-    return context.guest ? SessionHistoryResponseSchema.parse(read) : read
+  /** One history page, `offset` rows back from the newest. */
+  function readHistory(scope: SessionScope, offset = 0) {
+    return workspace.history(scope, HISTORY_REPLAY_LIMIT, offset)
   }
 
   /** Whether this client reads older pages itself (`initialize`). */
@@ -350,25 +335,28 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * keeps its room, its follow, and its reports, and learns only where the
    * next page starts.
    */
-  async function replayOlder(publicSessionId: string, cursor: string) {
-    const member = sessions.member(publicSessionId)
+  async function replayOlder({
+    sessionId,
+    cursor,
+  }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
+    const member = sessions.member(sessionId)
     if (!member) throw notFound()
     const offset = decodeHistoryCursor(cursor)
-    if (paging.has(publicSessionId)) throw invalidRequest()
-    paging.add(publicSessionId)
+    if (paging.has(sessionId)) throw invalidRequest()
+    paging.add(sessionId)
     try {
-      const history = await readHistory(member.scope, offset)
+      const page = await readHistory(member.scope, offset)
       // A cursor past this Session's history was never issued for it. One at
       // its end was: a runtime that estimates `total` learns the start only
       // by reading an empty page there.
-      if (offset > history.total) throw invalidRequest()
-      await member.showHistory(beforeStreamedTurn(member.scope, history), {
+      if (offset > page.total) throw invalidRequest()
+      await member.showHistory(beforeStreamedTurn(member.scope, page), {
         cursor,
         offset,
       })
-      return { _meta: { [AOS_META_KEY]: { history: historyCursor(history) } } }
+      return { page }
     } finally {
-      paging.delete(publicSessionId)
+      paging.delete(sessionId)
     }
   }
 
@@ -438,15 +426,15 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
-   * Rebuilds the view from the page a from-start resume replays, projected for
-   * a guest. A page that cannot reach the view recovers as a failed read does,
-   * so the room's turns still reach it.
+   * Rebuilds the view from the page a from-start resume replays. A page that
+   * cannot reach the view recovers as a failed read does, so the room's turns
+   * still reach it.
    */
   async function replayHistory(member: Seat, scope: SessionScope) {
     const replay = await replayPage(member, scope)
     try {
-      // Counted on the authoritative page, before the guest projection
-      // rebuilds its messages: that projection keeps no user-turn metadata.
+      // Counted on the authoritative page, before a member's stack rebuilds
+      // its messages: a guest's projection keeps no user-turn metadata.
       const corrections = translators.persistedCorrections(replay.history)
       await member.showHistory(replay.history)
       return { ...replay, corrections }
@@ -484,108 +472,137 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       afterResponse(member, async () => {
         await member.reloadOnce(restarted)
       })
-      return { resync: true }
+      return { resync: true as const }
     }
-    return positioned && followed !== null ? {} : { resync: true }
+    return positioned && followed !== null ? {} : { resync: true as const }
   }
 
   /**
-   * The invited conversation as the guest lane resumes it. A fresh invitation
-   * has no Session yet: resuming it creates nothing and replays nothing, the
-   * way the guest history route serves an empty page, and the first Send
-   * resolves it.
+   * Attaches this connection to one Session and follows it. A command that
+   * names its `scope` addresses a Session outside this connection's catalog:
+   * it adopts nothing and reads no row, models or usage, and only a wait can
+   * hide a recoverable execution there.
    */
-  async function resumeInvited(
-    guest: GuestRequest,
-    params: ResumeSessionRequest,
+  async function resume(
+    command: MemberCommands["resume"],
     client: AgentContext
-  ) {
-    const { grant, policy } = guest
-    const cursor = olderPageCursor(params.replayFrom)
-    if (cursor !== undefined) {
-      if (params.sessionId !== grant.ref) throw notFound()
-      // A page is a read the expiry timer may not have caught up with.
-      if (!policy.active()) throw authenticationRequired()
-      return await replayOlder(params.sessionId, cursor)
-    }
-    const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
-    const scope = await invitedScope(grant, params.sessionId)
-    const capabilities = policy.project.capabilities(
-      await workspace.capabilities({
-        agentId: grant.agentId,
-        threadId: grant.ref,
-      })
+  ): Promise<CommandResults["resume"]> {
+    const addressed = command.scope
+    if (!addressed && command.agentId !== undefined)
+      sessions.adopt(command.sessionId, command.agentId)
+    const scope = addressed ?? sessions.scope(command.sessionId)
+    const row = addressed ? undefined : await workspace.session(scope)
+    // The same preamble the history route runs: only a wait or a Session the
+    // provider still calls running can hide a recoverable execution.
+    const state = coordinator.state(scope)
+    if (
+      state === "waiting-for-input" ||
+      (state === "idle" && row?.status === "running")
     )
-    if (!scope)
-      return {
-        _meta: {
-          [AOS_META_KEY]: {
-            session: invitedSessionMeta(grant, "idle"),
-            execution: { status: "idle" as const },
-            capabilities,
-          },
-        },
-      }
-    if (coordinator.state(scope) === "waiting-for-input")
       await workspace.discover(scope)
     const member = sessions.join(client, scope)
-    const replay =
-      params.replayFrom?.type === "start"
-        ? await replayHistory(member, scope)
-        : undefined
+    // A correction the provider persisted the moment it accepted the steer is
+    // already in this page, so the journal's acknowledgement of it is dropped.
+    const replay = command.fromStart
+      ? await replayHistory(member, scope)
+      : undefined
     const history = replay?.history
-    // Seated after its history and before its follow, so the room's prompt
-    // lands between them; checked on the authoritative page, as corrections are.
+    // Seated after its history and before any other provider read, so a turn
+    // another browser starts meanwhile reaches it, prompt first.
     member.enterRoom(
-      showsPrompt(context.rooms.current(scope), meta, history),
+      showsPrompt(context.rooms.current(scope), command, history),
       history !== undefined
     )
+    // A cursor for another turn cannot position this one, and a cursor beyond
+    // bounded replay cannot be served: both need a full reload. A view rebuilt
+    // from history owns nothing of the turn, so it follows without a cursor.
     const resync = await followPositioned(
       member,
       scope,
-      history === undefined ? meta : {},
+      history === undefined ? command : {},
       replay
     )
     const execution = coordinator.snapshot(scope)
+    // Every provider read the response needs settles before the follow-up is
+    // scheduled: `afterResponse` fires on the next task, so a read awaited
+    // after it lets the notifications overtake the very response that tells
+    // the browser to start listening for them.
+    const models = addressed ? undefined : await workspace.models(scope)
+    const capabilities = await workspace.capabilities(scope)
     afterResponse(member, async () => {
       // A turn admitted since this response was built reports itself on its
       // own stream; restating it here would run ahead of that stream.
       if (coordinator.snapshot(scope).turnId === execution.turnId)
         await member.reportExecution()
+      // A resumed Session carries the window every earlier turn already grew;
+      // only a report here keeps its composer from opening on an empty gauge.
+      if (!addressed) await member.reportUsage()
       if (coordinator.state(scope) === "waiting-for-input")
         await member.reissuePending()
     })
     return {
-      _meta: {
-        [AOS_META_KEY]: {
-          session: invitedSessionMeta(grant, execution.state),
-          execution: executionMeta(execution),
-          capabilities,
-          ...resync,
-          ...(history === undefined ? {} : { history: historyCursor(history) }),
-        },
-      },
+      agentId: scope.agentId,
+      ...(row ? { row } : {}),
+      execution,
+      capabilities,
+      ...(models ? { models } : {}),
+      ...resync,
+      ...(history === undefined ? {} : { history }),
     }
   }
 
-  /**
-   * The invited Session one guest turn runs in. Rewind stays operator-only,
-   * exactly as the guest turn route refuses one, and the invitation's setup text
-   * reaches the runtime only when this Send creates the Session.
-   */
-  async function promptInvited(
-    { grant }: GuestRequest,
-    publicSessionId: string,
-    meta: { rewindSourceId?: string }
-  ) {
-    if (meta.rewindSourceId !== undefined) throw invalidRequest()
-    const scope = await invitedScope(grant, publicSessionId, {
-      ...(grant.firstTurnInstruction === undefined
+  /** Admits one user turn in a Session this connection reaches. */
+  async function send(
+    command: MemberCommands["send"],
+    client: AgentContext
+  ): Promise<CommandResults["send"]> {
+    const scope = command.scope ?? sessions.scope(command.sessionId)
+    await workspace.session(scope)
+    if (coordinator.state(scope) !== "idle") throw turnInProgress()
+    // Bytes were staged over REST; the prompt references the batch by id and
+    // the stage appends its server-owned content to the user turn.
+    const { attachmentStageId, content } = command
+    const stage =
+      attachmentStageId === undefined
+        ? undefined
+        : context.attachmentStages.take(
+            scope.agentId,
+            scope.threadId,
+            attachmentStageId
+          )
+    if (attachmentStageId !== undefined && !stage) throw invalidRequest()
+    const messageId = crypto.randomUUID()
+    const input: PromptTurnInput = {
+      turnId: crypto.randomUUID(),
+      messageId,
+      prompt: stage ? await stage.appendTo(command.text) : command.text,
+      ...(command.rewindSourceId === undefined
         ? {}
-        : { firstTurnInstruction: grant.firstTurnInstruction }),
+        : { rewindSourceId: command.rewindSourceId }),
+    }
+    const member = sessions.join(client, scope)
+    afterResponse(member, async () => {
+      // Seated before admission, so a turn that wins the race still reaches
+      // this browser, and shown its own prompt as today.
+      member.enterRoom()
+      await member.emit({ kind: "prompt", messageId, content, own: true })
+      try {
+        await member.startTurn(input, stage)
+      } catch (cause) {
+        if (!(cause instanceof ServerTurnConflictError)) throw cause
+        // Another browser's turn won: report the conflict, then follow it.
+        await member.report(cause)
+        await member.catchUp()
+        return
+      }
+      await member.announce({
+        turnId: input.turnId,
+        messageId,
+        content,
+        at: Date.now(),
+      })
     })
-    if (!scope) throw notFound()
-    return scope
+    return { messageId }
   }
 
   app.onRequest(methods.agent.initialize, async ({ params }) => {
@@ -634,119 +651,117 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.new, async ({ params, client }) => {
-    guestFor(methods.agent.session.new)
+    admit(methods.agent.session.new, "new")
     const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
-    const publicSessionId = await workspace.create(meta.agentId, meta.title)
-    const scope = workspace.scope(meta.agentId, publicSessionId)
-    const row = await workspace.session(scope)
-    sessions.remember([row])
-    const capabilities = await workspace.capabilities(scope)
-    const models = await workspace.models(scope)
-    const member = sessions.join(client, scope)
-    afterResponse(member, async () => {
-      await member.emit({ kind: "commands", capabilities })
-      await member.reportUsage()
-    })
+    const created = await perform(
+      "new",
+      {
+        agentId: meta.agentId,
+        ...(meta.title === undefined ? {} : { title: meta.title }),
+      },
+      async ({ agentId, title }) => {
+        const sessionId = await workspace.create(agentId, title)
+        const scope = workspace.scope(agentId, sessionId)
+        const row = await workspace.session(scope)
+        sessions.remember([row])
+        const capabilities = await workspace.capabilities(scope)
+        const models = await workspace.models(scope)
+        const member = sessions.join(client, scope)
+        afterResponse(member, async () => {
+          await member.emit({ kind: "commands", capabilities })
+          await member.reportUsage()
+        })
+        return { sessionId, row, capabilities, models }
+      }
+    )
     return {
-      sessionId: publicSessionId,
-      configOptions: translators.configOptionsOf(models),
+      sessionId: created.sessionId,
+      configOptions: translators.configOptionsOf(created.models),
       _meta: {
         [AOS_META_KEY]: {
-          session: sessionInfoMeta(row, sessions.status(row)),
-          capabilities,
+          session: sessionInfoMeta(created.row, sessions.status(created.row)),
+          capabilities: created.capabilities,
         },
       },
     }
   })
 
   app.onRequest(methods.agent.session.list, async ({ params }) => {
-    guestFor(methods.agent.session.list)
+    admit(methods.agent.session.list, "list")
     const meta = parseMeta(AosSessionListMetaSchema, params._meta)
-    const offset = decodeCursor(params.cursor)
-    const page = await workspace.list(meta.agentId, SESSION_LIST_LIMIT, offset)
-    sessions.remember(page.sessions)
-    context.sessionRows.rememberList(page.sessions)
-    const next = offset + page.sessions.length
+    const listed = await perform(
+      "list",
+      {
+        ...(meta.agentId === undefined ? {} : { agentId: meta.agentId }),
+        offset: decodeCursor(params.cursor),
+      },
+      async ({ agentId, offset }) => {
+        const page = await workspace.list(agentId, SESSION_LIST_LIMIT, offset)
+        sessions.remember(page.sessions)
+        context.sessionRows.rememberList(page.sessions)
+        const next = offset + page.sessions.length
+        return {
+          rows: page.sessions.map(
+            (session) =>
+              context.sessionRows.get(session.agentId, session.id) ?? session
+          ),
+          // No cursor points past the catalog window, which no runtime serves.
+          ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
+            ? { nextOffset: next }
+            : {}),
+        }
+      }
+    )
     return {
-      sessions: page.sessions.map((session) => {
-        const row =
-          context.sessionRows.get(session.agentId, session.id) ?? session
-        return sessionInfoOf(row, sessions.status(row))
-      }),
-      // No cursor points past the catalog window, which no runtime serves.
-      ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
-        ? { nextCursor: encodeCursor(next) }
-        : {}),
+      sessions: listed.rows.map((row) =>
+        sessionInfoOf(row, sessions.status(row))
+      ),
+      ...(listed.nextOffset === undefined
+        ? {}
+        : { nextCursor: encodeCursor(listed.nextOffset) }),
     }
   })
 
   app.onRequest(methods.agent.session.resume, async ({ params, client }) => {
-    const guest = guestFor(methods.agent.session.resume)
-    if (guest) return await resumeInvited(guest, params, client)
+    const method = methods.agent.session.resume
+    stack()
     const cursor = olderPageCursor(params.replayFrom)
-    if (cursor !== undefined) return await replayOlder(params.sessionId, cursor)
+    if (cursor !== undefined) {
+      admit(method, "older-page")
+      const { page } = await perform(
+        "older-page",
+        { sessionId: params.sessionId, cursor },
+        replayOlder
+      )
+      return { _meta: { [AOS_META_KEY]: { history: historyCursor(page) } } }
+    }
+    admit(method, "resume")
     const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
-    if (meta.agentId !== undefined)
-      sessions.adopt(params.sessionId, meta.agentId)
-    const scope = sessions.scope(params.sessionId)
-    const row = await workspace.session(scope)
-    // The same preamble the history route runs: only a wait or a Session the
-    // provider still calls running can hide a recoverable execution.
-    const state = coordinator.state(scope)
-    if (
-      state === "waiting-for-input" ||
-      (state === "idle" && row.status === "running")
+    const resumed = await perform(
+      "resume",
+      {
+        sessionId: params.sessionId,
+        ...meta,
+        fromStart: params.replayFrom?.type === "start",
+      },
+      (command) => resume(command, client)
     )
-      await workspace.discover(scope)
-    const member = sessions.join(client, scope)
-    // A correction the provider persisted the moment it accepted the steer is
-    // already in this page, so the journal's acknowledgement of it is dropped.
-    const replay =
-      params.replayFrom?.type === "start"
-        ? await replayHistory(member, scope)
-        : undefined
-    const history = replay?.history
-    // Seated after its history and before any other provider read, so a turn
-    // another browser starts meanwhile reaches it, prompt first.
-    member.enterRoom(
-      showsPrompt(context.rooms.current(scope), meta, history),
-      history !== undefined
-    )
-    // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload. A view rebuilt
-    // from history owns nothing of the turn, so it follows without a cursor.
-    const resync = await followPositioned(
-      member,
-      scope,
-      history === undefined ? meta : {},
-      replay
-    )
-    const execution = coordinator.snapshot(scope)
-    // Every provider read the response needs settles before the follow-up is
-    // scheduled: `afterResponse` fires on the next task, so a read awaited
-    // after it lets the notifications overtake the very response that tells
-    // the browser to start listening for them.
-    const models = await workspace.models(scope)
-    const capabilities = await workspace.capabilities(scope)
-    afterResponse(member, async () => {
-      // A turn admitted since this response was built reports itself on its
-      // own stream; restating it here would run ahead of that stream.
-      if (coordinator.snapshot(scope).turnId === execution.turnId)
-        await member.reportExecution()
-      // A resumed Session carries the window every earlier turn already grew;
-      // only a report here keeps its composer from opening on an empty gauge.
-      await member.reportUsage()
-      if (coordinator.state(scope) === "waiting-for-input")
-        await member.reissuePending()
-    })
+    const { row, execution, models, history } = resumed
     return {
-      configOptions: translators.configOptionsOf(models),
+      ...(models ? { configOptions: translators.configOptionsOf(models) } : {}),
       _meta: {
         [AOS_META_KEY]: {
-          session: sessionInfoMeta(row, sessions.status(row)),
+          // A Session outside the catalog shows its live state, not a row.
+          session: row
+            ? sessionInfoMeta(row, sessions.status(row))
+            : {
+                agentId: resumed.agentId,
+                status: overlaidStatus(execution.state, "idle"),
+                archived: false,
+              },
           execution: executionMeta(execution),
-          capabilities,
-          ...resync,
+          capabilities: resumed.capabilities,
+          ...(resumed.resync ? { resync: true } : {}),
           ...(history === undefined ? {} : { history: historyCursor(history) }),
         },
       },
@@ -754,99 +769,79 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.prompt, async ({ params, client }) => {
-    const guest = guestFor(methods.agent.session.prompt)
+    admit(methods.agent.session.prompt, "send")
     const meta = parseMeta(AosPromptMetaSchema, params._meta)
     if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
     const text = promptText(params.prompt)
     if (!text) throw invalidRequest()
-    const scope = guest
-      ? await promptInvited(guest, params.sessionId, meta)
-      : sessions.scope(params.sessionId)
-    await workspace.session(scope)
-    if (coordinator.state(scope) !== "idle") throw turnInProgress()
-    // Bytes were staged over REST; the prompt references the batch by id and
-    // the stage appends its server-owned content to the user turn.
-    const stage =
-      meta.attachmentStageId === undefined
-        ? undefined
-        : context.attachmentStages.take(
-            scope.agentId,
-            scope.threadId,
-            meta.attachmentStageId
-          )
-    if (meta.attachmentStageId !== undefined && !stage) throw invalidRequest()
-    const messageId = crypto.randomUUID()
-    const input: PromptTurnInput = {
-      turnId: crypto.randomUUID(),
-      messageId,
-      prompt: stage ? await stage.appendTo(text) : text,
-      ...(meta.rewindSourceId === undefined
-        ? {}
-        : { rewindSourceId: meta.rewindSourceId }),
-    }
-    const content = promptParts(params.prompt)
-    const member = sessions.join(client, scope)
-    afterResponse(member, async () => {
-      // Seated before admission, so a turn that wins the race still reaches
-      // this browser, and shown its own prompt as today.
-      member.enterRoom()
-      await member.emit({ kind: "prompt", messageId, content, own: true })
-      try {
-        await member.startTurn(input, stage)
-      } catch (cause) {
-        if (!(cause instanceof ServerTurnConflictError)) throw cause
-        // Another browser's turn won: report the conflict, then follow it.
-        await member.report(cause)
-        await member.catchUp()
-        return
-      }
-      await member.announce({
-        turnId: input.turnId,
-        messageId,
-        content,
-        at: Date.now(),
-      })
-    })
+    const { messageId } = await perform(
+      "send",
+      {
+        sessionId: params.sessionId,
+        content: promptParts(params.prompt),
+        text,
+        ...meta,
+      },
+      (command) => send(command, client)
+    )
     return { _meta: { [AOS_META_KEY]: { messageId } } }
   })
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
     log("acp.turn.cancel", { sessionId: params.sessionId })
-    // Only a joined Session has a member, so an unauthenticated
-    // guest reaches nothing here.
-    const member = sessions.member(params.sessionId)
-    if (!member) return
-    await member.cancel().catch((cause: unknown) => member.report(cause))
+    // An unauthenticated guest reaches nothing here.
+    if (!sessions.identity()) return
+    admit(methods.agent.session.cancel, "stop")
+    await perform("stop", { sessionId: params.sessionId }, async (command) => {
+      // Only a joined Session has a member.
+      const member = sessions.member(command.sessionId)
+      if (!member) return
+      await member.cancel().catch((cause: unknown) => member.report(cause))
+    })
   })
 
   app.onRequest(methods.agent.session.setConfigOption, async ({ params }) => {
-    guestFor(methods.agent.session.setConfigOption)
-    const scope = sessions.scope(params.sessionId)
+    admit(methods.agent.session.setConfigOption, "set-config")
     const write = translators.configWriteOf(params.configId, params.value)
-    if (!write) throw invalidRequest()
-    await workspace.updateModel(scope, write)
-    const configOptions = translators.configOptionsOf(
-      await workspace.models(scope)
+    const { models } = await perform(
+      "set-config",
+      { sessionId: params.sessionId, ...(write ? { write } : {}) },
+      async (command) => {
+        const scope = sessions.scope(command.sessionId)
+        if (!command.write) throw invalidRequest()
+        await workspace.updateModel(scope, command.write)
+        const models = await workspace.models(scope)
+        // The window's size belongs to the model, so a switch restates the
+        // usage every browser on the Session holds against the model it has
+        // just left.
+        const member = sessions.member(command.sessionId)
+        if (member) afterResponse(member, () => coordinator.reportUsage(scope))
+        return { models }
+      }
     )
-    // The window's size belongs to the model, so a switch restates the usage
-    // every browser on the Session holds against the model it has just left.
-    const member = sessions.member(params.sessionId)
-    if (member) afterResponse(member, () => coordinator.reportUsage(scope))
-    return { configOptions }
+    return { configOptions: translators.configOptionsOf(models) }
   })
 
-  app.onRequest(methods.agent.session.close, ({ params }) => {
-    guestFor(methods.agent.session.close)
-    sessions.leave(params.sessionId)
+  app.onRequest(methods.agent.session.close, async ({ params }) => {
+    admit(methods.agent.session.close, "close")
+    await perform("close", { sessionId: params.sessionId }, async (command) => {
+      sessions.leave(command.sessionId)
+    })
     return {}
   })
 
   app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
-    guestFor(methods.agent.session.delete)
-    const scope = sessions.scope(params.sessionId)
-    await workspace.delete(scope)
-    sessions.forget(scope)
-    await client.notify(AOS_METHODS.notify.catalogInvalidated)
+    admit(methods.agent.session.delete, "delete")
+    await perform(
+      "delete",
+      { sessionId: params.sessionId },
+      async (command) => {
+        const scope = sessions.scope(command.sessionId)
+        await workspace.delete(scope)
+        sessions.forget(scope)
+        await client.notify(AOS_METHODS.notify.catalogInvalidated)
+      }
+    )
     return {}
   })
 
@@ -854,31 +849,39 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     AOS_METHODS.session.update,
     AosSessionUpdateRequestSchema,
     async ({ params, client }) => {
-      guestFor(AOS_METHODS.session.update)
-      const scope = sessions.scope(params.sessionId)
-      if (params.unread === false) {
-        await context.readState.markRead(scope.agentId, scope.threadId)
-        return {}
-      }
-      await workspace.update(
-        scope,
-        params.title !== undefined
-          ? { title: params.title }
-          : params.archived !== undefined
-            ? { archived: params.archived }
-            : params.pinned !== undefined
-              ? { pinned: params.pinned }
-              : { unread: true }
+      admit(AOS_METHODS.session.update, "update")
+      const patch: SessionPatch =
+        params.unread === false
+          ? { unread: false }
+          : params.title !== undefined
+            ? { title: params.title }
+            : params.archived !== undefined
+              ? { archived: params.archived }
+              : params.pinned !== undefined
+                ? { pinned: params.pinned }
+                : { unread: true }
+      await perform(
+        "update",
+        { sessionId: params.sessionId, patch },
+        async (command) => {
+          const scope = sessions.scope(command.sessionId)
+          if ("unread" in command.patch && !command.patch.unread) {
+            await context.readState.markRead(scope.agentId, scope.threadId)
+            return
+          }
+          await workspace.update(scope, command.patch)
+          const row = await workspace.session(scope)
+          await sessions
+            .join(client, scope)
+            .emit({ kind: "session-info", row, status: sessions.status(row) })
+          // Archiving and pinning move the Session's membership and order in
+          // the catalog, which only a relist settles; a provider's catalog
+          // watcher may be debounced or absent. A rename or a read marker
+          // moves neither.
+          if ("archived" in command.patch || "pinned" in command.patch)
+            await client.notify(AOS_METHODS.notify.catalogInvalidated)
+        }
       )
-      const row = await workspace.session(scope)
-      await sessions
-        .join(client, scope)
-        .emit({ kind: "session-info", row, status: sessions.status(row) })
-      // Archiving and pinning move the Session's membership and order in the
-      // catalog, which only a relist settles; a provider's catalog watcher may
-      // be debounced or absent. A rename or a read marker moves neither.
-      if (params.archived !== undefined || params.pinned !== undefined)
-        await client.notify(AOS_METHODS.notify.catalogInvalidated)
       return {}
     }
   )
@@ -887,57 +890,86 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     AOS_METHODS.session.steer,
     AosSteerRequestSchema,
     async ({ params }) => {
-      guestFor(AOS_METHODS.session.steer)
-      const scope = sessions.scope(params.sessionId)
-      const { turnId } = coordinator.snapshot(scope)
-      if (turnId === undefined) throw turnInProgress()
-      return await workspace.steer(scope, {
-        requestId: params.requestId,
-        expectedTurnId: turnId,
-        text: params.text,
-      })
+      admit(AOS_METHODS.session.steer, "steer")
+      return await perform(
+        "steer",
+        {
+          sessionId: params.sessionId,
+          requestId: params.requestId,
+          text: params.text,
+        },
+        async (command) => {
+          const scope = sessions.scope(command.sessionId)
+          const { turnId } = coordinator.snapshot(scope)
+          if (turnId === undefined) throw turnInProgress()
+          return await workspace.steer(scope, {
+            requestId: command.requestId,
+            expectedTurnId: turnId,
+            text: command.text,
+          })
+        }
+      )
     }
   )
 
   app.onNotification(
     AOS_METHODS.session.focus,
     AosFocusNotificationSchema,
-    ({ params }) => {
-      // Read state belongs to the operator; a guest's exposure moves nothing.
-      if (context.guest) return
-      const report: PresenceReport = {
-        sessionId: params.sessionId,
-        foreground: params.foreground ?? params.sessionId !== null,
-        idle: params.idle ?? false,
-      }
-      context.presence?.set(context.principalId, context.connectionId, report)
-      if (params.sessionId === null) {
-        exposure = undefined
-        return context.readState.blur()
-      }
-      // A heartbeat re-sends an exposure this connection already acknowledged.
-      if (sameExposure(exposure, report)) return
-      const agentId = sessions.owner(params.sessionId)
-      if (agentId === undefined) return
-      exposure = report
-      context.readState.focus(agentId, params.sessionId)
+    async ({ params }) => {
+      if (!sessions.identity()) return
+      admit(AOS_METHODS.session.focus, "focus")
+      await perform(
+        "focus",
+        {
+          sessionId: params.sessionId,
+          foreground: params.foreground ?? params.sessionId !== null,
+          idle: params.idle ?? false,
+        },
+        async (report: PresenceReport) => {
+          context.presence?.set(
+            context.principalId,
+            context.connectionId,
+            report
+          )
+          if (report.sessionId === null) {
+            exposure = undefined
+            return context.readState.blur()
+          }
+          // A heartbeat re-sends an exposure this connection already
+          // acknowledged.
+          if (sameExposure(exposure, report)) return
+          const agentId = sessions.owner(report.sessionId)
+          if (agentId === undefined) return
+          exposure = report
+          context.readState.focus(agentId, report.sessionId)
+        }
+      )
     }
   )
 
-  app.onRequest(AOS_METHODS.agents.list, withoutParams, () => {
-    guestFor(AOS_METHODS.agents.list)
-    return workspace.agents()
+  app.onRequest(AOS_METHODS.agents.list, withoutParams, async () => {
+    admit(AOS_METHODS.agents.list, "agents")
+    return await perform("agents", {}, () => workspace.agents())
   })
 
   app.onRequest(
     AOS_METHODS.agents.setVisibility,
     AosSetVisibilityRequestSchema,
-    ({ params }) => {
-      guestFor(AOS_METHODS.agents.setVisibility)
-      return workspace.setVisibility(
-        params.agentId,
-        params.visibility,
-        params.revision
+    async ({ params }) => {
+      admit(AOS_METHODS.agents.setVisibility, "set-visibility")
+      return await perform(
+        "set-visibility",
+        {
+          agentId: params.agentId,
+          visibility: params.visibility,
+          revision: params.revision,
+        },
+        (command) =>
+          workspace.setVisibility(
+            command.agentId,
+            command.visibility,
+            command.revision
+          )
       )
     }
   )

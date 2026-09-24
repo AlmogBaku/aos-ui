@@ -39,7 +39,6 @@ type Subscriber<T> = {
   closed: boolean
   /** Set when the queue overflowed, which is the one unclean end. */
   failure?: FanoutOverflowError
-  project(value: T): T | undefined
   onDetach?(): void
 }
 
@@ -62,16 +61,12 @@ export class SubscriberFanout<T> {
     return this.#subscribers.size
   }
 
-  subscribe(
-    project: ((value: T) => T | undefined) | undefined = undefined,
-    onDetach?: () => void
-  ): FanoutSubscription<T> {
+  subscribe(onDetach?: () => void): FanoutSubscription<T> {
     const subscriber: Subscriber<T> = {
       values: [],
       bytes: 0,
       waiters: [],
       closed: false,
-      project: project ?? ((value) => value),
       ...(onDetach ? { onDetach } : {}),
     }
     if (this.#closed) subscriber.closed = true
@@ -111,12 +106,9 @@ export class SubscriberFanout<T> {
   publish(value: T) {
     if (this.#closed) return
     for (const subscriber of [...this.#subscribers]) {
-      let projected: T | undefined
       let bytes: number
       try {
-        projected = subscriber.project(value)
-        if (projected === undefined) continue
-        bytes = this.options.sizeOf(projected)
+        bytes = this.options.sizeOf(value)
       } catch {
         this.#detach(subscriber)
         continue
@@ -135,9 +127,9 @@ export class SubscriberFanout<T> {
         continue
       }
       const waiter = subscriber.waiters.shift()
-      if (waiter) waiter.resolve({ done: false, value: projected })
+      if (waiter) waiter.resolve({ done: false, value })
       else {
-        subscriber.values.push({ value: projected, bytes })
+        subscriber.values.push({ value, bytes })
         subscriber.bytes += bytes
       }
     }

@@ -26,6 +26,7 @@ import type { Member, MemberConnection } from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import {
+  authenticationRequired,
   errorNotificationOf,
   invalidRequest,
   notFound,
@@ -178,7 +179,12 @@ export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
  * mapped to its JSON-RPC error. Detail reads take the provider Session id and
  * workspace reads the public one, exactly as the normalized HTTP routes do.
  */
-export function createWorkspace(context: AcpConnectionContext) {
+export function createWorkspace(
+  context: Pick<
+    AcpConnectionContext,
+    "runtimeInstance" | "sessionRows" | "principalId"
+  >
+) {
   const { runtime, sessions: coordinator } = context.runtimeInstance
   const call = async <T>(operation: () => Promise<T>) => {
     try {
@@ -276,14 +282,24 @@ export function createSessions(
   /** This connection as the Channel seats it, once it first joins. */
   let member: Member | undefined
 
+  /**
+   * Who this connection acts as, and its stack: the operator's is empty, and
+   * a guest has none until it redeems an invitation.
+   */
+  function identity(): Omit<Member, "connection"> | undefined {
+    return context.guest
+      ? context.guest.member()
+      : {
+          principal: { id: context.principalId, role: context.lane },
+          middleware: [],
+        }
+  }
+
   function memberOf(client: AgentContext): Member {
-    member ??= {
-      principal: {
-        id: context.guest?.grant()?.principalId ?? context.principalId,
-        role: context.lane,
-      },
-      connection: connect(client),
-    }
+    if (member) return member
+    const joined = identity()
+    if (!joined) throw authenticationRequired()
+    member = { ...joined, connection: connect(client) }
     return member
   }
 
@@ -294,6 +310,7 @@ export function createSessions(
   return {
     workspace,
     remember,
+    identity,
 
     /** The live status of a row, whether or not this connection attached it. */
     status(row: Session) {
@@ -325,13 +342,9 @@ export function createSessions(
     join(client: AgentContext, scope: SessionScope) {
       const existing = members.get(scope.threadId)
       if (existing) return existing
-      const { guest } = context
       const seat = context.rooms.join(memberOf(client), scope, {
         coordinator,
         subscriberId: `${context.connectionId}:${scope.threadId}`,
-        ...(guest
-          ? { access: (base) => guest.project.access(base, scope) }
-          : {}),
         log: (level, event, fields) =>
           context.logger?.[level](
             redactForLog({
