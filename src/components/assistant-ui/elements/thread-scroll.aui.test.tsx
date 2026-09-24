@@ -531,6 +531,73 @@ describe("virtualized thread", () => {
       expect(topOf(reading)).toBe(top)
     })
 
+    it("keeps the reader's place near the top of a long thread as unmeasured messages mount above it", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread()}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 150
+      await settle()
+      const reading = firstVisibleText()
+      const top = topOf(reading)
+
+      act(() => thread.current?.prepend(olderMessages(20)))
+      await settle()
+
+      expect(topOf(reading)).toBe(top)
+    })
+
+    it("keeps the reader's place at the top of a short thread as older messages land above", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread().slice(0, 20)}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 0
+      await settle()
+      const top = topOf("Long thread message 0")
+
+      act(() => thread.current?.prepend(olderMessages(8)))
+
+      expect(topOf("Long thread message 0")).toBe(top)
+      await settle()
+      expect(topOf("Long thread message 0")).toBe(top)
+      expect(screen.getByText("Older message 7")).toBeInTheDocument()
+    })
+
+    it("keeps the reader's place as a page makes a short thread long enough to window", async () => {
+      const thread = createRef<PagedThreadHandle>()
+      render(
+        <PagedThread
+          initialMessages={longThread().slice(0, 20)}
+          history={historyState()}
+          ref={thread}
+        />
+      )
+      await settle()
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = 0
+      await settle()
+      const top = topOf("Long thread message 0")
+
+      act(() => thread.current?.prepend(olderMessages(15)))
+
+      expect(topOf("Long thread message 0")).toBe(top)
+      await settle()
+      expect(topOf("Long thread message 0")).toBe(top)
+    })
+
     it("keeps a reader following the latest message at the bottom as a page lands", async () => {
       const thread = createRef<PagedThreadHandle>()
       render(
