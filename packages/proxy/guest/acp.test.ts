@@ -18,6 +18,11 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
+  AosComposerPrefillNotificationSchema,
+  AosPromptMetaSchema,
+  AosSteerAcceptedNotificationSchema,
+  AosSteerRequestSchema,
+  AosSteerResponseSchema,
 } from "../../protocol/acp"
 import { createChannel } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
@@ -1685,17 +1690,28 @@ describe("guest scope and commands", () => {
       "an update carrying Guest-visible answer"
     )
 
-    await expect(test.steer("Shorter, please")).resolves.toMatchObject({
-      status: "steered",
-    })
+    // The browser's steer params are the ones this lane accepts.
+    expect(
+      AosSteerRequestSchema.safeParse({
+        sessionId: REF,
+        requestId: "steer-1",
+        text: "Shorter, please",
+      }).success
+    ).toBe(true)
+    const response = await test.steer("Shorter, please")
+    expect(response).toMatchObject({ status: "steered" })
+    expect(AosSteerResponseSchema.safeParse(response).success).toBe(true)
     expect(test.handles.at(0)?.steer).toHaveBeenCalledWith({
       requestId: "steer-1",
       text: "Shorter, please",
     })
-    await test.recorder.wait(
+    const accepted = await test.recorder.wait(
       (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
       "the steer's acknowledgement"
     )
+    expect(
+      AosSteerAcceptedNotificationSchema.safeParse(accepted.params).data
+    ).toMatchObject({ sessionId: REF, requestId: "steer-1" })
     test.close()
   })
 
@@ -1724,9 +1740,10 @@ describe("guest scope and commands", () => {
       "the runtime's prefill"
     )
 
+    const [prefill] = test.recorder.of(AOS_METHODS.notify.composerPrefill)
     expect(
-      JSON.stringify(test.recorder.of(AOS_METHODS.notify.composerPrefill))
-    ).toContain("Tell me more")
+      AosComposerPrefillNotificationSchema.safeParse(prefill?.params).data
+    ).toMatchObject({ sessionId: REF, text: "Tell me more" })
     const chunks = updates(test.recorder).flatMap(({ update }) =>
       update.sessionUpdate === "agent_message_chunk" ? [update] : []
     )
@@ -1744,12 +1761,17 @@ describe("guest scope and commands", () => {
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF)
-    const rewind = (rewindSourceId: string) =>
-      test.agent.request(methods.agent.session.prompt, {
+    const rewind = (rewindSourceId: string) => {
+      // The browser's prompt `_meta` is the shape this lane accepts.
+      expect(AosPromptMetaSchema.safeParse({ rewindSourceId }).success).toBe(
+        true
+      )
+      return test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Again" }],
         _meta: { [AOS_META_KEY]: { rewindSourceId } },
       })
+    }
 
     // The invitation's setup turn is in the stored history, never shown.
     await expect(rewind("user-0")).rejects.toMatchObject({
