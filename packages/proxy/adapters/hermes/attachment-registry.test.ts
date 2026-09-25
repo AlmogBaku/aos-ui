@@ -440,9 +440,13 @@ describe("HermesAttachmentRegistry", () => {
       { idleMs: 300_000 }
     )
     await registry.ensure(scope)
+    await vi.advanceTimersByTimeAsync(200_000)
+    // Using the cached binding restarts its idle window rather than ending it.
+    await registry.ensure(scope)
     await registry.ensure({ ...scope, sessionId: "other" })
     await registry.ensure({ ...scope, sessionId: "draft" })
     await vi.advanceTimersByTimeAsync(300_000)
+    expect(close).toHaveBeenCalledTimes(2)
     expect(close).toHaveBeenCalledWith("live-stored")
     expect(close).toHaveBeenCalledWith("live-other")
     // Closing a draft natively would delete it; it is only unbound.

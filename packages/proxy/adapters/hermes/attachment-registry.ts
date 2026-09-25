@@ -177,8 +177,11 @@ export class HermesAttachmentRegistry {
       entry.attachment.liveSessionId &&
       !entry.stale &&
       (!options.refresh || this.#resumedWithin(entry, options.freshForMs))
-    )
+    ) {
+      // Using a cached binding counts as activity: its idle window restarts.
+      this.#scheduleIdle(entry)
       return entry.attachment
+    }
     return this.#resumeOnce(entry)
   }
 
