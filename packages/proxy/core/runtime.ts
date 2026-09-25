@@ -1,4 +1,9 @@
-import type { PendingRequest, TurnEvent, TurnInput } from "./events"
+import type {
+  ExecutionEvent,
+  PendingRequest,
+  TurnEvent,
+  TurnInput,
+} from "./events"
 import type {
   AgentCatalogResponse,
   RuntimeAuthState,
@@ -222,9 +227,20 @@ export type ServerRuntimePublicError = {
   status: 400 | 401 | 404 | 409 | 503
 }
 
+/**
+ * Native semantics the ACP layer reads instead of assuming one provider's. An
+ * absent field is the neutral reading: an exposure acknowledges only an unread
+ * row and activity re-lights nothing.
+ */
+export type ServerRuntimeTranslation = {
+  /** Kinds that re-light a focused Session whose watermark moves only on a write. */
+  relighting?: readonly ExecutionEvent["kind"][]
+}
+
 /** Provider-neutral operations consumed by normalized HTTP and event routes. */
 export interface ServerRuntime {
   readonly turns: ServerTurnEngine
+  readonly translation?: ServerRuntimeTranslation
   resolveInvitedSession(
     agentId: string,
     ref: string,

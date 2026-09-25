@@ -15,23 +15,14 @@ type Target = { agentId: string; sessionId: string }
 export type ReadStateOptions = {
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
+  /** The runtime's `ServerRuntimeTranslation.relighting`. */
+  relighting?: readonly ExecutionEvent["kind"][]
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => TimerHandle
   cancel?: (handle: TimerHandle) => void
   /** Projects the settled row to this connection. */
   onUnreadChanged: (agentId: string, sessionId: string, unread: boolean) => void
 }
-
-/**
- * Activity that re-lights a Session the operator is already looking at. Unread
- * is role-blind and running-blind in Hermes, so the operator's own turn and a
- * streaming answer both need another acknowledgement.
- */
-const RELIGHTING: readonly ExecutionEvent["kind"][] = [
-  "turn-finished",
-  "turn-failed",
-  "attention-requested",
-]
 
 function sameTarget(left: Target, right: Target) {
   return left.agentId === right.agentId && left.sessionId === right.sessionId
@@ -40,6 +31,7 @@ function sameTarget(left: Target, right: Target) {
 export function createReadState({
   runtimeInstance,
   sessionRows,
+  relighting,
   now = Date.now,
   schedule = setTimeout,
   cancel = clearTimeout,
@@ -151,16 +143,17 @@ export function createReadState({
       releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
         arm(target, false)
       )
-      // Hermes arms its watermark only on a write, so an already-read Session
-      // still needs one acknowledgement per exposure.
-      arm(target, true)
+      // A watermark that moves only on a write needs one acknowledgement per
+      // exposure, even for a row that already reads read.
+      if (relighting || sessionRows.get(agentId, sessionId)?.unread)
+        arm(target, true)
     },
 
     blur: unfocus,
 
     onExecution(event) {
       if (!focused || !sameTarget(focused, event)) return
-      if (!RELIGHTING.includes(event.kind)) return
+      if (!relighting?.includes(event.kind)) return
       arm(focused, false)
     },
 

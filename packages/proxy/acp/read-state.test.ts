@@ -11,11 +11,19 @@ import {
 
 const AGENT = "researcher"
 const SESSION = "session-1"
+/** Hermes' translation hint: its watermark moves only on a write. */
+const RELIGHTING: readonly ExecutionEvent["kind"][] = [
+  "turn-finished",
+  "turn-failed",
+  "attention-requested",
+]
 
 function harness(
   options: {
     unread?: boolean
     tracked?: boolean
+    /** A runtime without the relighting hint. */
+    neutral?: boolean
     mutate?: () => Promise<void>
   } = {}
 ) {
@@ -57,6 +65,7 @@ function harness(
   const readState = createReadState({
     runtimeInstance,
     sessionRows,
+    ...(options.neutral ? {} : { relighting: RELIGHTING }),
     onUnreadChanged,
   })
   return { updateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }
@@ -101,7 +110,7 @@ describe("createReadState", () => {
     vi.useRealTimers()
   })
 
-  it("arms the watermark once per exposure even when the row reads read", async () => {
+  it("arms the watermark once per exposure even when the row reads read, only when hinted", async () => {
     const { updateSession, onUnreadChanged, readState } = harness()
 
     readState.focus(AGENT, SESSION)
@@ -119,6 +128,13 @@ describe("createReadState", () => {
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(2)
+
+    // Without the hint a read row stays settled and activity re-lights nothing.
+    const neutral = harness({ neutral: true })
+    neutral.readState.focus(AGENT, SESSION)
+    neutral.readState.onExecution(lifecycle("turn-finished"))
+    await settle(REACK_FLOOR_MS * 2)
+    expect(neutral.updateSession).not.toHaveBeenCalled()
   })
 
   it("defers a re-lit exposure's re-ack to the floor and ignores other Sessions", async () => {
