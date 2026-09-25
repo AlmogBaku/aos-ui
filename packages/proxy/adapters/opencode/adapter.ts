@@ -22,7 +22,8 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
-import { projectTodos } from "../todos"
+import { validIdentifier } from "../../core/identifier"
+import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
@@ -49,7 +50,6 @@ import {
   storedOpenCodeToolCall,
   type OpenCodeMcpCatalog,
 } from "./mcp-apps"
-import { OPENCODE_TODO_STATUS_ALIASES } from "./todos"
 import {
   OpenCodeInteractionPublicError,
   OpenCodeInteractions,
@@ -112,17 +112,6 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   /** The project's MCP servers; without them, no tool opens a view. */
   mcp?: OpenCodeMcpCatalog
 }>
-
-function identifier(value: string) {
-  return (
-    value.length > 0 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
-}
 
 /**
  * The bytes one native file read answered with. OpenCode answers a missing file
@@ -289,7 +278,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   resolveSessionId(agentId: string, publicSessionId: string) {
-    return identifier(agentId) && identifier(publicSessionId)
+    return validIdentifier(agentId) && validIdentifier(publicSessionId)
       ? publicSessionId
       : undefined
   }
@@ -474,7 +463,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     try {
       return projectTodos(
         { todos: await this.options.client.sessions.todos(sessionId) },
-        OPENCODE_TODO_STATUS_ALIASES
+        TODO_STATUS_ALIASES
       )
     } catch {
       return undefined
@@ -524,7 +513,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const selectedId = patch.selectedId
     const options = await this.#models(agentId, publicSessionId)
     const selected = options.native.get(selectedId)
-    if (!selected) throw new OpenCodeWorkspaceUnavailableError()
+    // A model the Session cannot run is the caller's mistake, not an outage.
+    if (!selected) throw new OpenCodeClientError("invalid_request")
     await this.options.client.sessions.switchModel(publicSessionId, selected)
     return { selectedId }
   }
@@ -728,14 +718,28 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const options = catalog.data.data.flatMap((model) => {
       if (!model.enabled) return []
       const id = openCodeModelOptionId(model)
-      if (!identifier(id) || native.has(id))
+      if (!validIdentifier(id) || native.has(id))
         throw new OpenCodeWorkspaceUnavailableError()
       native.set(id, { providerID: model.providerID, id: model.id })
       return [{ id, label: model.name, group: model.providerID }]
     })
-    const selectedId = openCodeModelOptionId(session.data.model)
-    if (!identifier(selectedId) || !native.has(selectedId))
+    const selected = session.data.model
+    const selectedId = openCodeModelOptionId(selected)
+    if (!validIdentifier(selectedId))
       throw new OpenCodeWorkspaceUnavailableError()
+    // A Session may run a model the catalog no longer lists; it stays listed
+    // by its own id so the selector still shows what the Session runs.
+    if (!native.has(selectedId)) {
+      native.set(selectedId, {
+        providerID: selected.providerID,
+        id: selected.id,
+      })
+      options.push({
+        id: selectedId,
+        label: selected.id,
+        group: selected.providerID,
+      })
+    }
     return { selectedId, options, native }
   }
 }

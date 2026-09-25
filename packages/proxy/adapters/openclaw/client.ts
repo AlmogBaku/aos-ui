@@ -161,23 +161,6 @@ export class OpenClawClientRequestError extends Error {
   }
 }
 
-function fixedGatewayUrl(value: string) {
-  try {
-    const url = new URL(value)
-    if (
-      (url.protocol !== "ws:" && url.protocol !== "wss:") ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    )
-      throw new Error()
-    return url.href
-  } catch {
-    throw new Error("Invalid OpenClaw Gateway URL")
-  }
-}
-
 function validNonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
 }
@@ -301,7 +284,6 @@ export class OpenClawClient {
   private stop?: Promise<void>
 
   constructor(options: OpenClawClientOptions) {
-    const url = fixedGatewayUrl(options.url)
     validateCredentials(options.credentials)
     if (
       !validNonEmptyString(options.role) ||
@@ -318,7 +300,7 @@ export class OpenClawClient {
     this.requestTimeout = options.requestTimeoutMs
 
     const gatewayOptions: OpenClawGatewayClientOptions = {
-      url,
+      url: options.url,
       deviceIdentity: options.credentials.deviceIdentity,
       deviceToken: options.credentials.deviceToken,
       hostDeps: {

@@ -232,7 +232,8 @@ export function openClawDeleteSessionParams(
   return official(SessionsDeleteParamsSchema, { agentId, key: sessionKey })
 }
 
-export function openClawInvitedSessionsParams(
+/** A search for one Session by key; the caller keeps only the exact match. */
+export function openClawSessionSearchParams(
   agentId: string,
   sessionKey: string
 ) {

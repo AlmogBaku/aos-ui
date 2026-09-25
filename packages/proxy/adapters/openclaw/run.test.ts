@@ -196,8 +196,6 @@ function coordinator(engine: OpenClawTurnEngine) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
-    maxReplayEvents: 32,
-    maxReplayBytes: 256 * 1024,
   })
 }
 

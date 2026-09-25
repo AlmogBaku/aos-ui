@@ -141,11 +141,31 @@ describe("OpenCode server adapter", () => {
     await expect(
       adapter.updateModel("research", "session-1", { effortId: "high" })
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    const unknown = await adapter
+      .updateModel("research", "session-1", {
+        selectedId: '["openai","unknown"]',
+      })
+      .catch((error: unknown) => error)
+    expect(adapter.publicError(unknown)).toMatchObject({ status: 400 })
     expect(native.sessions.switchModel).toHaveBeenCalledTimes(1)
     await expect(
       adapter.context("research", "session-1")
     ).rejects.toMatchObject({
       name: "OpenCodeWorkspaceUnavailableError",
+    })
+  })
+
+  it("lists a Session's model by its id when the catalog no longer has it", async () => {
+    const native = client()
+    native.catalog.models = async () => ({ data: [] })
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      turns: turnEngine,
+    })
+
+    await expect(adapter.models("research", "session-1")).resolves.toEqual({
+      selectedId: '["openai","gpt-5"]',
+      options: [{ id: '["openai","gpt-5"]', label: "gpt-5", group: "openai" }],
     })
   })
 

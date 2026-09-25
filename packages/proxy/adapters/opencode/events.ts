@@ -8,7 +8,7 @@ import {
 } from "../../core/events"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 
-import { projectTodos, type Todo } from "../todos"
+import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 
 import type { OpenCodeDurableEvent } from "./client"
 import { openCodeArtifactReceipt } from "./content"
@@ -17,7 +17,7 @@ import {
   openCodeStopReason,
   openCodeTimestamp,
 } from "./native-schemas"
-import { OPENCODE_TODO_STATUS_ALIASES, OPENCODE_TODO_TOOL } from "./todos"
+import { OPENCODE_TODO_TOOL } from "./todos"
 import {
   OPENCODE_SHELL_TOOL,
   canonicalOpenCodeToolCall,
@@ -818,7 +818,7 @@ export class OpenCodeEventProjector {
         })
       // A written list is authoritative; a failed write left the plan alone.
       if (!failed && tool.todoInput) {
-        const todos = projectTodos(tool.todoInput, OPENCODE_TODO_STATUS_ALIASES)
+        const todos = projectTodos(tool.todoInput, TODO_STATUS_ALIASES)
         if (todos) this.#emitPlan(events, todos)
       }
     } else if (type === "session.next.step.started") {

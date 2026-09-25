@@ -5,14 +5,15 @@ import type {
   SessionCatalogResponse,
 } from "../../../protocol"
 import { SessionCreateResponseSchema } from "../../../protocol"
+import { openClawInviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 
 import {
   openClawAgentsParams,
   openClawCreateSessionParams,
   openClawDeleteSessionParams,
-  openClawInvitedSessionsParams,
   openClawPatchSessionParams,
+  openClawSessionSearchParams,
   openClawSessionsParams,
   parseOpenClawAgents,
   parseOpenClawCreatedSession,
@@ -130,7 +131,7 @@ export function invitedOpenClawSessionKey(agentId: string, ref: string) {
     !INVITATION_REFERENCE.test(ref)
   )
     throw new OpenClawWorkspaceOwnershipError()
-  return `agent:${agentId}:aos-invite:${ref}`
+  return openClawInviteSessionKey(agentId, ref)
 }
 
 export type OpenClawWorkspace = Readonly<{
@@ -209,7 +210,7 @@ export function createOpenClawWorkspace(input: {
     const page = parseOpenClawSessions(
       await input.client.request(
         "sessions.list",
-        openClawInvitedSessionsParams(agentId, sessionKey)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       MAX_SESSION_PAGE
     )
@@ -336,7 +337,7 @@ export function createOpenClawWorkspace(input: {
       const page = parseOpenClawSessions(
         await input.client.request(
           "sessions.list",
-          openClawInvitedSessionsParams(agentId, sessionKey)
+          openClawSessionSearchParams(agentId, sessionKey)
         ),
         MAX_SESSION_PAGE
       )

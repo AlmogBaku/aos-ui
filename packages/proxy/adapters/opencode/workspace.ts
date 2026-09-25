@@ -7,6 +7,7 @@ import {
   type Session,
   type SessionCatalogResponse,
 } from "../../../protocol"
+import { inviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 import {
   parseOpenCodeAgentCatalog,
@@ -198,7 +199,7 @@ export function createOpenCodeWorkspaceOperations(input: {
   ): Promise<InviteResolution> {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/u.test(ref))
       throw new OpenCodeWorkspaceUnavailableError()
-    const title = `aos-invite:${ref}`
+    const title = inviteSessionKey(ref)
     const matches = (await owned(agentId)).filter(
       (session) => session.title === title
     )
