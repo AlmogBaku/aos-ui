@@ -41,14 +41,14 @@ import {
 } from "./native"
 
 /**
- * The turn scope an interaction belongs to. `threadId` travels with it for the
- * caller's benefit; interactions themselves are Session-scoped, because a
- * Hermes Session carries exactly one thread.
+ * The turn scope an interaction belongs to. The public `sessionId` travels
+ * with it for the caller's benefit; interactions themselves are Session-scoped,
+ * because a Hermes Session carries exactly one thread.
  */
 export type HermesInteractionScope = {
   agentId: string
   providerSessionId: string
-  threadId: string
+  sessionId: string
 }
 
 /**
@@ -561,8 +561,8 @@ function cancellation(event: Record<string, unknown>) {
 /**
  * A Hermes Session carries exactly one thread, so every interaction key is the
  * Session key retainers, listeners and resumes already use: keying a pending
- * request by `threadId` as well would let one of the two release the other's
- * binding.
+ * request by the public `sessionId` as well would let one of the two release
+ * the other's binding.
  */
 function sameSession(
   left: HermesInteractionScope,

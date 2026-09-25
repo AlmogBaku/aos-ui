@@ -159,8 +159,8 @@ function showsPrompt(
 }
 
 /**
- * Keyed like the coordinator's `scopeKey`, never by `threadId`: a guest's
- * thread differs from the operator's for the same provider Session.
+ * Keyed like the coordinator's `scopeKey`, never by the public `sessionId`: a
+ * guest's public id differs from the operator's for the same provider Session.
  */
 function roomKey(scope: RoomScope) {
   return `${scope.agentId}\u0000${scope.providerSessionId}`
@@ -596,7 +596,7 @@ class Seat {
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
-      { sessionId: this.#scope.threadId, ...event },
+      { sessionId: this.#scope.sessionId, ...event },
       { decline: (requestId) => declines.add(requestId) }
     )
     if (shown?.kind === "request-asked")
@@ -1074,7 +1074,7 @@ class Seat {
         await this.#coordinator.recover(
           this.#scope,
           {
-            threadId: this.#scope.threadId,
+            sessionId: this.#scope.sessionId,
             turnId,
             ...(after === "reset"
               ? { reset: true as const }
@@ -1125,7 +1125,7 @@ class Seat {
     fields: Record<string, unknown>
   ) {
     this.#options.log(level, event, {
-      sessionId: this.#scope.threadId,
+      sessionId: this.#scope.sessionId,
       ...fields,
     })
   }

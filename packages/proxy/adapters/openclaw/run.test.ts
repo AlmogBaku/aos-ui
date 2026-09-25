@@ -120,7 +120,7 @@ class ControlledNative implements OpenClawRunRequestClient {
 const scope = {
   agentId: "research",
   providerSessionId: "agent:research:main",
-  threadId: "thread-public",
+  sessionId: "thread-public",
 }
 
 const pendingQuestion = {
@@ -595,7 +595,7 @@ describe("OpenClaw run engine", () => {
     })
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "turn-replies",
     })
     await expect(
@@ -1168,7 +1168,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "segment-continued",
     })
     await expect(handle.stop()).resolves.toBe("stopping")
@@ -1728,7 +1728,7 @@ describe("OpenClaw run engine", () => {
       inFlightRun: { runId: "run-a", text: "Accepted remotely" },
     }
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
     await expect(
@@ -2021,7 +2021,7 @@ describe("OpenClaw run engine", () => {
     }
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
       position: original.recoveryPosition(),
     })
@@ -2104,7 +2104,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
     const events: unknown[] = []
@@ -2164,7 +2164,7 @@ describe("OpenClaw run engine", () => {
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
 

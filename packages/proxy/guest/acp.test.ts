@@ -793,7 +793,11 @@ describe("guest ACP lane", () => {
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
     })
-    const invited = { agentId: AGENT, providerSessionId: STORED, threadId: REF }
+    const invited = {
+      agentId: AGENT,
+      providerSessionId: STORED,
+      sessionId: REF,
+    }
     await test.coordinator.start(
       invited,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
@@ -1413,7 +1417,7 @@ describe("guest ACP lane", () => {
     const operatorScope = {
       agentId: AGENT,
       providerSessionId: "operator-session",
-      threadId: "operator",
+      sessionId: "operator",
     }
     await test.coordinator.start(
       operatorScope,
@@ -1465,7 +1469,7 @@ describe("guest ACP lane", () => {
       {
         agentId: AGENT,
         providerSessionId: "operator-session",
-        threadId: "operator",
+        sessionId: "operator",
       },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {

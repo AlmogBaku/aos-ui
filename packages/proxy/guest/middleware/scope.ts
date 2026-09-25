@@ -21,7 +21,7 @@ export type GuestScopeOptions = {
     create?: { firstTurnInstruction?: string }
   ): Promise<{ sessionId: string } | undefined>
   capabilities(
-    scope: Pick<SessionScope, "agentId" | "threadId">
+    scope: Pick<SessionScope, "agentId" | "sessionId">
   ): Promise<WorkspaceCapabilities>
 }
 
@@ -43,7 +43,7 @@ export function createScopeMiddleware({
       ? {
           agentId: grant.agentId,
           providerSessionId: resolved.sessionId,
-          threadId: grant.ref,
+          sessionId: grant.ref,
         }
       : undefined
   }
@@ -62,7 +62,7 @@ export function createScopeMiddleware({
           agentId: grant.agentId,
           capabilities: await capabilities({
             agentId: grant.agentId,
-            threadId: grant.ref,
+            sessionId: grant.ref,
           }),
           execution: { state: "idle" },
         }

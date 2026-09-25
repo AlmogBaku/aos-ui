@@ -13,7 +13,7 @@ const MAX_TEXT_BYTES = 4_096
 export type OpenCodeInteractionScope = {
   agentId: string
   providerSessionId: string
-  threadId: string
+  sessionId: string
   /** A normalized segment ID is not native interaction identity. */
   turnId?: string
 }
@@ -100,7 +100,7 @@ function boundedLines(values: readonly string[]) {
   }
 }
 const identity = (s: Scope) =>
-  JSON.stringify([s.agentId, s.providerSessionId, s.threadId])
+  JSON.stringify([s.agentId, s.providerSessionId, s.sessionId])
 const key = (s: Scope, id: string) => `${identity(s)}:${id}`
 function parseQuestions(native: unknown, sessionId: string): Question[] {
   const request = record(native)
@@ -180,7 +180,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     const prepared = this.#prepared.get(identity(s))
     if (
@@ -207,7 +207,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     if (!this.#pending.has(key(s, id)) && this.#pending.size >= MAX_PENDING)
       throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
@@ -242,7 +242,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     const existing = this.#pending.get(key(s, id))
     if (
@@ -276,7 +276,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     const qs = Array.isArray(native.questions)
       ? native.questions
@@ -317,7 +317,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     const pending = [...this.#pending.values()].filter(
       (p) => identity(p.scope) === identity(s)
@@ -362,7 +362,7 @@ export class OpenCodeInteractions {
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
     }
     const pending = [...this.#pending.values()].filter(
       (p) => identity(p.scope) === identity(s)

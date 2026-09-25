@@ -27,7 +27,7 @@ export type SessionScope = {
   /** Provider-resolved Session identity; never supplied by the browser. */
   providerSessionId: string
   /** Opaque public Session identity supplied by the browser. */
-  threadId: string
+  sessionId: string
 }
 
 /** Exactly one Session field a write changes, as the wire request carries it. */
@@ -55,7 +55,7 @@ export type ServerTurnHandle = {
 }
 
 export type RecoveryRequest = {
-  threadId: string
+  sessionId: string
   turnId: string
   position?: { epoch: string; lastSeen: number }
 }

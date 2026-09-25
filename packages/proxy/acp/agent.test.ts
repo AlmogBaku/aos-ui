@@ -360,7 +360,7 @@ describe("AOS ACP agent", () => {
       .parse(accepted)._meta.aos.messageId
     expect(messageId).toHaveLength(36)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    expect(test.start.mock.calls[0]?.[0]).toMatchObject({ threadId: CREATED })
+    expect(test.start.mock.calls[0]?.[0]).toMatchObject({ sessionId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
       messageId,
       prompt: "Summarize",

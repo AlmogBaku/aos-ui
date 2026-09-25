@@ -67,7 +67,7 @@ export type CoordinatorAccess = {
 
 export type CoordinatorRecoveryRequest = Pick<
   RecoveryRequest,
-  "threadId" | "turnId"
+  "sessionId" | "turnId"
 > & {
   after?: number
   /** The reader holds part of the turn it cannot position, so it reloads. */
@@ -448,7 +448,7 @@ export class SessionCoordinator {
     this.#usage = new SessionReporter({
       read: async (scope) =>
         SessionContextResponseSchema.parse(
-          await readings.context(scope.agentId, scope.threadId)
+          await readings.context(scope.agentId, scope.sessionId)
         ),
       retryDelaysMs: USAGE_RETRY_DELAYS_MS,
     })
@@ -456,7 +456,7 @@ export class SessionCoordinator {
     this.#models = new SessionReporter({
       read: async (scope, selectedId: string) => ({
         ...SessionModelsResponseSchema.parse(
-          await readings.models(scope.agentId, scope.threadId)
+          await readings.models(scope.agentId, scope.sessionId)
         ),
         selectedId,
       }),
@@ -785,7 +785,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess
   ): Promise<CoordinatedTurnSubscription> {
     if (this.#closed) throw new Error("Session coordinator is closed")
-    if (request.threadId !== scope.threadId)
+    if (request.sessionId !== scope.sessionId)
       throw new Error("Recovery scope does not match this Session")
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
@@ -853,7 +853,7 @@ export class SessionCoordinator {
     try {
       recovered = await this.#recovery(
         scope,
-        { threadId: scope.threadId, turnId: execution.segment.turnId },
+        { sessionId: scope.sessionId, turnId: execution.segment.turnId },
         access,
         execution
       )
@@ -881,7 +881,7 @@ export class SessionCoordinator {
       // without a position: a fabricated one would never match a real epoch.
       const position = existing?.segment.handle.recoveryPosition()
       const providerRequest: RecoveryRequest = {
-        threadId: request.threadId,
+        sessionId: request.sessionId,
         turnId: request.turnId,
         ...(position ? { position } : {}),
       }
@@ -1074,7 +1074,7 @@ export class SessionCoordinator {
     return {
       agentId: scope.agentId,
       // Observers project to the browser, which knows only public identity.
-      sessionId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId,
       occurredAt: new Date().toISOString(),
     }

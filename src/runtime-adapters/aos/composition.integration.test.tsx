@@ -811,7 +811,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     expect(proxy.created).toEqual([AGENT_ID])
-    expect(proxy.scopes[0]!.threadId).toBe(CREATED_SESSION_ID)
+    expect(proxy.scopes[0]!.sessionId).toBe(CREATED_SESSION_ID)
     // The turn the operator sent stays on screen across `session/new`.
     expect(messageTexts(runtime())).toEqual(["Ship it"])
     const segment = proxy.segments[0]!

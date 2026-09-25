@@ -40,7 +40,7 @@ import { assistantToolCall, toolRow } from "./test-utils/history-rows"
 const scope = {
   agentId: "research",
   providerSessionId: "stored-session",
-  threadId: "hermes:research:stored-session",
+  sessionId: "hermes:research:stored-session",
 }
 
 function input(overrides: Partial<PromptTurnInput> = {}): PromptTurnInput {
@@ -1729,7 +1729,7 @@ describe("HermesRunEngine", () => {
     )
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 20 },
     })
@@ -1894,7 +1894,7 @@ describe("HermesRunEngine", () => {
 
     const events = await collect(
       await engine.recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-1",
         position: { epoch: "epoch-1", lastSeen: 0 },
       })
@@ -1946,7 +1946,7 @@ describe("HermesRunEngine", () => {
     )
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 10 },
     })
@@ -2188,7 +2188,7 @@ describe("HermesRunEngine", () => {
     attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
 
     const resumed = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position,
     })
@@ -2241,7 +2241,7 @@ describe("HermesRunEngine", () => {
     )
 
     const resumed = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "restored-run",
     })
     attachment.publish("live-secret", {
@@ -3105,7 +3105,7 @@ describe("HermesRunEngine", () => {
     )
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 10 },
     })
@@ -3184,7 +3184,7 @@ describe("HermesRunEngine", () => {
       })
     )
     const request = {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 0 },
     }
@@ -3260,7 +3260,7 @@ describe("HermesRunEngine", () => {
       })
     )
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 0 },
     })
@@ -3324,7 +3324,7 @@ describe("HermesRunEngine", () => {
     )
     await expect(
       reconnect.recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-1",
         position: { epoch: "epoch-1", lastSeen: 0 },
       })
@@ -3452,7 +3452,7 @@ describe("HermesRunEngine", () => {
     expect(
       await collect(
         await recovered.recover(scope, {
-          threadId: scope.threadId,
+          sessionId: scope.sessionId,
           turnId: "run-1",
           position: { epoch: "epoch-1", lastSeen: 0 },
         })
@@ -3877,7 +3877,7 @@ describe("HermesRunEngine", () => {
     )
     const recovered = await collect(
       await recovery.recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-1",
         position: { epoch: "epoch-1", lastSeen: 0 },
       })
@@ -4235,7 +4235,7 @@ describe("HermesRunEngine", () => {
     )
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "recovered-run",
     })
 
@@ -4525,7 +4525,7 @@ describe("HermesRunEngine", () => {
     expect(handle.recoveryPosition()).toEqual({ epoch: "epoch-1", lastSeen: 2 })
 
     const resumed = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: handle.recoveryPosition(),
     })
@@ -4622,7 +4622,7 @@ describe("HermesRunEngine", () => {
     const other = {
       agentId: "research",
       providerSessionId: "stored-other",
-      threadId: "hermes:research:stored-other",
+      sessionId: "hermes:research:stored-other",
     }
     const first = nativeTurn("live-a", 1)
     const second = nativeTurn("live-b", 1)
@@ -4727,7 +4727,7 @@ describe("HermesRunEngine", () => {
     expect(handle.recoveryPosition()).toEqual({ epoch: "epoch-1", lastSeen: 0 })
 
     const resumed = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: handle.recoveryPosition(),
     })
@@ -4851,7 +4851,7 @@ describe("HermesRunEngine", () => {
     releaseSubmit()
     const handle = await starting
     const resumed = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: handle.recoveryPosition(),
     })
@@ -6007,7 +6007,7 @@ describe("HermesRunEngine", () => {
     expect(settled).toBe(false)
     await expect(
       engine.recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-1",
         position: { epoch: "epoch-1", lastSeen: 1 },
       })
@@ -6049,7 +6049,7 @@ describe("HermesRunEngine", () => {
     expect(handle.recoveryPosition()).toEqual({ epoch: "epoch-1", lastSeen: 0 })
     const recovered = await collect(
       await engine.recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-1",
       })
     )
@@ -6087,7 +6087,7 @@ describe("HermesRunEngine", () => {
     )
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 5 },
     })

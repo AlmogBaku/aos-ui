@@ -1012,7 +1012,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (
       !validId(scope.agentId) ||
       !validId(scope.providerSessionId) ||
-      request.threadId !== scope.threadId ||
+      request.sessionId !== scope.sessionId ||
       !validId(request.turnId)
     )
       throw new Error("AOS recovery scope does not match this Session")

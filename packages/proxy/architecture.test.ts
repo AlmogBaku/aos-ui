@@ -170,6 +170,39 @@ describe("runtime adapter boundary", () => {
   })
 })
 
+/**
+ * D10: one name per concept and per id, ACP first, then IRC. Each row retires
+ * a name from a directory once the rename that replaced it has landed.
+ */
+describe("vocabulary", () => {
+  const retiredNames: ReadonlyArray<{
+    retired: RegExp
+    scope: string
+    reason: string
+  }> = [
+    {
+      retired: /\bthreadId\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the public Session id is `sessionId`, from the wire to the adapters",
+    },
+  ]
+
+  it("keeps retired names out of the proxy", async () => {
+    const repositoryRoot = join(import.meta.dirname, "../..")
+    for (const { retired, scope, reason } of retiredNames) {
+      const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))
+      for (const path of await productionFiles(directory)) {
+        const source = await readFile(path, "utf8")
+        expect(
+          source.match(retired)?.[0],
+          `${relative(repositoryRoot, path)}: ${reason}`
+        ).toBeUndefined()
+      }
+    }
+  })
+})
+
 const ACP_IMPORT =
   /(?:from\s+|import\s*\()["'](?:@agentclientprotocol\/|[^"']*protocol\/acp(?:\.ts)?["'])/u
 

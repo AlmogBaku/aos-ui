@@ -284,7 +284,7 @@ export class HermesTurnEngine {
     request: HermesReconnectRequest,
     adopt: boolean
   ): Promise<{ handle: HermesTurnHandle; fromStart: boolean } | undefined> {
-    if (request.threadId !== scope.threadId)
+    if (request.sessionId !== scope.sessionId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
       )
@@ -361,7 +361,7 @@ export class HermesTurnEngine {
     // Hermes reports a turn it just finished as running for a moment.
     const recovered = await this.#recover(
       scope,
-      { threadId: scope.threadId, turnId },
+      { sessionId: scope.sessionId, turnId },
       true
     )
     if (!recovered) return undefined

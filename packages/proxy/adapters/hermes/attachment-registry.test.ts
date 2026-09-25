@@ -14,7 +14,7 @@ import { nativeTurn } from "./test-utils/native-events"
 const scope = {
   agentId: "research",
   providerSessionId: "stored",
-  threadId: "thread",
+  sessionId: "thread",
 }
 
 /**

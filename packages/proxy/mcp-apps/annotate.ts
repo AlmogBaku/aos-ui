@@ -245,7 +245,7 @@ export function withMcpApps<Runtime extends ServerRuntime>(
       return annotatedHistory(history, apps, {
         agentId,
         providerSessionId: runtimeSessionId,
-        threadId: history.sessionId,
+        sessionId: history.sessionId,
       })
     },
     async workspaceCapabilities(agentId, publicSessionId) {

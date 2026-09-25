@@ -594,7 +594,7 @@ describe("guest app", () => {
     })
     expect(own.status).toBe(200)
     expect(mcpApps.open).toHaveBeenLastCalledWith(
-      { agentId: AGENT, providerSessionId: STORED, threadId: REF },
+      { agentId: AGENT, providerSessionId: STORED, sessionId: REF },
       "call-1",
       expect.anything()
     )

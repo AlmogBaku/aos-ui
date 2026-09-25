@@ -340,7 +340,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? undefined
         : context.attachmentStages.take(
             scope.agentId,
-            scope.threadId,
+            scope.sessionId,
             attachmentStageId
           )
     if (attachmentStageId !== undefined && !stage) throw invalidRequest()
@@ -658,7 +658,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           const scope = sessions.scope(command.sessionId)
           if ("unread" in command.patch && !command.patch.unread) {
-            await readState?.markRead(scope.agentId, scope.threadId)
+            await readState?.markRead(scope.agentId, scope.sessionId)
             return
           }
           await workspace.update(scope, command.patch)

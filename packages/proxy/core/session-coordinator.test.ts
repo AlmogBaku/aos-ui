@@ -88,13 +88,13 @@ class EventSource implements ServerTurnHandle {
 const scope: SessionScope = {
   agentId: "researcher",
   providerSessionId: "stored-1",
-  threadId: "stored-1",
+  sessionId: "stored-1",
 }
 
 const otherScope: SessionScope = {
   agentId: "researcher",
   providerSessionId: "stored-2",
-  threadId: "stored-2",
+  sessionId: "stored-2",
 }
 
 function input(turnId: string): PromptTurnInput {
@@ -167,7 +167,7 @@ async function reloadedHead(
 ) {
   const reload = await sessions.recover(
     target,
-    { threadId: target.threadId, turnId },
+    { sessionId: target.sessionId, turnId },
     access(`reload-${turnId}`)
   )
   const head = await reader(reload)()
@@ -234,7 +234,7 @@ async function oldestReplayableCursor(
   const resets = async (after: number) => {
     const probe = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after },
+      { sessionId: scope.sessionId, turnId: "run-1", after },
       access(`probe-${after}`)
     )
     const head = await reader(probe)()
@@ -292,7 +292,7 @@ describe("SessionCoordinator", () => {
 
     const second = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 0 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 0 },
       access("two")
     )
     const readSecond = reader(second)
@@ -398,7 +398,7 @@ describe("SessionCoordinator", () => {
 
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     const readRefreshed = reader(refreshed)
@@ -471,7 +471,7 @@ describe("SessionCoordinator", () => {
 
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     const iterator = refreshed.events[Symbol.asyncIterator]()
@@ -547,7 +547,7 @@ describe("SessionCoordinator", () => {
 
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     const iterator = refreshed.events[Symbol.asyncIterator]()
@@ -606,7 +606,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 3 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -666,7 +666,11 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: emitted.length - 1 },
+      {
+        sessionId: scope.sessionId,
+        turnId: "run-1",
+        after: emitted.length - 1,
+      },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -712,13 +716,13 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 2 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 2 },
       access("redial")
     )
     const readRedial = reader(redial)
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("reload")
     )
     const readReload = reader(reload)
@@ -772,7 +776,7 @@ describe("SessionCoordinator", () => {
         const sessionScope = {
           agentId: "researcher",
           providerSessionId: `stored-${id}`,
-          threadId: `stored-${id}`,
+          sessionId: `stored-${id}`,
         }
         const runInput = input(`run-${id}`)
         const subscription = await sessions.start(
@@ -794,7 +798,7 @@ describe("SessionCoordinator", () => {
     const leastRecent = await sessions.recover(
       oldest.sessionScope,
       {
-        threadId: oldest.sessionScope.threadId,
+        sessionId: oldest.sessionScope.sessionId,
         turnId: oldest.runInput.turnId,
       },
       access("refreshed-oldest")
@@ -809,7 +813,7 @@ describe("SessionCoordinator", () => {
     const retained = await sessions.recover(
       newest.sessionScope,
       {
-        threadId: newest.sessionScope.threadId,
+        sessionId: newest.sessionScope.sessionId,
         turnId: newest.runInput.turnId,
       },
       access("refreshed-newest")
@@ -895,7 +899,7 @@ describe("SessionCoordinator", () => {
     // the run it is still watching answers this cursor with its live events.
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 0 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 0 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -946,7 +950,7 @@ describe("SessionCoordinator", () => {
 
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("reload")
     )
     const readReload = reader(reload)
@@ -978,7 +982,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: total - 3 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: total - 3 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -1016,7 +1020,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 1 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -1044,7 +1048,7 @@ describe("SessionCoordinator", () => {
     // owns nothing is owed authoritative history instead of a partial replay.
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("reload")
     )
     const readReload = reader(reload)
@@ -1148,7 +1152,7 @@ describe("SessionCoordinator", () => {
 
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", reset: true },
+      { sessionId: scope.sessionId, turnId: "run-1", reset: true },
       access("reload")
     )
 
@@ -1176,7 +1180,7 @@ describe("SessionCoordinator", () => {
     // the run it is still watching answers this cursor with its live events.
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 0 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 0 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -1251,7 +1255,7 @@ describe("SessionCoordinator", () => {
 
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     await expect(reader(refreshed)()).resolves.toMatchObject({
@@ -1287,7 +1291,7 @@ describe("SessionCoordinator", () => {
     // events reloads it instead of replaying a journal AOS no longer keeps.
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 1 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -1317,7 +1321,7 @@ describe("SessionCoordinator", () => {
     initial.close()
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     const readRefreshed = reader(refreshed)
@@ -1364,7 +1368,7 @@ describe("SessionCoordinator", () => {
 
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("refreshed")
     )
     const readRefreshed = reader(refreshed)
@@ -1407,7 +1411,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 3 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -1420,7 +1424,7 @@ describe("SessionCoordinator", () => {
 
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("reload")
     )
     const readReload = reader(reload)
@@ -1446,12 +1450,12 @@ describe("SessionCoordinator", () => {
       {
         agentId: "writer",
         providerSessionId: scope.providerSessionId,
-        threadId: "writer-1",
+        sessionId: "writer-1",
       },
       {
         agentId: scope.agentId,
         providerSessionId: "stored-2",
-        threadId: "stored-2",
+        sessionId: "stored-2",
       },
     ]
     for (const [index, sessionScope] of scopes.entries()) {
@@ -1466,15 +1470,15 @@ describe("SessionCoordinator", () => {
       await expect(
         sessions.recover(
           sessionScope,
-          { threadId: sessionScope.threadId, turnId: "run-1" },
-          access(`refresh-${sessionScope.threadId}`)
+          { sessionId: sessionScope.sessionId, turnId: "run-1" },
+          access(`refresh-${sessionScope.sessionId}`)
         )
       ).rejects.toThrow("An AOS turn is already active")
     }
     await expect(
       sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: "unknown-run" },
+        { sessionId: scope.sessionId, turnId: "unknown-run" },
         access("refresh-unknown")
       )
     ).rejects.toThrow("An AOS turn is already active")
@@ -1708,7 +1712,7 @@ describe("SessionCoordinator", () => {
       })
       await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: "run-1" },
+        { sessionId: scope.sessionId, turnId: "run-1" },
         access("recovering")
       )
       await sessions.discover(otherScope)
@@ -2082,12 +2086,12 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const first = sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("one")
     )
     const second = sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("two")
     )
 
@@ -2109,7 +2113,7 @@ describe("SessionCoordinator", () => {
     // sequence the recovered segment does not continue.
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 57 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 57 },
       access("redial")
     )
     const readRedial = reader(redial)
@@ -2144,7 +2148,7 @@ describe("SessionCoordinator", () => {
 
     await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("operator")
     )
     const terminal = {
@@ -2257,7 +2261,7 @@ describe("SessionCoordinator", () => {
       expect(events).toMatchObject([{ kind: "turn-started", turnId }])
       const member = await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: turnId! },
+        { sessionId: scope.sessionId, turnId: turnId! },
         access("member")
       )
       await expect(sessions.stop(scope, "member")).resolves.toBe("stopping")
@@ -2283,7 +2287,10 @@ describe("SessionCoordinator", () => {
 
       const member = await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: sessions.snapshot(scope).turnId! },
+        {
+          sessionId: scope.sessionId,
+          turnId: sessions.snapshot(scope).turnId!,
+        },
         access("member")
       )
 
@@ -2377,7 +2384,7 @@ describe("SessionCoordinator", () => {
     const turnId = sessions.snapshot(scope).turnId!
     const refreshed = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId },
+      { sessionId: scope.sessionId, turnId },
       access("refreshed")
     )
     source.emit({
@@ -2410,7 +2417,7 @@ describe("SessionCoordinator", () => {
     const turnId = sessions.snapshot(scope).turnId!
     const live = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId, after: 0 },
+      { sessionId: scope.sessionId, turnId, after: 0 },
       access("live")
     )
     const readLive = reader(live)
@@ -2433,7 +2440,7 @@ describe("SessionCoordinator", () => {
     // beginning, so a reload is owed authoritative history, not that prefix.
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId },
+      { sessionId: scope.sessionId, turnId },
       access("reload")
     )
     const readReload = reader(reload)
@@ -2502,7 +2509,7 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 3 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
       access("one")
     )
     const readRedial = reader(redial)
@@ -2519,7 +2526,7 @@ describe("SessionCoordinator", () => {
 
     const reload = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1" },
+      { sessionId: scope.sessionId, turnId: "run-1" },
       access("two")
     )
     const readReload = reader(reload)
@@ -2571,13 +2578,13 @@ describe("SessionCoordinator", () => {
 
     const first = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 2 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 2 },
       access("one")
     )
     const readFirst = reader(first)
     const second = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 2 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 2 },
       access("two")
     )
     const readSecond = reader(second)
@@ -2638,7 +2645,7 @@ describe("SessionCoordinator", () => {
 
     expect(subscription.turnId).toBe("run-2")
     expect(engine.recover).toHaveBeenCalledWith(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: { epoch: "epoch-1", lastSeen: 0 },
     })
@@ -2660,14 +2667,14 @@ describe("SessionCoordinator", () => {
 
     const redial = await sessions.recover(
       scope,
-      { threadId: scope.threadId, turnId: "run-1", after: 1 },
+      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
       access("two")
     )
 
     // A fabricated position could never match a provider epoch, so the recovery
     // asks for the run itself rather than for an interval nothing owns.
     expect(engine.recover).toHaveBeenCalledWith(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
     })
     redial.close()
@@ -2921,7 +2928,7 @@ describe("SessionCoordinator", () => {
 
       const redial = await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: "run-1", after: 2 },
+        { sessionId: scope.sessionId, turnId: "run-1", after: 2 },
         access("one")
       )
       const readRedial = reader(redial)
@@ -2972,7 +2979,7 @@ describe("SessionCoordinator", () => {
       // terminal hook; a later subscriber cannot install one either.
       const live = await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId: turnId!, after: 0 },
+        { sessionId: scope.sessionId, turnId: turnId!, after: 0 },
         { ...access("one"), onTerminal }
       )
       const readLive = reader(live)
@@ -3044,7 +3051,7 @@ describe("SessionCoordinator", () => {
       const turnId = await continueTurn(sessions)
       const live = await sessions.recover(
         scope,
-        { threadId: scope.threadId, turnId },
+        { sessionId: scope.sessionId, turnId },
         access("one")
       )
       const readLive = reader(live)
@@ -3136,7 +3143,7 @@ describe("SessionCoordinator", () => {
     ])
     expect(observed[0]).toMatchObject({
       agentId: scope.agentId,
-      sessionId: scope.threadId,
+      sessionId: scope.sessionId,
     })
     expect(Number.isNaN(Date.parse(observed[0]!.occurredAt))).toBe(false)
   })
@@ -3206,7 +3213,7 @@ describe("SessionCoordinator", () => {
 
     // A guest's thread names the same Session under another public id.
     await sessions.start(
-      { ...scope, threadId: "guest-ref" },
+      { ...scope, sessionId: "guest-ref" },
       input("run-1"),
       access("one")
     )

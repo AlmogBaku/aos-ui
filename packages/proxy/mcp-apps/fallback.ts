@@ -169,7 +169,7 @@ export function createMcpAppsFallback(
   ) {
     log({
       agentId: scope.agentId,
-      sessionId: scope.threadId,
+      sessionId: scope.sessionId,
       toolCallId,
       server: resolved.server,
       ...fields,

@@ -14,7 +14,7 @@ const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
 const scope = {
   agentId: "research",
   providerSessionId: sessionKey,
-  threadId: "t1",
+  sessionId: "t1",
 }
 const toolResult = { content: [{ type: "text", text: "drawn" }] }
 

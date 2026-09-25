@@ -905,7 +905,7 @@ export async function harness(options: HarnessOptions = {}) {
   const scope: SessionScope = {
     agentId: AGENT,
     providerSessionId: providerId(SESSION),
-    threadId: SESSION,
+    sessionId: SESSION,
   }
 
   return {

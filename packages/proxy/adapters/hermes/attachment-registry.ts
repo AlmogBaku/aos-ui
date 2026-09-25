@@ -22,7 +22,7 @@ import { isRecord, nativeId, publicReason, sessionKey } from "./native"
 export type HermesAttachmentScope = {
   agentId: string
   providerSessionId: string
-  threadId: string
+  sessionId: string
 }
 
 export type HermesAttachment = HermesAttachmentScope & {
@@ -236,8 +236,8 @@ export class HermesAttachmentRegistry {
   scopeFor(liveSessionId: string): HermesAttachmentScope | undefined {
     const entry = this.#byLiveId.get(liveSessionId)
     if (!entry) return undefined
-    const { agentId, providerSessionId, threadId } = entry.attachment
-    return { agentId, providerSessionId, threadId }
+    const { agentId, providerSessionId, sessionId } = entry.attachment
+    return { agentId, providerSessionId, sessionId }
   }
 
   /**

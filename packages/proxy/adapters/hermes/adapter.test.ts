@@ -94,21 +94,21 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "stored"
+    const sessionId = "stored"
 
-    await expect(adapter.models("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.models("researcher", sessionId)).resolves.toEqual({
       selectedId: '["native","small"]',
       options: [{ id: '["native","small"]', label: "small", group: "Native" }],
     })
-    await expect(adapter.context("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.context("researcher", sessionId)).resolves.toEqual({
       usedTokens: 20,
       maxTokens: 100,
       source: "provider-usage",
     })
-    await expect(adapter.todos("researcher", threadId)).resolves.toEqual([
+    await expect(adapter.todos("researcher", sessionId)).resolves.toEqual([
       { id: "one", label: "Inspect", status: "active" },
     ])
-    await expect(adapter.activity("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.activity("researcher", sessionId)).resolves.toEqual({
       status: "available",
       scope: "attached-active-session",
       coverage: "active-session-only",
@@ -117,7 +117,7 @@ describe("Hermes server adapter", () => {
     vi.spyOn(adapter, "slashCommands").mockResolvedValue([])
     expect(
       JSON.stringify(
-        await adapter.workspaceCapabilities("researcher", threadId)
+        await adapter.workspaceCapabilities("researcher", sessionId)
       )
     ).not.toContain("live-secret")
   })
@@ -227,9 +227,9 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "stored"
+    const sessionId = "stored"
 
-    const staged = await adapter.stageAttachments("researcher", threadId, [
+    const staged = await adapter.stageAttachments("researcher", sessionId, [
       { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
     ])
     expect(staged.public).toEqual([
@@ -247,7 +247,7 @@ describe("Hermes server adapter", () => {
     )
 
     await expect(
-      adapter.artifact("researcher", threadId, "artifact-1")
+      adapter.artifact("researcher", sessionId, "artifact-1")
     ).resolves.toEqual({
       bytes: Uint8Array.from([104, 101, 108, 108, 111]),
       filename: "result.txt",
@@ -662,7 +662,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
-      threadId: "stored",
+      sessionId: "stored",
     }
 
     await expect(adapter.native.resume(scope)).resolves.toEqual({
@@ -809,7 +809,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
-      threadId: "stored",
+      sessionId: "stored",
     }
 
     await expect(
@@ -846,7 +846,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
-      threadId: "stored",
+      sessionId: "stored",
     }
 
     await adapter.native.submit("live-secret", {
@@ -2532,7 +2532,7 @@ describe("Hermes server adapter", () => {
       adapter.native.resume({
         agentId: "researcher",
         providerSessionId: "stored",
-        threadId: "stored",
+        sessionId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
@@ -2559,7 +2559,7 @@ describe("Hermes server adapter", () => {
       adapter.native.resume({
         agentId: "researcher",
         providerSessionId: "stored",
-        threadId: "stored",
+        sessionId: "stored",
       })
     ).resolves.toMatchObject({ liveSessionId: "live-secret" })
     expect(wait).toHaveBeenCalledTimes(2)
@@ -2582,7 +2582,7 @@ describe("Hermes server adapter", () => {
       adapter.native.resume({
         agentId: "researcher",
         providerSessionId: "stored",
-        threadId: "stored",
+        sessionId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
     expect(router.calls("session.resume")).toHaveLength(3)
@@ -2601,7 +2601,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
-      threadId: "stored",
+      sessionId: "stored",
     }
     await expect(adapter.native.resume(scope)).resolves.toMatchObject({
       liveSessionId: "live-first",
@@ -2636,7 +2636,7 @@ describe("Hermes server adapter", () => {
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
-      threadId: "stored",
+      sessionId: "stored",
     }
     await adapter.native.resume(scope)
     await adapter.native.observe("live-first", vi.fn())
@@ -2749,7 +2749,7 @@ describe("Hermes server adapter", () => {
       const scope = {
         agentId: "researcher",
         providerSessionId: "stored",
-        threadId: "stored",
+        sessionId: "stored",
         turnId: "run-1",
       }
 
@@ -2785,7 +2785,7 @@ describe("Hermes server adapter", () => {
       await adapter.native.inspectExecution({
         ...scope,
         providerSessionId: "draft",
-        threadId: "draft",
+        sessionId: "draft",
       })
       await vi.advanceTimersByTimeAsync(1_000)
 

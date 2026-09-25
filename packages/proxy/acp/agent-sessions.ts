@@ -203,7 +203,7 @@ export function createWorkspace(
       return {
         agentId,
         providerSessionId: sessionId,
-        threadId: publicSessionId,
+        sessionId: publicSessionId,
       }
     },
     info: () => call(() => runtime.runtimeInfo()),
@@ -250,20 +250,20 @@ export function createWorkspace(
     delete: (scope: SessionScope) =>
       call(() => runtime.deleteSession(scope.agentId, scope.providerSessionId)),
     /** Addressed by public reference, so an invited Session needs no detail. */
-    capabilities: (scope: Pick<SessionScope, "agentId" | "threadId">) =>
+    capabilities: (scope: Pick<SessionScope, "agentId" | "sessionId">) =>
       call(async () =>
         SessionWorkspaceCapabilitiesResponseSchema.parse(
-          await runtime.workspaceCapabilities(scope.agentId, scope.threadId)
+          await runtime.workspaceCapabilities(scope.agentId, scope.sessionId)
         )
       ),
     models: (scope: SessionScope) =>
       call(async () =>
         SessionModelsResponseSchema.parse(
-          await runtime.models(scope.agentId, scope.threadId)
+          await runtime.models(scope.agentId, scope.sessionId)
         )
       ),
     updateModel: (scope: SessionScope, patch: SessionModelUpdateRequest) =>
-      call(() => runtime.updateModel(scope.agentId, scope.threadId, patch)),
+      call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
     /** Steers the live turn as `controllerId`, the member the turn knows. */
@@ -356,11 +356,11 @@ export function createSessions(
 
     /** The Session's seat on this connection, taken on first use. */
     join(client: AgentContext, scope: SessionScope) {
-      const existing = members.get(scope.threadId)
+      const existing = members.get(scope.sessionId)
       if (existing) return existing
       const seat = context.rooms.join(memberOf(client), scope, {
         coordinator,
-        subscriberId: `${context.connectionId}:${scope.threadId}`,
+        subscriberId: `${context.connectionId}:${scope.sessionId}`,
         log: (level, event, fields) =>
           context.logger?.[level](
             redactForLog({
@@ -372,7 +372,7 @@ export function createSessions(
         describe: (cause) => errorNotificationOf(runtime, cause),
         feeds: context.feeds,
       })
-      members.set(scope.threadId, seat)
+      members.set(scope.sessionId, seat)
       return seat
     },
 
@@ -386,10 +386,10 @@ export function createSessions(
     },
 
     forget(scope: SessionScope) {
-      members.get(scope.threadId)?.leave()
-      members.delete(scope.threadId)
-      owners.delete(scope.threadId)
-      context.sessionRows.forget(scope.agentId, scope.threadId)
+      members.get(scope.sessionId)?.leave()
+      members.delete(scope.sessionId)
+      owners.delete(scope.sessionId)
+      context.sessionRows.forget(scope.agentId, scope.sessionId)
     },
 
     close() {

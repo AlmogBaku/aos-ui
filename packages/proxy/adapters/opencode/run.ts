@@ -586,7 +586,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     scope: SessionScope,
     request: RecoveryRequest
   ): Promise<ServerTurnHandle> {
-    if (request.threadId !== scope.threadId)
+    if (request.sessionId !== scope.sessionId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
       )

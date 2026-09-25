@@ -60,7 +60,7 @@ class NativeTurn implements ServerTurnHandle {
 const scope: SessionScope = {
   agentId: "aos-test",
   providerSessionId: "stored-1",
-  threadId: "stored-1",
+  sessionId: "stored-1",
 }
 
 const access = {

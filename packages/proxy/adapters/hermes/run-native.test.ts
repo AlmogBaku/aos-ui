@@ -18,7 +18,7 @@ import type { ServerAttachmentStage } from "../../core/runtime"
 const scope: HermesTurnScope = {
   agentId: "researcher",
   providerSessionId: "stored",
-  threadId: "stored",
+  sessionId: "stored",
 }
 
 const MAX_REPLAY_RESPONSE_BYTES = 6_291_456

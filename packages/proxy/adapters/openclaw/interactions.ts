@@ -22,12 +22,12 @@ import { OpenClawClientRequestError } from "./client"
 export type OpenClawInteractionScope = Readonly<{
   agentId: string
   providerSessionId: string
-  threadId: string
+  sessionId: string
   runId: string
 }>
 export type OpenClawRepliesScope = Pick<
   OpenClawInteractionScope,
-  "agentId" | "providerSessionId" | "threadId"
+  "agentId" | "providerSessionId" | "sessionId"
 >
 export type OpenClawInteractionDiscoveryScope = OpenClawRepliesScope &
   Readonly<{
@@ -114,9 +114,9 @@ const encoder = new TextEncoder(),
     return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
   },
   scopeKey = (s: OpenClawInteractionScope) =>
-    `${s.agentId}\0${s.providerSessionId}\0${s.threadId}\0${s.runId}`,
+    `${s.agentId}\0${s.providerSessionId}\0${s.sessionId}\0${s.runId}`,
   repliesScopeKey = (s: OpenClawRepliesScope) =>
-    `${s.agentId}\0${s.providerSessionId}\0${s.threadId}`,
+    `${s.agentId}\0${s.providerSessionId}\0${s.sessionId}`,
   key = (s: OpenClawInteractionScope, i: string) => `${scopeKey(s)}\0${i}`,
   bindingKey = (s: OpenClawRepliesScope, i: string) =>
     `${repliesScopeKey(s)}\0${i}`
@@ -299,7 +299,7 @@ export class OpenClawInteractions {
     const fullScope: OpenClawInteractionScope = {
         agentId: scope.agentId,
         providerSessionId: scope.providerSessionId,
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         runId: scope.nativeRunId,
       },
       listed = await this.transport.request("question.list", {})

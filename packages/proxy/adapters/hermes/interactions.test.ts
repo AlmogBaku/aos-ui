@@ -7,7 +7,7 @@ import { serverRequests } from "./test-utils/server-requests"
 const scope: HermesInteractionScope = {
   agentId: "research",
   providerSessionId: "session-1",
-  threadId: "session-1",
+  sessionId: "session-1",
 }
 
 const LIVE = "live-private"
@@ -613,7 +613,7 @@ describe("HermesInteractions server requests", () => {
     const other = {
       ...scope,
       providerSessionId: "session-2",
-      threadId: "session-2",
+      sessionId: "session-2",
     }
     bind()
     bind("live-other", other)

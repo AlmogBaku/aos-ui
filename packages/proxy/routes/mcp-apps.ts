@@ -81,7 +81,7 @@ export async function handleMcpAppRequest(input: {
   const apps = runtime.mcpApps
   if (!apps) return failure.not_found
   if (
-    !input.allow(`${scope.agentId}\u0000${scope.threadId}\u0000${toolCallId}`)
+    !input.allow(`${scope.agentId}\u0000${scope.sessionId}\u0000${toolCallId}`)
   )
     return failure.rate_limited
   try {
@@ -164,21 +164,25 @@ export function registerMcpAppRoutes(
         return errorResponse("forbidden", 403)
       const params = mcpAppParams(context.req.param())
       if (!params) return errorResponse("not_found", 404)
-      const { agentId, sessionId: threadId, toolCallId } = params
-      const sessionId = await requireScopedSession(runtime, agentId, threadId)
+      const { agentId, sessionId, toolCallId } = params
+      const providerSessionId = await requireScopedSession(
+        runtime,
+        agentId,
+        sessionId
+      )
       options.logger.info(
         redactForLog({
           event: "mcp_app.request",
           requestId: context.get("requestId"),
           operation,
           agentId,
-          sessionId: threadId,
+          sessionId,
           toolCallId,
         })
       )
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, providerSessionId: sessionId, threadId },
+        scope: { agentId, providerSessionId, sessionId },
         toolCallId,
         operation,
         request: context.req.raw,

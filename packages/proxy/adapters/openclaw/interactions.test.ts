@@ -8,7 +8,7 @@ import {
 const scope = {
   agentId: "agent-a",
   providerSessionId: "session-a",
-  threadId: "thread-a",
+  sessionId: "thread-a",
   runId: "run-a",
 }
 const question = {
@@ -69,7 +69,7 @@ const approvalReplay = {
 const repliesScope = {
   agentId: scope.agentId,
   providerSessionId: scope.providerSessionId,
-  threadId: scope.threadId,
+  sessionId: scope.sessionId,
 }
 const resolvedQuestion = [
   {
@@ -502,7 +502,7 @@ describe("OpenClaw interactions", () => {
     )
     await expect(
       interactions.validate(
-        { ...repliesScope, threadId: "foreign" },
+        { ...repliesScope, sessionId: "foreign" },
         resolvedQuestion
       )
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })

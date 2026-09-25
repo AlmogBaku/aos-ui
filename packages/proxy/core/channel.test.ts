@@ -24,7 +24,7 @@ import type { SessionCoordinator } from "./session-coordinator"
 const SCOPE: SessionScope = {
   agentId: "researcher",
   providerSessionId: "session-1",
-  threadId: "thread-operator",
+  sessionId: "thread-operator",
 }
 
 function turn(turnId: string, at = 0): RoomTurn {
@@ -134,12 +134,12 @@ describe("createChannel", () => {
     expect(outsider.sent).toEqual([])
   })
 
-  it("puts one provider Session in one room whatever the threadId", async () => {
+  it("puts one provider Session in one room whatever the sessionId", async () => {
     const { rooms, setSnapshot } = harness()
     const operator = member()
     const guest = member()
     rooms.add(SCOPE, operator.fake, { hasPrompt: false })
-    rooms.add({ ...SCOPE, threadId: "thread-guest" }, guest.fake, {
+    rooms.add({ ...SCOPE, sessionId: "thread-guest" }, guest.fake, {
       hasPrompt: false,
     })
     setSnapshot({ state: "running", turnId: "turn-1" })
@@ -487,7 +487,7 @@ function adoptingHarness() {
   }
 }
 
-const GUEST_SCOPE: SessionScope = { ...SCOPE, threadId: "thread-guest" }
+const GUEST_SCOPE: SessionScope = { ...SCOPE, sessionId: "thread-guest" }
 
 describe("createChannel adopting runtime-started turns", () => {
   it("watches while the room has members and stops when the last leaves", () => {

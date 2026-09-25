@@ -21,7 +21,7 @@ import { OpenCodeTurnEngine } from "./run"
 const scope = {
   agentId: "writer",
   providerSessionId: "session-1",
-  threadId: "thread-1",
+  sessionId: "thread-1",
 }
 const admission = {
   "run-1":
@@ -581,7 +581,7 @@ describe("OpenCodeRunEngine", () => {
     })
 
     const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-recovered",
     })
     const events = await collect(handle)
@@ -688,7 +688,7 @@ describe("OpenCodeRunEngine", () => {
       })
 
       const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-recovered",
         position: {
           epoch: `opencode:${scope.providerSessionId}`,
@@ -730,7 +730,7 @@ describe("OpenCodeRunEngine", () => {
     })
 
     const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-recovered",
       position: {
         epoch: `opencode:${scope.providerSessionId}`,
@@ -759,7 +759,7 @@ describe("OpenCodeRunEngine", () => {
 
     await expect(
       new OpenCodeTurnEngine(state.native).recover(scope, {
-        threadId: scope.threadId,
+        sessionId: scope.sessionId,
         turnId: "run-recovered",
       })
     ).rejects.toThrow("stable prompt admission")
@@ -804,7 +804,7 @@ describe("OpenCodeRunEngine", () => {
     )
 
     const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-recovered",
     })
     expect(JSON.stringify(await collect(handle))).toContain("Won the race")
@@ -1108,7 +1108,7 @@ describe("OpenCodeRunEngine", () => {
     const engine = new OpenCodeTurnEngine(state.native, { maxQueueEvents: 2 })
     const prior = await engine.start(scope, input())
     await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-recovered",
     })
 
@@ -1173,7 +1173,7 @@ describe("OpenCodeRunEngine", () => {
     const stopped = prior.stop()
     await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: {
         epoch: `opencode:${scope.providerSessionId}`,
@@ -1252,7 +1252,7 @@ describe("OpenCodeRunEngine", () => {
     const stopped = prior.stop()
     await until(() => expect(state.sessions.interrupt).toHaveBeenCalledOnce())
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-1",
       position: {
         epoch: `opencode:${scope.providerSessionId}`,
@@ -1577,7 +1577,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     ])
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "aos-recovered-1",
     })
     expect(JSON.stringify(await collect(recovered))).toContain("From the TUI")

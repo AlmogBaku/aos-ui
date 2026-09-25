@@ -772,7 +772,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const attached = await this.#attachments.ensure({
       agentId,
       providerSessionId: storedId,
-      threadId: publicSessionId,
+      sessionId: publicSessionId,
     })
     const resumed = this.#attachmentInfo.get(
       attachmentInfoKey(agentId, storedId)
@@ -911,7 +911,7 @@ export class HermesServerAdapter implements ServerRuntime {
       ...(await this.interactions.resume({
         agentId,
         providerSessionId: storedId,
-        threadId: publicSessionId,
+        sessionId: publicSessionId,
       })),
     }
   }
@@ -1219,7 +1219,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const providerSessionId = storedSessionIdentity(agentId, publicSessionId)
     if (!providerSessionId) throw new HermesSessionNotFoundError()
     return this.#attachments.subscribe(
-      { agentId, providerSessionId, threadId: publicSessionId },
+      { agentId, providerSessionId, sessionId: publicSessionId },
       (signal) => {
         if (signal.kind === "event") listener()
         else if (signal.kind === "lost") reset?.()
@@ -1543,7 +1543,7 @@ export class HermesServerAdapter implements ServerRuntime {
         {
           agentId,
           providerSessionId: storedId,
-          threadId: sessionId(agentId, storedId),
+          sessionId: sessionId(agentId, storedId),
         },
         { refresh: true, freshForMs: RESTORE_SNAPSHOT_FRESH_MS }
       )
