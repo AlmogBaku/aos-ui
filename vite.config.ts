@@ -333,6 +333,10 @@ export default defineConfig(({ mode }) => {
           import.meta.dirname,
           "packages/protocol/index.ts"
         ),
+        "@aos/lifecycle": path.resolve(
+          import.meta.dirname,
+          "packages/lifecycle/index.ts"
+        ),
       },
     },
     optimizeDeps: {
