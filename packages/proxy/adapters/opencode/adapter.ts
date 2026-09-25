@@ -23,7 +23,7 @@ import type {
 } from "../../core/runtime"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
-import { projectTodos } from "../todos"
+import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
@@ -50,7 +50,6 @@ import {
   storedOpenCodeToolCall,
   type OpenCodeMcpCatalog,
 } from "./mcp-apps"
-import { OPENCODE_TODO_STATUS_ALIASES } from "./todos"
 import {
   OpenCodeInteractionPublicError,
   OpenCodeInteractions,
@@ -464,7 +463,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     try {
       return projectTodos(
         { todos: await this.options.client.sessions.todos(sessionId) },
-        OPENCODE_TODO_STATUS_ALIASES
+        TODO_STATUS_ALIASES
       )
     } catch {
       return undefined

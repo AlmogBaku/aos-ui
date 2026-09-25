@@ -1,5 +1,6 @@
 import type { SessionMessage } from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { publicJsonValue, type JsonValue } from "../json-value"
 import {
   openCodeStopReason,
   openCodeTimestamp,
@@ -15,8 +16,6 @@ import {
 
 export type NativeMessage = typeof OpenCodeNativeMessageSchema._output
 type ProjectedHistory = SessionMessage[]
-type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 function safeFilename(value: string | undefined) {
   return value &&
@@ -33,29 +32,6 @@ function safeImage(url: string) {
   return /^data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/u.test(url)
     ? url
     : undefined
-}
-
-function publicJson(value: unknown, depth = 0): JsonValue | undefined {
-  if (depth > 8) return undefined
-  if (value === null || typeof value === "boolean") return value
-  if (typeof value === "number")
-    return Number.isFinite(value) ? value : undefined
-  if (typeof value === "string")
-    return value.length <= 4_000 ? value : undefined
-  if (Array.isArray(value))
-    return value.slice(0, 100).flatMap((item) => {
-      const projected = publicJson(item, depth + 1)
-      return projected === undefined ? [] : [projected]
-    })
-  if (!value || typeof value !== "object") return undefined
-  const result: { [key: string]: JsonValue } = {}
-  for (const [key, item] of Object.entries(value).slice(0, 100)) {
-    if (/(?:credential|metadata|password|path|secret|token|url)$/iu.test(key))
-      continue
-    const projected = publicJson(item, depth + 1)
-    if (projected !== undefined) result[key] = projected
-  }
-  return result
 }
 
 type NativeAssistantPart = Extract<
@@ -138,13 +114,13 @@ function projectMessage(
         const args =
           part.state.status === "pending"
             ? parseToolInput(part.state.input)
-            : publicJson(part.state.input)
+            : publicJsonValue(part.state.input)
         if (!args || typeof args !== "object" || Array.isArray(args)) continue
         const call = canonicalOpenCodeToolCall(
           part.name,
           args as { [key: string]: JsonValue },
           part.state.status === "completed"
-            ? publicJson(part.state.result)
+            ? publicJsonValue(part.state.result)
             : undefined,
           resolve
         )
@@ -208,7 +184,7 @@ function projectMessage(
 
 function parseToolInput(value: string): JsonValue {
   try {
-    return publicJson(JSON.parse(value) as unknown) ?? {}
+    return publicJsonValue(JSON.parse(value) as unknown) ?? {}
   } catch {
     return {}
   }

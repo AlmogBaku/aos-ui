@@ -10,6 +10,7 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import { validIdentifier } from "../../core/identifier"
+import { publicJsonValue, type JsonValue } from "../json-value"
 import {
   openClawArtifactReceipt,
   openClawMediaArtifact,
@@ -92,9 +93,6 @@ function nativeSequence(row: Record<string, unknown>, index: number) {
     : index
 }
 
-type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
-
 /** One native tool outcome, from the `toolResult` row that answers a call. */
 type ToolOutcome = Readonly<{
   result?: JsonValue
@@ -103,18 +101,6 @@ type ToolOutcome = Readonly<{
   /** The MCP server and tool OpenClaw records on an MCP tool's result. */
   mcp?: Readonly<{ server: string; tool: string }>
 }>
-
-/** A bounded JSON copy of a native value, or `undefined` when it has none. */
-function publicJson(value: unknown): JsonValue | undefined {
-  try {
-    const json = JSON.stringify(value)
-    return json === undefined || json.length > 262_144
-      ? undefined
-      : (JSON.parse(json) as JsonValue)
-  } catch {
-    return undefined
-  }
-}
 
 /** The AOS tool a native tool name refers to. */
 function aosToolName(value: unknown) {
@@ -163,7 +149,7 @@ function toolOutcomes(rows: readonly unknown[]) {
     const mcp = mcpTool(row.details)
     const result = artifact
       ? artifact.result
-      : publicJson({
+      : publicJsonValue({
           content: row.content,
           ...(row.details === undefined ? {} : { details: row.details }),
         })
@@ -189,7 +175,7 @@ function toolCallParts(
   const toolCallId = identifier(block.id)
   const outcome = toolCallId ? outcomes.get(toolCallId) : undefined
   const name = historyToolName(block.name, outcome, resolve)
-  const args = publicJson(
+  const args = publicJsonValue(
     name === "present_artifact"
       ? publicArtifactArgs(block.arguments)
       : block.arguments
