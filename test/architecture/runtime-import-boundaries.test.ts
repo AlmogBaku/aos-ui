@@ -151,6 +151,17 @@ describe("runtime package import boundaries", () => {
     expect(result!.messages.map(({ ruleId }) => ruleId)).toEqual(["no-console"])
   })
 
+  it("loads the lifecycle package once through the alias and the relative path", async () => {
+    const [aliased, relative] = await Promise.all([
+      import("@aos/lifecycle"),
+      import("../../packages/lifecycle"),
+    ])
+
+    // Owner state such as each actor's transition track is module-scoped, so
+    // a second copy would split it between the two import styles.
+    expect(aliased.createOwner).toBe(relative.createOwner)
+  })
+
   it.each(["vite.config.ts", "shared/example.ts"])(
     "enforces the package seam for non-UI consumers in %s",
     async (filePath) => {
