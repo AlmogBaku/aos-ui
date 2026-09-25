@@ -299,35 +299,10 @@ never writable.
 
 Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
 
-### Before deploying Agent icons
-
-The first time the workspace opens after the proxy is upgraded, AOS writes an
-icon into every visible, editable Agent. Back up the affected files first.
-
-1. Create a timestamped, owner-only backup directory:
-
-   ```bash
-   sudo install -d -m 700 /etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
-   ```
-
-2. Copy every profile's `profile.yaml`, preserving its mode. The default
-   profile keeps its file in the Hermes home itself, not under `profiles/`:
-
-   ```bash
-   backup=/etc/aos-ui/backups/agent-icons-$(date +%Y%m%d)
-   sudo cp -p ~/.hermes/profile.yaml "$backup/default.profile.yaml"
-   for f in ~/.hermes/profiles/*/profile.yaml; do
-     sudo cp -p "$f" "$backup/$(basename "$(dirname "$f")").profile.yaml"
-   done
-   ```
-
-   Use the Hermes home in place of `~/.hermes` when it is not the default.
-
-3. After the backup, deploy the updated proxy. The next workspace open writes
-   icons.
-
-To restore: roll the proxy back **first**, then restore the files — otherwise
-the next workspace open saves icons again.
+The first time the workspace opens after the proxy is upgraded, it saves an
+icon for every visible, editable Agent: one `ui_meta.aos.avatar` key per
+profile, written through the same compare-and-set `profiles.configure` call
+visibility uses.
 
 ## Operational behavior
 
