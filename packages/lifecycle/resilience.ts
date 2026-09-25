@@ -13,7 +13,9 @@ import { Deadline } from "./deadline"
  * A cockatiel bulkhead running `limit` calls with `queue` more waiting. A call
  * past both rejects at once with `BulkheadRejectedError`; a waiting call
  * rejects with a `TimeoutError` after `waitMs` on the injected clock, or when
- * its `signal` aborts. The deadline bounds the wait, not the call.
+ * its `signal` aborts. The deadline bounds the wait, not the call. A waiter
+ * that times out or aborts keeps its queue slot until a running call
+ * finishes, so a new call can be rejected as full in the meantime.
  */
 export function boundedQueue({
   limit,
