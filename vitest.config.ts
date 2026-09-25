@@ -31,6 +31,10 @@ export default defineConfig({
         import.meta.dirname,
         "packages/protocol/index.ts"
       ),
+      "@aos/lifecycle": path.resolve(
+        import.meta.dirname,
+        "packages/lifecycle/index.ts"
+      ),
     },
   },
   // Every setting here, plugins and aliases included, is inherited by both

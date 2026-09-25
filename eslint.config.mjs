@@ -109,6 +109,42 @@ export default defineConfig([
               message:
                 "The proxy must not import the tools MCP server; harnesses reach it over MCP.",
             },
+            {
+              group: ["@aos/lifecycle", "@aos/lifecycle/*"],
+              message:
+                "The proxy imports the lifecycle package by relative path; the server image resolves no aliases.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/lifecycle/**/*.ts"],
+    rules: {
+      "no-console": "error",
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "node:*",
+                "bun",
+                "bun:*",
+                "@/*",
+                "src/*",
+                "src/**",
+                "../**/src/**",
+                "packages/proxy",
+                "packages/proxy/**",
+                "../proxy",
+                "../proxy/**",
+                "../**/packages/proxy/**",
+              ],
+              message:
+                "The lifecycle package stays pure: no Node, Bun, browser or proxy imports.",
+            },
           ],
         },
       ],
