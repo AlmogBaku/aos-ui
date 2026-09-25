@@ -1,6 +1,7 @@
 // Pure allocation of generated Agent icons. Every visible Agent gets a unique
-// (silhouette, tone) pair, least-used silhouette first, until visible Agents
-// outnumber the pool; then pairs repeat deterministically.
+// (silhouette, tone) pair, least-used silhouette first and then least-used
+// tone, until visible Agents outnumber the pool; then pairs repeat
+// deterministically.
 
 import {
   avatarToken,
@@ -68,9 +69,10 @@ export function parseAvatar(token: string): {
   return { pair: [h % S, Math.floor(h / S) % T], known: false }
 }
 
-/** Silhouette use counts and taken pairs of the icons placed so far. */
+/** Silhouette and tone use counts and taken pairs of the icons placed so far. */
 class Placement {
   private readonly uses = new Array<number>(S).fill(0)
+  private readonly toneUses = new Array<number>(T).fill(0)
   private readonly taken = new Set<number>()
 
   constructor(pairs: Iterable<AvatarPair> = []) {
@@ -79,6 +81,7 @@ class Placement {
 
   add([s, t]: AvatarPair) {
     this.uses[s] += 1
+    this.toneUses[t] += 1
     this.taken.add(s * T + t)
   }
 
@@ -93,20 +96,38 @@ class Placement {
     )
   }
 
-  freeTones(s: number) {
-    return [...tones.keys()].filter((t) => this.isFree([s, t]))
+  /**
+   * The free tones of silhouette `s` that are used least across every placed
+   * icon, in pool order; every tone when `s` has none free.
+   */
+  leastUsedTones(s: number) {
+    const free = [...tones.keys()].filter((t) => this.isFree([s, t]))
+    const candidates = free.length ? free : [...tones.keys()]
+    const fewest = Math.min(...candidates.map((t) => this.toneUses[t]))
+    return candidates.filter((t) => this.toneUses[t] === fewest)
   }
 
-  /** First free tone of the least-used silhouette in a rotation from `start`. */
-  pick(start: number): AvatarPair {
+  /** The silhouette to place next: the least-used one that has a free tone. */
+  nextSilhouette() {
     const order = this.silhouetteOrder()
-    for (const s of order) {
-      for (let k = 0; k < T; k += 1) {
-        const t = (start + k) % T
-        if (this.isFree([s, t])) return [s, t]
-      }
+    return (
+      order.find((s) => [...tones.keys()].some((t) => this.isFree([s, t]))) ??
+      order[0]
+    )
+  }
+
+  /**
+   * The least-used silhouette, then its least-used free tone, the first of
+   * those in a rotation from `start`.
+   */
+  pick(start: number): AvatarPair {
+    const s = this.nextSilhouette()
+    const candidates = this.leastUsedTones(s)
+    for (let k = 0; k < T; k += 1) {
+      const t = (start + k) % T
+      if (candidates.includes(t)) return [s, t]
     }
-    return [order[0], start]
+    return [s, candidates[0]]
   }
 
   /**
@@ -127,8 +148,8 @@ class Placement {
 }
 
 /**
- * The unhide rule: the least-used silhouette among `shown`, then a random
- * free tone of it. `random` returns a number in [0, 1).
+ * The unhide rule: the least-used silhouette among `shown`, then a random one
+ * of its least-used free tones. `random` returns a number in [0, 1).
  *
  * Above 34 visible Agents an unhide can shift the silhouette of an unsaved
  * Agent that is not avatarEditable, since its computed pair is no longer free;
@@ -139,12 +160,9 @@ export function nextFree(
   random: () => number
 ): AvatarPair {
   const placement = new Placement(shown)
-  const order = placement.silhouetteOrder()
-  for (const s of order) {
-    const free = placement.freeTones(s)
-    if (free.length) return [s, free[Math.floor(random() * free.length)]]
-  }
-  return [order[0], Math.floor(random() * T)]
+  const s = placement.nextSilhouette()
+  const candidates = placement.leastUsedTones(s)
+  return [s, candidates[Math.floor(random() * candidates.length)]]
 }
 
 const byId = (a: AgentAvatarInput, b: AgentAvatarInput) =>
