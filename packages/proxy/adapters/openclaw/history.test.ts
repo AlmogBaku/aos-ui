@@ -93,7 +93,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async (method) => {
+        request: async (method, params) => {
           if (method === "models.list")
             return {
               models: [
@@ -105,6 +105,9 @@ describe("OpenClaw authoritative history", () => {
                 },
               ],
             }
+          // OpenClaw finds the Session by its key, not its place in a page.
+          if ((params as { search?: string }).search !== "agent:analyst:main")
+            return { sessions: [] }
           return {
             sessions: [
               {

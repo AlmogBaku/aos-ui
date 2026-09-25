@@ -44,7 +44,7 @@ import {
 import {
   aosToolsPatch,
   enablesAosTools,
-  openClawInvitedSessionsParams,
+  openClawSessionSearchParams,
   openClawPatchSessionParams,
   parseOpenClawSessions,
 } from "./native-schemas"
@@ -1354,7 +1354,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const rows = parseOpenClawSessions(
       await this.#client.request<unknown>(
         "sessions.list",
-        openClawInvitedSessionsParams(agentId, sessionKey)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       MAX_SESSION_LOOKUP_ROWS
     ).filter((row) => row.key === sessionKey)

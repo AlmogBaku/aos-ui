@@ -20,7 +20,7 @@ import { mayBeMcpToolName, type OpenClawMcpToolNames } from "./mcp-tool-names"
 import {
   openClawHistoryParams,
   openClawModelsParams,
-  openClawSessionsParams,
+  openClawSessionSearchParams,
   parseOpenClawHistory,
   parseOpenClawModels,
   parseOpenClawSessions,
@@ -402,7 +402,7 @@ export function createOpenClawHistory(input: {
     const rows = parseOpenClawSessions(
       await input.client.request(
         "sessions.list",
-        openClawSessionsParams(agentId, 100, 0)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       100
     )

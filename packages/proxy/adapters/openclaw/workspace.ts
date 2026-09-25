@@ -11,7 +11,7 @@ import {
   openClawAgentsParams,
   openClawCreateSessionParams,
   openClawDeleteSessionParams,
-  openClawInvitedSessionsParams,
+  openClawSessionSearchParams,
   openClawPatchSessionParams,
   openClawSessionsParams,
   parseOpenClawAgents,
@@ -209,7 +209,7 @@ export function createOpenClawWorkspace(input: {
     const page = parseOpenClawSessions(
       await input.client.request(
         "sessions.list",
-        openClawInvitedSessionsParams(agentId, sessionKey)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       MAX_SESSION_PAGE
     )
@@ -336,7 +336,7 @@ export function createOpenClawWorkspace(input: {
       const page = parseOpenClawSessions(
         await input.client.request(
           "sessions.list",
-          openClawInvitedSessionsParams(agentId, sessionKey)
+          openClawSessionSearchParams(agentId, sessionKey)
         ),
         MAX_SESSION_PAGE
       )
