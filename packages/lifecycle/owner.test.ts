@@ -90,3 +90,23 @@ it("writes one line per transition with the deadline it arms or clears", () => {
     },
   ])
 })
+
+it("fires after deadlines on the injected monotonic clock only", () => {
+  const { logger } = recorder()
+  const owner = createOwner(membership(logger), {
+    logger,
+    clock: defaultClock,
+    bindings: {},
+  })
+  owner.actor.send({ type: "join" })
+  const joinedAt = defaultClock.now()
+
+  vi.setSystemTime(Date.now() + 60_000)
+  expect(defaultClock.now()).toBe(joinedAt)
+  expect(owner.actor.getSnapshot().value).toBe("joining")
+
+  vi.advanceTimersByTime(999)
+  expect(owner.actor.getSnapshot().value).toBe("joining")
+  vi.advanceTimersByTime(1)
+  expect(owner.actor.getSnapshot().value).toBe("expired")
+})
