@@ -300,8 +300,8 @@ standard component cannot express and record that reason.
   indicator; status must not be conveyed by icon color alone. The icon is a
   generated robot tile from `src/components/agent-icons`: one of 34 flat
   silhouettes in one of 8 muted tones, with a two-bar pair sensor. Every
-  visible Agent's pair is unique, silhouettes first, until more than 272 are
-  visible. The tile is decorative (`aria-hidden`); the Agent name carries the
+  visible Agent's pair is unique until more than 272 are visible: a new icon
+  takes the least-used silhouette, then its least-used tone. The tile is decorative (`aria-hidden`); the Agent name carries the
   accessible label. A hidden Agent in Manage Agents shows one neutral outline
   tile with no sensor.
 - **Draft Agent rows:** every draft shares one dashed tile. It is named by its

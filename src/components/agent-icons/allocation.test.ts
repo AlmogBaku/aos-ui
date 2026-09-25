@@ -109,7 +109,17 @@ describe("nextFree", () => {
     ).toBe(2)
   })
 
-  it("picks a random tone among the free tones of that silhouette", () => {
+  it("picks a random tone among the free tones no shown Agent uses more", () => {
+    const shown: AvatarPair[] = [
+      [0, 0],
+      [1, 1],
+    ]
+    // Silhouette 2 is least used; tones 2 to 7 are unused anywhere.
+    expect(nextFree(shown, () => 0)).toEqual([2, 2])
+    expect(nextFree(shown, () => 0.999)).toEqual([2, 7])
+  })
+
+  it("prefers the least-used tone among a silhouette's free tones", () => {
     const shown: AvatarPair[] = []
     for (let s = 0; s < S; s += 1) {
       for (let t = 0; t < T - 1; t += 1) {
@@ -117,9 +127,8 @@ describe("nextFree", () => {
         shown.push([s, t])
       }
     }
-    // Silhouette 0 is least used, with tones 2 and 7 free.
-    expect(nextFree(shown, () => 0)).toEqual([0, 2])
-    expect(nextFree(shown, () => 0.999)).toEqual([0, 7])
+    // Silhouette 0 is least used, with tones 2 and 7 free; 7 is used least.
+    expect(nextFree(shown, () => 0)).toEqual([0, 7])
   })
 
   it("allows a duplicate of the least-used silhouette once all 272 are shown", () => {
@@ -136,6 +145,27 @@ describe("resolveAgentIcons", () => {
     const icons = [...resolveAgentIcons(roster(34)).values()]
     expect(new Set(icons.map((icon) => icon.pair[0])).size).toBe(34)
     expect(icons.every((icon) => icon.source === "unsaved")).toBe(true)
+  })
+
+  it("gives the first 8 visible Agents 8 different tones", () => {
+    const icons = [...resolveAgentIcons(roster(8)).values()]
+    expect(new Set(icons.map((icon) => icon.pair[1])).size).toBe(8)
+  })
+
+  it("spreads tones evenly while silhouettes stay unique", () => {
+    const icons = [...resolveAgentIcons(roster(34)).values()]
+    const uses = new Array<number>(T).fill(0)
+    for (const icon of icons) uses[icon.pair[1]] += 1
+    expect(Math.max(...uses) - Math.min(...uses)).toBeLessThanOrEqual(1)
+  })
+
+  it("gives an unsaved Agent a tone the saved Agents do not use", () => {
+    const saved = tones.slice(0, T - 1).map((tone, index) => ({
+      id: `saved-${index}`,
+      avatar: avatarToken(pairOf(silhouettes[index].slug, tone.slug)),
+    }))
+    const icons = resolveAgentIcons([...saved, { id: "new" }])
+    expect(icons.get("new")?.pair[1]).toBe(T - 1)
   })
 
   it("fills silhouettes evenly: no silhouette holds a second pair before all hold one", () => {
