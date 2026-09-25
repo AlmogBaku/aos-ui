@@ -1,6 +1,6 @@
 export { defaultClock, type Clock } from "./clock"
 export { Deadline } from "./deadline"
-export type { LogFields, Logger } from "./logger"
+export { inspectToLogger, type LogFields, type Logger } from "./logger"
 export {
   createOwner,
   fromAbortable,

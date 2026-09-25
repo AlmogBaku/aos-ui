@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { fromPromise } from "xstate"
 
 import { defaultClock } from "./clock"
-import type { LogFields, Logger } from "./logger"
+import { inspectToLogger, type LogFields, type Logger } from "./logger"
 import { createOwner, fromAbortable, ownerSetup } from "./owner"
 
 type LogRecord = { level: string; message: string; fields: LogFields }
@@ -205,4 +205,28 @@ it("aborts an invoke when its state exits and ignores its late result", async ()
 
   owner.dispose()
   expect(owner.stale(owner.generation)).toBe(true)
+})
+
+it("writes one inspection line per transition taken when inspected", () => {
+  const { logger, records } = recorder()
+  const owner = createOwner(membership(logger), {
+    logger,
+    clock: defaultClock,
+    inspect: inspectToLogger(logger),
+    bindings: {},
+  })
+
+  owner.actor.send({ type: "join" })
+  owner.actor.send({ type: "unhandled" })
+  owner.actor.send({ type: "joined" })
+  owner.dispose()
+
+  expect(
+    records
+      .filter(({ message }) => message === "xstate.transition")
+      .map(({ level, fields: { event, state } }) => ({ level, event, state }))
+  ).toEqual([
+    { level: "debug", event: "join", state: "joining" },
+    { level: "debug", event: "joined", state: "joined" },
+  ])
 })
