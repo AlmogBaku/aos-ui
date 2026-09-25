@@ -23,8 +23,6 @@ export type SessionScope = {
   sessionId: string
   /** Opaque public Session identity supplied by the browser. */
   threadId: string
-  /** Command routing is limited to plain text-only submissions. */
-  hasAttachments?: boolean
 }
 
 /** Exactly one Session field a write changes, as the wire request carries it. */

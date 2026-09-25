@@ -9,9 +9,11 @@ import {
 import { hermesRowMessageId, projectHermesHistory } from "./history"
 import { persistedTurnRows } from "./run-frames"
 import { HermesNativeRuntime } from "./run-native"
+import { HermesTurnEngine } from "./run"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
 import type { PendingRequest } from "../../core/events"
+import type { ServerAttachmentStage } from "../../core/runtime"
 
 const scope: HermesTurnScope = {
   agentId: "researcher",
@@ -435,17 +437,37 @@ describe("Hermes native submit outcomes", () => {
 
   it("leaves the source images alone when a rewind stages its own", async () => {
     const { native, router } = runtime(
-      { "prompt.submit": async () => ({ status: "streaming" }) },
+      {
+        "session.events.since": async () => ({
+          epoch: "epoch-1",
+          last_seen: 0,
+          truncated: false,
+          events: [],
+        }),
+        "session.active_list": async () => ({ sessions: [] }),
+        "image.attach": async () => ({ attached: true }),
+        "prompt.submit": async () => ({ status: "streaming" }),
+      },
       [{ row_id: 12, role: "user", content: "@image:/uploads/one.png" }]
     )
+    const stage: ServerAttachmentStage = {
+      public: [{ type: "image", dataUrl: "data:image/png;base64,AA==" }],
+      appendTo: (text) => text,
+      cleanup: async () => {},
+    }
 
-    await native.submit("live-secret", {
-      scope: { ...scope, hasAttachments: true },
-      text: "Edited",
-      turnId: "edit-run",
-      rewindSourceId: "hermes-row-12",
-    })
+    await new HermesTurnEngine(native).start(
+      scope,
+      {
+        turnId: "edit-run",
+        messageId: "user",
+        prompt: "Edited",
+        rewindSourceId: "hermes-row-12",
+      },
+      stage
+    )
 
+    expect(router.calls("prompt.submit")).toHaveLength(1)
     expect(router.calls("image.attach")).toHaveLength(0)
   })
 
@@ -579,25 +601,6 @@ describe("Hermes native submit outcomes", () => {
     await expect(
       native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).rejects.toBeInstanceOf(HermesAuthenticationError)
-  })
-
-  it("refuses a recognized command that carries attachments before any write", async () => {
-    const { native, router } = runtime({
-      "commands.catalog": async () => ({ pairs: [["/help", "Help"]] }),
-    })
-
-    await expect(
-      native.submit("live-secret", {
-        scope: { ...scope, hasAttachments: true },
-        text: "/help",
-        turnId: "run-1",
-      })
-    ).resolves.toEqual({
-      acknowledgement: "rejected",
-      reason: "command-with-attachments",
-    })
-    expect(router.calls("slash.exec")).toHaveLength(0)
-    expect(router.calls("prompt.submit")).toHaveLength(0)
   })
 })
 

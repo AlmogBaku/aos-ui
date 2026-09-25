@@ -21,6 +21,7 @@ import {
 import {
   ServerTurnConflictError,
   type RecoveryRequest,
+  type ServerAttachmentStage,
   type ServerTurnHandle,
   type ServerTurnWatcher,
 } from "../../core/runtime"
@@ -174,7 +175,8 @@ export class HermesTurnEngine {
 
   async start(
     scope: HermesTurnScope,
-    candidate: unknown
+    candidate: unknown,
+    attachments?: ServerAttachmentStage
   ): Promise<HermesTurnHandle> {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
@@ -256,6 +258,7 @@ export class HermesTurnEngine {
         text: text!,
         turnId: input.turnId,
         ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
+        ...(attachments ? { hasAttachments: true } : {}),
       },
       false
     )
