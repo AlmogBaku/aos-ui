@@ -141,6 +141,12 @@ describe("OpenCode server adapter", () => {
     await expect(
       adapter.updateModel("research", "session-1", { effortId: "high" })
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    const unknown = await adapter
+      .updateModel("research", "session-1", {
+        selectedId: '["openai","unknown"]',
+      })
+      .catch((error: unknown) => error)
+    expect(adapter.publicError(unknown)).toMatchObject({ status: 400 })
     expect(native.sessions.switchModel).toHaveBeenCalledTimes(1)
     await expect(
       adapter.context("research", "session-1")

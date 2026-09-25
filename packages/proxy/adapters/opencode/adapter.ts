@@ -524,7 +524,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const selectedId = patch.selectedId
     const options = await this.#models(agentId, publicSessionId)
     const selected = options.native.get(selectedId)
-    if (!selected) throw new OpenCodeWorkspaceUnavailableError()
+    // A model the Session cannot run is the caller's mistake, not an outage.
+    if (!selected) throw new OpenCodeClientError("invalid_request")
     await this.options.client.sessions.switchModel(publicSessionId, selected)
     return { selectedId }
   }
