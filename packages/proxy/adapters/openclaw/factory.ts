@@ -9,7 +9,7 @@ import {
 import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 
 import type { RuntimeLimits } from "../../config"
-import { SessionCoordinator } from "../../core/session-coordinator"
+import { createCoordinator } from "../create-coordinator"
 import type { RuntimeInstance } from "../../core/runtime"
 import { withMcpApps } from "../../mcp-apps/annotate"
 import { readSecretFile } from "../../secrets"
@@ -207,14 +207,7 @@ export async function createOpenClawRuntime(
       },
     })
   )
-  const sessions = new SessionCoordinator({
-    engine: runtime.turns,
-    readings: runtime,
-    maxActiveExecutions: limits.activeExecutions,
-    maxGuestActiveExecutions: limits.guestActiveExecutions,
-    maxSubscriberEvents: limits.subscriberEvents,
-    maxSubscriberBytes: limits.subscriberBytes,
-  })
+  const sessions = createCoordinator(runtime, limits)
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,
