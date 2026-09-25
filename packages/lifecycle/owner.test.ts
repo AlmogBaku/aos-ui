@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { fromPromise } from "xstate"
 
-import { defaultClock } from "./clock"
+import { defaultClock, type Clock } from "./clock"
 import { inspectToLogger, type LogFields, type Logger } from "./logger"
 import { createOwner, fromAbortable, ownerSetup } from "./owner"
 
@@ -24,9 +24,34 @@ function recorder() {
   return { logger: logger({}), records }
 }
 
+/** A Clock whose timers fire only when the test advances it. */
+function manualClock() {
+  let now = 0
+  let lastId = 0
+  const timers = new Map<number, { at: number; callback: () => void }>()
+  return {
+    now: () => now,
+    setTimeout: (callback: () => void, ms: number) => {
+      timers.set(++lastId, { at: now + ms, callback })
+      return lastId
+    },
+    clearTimeout: (id: unknown) => {
+      timers.delete(id as number)
+    },
+    advance(ms: number) {
+      now += ms
+      for (const [id, { at, callback }] of timers)
+        if (at <= now) {
+          timers.delete(id)
+          callback()
+        }
+    },
+  }
+}
+
 /** idle → joining (join deadline 1 s) → joined, or expired at the deadline. */
-function membership(logger: Logger) {
-  return ownerSetup("membership", logger, defaultClock)
+function membership(logger: Logger, clock: Clock = defaultClock) {
+  return ownerSetup("membership", logger, clock)
     .extend({ delays: { join: 1_000 } })
     .createMachine({
       context: { generation: 0 },
@@ -92,23 +117,20 @@ it("writes one line per transition with the deadline it arms or clears", () => {
   ])
 })
 
-it("fires after deadlines on the injected monotonic clock only", () => {
+it("fires after deadlines on the injected clock alone", () => {
   const { logger } = recorder()
-  const owner = createOwner(membership(logger), {
+  const clock = manualClock()
+  const owner = createOwner(membership(logger, clock), {
     logger,
-    clock: defaultClock,
+    clock,
     bindings: {},
   })
   owner.actor.send({ type: "join" })
-  const joinedAt = defaultClock.now()
 
-  vi.setSystemTime(Date.now() + 60_000)
-  expect(defaultClock.now()).toBe(joinedAt)
+  vi.advanceTimersByTime(60_000)
+  clock.advance(999)
   expect(owner.actor.getSnapshot().value).toBe("joining")
-
-  vi.advanceTimersByTime(999)
-  expect(owner.actor.getSnapshot().value).toBe("joining")
-  vi.advanceTimersByTime(1)
+  clock.advance(1)
   expect(owner.actor.getSnapshot().value).toBe("expired")
 })
 
