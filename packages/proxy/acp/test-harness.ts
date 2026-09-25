@@ -585,6 +585,8 @@ export type HarnessOptions = {
   onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
+  /** The provider's Agent write; refuses as untested by default. */
+  updateAgent?: ServerRuntime["updateAgent"]
   /**
    * Runs as the provider admits each turn, before its handle returns: holding
    * it holds the admission, and throwing refuses the turn.
@@ -636,6 +638,9 @@ export async function harness(options: HarnessOptions = {}) {
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
+  )
+  const updateAgent = vi.fn<ServerRuntime["updateAgent"]>(
+    options.updateAgent ?? (async () => unsupported())
   )
   // A provider id is the public one behind a prefix, so either maps to the other.
   const providerId = (publicId: string) =>
@@ -727,7 +732,7 @@ export async function harness(options: HarnessOptions = {}) {
     authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
-    updateAgentVisibility: unsupported,
+    updateAgent,
     listAllSessions,
     listSessions: async (_agentId, limit, offset) =>
       listAllSessions(limit, offset),
@@ -918,6 +923,7 @@ export async function harness(options: HarnessOptions = {}) {
     updateSession,
     deleteSession,
     updateModel,
+    updateAgent,
     listAllSessions,
     history,
     readState,

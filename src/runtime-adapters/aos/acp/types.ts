@@ -10,11 +10,10 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
+import type { AgentCatalogResponseSchema } from "@aos/protocol"
 import type {
-  AgentCatalogResponseSchema,
-  VisibilityUpdateResponseSchema,
-} from "@aos/protocol"
-import type {
+  AosAgentUpdateRequest,
+  AosAgentUpdateResponseSchema,
   AosHistoryCursor,
   AosInitializeMetaSchema,
   AosPromptMetaSchema,
@@ -23,7 +22,6 @@ import type {
   AosSessionNewResponseMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosSessionUpdateRequestSchema,
-  AosSetVisibilityRequestSchema,
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "@aos/protocol/acp"
@@ -155,9 +153,10 @@ export interface AcpConnection {
     presence: { foreground: boolean; idle: boolean }
   ): void
   listAgents(): Promise<z.infer<typeof AgentCatalogResponseSchema>>
-  setVisibility(
-    request: z.infer<typeof AosSetVisibilityRequestSchema>
-  ): Promise<z.infer<typeof VisibilityUpdateResponseSchema>>
+  /** Unsupported and revision-conflict refusals reject as `AgentUpdateError`. */
+  updateAgent(
+    request: AosAgentUpdateRequest
+  ): Promise<z.infer<typeof AosAgentUpdateResponseSchema>>
 
   /** `session/update` notifications for one Session, with `_meta.aos`. */
   onSessionUpdate(

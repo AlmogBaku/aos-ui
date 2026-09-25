@@ -1,23 +1,25 @@
 import { createHash } from "node:crypto"
 
 import {
+  AgentAvatarSchema,
   AgentCatalogResponseSchema,
+  AgentUpdateResponseSchema,
   RuntimeInfoSchema,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionHistoryResponseSchema,
   SessionSchema,
   SESSION_CATALOG_MAX_WINDOW,
-  VisibilityUpdateResponseSchema,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
+  type AgentUpdatePatch,
+  type AgentUpdateResponse,
   type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionMessage,
   type SessionModelUpdateRequest,
   type SessionPlanActivityMessage,
-  type VisibilityUpdateResponse,
 } from "../../../protocol"
 import {
   HermesAuthenticationError,
@@ -67,10 +69,11 @@ import {
   HermesSessionGoneError,
   isSessionGone,
 } from "./attachment-registry"
-import type {
-  ServerMcpApps,
-  ServerRuntime,
-  SessionPatch,
+import {
+  ServerAgentUpdateUnsupportedError,
+  type ServerMcpApps,
+  type ServerRuntime,
+  type SessionPatch,
 } from "../../core/runtime"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -81,13 +84,19 @@ import {
   retryTransient,
   type HermesRetrySchedule,
 } from "./transient-rejections"
-import { isRecord, nativeId, timestamp, trimmedText } from "./native"
+import {
+  isRecord,
+  nativeId,
+  timestamp,
+  timestampMs,
+  trimmedText,
+} from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
 export class HermesRevisionConflictError extends Error {
   constructor() {
-    super("Agent visibility revision conflict")
+    super("Agent revision conflict")
     this.name = "HermesRevisionConflictError"
   }
 }
@@ -214,40 +223,62 @@ function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
 }
 
+/** The `ui_meta` namespaces AOS writes: visibility and the avatar. */
+const UI_META_KEYS = ["hermes-bots", "aos"] as const
+type UiMetaKey = (typeof UI_META_KEYS)[number]
+type UiMetaRevisions = Record<UiMetaKey, number>
+
 /**
- * The `hermes-bots` CAS revision of one profile-list row. Hermes always sends
- * `ui_meta_revisions` on a list row — that map is how it feature-detects its
- * own gateway-owned CAS — but a profile that has never been written through it
- * has no `hermes-bots` key, and the gateway then compares against `0`. So an
- * absent key is revision `0`, and only a missing map means the CAS itself is
- * unavailable. `profiles.describe` never carries the map, so it cannot answer
- * this question.
+ * The CAS revision of each namespace AOS writes on one profile-list row.
+ * Hermes always sends `ui_meta_revisions` on a list row — that map is how it
+ * feature-detects its own gateway-owned CAS — but a namespace that has never
+ * been written through it has no key, and the gateway then compares against
+ * `0`. So an absent key is revision `0`, and only a missing map means the CAS
+ * itself is unavailable. `profiles.describe` never carries the map, so it
+ * cannot answer this question.
  */
-function nativeRevision(profile: NativeRecord) {
-  if (!isRecord(profile.ui_meta_revisions)) return undefined
-  const revision = profile.ui_meta_revisions["hermes-bots"] ?? 0
-  return typeof revision === "number" &&
-    Number.isSafeInteger(revision) &&
-    revision >= 0
-    ? revision
-    : undefined
+function nativeRevisions(profile: NativeRecord): UiMetaRevisions | undefined {
+  const map = profile.ui_meta_revisions
+  if (!isRecord(map)) return undefined
+  const revisions: Partial<UiMetaRevisions> = {}
+  for (const key of UI_META_KEYS) {
+    const revision = map[key] ?? 0
+    if (
+      typeof revision !== "number" ||
+      !Number.isSafeInteger(revision) ||
+      revision < 0
+    )
+      return undefined
+    revisions[key] = revision
+  }
+  return revisions as UiMetaRevisions
 }
 
-function nativeBots(profile: NativeRecord) {
+/** The Agent revision: every written namespace's own, in one identifier. */
+function agentRevision(revisions: UiMetaRevisions | undefined) {
+  return revisions === undefined
+    ? "unavailable"
+    : UI_META_KEYS.map((key) => `${key}:${revisions[key]}`).join(",")
+}
+
+/** One `ui_meta` namespace of a profile row, or none. */
+function nativeNamespace(profile: NativeRecord, key: UiMetaKey) {
   const uiMeta = isRecord(profile.ui_meta) ? profile.ui_meta : {}
-  return isRecord(uiMeta["hermes-bots"]) ? uiMeta["hermes-bots"] : {}
+  return isRecord(uiMeta[key]) ? uiMeta[key] : {}
 }
 
 function projectProfile(profile: NativeRecord): AgentCatalogEntry {
   const id = trimmedText(profile.name)
   if (!id) throw new HermesUnavailableError()
-  const uiMeta = isRecord(profile.ui_meta) ? profile.ui_meta : {}
-  const aos = isRecord(uiMeta.aos) ? uiMeta.aos : {}
-  const bots = nativeBots(profile)
-  const revision = nativeRevision(profile)
+  const aos = nativeNamespace(profile, "aos")
+  const bots = nativeNamespace(profile, "hermes-bots")
+  const revisions = nativeRevisions(profile)
   const visibility =
     bots.hidden === true ? ("hidden" as const) : ("visible" as const)
   const creator = aos.role === "creator"
+  // A stored value that is not a token reads as no avatar, never as a bad row.
+  const avatar = AgentAvatarSchema.safeParse(aos.avatar)
+  const editable = revisions !== undefined && !creator
   return {
     summary: {
       kind: "ready",
@@ -258,12 +289,13 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
         : {}),
       visibility,
       ...(creator ? { role: "creator" as const } : {}),
+      ...(avatar.success ? { avatar: avatar.data } : {}),
     },
     visibility,
     selectable: visibility === "visible" && !creator,
-    editable: revision !== undefined && !creator,
-    revision:
-      revision === undefined ? "unavailable" : `hermes-bots:${revision}`,
+    editable,
+    avatarEditable: editable,
+    revision: agentRevision(revisions),
   }
 }
 
@@ -289,6 +321,12 @@ function catalogRevision(agents: readonly AgentCatalogEntry[]) {
     .sort()
     .join(",")
   return `profiles:${createHash("sha256").update(material).digest("hex")}`
+}
+
+/** A row's `started_at` (epoch seconds) as `createdAt`, absent when unusable. */
+function createdAt(startedAt: unknown) {
+  const ms = timestampMs(startedAt)
+  return ms === undefined ? {} : { createdAt: new Date(ms).toISOString() }
 }
 
 function sessionId(_profile: string, storedId: string) {
@@ -1050,37 +1088,54 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
-  async updateAgentVisibility(
+  async updateAgent(
     agentId: string,
-    visibility: "visible" | "hidden",
+    patch: AgentUpdatePatch,
     observedRevision: string
-  ): Promise<VisibilityUpdateResponse> {
-    // The list row is the only read that carries the CAS revision and the
-    // stored `hermes-bots` keys the write must preserve; `profiles.configure`
-    // then compares that revision itself, so a write that races another client
-    // is rejected by Hermes rather than by a second read here.
+  ): Promise<AgentUpdateResponse> {
+    // Re-checked here so no caller can reach the native write with a bad value.
+    if (
+      !AgentAvatarSchema.nullable().optional().safeParse(patch.avatar).success
+    )
+      throw new ServerAgentUpdateUnsupportedError()
+    // The list row is the only read that carries the CAS revisions and the
+    // stored keys the write must preserve; `profiles.configure` then compares
+    // those revisions itself and rejects the whole write on any mismatch, so a
+    // write that races another client is rejected by Hermes rather than by a
+    // second read here.
     const profile = (await this.#profiles()).find(
       (row) => trimmedText(row.name) === agentId
     )
     if (!profile) throw new HermesAgentNotFoundError()
     const current = projectProfile(profile)
-    if (!current.editable || current.revision === "unavailable")
-      throw new HermesUnavailableError()
+    const revisions = nativeRevisions(profile)
+    if (!current.editable || !revisions) throw new HermesUnavailableError()
     if (current.revision !== observedRevision)
       throw new HermesRevisionConflictError()
-    const expected = Number(current.revision.slice("hermes-bots:".length))
+
+    const writes: Partial<Record<UiMetaKey, NativeRecord>> = {}
+    if (patch.visibility !== undefined)
+      writes["hermes-bots"] = {
+        ...nativeNamespace(profile, "hermes-bots"),
+        hidden: patch.visibility === "hidden",
+      }
+    if (patch.avatar !== undefined) {
+      // Spread the stored keys so `role` survives; null drops the avatar.
+      const aos = { ...nativeNamespace(profile, "aos") }
+      delete aos.avatar
+      writes.aos =
+        patch.avatar === null ? aos : { ...aos, avatar: patch.avatar }
+    }
+    const touched = UI_META_KEYS.filter((key) => writes[key] !== undefined)
 
     let configured: unknown
     try {
       configured = await this.transport.request("profiles.configure", {
         name: agentId,
-        ui_meta: {
-          "hermes-bots": {
-            ...nativeBots(profile),
-            hidden: visibility === "hidden",
-          },
-        },
-        ui_meta_expected_revisions: { "hermes-bots": expected },
+        ui_meta: writes,
+        ui_meta_expected_revisions: Object.fromEntries(
+          touched.map((key) => [key, revisions[key]])
+        ),
       })
     } catch (error) {
       throwUnavailable(error)
@@ -1097,9 +1152,15 @@ export class HermesServerAdapter implements ServerRuntime {
 
     const confirmed = await this.listAgents()
     const agent = confirmed.agents.find(({ summary }) => summary.id === agentId)
-    if (!agent || agent.visibility !== visibility)
+    if (
+      !agent ||
+      (patch.visibility !== undefined &&
+        agent.visibility !== patch.visibility) ||
+      (patch.avatar !== undefined &&
+        (agent.summary.avatar ?? null) !== patch.avatar)
+    )
       throw new HermesUnavailableError()
-    return VisibilityUpdateResponseSchema.parse({
+    return AgentUpdateResponseSchema.parse({
       revision: confirmed.revision,
       agent,
     })
@@ -1240,6 +1301,7 @@ export class HermesServerAdapter implements ServerRuntime {
         agentId: profile,
         title: trimmedText(row.title) ?? storedId,
         archived: row.archived === true,
+        ...createdAt(row.started_at),
         updatedAt: timestamp(row.last_active ?? row.started_at),
         status: SETTLED,
         // Read state is derived per catalog row; an older Hermes omits it, and
@@ -1539,6 +1601,7 @@ export class HermesServerAdapter implements ServerRuntime {
       // This read reports the stored flags as SQLite integers, so an archived
       // Session arrives as `1`; an unreadable flag stays the archive default.
       archived: nativeFlag(payload.archived) ?? false,
+      ...createdAt(payload.started_at),
       updatedAt: timestamp(payload.last_active ?? payload.started_at),
       status: SETTLED,
       ...(pinned === undefined ? {} : { pinned }),

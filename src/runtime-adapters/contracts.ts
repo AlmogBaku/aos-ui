@@ -13,17 +13,6 @@ export type { RuntimeMode } from "@shared/runtime-modes"
 export type AgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
 
-export type AgentIconName =
-  "spark" | "layers" | "compass" | "chart" | "pen" | "unassigned"
-
-export type AgentIcon =
-  | {
-      kind: "symbol"
-      symbol: AgentIconName
-      tone: "indigo" | "purple" | "teal" | "ochre" | "slate"
-    }
-  | { kind: "image"; src: string; alt?: string }
-
 type AgentSummaryBase = {
   id: string
   name: string
@@ -31,7 +20,8 @@ type AgentSummaryBase = {
   status?: AgentStatus
   /** Native roster activity, distinct from exact Session execution. */
   activity?: "active" | "idle" | "unknown"
-  icon?: AgentIcon
+  /** Generated robot avatar token, `shape/palette`; absent when unset. */
+  avatar?: string
   visibility?: AgentVisibility
   role?: "creator"
 }
@@ -42,23 +32,34 @@ export type AgentSummary = ReadyAgentSummary
 
 export type AgentVisibility = "visible" | "hidden"
 
-/** Actionable visibility outcomes; all other failures remain ordinary Errors. */
-export class AgentVisibilityUpdateError extends Error {
-  constructor(
-    readonly code: "provider-active" | "pending-reload",
-    message: string
-  ) {
-    super(message)
-    this.name = "AgentVisibilityUpdateError"
-  }
-}
-
-/** Provider-filtered normal Agents; dedicated creator stays outside management. */
+/**
+ * Every native Agent with its management facts, as one read. The creator is
+ * listed like any Agent; management surfaces leave it out.
+ */
 export type AgentCatalogEntry = {
   summary: ReadyAgentSummary
   visibility: AgentVisibility
   selectable: boolean
   editable: boolean
+  /** Whether the runtime can store this Agent's avatar. */
+  avatarEditable: boolean
+}
+
+/** Fields an operator changes on an Agent; `avatar: null` clears it. */
+export type AgentUpdate = {
+  visibility?: AgentVisibility
+  avatar?: string | null
+}
+
+/** Actionable Agent update refusals; all other failures remain ordinary Errors. */
+export class AgentUpdateError extends Error {
+  constructor(
+    readonly code: "unsupported" | "conflict",
+    message: string
+  ) {
+    super(message)
+    this.name = "AgentUpdateError"
+  }
 }
 
 export type SessionStatus =
@@ -96,6 +97,8 @@ export type SessionMetadata = {
   unread?: boolean
   /** Provider pin; absent when the runtime does not track it. */
   pinned?: boolean
+  /** Provider creation time; absent when the runtime does not report it. */
+  createdAt?: string
 }
 
 /** Which Session actions the selected runtime declares it performs. */
@@ -114,8 +117,6 @@ export type TodoItem = {
   status: TodoStatus
 }
 
-export type AgentPatch = Partial<Pick<AgentSummary, "name" | "description">>
-
 export type SessionCreationOptions = {
   title: string
 }
@@ -125,16 +126,12 @@ export type WorkspaceAdapter = {
   listAgents(): Promise<AgentSummary[]>
   refreshAgents(): Promise<AgentSummary[]>
   listAgentCatalog?: () => Promise<AgentCatalogEntry[]>
-  updateAgentVisibility?: (
-    agentId: string,
-    visibility: AgentVisibility
-  ) => Promise<void>
   getSessionMetadata(threadIds: string[]): Promise<SessionMetadata[]>
   createSession(
     agentId: string,
     options?: SessionCreationOptions
   ): Promise<{ threadId: string }>
-  updateAgent?: (agentId: string, patch: AgentPatch) => Promise<void>
+  updateAgent?: (agentId: string, patch: AgentUpdate) => Promise<void>
   subscribeTodos?: (
     threadId: string,
     listener: (todos: TodoItem[]) => void,
@@ -300,7 +297,6 @@ export type HarnessRuntime = {
 
 export type WorkspaceCapabilities = {
   agentCatalog: boolean
-  agentVisibilityUpdates: boolean
   agentUpdates: boolean
   todos: boolean
   agentCreation: boolean

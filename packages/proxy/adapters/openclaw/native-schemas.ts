@@ -3,6 +3,8 @@ import {
   AgentsListResultSchema,
   ArtifactsDownloadParamsSchema,
   ChatHistoryParamsSchema,
+  ConfigGetParamsSchema,
+  ConfigPatchParamsSchema,
   ModelsListParamsSchema,
   SessionToolOverridesSchema,
   SessionsCreateParamsSchema,
@@ -35,7 +37,7 @@ export type OpenClawAgent = Readonly<{
   kind?: "agent" | "system"
   createdVia?: "operator" | "agent" | "claw"
   creatorAgentId?: string | null
-  identity?: Readonly<{ name?: string }>
+  identity?: Readonly<{ name?: string; avatar?: string }>
 }>
 
 /** A Session's sparse tool overlay, exactly as the native schema defines it. */
@@ -53,6 +55,7 @@ export type OpenClawSession = Readonly<{
   displayName?: string
   archived?: boolean
   pinned?: boolean
+  createdAt?: number
   updatedAt?: number
   lastInteractionAt?: number
   hasActiveRun?: boolean
@@ -225,6 +228,56 @@ export function openClawPatchSessionParams(
   })
 }
 
+export function openClawConfigGetParams() {
+  return official(ConfigGetParamsSchema, {})
+}
+
+/**
+ * Writes one Agent's avatar and nothing else. The gateway merges
+ * `agents.list` by id and deep-merges the entry, and `null` deletes the key.
+ */
+export function openClawAgentAvatarPatchParams(
+  agentId: string,
+  avatar: string | null,
+  baseHash: string
+) {
+  return official(ConfigPatchParamsSchema, {
+    raw: JSON.stringify({
+      agents: { list: [{ id: agentId, identity: { avatar } }] },
+    }),
+    baseHash,
+  })
+}
+
+/**
+ * What AOS keeps from `config.get`: its hash and the ids with their own
+ * authored `agents.list` entry. The payload carries credentials, so nothing
+ * else survives this call, and an unusable payload reads as no entries.
+ */
+export type OpenClawConfiguredAgents = Readonly<{
+  hash: string | undefined
+  agentIds: ReadonlySet<string>
+}>
+
+export function parseOpenClawConfiguredAgents(
+  value: unknown
+): OpenClawConfiguredAgents {
+  if (!isRecord(value) || value.valid === false)
+    return { hash: undefined, agentIds: new Set() }
+  const hash = string(value.hash, 256)
+  const agents = isRecord(value.sourceConfig)
+    ? value.sourceConfig.agents
+    : undefined
+  const list = isRecord(agents) ? agents.list : undefined
+  const ids = Array.isArray(list)
+    ? list.map((entry) => (isRecord(entry) ? string(entry.id) : undefined))
+    : []
+  // A roster the gateway cannot merge by id is one AOS never patches.
+  const mergeable =
+    ids.length <= MAX_NATIVE_COLLECTION && ids.every((id) => id !== undefined)
+  return { hash, agentIds: new Set(mergeable ? (ids as string[]) : []) }
+}
+
 export function openClawDeleteSessionParams(
   agentId: string,
   sessionKey: string
@@ -374,6 +427,10 @@ export function parseOpenClawSessions(
         ? { archived: value.archived }
         : {}),
       ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
+      // Newer gateways report it; a missing or unusable value stays absent.
+      ...(integer(value.createdAt) !== undefined
+        ? { createdAt: integer(value.createdAt) }
+        : {}),
       ...(number(value.updatedAt) !== undefined
         ? { updatedAt: number(value.updatedAt) }
         : {}),

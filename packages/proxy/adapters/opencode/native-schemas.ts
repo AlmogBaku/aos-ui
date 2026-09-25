@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-import { StopReason } from "../../../protocol"
+import { AgentAvatarSchema, StopReason } from "../../../protocol"
 
 const IdentifierSchema = z
   .string()
@@ -27,6 +27,22 @@ export const OpenCodeAgentSchema = z.object({
   permissions: z.array(z.unknown()),
   request: z.record(z.string(), z.unknown()),
 })
+
+const OpenCodeAgentAvatarRequestSchema = z.object({
+  body: z.object({ avatar: AgentAvatarSchema }),
+})
+
+/**
+ * An Agent file's unknown frontmatter key lands in the native request body,
+ * so `avatar:` arrives there. Only a token reads as an avatar; the request's
+ * headers may carry credentials and are never read.
+ */
+export function openCodeAgentAvatar(
+  request: Readonly<Record<string, unknown>>
+) {
+  const parsed = OpenCodeAgentAvatarRequestSchema.safeParse(request)
+  return parsed.success ? parsed.data.body.avatar : undefined
+}
 
 export const OpenCodeAgentCatalogSchema = z.object({
   data: z.array(OpenCodeAgentSchema).max(1_000),

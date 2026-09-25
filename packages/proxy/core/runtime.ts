@@ -1,6 +1,8 @@
 import type { PendingRequest, TurnEvent, TurnInput } from "./events"
 import type {
   AgentCatalogResponse,
+  AgentUpdatePatch,
+  AgentUpdateResponse,
   RuntimeAuthState,
   RuntimeInfo,
   Session,
@@ -9,7 +11,6 @@ import type {
   SessionAttachmentStageRequest,
   SessionAttachmentStageResponse,
   SessionModelUpdateRequest,
-  VisibilityUpdateResponse,
 } from "../../protocol"
 import type {
   CallToolResult,
@@ -186,6 +187,14 @@ export class ServerSessionNotFoundError extends Error {
   }
 }
 
+/** A write to an Agent field this runtime has no native place to store. */
+export class ServerAgentUpdateUnsupportedError extends Error {
+  constructor() {
+    super("This runtime cannot store that Agent field")
+    this.name = "ServerAgentUpdateUnsupportedError"
+  }
+}
+
 export type ServerAttachmentStage = {
   public: Readonly<SessionAttachmentStageResponse["attachments"]>
   appendTo(text: string): string | Promise<string>
@@ -237,11 +246,16 @@ export interface ServerRuntime {
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>
-  updateAgentVisibility(
+  /**
+   * Writes the patch's fields in one native write, refusing a stale
+   * `observedRevision`. A field the runtime cannot store throws
+   * `ServerAgentUpdateUnsupportedError`.
+   */
+  updateAgent(
     agentId: string,
-    visibility: "visible" | "hidden",
+    patch: AgentUpdatePatch,
     observedRevision: string
-  ): Promise<VisibilityUpdateResponse>
+  ): Promise<AgentUpdateResponse>
   listAllSessions(
     limit: number,
     offset: number

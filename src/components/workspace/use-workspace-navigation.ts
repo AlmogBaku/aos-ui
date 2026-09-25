@@ -1,4 +1,5 @@
 import { useWorkspaceCatalog } from "./use-workspace-catalog"
+import { useAvatarAllocation } from "./use-avatar-allocation"
 import {
   useCallback,
   useEffect,
@@ -10,7 +11,10 @@ import {
 } from "react"
 import { useLocation, useNavigate } from "react-router"
 import type { AssistantRuntime } from "@assistant-ui/react"
-import { AgentVisibilityUpdateError } from "@/runtime-adapters/contracts"
+import {
+  resolveAgentIcons,
+  visibilityPatch,
+} from "@/components/agent-icons/allocation"
 import type {
   HarnessRuntime,
   SessionActionCapabilities,
@@ -201,6 +205,8 @@ export function useWorkspaceNavigation({
   const {
     agents,
     setAgents,
+    avatarEditableIds,
+    reloadCatalog,
     agentsLoading,
     setAgentsLoading,
     agentError: catalogError,
@@ -254,6 +260,18 @@ export function useWorkspaceNavigation({
   // Drafts are derived from the last published metadata rather than the current
   // query, so a selected draft survives a Session metadata refresh.
   const publishedSessions = sessionSnapshot.sessions
+  // A draft is named by its interview's own title, so this keeps the title a
+  // thread has, never the untitled fallback the Session lists show.
+  const threadTitles = useMemo(
+    () =>
+      new Map(
+        Object.values(threadState.threadItems).map((item) => [
+          item.remoteId ?? item.externalId ?? item.id,
+          item.title,
+        ])
+      ),
+    [threadState.threadItems]
+  )
   const draftProjection = useMemo(
     () =>
       projectDraftAgents({
@@ -263,6 +281,9 @@ export function useWorkspaceNavigation({
         resolvedThreadIds: resolvedDrafts,
         now: eligibilityNow.getTime(),
         name: dictionary.actions.newAgent,
+        draftLabel: dictionary.creator.draftDescription,
+        locale,
+        titles: threadTitles,
         pendingDraftAgentId,
       }),
     [
@@ -270,11 +291,34 @@ export function useWorkspaceNavigation({
       agents,
       pendingDraftAgentId,
       dictionary.actions.newAgent,
+      dictionary.creator.draftDescription,
       eligibilityNow,
+      locale,
       publishedSessions,
       resolvedDrafts,
+      threadTitles,
     ]
   )
+  // Icons resolve once per catalog, over the Agents the roster shows; every
+  // place that draws an Agent reads the same resolution.
+  const avatarInputs = useMemo(() => {
+    const editable = new Set(avatarEditableIds)
+    return agents.filter(isRosterAgent).map(({ id, avatar }) => ({
+      id,
+      avatar,
+      avatarEditable: editable.has(id),
+    }))
+  }, [agents, avatarEditableIds])
+  const agentIcons = useMemo(
+    () => resolveAgentIcons(avatarInputs),
+    [avatarInputs]
+  )
+  useAvatarAllocation({
+    workspace,
+    agents: avatarInputs,
+    ready: !agentsLoading && !catalogError,
+    onConflict: reloadCatalog,
+  })
   const navigableAgents = draftProjection.agents
   const defaultAgentId = agents.find(isRosterAgent)?.id ?? null
   const selectedAgentId = navigableAgents.some(
@@ -587,8 +631,15 @@ export function useWorkspaceNavigation({
     localDraftOperation.current = null
     // A promoted interview becomes the draft row that owns its new Session;
     // the creator itself is never a place the operator can be.
-    const rowAgentId =
-      agentId === agentCreator?.id ? draftAgentId(activeThreadId) : agentId
+    const isInterview = agentId === agentCreator?.id
+    const rowAgentId = isInterview ? draftAgentId(activeThreadId) : agentId
+    // An interview started without a title would take its kickoff as one, so
+    // its Session is named New Agent once, as soon as it exists.
+    if (isInterview && mainItemId)
+      void runtime.threads
+        .getItemById(mainItemId)
+        .rename(dictionary.actions.newAgent)
+        .catch(() => undefined)
     setPreferredAgentId(rowAgentId)
     setManuallyOpened((current) => ({
       ...current,
@@ -598,7 +649,14 @@ export function useWorkspaceNavigation({
     }))
     lastSelected.current.set(rowAgentId, activeThreadId)
     updateRoute({ agentId: rowAgentId, sessionId: activeThreadId }, "replace")
-  }, [activeThreadId, agentCreator?.id, mainItemId, updateRoute])
+  }, [
+    activeThreadId,
+    agentCreator?.id,
+    dictionary.actions.newAgent,
+    mainItemId,
+    runtime,
+    updateRoute,
+  ])
 
   useEffect(() => {
     if (
@@ -986,6 +1044,7 @@ export function useWorkspaceNavigation({
 
   const displayAgents = navigableAgents.map((agent) => ({
     ...agent,
+    avatar: agentIcons.get(agent.id)?.token,
     status: agentStatusFromSessions(agent, sessions),
     unread: agentUnreadFromSessions(agent, sessions),
   }))
@@ -1399,21 +1458,17 @@ export function useWorkspaceNavigation({
 
   /** The rail's way into the visibility rule Agent management already owns. */
   async function hideAgent(agentId: string) {
-    if (!workspace.updateAgentVisibility)
+    if (!workspace.updateAgent)
       throw new Error("Agent visibility is unavailable from this provider")
-    try {
-      await workspace.updateAgentVisibility(agentId, "hidden")
-    } catch (reason) {
-      // The rail owes the same words for a refused hide that Manage Agents
-      // gives, rather than whichever sentence the provider happened to send.
-      if (reason instanceof AgentVisibilityUpdateError)
-        throw new Error(
-          reason.code === "provider-active"
-            ? dictionary.agentManagement.providerActive
-            : dictionary.agentManagement.pendingReload
-        )
-      throw reason
-    }
+    const editable = avatarInputs.some(
+      (agent) => agent.id === agentId && agent.avatarEditable
+    )
+    await workspace.updateAgent(
+      agentId,
+      editable
+        ? visibilityPatch("hidden", avatarInputs)
+        : { visibility: "hidden" }
+    )
     await refreshAfterVisibilityChange()
   }
 

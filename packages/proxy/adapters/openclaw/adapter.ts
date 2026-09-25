@@ -1,20 +1,21 @@
 import type {
+  AgentUpdatePatch,
+  AgentUpdateResponse,
   RuntimeAuthState,
   RuntimeInfo,
   SessionAttachmentStageRequest,
   SessionModelUpdateRequest,
-  VisibilityUpdateResponse,
 } from "../../../protocol"
 import {
   SESSION_CATALOG_MAX_WINDOW,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../../protocol"
-import type {
-  ServerAttachmentStage,
-  ServerMcpApps,
-  ServerTurnEngine,
-  ServerRuntime,
-  SessionPatch,
+import {
+  type ServerAttachmentStage,
+  type ServerMcpApps,
+  type ServerTurnEngine,
+  type ServerRuntime,
+  type SessionPatch,
 } from "../../core/runtime"
 import {
   OpenClawClientConnectionError,
@@ -56,6 +57,7 @@ import {
 import {
   createOpenClawWorkspace,
   OpenClawWorkspaceOwnershipError,
+  OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
 
@@ -174,6 +176,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
         cause.code === "AOS_INTERACTION_NOT_FOUND")
     )
       return { code: "not_found", status: 404 } as const
+    if (cause instanceof OpenClawWorkspaceRevisionConflictError)
+      return { code: "revision_conflict", status: 409 } as const
     if (
       cause instanceof OpenClawContentPublicError ||
       (cause instanceof OpenClawInteractionPublicError &&
@@ -227,13 +231,13 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.listAgents()
   }
 
-  async updateAgentVisibility(
-    _agentId: string,
-    _visibility: "visible" | "hidden",
-    _observedRevision: string
-  ): Promise<VisibilityUpdateResponse> {
-    void [_agentId, _visibility, _observedRevision]
-    throw new OpenClawAdapterUnavailableError()
+  async updateAgent(
+    agentId: string,
+    patch: AgentUpdatePatch,
+    observedRevision: string
+  ): Promise<AgentUpdateResponse> {
+    await this.#start()
+    return this.#workspace.updateAgent(agentId, patch, observedRevision)
   }
 
   async listAllSessions(limit: number, offset: number) {

@@ -149,6 +149,40 @@ describe("AosUiApp fixture composition", () => {
     ).toHaveAttribute("aria-current", "true")
   })
 
+  it("the pending interview's Session is renamed New Agent once", async () => {
+    const user = userEvent.setup()
+    const firstTurn = deferred<void>()
+    let workspace: FixtureWorkspace | undefined
+    render(
+      <PendingInterviewFixture
+        firstTurn={firstTurn.promise}
+        capture={(value) => {
+          workspace = value
+        }}
+      />
+    )
+    await screen.findByRole("button", { name: /^Aster,/ })
+    const rename = vi.spyOn(workspace!, "setSessionTitle")
+
+    await user.click(screen.getByRole("button", { name: "New Agent" }))
+    await screen.findByText(en.creator.kickoff)
+    expect(rename).not.toHaveBeenCalled()
+
+    await act(async () => firstTurn.resolve())
+    const interview = await waitFor(() => {
+      const created = workspace!
+        .listAllSessionMetadata()
+        .find(({ agentId }) => agentId === "agent-builder")
+      expect(created).toBeDefined()
+      return created!
+    })
+    await waitFor(() =>
+      expect(rename).toHaveBeenCalledWith(interview.threadId, "New Agent")
+    )
+    await user.click(screen.getByRole("button", { name: /^New Agent, draft/ }))
+    expect(rename).toHaveBeenCalledOnce()
+  })
+
   it("discards a pending draft deleting no Session, and a started draft by deleting its interview Session", async () => {
     const user = userEvent.setup()
     const discardDraft = async () => {

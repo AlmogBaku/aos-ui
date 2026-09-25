@@ -1,9 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Switch } from "@base-ui/react/switch"
 import { Plus, X } from "lucide-react"
 
+import {
+  resolveAgentIcons,
+  visibilityPatch,
+} from "@/components/agent-icons/allocation"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -16,13 +20,12 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
-import {
-  AgentVisibilityUpdateError,
-  type AgentCatalogEntry,
-  type AgentVisibility,
-  type WorkspaceAdapter,
+import type {
+  AgentCatalogEntry,
+  AgentVisibility,
+  WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
-import { AgentGlyph } from "./workspace-shell"
+import { WorkspaceAgentTile } from "./workspace-agent-tile"
 
 export function ManageAgents({
   open,
@@ -47,20 +50,12 @@ export function ManageAgents({
 }) {
   const [entries, setEntries] = useState<AgentCatalogEntry[] | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
-  const [updateFailure, setUpdateFailure] = useState<
-    AgentVisibilityUpdateError["code"] | "failed" | null
-  >(null)
+  const [updateFailed, setUpdateFailed] = useState(false)
   const [pending, setPending] = useState<string | null>(null)
   const lifetime = useRef<{ active: boolean; mutating: boolean } | null>(null)
   const generation = useRef(0)
   const copy = dictionary.agentManagement
-  const updateMessage = updateFailure
-    ? {
-        failed: copy.updateFailed,
-        "provider-active": copy.providerActive,
-        "pending-reload": copy.pendingReload,
-      }[updateFailure]
-    : null
+  const updateMessage = updateFailed ? copy.updateFailed : null
 
   useEffect(() => {
     const scope = { active: true, mutating: false }
@@ -86,6 +81,7 @@ export function ManageAgents({
                     visibility: summary.visibility ?? "visible",
                     selectable: summary.visibility !== "hidden",
                     editable: false,
+                    avatarEditable: false,
                   },
                 ]
               : []
@@ -124,10 +120,24 @@ export function ManageAgents({
     }
   }, [load, open, workspace])
 
-  async function update(agentId: string, visibility: AgentVisibility) {
+  const shownEntries = useMemo(
+    () =>
+      (entries ?? [])
+        .filter((entry) => entry.visibility === "visible")
+        .map(({ summary, avatarEditable }) => ({
+          id: summary.id,
+          avatar: summary.avatar,
+          avatarEditable,
+        })),
+    [entries]
+  )
+  const icons = useMemo(() => resolveAgentIcons(shownEntries), [shownEntries])
+
+  async function update(entry: AgentCatalogEntry, visibility: AgentVisibility) {
+    const agentId = entry.summary.id
     const scope = lifetime.current
     if (
-      !workspace.updateAgentVisibility ||
+      !workspace.updateAgent ||
       !scope?.active ||
       scope.mutating ||
       loadFailed
@@ -136,16 +146,19 @@ export function ManageAgents({
     scope.mutating = true
     generation.current += 1
     setPending(agentId)
-    setUpdateFailure(null)
+    setUpdateFailed(false)
     try {
-      await workspace.updateAgentVisibility(agentId, visibility)
+      // Hiding frees the Agent's icon; showing it again claims one no visible
+      // Agent shows. A runtime that cannot store avatars only moves visibility.
+      const patch = visibilityPatch(visibility, shownEntries)
+      await workspace.updateAgent(
+        agentId,
+        entry.avatarEditable ? patch : { visibility }
+      )
       if (!scope.active) return
       await onVisibilityChanged()
-    } catch (error) {
-      if (scope.active)
-        setUpdateFailure(
-          error instanceof AgentVisibilityUpdateError ? error.code : "failed"
-        )
+    } catch {
+      if (scope.active) setUpdateFailed(true)
     } finally {
       // Reconcile even rejected mutations: providers may publish on failure.
       // Keep stale values locked if this read fails, until a successful retry.
@@ -162,7 +175,7 @@ export function ManageAgents({
         if (next) {
           setEntries(null)
           setLoadFailed(false)
-          setUpdateFailure(null)
+          setUpdateFailed(false)
         }
         onOpenChange(next)
       }}
@@ -201,7 +214,7 @@ export function ManageAgents({
           className="min-h-0 overflow-y-auto px-6"
           aria-busy={entries === null && !loadFailed}
         >
-          {loadFailed || updateFailure ? (
+          {loadFailed || updateFailed ? (
             <div
               role="alert"
               className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm text-destructive"
@@ -243,9 +256,11 @@ export function ManageAgents({
                 key={entry.summary.id}
                 className="flex items-start gap-3 py-4 first:pt-0"
               >
-                <AgentGlyph
-                  agent={entry.summary}
-                  className="!size-10 !rounded-xl [&_svg]:!size-5"
+                <WorkspaceAgentTile
+                  agent={{
+                    ...entry.summary,
+                    avatar: icons.get(entry.summary.id)?.token,
+                  }}
                 />
                 <div className="min-w-0 flex-1 sm:flex sm:items-center sm:gap-4">
                   <div className="min-w-0 flex-1">
@@ -258,7 +273,7 @@ export function ManageAgents({
                       </bdi>
                     ) : null}
                   </div>
-                  {entry.editable && workspace.updateAgentVisibility ? (
+                  {entry.editable && workspace.updateAgent ? (
                     <div className="mt-2 flex min-h-11 items-center justify-between gap-4 text-sm sm:mt-0 sm:max-w-44 sm:gap-2">
                       <span>{copy.showInWorkspace}</span>
                       <Switch.Root
@@ -266,10 +281,7 @@ export function ManageAgents({
                         disabled={pending !== null || loadFailed}
                         aria-label={`${copy.showInWorkspace}: ${entry.summary.name}`}
                         onCheckedChange={(checked) =>
-                          void update(
-                            entry.summary.id,
-                            checked ? "visible" : "hidden"
-                          )
+                          void update(entry, checked ? "visible" : "hidden")
                         }
                         className="group inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring data-disabled:cursor-wait data-disabled:opacity-60"
                       >

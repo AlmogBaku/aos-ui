@@ -6,6 +6,7 @@ export type ErrorCode =
   | "invalid_request"
   | "not_found"
   | "revision_conflict"
+  | "unsupported"
   | "turn_conflict"
   | "turn_capacity_exceeded"
   | "registration_limit_exceeded"
@@ -21,6 +22,7 @@ const errorDescriptions: Record<ErrorCode, string> = {
   invalid_request: "The request could not be processed.",
   not_found: "The requested item was not found.",
   revision_conflict: "This item changed. Refresh and try again.",
+  unsupported: "The runtime cannot store that change.",
   turn_conflict: "A turn is already active for this session.",
   turn_capacity_exceeded: "AOS is at capacity. Please try again shortly.",
   registration_limit_exceeded:

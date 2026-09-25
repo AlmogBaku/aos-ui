@@ -97,6 +97,15 @@ describe("ACP WebSocket shim", () => {
     expect(socket.drain()).toEqual([])
   })
 
+  it("keeps an unsupported refusal's code on a public reply", () => {
+    expect(
+      PUBLIC_ERRORS.reply({
+        code: AOS_JSONRPC_ERRORS.unsupported,
+        message: "private detail",
+      })
+    ).toEqual({ code: AOS_JSONRPC_ERRORS.unsupported, message: "unsupported" })
+  })
+
   it("writes a lane's error notice as its Session and a public code alone", () => {
     const { socket } = harness({ publicErrors: PUBLIC_ERRORS })
     const notice = (params: Record<string, unknown>) =>

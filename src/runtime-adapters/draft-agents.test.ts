@@ -30,15 +30,19 @@ const roster: AgentSummary[] = [
 function session(
   threadId: string,
   agentId: string,
-  ageMs: number
+  ageMs: number,
+  createdAt?: string
 ): SessionMetadata {
   return {
     threadId,
     agentId,
     updatedAt: new Date(now - ageMs).toISOString(),
     status: "idle",
+    ...(createdAt ? { createdAt } : {}),
   }
 }
+
+const copy = { name: "New Agent", draftLabel: "Draft", locale: "en" }
 
 describe("draft Agent identifiers", () => {
   it("round-trips a thread id and rejects ordinary Agent ids", () => {
@@ -59,7 +63,8 @@ describe("projectDraftAgents", () => {
     sessions: SessionMetadata[],
     resolvedThreadIds: ReadonlySet<string> = new Set<string>(),
     creatorAgent: AgentSummary | undefined = creator,
-    pendingDraftAgentId: string | undefined = undefined
+    pendingDraftAgentId: string | undefined = undefined,
+    titles: ReadonlyMap<string, string> = new Map()
   ) =>
     projectDraftAgents({
       creator: creatorAgent,
@@ -67,7 +72,8 @@ describe("projectDraftAgents", () => {
       sessions,
       resolvedThreadIds,
       now,
-      name: "New Agent",
+      ...copy,
+      titles,
       pendingDraftAgentId,
     })
 
@@ -103,9 +109,45 @@ describe("projectDraftAgents", () => {
       kind: "ready",
       id: draftAgentId("fresh"),
       name: "New Agent",
-      icon: { kind: "symbol", symbol: "unassigned", tone: "slate" },
+      description: "Draft",
       visibility: "visible",
     })
+  })
+
+  it("a draft is named by its Session title unless generic, with its start time", () => {
+    const startedAt = "2026-09-20T09:30:00.000Z"
+    const projected = project(
+      [
+        session("titled", creator.id, 0, startedAt),
+        session("english", creator.id, 0, startedAt),
+        session("hebrew", creator.id, 0, startedAt),
+        session("blank", creator.id, 0),
+      ],
+      new Set<string>(),
+      creator,
+      undefined,
+      new Map([
+        ["titled", "Travel planner"],
+        ["english", "New Agent"],
+        ["hebrew", "סוכן חדש"],
+        ["blank", "  "],
+      ])
+    )
+    const started = new Intl.DateTimeFormat("en", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(startedAt))
+
+    expect(
+      projected.agents
+        .slice(-4)
+        .map(({ name, description }) => ({ name, description }))
+    ).toEqual([
+      { name: "Travel planner", description: `Draft · ${started}` },
+      { name: "New Agent", description: `Draft · ${started}` },
+      { name: "New Agent", description: `Draft · ${started}` },
+      { name: "New Agent", description: "Draft" },
+    ])
   })
 
   it("excludes resolved interviews and leaves other Sessions untouched", () => {
@@ -166,6 +208,7 @@ describe("projectDraftAgents", () => {
     expect(projected.agents.at(-1)).toEqual({
       ...projected.agents.at(-2),
       id: PENDING_DRAFT_AGENT_ID,
+      description: "Draft",
     })
     // The pending draft precedes its Session, so it invents none.
     expect(projected.sessions.map(({ threadId }) => threadId)).toEqual([
@@ -181,7 +224,8 @@ describe("projectDraftAgents", () => {
       sessions: [],
       resolvedThreadIds: new Set(),
       now,
-      name: "New Agent",
+      ...copy,
+      titles: new Map(),
       pendingDraftAgentId: PENDING_DRAFT_AGENT_ID,
     })
 
@@ -233,7 +277,8 @@ describe("projectDraftAgents", () => {
       sessions,
       resolvedThreadIds: new Set(),
       now,
-      name: "New Agent",
+      ...copy,
+      titles: new Map(),
     })
 
     expect(projected.agents).toEqual(roster)

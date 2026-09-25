@@ -230,13 +230,13 @@ export type Dictionary = {
     loading: string
     loadFailed: string
     updateFailed: string
-    providerActive: string
-    pendingReload: string
     retry: string
   }
   creator: {
     kickoff: string
     draftLabel: string
+    /** Leads a draft Agent's description, before its start time. */
+    draftDescription: string
     discardTitle: string
     discardDescription: string
     createdPending: string

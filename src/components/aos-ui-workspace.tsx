@@ -42,7 +42,7 @@ import {
 } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
-import { AgentGlyph, WorkspaceShell } from "@/components/workspace"
+import { WorkspaceAgentTile, WorkspaceShell } from "@/components/workspace"
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell"
 import {
   ArtifactDataUI,
@@ -358,10 +358,7 @@ function AgentIdentity({ agent }: { agent: AgentSummary | null }) {
 
   return (
     <div className="mb-3 flex items-center gap-2 px-2 text-sm">
-      <AgentGlyph
-        agent={agent}
-        className="!size-7 !rounded-lg [&_svg]:!size-3.5"
-      />
+      <WorkspaceAgentTile agent={agent} size={28} />
       <bdi className="font-medium">{agent.name}</bdi>
     </div>
   )
@@ -667,9 +664,7 @@ function WorkspaceContent({
         creatorNotice={creatorNotice}
         selectedAgentIsDraft={selectedAgentIsDraft}
         onSelectAgent={selectAgent}
-        onHideAgent={
-          capabilities.agentVisibilityUpdates ? hideAgent : undefined
-        }
+        onHideAgent={capabilities.agentUpdates ? hideAgent : undefined}
         onDiscardDraft={discardDraft}
         onOpenSession={openSession}
         onCloseSession={closeSession}

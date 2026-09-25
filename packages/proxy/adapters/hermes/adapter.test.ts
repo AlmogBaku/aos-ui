@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import type { AgentUpdatePatch } from "../../../protocol"
 
 import {
   HermesAgentNotFoundError,
@@ -17,7 +18,10 @@ import {
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 import { PendingRequestKind } from "../../core/events"
-import { ServerTurnSteerUncertainError } from "../../core/runtime"
+import {
+  ServerAgentUpdateUnsupportedError,
+  ServerTurnSteerUncertainError,
+} from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
 import { HermesInteractionPublicError } from "./interactions"
 import {
@@ -30,18 +34,31 @@ import {
   HermesWorkspaceUnavailableError,
 } from "./workspace"
 
-function profile(hidden = false, revision: number | null = 7) {
+function profile(
+  hidden = false,
+  revision: number | null = 7,
+  aos: { avatar?: unknown; revision?: number } = {}
+) {
   return {
     name: "researcher",
     display_name: "Researcher",
     description: "Investigates primary sources",
     ui_meta: {
-      aos: { role: "agent", privatePath: "/srv/hermes/researcher" },
+      aos: {
+        role: "agent",
+        privatePath: "/srv/hermes/researcher",
+        ...(aos.avatar === undefined ? {} : { avatar: aos.avatar }),
+      },
       "hermes-bots": { hidden, nativeOnly: "keep-server-side" },
     },
     ...(revision === null
       ? {}
-      : { ui_meta_revisions: { "hermes-bots": revision } }),
+      : {
+          ui_meta_revisions: {
+            "hermes-bots": revision,
+            ...(aos.revision === undefined ? {} : { aos: aos.revision }),
+          },
+        }),
   }
 }
 
@@ -1475,6 +1492,7 @@ describe("Hermes server adapter", () => {
             id: "stored/1",
             profile: "researcher",
             title: "One",
+            started_at: 0.5,
             last_active: 1,
             is_active: true,
             session_id: "live-secret",
@@ -1491,6 +1509,7 @@ describe("Hermes server adapter", () => {
           agentId: "researcher",
           title: "One",
           archived: false,
+          createdAt: "1970-01-01T00:00:00.500Z",
           updatedAt: "1970-01-01T00:00:01.000Z",
           // `is_active` is Hermes' five-minute recency window, not a live turn.
           status: "idle",
@@ -1500,6 +1519,23 @@ describe("Hermes server adapter", () => {
       limit: 50,
       offset: 0,
     })
+  })
+
+  it("reads a Session's creation time from its detail row", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        id: "stored/1",
+        profile: "researcher",
+        title: "One",
+        started_at: 1_700_000_000,
+        last_active: 1_700_000_100,
+      })),
+    })
+
+    await expect(
+      adapter.getSession("researcher", "stored/1")
+    ).resolves.toMatchObject({ createdAt: "2023-11-14T22:13:20.000Z" })
   })
 
   it("reads a recently active Session as settled, not running", async () => {
@@ -2341,7 +2377,8 @@ describe("Hermes server adapter", () => {
           visibility: "visible",
           selectable: true,
           editable: true,
-          revision: "hermes-bots:7",
+          avatarEditable: true,
+          revision: "hermes-bots:7,aos:0",
         },
       ],
     })
@@ -2426,13 +2463,13 @@ describe("Hermes server adapter", () => {
 
     expect((await adapter.listAgents()).agents[0]).toMatchObject({
       editable: true,
-      revision: "hermes-bots:0",
+      revision: "hermes-bots:0,aos:0",
     })
 
-    const updated = await adapter.updateAgentVisibility(
+    const updated = await adapter.updateAgent(
       "default",
-      "hidden",
-      "hermes-bots:0"
+      { visibility: "hidden" },
+      "hermes-bots:0,aos:0"
     )
 
     expect(request.mock.calls[2]).toEqual([
@@ -2447,7 +2484,7 @@ describe("Hermes server adapter", () => {
     ])
     expect(updated.agent).toMatchObject({
       visibility: "hidden",
-      revision: "hermes-bots:1",
+      revision: "hermes-bots:1,aos:0",
     })
   })
 
@@ -2461,10 +2498,10 @@ describe("Hermes server adapter", () => {
       .mockResolvedValueOnce({ profiles: [profile(true, 8)] })
     const adapter = new HermesServerAdapter({ request })
 
-    const updated = await adapter.updateAgentVisibility(
+    const updated = await adapter.updateAgent(
       "researcher",
-      "hidden",
-      "hermes-bots:7"
+      { visibility: "hidden" },
+      "hermes-bots:7,aos:0"
     )
 
     expect(request.mock.calls).toEqual([
@@ -2487,7 +2524,7 @@ describe("Hermes server adapter", () => {
     expect(updated.agent).toMatchObject({
       visibility: "hidden",
       selectable: false,
-      revision: "hermes-bots:8",
+      revision: "hermes-bots:8,aos:0",
     })
   })
 
@@ -2495,9 +2532,186 @@ describe("Hermes server adapter", () => {
     const request = vi.fn(async () => ({ profiles: [profile()] }))
     const adapter = new HermesServerAdapter({ request })
     await expect(
-      adapter.updateAgentVisibility("researcher", "hidden", "hermes-bots:6")
+      adapter.updateAgent(
+        "researcher",
+        { visibility: "hidden" },
+        "hermes-bots:6,aos:0"
+      )
     ).rejects.toBeInstanceOf(HermesRevisionConflictError)
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("surfaces a token-shaped stored avatar", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(async () => ({
+        profiles: [profile(false, 7, { avatar: "ring/blue", revision: 3 })],
+      })),
+    })
+
+    expect((await adapter.listAgents()).agents[0]).toMatchObject({
+      summary: { avatar: "ring/blue" },
+      avatarEditable: true,
+      revision: "hermes-bots:7,aos:3",
+    })
+  })
+
+  it("reads a stored avatar that is not token-shaped as no avatar", async () => {
+    for (const avatar of ["Ring/Blue", "a/b/c", 42, { tone: "blue" }]) {
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(async () => ({
+          profiles: [profile(false, 7, { avatar, revision: 3 })],
+        })),
+      })
+
+      const [agent] = (await adapter.listAgents()).agents
+      expect(agent?.summary).not.toHaveProperty("avatar")
+    }
+  })
+
+  it("refuses an update when the aos revision moved on", async () => {
+    const request = vi.fn(async () => ({
+      profiles: [profile(false, 7, { revision: 3 })],
+    }))
+    const adapter = new HermesServerAdapter({ request })
+
+    await expect(
+      adapter.updateAgent(
+        "researcher",
+        { avatar: "ring/blue" },
+        "hermes-bots:7,aos:2"
+      )
+    ).rejects.toBeInstanceOf(HermesRevisionConflictError)
+    expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  it("hides an Agent and clears its avatar in one configure", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        profiles: [profile(false, 7, { avatar: "ring/blue", revision: 3 })],
+      })
+      .mockResolvedValueOnce({ applied: { ui_meta: true } })
+      .mockResolvedValueOnce({
+        profiles: [profile(true, 8, { revision: 4 })],
+      })
+    const adapter = new HermesServerAdapter({ request })
+
+    const updated = await adapter.updateAgent(
+      "researcher",
+      { visibility: "hidden", avatar: null },
+      "hermes-bots:7,aos:3"
+    )
+
+    expect(
+      request.mock.calls.filter(([method]) => method === "profiles.configure")
+    ).toEqual([
+      [
+        "profiles.configure",
+        {
+          name: "researcher",
+          ui_meta: {
+            "hermes-bots": { hidden: true, nativeOnly: "keep-server-side" },
+            aos: { role: "agent", privatePath: "/srv/hermes/researcher" },
+          },
+          ui_meta_expected_revisions: { "hermes-bots": 7, aos: 3 },
+        },
+      ],
+    ])
+    expect(updated.agent).toMatchObject({
+      visibility: "hidden",
+      revision: "hermes-bots:8,aos:4",
+    })
+    expect(updated.agent.summary).not.toHaveProperty("avatar")
+  })
+
+  it("writes an avatar alone, keeping the other aos keys", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ profiles: [profile(false, 7, { revision: 3 })] })
+      .mockResolvedValueOnce({ applied: { ui_meta: true } })
+      .mockResolvedValueOnce({
+        profiles: [profile(false, 7, { avatar: "dome/sage", revision: 4 })],
+      })
+    const adapter = new HermesServerAdapter({ request })
+
+    const updated = await adapter.updateAgent(
+      "researcher",
+      { avatar: "dome/sage" },
+      "hermes-bots:7,aos:3"
+    )
+
+    expect(request.mock.calls[1]).toEqual([
+      "profiles.configure",
+      {
+        name: "researcher",
+        ui_meta: {
+          aos: {
+            role: "agent",
+            privatePath: "/srv/hermes/researcher",
+            avatar: "dome/sage",
+          },
+        },
+        ui_meta_expected_revisions: { aos: 3 },
+      },
+    ])
+    expect(updated.agent.summary).toMatchObject({ avatar: "dome/sage" })
+  })
+
+  it("rejects a write the confirming reread does not show", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ profiles: [profile(false, 7, { revision: 3 })] })
+      .mockResolvedValueOnce({ applied: { ui_meta: true } })
+      .mockResolvedValueOnce({ profiles: [profile(false, 7, { revision: 4 })] })
+    const adapter = new HermesServerAdapter({ request })
+
+    await expect(
+      adapter.updateAgent(
+        "researcher",
+        { avatar: "dome/sage" },
+        "hermes-bots:7,aos:3"
+      )
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+  })
+
+  it("sends no native request for a malformed avatar reaching the adapter directly", async () => {
+    const request = vi.fn(async () => ({ profiles: [profile(false, 7)] }))
+    const adapter = new HermesServerAdapter({ request })
+
+    for (const avatar of ["Not A Token", "ring", "ring/blue/extra", 7])
+      await expect(
+        adapter.updateAgent(
+          "researcher",
+          { avatar } as unknown as AgentUpdatePatch,
+          "hermes-bots:7,aos:0"
+        )
+      ).rejects.toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it("refuses an update aimed at the creator", async () => {
+    const creator = {
+      name: "aos-creator",
+      ui_meta: { aos: { role: "creator" } },
+      ui_meta_revisions: {},
+    }
+    const request = vi.fn(async () => ({ profiles: [creator] }))
+    const adapter = new HermesServerAdapter({ request })
+
+    expect((await adapter.listAgents()).agents[0]).toMatchObject({
+      editable: false,
+      avatarEditable: false,
+    })
+    await expect(
+      adapter.updateAgent(
+        "aos-creator",
+        { avatar: "ring/blue" },
+        "hermes-bots:0,aos:0"
+      )
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    expect(
+      request.mock.calls.some(([method]) => method === "profiles.configure")
+    ).toBe(false)
   })
 
   it("distinguishes rejected Hermes credentials from a temporary outage", async () => {
@@ -2987,7 +3201,11 @@ describe("Hermes server adapter", () => {
       request: vi.fn(async () => ({ profiles: [profile()] })),
     })
     await expect(
-      adapter.updateAgentVisibility("missing-agent", "hidden", "hermes-bots:7")
+      adapter.updateAgent(
+        "missing-agent",
+        { visibility: "hidden" },
+        "hermes-bots:7,aos:0"
+      )
     ).rejects.toBeInstanceOf(HermesAgentNotFoundError)
   })
 })

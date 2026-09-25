@@ -6,7 +6,7 @@ import type {
 } from "@aos/protocol"
 
 import type {
-  AgentVisibility,
+  AgentUpdate,
   SessionActionCapabilities,
   SessionCreationOptions,
 } from "../../contracts"
@@ -67,6 +67,16 @@ export function createAcpWorkspaceClient({
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
+
+  /** Sends the revision the catalog last reported and keeps the one returned. */
+  async function updateAgent(agentId: string, patch: AgentUpdate) {
+    const revision = revisions.get(agentId)
+    if (!revision || revision === "unavailable")
+      throw new Error("An Agent update requires a fresh catalog revision")
+    const result = await connection.updateAgent({ agentId, ...patch, revision })
+    revisions.set(agentId, result.agent.revision)
+  }
+
   let creatorId: string | undefined
   let listedAgentIds: ReadonlySet<string> = new Set()
   /** The Agent ids each creator Session's catalog held when it opened. */
@@ -223,25 +233,16 @@ export function createAcpWorkspaceClient({
     },
     async listAgentCatalog() {
       return (await catalog()).agents.map(
-        ({ summary, visibility, selectable, editable }) => ({
+        ({ summary, visibility, selectable, editable, avatarEditable }) => ({
           summary,
           visibility,
           selectable,
           editable,
+          avatarEditable,
         })
       )
     },
-    async updateAgentVisibility(agentId: string, visibility: AgentVisibility) {
-      const revision = revisions.get(agentId)
-      if (!revision || revision === "unavailable")
-        throw new Error("Agent visibility requires a fresh catalog revision")
-      const result = await connection.setVisibility({
-        agentId,
-        visibility,
-        revision,
-      })
-      revisions.set(agentId, result.agent.revision)
-    },
+    updateAgent,
     subscribeAgentCatalog: (listener: () => void) =>
       connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () =>
         listener()

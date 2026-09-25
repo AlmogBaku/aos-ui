@@ -126,23 +126,6 @@ nav.list {
   place-items: center;
 }
 
-.agentIcon > svg {
-  inline-size: 1.25rem;
-  block-size: 1.25rem;
-}
-
-/* AgentGlyph is a complete glyph container. Keep it inside this compact slot. */
-.agentIcon > span {
-  inline-size: 100%;
-  block-size: 100%;
-  border-radius: 0.5rem;
-}
-
-.agentIcon > span > svg {
-  inline-size: 1.125rem;
-  block-size: 1.125rem;
-}
-
 .rowText {
   display: flex;
   min-inline-size: 0;

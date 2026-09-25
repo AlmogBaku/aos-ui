@@ -5,6 +5,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
+  type AgentUpdatePatch,
   SessionCreateResponseSchema,
   SessionModelsResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -65,6 +66,7 @@ export function sessionInfoMeta(
     agentId: row.agentId,
     status,
     archived: row.archived,
+    ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
     ...(row.unread === undefined ? {} : { unread: row.unread }),
     ...(row.pinned === undefined ? {} : { pinned: row.pinned }),
   }
@@ -201,12 +203,8 @@ export function createWorkspace(
     },
     info: () => call(() => runtime.runtimeInfo()),
     agents: () => call(() => runtime.listAgents()),
-    setVisibility: (
-      agentId: string,
-      visibility: "visible" | "hidden",
-      revision: string
-    ) =>
-      call(() => runtime.updateAgentVisibility(agentId, visibility, revision)),
+    updateAgent: (agentId: string, patch: AgentUpdatePatch, revision: string) =>
+      call(() => runtime.updateAgent(agentId, patch, revision)),
     list: (agentId: string | undefined, limit: number, offset: number) =>
       call(() =>
         agentId === undefined

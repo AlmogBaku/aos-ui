@@ -130,10 +130,41 @@ AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
   bun run dev
 ```
 
+## Agent icons
+
+Each Agent's icon is stored in the `identity.avatar` field of the Agent's own
+authored entry in `agents.list` inside the config.
+
+The proxy writes an icon only for a non-creator Agent (never `aos-agent-creator`)
+that has its own `agents.list` entry whose `id` exactly matches. An Agent with
+no authored entry cannot take a write; its `avatarEditable` is `false`. The
+implicit default Agent (no entry) stays unsaved for the same reason.
+
+The write reads the current config hash with `config.get`, then sends one
+`config.patch` with that `baseHash` and exactly
+`{agents:{list:[{id, identity:{avatar}}]}}`, then re-lists to confirm.
+It requires `operator.admin`.
+
+The `config.get` payload may carry credentials. The proxy keeps only the config
+hash and the set of authored Agent ids, and logs or returns nothing else from
+it. Every catalog read also calls `config.get` to refresh the authorized set.
+
+Visibility changes are unsupported for OpenClaw; a patch that includes
+`visibility` is rejected as a whole.
+
+OpenClaw's own Control UI reads `identity.avatar` as a file path, so after AOS
+writes a token such as `ring/blue` that field may show as a broken or default
+avatar in the Control UI.
+
+Session `createdAt` comes from the native millisecond timestamp in `createdAt`.
+
+The first workspace open after the proxy is upgraded saves an icon for every
+Agent with an authored entry.
+
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
-- Session creation and Artifacts are available. Rename, archive, delete, visibility changes, Todos, Activity, edit/regenerate, steering, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- Session creation and Artifacts are available. Rename, archive, delete, Todos, Activity, edit/regenerate, steering, visibility changes, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Avatar writes are available for Agents with an authored config entry. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
 - The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, and `operator.admin`. Admin scope is what lets it enable the `aos-ui` MCP server per Session; pair the proxy device with it.

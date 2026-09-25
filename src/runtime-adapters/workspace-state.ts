@@ -15,8 +15,6 @@ export function getWorkspaceCapabilities(
 ): WorkspaceCapabilities {
   return {
     agentCatalog: typeof workspace.listAgentCatalog === "function",
-    agentVisibilityUpdates:
-      typeof workspace.updateAgentVisibility === "function",
     agentUpdates: typeof workspace.updateAgent === "function",
     todos: typeof workspace.subscribeTodos === "function",
     agentCreation:

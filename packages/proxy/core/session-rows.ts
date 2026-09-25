@@ -3,8 +3,8 @@ import type { Session } from "../../protocol"
 /**
  * One cached Session row. `unread` is present only when a list read reported
  * it or a mark-read write settled it; detail reads never carry it and never
- * clear a known value. `pinned` comes from whichever read reports it, and a
- * read that omits it likewise never clears a known value.
+ * clear a known value. `pinned` and `createdAt` come from whichever read
+ * reports them, and a read that omits one likewise never clears a known value.
  *
  * `readAt` is Unix ms of the moment *we* acknowledged a read for the operator,
  * which is what answers "has the operator seen what happened before this?" — a
@@ -66,6 +66,7 @@ const COMPARED: readonly (keyof SessionRow)[] = [
   "agentId",
   "title",
   "archived",
+  "createdAt",
   "updatedAt",
   "status",
   "unread",

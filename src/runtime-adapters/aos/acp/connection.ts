@@ -27,6 +27,7 @@ import {
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
   AosActivityNotificationSchema,
+  AosAgentUpdateResponseSchema,
   AosAgentsListResponseSchema,
   AosChunkMetaSchema,
   AosComposerPrefillNotificationSchema,
@@ -38,13 +39,13 @@ import {
   AosSessionInvalidatedNotificationSchema,
   AosSessionNewResponseMetaSchema,
   AosSessionResumeResponseMetaSchema,
-  AosSetVisibilityResponseSchema,
   AosSteerAcceptedNotificationSchema,
   AosSteerResponseSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
+import { AgentUpdateError } from "../../contracts"
 import type {
   AcpConnection,
   AcpConnectionStatus,
@@ -100,14 +101,31 @@ export type AcpConnectionOptions = {
   schedule?: (delayMs: number, task: () => void) => void
 }
 
-/** The code the proxy refuses an invitation it cannot redeem with. */
-function isAuthenticationRequired(error: unknown) {
+/** Whether a JSON-RPC failure carries `code`. */
+function hasErrorCode(error: unknown, code: number) {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === AOS_JSONRPC_ERRORS.authenticationRequired
+    error.code === code
   )
+}
+
+/** The code the proxy refuses an invitation it cannot redeem with. */
+function isAuthenticationRequired(error: unknown) {
+  return hasErrorCode(error, AOS_JSONRPC_ERRORS.authenticationRequired)
+}
+
+/** The Agent update refusals a caller can act on, as typed errors. */
+function agentUpdateError(error: unknown) {
+  if (hasErrorCode(error, AOS_JSONRPC_ERRORS.unsupported))
+    return new AgentUpdateError(
+      "unsupported",
+      "This runtime cannot store that Agent field"
+    )
+  if (hasErrorCode(error, AOS_JSONRPC_ERRORS.revisionConflict))
+    return new AgentUpdateError("conflict", "The Agent changed; reload it")
+  return error
 }
 
 /** `_meta.aos` of an ACP payload, when it carries one. */
@@ -624,11 +642,14 @@ export function createAcpConnection(
       )
     },
 
-    async setVisibility(request) {
+    async updateAgent(request) {
       const agent = await withAgent()
-      return AosSetVisibilityResponseSchema.parse(
-        await agent.request(AOS_METHODS.agents.setVisibility, request)
-      )
+      const response = await agent
+        .request(AOS_METHODS.agents.update, request)
+        .catch((error: unknown) => {
+          throw agentUpdateError(error)
+        })
+      return AosAgentUpdateResponseSchema.parse(response)
     },
 
     onSessionUpdate: (sessionId, listener) =>

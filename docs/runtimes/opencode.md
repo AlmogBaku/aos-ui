@@ -172,9 +172,32 @@ its bytes through OpenCode's `GET /file/content`, confined to the configured
 project directory: a receipt path outside that directory reads as unavailable.
 Only a receipt the Session still holds grants read access.
 
+## Agent icons
+
+OpenCode has no native Agent write, so every `_aos/agents/update` call returns
+the `-32009 unsupported` error and `avatarEditable` is `false` for every Agent.
+
+An operator may hand-write an `avatar: ring/blue` key in the Agent file's
+frontmatter. The proxy reads it from `request.body.avatar` and treats it as
+the Agent's icon. Be aware of two effects:
+
+- OpenCode forwards `request.body` to the model provider on every request, so
+  the `avatar` key travels to the LLM API.
+- An unknown frontmatter key causes OpenCode to load that Agent file with its
+  legacy parser, which may change other frontmatter handling.
+
+Agents without a stored icon receive a generated icon derived from their
+position in the id-sorted roster. If the roster changes, the icon assignments
+can shift. A stable icon requires writing the frontmatter key.
+
+Session `createdAt` comes from `time.created`.
+
+A follow-up ticket (ALM-16) will adopt `experimental.fs.write` once a released
+OpenCode ships it, enabling the proxy to store icons without frontmatter.
+
 ## Capability limits
 
-- AOS reads the native Agent catalog and creates Sessions, but Agent visibility, Session titles, deletion, Todos, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- AOS reads the native Agent catalog and creates Sessions, but Agent visibility, Agent icon writes, Session titles, deletion, Todos, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
 - An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API exposes neither title-bearing creation nor title mutation; a new invitation therefore cannot create a Session on first Send.
 - AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
