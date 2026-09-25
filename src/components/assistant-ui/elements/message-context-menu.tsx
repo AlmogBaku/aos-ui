@@ -16,6 +16,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react"
 import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
 import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
 import type { LocaleDirection } from "@/lib/i18n/config"
+import { useTouchPress } from "@/lib/touch-press"
 
 import { useVoiceMessageAction } from "../voice/voice-read-aloud"
 import {
@@ -24,7 +25,6 @@ import {
   useMessageRetry,
 } from "./message-actions"
 import type { MessageRewind, ThreadLabels } from "./thread.aui"
-import { useTouchPrimaryInput } from "./touch-primary"
 
 export type MessageContextMenuLabels = Pick<
   ThreadLabels,
@@ -74,9 +74,9 @@ function hasSelectionInside(root: HTMLElement | null) {
  * long press on touch, a right click with a pointer. The action bar keeps every
  * item it already has, and this menu offers the same ones in the same states.
  *
- * Touch selects no text by default, because a press has to mean the menu.
- * `Select text` hands that press back to the browser for one message until the
- * next press outside it.
+ * A finger press selects no text by default, because a press has to mean the
+ * menu. `Select text` hands that press back to the browser for one message
+ * until the next press outside it.
  */
 export function MessageContextMenu({
   role,
@@ -94,7 +94,7 @@ export function MessageContextMenu({
   const rootRef = useRef<HTMLDivElement>(null)
   const returnFocusTo = useRef<HTMLElement | null>(null)
   const [selectable, setSelectable] = useState(false)
-  const isTouchPrimaryInput = useTouchPrimaryInput()
+  const { touchPress, onPointerDown } = useTouchPress()
   const hasPendingInteraction = usePendingInteractionGate()
   const copy = useMessageCopy()
   const retry = useMessageRetry(messageRewind)
@@ -170,7 +170,7 @@ export function MessageContextMenu({
       onSelect: edit.edit,
     })
   }
-  if (isTouchPrimaryInput)
+  if (touchPress)
     items.push({
       id: "select-text",
       label: labels.selectText,
@@ -198,8 +198,7 @@ export function MessageContextMenu({
         // Only so closing the menu has somewhere to return focus to: an
         // unhovered message renders no action bar and no focusable control.
         tabIndex={-1}
-        data-selectable={selectable ? "true" : undefined}
-        className="touch-primary:select-none touch-primary:data-[selectable=true]:select-text"
+        className={touchPress && !selectable ? "select-none" : undefined}
         // Base UI suppresses the iOS callout for the whole trigger; the targets
         // vetoed below keep their own link and image menus.
         style={{ WebkitTouchCallout: "default" }}
@@ -214,6 +213,7 @@ export function MessageContextMenu({
           event.stopPropagation()
           event.preventBaseUIHandler()
         }}
+        onPointerDown={onPointerDown}
         onTouchStart={(event) => {
           // Base UI stops this event itself; veto only its long-press handler.
           if (isNativeTarget(event.target, TOUCH_NATIVE_TARGETS))
