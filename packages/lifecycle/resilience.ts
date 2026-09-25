@@ -8,7 +8,6 @@ import {
 
 import { defaultClock, type Clock } from "./clock"
 import { Deadline } from "./deadline"
-import { BACKOFF } from "./values"
 
 /**
  * A cockatiel bulkhead running `limit` calls with `queue` more waiting. A call
@@ -60,7 +59,10 @@ export function breaker({
 }
 
 /** cockatiel's full-jitter delay for a 0-based retry `attempt`. */
-export function backoffDelay(attempt: number, { baseMs, capMs } = BACKOFF) {
+export function backoffDelay(
+  attempt: number,
+  { baseMs, capMs }: { baseMs: number; capMs: number }
+) {
   const [delay] = fullJitterGenerator(attempt, {
     initialDelay: baseMs,
     maxDelay: capMs,
