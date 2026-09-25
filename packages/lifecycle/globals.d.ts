@@ -5,3 +5,23 @@
 declare function setTimeout(callback: () => void, ms: number): unknown
 declare function clearTimeout(id: unknown): void
 declare const performance: { now(): number }
+
+interface AbortSignal {
+  readonly aborted: boolean
+  readonly reason: unknown
+  addEventListener(
+    type: "abort",
+    listener: () => void,
+    options?: { once?: boolean }
+  ): void
+  removeEventListener(type: "abort", listener: () => void): void
+}
+
+declare class AbortController {
+  readonly signal: AbortSignal
+  abort(reason?: unknown): void
+}
+
+declare class DOMException extends Error {
+  constructor(message?: string, name?: string)
+}
