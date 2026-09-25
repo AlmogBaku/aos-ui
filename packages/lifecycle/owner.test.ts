@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { fromPromise } from "xstate"
 
 import { defaultClock } from "./clock"
 import type { LogFields, Logger } from "./logger"
@@ -110,3 +111,52 @@ it("fires after deadlines on the injected monotonic clock only", () => {
   vi.advanceTimersByTime(1)
   expect(owner.actor.getSnapshot().value).toBe("expired")
 })
+
+it.each(["dispose", "a final state", "a thrown action"] as const)(
+  "releases the owner exactly once after %s and stops its children",
+  (exit) => {
+    const { logger } = recorder()
+    let child: AbortSignal | undefined
+    const machine = ownerSetup("turn", logger, defaultClock).createMachine({
+      context: { generation: 0 },
+      initial: "running",
+      states: {
+        running: {
+          invoke: {
+            src: fromPromise(({ signal }) => {
+              child = signal
+              return new Promise(() => {})
+            }),
+          },
+          on: {
+            settle: "settled",
+            fail: {
+              actions: () => {
+                throw new Error("synthetic failure")
+              },
+            },
+          },
+        },
+        settled: { type: "final" },
+      },
+    })
+    const owner = createOwner(machine, {
+      logger,
+      clock: defaultClock,
+      bindings: {},
+    })
+    let released = 0
+    owner.stack.defer(() => {
+      released += 1
+    })
+
+    if (exit === "dispose") owner.dispose()
+    if (exit === "a final state") owner.actor.send({ type: "settle" })
+    if (exit === "a thrown action") owner.actor.send({ type: "fail" })
+
+    expect(released).toBe(1)
+    expect(child?.aborted).toBe(true)
+    owner.dispose()
+    expect(released).toBe(1)
+  }
+)

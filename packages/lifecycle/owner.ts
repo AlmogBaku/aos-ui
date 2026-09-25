@@ -8,6 +8,7 @@ import {
   type AnyStateMachine,
   type InspectionEvent,
   type Observer,
+  type UnknownActorLogic,
 } from "xstate"
 
 import type { Clock } from "./clock"
@@ -110,6 +111,8 @@ export function ownerSetup<
     kind,
     setup({
       types: {} as { context: TContext; events: TEvent },
+      // An open actor map is what lets XState type an inline invoke source.
+      actors: {} as Record<string, UnknownActorLogic>,
       actions: {
         logTransition: (args, { to, after, info }: TransitionParams) => {
           const { context, event, self } = args
@@ -160,7 +163,23 @@ export type Owner<TMachine extends AnyStateMachine> = {
   dispose(): void
 }
 
-/** Start one owner actor on the injected clock, logging with `bindings`. */
+/**
+ * XState 5.33 stops a parent's children when it stops or finishes, but not
+ * when one of its actions throws; its `_stop` is the only way to do it then.
+ */
+function stopChildren(actor: AnyActorRef) {
+  const { children } = actor.getSnapshot() as {
+    children: Record<string, AnyActorRef | undefined>
+  }
+  for (const child of Object.values(children))
+    (child as unknown as { _stop?: () => void } | undefined)?._stop?.()
+}
+
+/**
+ * Start one owner actor on the injected clock, logging with `bindings`. Its
+ * stack is disposed exactly once, after its children stop, whether the owner
+ * is disposed, reaches a final state or fails.
+ */
 export function createOwner<TMachine extends AnyStateMachine>(
   machine: TMachine,
   { logger, clock, inspect, bindings }: OwnerOptions
@@ -172,6 +191,21 @@ export function createOwner<TMachine extends AnyStateMachine>(
   }) as Actor<TMachine>
   tracks.set(actor, { log })
   const stack = new DisposableStack()
+  const release = () => {
+    try {
+      stack.dispose()
+    } catch (err) {
+      log.error({ err }, `${machine.id}.failed`)
+    }
+  }
+  actor.subscribe({
+    complete: release,
+    error: (err) => {
+      log.error({ err }, `${machine.id}.failed`)
+      stopChildren(actor)
+      release()
+    },
+  })
   const generation = () =>
     (actor.getSnapshot() as { context: OwnerContext }).context.generation
   actor.start()
@@ -182,6 +216,9 @@ export function createOwner<TMachine extends AnyStateMachine>(
       return generation()
     },
     stale: (candidate) => candidate !== generation(),
-    dispose: () => actor.stop(),
+    dispose: () => {
+      actor.stop()
+      release()
+    },
   }
 }
