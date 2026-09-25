@@ -445,7 +445,6 @@ export const UNCERTAIN_ERROR_CODES = [
   "AOS_CONNECTION_INTERRUPTED",
   "AOS_RESET_REQUIRED",
 ] as const
-export type UncertainErrorCode = (typeof UNCERTAIN_ERROR_CODES)[number]
 
 export function isUncertainFailure(event: TurnEvent): boolean {
   return (

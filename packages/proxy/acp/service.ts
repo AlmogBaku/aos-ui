@@ -98,5 +98,3 @@ export function createAcpService(options: AcpServiceOptions) {
 
   return { authorizeUpgrade, open }
 }
-
-export type AcpService = ReturnType<typeof createAcpService>

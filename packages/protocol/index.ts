@@ -1,6 +1,5 @@
 import { z } from "zod"
 
-export const AOS_API_PREFIX = "/api/aos/v1" as const
 export const SESSION_CATALOG_MAX_WINDOW = 1_000 as const
 
 const IdentifierSchema = z

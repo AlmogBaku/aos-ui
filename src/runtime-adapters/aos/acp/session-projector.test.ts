@@ -25,7 +25,6 @@ import {
   messageBlocks,
   prependMessages,
   renameMessage,
-  retainBefore,
   retainMessages,
   toThreadMessages,
   type ProjectorState,
@@ -1493,13 +1492,6 @@ describe("local turn bookkeeping", () => {
       toThreadMessages(retainMessages(sent, ["local-1"])).map((m) => m.id)
     ).toEqual(["local-1"])
     expect(retainMessages(sent, ["local-1", "a1"])).toBe(sent)
-  })
-
-  it("keeps only the turns before the one a rewind replaces", () => {
-    expect(
-      toThreadMessages(retainBefore(sent, "a1")).map((message) => message.id)
-    ).toEqual(["local-1"])
-    expect(retainBefore(sent, "missing")).toBe(sent)
   })
 
   it("hands back the blocks a turn was sent with", () => {

@@ -130,9 +130,6 @@ export type AosExtensions = z.infer<typeof AosExtensionsSchema>
 export const AosClientCapabilitiesMetaSchema = readObject({
   historyPages: z.boolean().default(false),
 })
-export type AosClientCapabilitiesMeta = z.infer<
-  typeof AosClientCapabilitiesMetaSchema
->
 
 /** `InitializeResponse._meta.aos` */
 export const AosInitializeMetaSchema = readObject({
@@ -218,7 +215,6 @@ export const AosReplayBeforeSchema = z.strictObject({
   cursor: z.string().min(1).max(256),
   _meta: z.record(z.string(), z.unknown()).nullish(),
 })
-export type AosReplayBefore = z.infer<typeof AosReplayBeforeSchema>
 
 /**
  * `_meta.aos.history` on a resume that replayed. It follows ACP v2
@@ -288,9 +284,6 @@ export const AosSessionUpdateRequestSchema = z
       ).length === 1,
     "Exactly one of title, archived, unread, pinned"
   )
-export type AosSessionUpdateRequest = z.infer<
-  typeof AosSessionUpdateRequestSchema
->
 
 /** `_aos/session/steer` params and response. */
 export const AosSteerRequestSchema = z.strictObject({
@@ -467,7 +460,6 @@ export const AosUsageMetaSchema = readObject({
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
 })
-export type AosUsageMeta = z.infer<typeof AosUsageMetaSchema>
 
 // ---------------------------------------------------------------------------
 // pending requests `_meta.aos`

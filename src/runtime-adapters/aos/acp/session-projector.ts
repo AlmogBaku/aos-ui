@@ -1132,15 +1132,6 @@ export function failedWithoutReply(
   )
 }
 
-/** Drops the turn a rewind replaces, and everything after it. */
-export function retainBefore(
-  state: ProjectorState,
-  messageId: string
-): ProjectorState {
-  const at = state.messages.findIndex((message) => message.id === messageId)
-  return at < 0 ? state : withMessages(state, state.messages.slice(0, at))
-}
-
 /** The blocks a turn was sent with, so a retry can re-send them verbatim. */
 export function messageBlocks(
   state: ProjectorState,
