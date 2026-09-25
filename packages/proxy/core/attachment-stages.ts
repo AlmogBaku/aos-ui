@@ -10,6 +10,9 @@ type Entry = {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** Staged attachment bytes one process holds at once. */
+const MAXIMUM_STAGED_BYTES = 256 * 1024 * 1024
+
 /** Bounded, expiring one-shot registry; native references remain inside closures. */
 export class AttachmentStageRegistry implements ServerAttachmentStages {
   readonly #entries = new Map<string, Entry>()
@@ -18,7 +21,7 @@ export class AttachmentStageRegistry implements ServerAttachmentStages {
   constructor(
     private readonly maximum = 256,
     private readonly ttlMs = 300_000,
-    private readonly maximumBytes = Number.POSITIVE_INFINITY,
+    private readonly maximumBytes = MAXIMUM_STAGED_BYTES,
     private readonly maximumPerScope = maximum
   ) {}
 

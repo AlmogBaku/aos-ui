@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { createProxyApp } from "./app"
+import { createProxyApp, type ProxyAppOptions } from "./app"
 import {
   HermesAuthenticationError,
   HermesHttpError,
@@ -10,6 +10,7 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
+import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { RuntimeInstance, ServerMcpApps } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 import { McpAppNotFoundError } from "./mcp-apps/fallback"
@@ -56,13 +57,19 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
   }
 }
 
-function app(runtime: HermesServerAdapter) {
+function app(
+  runtime: HermesServerAdapter,
+  options: Partial<ProxyAppOptions> = {}
+) {
   return createProxyApp({
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
     logger: { info: vi.fn(), error: vi.fn() },
+    ...options,
   })
 }
+
+const stagedDataUrl = "data:text/plain;base64,bm90ZXM="
 
 const stageRequest = {
   method: "POST",
@@ -73,7 +80,7 @@ const stageRequest = {
         type: "file",
         filename: "notes.txt",
         mimeType: "text/plain",
-        dataUrl: "data:text/plain;base64,bm90ZXM=",
+        dataUrl: stagedDataUrl,
       },
     ],
   }),
@@ -107,10 +114,17 @@ describe("AOS V1 proxy", () => {
       cleanup,
     })
 
-    const response = await app(runtime).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
-      stageRequest
-    )
+    // Room for exactly one batch's bytes, so a second one is over the cap.
+    const proxy = app(runtime, {
+      attachmentStages: new AttachmentStageRegistry(
+        256,
+        300_000,
+        stagedDataUrl.length
+      ),
+    })
+    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
+
+    const response = await proxy.request(path, stageRequest)
 
     expect(response.status).toBe(201)
     await expect(response.json()).resolves.toMatchObject({
@@ -120,6 +134,9 @@ describe("AOS V1 proxy", () => {
       ],
     })
     expect(cleanup).not.toHaveBeenCalled()
+
+    expect((await proxy.request(path, stageRequest)).status).toBe(503)
+    expect(cleanup).toHaveBeenCalledOnce()
   })
 
   it("requires the exact configured origin for state changes", async () => {

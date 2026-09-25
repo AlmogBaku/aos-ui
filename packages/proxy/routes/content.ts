@@ -70,7 +70,16 @@ export function registerContentRoutes(
       sessionId,
       body.data.attachments
     )
-    const stageId = attachmentStages.create(agentId, sessionId, stage)
+    const sizeBytes = body.data.attachments.reduce(
+      (total, attachment) => total + attachment.dataUrl.length,
+      0
+    )
+    const stageId = attachmentStages.create(
+      agentId,
+      sessionId,
+      stage,
+      sizeBytes
+    )
     if (!stageId) {
       await stage.cleanup().catch(() => undefined)
       return errorResponse("turn_capacity_exceeded", 503)

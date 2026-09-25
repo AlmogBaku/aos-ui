@@ -18,6 +18,15 @@ describe("AttachmentStageRegistry", () => {
     expect(registry.create("agent", "one", stage(), 1)).toBeUndefined()
     expect(registry.create("agent", "two", stage(), 3)).toBeUndefined()
     expect(registry.create("agent", "two", stage(), 2)).toBeDefined()
+    // A registry built without a byte bound still holds at most 256 MiB.
+    expect(
+      new AttachmentStageRegistry().create(
+        "agent",
+        "one",
+        stage(),
+        256 * 1024 * 1024 + 1
+      )
+    ).toBeUndefined()
   })
 
   it("expires and cleans unused stages while preserving one-shot consumption", async () => {
