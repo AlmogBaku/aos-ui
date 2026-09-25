@@ -54,23 +54,6 @@ export class HermesHttpError extends Error {
   }
 }
 
-export function normalizeBaseUrl(value: string) {
-  try {
-    const url = new URL(value)
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    )
-      throw new Error()
-    return url.href.replace(/\/$/u, "")
-  } catch {
-    throw new Error("Invalid Hermes base URL")
-  }
-}
-
 function declaredLength(response: Response, maxBytes: number) {
   const value = response.headers.get("content-length")
   if (value === null) return
@@ -184,7 +167,7 @@ async function boundedJsonResponse(
 
 /** Bounded native REST client; the only AOS surface that talks Hermes HTTP. */
 export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
-  const baseUrl = normalizeBaseUrl(options.baseUrl)
+  const { baseUrl } = options
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
   const timeoutMs = options.timeoutMs ?? 15_000
   return {
