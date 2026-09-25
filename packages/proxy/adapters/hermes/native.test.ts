@@ -8,7 +8,6 @@ import {
   isRecord,
   nativeId,
   parseJson,
-  parseJsonOrValue,
   timestamp,
   utf8BytesWithin,
 } from "./native"
@@ -26,7 +25,7 @@ describe("isRecord", () => {
 })
 
 // ---------------------------------------------------------------------------
-// parseJson / parseJsonOrValue
+// parseJson
 // ---------------------------------------------------------------------------
 
 describe("parseJson", () => {
@@ -36,15 +35,6 @@ describe("parseJson", () => {
     expect(parseJson("{broken")).toBeUndefined()
     expect(parseJson(42)).toBe(42)
     expect(parseJson({ x: 1 })).toEqual({ x: 1 })
-  })
-})
-
-describe("parseJsonOrValue", () => {
-  it("parses a JSON string, returns an invalid one unchanged, and passes non-strings through", () => {
-    expect(parseJsonOrValue('{"a":1}')).toEqual({ a: 1 })
-    expect(parseJsonOrValue("{broken")).toBe("{broken")
-    expect(parseJsonOrValue(42)).toBe(42)
-    expect(parseJsonOrValue({ x: 1 })).toEqual({ x: 1 })
   })
 })
 

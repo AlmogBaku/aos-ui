@@ -23,11 +23,11 @@ import {
   containsCredentialValue,
   isRecord,
   parseJson,
-  parseJsonOrValue,
   trimmedText,
   unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
+import { parseJsonOrValue } from "../todos"
 import {
   isCredentialPlaceholder,
   REDACTED,

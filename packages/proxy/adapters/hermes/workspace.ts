@@ -2,7 +2,7 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "../../../protocol"
-import { projectTodos, type Todo } from "../todos"
+import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson } from "./native"
 import {
@@ -10,7 +10,6 @@ import {
   nativeProviderSlug,
   projectSessionModel,
 } from "./session-model"
-import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { toolCallSelections } from "./tool-data"
 
 type NativeRecord = Record<string, unknown>
@@ -401,7 +400,7 @@ export function latestHermesTodos(
       continue
     const todos = projectTodos(
       row.content ?? row.result,
-      HERMES_TODO_STATUS_ALIASES
+      TODO_STATUS_ALIASES
     )
     // A batched call may settle a Todo tool beside another one, and a row that
     // carries no Todo list at all leaves the plan the last one published
