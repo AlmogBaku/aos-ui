@@ -22,6 +22,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
+import { validIdentifier } from "../../core/identifier"
 import { projectTodos } from "../todos"
 import {
   OpenCodeClientAbortError,
@@ -112,17 +113,6 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   /** The project's MCP servers; without them, no tool opens a view. */
   mcp?: OpenCodeMcpCatalog
 }>
-
-function identifier(value: string) {
-  return (
-    value.length > 0 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
-}
 
 /**
  * The bytes one native file read answered with. OpenCode answers a missing file
@@ -289,7 +279,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   resolveSessionId(agentId: string, publicSessionId: string) {
-    return identifier(agentId) && identifier(publicSessionId)
+    return validIdentifier(agentId) && validIdentifier(publicSessionId)
       ? publicSessionId
       : undefined
   }
@@ -729,14 +719,15 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const options = catalog.data.data.flatMap((model) => {
       if (!model.enabled) return []
       const id = openCodeModelOptionId(model)
-      if (!identifier(id) || native.has(id))
+      if (!validIdentifier(id) || native.has(id))
         throw new OpenCodeWorkspaceUnavailableError()
       native.set(id, { providerID: model.providerID, id: model.id })
       return [{ id, label: model.name, group: model.providerID }]
     })
     const selected = session.data.model
     const selectedId = openCodeModelOptionId(selected)
-    if (!identifier(selectedId)) throw new OpenCodeWorkspaceUnavailableError()
+    if (!validIdentifier(selectedId))
+      throw new OpenCodeWorkspaceUnavailableError()
     // A Session may run a model the catalog no longer lists; it stays listed
     // by its own id so the selector still shows what the Session runs.
     if (!native.has(selectedId)) {

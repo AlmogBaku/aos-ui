@@ -9,6 +9,7 @@ import {
   canonicalToolName,
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
+import { validIdentifier } from "../../core/identifier"
 import {
   openClawArtifactReceipt,
   openClawMediaArtifact,
@@ -64,15 +65,7 @@ function boundedString(value: unknown, max = 1_000_000) {
 }
 
 function identifier(value: unknown) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 256 &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0)
-      return code < 32 || code === 127
-    })
-    ? value
-    : undefined
+  return typeof value === "string" && validIdentifier(value) ? value : undefined
 }
 
 function timestamp(row: Record<string, unknown>, index: number) {

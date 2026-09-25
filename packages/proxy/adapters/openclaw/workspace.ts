@@ -5,14 +5,15 @@ import type {
   SessionCatalogResponse,
 } from "../../../protocol"
 import { SessionCreateResponseSchema } from "../../../protocol"
+import { openClawInviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 
 import {
   openClawAgentsParams,
   openClawCreateSessionParams,
   openClawDeleteSessionParams,
-  openClawSessionSearchParams,
   openClawPatchSessionParams,
+  openClawSessionSearchParams,
   openClawSessionsParams,
   parseOpenClawAgents,
   parseOpenClawCreatedSession,
@@ -130,7 +131,7 @@ export function invitedOpenClawSessionKey(agentId: string, ref: string) {
     !INVITATION_REFERENCE.test(ref)
   )
     throw new OpenClawWorkspaceOwnershipError()
-  return `agent:${agentId}:aos-invite:${ref}`
+  return openClawInviteSessionKey(agentId, ref)
 }
 
 export type OpenClawWorkspace = Readonly<{
