@@ -9,6 +9,41 @@
 const SECRET_KEY =
   /^(?:authorization|cookie|set-cookie|token|accessToken|refreshToken|secret|clientSecret|privateKey|p256dh|auth|applicationServerKey|endpoint)$/iu
 
+/**
+ * Every word a native field or variable name uses for a credential, lowercase
+ * with separators removed (`api_key` and `apiKey` are both `apikey`). It merges
+ * the log redactor's field names above with the terms the adapters mask tool
+ * data, question text, and history by, so a projection reads one list.
+ */
+export const SECRET_TERMS: readonly string[] = [
+  "accesskey",
+  "accesskeyid",
+  "accesstoken",
+  "apikey",
+  "applicationserverkey",
+  "auth",
+  "authorization",
+  "clientsecret",
+  "cookie",
+  "cookiejar",
+  "credential",
+  "credentials",
+  "endpoint",
+  "p256dh",
+  "pass",
+  "passcode",
+  "passphrase",
+  "passwd",
+  "password",
+  "privatekey",
+  "pwd",
+  "refreshtoken",
+  "secret",
+  "secretkey",
+  "setcookie",
+  "token",
+]
+
 function redactUrl(value: string) {
   try {
     const url = new URL(value)

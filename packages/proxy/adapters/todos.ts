@@ -24,8 +24,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** A provider may deliver the list as a value or as serialized tool output. */
-function parseJsonOrValue(value: unknown): unknown {
+/**
+ * The two states Hermes and OpenCode both write under names the normalized
+ * vocabulary does not share: `in_progress` is work under way, and `cancelled`
+ * is a Todo that will not complete.
+ */
+export const TODO_STATUS_ALIASES: Readonly<Record<string, string>> = {
+  in_progress: "active",
+  cancelled: "failed",
+}
+
+/**
+ * A provider may deliver a value as itself or as serialized JSON: a string is
+ * parsed, and one that is not JSON is kept as the string it is.
+ */
+export function parseJsonOrValue(value: unknown): unknown {
   if (typeof value !== "string") return value
   try {
     return JSON.parse(value) as unknown
