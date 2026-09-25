@@ -80,6 +80,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
               )
             return materialized.appendTo(text)
           },
+          artifactIds: () => materialized?.artifactIds?.() ?? [],
           async cleanup() {
             await materialized?.cleanup()
           },

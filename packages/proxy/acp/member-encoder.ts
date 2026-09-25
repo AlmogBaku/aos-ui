@@ -32,7 +32,7 @@ import {
   type AcpOutbound,
   type TranslateState,
 } from "./types"
-import { errorNotificationOf } from "./validation"
+import { errorNotificationOf, PUBLIC_ERRORS } from "./validation"
 
 /**
  * Writes one connection's member events as ACP: `session/update` and `_aos/*`
@@ -427,6 +427,24 @@ export function createMemberEncoder({
           errorCode: failure.code,
           message: failure.message,
         })
+        // A turn that never started brackets itself as one that failed at
+        // once, the way the browser already reads a run refused before
+        // replying. Only a public code travels, as an `_aos/error` would on a
+        // guest's socket, and no message, so the browser words the notice.
+        if (event.turn) {
+          const code = PUBLIC_ERRORS.notice(failure.code)
+          await update(sessionId, {
+            sessionUpdate: "state_update",
+            state: "running",
+            _meta: { [AOS_META_KEY]: event.turn },
+          })
+          return update(sessionId, {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: AOS_STOP_REASONS.error,
+            _meta: { [AOS_META_KEY]: { ...event.turn, code } },
+          })
+        }
         await client
           .notify(AOS_METHODS.notify.error, { sessionId, ...failure })
           .catch(() => undefined)

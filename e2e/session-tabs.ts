@@ -1,4 +1,5 @@
 import { expect, type Page } from "./test"
+import { longPress } from "./support/long-press"
 
 const copy = {
   drawer: "Open Agents",
@@ -62,9 +63,12 @@ export async function exerciseSessionTabs(page: Page, mobile: boolean) {
 
     await drawerTrigger.click()
     drawer = page.getByRole("dialog", { name: copy.sessions })
-    await drawer
-      .getByRole("button", { name: `${copy.actions}: Market brief` })
-      .click()
+    await longPress(
+      page,
+      drawer.getByRole("button", {
+        name: new RegExp(`${copy.openSession}: Market brief`, "i"),
+      })
+    )
     // The row menu is portaled out of the drawer.
     await page.getByRole("menuitem", { name: copy.removeOpenSession }).click()
     await expect(drawer).toHaveCount(0)

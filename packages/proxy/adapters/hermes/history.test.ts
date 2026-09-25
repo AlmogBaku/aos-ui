@@ -1036,6 +1036,35 @@ describe("server-side Hermes history projection", () => {
     expect(turn?.content.map((part) => part.type)).toEqual(["tool-call"])
   })
 
+  it.each([
+    "Your request was not processed. Send it again if you still want me to carry it out.",
+    "This turn did not complete. Some actions may already have run; verify their effects before resending.",
+  ])(
+    "replays a turn Hermes closed with a failed-turn notice as cancelled: %s",
+    (notice) => {
+      const messages = projectHermesHistory([
+        userRow("u1", "Describe these"),
+        { ...assistantText("a1", notice), finish_reason: null },
+      ])
+
+      const turn = messages[1]
+      expect(turn?.stopReason).toBe(StopReason.Cancelled)
+      expect(turn?.content).toEqual([])
+    }
+  )
+
+  it("keeps a model reply that quotes a failed-turn notice", () => {
+    const notice =
+      "Your request was not processed. Send it again if you still want me to carry it out."
+    const messages = projectHermesHistory([
+      userRow("u1", "What does the notice say?"),
+      { ...assistantText("a1", notice), finish_reason: "stop" },
+    ])
+
+    expect(messages[1]?.stopReason).toBe(StopReason.EndTurn)
+    expect(messages[1]?.content).toEqual([{ type: "text", text: notice }])
+  })
+
   it("keeps a user message that is a JSON object as the text that was sent", () => {
     const sent = JSON.stringify({ v: 1, type: "note", body: "Synthetic" })
 

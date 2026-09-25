@@ -960,6 +960,15 @@ class Seat {
     await this.emit({ kind: "error", cause })
   }
 
+  /** Reports the turn this member's accepted prompt was to start as failed. */
+  async refuseTurn(turnId: string, cause: unknown) {
+    await this.emit({
+      kind: "error",
+      cause,
+      turn: { turnId, sequence: this.#sequence },
+    })
+  }
+
   /**
    * The open request this member answers. One settled, or never handed to
    * this member, is stale.

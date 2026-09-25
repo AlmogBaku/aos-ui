@@ -17,6 +17,7 @@ import {
   AOS_REPLAY_BEFORE,
   AOS_STOP_REASONS,
   AosHistoryCursorSchema,
+  formatArtifactUri,
   type AosActivityNotification,
 } from "../../protocol/acp"
 import {
@@ -1376,10 +1377,30 @@ describe("Session rooms", () => {
     await open(other)
 
     await prompt(test, "Summarize")
-    await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
+    // The sender reads its accepted prompt's turn as one that failed at once.
+    const failed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
+      "a failed state_update"
     )
+    expect(failed.params).toMatchObject({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: AOS_STOP_REASONS.error,
+        _meta: {
+          [AOS_META_KEY]: {
+            turnId: expect.any(String),
+            code: "internal_error",
+          },
+        },
+      },
+    })
+    expect(
+      test.recorder.entries.some(
+        (entry) => entry.method === AOS_METHODS.notify.error
+      )
+    ).toBe(false)
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
@@ -2146,6 +2167,68 @@ describe("Session rooms", () => {
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
       prompt: "[image one][image two]",
+    })
+    test.close()
+  })
+
+  it("echoes each staged image as the artifact its history replays as", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const stageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      artifactIds: () => ["image-artifact", undefined],
+      cleanup: async () => undefined,
+    })
+    const image = {
+      type: "resource_link" as const,
+      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/one`,
+      name: "one.jpg",
+      mimeType: "image/jpeg",
+    }
+    const file = {
+      type: "resource_link" as const,
+      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/two`,
+      name: "notes.txt",
+    }
+
+    const messageId = await prompt(test, [image, file], SESSION, {
+      attachmentStageId: stageId,
+    })
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"user_message"'),
+      "the prompt echo"
+    )
+    expect(
+      updates(test.recorder).find(
+        ({ update }) => update.sessionUpdate === "user_message"
+      )
+    ).toMatchObject({
+      update: {
+        messageId,
+        content: [
+          {
+            ...image,
+            uri: formatArtifactUri("image-artifact"),
+          },
+          file,
+        ],
+      },
+    })
+    test.close()
+  })
+
+  it("sends a rewind with no text as the turn it replaces", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await prompt(test, [], SESSION, { rewindSourceId: "user-1" })
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    expect(test.start.mock.calls[0]?.[1]).toMatchObject({
+      prompt: "",
+      rewindSourceId: "user-1",
     })
     test.close()
   })

@@ -49,7 +49,12 @@ import {
   encodeCursor,
   historyCursor,
 } from "./agent-sessions"
-import { isPromptBlock, promptParts, promptText } from "./prompt-content"
+import {
+  echoedParts,
+  isPromptBlock,
+  promptParts,
+  promptText,
+} from "./prompt-content"
 import {
   admits,
   CommandRefusedError,
@@ -329,7 +334,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (coordinator.state(scope) !== "idle") throw turnInProgress()
     // Bytes were staged over REST; the prompt references the batch by id and
     // the stage appends its server-owned content to the user turn.
-    const { attachmentStageId, content } = command
+    const { attachmentStageId } = command
     const stage =
       attachmentStageId === undefined
         ? undefined
@@ -348,6 +353,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? {}
         : { rewindSourceId: command.rewindSourceId }),
     }
+    const content = echoedParts(command.content, stage?.artifactIds?.() ?? [])
     const member = sessions.join(client, scope)
     member.afterResponse(async () => {
       // Seated before admission, so a turn that wins the race still reaches
@@ -357,7 +363,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       try {
         await member.startTurn(input, stage)
       } catch (cause) {
-        if (!(cause instanceof ServerTurnConflictError)) throw cause
+        // The prompt was accepted and echoed, so its turn fails in view.
+        if (!(cause instanceof ServerTurnConflictError))
+          return member.refuseTurn(input.turnId, cause)
         // Another browser's turn won: report the conflict, then follow it.
         await member.report(cause)
         await member.catchUp()
@@ -549,8 +557,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const meta = parseMeta(AosPromptMetaSchema, params._meta)
     if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
     const text = promptText(params.prompt)
-    // A turn of attachments alone carries no text; its stage supplies the turn.
-    if (!text && meta.attachmentStageId === undefined) throw invalidRequest()
+    // A turn of attachments alone carries no text: its stage supplies the turn,
+    // or, for a rewind, the turn it replaces.
+    if (
+      !text &&
+      meta.attachmentStageId === undefined &&
+      meta.rewindSourceId === undefined
+    )
+      throw invalidRequest()
     const { messageId } = await perform(
       "send",
       {

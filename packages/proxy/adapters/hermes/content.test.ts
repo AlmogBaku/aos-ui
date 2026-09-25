@@ -6,6 +6,7 @@ import {
   HermesContentUnavailableError,
   createHermesContentOperations,
 } from "./content"
+import { projectHermesAttachedImages } from "./media-artifacts"
 
 const scope = {
   agentId: "research",
@@ -129,6 +130,12 @@ describe("Hermes content operations", () => {
       { type: "file", filename: "notes.txt", mimeType: "text/plain" },
     ])
     expect(staged.appendTo("Inspect")).toBe("Inspect\n@file:notes.txt")
+    // The image reads as the artifact its persisted directive replays as.
+    expect(staged.artifactIds()).toEqual([
+      projectHermesAttachedImages("@image:/srv/private/image.png").artifacts[0]
+        ?.descriptor.id,
+      undefined,
+    ])
     expect(JSON.stringify(staged.public)).not.toContain("/srv/private")
     expect(h.request).toHaveBeenNthCalledWith(
       1,

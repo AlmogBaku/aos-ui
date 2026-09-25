@@ -19,6 +19,7 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
+  AOS_STOP_REASONS,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -2263,17 +2264,27 @@ describe("guest scope and commands", () => {
       prompt: [{ type: "text", text: "Hello" }],
     })
     const failure = await vi.waitFor(() => {
-      const frame = socket.frames.find(
-        ({ method }) => method === AOS_METHODS.notify.error
+      const frame = socket.frames.find(({ params }) =>
+        JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
       )
-      if (!frame) throw new Error("No error notification")
+      if (!frame) throw new Error("No failed state_update")
       return frame
     })
 
     expect(failure.params).toEqual({
       sessionId: REF,
-      code: "internal_error",
-      message: "internal_error",
+      update: {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: AOS_STOP_REASONS.error,
+        _meta: {
+          [AOS_META_KEY]: {
+            sequence: expect.any(Number),
+            turnId: expect.any(String),
+            code: "internal_error",
+          },
+        },
+      },
     })
     socket.close()
   })

@@ -261,6 +261,9 @@ Stop reasons `_aos_error` and `_aos_uncertain` appear in
 `state_update { state: "running" }` carrying `code` and `message` reports a
 final failure on a run that stays active until it is stopped: the browser shows
 the failure and keeps Stop available, and the run's own idle update ends it.
+A prompt the proxy accepted whose turn then fails to start reaches its sender
+as a `running` update followed by an `_aos_error` idle update for the same
+`turnId`, carrying only a public `code`, never an `_aos/error` notification.
 
 ## AOS extension methods (`_aos/*`)
 

@@ -22,7 +22,6 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import {
-  setTouchPrimary,
   resetThreadTestEnvironment,
   TURN_TIMING,
   LocalThread,
@@ -486,10 +485,13 @@ describe("message context menu", () => {
   })
 
   it("hands the press back to the browser after Select text", async () => {
-    setTouchPrimary(true)
     const user = userEvent.setup()
     render(<LocalThread />)
 
+    // A finger press, whatever pointers the device also has.
+    fireEvent.pointerDown(await screen.findByText("The reference is ready."), {
+      pointerType: "touch",
+    })
     const menu = await openMessageMenu("The reference is ready.")
     await user.click(
       within(menu).getByRole("menuitem", { name: "Select text" })

@@ -396,6 +396,118 @@ describe("Hermes native submit outcomes", () => {
     })
   })
 
+  it("re-attaches the images of the turn a rewind replaces before submitting", async () => {
+    const order: string[] = []
+    const { native, router } = runtime(
+      {
+        "image.attach": async () => {
+          order.push("image.attach")
+          return { attached: true }
+        },
+        "prompt.submit": async () => {
+          order.push("prompt.submit")
+          return { status: "streaming" }
+        },
+      },
+      [
+        {
+          row_id: 12,
+          role: "user",
+          content: "@image:/uploads/one.png\n@image:/uploads/two.jpg",
+        },
+        { row_id: 13, role: "assistant", content: "Not processed" },
+      ]
+    )
+
+    await native.submit("live-secret", {
+      scope,
+      text: "",
+      turnId: "retry-run",
+      rewindSourceId: "hermes-row-12",
+    })
+
+    expect(router.calls("image.attach").map(({ params }) => params)).toEqual([
+      { session_id: "live-secret", path: "/uploads/one.png" },
+      { session_id: "live-secret", path: "/uploads/two.jpg" },
+    ])
+    expect(order).toEqual(["image.attach", "image.attach", "prompt.submit"])
+  })
+
+  it("leaves the source images alone when a rewind stages its own", async () => {
+    const { native, router } = runtime(
+      { "prompt.submit": async () => ({ status: "streaming" }) },
+      [{ row_id: 12, role: "user", content: "@image:/uploads/one.png" }]
+    )
+
+    await native.submit("live-secret", {
+      scope: { ...scope, hasAttachments: true },
+      text: "Edited",
+      turnId: "edit-run",
+      rewindSourceId: "hermes-row-12",
+    })
+
+    expect(router.calls("image.attach")).toHaveLength(0)
+  })
+
+  it("detaches the re-attached images when Hermes refuses the rewind", async () => {
+    const { native, router } = runtime(
+      {
+        "image.attach": async () => ({ attached: true }),
+        "image.detach": async () => ({ detached: true }),
+        "prompt.submit": async () => {
+          throw new HermesRpcRejectedError(4009, "session busy")
+        },
+      },
+      [{ row_id: 12, role: "user", content: "@image:/uploads/one.png" }]
+    )
+
+    const outcome = await native.submit("live-secret", {
+      scope,
+      text: "",
+      turnId: "retry-run",
+      rewindSourceId: "hermes-row-12",
+    })
+
+    expect(outcome.acknowledgement).toBe("rejected")
+    expect(router.calls("image.detach").map(({ params }) => params)).toEqual([
+      { session_id: "live-secret", path: "/uploads/one.png" },
+    ])
+  })
+
+  it("never submits a rewind whose images could not be re-attached", async () => {
+    const { native, router } = runtime(
+      {
+        "image.attach": async ({ path }) => {
+          if (path === "/uploads/two.png")
+            throw new HermesRpcRejectedError(4016, "image not found")
+          return { attached: true }
+        },
+        "image.detach": async () => ({ detached: true }),
+        "prompt.submit": async () => ({ status: "streaming" }),
+      },
+      [
+        {
+          row_id: 12,
+          role: "user",
+          content: "@image:/uploads/one.png\n@image:/uploads/two.png",
+        },
+      ]
+    )
+
+    await expect(
+      native.submit("live-secret", {
+        scope,
+        text: "",
+        turnId: "retry-run",
+        rewindSourceId: "hermes-row-12",
+      })
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    expect(router.calls("image.detach").map(({ params }) => params)).toEqual([
+      { session_id: "live-secret", path: "/uploads/one.png" },
+    ])
+    expect(router.calls("prompt.submit")).toHaveLength(0)
+  })
+
   it("carries the row Hermes saved a submitted prompt under", async () => {
     const { native } = runtime({
       "prompt.submit": async () => ({ status: "streaming", user_row_id: 7 }),

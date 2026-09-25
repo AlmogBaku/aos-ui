@@ -197,6 +197,16 @@ const IMAGE_DIRECTIVE_LINE =
 const ATTACHED_IMAGE_SCOPE = "hermes:attached-image"
 
 /**
+ * The artifact an attached image's native path reads as, or `undefined` when
+ * the path is unusable. A staged upload and the directive its row later
+ * persists derive the same id, so the live echo and history show one image.
+ */
+export function hermesAttachedImageArtifact(reference: string) {
+  const image = safeMediaReference(reference, IMAGE_MIME_BY_EXTENSION)
+  return image && mediaArtifact(ATTACHED_IMAGE_SCOPE, reference, image)
+}
+
+/**
  * Split a durable user row's text into the prose the operator wrote and the
  * images it attached. Every directive line leaves the text whether or not its
  * reference is usable, so a marker never reaches the browser as prose.
@@ -211,10 +221,10 @@ export function projectHermesAttachedImages(text: string) {
       prose.push(line)
       continue
     }
-    const image = safeMediaReference(reference, IMAGE_MIME_BY_EXTENSION)
-    if (!image || seen.has(reference)) continue
+    const artifact = hermesAttachedImageArtifact(reference)
+    if (!artifact || seen.has(reference)) continue
     seen.add(reference)
-    artifacts.push(mediaArtifact(ATTACHED_IMAGE_SCOPE, reference, image))
+    artifacts.push(artifact)
   }
   return { text: prose.join("\n").trim(), artifacts }
 }

@@ -3,8 +3,9 @@ import { useSyncExternalStore } from "react"
 /**
  * Touch is the only pointer the device offers, so a hover action bar is out of
  * reach and a long press is the way in. CSS cannot read this constant, so the
- * `touch-primary` variant in `src/app/globals.css` repeats the same query;
- * change the two together.
+ * `touch-primary` variant in `src/app/globals.css` and the Session row action
+ * slot in `src/components/workspace/agent-session-history.module.css` repeat
+ * the same query; change them together.
  */
 const TOUCH_PRIMARY_QUERY = "(pointer: coarse) and (not (any-pointer: fine))"
 

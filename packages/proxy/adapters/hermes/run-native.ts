@@ -23,6 +23,7 @@ import {
 import type { AttachmentObserver } from "./attachment-registry"
 import { isRecord, trimmedText } from "./native"
 import { projectHermesHistory } from "./history"
+import { publishedArtifact } from "./media-artifacts"
 import {
   executeSlashCommand,
   nativeSlashInvocation,
@@ -277,13 +278,15 @@ function completionOutcome(
 }
 
 /**
- * Address the authoritative durable user row a rewind must truncate before.
- * A missing or moved row is a conflict, never a silent append.
+ * Address the authoritative durable user row a rewind must truncate before,
+ * with the native paths of the images that row attached: a retry resends the
+ * turn it replaces, and only history still holds those images. A missing or
+ * moved row is a conflict, never a silent append.
  */
 function rewindSubmitParams(
   rows: readonly unknown[],
   rewindSourceId: string
-): Record<string, unknown> {
+): { params: Record<string, unknown>; images: string[] } {
   const history = projectHermesHistory(rows)
   const targetIndex = history.findIndex(
     ({ id, role }) => id === rewindSourceId && role === "user"
@@ -301,12 +304,23 @@ function rewindSubmitParams(
         : undefined
   if (!address) throw new HermesTurnRewindConflictError()
 
+  const images = target.content.flatMap((part) => {
+    const id =
+      part.type === "data" && isRecord(part.data) ? part.data.id : undefined
+    const image =
+      typeof id === "string" ? publishedArtifact(rows, id) : undefined
+    return image ? [image.reference] : []
+  })
+
   return {
-    confirm_truncate: true,
-    ...address,
-    ...(history.slice(0, targetIndex).some(({ role }) => role === "user")
-      ? {}
-      : { confirm_empty_truncate: true }),
+    params: {
+      confirm_truncate: true,
+      ...address,
+      ...(history.slice(0, targetIndex).some(({ role }) => role === "user")
+        ? {}
+        : { confirm_empty_truncate: true }),
+    },
+    images,
   }
 }
 
@@ -386,12 +400,13 @@ export class HermesNativeRuntime implements HermesTurnNative {
     }
 
     let rewind: Record<string, unknown> = {}
+    let images: readonly string[] = []
     if (!invocation && prompt.rewindSourceId !== undefined) {
       try {
-        rewind = rewindSubmitParams(
+        ;({ params: rewind, images } = rewindSubmitParams(
           await this.#history(prompt.scope),
           prompt.rewindSourceId
-        )
+        ))
       } catch (error) {
         if (error instanceof HermesTurnRewindConflictError) throw error
         throwUnavailable(error)
@@ -425,7 +440,48 @@ export class HermesNativeRuntime implements HermesTurnNative {
         : completionOutcome(execution)
     }
 
-    return this.#submitPrompt(liveSessionId, { text: prompt.text, ...rewind })
+    // A rewind that stages attachments of its own replaces the source row's.
+    const reattached = prompt.scope.hasAttachments ? [] : images
+    await this.#attachImages(liveSessionId, reattached)
+    const outcome = await this.#submitPrompt(liveSessionId, {
+      text: prompt.text,
+      ...rewind,
+    })
+    // A refused write consumed nothing, so the images it would have carried
+    // must not ride along with the Session's next prompt.
+    if (outcome.acknowledgement === "rejected")
+      await this.#detachImages(liveSessionId, reattached).catch(() => {})
+    return outcome
+  }
+
+  /**
+   * Queue already-stored images for the next `prompt.submit`, the way the TUI
+   * attaches a path. A failed attach detaches the rest before the submit.
+   */
+  async #attachImages(liveSessionId: string, paths: readonly string[]) {
+    const attached: string[] = []
+    try {
+      for (const path of paths) {
+        const result = await this.#transport.request("image.attach", {
+          session_id: liveSessionId,
+          path,
+        })
+        if (!isRecord(result) || result.attached !== true)
+          throw new HermesUnavailableError()
+        attached.push(path)
+      }
+    } catch (error) {
+      await this.#detachImages(liveSessionId, attached).catch(() => {})
+      throwUnavailable(error)
+    }
+  }
+
+  async #detachImages(liveSessionId: string, paths: readonly string[]) {
+    for (const path of paths)
+      await this.#transport.request("image.detach", {
+        session_id: liveSessionId,
+        path,
+      })
   }
 
   /**

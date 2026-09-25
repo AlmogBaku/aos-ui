@@ -195,7 +195,11 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   await page.getByRole("button", { name: copy.openAgents }).click()
   await expect(drawer).toBeVisible()
 
-  await rowMenu(openSessions, copy, "Launch review").click()
+  // Touch offers the row menu through a long press, not an overflow button.
+  await longPress(
+    page,
+    openSessions.getByRole("button", { name: rowName(copy, "Launch review") })
+  )
   await menuItem(page, copy.rename).click()
   await renameThroughDialog(page, copy, "Launch review", "Launch review 2")
   await expect(
@@ -233,7 +237,7 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   await expect(archivedRow).toBeHidden()
   await archived.getByRole("heading", { name: copy.archived }).click()
   await expect(archivedRow).toBeVisible()
-  await rowMenu(archived, copy, "Campaign retrospective").click()
+  await longPress(page, archivedRow)
   await expect(menuItem(page, copy.unarchive)).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(page.getByRole("menu")).toHaveCount(0)

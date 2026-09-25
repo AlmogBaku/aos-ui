@@ -198,6 +198,12 @@ export class ServerAgentUpdateUnsupportedError extends Error {
 export type ServerAttachmentStage = {
   public: Readonly<SessionAttachmentStageResponse["attachments"]>
   appendTo(text: string): string | Promise<string>
+  /**
+   * The artifact id each `public` attachment reads as once the turn is
+   * history, in the same order, where the provider derives one. Known once
+   * `appendTo` settled.
+   */
+  artifactIds?(): readonly (string | undefined)[]
   cleanup(): Promise<void>
 }
 
