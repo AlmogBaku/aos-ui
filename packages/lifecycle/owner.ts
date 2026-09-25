@@ -27,6 +27,16 @@ type TransitionParams = { to: string; info: boolean }
 /** A state's `after` keys, each with the event XState raises when it fires. */
 type AfterParams = { after: { key: string; event: string }[] }
 
+type ActorMap = Record<string, UnknownActorLogic>
+
+/** The actions ownerSetup provides, with their params. */
+type OwnerActions = {
+  armAfter: AfterParams
+  clearAfter: AfterParams
+  logTransition: TransitionParams
+  bumpGeneration: undefined
+}
+
 /** A deadline as logged: a static delay in ms, or a function delay's key. */
 type Armed = number | string
 
@@ -140,12 +150,16 @@ function instrumented<TSetup extends Instrumentable>(
  * generation, and the `after` deadlines armed and cleared on the way, in ms
  * or by key for a function delay), or `${kind}.${state}` at info when its
  * meta is `{ log: "info" }`. The machine id defaults to the kind. Parallel
- * states are not tracked: `from` and `to` assume one active state.
+ * states are not tracked: `from` and `to` assume one active state. Declared
+ * `actors` type every invoke by name, provided a caller that names the
+ * context and event types names `typeof actors` too; without them any inline
+ * source type-checks.
  */
 export function ownerSetup<
   TContext extends OwnerContext = OwnerContext,
   TEvent extends AnyEventObject = AnyEventObject,
->(kind: OwnerKind, logger: Logger, clock: Clock) {
+  TActors extends ActorMap = ActorMap,
+>(kind: OwnerKind, logger: Logger, clock: Clock, actors?: TActors) {
   const trackOf = (self: AnyActorRef) => {
     const track = tracks.get(self) ?? newTrack(logger)
     tracks.set(self, track)
@@ -153,10 +167,11 @@ export function ownerSetup<
   }
   return instrumented(
     kind,
-    setup({
+    // XState cannot infer a generic actor map, so its type arguments are
+    // named; the open default map is what lets it type an inline source.
+    setup<TContext, TEvent, TActors, Record<never, string>, OwnerActions>({
       types: {} as { context: TContext; events: TEvent },
-      // An open actor map is what lets XState type an inline invoke source.
-      actors: {} as Record<string, UnknownActorLogic>,
+      actors: (actors ?? {}) as never,
       actions: {
         armAfter: ({ self }, { after }: AfterParams) => {
           trackOf(self).armed.push(

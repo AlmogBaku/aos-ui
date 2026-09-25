@@ -240,18 +240,23 @@ it.each([
 it("aborts an invoke when its state exits and ignores its late result", async () => {
   const { logger } = recorder()
   const attempts: { signal: AbortSignal; resolve: () => void }[] = []
-  const machine = ownerSetup("link", logger, defaultClock).createMachine({
+  const link = ownerSetup("link", logger, defaultClock, {
+    connect: fromAbortable(
+      (signal) =>
+        new Promise<void>((resolve) => attempts.push({ signal, resolve }))
+    ),
+  })
+  link.createMachine({
+    context: { generation: 0 },
+    // @ts-expect-error an owner that declares its actors invokes only those
+    invoke: { src: "listen" },
+  })
+  const machine = link.createMachine({
     context: { generation: 0 },
     initial: "connecting",
     states: {
       connecting: {
-        invoke: {
-          src: fromAbortable(
-            (signal) =>
-              new Promise<void>((resolve) => attempts.push({ signal, resolve }))
-          ),
-          onDone: "ready",
-        },
+        invoke: { src: "connect", onDone: "ready" },
         on: {
           lost: {
             target: "connecting",
