@@ -174,7 +174,7 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 - OpenCode reads only files inside the configured project directory; a path outside it reads as unavailable. OpenClaw reads only the Session's workspace files, at most 256 KiB and only text or common images; OpenClaw's native media appears after a reload.
 - Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
-- For HTML dependencies, add only the required credential-free HTTPS origins to `artifactHtmlAssetOrigins`.
+- HTML preview loads no external assets; an Artifact that needs one must inline it.
 - Inspect the Source or textual fallback when preview rendering is unavailable.
 
 ## A route points to missing work

@@ -193,7 +193,6 @@ export async function serveProxy(
           {
             surface: "guest",
             basePath: "/api/guest/v1",
-            lane: "guest",
           },
           true
         ),

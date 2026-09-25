@@ -141,8 +141,6 @@ function coordinator(
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
-    maxReplayEvents: 32,
-    maxReplayBytes: 256 * 1024,
     ...limits,
   })
 }
@@ -354,7 +352,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a fresh browser")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayEvents: 64 })
+    const sessions = coordinator(engine, { maxSubscriberEvents: 64 })
     const initial = await sessions.start(
       scope,
       input("run-1"),
@@ -875,7 +873,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a live segment")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayEvents: 4 })
+    const sessions = coordinator(engine, { maxSubscriberEvents: 4 })
     const initial = await sessions.start(
       scope,
       input("run-1"),
@@ -927,7 +925,7 @@ describe("SessionCoordinator", () => {
     // the event bound long before the one event they compact into does. The
     // bytes bound is the retention cap of the raw entries too, so it is set
     // where this run's own raw events still fit inside it.
-    const sessions = coordinator(engine, { maxReplayBytes: 32 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 32 * 1024 })
     const initial = await sessions.start(
       scope,
       input("run-1"),
@@ -974,7 +972,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a journaled run")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     const emitted = await deltaFlood(sessions, source, 400)
     const total = emitted.length
 
@@ -1013,7 +1011,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a journaled run")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     await deltaFlood(sessions, source, 400)
 
     const redial = await sessions.recover(
@@ -1039,7 +1037,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a journaled run")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     await deltaFlood(sessions, source, 400)
 
     // The journal no longer holds this run from its beginning, so a reload that
@@ -1067,7 +1065,7 @@ describe("SessionCoordinator", () => {
       start: vi.fn(async () => sources.shift() ?? new EventSource()),
       recover: vi.fn(async () => new EventSource()),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     expect(sessions.replayStart(scope)).toBeUndefined()
 
     await deltaFlood(sessions, pruned, 400)
@@ -1171,7 +1169,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a live segment")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     const emitted = await deltaFlood(sessions, source, 400)
 
     // The browser reloaded the authoritative history after the one reset, so
@@ -1205,7 +1203,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a live segment")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayBytes: 2 * 1024 })
+    const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     const emitted = await deltaFlood(sessions, source, 400)
 
     // A retry of the same admission reads the run from its beginning, and a
@@ -1389,7 +1387,7 @@ describe("SessionCoordinator", () => {
         throw new Error("native recovery must not run for a fresh browser")
       }),
     }
-    const sessions = coordinator(engine, { maxReplayEvents: 4 })
+    const sessions = coordinator(engine, { maxSubscriberEvents: 4 })
     const initial = await sessions.start(
       scope,
       input("run-1"),

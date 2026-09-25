@@ -207,8 +207,6 @@ function harness(options: { existing?: boolean } = {}) {
       maxGuestActiveExecutions: 4,
       maxSubscriberEvents: 32,
       maxSubscriberBytes: 256 * 1024,
-      maxReplayEvents: 64,
-      maxReplayBytes: 512 * 1024,
     }),
     close: vi.fn(async () => undefined),
   }

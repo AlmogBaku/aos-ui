@@ -80,8 +80,6 @@ export async function createHermesRuntime(
     maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,
     maxSubscriberBytes: limits.subscriberBytes,
-    maxReplayEvents: limits.subscriberEvents,
-    maxReplayBytes: limits.subscriberBytes,
   })
   let closePromise: Promise<void> | undefined
   return {

@@ -193,7 +193,6 @@ describe("proxy executable", () => {
     ).toEqual({
       surface: "guest",
       basePath: "/api/guest/v1",
-      lane: "guest",
     })
     const guestDocument = await guestApp.fetch(
       new Request("https://guest.example.test/")

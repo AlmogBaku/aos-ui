@@ -104,6 +104,17 @@ describe("container orchestration", () => {
     }
   )
 
+  it.each([
+    "proxy.hermes.example.yaml",
+    "proxy.openclaw.example.yaml",
+    "proxy.opencode.example.yaml",
+  ])("ships %s as a loadable proxy configuration", (filename) => {
+    const proxy: unknown = parse(
+      readFileSync(resolve(root, "deploy", filename), "utf8")
+    )
+    expect(() => parseProxyConfig(proxy)).not.toThrow()
+  })
+
   it("ships the V1 Hermes proxy example with one runtime credential", () => {
     const proxy = parse(
       readFileSync(resolve(root, "deploy/proxy.hermes.example.yaml"), "utf8")
@@ -125,7 +136,6 @@ describe("container orchestration", () => {
       limits: Record<string, number>
       mcpApps: unknown
     }
-    expect(parseProxyConfig(proxy)).toBeDefined()
     expect(proxy.deploymentId).toBe("aos-hermes-local")
     expect(proxy.listen).toMatchObject({
       host: "0.0.0.0",

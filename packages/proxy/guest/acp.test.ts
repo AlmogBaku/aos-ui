@@ -507,8 +507,6 @@ function harness(options: HarnessOptions = {}) {
     maxGuestActiveExecutions: 4,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1_024,
   })
   const runtimeInstance: RuntimeInstance = {
     id: RUNTIME_ID,

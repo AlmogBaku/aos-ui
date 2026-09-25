@@ -64,7 +64,6 @@ it.each([
     configuration: {
       surface: "guest",
       basePath: "/api/guest/v1",
-      lane: "guest",
     },
   },
   { name: "unavailable", configuration: { mode: "unsupported" } },

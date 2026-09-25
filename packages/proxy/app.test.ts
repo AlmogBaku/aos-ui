@@ -44,8 +44,6 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 32,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 512 * 1024,
   })
   return {
     id: "hermes-main",

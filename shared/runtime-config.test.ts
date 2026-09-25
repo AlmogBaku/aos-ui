@@ -52,13 +52,11 @@ describe("browser runtime configuration", () => {
       parsePublicApplicationConfiguration({
         surface: "guest",
         basePath: "/api/guest/v1/",
-        lane: "guest",
       })
     ).toEqual({
       status: "ready",
       surface: "guest",
       basePath: "/api/guest/v1",
-      lane: "guest",
     })
   })
 })

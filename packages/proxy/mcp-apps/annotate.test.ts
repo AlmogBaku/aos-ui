@@ -124,8 +124,6 @@ function harness(describeView: ServerMcpApps["describe"]) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
   })
   return { native, engine, apps, sessions }
 }

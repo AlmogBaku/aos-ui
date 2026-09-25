@@ -962,13 +962,17 @@ runtime:
   kind: hermes
   baseUrl: http://127.0.0.1:9119
   tokenFile: /run/secrets/hermes-token
+guest:
+  lane: guest
 `,
         },
       }),
     })
     expect(message).not.toContain("SYNTHETIC-TOKEN-9f3a")
     expect(message).toContain("publicOrigin")
-    expect(message).toContain("1 unrecognized key")
+    expect(message).toContain("  (document root): 1 unrecognized key")
+    // A key a past release accepted fails like any other, at its field path.
+    expect(message).toContain("  guest: 1 unrecognized key")
   })
 
   it("survives the log redactor a start failure is written through", async () => {

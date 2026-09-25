@@ -414,7 +414,6 @@ function mount({
         status: "ready",
         surface: "guest",
         basePath: BASE_PATH,
-        lane: "guest",
       }}
       inviteToken={inviteToken ?? TOKEN}
       locale="en"

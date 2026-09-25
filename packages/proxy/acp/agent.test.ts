@@ -2364,7 +2364,7 @@ describe("Session rooms", () => {
   })
 
   it("keeps streaming a reopen whose turn outgrew its journal", async () => {
-    const test = await harness({ providerIds: true, maxReplayEvents: 2 })
+    const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()

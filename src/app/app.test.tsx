@@ -37,12 +37,11 @@ vi.mock("@/runtime-adapters/aos", () => ({
     config,
   }: {
     inviteToken?: string
-    config: { basePath: string; lane: string }
+    config: { basePath: string }
   }) => (
     <div
       data-invite-token={inviteToken}
       data-base-path={config.basePath}
-      data-lane={config.lane}
       data-testid="guest-app"
     >
       guest
@@ -105,7 +104,6 @@ describe("App", () => {
         JSON.stringify({
           surface: "guest",
           basePath: "/api/guest/v1",
-          lane: "guest",
         }),
         {
           status: 200,
@@ -118,10 +116,6 @@ describe("App", () => {
     expect(screen.getByTestId("guest-app")).toHaveAttribute(
       "data-base-path",
       "/api/guest/v1"
-    )
-    expect(screen.getByTestId("guest-app")).toHaveAttribute(
-      "data-lane",
-      "guest"
     )
     expect(screen.queryByTestId("fixture-app")).not.toBeInTheDocument()
   })
@@ -143,7 +137,6 @@ describe("App", () => {
         JSON.stringify({
           surface: "guest",
           basePath: "/api/guest/v1",
-          lane: "guest",
         }),
         {
           status: 200,

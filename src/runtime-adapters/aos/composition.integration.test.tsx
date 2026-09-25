@@ -378,8 +378,6 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
   })
   const runtimeInstance: RuntimeInstance = {
     id: "hermes-main",

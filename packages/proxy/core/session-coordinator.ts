@@ -86,10 +86,9 @@ export type SessionCoordinatorOptions = {
   readings: Pick<ServerRuntime, "context" | "models">
   maxActiveExecutions: number
   maxGuestActiveExecutions: number
+  /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
   maxSubscriberBytes: number
-  maxReplayEvents: number
-  maxReplayBytes: number
 }
 
 /** What one subscriber takes of its Session's readings; it is owed only these. */
@@ -468,8 +467,6 @@ export class SessionCoordinator {
       options.maxGuestActiveExecutions,
       options.maxSubscriberEvents,
       options.maxSubscriberBytes,
-      options.maxReplayEvents,
-      options.maxReplayBytes,
     ])
       if (!Number.isSafeInteger(value) || value < 1)
         throw new Error("Invalid Session coordinator limits")
@@ -1269,8 +1266,8 @@ export class SessionCoordinator {
     if (
       !Number.isSafeInteger(tail.bytes) ||
       !Number.isSafeInteger(retained) ||
-      events > this.options.maxReplayEvents ||
-      bytes > this.options.maxReplayBytes
+      events > this.options.maxSubscriberEvents ||
+      bytes > this.options.maxSubscriberBytes
     ) {
       this.#forgetJournal(segment)
       return
@@ -1292,7 +1289,7 @@ export class SessionCoordinator {
    * cursorless reload, is owed authoritative history instead.
    */
   #prune(journal: SegmentJournal) {
-    while (journal.retained > this.options.maxReplayBytes) {
+    while (journal.retained > this.options.maxSubscriberBytes) {
       const oldest = journal.entries.shift()
       if (!oldest) break
       journal.retained -= oldest.bytes

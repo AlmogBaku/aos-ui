@@ -579,8 +579,6 @@ export type HarnessOptions = {
   beforeModels?: () => Promise<void>
   /** Runs before each history read; a held one stands for a slow page. */
   beforeHistory?: () => Promise<void>
-  /** Bounds each turn's journal; a small one stands for a long turn. */
-  maxReplayEvents?: number
   /** Runs as a resume translates the page it read, before it follows the turn. */
   onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
@@ -606,7 +604,10 @@ export type HarnessOptions = {
   pagesHistory?: boolean
   /** What the provider reports it supports; defaults to `CAPABILITIES`. */
   capabilities?: unknown
-  /** Queue depth one browser's run stream is allowed, before it is dropped. */
+  /**
+   * Queue depth one browser's run stream is allowed, before it is dropped, and
+   * so each turn's journal; a small one stands for a long turn.
+   */
   maxSubscriberEvents?: number
   /** The translator lane; defaults to the deterministic stand-ins above. */
   translators?: Translators
@@ -766,8 +767,6 @@ export async function harness(options: HarnessOptions = {}) {
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: options.maxReplayEvents ?? 64,
-    maxReplayBytes: 256 * 1024,
   })
   const runtimeInstance: RuntimeInstance = {
     id: "test",

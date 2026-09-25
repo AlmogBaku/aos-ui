@@ -31,14 +31,8 @@ export function FixtureAosUiApp({
   return (
     <FixtureRuntimeProvider
       locale={locale}
-      config={{
-        status: "ready",
-        mode: "fixture",
-        composerFeatures,
-        artifactHtmlAssetOrigins: artifactHtmlAssetOrigins
-          ? [...artifactHtmlAssetOrigins]
-          : undefined,
-      }}
+      config={{ status: "ready", mode: "fixture", composerFeatures }}
+      artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
       {(runtime) => (
         <AosUiWorkspace
@@ -57,7 +51,10 @@ function FixtureRuntimeProvider({
   config,
   locale,
   children,
-}: RuntimeAdapterProps<"fixture">) {
+  artifactHtmlAssetOrigins,
+}: RuntimeAdapterProps<"fixture"> & {
+  artifactHtmlAssetOrigins?: readonly string[]
+}) {
   const [threadId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
@@ -90,7 +87,7 @@ function FixtureRuntimeProvider({
     environmentLabel: locale === "he" ? "סביבת הדגמה" : "Demo workspace",
     artifacts: {
       resolver: bundle.artifacts,
-      htmlAssetOrigins: config.artifactHtmlAssetOrigins,
+      htmlAssetOrigins: artifactHtmlAssetOrigins,
     },
     interactions: bundle.interactions,
     mcpApps: bundle.mcpApps,

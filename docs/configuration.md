@@ -13,13 +13,8 @@ and model identifiers never belong in this public file.
 }
 ```
 
-Unknown fields are rejected.
-
-### Artifact HTML assets {#artifact-html-assets}
-
-Optional `artifactHtmlAssetOrigins` is an array of at most 16
-credential-free HTTPS origins allowed as external asset sources inside
-published HTML Artifacts. Omit it to block external HTML preview assets.
+Unknown fields are rejected. Published HTML Artifacts load no external assets
+in preview.
 
 ## Local development
 
@@ -253,7 +248,9 @@ Invalid proxy configuration in /etc/aos-ui/proxy.yaml:
 ```
 
 Field paths are reported; values are never included. Unrecognized keys are
-reported as a count, not by name. When a variable set the failing field, its
+reported as a count, not by name. A stale key, one an earlier release accepted
+and this one no longer does, is an unrecognized key: the proxy refuses to start
+and names the field path that holds it. When a variable set the failing field, its
 name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
