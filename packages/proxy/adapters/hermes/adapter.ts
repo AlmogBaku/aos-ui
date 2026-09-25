@@ -215,6 +215,27 @@ function validLiveSessionId(value: unknown): value is string {
 }
 
 /**
+ * A `session.resume` answer for a Session Hermes has never persisted: a lazy
+ * live draft with no stored row and no transcript yet.
+ */
+function isUnpersistedDraft(
+  payload: NativeRecord,
+  profile: string,
+  storedId: string
+) {
+  const info = isRecord(payload.info) ? payload.info : undefined
+  return (
+    validLiveSessionId(payload.session_id) &&
+    payload.stored_session_id === storedId &&
+    (payload.message_count === 0 || payload.message_count === 1) &&
+    Array.isArray(payload.messages) &&
+    payload.messages.length === 0 &&
+    info?.lazy === true &&
+    info.profile_name === profile
+  )
+}
+
+/**
  * The `hermes-bots` CAS revision of one profile-list row. Hermes always sends
  * `ui_meta_revisions` on a list row — that map is how it feature-detects its
  * own gateway-owned CAS — but a profile that has never been written through it
@@ -1145,7 +1166,10 @@ export class HermesServerAdapter implements ServerRuntime {
       if (mapped === key && observed !== liveSessionId)
         this.#liveInfoKeys.delete(observed)
     this.#liveInfoKeys.set(liveSessionId, key)
-    return { liveSessionId }
+    return {
+      liveSessionId,
+      saved: !isUnpersistedDraft(payload, scope.agentId, scope.sessionId),
+    }
   }
 
   async #closeNativeSession(liveSessionId: string) {
@@ -1560,18 +1584,7 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-    const info =
-      isRecord(payload) && isRecord(payload.info) ? payload.info : undefined
-    if (
-      !isRecord(payload) ||
-      !validLiveSessionId(payload.session_id) ||
-      payload.stored_session_id !== storedId ||
-      (payload.message_count !== 0 && payload.message_count !== 1) ||
-      !Array.isArray(payload.messages) ||
-      payload.messages.length !== 0 ||
-      info?.lazy !== true ||
-      info.profile_name !== profile
-    )
+    if (!isRecord(payload) || !isUnpersistedDraft(payload, profile, storedId))
       throw new HermesSessionNotFoundError()
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),

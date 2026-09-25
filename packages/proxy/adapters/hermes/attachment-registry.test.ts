@@ -426,23 +426,29 @@ describe("HermesAttachmentRegistry", () => {
     }
   })
 
-  it("closes only an idle exact native Session", async () => {
+  it("closes only an idle exact native Session and drops an unsaved draft", async () => {
     vi.useFakeTimers()
     const gateway = fakeGateway()
     const close = vi.fn(async () => undefined)
+    const resume = vi.fn(async (value: typeof scope) => ({
+      liveSessionId: `live-${value.sessionId}`,
+      saved: value.sessionId !== "draft",
+    }))
     const registry = new HermesAttachmentRegistry(
-      {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
-        close,
-      },
+      { resume, close },
       gateway.transport,
       { idleMs: 300_000 }
     )
     await registry.ensure(scope)
     await registry.ensure({ ...scope, sessionId: "other" })
+    await registry.ensure({ ...scope, sessionId: "draft" })
     await vi.advanceTimersByTimeAsync(300_000)
     expect(close).toHaveBeenCalledWith("live-stored")
     expect(close).toHaveBeenCalledWith("live-other")
+    // Closing a draft natively would delete it; it is only unbound.
+    expect(close).not.toHaveBeenCalledWith("live-draft")
+    await registry.ensure({ ...scope, sessionId: "draft" })
+    expect(resume).toHaveBeenCalledTimes(4)
     vi.useRealTimers()
   })
 
@@ -561,12 +567,15 @@ describe("HermesAttachmentRegistry", () => {
     await registry.close()
   })
 
-  it("shutdown detaches retained and running Sessions and closes only idle attachments", async () => {
+  it("shutdown detaches retained, running, and draft Sessions and closes only idle attachments", async () => {
     const gateway = fakeGateway()
     const close = vi.fn(async () => undefined)
     const registry = new HermesAttachmentRegistry(
       {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
+        resume: async (value) => ({
+          liveSessionId: `live-${value.sessionId}`,
+          saved: value.sessionId !== "draft",
+        }),
         close,
       },
       gateway.transport
@@ -574,6 +583,7 @@ describe("HermesAttachmentRegistry", () => {
     const release = await registry.retain(scope, "waiting-for-input")
     await registry.ensure({ ...scope, sessionId: "running" })
     await registry.ensure({ ...scope, sessionId: "idle" })
+    await registry.ensure({ ...scope, sessionId: "draft" })
     gateway.publish(nativeTurn("live-running").messageStart("msg-1"))
 
     await registry.close()
@@ -581,6 +591,7 @@ describe("HermesAttachmentRegistry", () => {
     expect(close).toHaveBeenCalledWith("live-idle")
     expect(close).not.toHaveBeenCalledWith("live-stored")
     expect(close).not.toHaveBeenCalledWith("live-running")
+    expect(close).not.toHaveBeenCalledWith("live-draft")
     release()
   })
 })
