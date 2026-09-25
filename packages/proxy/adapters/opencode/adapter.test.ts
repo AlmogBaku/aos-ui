@@ -149,6 +149,20 @@ describe("OpenCode server adapter", () => {
     })
   })
 
+  it("lists a Session's model by its id when the catalog no longer has it", async () => {
+    const native = client()
+    native.catalog.models = async () => ({ data: [] })
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      turns: turnEngine,
+    })
+
+    await expect(adapter.models("research", "session-1")).resolves.toEqual({
+      selectedId: '["openai","gpt-5"]',
+      options: [{ id: '["openai","gpt-5"]', label: "gpt-5", group: "openai" }],
+    })
+  })
+
   it("uses newest-first native message pages for exact-Agent authoritative history", async () => {
     const native = client()
     const adapter = new OpenCodeServerAdapter({

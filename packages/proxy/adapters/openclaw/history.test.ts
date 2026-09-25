@@ -142,6 +142,37 @@ describe("OpenClaw authoritative history", () => {
     })
   })
 
+  it("lists a Session's model by its id when the catalog no longer has it", async () => {
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: async (method) =>
+          method === "models.list"
+            ? { models: [] }
+            : {
+                sessions: [
+                  {
+                    key: "agent:analyst:main",
+                    agentId: "analyst",
+                    model: "retired",
+                    modelProvider: "anthropic",
+                  },
+                ],
+              },
+      },
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(
+      history.models("analyst", "agent:analyst:main")
+    ).resolves.toEqual({
+      selectedId: '["anthropic","retired"]',
+      options: [
+        { id: '["anthropic","retired"]', label: "retired", group: "anthropic" },
+      ],
+    })
+  })
+
   it("[CL1-HISTORY-003] fails closed when the official scoped subscription is unavailable", async () => {
     const history = createOpenClawHistory({
       authority: authority(),

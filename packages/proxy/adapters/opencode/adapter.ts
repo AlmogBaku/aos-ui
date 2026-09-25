@@ -733,9 +733,22 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       native.set(id, { providerID: model.providerID, id: model.id })
       return [{ id, label: model.name, group: model.providerID }]
     })
-    const selectedId = openCodeModelOptionId(session.data.model)
-    if (!identifier(selectedId) || !native.has(selectedId))
-      throw new OpenCodeWorkspaceUnavailableError()
+    const selected = session.data.model
+    const selectedId = openCodeModelOptionId(selected)
+    if (!identifier(selectedId)) throw new OpenCodeWorkspaceUnavailableError()
+    // A Session may run a model the catalog no longer lists; it stays listed
+    // by its own id so the selector still shows what the Session runs.
+    if (!native.has(selectedId)) {
+      native.set(selectedId, {
+        providerID: selected.providerID,
+        id: selected.id,
+      })
+      options.push({
+        id: selectedId,
+        label: selected.id,
+        group: selected.providerID,
+      })
+    }
     return { selectedId, options, native }
   }
 }

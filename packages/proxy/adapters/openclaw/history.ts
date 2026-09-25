@@ -519,12 +519,13 @@ export function createOpenClawHistory(input: {
         label: model.name,
         group: model.provider,
       }))
-      const selectedId = JSON.stringify([
-        selected.modelProvider ?? "",
-        selected.model ?? "",
-      ])
+      if (!selected.model) throw new OpenClawHistoryUnavailableError()
+      const provider = selected.modelProvider ?? ""
+      const selectedId = JSON.stringify([provider, selected.model])
+      // A Session may run a model the catalog no longer lists; it stays listed
+      // by its own id so the selector still shows what the Session runs.
       if (!options.some((option) => option.id === selectedId))
-        throw new OpenClawHistoryUnavailableError()
+        options.push({ id: selectedId, label: selected.model, group: provider })
       return { selectedId, options }
     },
     async context(agentId, sessionKey) {
