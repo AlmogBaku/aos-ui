@@ -73,6 +73,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { inviteSessionKey } from "../../core/invite-key"
 import type { McpAppClient } from "../../mcp-apps/client"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
@@ -542,7 +543,7 @@ export class HermesServerAdapter implements ServerRuntime {
       !/^[A-Za-z0-9_-]{1,128}$/u.test(ref)
     )
       throw new HermesSessionNotFoundError()
-    const title = `aos-invite:${ref}`
+    const title = inviteSessionKey(ref)
     if (!create) {
       const sessionId = await this.#findInvitedSession(agentId, title)
       return sessionId ? { sessionId, created: false } : undefined
