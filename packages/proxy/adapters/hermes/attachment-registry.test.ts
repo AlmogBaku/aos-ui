@@ -432,7 +432,7 @@ describe("HermesAttachmentRegistry", () => {
     const close = vi.fn(async () => undefined)
     const resume = vi.fn(async (value: typeof scope) => ({
       liveSessionId: `live-${value.sessionId}`,
-      saved: value.sessionId !== "draft",
+      saved: !value.sessionId.startsWith("draft"),
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close },
@@ -445,14 +445,18 @@ describe("HermesAttachmentRegistry", () => {
     await registry.ensure(scope)
     await registry.ensure({ ...scope, sessionId: "other" })
     await registry.ensure({ ...scope, sessionId: "draft" })
+    await registry.ensure({ ...scope, sessionId: "draft-sent" })
+    // Hermes commits a turn before completing it, so the draft is now stored.
+    gateway.publish(nativeTurn("live-draft-sent").complete("msg-1", "done"))
     await vi.advanceTimersByTimeAsync(300_000)
-    expect(close).toHaveBeenCalledTimes(2)
+    expect(close).toHaveBeenCalledTimes(3)
     expect(close).toHaveBeenCalledWith("live-stored")
     expect(close).toHaveBeenCalledWith("live-other")
+    expect(close).toHaveBeenCalledWith("live-draft-sent")
     // Closing a draft natively would delete it; it is only unbound.
     expect(close).not.toHaveBeenCalledWith("live-draft")
     await registry.ensure({ ...scope, sessionId: "draft" })
-    expect(resume).toHaveBeenCalledTimes(4)
+    expect(resume).toHaveBeenCalledTimes(5)
     vi.useRealTimers()
   })
 

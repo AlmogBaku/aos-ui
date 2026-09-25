@@ -69,7 +69,8 @@ type Entry = {
   /**
    * Hermes holds a row for this Session. An unsaved draft lives only in the
    * live Session, so closing it natively would delete the draft; it is only
-   * ever dropped locally.
+   * ever dropped locally. Hermes commits a turn's history before it sends
+   * `message.complete`, so a completed turn marks the draft saved.
    */
   saved: boolean
   /** When Hermes last answered a resume for this entry. */
@@ -416,8 +417,10 @@ export class HermesAttachmentRegistry {
   #observeTurnState(entry: Entry, event: unknown) {
     if (!isRecord(event)) return
     if (event.type === "message.start") entry.running = true
-    else if (event.type === "message.complete") entry.running = false
-    else if (event.type === "session.info") {
+    else if (event.type === "message.complete") {
+      entry.running = false
+      entry.saved = true
+    } else if (event.type === "session.info") {
       const running = isRecord(event.payload)
         ? event.payload.running
         : undefined
