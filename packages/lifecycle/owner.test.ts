@@ -178,8 +178,13 @@ it("fires after deadlines on the injected clock alone, drawing each once", () =>
   expect(owner.actor.getSnapshot().value).toBe("expired")
 })
 
-it.each(["dispose", "a final state", "a thrown action"] as const)(
-  "releases the owner exactly once after %s and stops its children",
+it.each([
+  "dispose",
+  "dispose from an action",
+  "a final state",
+  "a thrown action",
+] as const)(
+  "releases the owner exactly once after %s, once its children stop",
   (exit) => {
     const { logger } = recorder()
     let child: AbortSignal | undefined
@@ -196,6 +201,11 @@ it.each(["dispose", "a final state", "a thrown action"] as const)(
           },
           on: {
             settle: "settled",
+            quit: {
+              actions: () => {
+                owner.dispose()
+              },
+            },
             fail: {
               actions: () => {
                 throw new Error("synthetic failure")
@@ -211,19 +221,19 @@ it.each(["dispose", "a final state", "a thrown action"] as const)(
       clock: defaultClock,
       bindings: {},
     })
-    let released = 0
+    const childStoppedAtRelease: (boolean | undefined)[] = []
     owner.stack.defer(() => {
-      released += 1
+      childStoppedAtRelease.push(child?.aborted)
     })
 
     if (exit === "dispose") owner.dispose()
+    if (exit === "dispose from an action") owner.actor.send({ type: "quit" })
     if (exit === "a final state") owner.actor.send({ type: "settle" })
     if (exit === "a thrown action") owner.actor.send({ type: "fail" })
 
-    expect(released).toBe(1)
-    expect(child?.aborted).toBe(true)
+    expect(childStoppedAtRelease).toEqual([true])
     owner.dispose()
-    expect(released).toBe(1)
+    expect(childStoppedAtRelease).toEqual([true])
   }
 )
 

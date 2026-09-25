@@ -218,6 +218,7 @@ export type Owner<TMachine extends AnyStateMachine> = {
   stack: DisposableStack
   /** True for a result from an earlier generation or a released owner. */
   stale(generation: number): boolean
+  /** Stop the actor; its stack releases once the stop is processed. */
   dispose(): void
 }
 
@@ -243,7 +244,8 @@ function stopChildren(actor: AnyActorRef) {
 /**
  * Start one owner actor on the injected clock, logging with `bindings`. Its
  * stack is disposed exactly once, after its children stop, whether the owner
- * is disposed, reaches a final state or fails.
+ * is disposed, reaches a final state or fails. XState only queues a stop
+ * sent from the actor's own processing, so the release waits on `complete`.
  */
 export function createOwner<TMachine extends AnyStateMachine>(
   machine: TMachine,
@@ -283,7 +285,6 @@ export function createOwner<TMachine extends AnyStateMachine>(
     stale: (candidate) => stack.disposed || candidate !== generation(),
     dispose: () => {
       actor.stop()
-      release()
     },
   }
 }
