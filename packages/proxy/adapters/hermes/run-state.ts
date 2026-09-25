@@ -158,7 +158,10 @@ export function failReset(
   reason: string
 ) {
   if (active.terminal) return
-  host.log.warn(TURN_RESET_LOG, { sessionId: active.scope.sessionId, reason })
+  host.log.warn(TURN_RESET_LOG, {
+    sessionId: active.scope.providerSessionId,
+    reason,
+  })
   host.fail(active, TURN_FAILURES.resetRequired)
 }
 

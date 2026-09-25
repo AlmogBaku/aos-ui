@@ -178,7 +178,7 @@ export function registerMcpAppRoutes(
       )
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, sessionId, threadId },
+        scope: { agentId, providerSessionId: sessionId, threadId },
         toolCallId,
         operation,
         request: context.req.raw,

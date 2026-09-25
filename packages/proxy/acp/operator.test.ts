@@ -253,7 +253,7 @@ function unreadChanges(recorder: Recorder) {
 }
 
 /** The Session the seeded row names, as the coordinator and the routes see it. */
-const SCOPE = { agentId: AGENT, sessionId: SESSION, threadId: SESSION }
+const SCOPE = { agentId: AGENT, providerSessionId: SESSION, threadId: SESSION }
 
 /**
  * A steered run this connection does not own: the coordinator holds it for a

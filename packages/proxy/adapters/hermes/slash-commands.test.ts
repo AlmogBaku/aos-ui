@@ -15,7 +15,7 @@ import { rpcRouter } from "./test-utils/rpc-router"
 
 const scope = {
   agentId: "writer",
-  sessionId: "stored",
+  providerSessionId: "stored",
   threadId: "stored",
 }
 
@@ -420,7 +420,7 @@ it("finishes a synchronous command run without waiting for native conversational
   }
   const engine = new HermesTurnEngine(native)
   const handle = await engine.start(
-    { agentId: "writer", sessionId: "stored", threadId: "thread" },
+    { agentId: "writer", providerSessionId: "stored", threadId: "thread" },
     { turnId: "run", messageId: "user", prompt: "/help" }
   )
   const events = []

@@ -726,7 +726,7 @@ export async function harness(options: HarnessOptions = {}) {
       sessionId: providerId(SESSION),
       created: false,
     }),
-    resolveSessionId: (_agentId, publicSessionId) =>
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
       providerId(publicSessionId),
     publicError: () => undefined,
     authState: unsupported,
@@ -904,7 +904,7 @@ export async function harness(options: HarnessOptions = {}) {
 
   const scope: SessionScope = {
     agentId: AGENT,
-    sessionId: providerId(SESSION),
+    providerSessionId: providerId(SESSION),
     threadId: SESSION,
   }
 

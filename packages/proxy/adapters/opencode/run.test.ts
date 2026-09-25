@@ -20,7 +20,7 @@ import { OpenCodeTurnEngine } from "./run"
 
 const scope = {
   agentId: "writer",
-  sessionId: "session-1",
+  providerSessionId: "session-1",
   threadId: "thread-1",
 }
 const admission = {
@@ -49,8 +49,8 @@ function historyEvent(
   return {
     id: `native-${seq}`,
     type,
-    durable: { aggregateID: scope.sessionId, seq, version: 1 },
-    data: { sessionID: scope.sessionId, ...data },
+    durable: { aggregateID: scope.providerSessionId, seq, version: 1 },
+    data: { sessionID: scope.providerSessionId, ...data },
   }
 }
 
@@ -138,7 +138,7 @@ function client(overrides: Record<string, unknown> = {}) {
   const observation = controlledStream()
   const sessions = {
     get: vi.fn(async () => ({
-      data: { id: scope.sessionId, agent: scope.agentId },
+      data: { id: scope.providerSessionId, agent: scope.agentId },
     })),
     active: vi.fn(async () => ({ data: {} })),
     prompt: vi.fn(
@@ -146,7 +146,7 @@ function client(overrides: Record<string, unknown> = {}) {
         data: {
           admittedSeq: 0,
           id: request.id,
-          sessionID: scope.sessionId,
+          sessionID: scope.providerSessionId,
           prompt: request.prompt,
           delivery: "queue",
           timeCreated: 1,
@@ -194,7 +194,7 @@ describe("OpenCodeRunEngine", () => {
     await new OpenCodeTurnEngine(state.native).start(scope, input(), stage)
 
     expect(state.sessions.prompt).toHaveBeenCalledWith(
-      scope.sessionId,
+      scope.providerSessionId,
       expect.objectContaining({
         prompt: {
           text: "Hello OpenCode",
@@ -239,7 +239,7 @@ describe("OpenCodeRunEngine", () => {
   it("rejects a wrong native Agent owner before observation or mutation", async () => {
     const state = client({
       get: vi.fn(async () => ({
-        data: { id: scope.sessionId, agent: "other-agent" },
+        data: { id: scope.providerSessionId, agent: "other-agent" },
       })),
     })
 
@@ -277,7 +277,7 @@ describe("OpenCodeRunEngine", () => {
     const state = client({
       get: vi.fn(async () => {
         order.push("ownership")
-        return { data: { id: scope.sessionId, agent: scope.agentId } }
+        return { data: { id: scope.providerSessionId, agent: scope.agentId } }
       }),
       history: vi.fn(async () => {
         order.push("history")
@@ -402,7 +402,7 @@ describe("OpenCodeRunEngine", () => {
     let running = false
     const state = client({
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       wait: vi.fn(async () => wait.promise),
     })
@@ -414,7 +414,7 @@ describe("OpenCodeRunEngine", () => {
           data: {
             admittedSeq: 0,
             id: request.id,
-            sessionID: scope.sessionId,
+            sessionID: scope.providerSessionId,
             prompt: request.prompt,
             delivery: "queue",
             timeCreated: 1,
@@ -448,7 +448,10 @@ describe("OpenCodeRunEngine", () => {
 
     const events = await collect(handle)
     expect(state.sessions.prompt).toHaveBeenCalledOnce()
-    expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {})
+    expect(state.sessions.events).toHaveBeenCalledWith(
+      scope.providerSessionId,
+      {}
+    )
     expect(events).toEqual([
       { kind: TurnEventKind.TurnStarted },
       {
@@ -466,7 +469,7 @@ describe("OpenCodeRunEngine", () => {
     let running = false
     const state = client({
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -475,7 +478,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -510,7 +513,7 @@ describe("OpenCodeRunEngine", () => {
   it("refuses a new turn as a run conflict while the native Session is running", async () => {
     const state = client({
       active: vi.fn(async () => ({
-        data: { [scope.sessionId]: { type: "running" } },
+        data: { [scope.providerSessionId]: { type: "running" } },
       })),
     })
 
@@ -526,7 +529,7 @@ describe("OpenCodeRunEngine", () => {
     const order: string[] = []
     const state = client({
       active: vi.fn(async () => ({
-        data: { [scope.sessionId]: { type: "running" } },
+        data: { [scope.providerSessionId]: { type: "running" } },
       })),
       events: vi.fn(async () => {
         order.push("subscribe")
@@ -553,7 +556,10 @@ describe("OpenCodeRunEngine", () => {
     })
 
     expect(order).toEqual(["validate", "subscribe", "dispatch"])
-    expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {})
+    expect(state.sessions.events).toHaveBeenCalledWith(
+      scope.providerSessionId,
+      {}
+    )
     expect(state.sessions.prompt).not.toHaveBeenCalled()
     await handle.stop()
   })
@@ -685,16 +691,19 @@ describe("OpenCodeRunEngine", () => {
         threadId: scope.threadId,
         turnId: "run-recovered",
         position: {
-          epoch: `opencode:${scope.sessionId}`,
+          epoch: `opencode:${scope.providerSessionId}`,
           lastSeen: 1,
         },
       })
       const events = await collect(handle)
 
       expect(events.map((event) => event.kind)).toEqual(expected)
-      expect(state.sessions.events).toHaveBeenCalledWith(scope.sessionId, {
-        after: "1",
-      })
+      expect(state.sessions.events).toHaveBeenCalledWith(
+        scope.providerSessionId,
+        {
+          after: "1",
+        }
+      )
       expect(state.sessions.prompt).not.toHaveBeenCalled()
     }
   )
@@ -706,7 +715,7 @@ describe("OpenCodeRunEngine", () => {
         assistantMessageID: "assistant-failed",
         error: { type: "unknown", message: "native failure" },
       }),
-      durable: { aggregateID: scope.sessionId, seq: 1, version: 2 },
+      durable: { aggregateID: scope.providerSessionId, seq: 1, version: 2 },
     }
     const all = [
       admitted(0, admission["run-recovered"]),
@@ -724,7 +733,7 @@ describe("OpenCodeRunEngine", () => {
       threadId: scope.threadId,
       turnId: "run-recovered",
       position: {
-        epoch: `opencode:${scope.sessionId}`,
+        epoch: `opencode:${scope.providerSessionId}`,
         lastSeen: 1,
       },
     })
@@ -810,7 +819,9 @@ describe("OpenCodeRunEngine", () => {
         .fn()
         .mockResolvedValueOnce({ data: {} })
         .mockImplementation(async () => ({
-          data: running ? { [scope.sessionId]: { type: "running" } } : {},
+          data: running
+            ? { [scope.providerSessionId]: { type: "running" } }
+            : {},
         })),
     })
     const handle = await new OpenCodeTurnEngine(state.native).start(
@@ -837,7 +848,7 @@ describe("OpenCodeRunEngine", () => {
         .fn()
         .mockResolvedValueOnce({ data: {} })
         .mockResolvedValue({
-          data: { [scope.sessionId]: { type: "running" } },
+          data: { [scope.providerSessionId]: { type: "running" } },
         }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
@@ -879,7 +890,9 @@ describe("OpenCodeRunEngine", () => {
       active: vi.fn(async () => {
         if (activeUnavailable) throw new Error("active unavailable")
         return {
-          data: running ? { [scope.sessionId]: { type: "running" } } : {},
+          data: running
+            ? { [scope.providerSessionId]: { type: "running" } }
+            : {},
         }
       }),
       prompt: vi.fn(
@@ -889,7 +902,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -937,7 +950,7 @@ describe("OpenCodeRunEngine", () => {
     let running = false
     const state = client({
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -946,7 +959,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -991,7 +1004,7 @@ describe("OpenCodeRunEngine", () => {
     const state = client({
       events: vi.fn(async () => sources.shift()!),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       history: vi.fn(async (_id: string, options?: { after?: number }) => ({
         data: durable.filter(
@@ -1006,7 +1019,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: nextAdmissionSeq++,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -1089,7 +1102,7 @@ describe("OpenCodeRunEngine", () => {
         .fn()
         .mockResolvedValueOnce({ data: {} })
         .mockResolvedValue({
-          data: { [scope.sessionId]: { type: "running" } },
+          data: { [scope.providerSessionId]: { type: "running" } },
         }),
     })
     const engine = new OpenCodeTurnEngine(state.native, { maxQueueEvents: 2 })
@@ -1117,7 +1130,7 @@ describe("OpenCodeRunEngine", () => {
         return subscriptionCount === 1 ? first.source : second.source
       }),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -1126,7 +1139,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -1163,7 +1176,7 @@ describe("OpenCodeRunEngine", () => {
       threadId: scope.threadId,
       turnId: "run-1",
       position: {
-        epoch: `opencode:${scope.sessionId}`,
+        epoch: `opencode:${scope.providerSessionId}`,
         lastSeen: 0,
       },
     })
@@ -1195,7 +1208,7 @@ describe("OpenCodeRunEngine", () => {
         return subscriptionCount === 1 ? first.source : second.source
       }),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -1204,7 +1217,7 @@ describe("OpenCodeRunEngine", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,
@@ -1242,7 +1255,7 @@ describe("OpenCodeRunEngine", () => {
       threadId: scope.threadId,
       turnId: "run-1",
       position: {
-        epoch: `opencode:${scope.sessionId}`,
+        epoch: `opencode:${scope.providerSessionId}`,
         lastSeen: 0,
       },
     })
@@ -1267,7 +1280,7 @@ describe("OpenCodeRunEngine", () => {
         .fn()
         .mockResolvedValueOnce({ data: {} })
         .mockResolvedValue({
-          data: { [scope.sessionId]: { type: "running" } },
+          data: { [scope.providerSessionId]: { type: "running" } },
         }),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
@@ -1317,7 +1330,7 @@ describe("OpenCodeRunEngine", () => {
     ).rejects.toBe(promptUncertain)
     expect(promptCase.sessions.prompt).toHaveBeenCalledOnce()
     expect(promptCase.sessions.prompt).toHaveBeenCalledWith(
-      scope.sessionId,
+      scope.providerSessionId,
       expect.objectContaining({
         prompt: expect.objectContaining({
           files: [{ uri: "data:text/plain;base64,SGVsbG8=" }],
@@ -1333,7 +1346,7 @@ describe("OpenCodeRunEngine", () => {
         .fn()
         .mockResolvedValueOnce({ data: {} })
         .mockResolvedValue({
-          data: { [scope.sessionId]: { type: "running" } },
+          data: { [scope.providerSessionId]: { type: "running" } },
         }),
     })
     const handle = await new OpenCodeTurnEngine(stopCase.native).start(
@@ -1381,7 +1394,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
       history: log.history,
       events: vi.fn(async () => streams.shift()!),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       wait: vi.fn(async () => new Promise<void>(() => {})),
     })
@@ -1400,7 +1413,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
           data: {
             admittedSeq: 0,
             id: request.id,
-            sessionID: scope.sessionId,
+            sessionID: scope.providerSessionId,
             prompt: request.prompt,
             delivery: "queue",
             timeCreated: 1,
@@ -1444,7 +1457,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const state = client({
       history: log.history,
       active: vi.fn(async () => ({
-        data: { [scope.sessionId]: { type: "running" } },
+        data: { [scope.providerSessionId]: { type: "running" } },
       })),
     })
     const observer = watcher()
@@ -1452,7 +1465,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
 
     await until(() => expect(observer.onTurn).toHaveBeenCalledOnce())
     expect(state.sessions.events).toHaveBeenCalledWith(
-      scope.sessionId,
+      scope.providerSessionId,
       expect.objectContaining({ after: "1" })
     )
     state.observation.publish(live(textEnded(2, "Still working")))
@@ -1471,7 +1484,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
       history: log.history,
       events: vi.fn(async () => streams.shift()!),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
     })
     const observer = watcher()
@@ -1516,7 +1529,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
       history: log.history,
       events: vi.fn(async () => controlledStream().source),
       active: vi.fn(async () => ({
-        data: { [scope.sessionId]: { type: "running" } },
+        data: { [scope.providerSessionId]: { type: "running" } },
       })),
     })
     const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
@@ -1539,7 +1552,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
       history: log.history,
       events: vi.fn(async () => controlledStream().source),
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
     })
     const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
@@ -1577,7 +1590,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const state = client({
       history: log.history,
       active: vi.fn(async () => ({
-        data: running ? { [scope.sessionId]: { type: "running" } } : {},
+        data: running ? { [scope.providerSessionId]: { type: "running" } } : {},
       })),
       prompt: vi.fn(
         async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -1587,7 +1600,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
             data: {
               admittedSeq: 0,
               id: request.id,
-              sessionID: scope.sessionId,
+              sessionID: scope.providerSessionId,
               prompt: request.prompt,
               delivery: "queue",
               timeCreated: 1,

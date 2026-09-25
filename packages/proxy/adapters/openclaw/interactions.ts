@@ -21,13 +21,13 @@ import { OpenClawClientRequestError } from "./client"
 
 export type OpenClawInteractionScope = Readonly<{
   agentId: string
-  sessionId: string
+  providerSessionId: string
   threadId: string
   runId: string
 }>
 export type OpenClawRepliesScope = Pick<
   OpenClawInteractionScope,
-  "agentId" | "sessionId" | "threadId"
+  "agentId" | "providerSessionId" | "threadId"
 >
 export type OpenClawInteractionDiscoveryScope = OpenClawRepliesScope &
   Readonly<{
@@ -114,9 +114,9 @@ const encoder = new TextEncoder(),
     return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
   },
   scopeKey = (s: OpenClawInteractionScope) =>
-    `${s.agentId}\0${s.sessionId}\0${s.threadId}\0${s.runId}`,
+    `${s.agentId}\0${s.providerSessionId}\0${s.threadId}\0${s.runId}`,
   repliesScopeKey = (s: OpenClawRepliesScope) =>
-    `${s.agentId}\0${s.sessionId}\0${s.threadId}`,
+    `${s.agentId}\0${s.providerSessionId}\0${s.threadId}`,
   key = (s: OpenClawInteractionScope, i: string) => `${scopeKey(s)}\0${i}`,
   bindingKey = (s: OpenClawRepliesScope, i: string) =>
     `${repliesScopeKey(s)}\0${i}`
@@ -137,7 +137,7 @@ function record(
   if (
     !requestId ||
     r.agentId !== scope.agentId ||
-    r.sessionKey !== scope.sessionId ||
+    r.sessionKey !== scope.providerSessionId ||
     r.runId !== scope.runId ||
     !["pending", "answered", "cancelled", "expired"].includes(
       r.status as string
@@ -221,7 +221,10 @@ function jsonFingerprint(value: unknown) {
   }
   return JSON.stringify(normalize(value))
 }
-function parseReply(raw: unknown): { entry: RequestReply; fingerprint: string } {
+function parseReply(raw: unknown): {
+  entry: RequestReply
+  fingerprint: string
+} {
   if (!Array.isArray(raw) || raw.length !== 1) invalid()
   const parsed = RequestReplySchema.safeParse((raw as unknown[])[0])
   if (!parsed.success) invalid()
@@ -230,7 +233,8 @@ function parseReply(raw: unknown): { entry: RequestReply; fingerprint: string } 
   return { entry, fingerprint: jsonFingerprint(entry) }
 }
 /** A free-text answer is valid wherever OpenClaw accepts one. */
-const acceptsText = (q: Question) => !!q.other || !!q.secret || !q.options.length
+const acceptsText = (q: Question) =>
+  !!q.other || !!q.secret || !q.options.length
 function pendingQuestion(q: Question): PendingQuestion {
   return {
     label: q.header,
@@ -288,13 +292,13 @@ export class OpenClawInteractions {
   ): Promise<{ requests: PendingRequest[] } | undefined> {
     if (
       !Check(SessionApprovalReplaySchema, approvalReplay) ||
-      approvalReplay.sessionKey !== scope.sessionId ||
+      approvalReplay.sessionKey !== scope.providerSessionId ||
       approvalReplay.truncated
     )
       return undefined
     const fullScope: OpenClawInteractionScope = {
         agentId: scope.agentId,
-        sessionId: scope.sessionId,
+        providerSessionId: scope.providerSessionId,
         threadId: scope.threadId,
         runId: scope.nativeRunId,
       },
@@ -309,7 +313,7 @@ export class OpenClawInteractions {
       const row = value as Record<string, unknown>
       if (
         row.agentId !== scope.agentId ||
-        row.sessionKey !== scope.sessionId ||
+        row.sessionKey !== scope.providerSessionId ||
         row.runId !== scope.nativeRunId
       )
         continue
@@ -318,7 +322,7 @@ export class OpenClawInteractions {
     }
     for (const value of approvalReplay.approvals)
       if (
-        value.sourceSessionKey === scope.sessionId &&
+        value.sourceSessionKey === scope.providerSessionId &&
         value.presentation.agentId === scope.agentId
       )
         candidates.push({ kind: "approval", value })
@@ -371,7 +375,7 @@ export class OpenClawInteractions {
     }
     if (
       r.status !== "pending" ||
-      r.sourceSessionKey !== scope.sessionId ||
+      r.sourceSessionKey !== scope.providerSessionId ||
       r.presentation.agentId !== scope.agentId ||
       !Number.isSafeInteger(r.expiresAtMs)
     )
@@ -412,7 +416,7 @@ export class OpenClawInteractions {
       const row = q as Record<string, unknown>
       if (
         row.agentId !== scope.agentId ||
-        row.sessionKey !== scope.sessionId ||
+        row.sessionKey !== scope.providerSessionId ||
         row.runId !== scope.runId
       )
         continue
@@ -587,8 +591,8 @@ export class OpenClawInteractions {
     const presentation = approval.presentation as
       Record<string, unknown> | undefined
     if (
-      approval.sourceSessionKey !== p.scope.sessionId &&
-      source?.sessionKey !== p.scope.sessionId
+      approval.sourceSessionKey !== p.scope.providerSessionId &&
+      source?.sessionKey !== p.scope.providerSessionId
     )
       bad()
     if (presentation?.agentId !== p.scope.agentId) bad()

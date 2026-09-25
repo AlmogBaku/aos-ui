@@ -141,8 +141,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
     })
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
-    return this.#workspace.resolveSessionId(agentId, publicSessionId)
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
+    return this.#workspace.resolveProviderSessionId(agentId, publicSessionId)
   }
 
   async resolveInvitedSession(
@@ -348,10 +348,13 @@ export class OpenClawServerAdapter implements ServerRuntime {
   ) {
     void _reset
     await this.#start()
-    const sessionId = this.resolveSessionId(agentId, publicSessionId)
-    if (!sessionId) throw new OpenClawWorkspaceOwnershipError()
-    await this.#workspace.getSession(agentId, sessionId)
-    return this.#subscribeSession(agentId, sessionId, listener)
+    const providerSessionId = this.resolveProviderSessionId(
+      agentId,
+      publicSessionId
+    )
+    if (!providerSessionId) throw new OpenClawWorkspaceOwnershipError()
+    await this.#workspace.getSession(agentId, providerSessionId)
+    return this.#subscribeSession(agentId, providerSessionId, listener)
   }
 
   async stageAttachments(

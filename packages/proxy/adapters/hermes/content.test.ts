@@ -10,7 +10,7 @@ import { projectHermesAttachedImages } from "./media-artifacts"
 
 const scope = {
   agentId: "research",
-  sessionId: "session-public-1",
+  providerSessionId: "session-public-1",
   liveSessionId: "live-private-1",
   attached: true,
 }

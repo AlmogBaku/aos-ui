@@ -39,7 +39,7 @@ import { assistantToolCall, toolRow } from "./test-utils/history-rows"
 
 const scope = {
   agentId: "research",
-  sessionId: "stored-session",
+  providerSessionId: "stored-session",
   threadId: "hermes:research:stored-session",
 }
 
@@ -4621,7 +4621,7 @@ describe("HermesRunEngine", () => {
     const attachment = observation()
     const other = {
       agentId: "research",
-      sessionId: "stored-other",
+      providerSessionId: "stored-other",
       threadId: "hermes:research:stored-other",
     }
     const first = nativeTurn("live-a", 1)
@@ -4637,7 +4637,9 @@ describe("HermesRunEngine", () => {
       runtime({
         resume: async (candidate) => ({
           liveSessionId:
-            candidate.sessionId === scope.sessionId ? "live-a" : "live-b",
+            candidate.providerSessionId === scope.providerSessionId
+              ? "live-a"
+              : "live-b",
           running: false,
         }),
         observe: attachment.observe,

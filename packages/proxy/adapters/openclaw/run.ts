@@ -319,7 +319,7 @@ function toolName(value: unknown, resolve: McpToolNameResolver) {
 const unresolved: McpToolNameResolver = () => undefined
 
 function scopeKey(scope: SessionScope) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 function boundedText(value: unknown) {
@@ -750,7 +750,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       throw new Error(
         "OpenClaw request replies cannot include staged attachments"
       )
-    if (!validId(scope.agentId) || !validId(scope.sessionId))
+    if (!validId(scope.agentId) || !validId(scope.providerSessionId))
       throw new Error("AOS turn scope does not match this Session")
     if (replies) {
       if (!this.#replies)
@@ -770,7 +770,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const key = scopeKey(scope)
     const waiting = this.#waiting.get(key)
     const interactionScope = waiting
-      ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
+      ? { ...scope, providerSessionId: waiting.nativeInteractionSessionKey }
       : scope
     const repliesBinding = replies
       ? await this.#replies!.validate(interactionScope, replies)
@@ -787,7 +787,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const holder: { active?: ActiveRun } = {}
       let admissionDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else admissionDirty = true
@@ -1011,7 +1011,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   ): Promise<ServerTurnHandle> {
     if (
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
+      !validId(scope.providerSessionId) ||
       request.threadId !== scope.threadId ||
       !validId(request.turnId)
     )
@@ -1040,7 +1040,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const holder: { active?: ActiveRun } = {}
       let recoveryDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else recoveryDirty = true
@@ -1097,7 +1097,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (
       !this.#replies?.discover ||
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
+      !validId(scope.providerSessionId) ||
       !validId(turnId) ||
       this.#active.has(key)
     )
@@ -1122,7 +1122,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       }
       const holder: { waiting?: WaitingRun; active?: ActiveRun } = {}
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else if (holder.waiting) this.#acceptWaiting(holder.waiting, event)
@@ -1161,7 +1161,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         const discovered = await this.#replies.discover(
           {
             ...scope,
-            sessionId: approvalReplayKey,
+            providerSessionId: approvalReplayKey,
             nativeRunId,
           },
           approvalReplay.replay
@@ -1274,7 +1274,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const subscribe = () => {
       this.#subscriptions
         .acquire(
-          { agentId: scope.agentId, sessionKey: scope.sessionId },
+          { agentId: scope.agentId, sessionKey: scope.providerSessionId },
           (event) => announce(progressRunId(event), false),
           async () => {
             if (lease) await check(lease, true)

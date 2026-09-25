@@ -16,7 +16,7 @@ type NativeRecord = Record<string, unknown>
 
 export type HermesWorkspaceSession = {
   agentId: string
-  sessionId: string
+  providerSessionId: string
   /** Server-only Hermes identifier for an already attached Session. */
   liveSessionId: string
   attached: boolean
@@ -398,10 +398,7 @@ export function latestHermesTodos(
       (resultName !== undefined && !names.has(resultName))
     )
       continue
-    const todos = projectTodos(
-      row.content ?? row.result,
-      TODO_STATUS_ALIASES
-    )
+    const todos = projectTodos(row.content ?? row.result, TODO_STATUS_ALIASES)
     // A batched call may settle a Todo tool beside another one, and a row that
     // carries no Todo list at all leaves the plan the last one published
     // standing rather than emptying it.
@@ -455,7 +452,7 @@ export function createHermesWorkspaceOperations(input: {
     }
     if (
       scope.agentId !== agentId ||
-      scope.sessionId !== sessionId ||
+      scope.providerSessionId !== sessionId ||
       !stringValue(scope.liveSessionId, 4_096) ||
       typeof scope.attached !== "boolean" ||
       typeof scope.active !== "boolean"

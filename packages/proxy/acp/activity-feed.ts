@@ -101,9 +101,12 @@ export function createActivityFeed({
   /** Republishes what the provider already reports about a Session. */
   const noteExecution = (row: SessionRow) => {
     if (row.status !== "waiting-for-input" && row.status !== "failed") return
-    const providerId = runtime.resolveSessionId(row.agentId, row.id)
+    const providerId = runtime.resolveProviderSessionId(row.agentId, row.id)
     const execution = providerId
-      ? coordinator.snapshot({ agentId: row.agentId, sessionId: providerId })
+      ? coordinator.snapshot({
+          agentId: row.agentId,
+          providerSessionId: providerId,
+        })
       : undefined
     const base = {
       agentId: row.agentId,

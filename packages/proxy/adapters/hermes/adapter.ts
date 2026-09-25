@@ -397,13 +397,20 @@ export class HermesServerAdapter implements ServerRuntime {
         // Hermes pushes `session.info` after every model or effort change, and a
         // read taken right after a write must see what this server just applied.
         sessionInfo: async (scope) => {
-          const retained = this.#retainedInfo(scope.agentId, scope.sessionId)
+          const retained = this.#retainedInfo(
+            scope.agentId,
+            scope.providerSessionId
+          )
           if (retained)
             return isRecord(retained.info) ? retained.info : retained
           return (scope as HermesWorkspaceSession & { info?: unknown }).info
         },
         recordSessionInfo: (scope, patch) =>
-          this.#recordSessionInfo(scope.agentId, scope.sessionId, patch),
+          this.#recordSessionInfo(
+            scope.agentId,
+            scope.providerSessionId,
+            patch
+          ),
       },
     })
     this.#content = createHermesContentOperations({
@@ -417,7 +424,10 @@ export class HermesServerAdapter implements ServerRuntime {
           this.transport.request(method, params, { maxResponseBytes }),
         readArtifact: async (scope, reference, maxBytes, maxResponseBytes) => {
           if (!this.#dashboard) throw new HermesUnavailableError()
-          const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+          const storedId = storedSessionIdentity(
+            scope.agentId,
+            scope.providerSessionId
+          )
           if (!storedId) throw new HermesUnavailableError()
           let payload: unknown
           try {
@@ -494,8 +504,8 @@ export class HermesServerAdapter implements ServerRuntime {
     ) => ({
       liveSessionId: (await this.#attachments.ensure(scope, attach))
         .liveSessionId,
-      running: this.#attachedRunning(scope.agentId, scope.sessionId),
-      info: this.#retainedInfo(scope.agentId, scope.sessionId)?.info,
+      running: this.#attachedRunning(scope.agentId, scope.providerSessionId),
+      info: this.#retainedInfo(scope.agentId, scope.providerSessionId)?.info,
     })
     this.interactions = new HermesInteractions(
       {
@@ -538,7 +548,7 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
     return storedSessionIdentity(agentId, publicSessionId)
   }
 
@@ -761,7 +771,7 @@ export class HermesServerAdapter implements ServerRuntime {
     await this.getSession(agentId, storedId)
     const attached = await this.#attachments.ensure({
       agentId,
-      sessionId: storedId,
+      providerSessionId: storedId,
       threadId: publicSessionId,
     })
     const resumed = this.#attachmentInfo.get(
@@ -770,7 +780,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const info = resumed && isRecord(resumed.info) ? resumed.info : undefined
     return {
       agentId,
-      sessionId: publicSessionId,
+      providerSessionId: publicSessionId,
       liveSessionId: attached.liveSessionId,
       attached: true,
       active: this.#attachedRunning(agentId, storedId),
@@ -796,12 +806,15 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async #rawHistory(
-    scope: Pick<HermesWorkspaceSession, "agentId" | "sessionId"> & {
+    scope: Pick<HermesWorkspaceSession, "agentId" | "providerSessionId"> & {
       info?: unknown
     }
   ) {
     if (!this.#dashboard) throw new HermesUnavailableError()
-    const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+    const storedId = storedSessionIdentity(
+      scope.agentId,
+      scope.providerSessionId
+    )
     if (!storedId) throw new HermesSessionNotFoundError()
     let value: unknown
     try {
@@ -897,7 +910,7 @@ export class HermesServerAdapter implements ServerRuntime {
       turnId,
       ...(await this.interactions.resume({
         agentId,
-        sessionId: storedId,
+        providerSessionId: storedId,
         threadId: publicSessionId,
       })),
     }
@@ -1151,7 +1164,7 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await retryTransient(
         () =>
           this.transport.request("session.resume", {
-            session_id: scope.sessionId,
+            session_id: scope.providerSessionId,
             profile: scope.agentId,
             omit_messages: true,
           }),
@@ -1169,7 +1182,7 @@ export class HermesServerAdapter implements ServerRuntime {
         ? payload.session_id
         : undefined
     if (!liveSessionId || !isRecord(payload)) throw new HermesUnavailableError()
-    const key = attachmentInfoKey(scope.agentId, scope.sessionId)
+    const key = attachmentInfoKey(scope.agentId, scope.providerSessionId)
     this.#attachmentInfo.set(key, payload)
     // A re-resumed Session answers under a new live id; the previous one can
     // never name this Session again.
@@ -1179,7 +1192,11 @@ export class HermesServerAdapter implements ServerRuntime {
     this.#liveInfoKeys.set(liveSessionId, key)
     return {
       liveSessionId,
-      saved: !isUnpersistedDraft(payload, scope.agentId, scope.sessionId),
+      saved: !isUnpersistedDraft(
+        payload,
+        scope.agentId,
+        scope.providerSessionId
+      ),
     }
   }
 
@@ -1199,10 +1216,10 @@ export class HermesServerAdapter implements ServerRuntime {
     listener: () => void,
     reset?: () => void
   ) {
-    const sessionId = storedSessionIdentity(agentId, publicSessionId)
-    if (!sessionId) throw new HermesSessionNotFoundError()
+    const providerSessionId = storedSessionIdentity(agentId, publicSessionId)
+    if (!providerSessionId) throw new HermesSessionNotFoundError()
     return this.#attachments.subscribe(
-      { agentId, sessionId, threadId: publicSessionId },
+      { agentId, providerSessionId, threadId: publicSessionId },
       (signal) => {
         if (signal.kind === "event") listener()
         else if (signal.kind === "lost") reset?.()
@@ -1525,7 +1542,7 @@ export class HermesServerAdapter implements ServerRuntime {
       await this.#attachments.ensure(
         {
           agentId,
-          sessionId: storedId,
+          providerSessionId: storedId,
           threadId: sessionId(agentId, storedId),
         },
         { refresh: true, freshForMs: RESTORE_SNAPSHOT_FRESH_MS }

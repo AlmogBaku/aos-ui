@@ -277,7 +277,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       )
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
     return validIdentifier(agentId) && validIdentifier(publicSessionId)
       ? publicSessionId
       : undefined

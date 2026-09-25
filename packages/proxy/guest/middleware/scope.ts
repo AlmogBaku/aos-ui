@@ -42,7 +42,7 @@ export function createScopeMiddleware({
     return resolved
       ? {
           agentId: grant.agentId,
-          sessionId: resolved.sessionId,
+          providerSessionId: resolved.sessionId,
           threadId: grant.ref,
         }
       : undefined

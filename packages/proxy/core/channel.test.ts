@@ -23,7 +23,7 @@ import type { SessionCoordinator } from "./session-coordinator"
 
 const SCOPE: SessionScope = {
   agentId: "researcher",
-  sessionId: "session-1",
+  providerSessionId: "session-1",
   threadId: "thread-operator",
 }
 
@@ -76,7 +76,8 @@ function member(
 function harness() {
   const snapshots = new Map<string, { state: string; turnId?: string }>()
   const clock = { now: 0 }
-  const key = (scope: RoomScope) => `${scope.agentId}/${scope.sessionId}`
+  const key = (scope: RoomScope) =>
+    `${scope.agentId}/${scope.providerSessionId}`
   const rooms = createChannel({
     snapshot: (scope) => snapshots.get(key(scope)) ?? { state: "idle" },
     now: () => clock.now,
@@ -150,7 +151,7 @@ describe("createChannel", () => {
 
   it("keeps another sessionId in another room", async () => {
     const { rooms, setSnapshot } = harness()
-    const other = { ...SCOPE, sessionId: "session-2" }
+    const other = { ...SCOPE, providerSessionId: "session-2" }
     const sender = member()
     const elsewhere = member()
     rooms.add(SCOPE, sender.fake, { hasPrompt: false })
@@ -477,7 +478,7 @@ function adoptingHarness() {
       for (const listener of listeners)
         listener({
           agentId: SCOPE.agentId,
-          sessionId: SCOPE.sessionId,
+          sessionId: SCOPE.providerSessionId,
           turnId,
           occurredAt: "2026-09-23T00:00:00Z",
           kind: "turn-finished",
@@ -695,7 +696,7 @@ function seated(
       for (const observer of observers)
         observer({
           agentId: SCOPE.agentId,
-          sessionId: SCOPE.sessionId,
+          sessionId: SCOPE.providerSessionId,
           turnId: "turn-1",
           occurredAt: "2026-09-24T00:00:00Z",
           kind: "attention-resolved",

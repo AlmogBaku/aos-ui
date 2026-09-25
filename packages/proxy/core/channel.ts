@@ -45,7 +45,7 @@ import { FanoutOverflowError } from "./subscriber-fanout"
  * by itself is adopted and streamed to every member like one of their own.
  */
 
-export type RoomScope = Pick<SessionScope, "agentId" | "sessionId">
+export type RoomScope = Pick<SessionScope, "agentId" | "providerSessionId">
 
 export type RoomTurn = {
   turnId: string
@@ -163,7 +163,7 @@ function showsPrompt(
  * thread differs from the operator's for the same provider Session.
  */
 function roomKey(scope: RoomScope) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 /** Runs one member's call so its failure reaches only that member. */

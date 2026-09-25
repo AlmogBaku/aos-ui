@@ -72,7 +72,7 @@ export function createReadState({
   const markRead = async (agentId: string, sessionId: string) => {
     sessionRows.markRead(agentId, sessionId)
     onUnreadChanged(agentId, sessionId, false)
-    const providerId = runtime.resolveSessionId(agentId, sessionId)
+    const providerId = runtime.resolveProviderSessionId(agentId, sessionId)
     if (!providerId) return
     try {
       await runtime.updateSession(agentId, providerId, { unread: false })

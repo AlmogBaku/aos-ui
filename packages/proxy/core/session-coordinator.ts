@@ -273,8 +273,8 @@ function admittedTurn(init: TurnInit): AdmittedTurn {
 
 const MAX_STEERING_REQUESTS_PER_EXECUTION = 256
 
-function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+function scopeKey(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 function safeEventBytes(event: TurnEvent) {
@@ -496,7 +496,7 @@ export class SessionCoordinator {
    * the first attempt has delivered or deferred it.
    */
   reportUsage(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     subscriberId?: string
   ) {
     return this.#usage.report(
@@ -506,12 +506,12 @@ export class SessionCoordinator {
     )
   }
 
-  state(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+  state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#executions.get(scopeKey(scope))?.state ?? "idle"
   }
 
   snapshot(
-    scope: Pick<SessionScope, "agentId" | "sessionId">
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">
   ): SessionSnapshot {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution) return { state: "idle", requests: [] }
@@ -530,7 +530,7 @@ export class SessionCoordinator {
    * that start was if it is known: a view rebuilt from history reads the turn
    * from there.
    */
-  replayStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+  replayStart(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
     if (!segment || replayPlan(segment, undefined) !== "history")
       return undefined
@@ -551,7 +551,7 @@ export class SessionCoordinator {
    * follow the requests its own Session resolves without the event naming them.
    */
   observeScope(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     listener: (event: ExecutionEvent) => void
   ) {
     return this.#addObserver({ key: scopeKey(scope), listener })
@@ -743,7 +743,7 @@ export class SessionCoordinator {
    * here, so the Channel's offered and delivered records stay in step.
    */
   async answer(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     reply: RequestReply
   ) {
     const execution = this.#executions.get(scopeKey(scope))
@@ -937,7 +937,7 @@ export class SessionCoordinator {
   }
 
   async stop(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     controllerId: string
   ) {
     const execution = this.#executions.get(scopeKey(scope))
@@ -968,7 +968,7 @@ export class SessionCoordinator {
   }
 
   async steer(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     request: TurnSteerRequest,
     controllerId: string
   ): Promise<TurnSteerResponse> {

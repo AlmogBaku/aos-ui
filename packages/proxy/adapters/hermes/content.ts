@@ -39,7 +39,7 @@ const FILE_REFERENCE = /^@file:(?:`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)$/u
 
 export type HermesContentSession = {
   agentId: string
-  sessionId: string
+  providerSessionId: string
   /** Server-only identifier for a currently attached native Session. */
   liveSessionId: string
   attached: boolean
@@ -362,10 +362,10 @@ export function createHermesContentOperations(input: {
   authority: HermesContentAuthority
   transport: HermesContentTransport
 }) {
-  const requireScope = async (agentId: string, sessionId: string) => {
+  const requireScope = async (agentId: string, providerSessionId: string) => {
     let scope: unknown
     try {
-      scope = await input.authority.requireSession(agentId, sessionId)
+      scope = await input.authority.requireSession(agentId, providerSessionId)
     } catch {
       throw new HermesContentScopeError()
     }
@@ -375,7 +375,7 @@ export function createHermesContentOperations(input: {
     if (
       !isRecord(scope) ||
       scope.agentId !== agentId ||
-      scope.sessionId !== sessionId ||
+      scope.providerSessionId !== providerSessionId ||
       !liveSessionId ||
       typeof scope.attached !== "boolean"
     )
@@ -383,7 +383,7 @@ export function createHermesContentOperations(input: {
     if (!scope.attached) throw new HermesContentUnavailableError()
     return {
       agentId,
-      sessionId,
+      providerSessionId,
       liveSessionId,
       attached: scope.attached,
     }

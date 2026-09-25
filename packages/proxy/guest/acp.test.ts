@@ -420,7 +420,10 @@ type HarnessOptions = {
   /** Whether a first send creates the invited Session; it does by default. */
   creates?: boolean
   /** How the runtime resolves a public Session id; none resolves by default. */
-  resolveSessionId?: (agentId: string, sessionId: string) => string | undefined
+  resolveProviderSessionId?: (
+    agentId: string,
+    sessionId: string
+  ) => string | undefined
   /** What the invited lookup, the capabilities read or a run's start throws instead. */
   fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
 }
@@ -469,7 +472,8 @@ function harness(options: HarnessOptions = {}) {
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
-    resolveSessionId: options.resolveSessionId ?? (() => undefined),
+    resolveProviderSessionId:
+      options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
     authState: unsupported,
     runtimeInfo,
@@ -789,7 +793,7 @@ describe("guest ACP lane", () => {
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
     })
-    const invited = { agentId: AGENT, sessionId: STORED, threadId: REF }
+    const invited = { agentId: AGENT, providerSessionId: STORED, threadId: REF }
     await test.coordinator.start(
       invited,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
@@ -1353,7 +1357,7 @@ describe("guest ACP lane", () => {
 
     // The operator's answer names the Session by its provider scope alone.
     await test.coordinator.answer(
-      { agentId: AGENT, sessionId: STORED },
+      { agentId: AGENT, providerSessionId: STORED },
       {
         requestId: QUESTION.requestId,
         status: "resolved",
@@ -1408,7 +1412,7 @@ describe("guest ACP lane", () => {
     })
     const operatorScope = {
       agentId: AGENT,
-      sessionId: "operator-session",
+      providerSessionId: "operator-session",
       threadId: "operator",
     }
     await test.coordinator.start(
@@ -1458,7 +1462,11 @@ describe("guest ACP lane", () => {
     await test.resume(REF)
 
     const other = await test.coordinator.start(
-      { agentId: AGENT, sessionId: "operator-session", threadId: "operator" },
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        threadId: "operator",
+      },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
         subscriberId: "operator",
@@ -1838,7 +1846,7 @@ describe("guest scope and commands", () => {
   it("reaches the invited conversation when its reference names another native Session", async () => {
     const test = harness({
       existing: true,
-      resolveSessionId: (_agentId, sessionId) => sessionId,
+      resolveProviderSessionId: (_agentId, sessionId) => sessionId,
     })
     await test.initialize()
     await test.login(await invite(test.invitations, "operator-native"))

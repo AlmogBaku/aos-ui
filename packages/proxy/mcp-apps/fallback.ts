@@ -108,7 +108,7 @@ export function createMcpAppsFallback(
   /** Flagged calls of running turns, until the runtime stores them. */
   const live = new Map<string, StoredMcpToolCall>()
   const liveKey = (scope: SessionScope, toolCallId: string) =>
-    JSON.stringify([scope.agentId, scope.sessionId, toolCallId])
+    JSON.stringify([scope.agentId, scope.providerSessionId, toolCallId])
 
   async function resolveServer(
     scope: SessionScope,

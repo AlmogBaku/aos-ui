@@ -872,7 +872,7 @@ describe("AOS ACP agent", () => {
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
       expect(
-        test.coordinator.state({ agentId: AGENT, sessionId: CREATED })
+        test.coordinator.state({ agentId: AGENT, providerSessionId: CREATED })
       ).toBe("running")
     )
 

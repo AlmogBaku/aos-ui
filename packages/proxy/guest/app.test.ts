@@ -575,7 +575,7 @@ describe("guest app", () => {
       describe: vi.fn(async () => true),
       // The runtime finds a call only in the Session that made it.
       open: vi.fn(async (scope, toolCallId) => {
-        if (scope.sessionId !== STORED || toolCallId !== "call-1")
+        if (scope.providerSessionId !== STORED || toolCallId !== "call-1")
           throw new McpAppNotFoundError()
         return { html: "<p>view</p>" }
       }),
@@ -594,7 +594,7 @@ describe("guest app", () => {
     })
     expect(own.status).toBe(200)
     expect(mcpApps.open).toHaveBeenLastCalledWith(
-      { agentId: AGENT, sessionId: STORED, threadId: REF },
+      { agentId: AGENT, providerSessionId: STORED, threadId: REF },
       "call-1",
       expect.anything()
     )

@@ -9,7 +9,7 @@ import {
 
 const scope = {
   agentId: "research",
-  sessionId: "hermes:research:stored-1",
+  providerSessionId: "hermes:research:stored-1",
   liveSessionId: "live-private-1",
   attached: true,
   active: true,

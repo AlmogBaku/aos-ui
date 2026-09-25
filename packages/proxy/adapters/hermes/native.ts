@@ -377,8 +377,11 @@ export function rowText(row: Record<string, unknown>, content: unknown) {
  * The one map key for a durable Agent/Session pair. The separator cannot occur
  * in a native identifier, so two distinct pairs never collide.
  */
-export function sessionKey(scope: { agentId: string; sessionId: string }) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+export function sessionKey(scope: {
+  agentId: string
+  providerSessionId: string
+}) {
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ import type {
 export type SessionScope = {
   agentId: string
   /** Provider-resolved Session identity; never supplied by the browser. */
-  sessionId: string
+  providerSessionId: string
   /** Opaque public Session identity supplied by the browser. */
   threadId: string
 }
@@ -255,7 +255,10 @@ export interface ServerRuntime {
     ref: string,
     create?: { firstTurnInstruction?: string }
   ): Promise<{ sessionId: string; created: boolean } | undefined>
-  resolveSessionId(agentId: string, publicSessionId: string): string | undefined
+  resolveProviderSessionId(
+    agentId: string,
+    publicSessionId: string
+  ): string | undefined
   publicError(cause: unknown): ServerRuntimePublicError | undefined
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>

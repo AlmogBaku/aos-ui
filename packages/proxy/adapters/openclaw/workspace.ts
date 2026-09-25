@@ -153,7 +153,10 @@ export type OpenClawWorkspace = Readonly<{
     patch: SessionPatch
   ): Promise<void>
   deleteSession(agentId: string, sessionKey: string): Promise<void>
-  resolveSessionId(agentId: string, publicSessionId: string): string | undefined
+  resolveProviderSessionId(
+    agentId: string,
+    publicSessionId: string
+  ): string | undefined
   resolveInvitedSession(
     agentId: string,
     ref: string
@@ -328,7 +331,7 @@ export function createOpenClawWorkspace(input: {
         openClawDeleteSessionParams(agentId, sessionKey)
       )
     },
-    resolveSessionId(_agentId, publicSessionId) {
+    resolveProviderSessionId(_agentId, publicSessionId) {
       return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined
     },
     async resolveInvitedSession(agentId, ref) {

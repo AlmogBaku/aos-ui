@@ -6,7 +6,7 @@ import { serverRequests } from "./test-utils/server-requests"
 
 const scope: HermesInteractionScope = {
   agentId: "research",
-  sessionId: "session-1",
+  providerSessionId: "session-1",
   threadId: "session-1",
 }
 
@@ -493,7 +493,7 @@ describe("HermesInteractions server requests", () => {
   it("ignores a cancellation addressed to another live Session", () => {
     const { requests, interactions, bind } = harness()
     bind()
-    bind("live-other", { ...scope, sessionId: "session-2" })
+    bind("live-other", { ...scope, providerSessionId: "session-2" })
     const id = requests.deliver("clarify", {
       session_id: LIVE,
       question: "Which region?",
@@ -610,7 +610,11 @@ describe("HermesInteractions server requests", () => {
 
   it("notifies only the run bound to the addressed Session", () => {
     const { requests, interactions, bind } = harness()
-    const other = { ...scope, sessionId: "session-2", threadId: "session-2" }
+    const other = {
+      ...scope,
+      providerSessionId: "session-2",
+      threadId: "session-2",
+    }
     bind()
     bind("live-other", other)
     const notified = vi.fn()
@@ -720,7 +724,7 @@ describe("HermesInteractions server requests", () => {
     // two dimensions an answer may not cross.
     for (const foreign of [
       { ...scope, agentId: "other" },
-      { ...scope, sessionId: "session-2" },
+      { ...scope, providerSessionId: "session-2" },
     ])
       await expect(
         interactions.respond(foreign, {

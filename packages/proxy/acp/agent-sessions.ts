@@ -195,9 +195,16 @@ export function createWorkspace(
   }
   return {
     scope(agentId: string, publicSessionId: string): SessionScope {
-      const sessionId = runtime.resolveSessionId(agentId, publicSessionId)
+      const sessionId = runtime.resolveProviderSessionId(
+        agentId,
+        publicSessionId
+      )
       if (!sessionId) throw notFound()
-      return { agentId, sessionId, threadId: publicSessionId }
+      return {
+        agentId,
+        providerSessionId: sessionId,
+        threadId: publicSessionId,
+      }
     },
     info: () => call(() => runtime.runtimeInfo()),
     agents: () => call(() => runtime.listAgents()),
@@ -229,17 +236,19 @@ export function createWorkspace(
     session: (scope: SessionScope) =>
       call(async () =>
         context.sessionRows.rememberDetail(
-          await runtime.getSession(scope.agentId, scope.sessionId)
+          await runtime.getSession(scope.agentId, scope.providerSessionId)
         )
       ),
     history: (scope: SessionScope, limit: number, offset = 0) =>
       call(() =>
-        runtime.history(scope.agentId, scope.sessionId, limit, offset)
+        runtime.history(scope.agentId, scope.providerSessionId, limit, offset)
       ),
     update: (scope: SessionScope, patch: SessionPatch) =>
-      call(() => runtime.updateSession(scope.agentId, scope.sessionId, patch)),
+      call(() =>
+        runtime.updateSession(scope.agentId, scope.providerSessionId, patch)
+      ),
     delete: (scope: SessionScope) =>
-      call(() => runtime.deleteSession(scope.agentId, scope.sessionId)),
+      call(() => runtime.deleteSession(scope.agentId, scope.providerSessionId)),
     /** Addressed by public reference, so an invited Session needs no detail. */
     capabilities: (scope: Pick<SessionScope, "agentId" | "threadId">) =>
       call(async () =>
@@ -318,10 +327,13 @@ export function createSessions(
 
     /** The live status of a row, whether or not this connection attached it. */
     status(row: Session) {
-      const sessionId = runtime.resolveSessionId(row.agentId, row.id)
+      const sessionId = runtime.resolveProviderSessionId(row.agentId, row.id)
       return sessionId
         ? overlaidStatus(
-            coordinator.state({ agentId: row.agentId, sessionId }),
+            coordinator.state({
+              agentId: row.agentId,
+              providerSessionId: sessionId,
+            }),
             row.status
           )
         : row.status

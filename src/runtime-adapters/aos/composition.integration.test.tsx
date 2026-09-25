@@ -301,7 +301,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession: unsupported,
-    resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
+    resolveProviderSessionId: (_agentId, publicSessionId) => publicSessionId,
     publicError: (cause) =>
       cause === UNAVAILABLE
         ? { code: "temporarily_unavailable", status: 503 }

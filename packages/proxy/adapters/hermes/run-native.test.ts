@@ -17,7 +17,7 @@ import type { ServerAttachmentStage } from "../../core/runtime"
 
 const scope: HermesTurnScope = {
   agentId: "researcher",
-  sessionId: "stored",
+  providerSessionId: "stored",
   threadId: "stored",
 }
 

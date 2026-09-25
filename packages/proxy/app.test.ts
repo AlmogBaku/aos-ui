@@ -332,11 +332,11 @@ describe("AOS V1 proxy", () => {
     const mcpApps: ServerMcpApps = {
       describe: vi.fn(async () => true),
       open: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { html: "<p>view</p>" }
       }),
       callTool: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { content: [] }
       }),
       readResource: vi.fn(async () => ({ contents: [] })),

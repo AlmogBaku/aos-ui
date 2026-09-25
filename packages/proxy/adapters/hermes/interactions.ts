@@ -47,7 +47,7 @@ import {
  */
 export type HermesInteractionScope = {
   agentId: string
-  sessionId: string
+  providerSessionId: string
   threadId: string
 }
 

@@ -87,13 +87,13 @@ class EventSource implements ServerTurnHandle {
 
 const scope: SessionScope = {
   agentId: "researcher",
-  sessionId: "stored-1",
+  providerSessionId: "stored-1",
   threadId: "stored-1",
 }
 
 const otherScope: SessionScope = {
   agentId: "researcher",
-  sessionId: "stored-2",
+  providerSessionId: "stored-2",
   threadId: "stored-2",
 }
 
@@ -771,7 +771,7 @@ describe("SessionCoordinator", () => {
         const id = index + 1
         const sessionScope = {
           agentId: "researcher",
-          sessionId: `stored-${id}`,
+          providerSessionId: `stored-${id}`,
           threadId: `stored-${id}`,
         }
         const runInput = input(`run-${id}`)
@@ -1443,10 +1443,14 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const scopes = [
       scope,
-      { agentId: "writer", sessionId: scope.sessionId, threadId: "writer-1" },
+      {
+        agentId: "writer",
+        providerSessionId: scope.providerSessionId,
+        threadId: "writer-1",
+      },
       {
         agentId: scope.agentId,
-        sessionId: "stored-2",
+        providerSessionId: "stored-2",
         threadId: "stored-2",
       },
     ]
@@ -2846,7 +2850,9 @@ describe("SessionCoordinator", () => {
       const onTerminal = vi.fn(async () => undefined)
       const engine: ServerTurnEngine = {
         start: vi.fn(async (target: SessionScope) =>
-          target.sessionId === otherScope.sessionId ? neighbor : source
+          target.providerSessionId === otherScope.providerSessionId
+            ? neighbor
+            : source
         ),
         recover: vi.fn(async () => {
           throw new Error("native recovery must not run for a journaled run")
@@ -2891,7 +2897,9 @@ describe("SessionCoordinator", () => {
       const onTerminal = vi.fn(async () => undefined)
       const engine: ServerTurnEngine = {
         start: vi.fn(async (target: SessionScope) =>
-          target.sessionId === otherScope.sessionId ? neighbor : interrupted
+          target.providerSessionId === otherScope.providerSessionId
+            ? neighbor
+            : interrupted
         ),
         recover: vi.fn(async () => recovered),
       }
@@ -3003,7 +3011,7 @@ describe("SessionCoordinator", () => {
       const sources = [interrupted, resumed]
       const engine: ServerTurnEngine = {
         start: vi.fn(async (target: SessionScope) =>
-          target.sessionId === otherScope.sessionId
+          target.providerSessionId === otherScope.providerSessionId
             ? neighbor
             : sources.shift()!
         ),
@@ -3192,7 +3200,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
     const unobserve = sessions.observeScope(
-      { agentId: scope.agentId, sessionId: scope.sessionId },
+      { agentId: scope.agentId, providerSessionId: scope.providerSessionId },
       (event) => observed.push(event)
     )
 

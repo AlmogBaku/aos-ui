@@ -51,7 +51,7 @@ function harness(
     id: "hermes-primary",
     runtime: {
       listAllSessions,
-      resolveSessionId: (_agentId: string, publicId: string) =>
+      resolveProviderSessionId: (_agentId: string, publicId: string) =>
         `stored-${publicId}`,
     },
     sessions: {
@@ -59,8 +59,11 @@ function harness(
         deliver = listener
         return unobserve
       },
-      snapshot: ({ sessionId }: { sessionId: string }) =>
-        options.executions?.[sessionId] ?? { state: "idle", requests: [] },
+      snapshot: ({
+        providerSessionId: sessionId,
+      }: {
+        providerSessionId: string
+      }) => options.executions?.[sessionId] ?? { state: "idle", requests: [] },
     },
   } as unknown as RuntimeInstance
   const sessionRows = createSessionRows()

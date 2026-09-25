@@ -661,7 +661,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({ request, onEvent })
     const scope = {
       agentId: "researcher",
-      sessionId: "stored",
+      providerSessionId: "stored",
       threadId: "stored",
     }
 
@@ -808,7 +808,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({ request, http })
     const scope = {
       agentId: "researcher",
-      sessionId: "stored",
+      providerSessionId: "stored",
       threadId: "stored",
     }
 
@@ -845,7 +845,7 @@ describe("Hermes server adapter", () => {
     })
     const scope = {
       agentId: "researcher",
-      sessionId: "stored",
+      providerSessionId: "stored",
       threadId: "stored",
     }
 
@@ -2531,7 +2531,7 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
-        sessionId: "stored",
+        providerSessionId: "stored",
         threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
@@ -2558,7 +2558,7 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
-        sessionId: "stored",
+        providerSessionId: "stored",
         threadId: "stored",
       })
     ).resolves.toMatchObject({ liveSessionId: "live-secret" })
@@ -2581,7 +2581,7 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
-        sessionId: "stored",
+        providerSessionId: "stored",
         threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
@@ -2600,7 +2600,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter(router)
     const scope = {
       agentId: "researcher",
-      sessionId: "stored",
+      providerSessionId: "stored",
       threadId: "stored",
     }
     await expect(adapter.native.resume(scope)).resolves.toMatchObject({
@@ -2635,7 +2635,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter(router, { log: { warn } })
     const scope = {
       agentId: "researcher",
-      sessionId: "stored",
+      providerSessionId: "stored",
       threadId: "stored",
     }
     await adapter.native.resume(scope)
@@ -2748,7 +2748,7 @@ describe("Hermes server adapter", () => {
       const adapter = new HermesServerAdapter(router, { sessionIdleMs: 1_000 })
       const scope = {
         agentId: "researcher",
-        sessionId: "stored",
+        providerSessionId: "stored",
         threadId: "stored",
         turnId: "run-1",
       }
@@ -2784,7 +2784,7 @@ describe("Hermes server adapter", () => {
       // never close it natively.
       await adapter.native.inspectExecution({
         ...scope,
-        sessionId: "draft",
+        providerSessionId: "draft",
         threadId: "draft",
       })
       await vi.advanceTimersByTimeAsync(1_000)

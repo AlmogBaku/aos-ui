@@ -7,7 +7,7 @@ import {
 } from "./interactions"
 const scope = {
   agentId: "agent-a",
-  sessionId: "session-a",
+  providerSessionId: "session-a",
   threadId: "thread-a",
   runId: "run-a",
 }
@@ -68,7 +68,7 @@ const approvalReplay = {
 }
 const repliesScope = {
   agentId: scope.agentId,
-  sessionId: scope.sessionId,
+  providerSessionId: scope.providerSessionId,
   threadId: scope.threadId,
 }
 const resolvedQuestion = [

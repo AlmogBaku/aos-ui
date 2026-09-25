@@ -306,7 +306,9 @@ describe("OpenClaw workspace reads", () => {
     const catalog = await workspace.listAllSessions(1, 0)
     const sessionId = catalog.sessions[0]!.id
 
-    expect(workspace.resolveSessionId("team.alpha", sessionId)).toBe(sessionId)
+    expect(workspace.resolveProviderSessionId("team.alpha", sessionId)).toBe(
+      sessionId
+    )
     await expect(
       workspace.getSession("team.alpha", sessionId)
     ).resolves.toMatchObject({
@@ -331,7 +333,9 @@ describe("OpenClaw workspace reads", () => {
     })
     const workspace = createOpenClawWorkspace({ client: native })
 
-    expect(workspace.resolveSessionId(agentId, sessionId)).toBe(sessionId)
+    expect(workspace.resolveProviderSessionId(agentId, sessionId)).toBe(
+      sessionId
+    )
     await expect(
       workspace.getSession(agentId, sessionId)
     ).resolves.toMatchObject({

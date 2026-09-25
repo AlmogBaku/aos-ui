@@ -43,7 +43,11 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
       if (!resolved) return emptyError(404)
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, sessionId: resolved.sessionId, threadId: ref },
+        scope: {
+          agentId,
+          providerSessionId: resolved.sessionId,
+          threadId: ref,
+        },
         toolCallId,
         operation,
         request: context.req.raw,

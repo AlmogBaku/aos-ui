@@ -111,7 +111,7 @@ export function createProxyApp(options: ProxyAppOptions) {
     agentId: string,
     publicSessionId: string
   ) => {
-    const id = selected.resolveSessionId(agentId, publicSessionId)
+    const id = selected.resolveProviderSessionId(agentId, publicSessionId)
     if (!id) throw new ServerSessionNotFoundError()
     await selected.getSession(agentId, id)
     return id

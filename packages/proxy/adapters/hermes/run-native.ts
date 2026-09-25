@@ -417,7 +417,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
       // truncates before is reported exactly as Hermes receives it. The prompt
       // replacing those rows is never logged.
       this.#log?.warn("hermes.rewind.submit", {
-        sessionId: prompt.scope.sessionId,
+        sessionId: prompt.scope.providerSessionId,
         rewindSourceId: prompt.rewindSourceId,
         ...rewind,
       })

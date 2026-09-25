@@ -11,7 +11,11 @@ import {
 const sessionKey = "agent:research:main"
 const otherKey = "agent:research:other"
 const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
-const scope = { agentId: "research", sessionId: sessionKey, threadId: "t1" }
+const scope = {
+  agentId: "research",
+  providerSessionId: sessionKey,
+  threadId: "t1",
+}
 const toolResult = { content: [{ type: "text", text: "drawn" }] }
 
 const appHistory = {
@@ -175,7 +179,7 @@ describe("OpenClaw MCP Apps", () => {
 
   it("refuses a tool call id from another Session without asking the gateway", async () => {
     const { adapter, mcpApps, request } = gateway()
-    const other = { ...scope, sessionId: otherKey }
+    const other = { ...scope, providerSessionId: otherKey }
 
     await expect(mcpApps.open(other, "call-1")).rejects.toSatisfy(
       isNotFound(adapter)
