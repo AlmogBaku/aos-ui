@@ -13,7 +13,7 @@ describe("mcpServersFromNative", () => {
       [
         { ...server, name: "open" },
         { ...server, name: "off", dialable: false },
-        { ...server, name: "stdio", url: "file:///tmp/mcp.sock" },
+        { ...server, name: "file-url", url: "file:///tmp/mcp.sock" },
         { ...server, name: "private", credentials: true },
         { ...server, name: "configured", credentials: true },
       ],
@@ -23,7 +23,7 @@ describe("mcpServersFromNative", () => {
     expect(servers).toEqual([
       { name: "open", url: "https://apps.example.test/mcp" },
       { name: "off" },
-      { name: "stdio" },
+      { name: "file-url" },
       { name: "private" },
       { name: "configured", url: "https://apps.example.test/mcp" },
     ])

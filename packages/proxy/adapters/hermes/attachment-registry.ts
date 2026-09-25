@@ -462,11 +462,12 @@ export class HermesAttachmentRegistry {
       }
       const liveSessionId = entry.attachment.liveSessionId
       if (entry.running || !entry.saved) {
-        // A whole grace window without one frame means AOS cannot see this
-        // turn any more (typically a socket that never healed), and an unsaved
-        // draft exists only in its live Session. Drop the local binding instead
-        // of re-arming forever or closing it: Hermes reaps its own orphan and
-        // the next ensure() resumes the Session.
+        // Drop only the local binding; the next ensure() resumes the Session.
+        // A turn silent for a whole grace window is one AOS cannot see any more
+        // (typically a socket that never healed): Hermes reaps that orphan, so
+        // AOS neither re-arms forever nor closes it. An unsaved draft exists
+        // only in its live Session, which Hermes keeps while the socket lives;
+        // closing it natively would delete the draft.
         this.invalidate(liveSessionId)
         return
       }

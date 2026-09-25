@@ -2706,12 +2706,20 @@ describe("Hermes server adapter", () => {
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
 
-  it("releases the interaction retainer when discovery finds no pending request", async () => {
+  it("closes an idle Session once no pending request retains it, but never an unsent draft", async () => {
     vi.useFakeTimers()
     try {
       let resumes = 0
       const router = rpcRouter({
-        "session.resume": async () => {
+        "session.resume": async (params) => {
+          if (params.session_id === "draft")
+            return {
+              session_id: "live-draft",
+              stored_session_id: "draft",
+              message_count: 0,
+              messages: [],
+              info: { lazy: true, profile_name: "researcher" },
+            }
           resumes += 1
           return {
             session_id: "live-secret",
@@ -2772,11 +2780,18 @@ describe("Hermes server adapter", () => {
       expect(await adapter.native.inspectExecution(scope)).toMatchObject({
         status: "idle",
       })
+      // An unsent draft exists only in its live Session, so idling it out must
+      // never close it natively.
+      await adapter.native.inspectExecution({
+        ...scope,
+        sessionId: "draft",
+        threadId: "draft",
+      })
       await vi.advanceTimersByTimeAsync(1_000)
 
-      expect(router.calls("session.close")[0]?.params).toEqual({
-        session_id: "live-secret",
-      })
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-secret" }]
+      )
     } finally {
       vi.useRealTimers()
     }
