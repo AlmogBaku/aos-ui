@@ -370,7 +370,7 @@ via `session/resume` with `_meta.aos.after` (last sequence) and `turnId`
 resuming (`connection.ts:374-377`).
 
 **Proxy**: coordinator journal holds every event of a turn segment, bounded by
-`maxReplayEvents`/`maxReplayBytes` (`hermes/factory.ts:63-71`). Adjacent text
+the subscriber limits (`limits.subscriberEvents`/`limits.subscriberBytes`). Adjacent text
 deltas merge on read to save replay size while keeping cursors exact
 (`session-coordinator.ts:73-77,141-145,310-320`). `resync` is set when the
 journal cannot answer the cursor (`acp/agent.ts:287-307`).

@@ -21,6 +21,7 @@ describe("publicJsonValue", () => {
       publicJsonValue({
         label: "kept",
         apiToken: "synthetic-token",
+        api_key: "synthetic-key",
         clientSecret: "synthetic-secret",
         filePath: "/synthetic/path",
         providerMetadata: {},

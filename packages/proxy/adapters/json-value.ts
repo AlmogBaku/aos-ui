@@ -6,8 +6,10 @@
  * array and object keeps its first `MAX_ENTRIES` entries, a string longer than
  * `MAX_STRING_LENGTH` is dropped, a key naming a credential or provider-private
  * data is dropped with its value, and a copy that still serializes past
- * `MAX_JSON_LENGTH` is no copy at all.
+ * `MAX_JSON_BYTES` of UTF-8 is no copy at all.
  */
+
+import { SECRET_TERMS } from "../redaction"
 
 export type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -15,8 +17,14 @@ export type JsonValue =
 const MAX_DEPTH = 8
 const MAX_ENTRIES = 100
 const MAX_STRING_LENGTH = 4_000
-const MAX_JSON_LENGTH = 262_144
-const PRIVATE_KEY = /(?:credential|metadata|password|path|secret|token|url)$/iu
+const MAX_JSON_BYTES = 262_144
+const PRIVATE_TERMS = [...SECRET_TERMS, "metadata", "path", "url"]
+
+/** Whether a key, lowercased with `-`, `_`, and spaces removed, ends in a private term. */
+function isPrivateKey(key: string) {
+  const normalized = key.toLowerCase().replace(/[-_ ]/gu, "")
+  return PRIVATE_TERMS.some((term) => normalized.endsWith(term))
+}
 
 function project(value: unknown, depth: number): JsonValue | undefined {
   if (depth > MAX_DEPTH) return undefined
@@ -33,7 +41,7 @@ function project(value: unknown, depth: number): JsonValue | undefined {
   if (typeof value !== "object") return undefined
   const result: { [key: string]: JsonValue } = {}
   for (const [key, item] of Object.entries(value).slice(0, MAX_ENTRIES)) {
-    if (PRIVATE_KEY.test(key)) continue
+    if (isPrivateKey(key)) continue
     const projected = project(item, depth + 1)
     if (projected !== undefined) result[key] = projected
   }
@@ -44,7 +52,7 @@ function project(value: unknown, depth: number): JsonValue | undefined {
 export function publicJsonValue(value: unknown): JsonValue | undefined {
   const projected = project(value, 0)
   return projected !== undefined &&
-    JSON.stringify(projected).length <= MAX_JSON_LENGTH
+    new TextEncoder().encode(JSON.stringify(projected)).length <= MAX_JSON_BYTES
     ? projected
     : undefined
 }

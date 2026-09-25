@@ -13,14 +13,16 @@ const SECRET_KEY =
  * Every word a native field or variable name uses for a credential, lowercase
  * with separators removed (`api_key` and `apiKey` are both `apikey`). It merges
  * the log redactor's field names above with the terms the adapters mask tool
- * data, question text, and history by, so a projection reads one list.
+ * data, question text, and history by, so a projection reads one list. The
+ * push-subscription names (`endpoint`, `p256dh`, `applicationServerKey`) stay
+ * in `SECRET_KEY` alone: matched as a suffix they would drop ordinary provider
+ * fields such as `apiEndpoint` from browser-bound data.
  */
 export const SECRET_TERMS: readonly string[] = [
   "accesskey",
   "accesskeyid",
   "accesstoken",
   "apikey",
-  "applicationserverkey",
   "auth",
   "authorization",
   "clientsecret",
@@ -28,8 +30,6 @@ export const SECRET_TERMS: readonly string[] = [
   "cookiejar",
   "credential",
   "credentials",
-  "endpoint",
-  "p256dh",
   "pass",
   "passcode",
   "passphrase",
