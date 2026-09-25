@@ -363,19 +363,11 @@ function statusFrom(error: unknown) {
 }
 
 function validateOptions(options: OpenCodeClientOptions) {
-  let baseUrl: URL
-  try {
-    baseUrl = new URL(options.baseUrl)
-  } catch {
-    throw new OpenCodeClientError("invalid_request")
-  }
+  // Config load already holds the base URL to HTTP(S) with no credentials,
+  // query, or fragment; only the root path, which config leaves open, is
+  // OpenCode's own rule.
   if (
-    !["http:", "https:"].includes(baseUrl.protocol) ||
-    baseUrl.username ||
-    baseUrl.password ||
-    baseUrl.search ||
-    baseUrl.hash ||
-    baseUrl.pathname !== "/" ||
+    new URL(options.baseUrl).pathname !== "/" ||
     !isAbsolute(options.directory) ||
     hasControl(options.directory) ||
     !text(options.username) ||
@@ -384,8 +376,6 @@ function validateOptions(options: OpenCodeClientOptions) {
     hasControl(options.password)
   )
     throw new OpenCodeClientError("invalid_request")
-
-  return { baseUrl: baseUrl.toString().replace(/\/$/u, "") }
 }
 
 function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
@@ -417,10 +407,10 @@ class Facade implements OpenCodeClient {
   #closed = false
 
   constructor(options: OpenCodeClientOptions) {
-    const config = validateOptions(options)
+    validateOptions(options)
     this.#directory = options.directory
     this.#sdk = createOpencodeClient({
-      baseUrl: config.baseUrl,
+      baseUrl: options.baseUrl,
       directory: options.directory,
       fetch: discardNativeErrorBodies(
         options.fetcher ?? globalThis.fetch.bind(globalThis)

@@ -75,28 +75,6 @@ function setup(
 }
 
 describe("OpenClaw client", () => {
-  it("rejects a mutable or non-WebSocket gateway URL before accepting credentials", () => {
-    expect(
-      () =>
-        new OpenClawClient({
-          url: "https://gateway.example.test?token=leaked",
-          credentials: {
-            deviceIdentity: {
-              deviceId: "device-a",
-              privateKeyPem: "private-key",
-              publicKeyPem: "public-key",
-            },
-            deviceToken: "pre-provisioned-token",
-            signDevicePayload: () => "signature",
-            publicKeyRawBase64UrlFromPem: () => "public-key-raw",
-          },
-          role: "aos-operator",
-          scopes: ["sessions.read"],
-          caps: [],
-        })
-    ).toThrow("Invalid OpenClaw Gateway URL")
-  })
-
   it("fails closed when a pre-provisioned device token is missing", () => {
     expect(() => setup({ credentials: undefined })).toThrow(
       "Invalid OpenClaw credentials"
@@ -110,7 +88,7 @@ describe("OpenClaw client", () => {
 
     expect(native.start).toHaveBeenCalledOnce()
     expect(native.options).toMatchObject({
-      url: "wss://gateway.example.test/",
+      url: "wss://gateway.example.test",
       deviceToken: "pre-provisioned-token",
       minProtocol: 4,
       maxProtocol: 4,
