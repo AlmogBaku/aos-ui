@@ -10,3 +10,4 @@ export {
   type OwnerKind,
   type OwnerOptions,
 } from "./owner"
+export { backoffDelay, boundedQueue, breaker } from "./resilience"
