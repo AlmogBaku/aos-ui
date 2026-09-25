@@ -173,14 +173,15 @@ function positiveInteger(value: unknown, fallback: number) {
 function validateInput(scope: SessionScope, candidate: TurnInput) {
   const input = TurnInputSchema.parse(candidate)
   if (isRepliesTurn(input)) return { input, replies: input.replies }
-  if (input.rewindSourceId !== undefined)
-    throw new Error(
-      "OpenCode Edit and Retry are not handled by this turn engine"
-    )
+  // OpenCode has no Edit or Retry, and a turn is one bounded prompt: anything
+  // else is the caller's mistake, not an outage.
   const text = input.prompt
-  if (!text) throw new Error("AOS turns require exactly one user prompt")
-  if (new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES)
-    throw new Error("The AOS user turn is too large")
+  if (
+    input.rewindSourceId !== undefined ||
+    !text ||
+    new TextEncoder().encode(text).byteLength > MAX_USER_TURN_BYTES
+  )
+    throw new OpenCodeClientError("invalid_request")
   return { input, text }
 }
 

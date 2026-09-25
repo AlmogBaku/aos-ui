@@ -224,6 +224,18 @@ describe("OpenCodeRunEngine", () => {
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
+  it("refuses Edit and Retry as an invalid request before any native call", async () => {
+    const state = client()
+
+    await expect(
+      new OpenCodeTurnEngine(state.native).start(
+        scope,
+        input({ rewindSourceId: "user-0" })
+      )
+    ).rejects.toMatchObject({ code: "invalid_request" })
+    expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
   it("rejects a wrong native Agent owner before observation or mutation", async () => {
     const state = client({
       get: vi.fn(async () => ({
