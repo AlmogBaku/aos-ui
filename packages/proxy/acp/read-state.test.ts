@@ -43,6 +43,7 @@ function harness(
   const runtimeInstance = {
     id: "hermes-primary",
     runtime: {
+      ...(options.neutral ? {} : { translation: { relighting: RELIGHTING } }),
       runtimeInfo,
       resolveSessionId: (_agentId: string, publicId: string) =>
         `stored-${publicId}`,
@@ -65,7 +66,6 @@ function harness(
   const readState = createReadState({
     runtimeInstance,
     sessionRows,
-    ...(options.neutral ? {} : { relighting: RELIGHTING }),
     onUnreadChanged,
   })
   return { updateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }

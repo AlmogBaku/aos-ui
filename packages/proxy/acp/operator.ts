@@ -65,7 +65,6 @@ export function createOperatorAcpService({
       readState: createReadState({
         runtimeInstance,
         sessionRows,
-        relighting: runtimeInstance.runtime.translation?.relighting,
         now,
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,

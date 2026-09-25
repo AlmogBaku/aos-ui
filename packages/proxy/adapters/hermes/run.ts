@@ -258,7 +258,7 @@ export class HermesTurnEngine {
         text: text!,
         turnId: input.turnId,
         ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
-        ...(attachments ? { hasAttachments: true } : {}),
+        ...(attachments?.public.length ? { hasAttachments: true } : {}),
       },
       false
     )

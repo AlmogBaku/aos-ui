@@ -230,11 +230,20 @@ export type ServerRuntimePublicError = {
 /**
  * Native semantics the ACP layer reads instead of assuming one provider's. An
  * absent field is the neutral reading: an exposure acknowledges only an unread
- * row and activity re-lights nothing.
+ * row, activity re-lights nothing, and every steer acknowledgement is announced.
  */
 export type ServerRuntimeTranslation = {
-  /** Kinds that re-light a focused Session whose watermark moves only on a write. */
+  /**
+   * Present means the read watermark moves only on a write, so every exposure
+   * acknowledges, even a row that already reads read. Its contents are the
+   * kinds that re-light a focused Session, so `[]` differs from leaving it out.
+   */
   relighting?: readonly ExecutionEvent["kind"][]
+  /**
+   * `in-history`: a resumed turn delivers acknowledgements again for
+   * corrections its history already carries.
+   */
+  steerAck?: "in-history"
 }
 
 /** Provider-neutral operations consumed by normalized HTTP and event routes. */

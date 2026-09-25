@@ -22,7 +22,11 @@ import type {
   RequestReply,
   TurnEvent,
 } from "../core/events"
-import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
+import type {
+  RuntimeInstance,
+  ServerAttachmentStages,
+  ServerRuntimeTranslation,
+} from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channel } from "../core/channel"
@@ -128,6 +132,8 @@ export type TranslateContext = {
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */
   now?: () => number
+  /** The runtime's `ServerRuntimeTranslation.steerAck`. */
+  steerAck?: ServerRuntimeTranslation["steerAck"]
 }
 
 /**

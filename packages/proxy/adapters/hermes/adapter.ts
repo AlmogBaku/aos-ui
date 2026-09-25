@@ -351,10 +351,11 @@ export class HermesServerAdapter implements ServerRuntime {
   /**
    * Hermes keeps unread role- and running-blind and moves its watermark only
    * on a write, so the operator's own turn and a streaming answer both re-light
-   * a Session in view.
+   * a Session in view. It stores an accepted steer as a user turn at once.
    */
   readonly translation: ServerRuntimeTranslation = {
     relighting: ["turn-finished", "turn-failed", "attention-requested"],
+    steerAck: "in-history",
   }
   readonly #retry: HermesRetrySchedule
   readonly mcpApps?: ServerMcpApps

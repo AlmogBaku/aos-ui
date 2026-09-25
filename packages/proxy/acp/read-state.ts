@@ -1,4 +1,3 @@
-import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { ReadState } from "./types"
@@ -15,8 +14,6 @@ type Target = { agentId: string; sessionId: string }
 export type ReadStateOptions = {
   runtimeInstance: RuntimeInstance
   sessionRows: SessionRows
-  /** The runtime's `ServerRuntimeTranslation.relighting`. */
-  relighting?: readonly ExecutionEvent["kind"][]
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => TimerHandle
   cancel?: (handle: TimerHandle) => void
@@ -31,13 +28,13 @@ function sameTarget(left: Target, right: Target) {
 export function createReadState({
   runtimeInstance,
   sessionRows,
-  relighting,
   now = Date.now,
   schedule = setTimeout,
   cancel = clearTimeout,
   onUnreadChanged,
 }: ReadStateOptions): ReadState {
   const { runtime } = runtimeInstance
+  const relighting = runtime.translation?.relighting
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let releaseFocus: (() => void) | undefined

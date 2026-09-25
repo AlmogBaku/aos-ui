@@ -606,17 +606,22 @@ describe("translateTurnEvent extensions", () => {
     ])
   })
 
-  it("drops the acceptances the replayed history already carried", () => {
-    const replay = translate(
-      [accepted("s1", "first"), accepted("s2", "second")],
-      undefined,
-      { ...initialTranslateState, replayedCorrections: 2 }
-    )
+  it("drops the acceptances the replayed history already carried, only when hinted", () => {
+    const replayed = { ...initialTranslateState, replayedCorrections: 2 }
+    const steers = [accepted("s1", "first"), accepted("s2", "second")]
+    // Without the hint every acceptance is announced, whatever history held.
+    expect(translate(steers, undefined, replayed).outbound).toHaveLength(2)
+
+    const replay = translate(steers, { steerAck: "in-history" }, replayed)
 
     expect(replay.outbound).toEqual([])
     expect(replay.state.replayedCorrections).toBe(0)
     expect(
-      translate([accepted("s3", "third")], undefined, replay.state).outbound
+      translate(
+        [accepted("s3", "third")],
+        { steerAck: "in-history" },
+        replay.state
+      ).outbound
     ).toEqual([
       {
         kind: "steer-accepted",

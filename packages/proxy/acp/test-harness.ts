@@ -40,6 +40,7 @@ import type {
   ServerTurnEngine,
   ServerTurnHandle,
   ServerRuntime,
+  ServerRuntimeTranslation,
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
@@ -600,6 +601,8 @@ export type HarnessOptions = {
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
   providerIds?: boolean
+  /** The runtime's translation hints; absent stands for the neutral reading. */
+  translation?: ServerRuntimeTranslation
   /** Whether the client pages older history, as the AOS browser does. */
   pagesHistory?: boolean
   /** What the provider reports it supports; defaults to `CAPABILITIES`. */
@@ -717,6 +720,7 @@ export async function harness(options: HarnessOptions = {}) {
 
   const runtime: ServerRuntime = {
     turns: engine,
+    ...(options.translation ? { translation: options.translation } : {}),
     // Every invitation in this harness addresses the seeded Session.
     resolveInvitedSession: async () => ({
       sessionId: providerId(SESSION),
