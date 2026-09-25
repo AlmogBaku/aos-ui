@@ -1041,7 +1041,7 @@ describe("HermesInteractions server requests", () => {
     ).resolves.toEqual({ status: "expired" })
   })
 
-  it("answers on the request frame when Hermes has no answer method", async () => {
+  it("reports a Hermes without an answer method as unavailable", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     requests.withoutAnswerMethod()
@@ -1057,9 +1057,10 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
-    ).resolves.toEqual({ status: "resolved" })
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_UNAVAILABLE" })
 
-    expect(requests.answer(id)).toEqual({ answer: "eu" })
+    expect(requests.answer(id)).toBeUndefined()
+    expect(interactions.pending(scope)).toHaveLength(1)
   })
 
   it("keeps the card when the answer acknowledgement is lost", async () => {

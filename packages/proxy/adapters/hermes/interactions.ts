@@ -833,9 +833,7 @@ export class HermesInteractions {
    * carries the same frame `resolve_response` routes, and is the only path that
    * says whether the request was still open: `expired` means Hermes no longer
    * holds it open (`server_requests.py`), for a reason it does not report.
-   *
-   * An older Hermes without the method falls back to the response frame, whose
-   * silence is what AOS answered with before.
+   * A Hermes without the method cannot answer at all, so it is unavailable.
    */
   async #answer(
     interaction: PendingInteraction,
@@ -856,8 +854,7 @@ export class HermesInteractions {
           "hermes.interactions.answer_unsupported",
           "request.answer"
         )
-        interaction.request.respond(result)
-        return "ok"
+        throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
       }
       return this.#unacknowledge(interaction)
     }
