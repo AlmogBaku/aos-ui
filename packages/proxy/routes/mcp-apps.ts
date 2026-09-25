@@ -6,6 +6,7 @@ import {
   ReadResourceResultSchema,
 } from "../../protocol/mcp-apps"
 import type { ProxyAppOptions } from "../app"
+import * as ids from "../core/ids"
 import type { ServerRuntime, SessionScope } from "../core/runtime"
 import { McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
@@ -144,7 +145,7 @@ export function registerMcpAppRoutes(
     runtime: ServerRuntime,
     agentId: string,
     sessionId: string
-  ) => Promise<string>
+  ) => Promise<ids.ProviderSessionId>
 ) {
   const base = `/api/aos/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`
   const allow = createMcpAppRateLimit(options.clock)
@@ -182,7 +183,11 @@ export function registerMcpAppRoutes(
       )
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, providerSessionId, sessionId },
+        scope: {
+          agentId,
+          providerSessionId,
+          sessionId: ids.sessionId(sessionId),
+        },
         toolCallId,
         operation,
         request: context.req.raw,

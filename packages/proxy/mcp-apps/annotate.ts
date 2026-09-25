@@ -16,6 +16,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
+import * as ids from "../core/ids"
 import { MAX_MCP_APP_HTML_BYTES } from "./client"
 
 /** How long a tool call waits to learn whether it opens a view. */
@@ -244,8 +245,8 @@ export function withMcpApps<Runtime extends ServerRuntime>(
       )
       return annotatedHistory(history, apps, {
         agentId,
-        providerSessionId: runtimeSessionId,
-        sessionId: history.sessionId,
+        providerSessionId: ids.providerSessionId(runtimeSessionId),
+        sessionId: ids.sessionId(history.sessionId),
       })
     },
     async workspaceCapabilities(agentId, publicSessionId) {

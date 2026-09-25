@@ -21,13 +21,14 @@ import type {
   McpAppView,
   ReadResourceResult,
 } from "../../protocol/mcp-apps"
+import type { ProviderSessionId, SessionId } from "./ids"
 
 export type SessionScope = {
   agentId: string
   /** Provider-resolved Session identity; never supplied by the browser. */
-  providerSessionId: string
+  providerSessionId: ProviderSessionId
   /** Opaque public Session identity supplied by the browser. */
-  sessionId: string
+  sessionId: SessionId
 }
 
 /** Exactly one Session field a write changes, as the wire request carries it. */
@@ -258,7 +259,7 @@ export interface ServerRuntime {
   resolveProviderSessionId(
     agentId: string,
     publicSessionId: string
-  ): string | undefined
+  ): ProviderSessionId | undefined
   publicError(cause: unknown): ServerRuntimePublicError | undefined
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>

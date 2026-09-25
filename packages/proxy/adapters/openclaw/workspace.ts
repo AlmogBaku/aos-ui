@@ -6,6 +6,7 @@ import type {
 } from "../../../protocol"
 import { SessionCreateResponseSchema } from "../../../protocol"
 import { openClawInviteSessionKey } from "../../core/invite-key"
+import * as ids from "../../core/ids"
 import type { SessionPatch } from "../../core/runtime"
 
 import {
@@ -156,7 +157,7 @@ export type OpenClawWorkspace = Readonly<{
   resolveProviderSessionId(
     agentId: string,
     publicSessionId: string
-  ): string | undefined
+  ): ids.ProviderSessionId | undefined
   resolveInvitedSession(
     agentId: string,
     ref: string
@@ -332,7 +333,9 @@ export function createOpenClawWorkspace(input: {
       )
     },
     resolveProviderSessionId(_agentId, publicSessionId) {
-      return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined
+      return isBoundedSessionKey(publicSessionId)
+        ? ids.providerSessionId(publicSessionId)
+        : undefined
     },
     async resolveInvitedSession(agentId, ref) {
       const sessionKey = invitedOpenClawSessionKey(agentId, ref)

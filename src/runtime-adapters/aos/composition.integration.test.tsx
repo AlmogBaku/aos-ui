@@ -39,6 +39,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../../../packages/proxy/core/runtime"
+import * as ids from "../../../packages/proxy/core/ids"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
 import { EVERY_FEED } from "../../../packages/proxy/core/member"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
@@ -301,7 +302,8 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession: unsupported,
-    resolveProviderSessionId: (_agentId, publicSessionId) => publicSessionId,
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
+      ids.providerSessionId(publicSessionId),
     publicError: (cause) =>
       cause === UNAVAILABLE
         ? { code: "temporarily_unavailable", status: 503 }

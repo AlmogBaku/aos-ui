@@ -18,6 +18,7 @@ import {
   type AosHistoryCursor,
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
+import * as ids from "../core/ids"
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
@@ -203,7 +204,7 @@ export function createWorkspace(
       return {
         agentId,
         providerSessionId: sessionId,
-        sessionId: publicSessionId,
+        sessionId: ids.sessionId(publicSessionId),
       }
     },
     info: () => call(() => runtime.runtimeInfo()),

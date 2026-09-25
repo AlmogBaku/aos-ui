@@ -44,6 +44,7 @@ import type {
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { EVERY_FEED } from "../core/member"
@@ -643,7 +644,9 @@ export async function harness(options: HarnessOptions = {}) {
   )
   // A provider id is the public one behind a prefix, so either maps to the other.
   const providerId = (publicId: string) =>
-    options.providerIds ? `provider-${publicId}` : publicId
+    ids.providerSessionId(
+      options.providerIds ? `provider-${publicId}` : publicId
+    )
   const publicId = (sessionId: string) =>
     options.providerIds ? sessionId.replace(/^provider-/u, "") : sessionId
   let models: SessionModelsResponse = MODELS
@@ -905,7 +908,7 @@ export async function harness(options: HarnessOptions = {}) {
   const scope: SessionScope = {
     agentId: AGENT,
     providerSessionId: providerId(SESSION),
-    sessionId: SESSION,
+    sessionId: ids.sessionId(SESSION),
   }
 
   return {

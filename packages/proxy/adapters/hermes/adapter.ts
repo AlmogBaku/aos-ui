@@ -66,6 +66,7 @@ import {
   HermesAttachmentRegistry,
   HermesSessionGoneError,
   isSessionGone,
+  type HermesAttachmentScope,
 } from "./attachment-registry"
 import type {
   ServerMcpApps,
@@ -73,6 +74,7 @@ import type {
   ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
+import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -549,7 +551,8 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   resolveProviderSessionId(agentId: string, publicSessionId: string) {
-    return storedSessionIdentity(agentId, publicSessionId)
+    const stored = storedSessionIdentity(agentId, publicSessionId)
+    return stored === undefined ? undefined : ids.providerSessionId(stored)
   }
 
   async resolveInvitedSession(
@@ -1156,7 +1159,7 @@ export class HermesServerAdapter implements ServerRuntime {
     await this.transport.close?.()
   }
 
-  async #resumeNative(scope: HermesTurnScope) {
+  async #resumeNative(scope: HermesAttachmentScope) {
     let payload: unknown
     try {
       // A reattach Hermes fences while it settles a disconnect is let through

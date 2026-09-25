@@ -3,6 +3,7 @@ import {
   type Middleware,
   type WorkspaceCapabilities,
 } from "../../core/member"
+import * as ids from "../../core/ids"
 import type { SessionScope } from "../../core/runtime"
 import type { GuestGrant } from "./index"
 
@@ -42,8 +43,8 @@ export function createScopeMiddleware({
     return resolved
       ? {
           agentId: grant.agentId,
-          providerSessionId: resolved.sessionId,
-          sessionId: grant.ref,
+          providerSessionId: ids.providerSessionId(resolved.sessionId),
+          sessionId: ids.sessionId(grant.ref),
         }
       : undefined
   }
@@ -62,7 +63,7 @@ export function createScopeMiddleware({
           agentId: grant.agentId,
           capabilities: await capabilities({
             agentId: grant.agentId,
-            sessionId: grant.ref,
+            sessionId: ids.sessionId(grant.ref),
           }),
           execution: { state: "idle" },
         }

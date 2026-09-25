@@ -21,6 +21,7 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
+import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
 import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
@@ -279,7 +280,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   resolveProviderSessionId(agentId: string, publicSessionId: string) {
     return validIdentifier(agentId) && validIdentifier(publicSessionId)
-      ? publicSessionId
+      ? ids.providerSessionId(publicSessionId)
       : undefined
   }
 

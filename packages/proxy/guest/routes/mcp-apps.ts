@@ -1,6 +1,7 @@
 import type { Hono } from "hono"
 
 import type { GuestOperation } from "../../auth/guest-invitation"
+import * as ids from "../../core/ids"
 import {
   createMcpAppRateLimit,
   handleMcpAppRequest,
@@ -45,8 +46,8 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         runtime,
         scope: {
           agentId,
-          providerSessionId: resolved.sessionId,
-          sessionId: ref,
+          providerSessionId: ids.providerSessionId(resolved.sessionId),
+          sessionId: ids.sessionId(ref),
         },
         toolCallId,
         operation,

@@ -33,6 +33,7 @@ import {
   type ServerTurnWatcher,
   type SessionScope,
 } from "../../core/runtime"
+import * as ids from "../../core/ids"
 import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
@@ -770,7 +771,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const key = scopeKey(scope)
     const waiting = this.#waiting.get(key)
     const interactionScope = waiting
-      ? { ...scope, providerSessionId: waiting.nativeInteractionSessionKey }
+      ? {
+          ...scope,
+          providerSessionId: ids.providerSessionId(
+            waiting.nativeInteractionSessionKey
+          ),
+        }
       : scope
     const repliesBinding = replies
       ? await this.#replies!.validate(interactionScope, replies)
@@ -1161,7 +1167,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         const discovered = await this.#replies.discover(
           {
             ...scope,
-            providerSessionId: approvalReplayKey,
+            providerSessionId: ids.providerSessionId(approvalReplayKey),
             nativeRunId,
           },
           approvalReplay.replay
