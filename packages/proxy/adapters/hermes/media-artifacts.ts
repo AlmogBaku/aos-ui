@@ -8,12 +8,12 @@ import {
   containsPrivateValue,
   isRecord,
   parseJson,
-  parseJsonOrValue,
   rowText,
   trimmedText,
   unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
+import { parseJsonOrValue } from "../todos"
 
 type HermesMediaArtifact = {
   reference: string

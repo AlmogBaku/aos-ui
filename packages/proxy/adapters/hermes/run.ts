@@ -25,7 +25,7 @@ import {
   type ServerTurnWatcher,
 } from "../../core/runtime"
 import type { AttachmentSignal } from "./attachment-registry"
-import { projectTodos, type Todo } from "../todos"
+import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import {
   hermesToolDiffs,
@@ -38,7 +38,6 @@ import {
 import { hermesRowMessageId } from "./history"
 import { boundedNativeBytes, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
-import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { attachTurn, scheduleCatchUp } from "./run-attach"
 import {
   HermesTurnRewindConflictError,
@@ -773,7 +772,7 @@ export class HermesTurnEngine {
       ...(duration === undefined ? {} : { durationMs: duration }),
     })
     if (tool.name === "todo") {
-      const todos = projectTodos(payload.result, HERMES_TODO_STATUS_ALIASES)
+      const todos = projectTodos(payload.result, TODO_STATUS_ALIASES)
       if (todos !== undefined) this.#emitPlan(active, todos)
     }
     for (const reference of outcome.trustedMedia)

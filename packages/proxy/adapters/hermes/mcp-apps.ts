@@ -5,6 +5,7 @@ import { CallToolResultSchema } from "../../../protocol/mcp-apps"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
 import type { ServerMcpApps, SessionScope } from "../../core/runtime"
 import type { McpAppClient } from "../../mcp-apps/client"
+import { mcpServersFromNative } from "../../mcp-apps/discovery"
 import {
   createMcpAppsFallback,
   type McpAppServer,
@@ -43,37 +44,30 @@ const HermesMcpServerSchema = z.object({
 const HermesMcpServersSchema = z.object({ servers: z.array(z.unknown()) })
 
 /**
- * A Streamable HTTP server that is on and asks for no credentials, or whose
- * credentials the operator configured for the proxy.
+ * Every readable entry, dialable when it is on and on Streamable HTTP, and
+ * credentialed when it carries `auth` of its own.
  */
-function reachableUrl(
-  server: z.infer<typeof HermesMcpServerSchema>,
-  credentialed: (name: string) => boolean
-) {
-  if (!server.enabled || server.transport !== "http") return
-  if (server.auth && !credentialed(server.name)) return
-  if (!server.url) return
-  try {
-    const url = new URL(server.url)
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.href
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
 export function hermesMcpServers(
   payload: unknown,
   credentialed: (name: string) => boolean = () => false
 ): McpAppServer[] {
   const { servers } = HermesMcpServersSchema.parse(payload)
-  return servers.flatMap((entry) => {
-    const server = HermesMcpServerSchema.safeParse(entry)
-    if (!server.success) return []
-    const url = reachableUrl(server.data, credentialed)
-    return [{ name: server.data.name, ...(url ? { url } : {}) }]
-  })
+  return mcpServersFromNative(
+    servers.flatMap((entry) => {
+      const server = HermesMcpServerSchema.safeParse(entry)
+      if (!server.success) return []
+      const { name, transport, url, auth, enabled } = server.data
+      return [
+        {
+          name,
+          dialable: enabled && transport === "http",
+          url,
+          credentials: Boolean(auth),
+        },
+      ]
+    }),
+    credentialed
+  )
 }
 
 /**

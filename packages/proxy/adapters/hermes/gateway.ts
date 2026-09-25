@@ -26,7 +26,6 @@ import {
 import {
   createHermesHttp,
   HermesAuthenticationError,
-  normalizeBaseUrl,
   responseLimit,
   withinDeadline,
   type HermesCredentials,
@@ -265,7 +264,7 @@ export class HermesGateway implements HermesRpcTransport {
   #readyWaiter: { settle(changed: boolean): void } | undefined
 
   constructor(options: HermesGatewayOptions) {
-    this.#baseUrl = normalizeBaseUrl(options.baseUrl)
+    this.#baseUrl = options.baseUrl
     this.#credentials = options.credentials
     this.#log = options.log
     this.#requestTimeoutMs =

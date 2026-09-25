@@ -73,6 +73,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { inviteSessionKey } from "../../core/invite-key"
 import type { McpAppClient } from "../../mcp-apps/client"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
@@ -212,6 +213,27 @@ function nativeFlag(value: unknown): boolean | undefined {
 
 function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
+}
+
+/**
+ * A `session.resume` answer for a Session Hermes has never persisted: a lazy
+ * live draft with no stored row and no transcript yet.
+ */
+function isUnpersistedDraft(
+  payload: NativeRecord,
+  profile: string,
+  storedId: string
+) {
+  const info = isRecord(payload.info) ? payload.info : undefined
+  return (
+    validLiveSessionId(payload.session_id) &&
+    payload.stored_session_id === storedId &&
+    (payload.message_count === 0 || payload.message_count === 1) &&
+    Array.isArray(payload.messages) &&
+    payload.messages.length === 0 &&
+    info?.lazy === true &&
+    info.profile_name === profile
+  )
 }
 
 /**
@@ -521,7 +543,7 @@ export class HermesServerAdapter implements ServerRuntime {
       !/^[A-Za-z0-9_-]{1,128}$/u.test(ref)
     )
       throw new HermesSessionNotFoundError()
-    const title = `aos-invite:${ref}`
+    const title = inviteSessionKey(ref)
     if (!create) {
       const sessionId = await this.#findInvitedSession(agentId, title)
       return sessionId ? { sessionId, created: false } : undefined
@@ -1145,7 +1167,10 @@ export class HermesServerAdapter implements ServerRuntime {
       if (mapped === key && observed !== liveSessionId)
         this.#liveInfoKeys.delete(observed)
     this.#liveInfoKeys.set(liveSessionId, key)
-    return { liveSessionId }
+    return {
+      liveSessionId,
+      saved: !isUnpersistedDraft(payload, scope.agentId, scope.sessionId),
+    }
   }
 
   async #closeNativeSession(liveSessionId: string) {
@@ -1560,18 +1585,7 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-    const info =
-      isRecord(payload) && isRecord(payload.info) ? payload.info : undefined
-    if (
-      !isRecord(payload) ||
-      !validLiveSessionId(payload.session_id) ||
-      payload.stored_session_id !== storedId ||
-      (payload.message_count !== 0 && payload.message_count !== 1) ||
-      !Array.isArray(payload.messages) ||
-      payload.messages.length !== 0 ||
-      info?.lazy !== true ||
-      info.profile_name !== profile
-    )
+    if (!isRecord(payload) || !isUnpersistedDraft(payload, profile, storedId))
       throw new HermesSessionNotFoundError()
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),

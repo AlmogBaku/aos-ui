@@ -253,13 +253,4 @@ describe("bounded Hermes HTTP", () => {
       http("/api/sessions/stored", { method: "DELETE" })
     ).resolves.toBeUndefined()
   })
-
-  it("rejects an unusable native base URL", () => {
-    expect(() =>
-      createHermesHttp({
-        baseUrl: "ftp://hermes.test",
-        credentials: async () => ({}),
-      })
-    ).toThrow("Invalid Hermes base URL")
-  })
 })

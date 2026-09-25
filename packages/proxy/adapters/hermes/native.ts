@@ -21,7 +21,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Attempt to JSON.parse a string value; non-strings are returned unchanged.
  * On parse failure returns `undefined`.  Callers that need the raw string on
- * failure should use `parseJsonOrValue` instead.
+ * failure use the shared `parseJsonOrValue` (`../todos`) instead.
  */
 export function parseJson(value: unknown): unknown {
   if (typeof value !== "string") return value
@@ -29,22 +29,6 @@ export function parseJson(value: unknown): unknown {
     return JSON.parse(value) as unknown
   } catch {
     return undefined
-  }
-}
-
-/**
- * Attempt to JSON.parse a string value; non-strings are returned unchanged.
- * On parse failure returns the original string unchanged.  Use instead of
- * `parseJson` when the raw string is a valid fallback (e.g. tool-data rows,
- * workspace context fields).  Callers that need `undefined` on failure should
- * use `parseJson` instead.
- */
-export function parseJsonOrValue(value: unknown): unknown {
-  if (typeof value !== "string") return value
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
   }
 }
 

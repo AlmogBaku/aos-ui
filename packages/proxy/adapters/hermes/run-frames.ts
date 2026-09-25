@@ -16,9 +16,9 @@ import {
   boundedNativeBytes,
   isRecord,
   nativeId,
-  parseJsonOrValue,
   utf8BytesWithin,
 } from "./native"
+import { parseJsonOrValue } from "../todos"
 import { publicPath, stringContainsCredential } from "./tool-data"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576

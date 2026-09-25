@@ -46,7 +46,7 @@ export type AttachmentObserver = (signal: AttachmentSignal) => void
 type RegistryNative = {
   resume(
     scope: HermesAttachmentScope
-  ): Promise<{ liveSessionId: string; running?: boolean }>
+  ): Promise<{ liveSessionId: string; running?: boolean; saved?: boolean }>
   close(liveSessionId: string): Promise<void>
 }
 
@@ -66,6 +66,13 @@ type Entry = {
   observers: Set<AttachmentObserver>
   /** Last known native turn state; a running Session is never closed. */
   running: boolean
+  /**
+   * Hermes holds a row for this Session. An unsaved draft lives only in the
+   * live Session, so closing it natively would delete the draft; it is only
+   * ever dropped locally. Hermes commits a turn's history before it sends
+   * `message.complete`, so a completed turn marks the draft saved.
+   */
+  saved: boolean
   /** When Hermes last answered a resume for this entry. */
   resumedAt?: number
   idle?: ReturnType<typeof setTimeout>
@@ -171,8 +178,11 @@ export class HermesAttachmentRegistry {
       entry.attachment.liveSessionId &&
       !entry.stale &&
       (!options.refresh || this.#resumedWithin(entry, options.freshForMs))
-    )
+    ) {
+      // Using a cached binding counts as activity: its idle window restarts.
+      this.#scheduleIdle(entry)
       return entry.attachment
+    }
     return this.#resumeOnce(entry)
   }
 
@@ -276,6 +286,7 @@ export class HermesAttachmentRegistry {
       if (
         entry.retainers.size === 0 &&
         !entry.running &&
+        entry.saved &&
         entry.attachment.liveSessionId
       )
         closing.push(
@@ -310,6 +321,7 @@ export class HermesAttachmentRegistry {
         retainers: new Map(),
         observers: new Set(),
         running: false,
+        saved: true,
       }
       this.#entries.set(id, entry)
     }
@@ -338,6 +350,7 @@ export class HermesAttachmentRegistry {
     entry.stale = false
     entry.resumedAt = this.#now()
     if (typeof resumed.running === "boolean") entry.running = resumed.running
+    entry.saved = resumed.saved !== false
     this.#byLiveId.set(liveSessionId, entry)
     this.#scheduleIdle(entry)
     // Hermes replaced the live Session, so every observed frame stream ends
@@ -404,8 +417,10 @@ export class HermesAttachmentRegistry {
   #observeTurnState(entry: Entry, event: unknown) {
     if (!isRecord(event)) return
     if (event.type === "message.start") entry.running = true
-    else if (event.type === "message.complete") entry.running = false
-    else if (event.type === "session.info") {
+    else if (event.type === "message.complete") {
+      entry.running = false
+      entry.saved = true
+    } else if (event.type === "session.info") {
       const running = isRecord(event.payload)
         ? event.payload.running
         : undefined
@@ -446,11 +461,12 @@ export class HermesAttachmentRegistry {
         return
       }
       const liveSessionId = entry.attachment.liveSessionId
-      if (entry.running) {
+      if (entry.running || !entry.saved) {
         // A whole grace window without one frame means AOS cannot see this
-        // turn any more (typically a socket that never healed). Drop the local
-        // binding instead of re-arming forever or closing a live turn: Hermes
-        // reaps its own orphan and the next ensure() resumes the Session.
+        // turn any more (typically a socket that never healed), and an unsaved
+        // draft exists only in its live Session. Drop the local binding instead
+        // of re-arming forever or closing it: Hermes reaps its own orphan and
+        // the next ensure() resumes the Session.
         this.invalidate(liveSessionId)
         return
       }
