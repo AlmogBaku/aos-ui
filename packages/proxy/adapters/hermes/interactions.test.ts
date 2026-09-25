@@ -801,13 +801,14 @@ describe("HermesInteractions server requests", () => {
     bind()
     const id = requests.deliver("clarify", {
       session_id: LIVE,
-      question: "Use https://hermes.internal with token=secret?",
+      question:
+        "Use https://hermes.internal with token=secret or passphrase=synthetic?",
       choices: ["/home/operator/run.sh", "skip"],
     })
 
     const interrupt = interactions.pending(scope)[0]
     expect(interrupt?.message).toBe(
-      "Use https://hermes.internal with [credential redacted]"
+      "Use https://hermes.internal with [credential redacted] or [credential redacted]"
     )
     const choices = interrupt?.questions?.[0]?.choices ?? []
     expect(choices).toEqual(["/home/operator/run.sh", "skip"])

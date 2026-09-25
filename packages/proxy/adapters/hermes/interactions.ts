@@ -23,6 +23,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
+import { SECRET_TERMS } from "../../redaction"
 
 import {
   HermesRpcRejectedError,
@@ -273,8 +274,12 @@ function nativeText(
     : undefined
 }
 
-const credentialText =
-  /(?:\bauthorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:access[-_]?token|api[-_]?key|credential|password|secret|token)\s*[=:]\s*[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)/giu
+/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
+const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
+const credentialText = new RegExp(
+  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
+  "giu"
+)
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
  * adapter. Paths and URLs stay: a question reaches every member of the
