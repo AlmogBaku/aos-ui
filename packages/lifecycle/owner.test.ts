@@ -49,10 +49,18 @@ function manualClock() {
   }
 }
 
-/** idle → joining (join deadline 1 s) → joined, or expired at the deadline. */
+/**
+ * idle → joining → joined, or expired at the 1 s join deadline. While joining,
+ * the request retries after a drawn 300-599 ms, each retry a new generation.
+ */
 function membership(logger: Logger, clock: Clock = defaultClock) {
   return ownerSetup("membership", logger, clock)
-    .extend({ delays: { join: 1_000 } })
+    .extend({
+      delays: {
+        join: 1_000,
+        retry: () => 300 + Math.floor(Math.random() * 300),
+      },
+    })
     .createMachine({
       context: { generation: 0 },
       initial: "idle",
@@ -60,7 +68,22 @@ function membership(logger: Logger, clock: Clock = defaultClock) {
         idle: {
           on: { join: { target: "joining", actions: "bumpGeneration" } },
         },
-        joining: { after: { join: "expired" }, on: { joined: "joined" } },
+        joining: {
+          after: { join: "expired" },
+          on: { joined: "joined" },
+          initial: "requesting",
+          states: {
+            requesting: {
+              after: {
+                retry: {
+                  target: "requesting",
+                  reenter: true,
+                  actions: "bumpGeneration",
+                },
+              },
+            },
+          },
+        },
         joined: { meta: { log: "info" } },
         expired: {},
       },
@@ -75,8 +98,9 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-it("writes one line per transition with the deadline it arms or clears", () => {
+it("writes one line per transition with the deadlines it arms and clears", () => {
   const { logger, records } = recorder()
+  vi.spyOn(Math, "random").mockReturnValue(0)
   const owner = createOwner(membership(logger), {
     logger,
     clock: defaultClock,
@@ -84,21 +108,32 @@ it("writes one line per transition with the deadline it arms or clears", () => {
   })
 
   owner.actor.send({ type: "join" })
-  vi.advanceTimersByTime(250)
+  vi.advanceTimersByTime(350)
   owner.actor.send({ type: "joined" })
 
+  const line = { level: "debug", message: "membership.transition" }
+  const joining = { sessionId: "session-1", to: "joining.requesting" }
   expect(records).toEqual([
     {
-      level: "debug",
-      message: "membership.transition",
+      ...line,
       fields: {
-        sessionId: "session-1",
+        ...joining,
         from: "idle",
-        to: "joining",
         generation: 1,
         event: "join",
         elapsedMs: 0,
-        armedMs: 1_000,
+        armed: [1_000, "retry"],
+      },
+    },
+    {
+      ...line,
+      fields: {
+        ...joining,
+        from: "joining.requesting",
+        generation: 2,
+        event: "xstate.after.retry.membership.joining.requesting",
+        elapsedMs: 300,
+        armed: ["retry"],
       },
     },
     {
@@ -106,20 +141,21 @@ it("writes one line per transition with the deadline it arms or clears", () => {
       message: "membership.joined",
       fields: {
         sessionId: "session-1",
-        from: "joining",
+        from: "joining.requesting",
         to: "joined",
-        generation: 1,
+        generation: 2,
         event: "joined",
-        elapsedMs: 250,
-        clearedMs: 1_000,
+        elapsedMs: 50,
+        cleared: ["retry", 1_000],
       },
     },
   ])
 })
 
-it("fires after deadlines on the injected clock alone", () => {
+it("fires after deadlines on the injected clock alone, drawing each once", () => {
   const { logger } = recorder()
   const clock = manualClock()
+  vi.spyOn(Math, "random").mockReturnValueOnce(0).mockReturnValueOnce(0.5)
   const owner = createOwner(membership(logger, clock), {
     logger,
     clock,
@@ -128,8 +164,16 @@ it("fires after deadlines on the injected clock alone", () => {
   owner.actor.send({ type: "join" })
 
   vi.advanceTimersByTime(60_000)
-  clock.advance(999)
-  expect(owner.actor.getSnapshot().value).toBe("joining")
+  clock.advance(299)
+  expect(owner.generation).toBe(1)
+  clock.advance(1)
+  expect(owner.generation).toBe(2)
+  clock.advance(449)
+  expect(owner.generation).toBe(2)
+  clock.advance(1)
+  expect(owner.generation).toBe(3)
+  clock.advance(249)
+  expect(owner.actor.getSnapshot().value).toEqual({ joining: "requesting" })
   clock.advance(1)
   expect(owner.actor.getSnapshot().value).toBe("expired")
 })
@@ -248,7 +292,7 @@ it("writes one inspection line per transition taken when inspected", () => {
       .filter(({ message }) => message === "xstate.transition")
       .map(({ level, fields: { event, state } }) => ({ level, event, state }))
   ).toEqual([
-    { level: "debug", event: "join", state: "joining" },
+    { level: "debug", event: "join", state: { joining: "requesting" } },
     { level: "debug", event: "joined", state: "joined" },
   ])
 })

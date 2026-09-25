@@ -22,29 +22,38 @@ export type OwnerKind =
 /** `bumpGeneration` moves the generation that `stale` compares against. */
 export type OwnerContext = { generation: number }
 
-type TransitionParams = { to: string; after: string[]; info: boolean }
+type TransitionParams = { to: string; info: boolean }
 
-type Track = { log: Logger; state?: string; since?: number; armedMs?: number }
+/** A state's `after` keys, each with the event XState raises when it fires. */
+type AfterParams = { after: { key: string; event: string }[] }
+
+/** A deadline as logged: a static delay in ms, or a function delay's key. */
+type Armed = number | string
+
+type Track = {
+  log: Logger
+  state?: string
+  since?: number
+  /** Deadlines armed and cleared since the last transition line. */
+  armed: Armed[]
+  cleared: Armed[]
+}
 
 /** Where each actor last was; createOwner seeds its logger. */
 const tracks = new WeakMap<AnyActorRef, Track>()
 
-type DelayMap = Record<
-  string,
-  number | ((args: unknown, params: undefined) => number)
->
+const newTrack = (log: Logger): Track => ({ log, armed: [], cleared: [] })
 
-/** The earliest `after` deadline a state arms, resolved as XState does. */
-function armedMs(self: AnyActorRef, keys: string[], args: unknown) {
-  if (keys.length === 0) return undefined
+/**
+ * Only XState calls a function delay, so a jittered deadline is drawn once,
+ * for the timer that fires; the log names its key instead.
+ */
+function armedAs(self: AnyActorRef, key: string): Armed {
+  if (!Number.isNaN(Number(key))) return Number(key)
   const { delays } = (self as unknown as { logic: AnyStateMachine }).logic
-    .implementations as { delays: DelayMap }
-  return Math.min(
-    ...keys.map((key) => {
-      const delay = Number.isNaN(Number(key)) ? delays[key]! : Number(key)
-      return typeof delay === "function" ? delay(args, undefined) : delay
-    })
-  )
+    .implementations as { delays: Record<string, unknown> }
+  const delay = delays[key]
+  return typeof delay === "number" ? delay : key
 }
 
 type StateConfig = {
@@ -52,30 +61,56 @@ type StateConfig = {
   type?: string
   states?: Record<string, StateConfig>
   entry?: unknown
+  exit?: unknown
   after?: Record<string, unknown>
   meta?: { log?: string }
 }
 
-/** Append `logTransition` to the entry of every atomic and final state. */
-function withTransitionLog(node: StateConfig, path: string[]): StateConfig {
+const actionList = (actions: unknown) =>
+  actions === undefined ? [] : [actions].flat()
+
+/**
+ * Every state with `after` records the deadlines it arms on entry and clears
+ * on exit, and every atomic or final state writes the line on entry.
+ */
+function withTransitionLog(
+  node: StateConfig,
+  path: string[],
+  machineId: string
+): StateConfig {
   if (node.type === "history") return node
-  if (node.states && Object.keys(node.states).length > 0)
-    return {
-      ...node,
+  const id = node.id ?? [machineId, ...path].join(".")
+  const after = Object.keys(node.after ?? {}).map((key) => ({
+    key,
+    event: `xstate.after.${Number.isNaN(Number(key)) ? key : Number(key)}.${id}`,
+  }))
+  const entry = actionList(node.entry)
+  const exit = actionList(node.exit)
+  if (after.length > 0) {
+    entry.push({ type: "armAfter", params: { after } })
+    exit.push({ type: "clearAfter", params: { after } })
+  }
+  const children = Object.entries(node.states ?? {})
+  if (children.length === 0) {
+    const params: TransitionParams = {
+      to: path.join("."),
+      info: node.meta?.log === "info",
+    }
+    entry.push({ type: "logTransition", params })
+  }
+  return {
+    ...node,
+    entry,
+    exit,
+    ...(children.length > 0 && {
       states: Object.fromEntries(
-        Object.entries(node.states).map(([key, child]) => [
+        children.map(([key, child]) => [
           key,
-          withTransitionLog(child, [...path, key]),
+          withTransitionLog(child, [...path, key], machineId),
         ])
       ),
-    }
-  const params: TransitionParams = {
-    to: path.join("."),
-    after: Object.keys(node.after ?? {}),
-    info: node.meta?.log === "info",
+    }),
   }
-  const entry = node.entry === undefined ? [] : [node.entry].flat()
-  return { ...node, entry: [...entry, { type: "logTransition", params }] }
 }
 
 type Instrumentable = {
@@ -89,10 +124,10 @@ function instrumented<TSetup extends Instrumentable>(
 ): TSetup {
   return {
     ...base,
-    createMachine: (config: StateConfig) =>
-      base.createMachine(
-        withTransitionLog({ id: kind, ...config }, []) as never
-      ),
+    createMachine: (config: StateConfig) => {
+      const root = { id: kind, ...config }
+      return base.createMachine(withTransitionLog(root, [], root.id) as never)
+    },
     extend: (implementations: never) =>
       instrumented(kind, base.extend(implementations)),
   }
@@ -100,15 +135,22 @@ function instrumented<TSetup extends Instrumentable>(
 
 /**
  * XState `setup()` for one owner kind. Context holds ids and credential
- * sources, never credential values or message text. Every state entered
- * writes one `${kind}.transition` line at debug (from, to, generation, and
- * the deadline it arms or clears), or `${kind}.${state}` at info when its
- * meta is `{ log: "info" }`. The machine id defaults to the kind.
+ * sources, never credential values or message text. Every atomic or final
+ * state entered writes one `${kind}.transition` line at debug (from, to,
+ * generation, and the `after` deadlines armed and cleared on the way, in ms
+ * or by key for a function delay), or `${kind}.${state}` at info when its
+ * meta is `{ log: "info" }`. The machine id defaults to the kind. Parallel
+ * states are not tracked: `from` and `to` assume one active state.
  */
 export function ownerSetup<
   TContext extends OwnerContext = OwnerContext,
   TEvent extends AnyEventObject = AnyEventObject,
 >(kind: OwnerKind, logger: Logger, clock: Clock) {
+  const trackOf = (self: AnyActorRef) => {
+    const track = tracks.get(self) ?? newTrack(logger)
+    tracks.set(self, track)
+    return track
+  }
   return instrumented(
     kind,
     setup({
@@ -116,16 +158,25 @@ export function ownerSetup<
       // An open actor map is what lets XState type an inline invoke source.
       actors: {} as Record<string, UnknownActorLogic>,
       actions: {
-        logTransition: (args, { to, after, info }: TransitionParams) => {
-          const { context, event, self } = args
-          const track = tracks.get(self) ?? { log: logger }
-          tracks.set(self, track)
+        armAfter: ({ self }, { after }: AfterParams) => {
+          trackOf(self).armed.push(
+            ...after.map(({ key }) => armedAs(self, key))
+          )
+        },
+        clearAfter: ({ event, self }, { after }: AfterParams) => {
+          const unfired = after.filter((timer) => timer.event !== event.type)
+          trackOf(self).cleared.push(
+            ...unfired.map(({ key }) => armedAs(self, key))
+          )
+        },
+        logTransition: (
+          { context, event, self },
+          { to, info }: TransitionParams
+        ) => {
+          const track = trackOf(self)
+          const { armed, cleared } = track
           const now = clock.now()
-          const armed = armedMs(self, after, args)
-          if (track.state !== undefined) {
-            const cleared =
-              track.armedMs !== undefined &&
-              !event.type.startsWith("xstate.after.")
+          if (track.state !== undefined)
             track.log[info ? "info" : "debug"](
               {
                 from: track.state,
@@ -133,13 +184,17 @@ export function ownerSetup<
                 generation: context.generation,
                 event: event.type,
                 elapsedMs: now - track.since!,
-                ...(armed !== undefined && { armedMs: armed }),
-                ...(cleared && { clearedMs: track.armedMs }),
+                ...(armed.length > 0 && { armed }),
+                ...(cleared.length > 0 && { cleared }),
               },
               info ? `${kind}.${to}` : `${kind}.transition`
             )
-          }
-          Object.assign(track, { state: to, since: now, armedMs: armed })
+          Object.assign(track, {
+            state: to,
+            since: now,
+            armed: [],
+            cleared: [],
+          })
         },
         bumpGeneration: assign(
           ({ context }) =>
@@ -199,7 +254,7 @@ export function createOwner<TMachine extends AnyStateMachine>(
     clock,
     inspect,
   }) as Actor<TMachine>
-  tracks.set(actor, { log })
+  tracks.set(actor, newTrack(log))
   const stack = new DisposableStack()
   const release = () => {
     try {
