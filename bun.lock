@@ -67,7 +67,6 @@
         "@types/react": "^19",
         "@types/react-dom": "^19",
         "@vitejs/plugin-react": "^6.1.1",
-        "@xstate/graph": "3.0.4",
         "eslint": "^9",
         "eslint-plugin-react-hooks": "^7.1.1",
         "eslint-plugin-react-refresh": "^0.5.6",
@@ -856,8 +855,6 @@
     "@vitest/mocker": ["@vitest/mocker@5.0.0", "", { "dependencies": { "@jridgewell/trace-mapping": "0.3.31", "@vitest/spy": "5.0.0", "estree-walker": "^3.0.3", "magic-string": "^1.2.3" }, "peerDependencies": { "msw": "^2.4.9", "vite": "^6.0.0 || ^7.0.0 || ^8.0.0" }, "optionalPeers": ["msw", "vite"] }, "sha512-66PGTMIiVJP3t4a5yxU9qPtf7MdTBs8jmToMvy+HVflB3Yy13WJZTtPePdvU+wjRV02SKK5doLbSA6o9pwOmiA=="],
 
     "@vitest/spy": ["@vitest/spy@5.0.0", "", {}, "sha512-uy+luWBAPw9XfthoHi5AkfHUnuPYEESjl0p/r+meoBnU8bxg5GDQ3Ey8MjcJ6sqahkL4PFyrvfMJJBw7LbU06g=="],
-
-    "@xstate/graph": ["@xstate/graph@3.0.4", "", { "peerDependencies": { "xstate": "^5.19.4" } }, "sha512-b12RA7E//+7FJVrD09Td+BhHRJbeKZnK+98xXBd+JmccG360xVP1lyzVhUZPgBgwPdmIGBJqhKzmWYJQ9c8ojQ=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 
