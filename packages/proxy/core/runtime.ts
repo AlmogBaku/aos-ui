@@ -1,4 +1,9 @@
-import type { PendingRequest, TurnEvent, TurnInput } from "./events"
+import type {
+  ExecutionEvent,
+  PendingRequest,
+  TurnEvent,
+  TurnInput,
+} from "./events"
 import type {
   AgentCatalogResponse,
   RuntimeAuthState,
@@ -23,8 +28,6 @@ export type SessionScope = {
   sessionId: string
   /** Opaque public Session identity supplied by the browser. */
   threadId: string
-  /** Command routing is limited to plain text-only submissions. */
-  hasAttachments?: boolean
 }
 
 /** Exactly one Session field a write changes, as the wire request carries it. */
@@ -224,9 +227,29 @@ export type ServerRuntimePublicError = {
   status: 400 | 401 | 404 | 409 | 503
 }
 
+/**
+ * Native semantics the ACP layer reads instead of assuming one provider's. An
+ * absent field is the neutral reading: an exposure acknowledges only an unread
+ * row, activity re-lights nothing, and every steer acknowledgement is announced.
+ */
+export type ServerRuntimeTranslation = {
+  /**
+   * Present means the read watermark moves only on a write, so every exposure
+   * acknowledges, even a row that already reads read. Its contents are the
+   * kinds that re-light a focused Session, so `[]` differs from leaving it out.
+   */
+  relighting?: readonly ExecutionEvent["kind"][]
+  /**
+   * `in-history`: a resumed turn delivers acknowledgements again for
+   * corrections its history already carries.
+   */
+  steerAck?: "in-history"
+}
+
 /** Provider-neutral operations consumed by normalized HTTP and event routes. */
 export interface ServerRuntime {
   readonly turns: ServerTurnEngine
+  readonly translation?: ServerRuntimeTranslation
   resolveInvitedSession(
     agentId: string,
     ref: string,

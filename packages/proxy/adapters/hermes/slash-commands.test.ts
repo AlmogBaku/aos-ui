@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { TurnEventKind } from "../../core/events"
+import type { ServerAttachmentStage } from "../../core/runtime"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesTurnEngine } from "./run"
@@ -355,32 +356,46 @@ it("follows native aliases and completes outputless synchronous commands", async
   )
 })
 
-it("rejects recognized commands with attachments and sends unknown ones normally", async () => {
-  const request = vi.fn(async (method: string) =>
-    method === "commands.catalog"
-      ? { pairs: [["/help", "Help"]] }
-      : { status: "streaming" }
+it("rejects recognized commands with attachments before any write and sends unknown ones normally", async () => {
+  const router = rpcRouter({
+    "commands.catalog": async () => ({ pairs: [["/help", "Help"]] }),
+    "session.events.since": async () => ({
+      epoch: "epoch-1",
+      last_seen: 0,
+      truncated: false,
+      events: [],
+    }),
+    "session.active_list": async () => ({ sessions: [] }),
+    "prompt.submit": async () => ({ status: "streaming" }),
+  })
+  const adapter = new HermesServerAdapter(router)
+  const stage: ServerAttachmentStage = {
+    public: [{ type: "image", dataUrl: "data:image/png;base64,AA==" }],
+    appendTo: (text) => text,
+    cleanup: async () => {},
+  }
+
+  const refused = await adapter.turns.start(
+    scope,
+    { turnId: "one", messageId: "user-one", prompt: "/help" },
+    stage
   )
-  const native = nativeFor(request)
-  await expect(
-    native.submit("live", {
-      scope: { ...scope, hasAttachments: true },
-      text: "/help",
-      turnId: "one",
-    })
-  ).resolves.toEqual({
-    acknowledgement: "rejected",
-    reason: "command-with-attachments",
+  const events = []
+  for await (const event of refused.events) events.push(event)
+  expect(events.at(-1)).toMatchObject({
+    kind: TurnEventKind.TurnFailed,
+    code: "AOS_COMMAND_WITH_ATTACHMENTS",
   })
-  await native.submit("live", {
-    scope: { ...scope, hasAttachments: true },
-    text: "/unknown",
-    turnId: "two",
-  })
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "commands.catalog",
-    "commands.catalog",
-    "prompt.submit",
+  await adapter.turns.start(
+    scope,
+    { turnId: "two", messageId: "user-two", prompt: "/unknown" },
+    stage
+  )
+
+  // The recognized command never ran; the unknown one is an ordinary prompt.
+  expect(router.calls("slash.exec")).toHaveLength(0)
+  expect(router.calls("prompt.submit").map(({ params }) => params)).toEqual([
+    { session_id: "live-secret", text: "/unknown" },
   ])
 })
 

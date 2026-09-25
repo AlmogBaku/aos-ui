@@ -403,9 +403,11 @@ Emit a descriptor only from an authoritative source: a `present_artifact`
 receipt from the `aos-ui` tools MCP server
 (`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`),
 a harness's own `MEDIA:` delivery convention, or a trusted native delivery
-tool such as Hermes text-to-speech. `packages/proxy/core/media-lines.ts`
-(`MediaLineFilter`) strips `MEDIA:` lines from streamed prose across deltas
-and replaces an unclaimed one with `[Media unavailable]`.
+tool such as Hermes text-to-speech.
+`packages/proxy/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
+`MEDIA:` lines from streamed prose across deltas and replaces an unclaimed one
+with `[Media unavailable]`. It is private to the Hermes adapter and parses
+Hermes's own `MEDIA:` convention; it is not a general helper.
 
 Validate every path with `packages/proxy/core/artifact-path.ts` before keeping
 it: `safeArtifactPath` accepts only absolute POSIX paths with no `..`

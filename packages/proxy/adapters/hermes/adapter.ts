@@ -70,6 +70,7 @@ import {
 import type {
   ServerMcpApps,
   ServerRuntime,
+  ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
@@ -347,6 +348,15 @@ export class HermesServerAdapter implements ServerRuntime {
   /** The typed native turn boundary; `run-native.ts` owns every native outcome. */
   readonly native: HermesTurnNative
   readonly turns: HermesTurnEngine
+  /**
+   * Hermes keeps unread role- and running-blind and moves its watermark only
+   * on a write, so the operator's own turn and a streaming answer both re-light
+   * a Session in view. It stores an accepted steer as a user turn at once.
+   */
+  readonly translation: ServerRuntimeTranslation = {
+    relighting: ["turn-finished", "turn-failed", "attention-requested"],
+    steerAck: "in-history",
+  }
   readonly #retry: HermesRetrySchedule
   readonly mcpApps?: ServerMcpApps
   readonly #mcpToolNames?: McpToolNames

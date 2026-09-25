@@ -1,4 +1,3 @@
-import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { ReadState } from "./types"
@@ -22,17 +21,6 @@ export type ReadStateOptions = {
   onUnreadChanged: (agentId: string, sessionId: string, unread: boolean) => void
 }
 
-/**
- * Activity that re-lights a Session the operator is already looking at. Unread
- * is role-blind and running-blind in Hermes, so the operator's own turn and a
- * streaming answer both need another acknowledgement.
- */
-const RELIGHTING: readonly ExecutionEvent["kind"][] = [
-  "turn-finished",
-  "turn-failed",
-  "attention-requested",
-]
-
 function sameTarget(left: Target, right: Target) {
   return left.agentId === right.agentId && left.sessionId === right.sessionId
 }
@@ -46,6 +34,7 @@ export function createReadState({
   onUnreadChanged,
 }: ReadStateOptions): ReadState {
   const { runtime } = runtimeInstance
+  const relighting = runtime.translation?.relighting
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let releaseFocus: (() => void) | undefined
@@ -151,16 +140,17 @@ export function createReadState({
       releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
         arm(target, false)
       )
-      // Hermes arms its watermark only on a write, so an already-read Session
-      // still needs one acknowledgement per exposure.
-      arm(target, true)
+      // A watermark that moves only on a write needs one acknowledgement per
+      // exposure, even for a row that already reads read.
+      if (relighting || sessionRows.get(agentId, sessionId)?.unread)
+        arm(target, true)
     },
 
     blur: unfocus,
 
     onExecution(event) {
       if (!focused || !sameTarget(focused, event)) return
-      if (!RELIGHTING.includes(event.kind)) return
+      if (!relighting?.includes(event.kind)) return
       arm(focused, false)
     },
 

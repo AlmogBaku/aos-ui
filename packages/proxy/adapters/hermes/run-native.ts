@@ -49,6 +49,8 @@ export type HermesSubmitPrompt = {
   text: string
   turnId: string
   rewindSourceId?: string
+  /** Staged attachments ride along; command routing takes plain text only. */
+  hasAttachments?: boolean
   /**
    * Re-send exactly the write Hermes refused, as that refusal reported it. Only
    * the single "that live Session is gone" retry sets it, and it repeats the
@@ -392,7 +394,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         // A read-only catalog lookup: Hermes never saw the user's text.
         throwUnavailable(error)
       }
-      if (invocation && prompt.scope.hasAttachments)
+      if (invocation && prompt.hasAttachments)
         return {
           acknowledgement: "rejected",
           reason: "command-with-attachments",
@@ -441,7 +443,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     }
 
     // A rewind that stages attachments of its own replaces the source row's.
-    const reattached = prompt.scope.hasAttachments ? [] : images
+    const reattached = prompt.hasAttachments ? [] : images
     await this.#attachImages(liveSessionId, reattached)
     const outcome = await this.#submitPrompt(liveSessionId, {
       text: prompt.text,

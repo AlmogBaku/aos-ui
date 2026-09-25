@@ -331,7 +331,12 @@ export function createMemberEncoder({
         replayedCorrections: stream.replayedCorrections,
       },
       event.event,
-      { turnId: stream.turnId, sequence, stopping: event.stopping }
+      {
+        turnId: stream.turnId,
+        sequence,
+        stopping: event.stopping,
+        steerAck: context.runtimeInstance.runtime.translation?.steerAck,
+      }
     )
     states.set(stream, translated.state)
     for (const outbound of translated.outbound) {

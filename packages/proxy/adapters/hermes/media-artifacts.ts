@@ -3,7 +3,7 @@ import {
   safeArtifactPath,
   safeRelativeArtifactPath,
 } from "../../core/artifact-path"
-import { MediaLineFilter, mediaReference } from "../../core/media-lines"
+import { MediaLineFilter, mediaReference } from "./media-lines"
 import {
   containsPrivateValue,
   isRecord,

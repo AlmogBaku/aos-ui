@@ -129,7 +129,7 @@ function createClock(startMs: number) {
 
 type HarnessOptions = Pick<
   AcpHarnessOptions,
-  "rows" | "maxSubscriberEvents" | "permission" | "question"
+  "rows" | "maxSubscriberEvents" | "permission" | "question" | "translation"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -677,7 +677,10 @@ describe("operator ACP lane", () => {
   })
 
   it("announces a persisted correction once on a from-start resume", async () => {
-    const test = await harness({ history: correctedHistory("Use the tables") })
+    const test = await harness({
+      history: correctedHistory("Use the tables"),
+      translation: { steerAck: "in-history" },
+    })
     const source = await steeredRun(test, ["Use the tables"])
 
     await test.agent.request(methods.agent.session.resume, {
@@ -707,7 +710,10 @@ describe("operator ACP lane", () => {
   })
 
   it("announces the correction history could not carry yet", async () => {
-    const test = await harness({ history: correctedHistory("Use the tables") })
+    const test = await harness({
+      history: correctedHistory("Use the tables"),
+      translation: { steerAck: "in-history" },
+    })
     const source = await steeredRun(test, ["Use the tables", "And the totals"])
 
     await test.agent.request(methods.agent.session.resume, {
