@@ -3,7 +3,7 @@ import { fromPromise } from "xstate"
 
 import { defaultClock } from "./clock"
 import type { LogFields, Logger } from "./logger"
-import { createOwner, ownerSetup } from "./owner"
+import { createOwner, fromAbortable, ownerSetup } from "./owner"
 
 type LogRecord = { level: string; message: string; fields: LogFields }
 
@@ -160,3 +160,49 @@ it.each(["dispose", "a final state", "a thrown action"] as const)(
     expect(released).toBe(1)
   }
 )
+
+it("aborts an invoke when its state exits and ignores its late result", async () => {
+  const { logger } = recorder()
+  const attempts: { signal: AbortSignal; resolve: () => void }[] = []
+  const machine = ownerSetup("link", logger, defaultClock).createMachine({
+    context: { generation: 0 },
+    initial: "connecting",
+    states: {
+      connecting: {
+        invoke: {
+          src: fromAbortable(
+            (signal) =>
+              new Promise<void>((resolve) => attempts.push({ signal, resolve }))
+          ),
+          onDone: "ready",
+        },
+        on: {
+          lost: {
+            target: "connecting",
+            reenter: true,
+            actions: "bumpGeneration",
+          },
+        },
+      },
+      ready: {},
+    },
+  })
+  const owner = createOwner(machine, {
+    logger,
+    clock: defaultClock,
+    bindings: {},
+  })
+  const first = owner.generation
+
+  owner.actor.send({ type: "lost" })
+  expect(attempts.map(({ signal }) => signal.aborted)).toEqual([true, false])
+
+  attempts[0]!.resolve()
+  await vi.advanceTimersByTimeAsync(0)
+  expect(owner.actor.getSnapshot().value).toBe("connecting")
+  expect(owner.stale(first)).toBe(true)
+  expect(owner.stale(owner.generation)).toBe(false)
+
+  owner.dispose()
+  expect(owner.stale(owner.generation)).toBe(true)
+})

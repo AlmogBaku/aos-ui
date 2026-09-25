@@ -1,12 +1,14 @@
 import {
   assign,
   createActor,
+  fromPromise,
   setup,
   type Actor,
   type AnyActorRef,
   type AnyEventObject,
   type AnyStateMachine,
   type InspectionEvent,
+  type NonReducibleUnknown,
   type Observer,
   type UnknownActorLogic,
 } from "xstate"
@@ -159,8 +161,16 @@ export type Owner<TMachine extends AnyStateMachine> = {
   actor: Actor<TMachine>
   readonly generation: number
   stack: DisposableStack
+  /** True for a result from an earlier generation or a released owner. */
   stale(generation: number): boolean
   dispose(): void
+}
+
+/** An invoke source whose signal aborts when the invoking state exits. */
+export function fromAbortable<TOutput, TInput = NonReducibleUnknown>(
+  fn: (signal: AbortSignal, input: TInput) => PromiseLike<TOutput>
+) {
+  return fromPromise<TOutput, TInput>(({ signal, input }) => fn(signal, input))
 }
 
 /**
@@ -215,7 +225,7 @@ export function createOwner<TMachine extends AnyStateMachine>(
     get generation() {
       return generation()
     },
-    stale: (candidate) => candidate !== generation(),
+    stale: (candidate) => stack.disposed || candidate !== generation(),
     dispose: () => {
       actor.stop()
       release()

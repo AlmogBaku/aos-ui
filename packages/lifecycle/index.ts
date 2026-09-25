@@ -3,6 +3,7 @@ export { Deadline } from "./deadline"
 export type { LogFields, Logger } from "./logger"
 export {
   createOwner,
+  fromAbortable,
   ownerSetup,
   type Owner,
   type OwnerContext,
