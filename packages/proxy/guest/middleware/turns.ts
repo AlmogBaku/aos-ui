@@ -8,13 +8,13 @@ import {
   type TurnEvent,
   type TurnEventOf,
 } from "../../core/events"
+import { validIdentifier } from "../../core/identifier"
 import {
   promptText,
   unhandledKind,
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
-import { validIdentifier } from "../../routes/http"
 
 /**
  * What a guest is shown of a live turn: the conversation's own text whole,

@@ -194,8 +194,11 @@ const LANE_BRANCH =
 describe("member boundary", () => {
   const proxyRoot = import.meta.dirname
 
-  /** A1: the core and the guest rules speak members, never the ACP wire. */
-  it("keeps ACP out of the core and the guest middleware", async () => {
+  /**
+   * A1: the core and the guest rules speak members, never the ACP wire, and
+   * the guest rules sit below every HTTP route rather than reaching into one.
+   */
+  it("keeps ACP and the routes out of the core and the guest middleware", async () => {
     const core = await productionFiles(join(proxyRoot, "core"))
     const middleware = await productionFiles(
       join(proxyRoot, "guest/middleware")
@@ -208,6 +211,7 @@ describe("member boundary", () => {
     for (const path of middleware) {
       const source = stripComments(await readFile(path, "utf8"))
       expect(source, path).not.toMatch(importsFrom("acp"))
+      expect(source, path).not.toMatch(importsFrom("routes"))
     }
   })
 

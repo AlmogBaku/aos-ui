@@ -58,17 +58,6 @@ export function errorResponse(
   )
 }
 
-export function validIdentifier(value: string) {
-  return (
-    value.length >= 1 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
-}
-
 export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   if (
     request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"
