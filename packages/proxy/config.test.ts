@@ -118,6 +118,13 @@ describe("proxy configuration and secret boundary", () => {
         deviceIdentityFile: "/run/secrets/openclaw-device",
         deviceTokenFile: "/run/secrets/openclaw-token",
       },
+      {
+        id: "openclaw-main",
+        kind: "openclaw",
+        baseUrl: "wss://gateway.example.test/?token=synthetic",
+        deviceIdentityFile: "/run/secrets/openclaw-device",
+        deviceTokenFile: "/run/secrets/openclaw-token",
+      },
     ])
       expect(() => parseProxyConfig({ ...validConfig(), runtime })).toThrow(
         "Invalid proxy configuration"

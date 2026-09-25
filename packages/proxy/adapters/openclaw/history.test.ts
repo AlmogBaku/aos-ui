@@ -440,7 +440,22 @@ describe("OpenClaw history AOS tools and artifacts", () => {
   }
 
   it("replays AOS tool calls canonically with the receipt's artifact and no native path", async () => {
-    const result = await historyOf(publishRows()).history(
+    const output = "x".repeat(5000)
+    const rows: unknown[] = publishRows()
+    ;(rows[0] as { content: unknown[] }).content.push({
+      type: "toolCall",
+      id: "read",
+      name: "files__read",
+      arguments: { path: "notes/plan.md" },
+    })
+    rows.push({
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "files__read",
+      content: [{ type: "text", text: output }],
+      details: { mcpServer: "files", mcpTool: "read" },
+    })
+    const result = await historyOf(rows).history(
       "analyst",
       "agent:analyst:main",
       200,
@@ -472,6 +487,15 @@ describe("OpenClaw history AOS tools and artifacts", () => {
         type: "tool-call",
         toolName: "render_chart",
         args: { title: "Sales" },
+      }),
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "mcp__files__read",
+        args: { path: "notes/plan.md" },
+        result: {
+          content: [{ type: "text", text: output }],
+          details: { mcpServer: "files", mcpTool: "read" },
+        },
       }),
     ])
     expect(JSON.stringify(result)).not.toContain("/workspace")

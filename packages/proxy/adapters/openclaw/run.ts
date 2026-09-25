@@ -53,6 +53,7 @@ import {
   type OpenClawReconciliationFence,
   type OpenClawSessionLease,
 } from "./subscriptions"
+import { safeClone, safeJson } from "./json-copy"
 import { openClawToolKind } from "./tool-kinds"
 import { projectTodos, type Todo } from "../todos"
 
@@ -324,28 +325,6 @@ function scopeKey(scope: SessionScope) {
 function boundedText(value: unknown) {
   if (typeof value !== "string") return undefined
   return encoder.encode(value).byteLength <= MAX_TEXT_BYTES ? value : undefined
-}
-
-function safeJson(value: unknown, fallback = "{}") {
-  try {
-    const json = JSON.stringify(value)
-    return typeof json === "string" &&
-      encoder.encode(json).byteLength <= 262_144
-      ? json
-      : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function safeClone(value: unknown) {
-  const json = safeJson(value, "")
-  if (!json) return undefined
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return undefined
-  }
 }
 
 function nonnegativeInteger(value: unknown) {

@@ -10,13 +10,14 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import { validIdentifier } from "../../core/identifier"
-import { publicJsonValue, type JsonValue } from "../json-value"
+import type { JsonValue } from "../json-value"
 import {
   openClawArtifactReceipt,
   openClawMediaArtifact,
   publicArtifactArgs,
   type OpenClawArtifactDescriptor,
 } from "./artifacts"
+import { safeClone } from "./json-copy"
 import { mcpAppViewId } from "./mcp-apps"
 import { mayBeMcpToolName, type OpenClawMcpToolNames } from "./mcp-tool-names"
 import {
@@ -149,7 +150,7 @@ function toolOutcomes(rows: readonly unknown[]) {
     const mcp = mcpTool(row.details)
     const result = artifact
       ? artifact.result
-      : publicJsonValue({
+      : safeClone({
           content: row.content,
           ...(row.details === undefined ? {} : { details: row.details }),
         })
@@ -175,7 +176,7 @@ function toolCallParts(
   const toolCallId = identifier(block.id)
   const outcome = toolCallId ? outcomes.get(toolCallId) : undefined
   const name = historyToolName(block.name, outcome, resolve)
-  const args = publicJsonValue(
+  const args = safeClone(
     name === "present_artifact"
       ? publicArtifactArgs(block.arguments)
       : block.arguments
