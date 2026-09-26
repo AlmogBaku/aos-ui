@@ -3053,6 +3053,8 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce(recovered),
     }
     const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    sessions.subscribeExecutions((event) => observed.push(event))
     const hung = expect(
       sessions.start(scope, input("run-1"), access("one"))
     ).rejects.toBeInstanceOf(ServerTurnUncertainError)
@@ -3073,6 +3075,12 @@ describe("SessionCoordinator", () => {
       { sessionId: scope.sessionId, turnId: "run-1" },
       expect.any(AbortSignal)
     )
+    // The start nobody answered and the reconcile that confirmed it are one
+    // turn, announced once.
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
+      ["turn-finished", "run-1"],
+    ])
     await expect(
       sessions.start(scope, input("run-2"), access("one"))
     ).resolves.toMatchObject({ turnId: "run-2" })
