@@ -219,7 +219,8 @@ export class HermesTurnEngine {
 
   /**
    * Admits a turn. `signal` is the admission's: once it aborts, a prompt not
-   * yet written to Hermes never is, and the start rejects.
+   * yet written to Hermes never is, and the start rejects; a prompt already
+   * written stands uncertain.
    */
   async start(
     scope: HermesTurnScope,

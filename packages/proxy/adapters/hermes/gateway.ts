@@ -84,7 +84,10 @@ export class HermesUnavailableError extends Error {
   }
 }
 
-/** The caller's `AbortSignal` aborted the request. */
+/**
+ * The caller's `AbortSignal` aborted the request before its frame went out; an
+ * abort after the write is uncertain instead.
+ */
 export class HermesRequestAbortedError extends Error {
   constructor() {
     super("Hermes request was aborted")
@@ -197,15 +200,6 @@ function webSocketUrl(baseUrl: string, token: string) {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   url.searchParams.set("token", token)
   return url.toString()
-}
-
-function isAbort(error: unknown) {
-  // The vendored channel rejects with a `DOMException`, not always an `Error`.
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    (error as { name?: unknown }).name === "AbortError"
-  )
 }
 
 /**
@@ -685,6 +679,9 @@ export class HermesGateway implements HermesRpcTransport {
       return await this.#queue.execute(async () => {
         await this.#awaitOpen(wait.signal)
         wait.clear()
+        // Past this line the frame goes out, and an abort is no longer proof
+        // that Hermes never saw it.
+        options.signal?.throwIfAborted()
         written = true
         return this.#write(method, params, limit, options)
       }, wait.signal)
@@ -763,8 +760,7 @@ export class HermesGateway implements HermesRpcTransport {
       error instanceof HermesAuthenticationError ||
       error instanceof HermesUnavailableError ||
       error instanceof HermesRpcUncertainError ||
-      error instanceof HermesRpcRejectedError ||
-      error instanceof HermesRequestAbortedError
+      error instanceof HermesRpcRejectedError
     )
       return error
     if (error instanceof JsonRpcGatewayError)
@@ -773,11 +769,11 @@ export class HermesGateway implements HermesRpcTransport {
         trimmedText(error.message),
         isRecord(error.data) ? nativeId(error.data.reason, 128) : undefined
       )
-    if (isAbort(error)) return new HermesRequestAbortedError()
     // Nothing was written: the generation was gone before the send.
     if (error instanceof Error && error.message === NOT_CONNECTED)
       return new HermesUnavailableError()
-    // Written, outcome unknown: timeout, dropped generation, send failure.
+    // Written, outcome unknown: timeout, dropped generation, send failure, or
+    // the caller giving up on a frame Hermes may already be running.
     return new HermesRpcUncertainError()
   }
 
