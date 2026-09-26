@@ -4,9 +4,13 @@ import {
   AGENT,
   chunk,
   harness,
+  NOW,
   SESSION,
   turnStarted,
+  type HarnessOptions,
 } from "../../../../../packages/proxy/acp/test-harness"
+import { translateHistory } from "../../../../../packages/proxy/acp/translate"
+import { TurnEventKind } from "../../../../../packages/proxy/core/events"
 import { useFakeClock } from "../../../../../test/support/fake-clock"
 
 import {
@@ -26,22 +30,32 @@ import {
 } from "./support"
 
 type Pipe = ReturnType<typeof connectBrowser>["pipe"]
+type Test = Awaited<ReturnType<typeof harness>>
+type Messages = NonNullable<HarnessOptions["history"]>
 
 /** What the browser holds once its turn has streamed its first chunk. */
-const HELD = ["assistant: replay:message-1", "user: Go", "assistant: Live"]
-/** The same, with the chunk the turn streamed while the browser was cut off. */
-const WHOLE = [
-  "assistant: replay:message-1",
-  "user: Go",
-  "assistant: Live reply",
-]
+const HELD = ["assistant: Earlier", "user: Go", "assistant: Live"]
+/**
+ * What a browser that recovered holds: the chunk its turn streamed while it
+ * was cut off, then the one it streamed after.
+ */
+const WHOLE = ["assistant: Earlier", "user: Go", "assistant: Live reply!"]
+
+const message = (id: string, role: "user" | "assistant", text: string) => ({
+  id,
+  role,
+  content: [{ type: "text" as const, text }],
+  createdAt: NOW,
+})
 
 const { baseMs } = RECONNECT_BACKOFF
 
 type Row = {
   fault: string
-  /** Faults the browser's live socket as its turn streams. */
-  inject(pipe: Pipe): void
+  /** A turn journal this many events deep; a small one loses the cursor. */
+  journal?: number
+  /** Faults the browser's live socket, or its Session, as its turn streams. */
+  inject(pipe: Pipe, test: Test): void
   /** Until then the browser opens no socket and shows this status. */
   holds?: { ms: number; status: AcpConnectionStatus }
   /** By then it has recovered, or stopped for good, whatever the jitter. */
@@ -79,6 +93,23 @@ const ROWS: Row[] = [
     transcript: WHOLE,
   },
   {
+    // The browser stops reading on a turn that has outgrown its journal, so
+    // its resume is answered with a resync, it replays the provider's store
+    // from the start once, and follows the turn from there.
+    fault: "the journal prunes a slow reader's cursor",
+    journal: 1,
+    inject: (pipe) => pipe.sockets[0]!.halfOpen(),
+    holds: {
+      ms: LIVENESS_SILENCE_MS + REQUEST_DEADLINE_MS.probe,
+      status: "ready",
+    },
+    bound: LIVENESS_SILENCE_MS + REQUEST_DEADLINE_MS.probe + baseMs,
+    status: "ready",
+    session: "joined",
+    resumes: 2,
+    transcript: WHOLE,
+  },
+  {
     fault: "the reopened socket's handshake is never answered",
     inject: (pipe) => {
       pipe.neverAnswerHandshake()
@@ -110,13 +141,40 @@ const ROWS: Row[] = [
     resumes: 0,
     transcript: HELD,
   },
+  {
+    // Deleted while the browser is away: the turn's native link drops, and
+    // the rejoin meets the Session gone.
+    fault: "the Session is gone mid-turn",
+    inject: (pipe, test) => {
+      pipe.sockets[0]!.drop()
+      test.faults.gone(test.scope)
+      test.sources[0]!.emit({
+        kind: TurnEventKind.TurnFailed,
+        code: "AOS_CONNECTION_INTERRUPTED",
+      })
+      test.sources[0]!.finish()
+    },
+    bound: baseMs,
+    status: "ready",
+    session: "gone",
+    resumes: 2,
+    transcript: HELD,
+  },
 ]
 
 describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
   it.each(ROWS)("settles within its bound when $fault", async (row) => {
     vi.spyOn(Math, "random").mockReturnValue(jitter)
     const clock = useFakeClock()
-    const { test, pipe, connection } = connectBrowser(await harness())
+    // The provider's store, which a replay from the start reads.
+    const stored: Messages = [message("message-1", "assistant", "Earlier")]
+    const { test, pipe, connection } = connectBrowser(
+      await harness({
+        history: stored,
+        translateHistory,
+        ...(row.journal ? { maxSubscriberEvents: row.journal } : {}),
+      })
+    )
     const frames = sentFrames()
     const transcript = watchTranscript(connection, {
       agentId: AGENT,
@@ -139,8 +197,13 @@ describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
         .length
     const resumed = resumes()
 
-    row.inject(pipe)
+    row.inject(pipe, test)
     chunk(test.sources[0], " reply")
+    // The provider stores the turn as it streams.
+    stored.push(
+      message("user-1", "user", "Go"),
+      message("assistant-1", "assistant", "Live reply")
+    )
     let elapsed = 0
     if (row.holds) {
       elapsed = row.holds.ms - 1
@@ -149,6 +212,9 @@ describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
       expect(connection.status).toBe(row.holds.status)
     }
     await clock.advance(row.bound - elapsed)
+    // The turn streams on, and a browser that recovered follows it.
+    chunk(test.sources[0], "!")
+    await clock.advance(0)
 
     expect(connection.status).toBe(row.status)
     expect(connection.sessionState(SESSION)).toBe(row.session)
