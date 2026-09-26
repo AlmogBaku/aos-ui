@@ -1427,7 +1427,7 @@ class Membership {
   async #settle(reply: RequestReply) {
     this.#options.logger.info(
       { requestId: reply.requestId, status: reply.status },
-      "acp.request.answered"
+      "membership.request.answered"
     )
     // Before the answer resolves this request, so the member answering it
     // is not withdrawn its own request, and a second decline finds none.

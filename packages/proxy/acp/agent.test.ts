@@ -1408,7 +1408,7 @@ describe("AOS ACP agent", () => {
       })
     )
     expect(test.logged()).toContainEqual({
-      event: "acp.request.answered",
+      event: "membership.request.answered",
       connectionId: "connection-1",
       role: "operator",
       sessionId: CREATED,

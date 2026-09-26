@@ -467,4 +467,16 @@ describe("logging", () => {
 
     expect(writers).toEqual([])
   })
+
+  /** Core names each event after the owner that writes it, never the wire. */
+  it("names no core event after ACP", async () => {
+    const named: string[] = []
+
+    for (const path of await productionFiles(join(proxyRoot, "core"))) {
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/["'`]acp\./u.test(source)) named.push(relative(proxyRoot, path))
+    }
+
+    expect(named).toEqual([])
+  })
 })
