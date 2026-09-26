@@ -388,7 +388,9 @@ export function createAcpConnection(
   })
   // Closing before the handshake settles must not raise an unhandled rejection
   // in a consumer that never awaited it.
-  void initialized.catch(() => {})
+  initialized.catch((err: unknown) =>
+    logger.warn({ err }, "acp.connection.initialized_failed")
+  )
 
   function setStatus(next: AcpConnectionStatus) {
     if (status === next) return
@@ -609,7 +611,9 @@ export function createAcpConnection(
           sessions.has(sessionId)
         if (!closedUnder) throw error
         // Once its close is handled, the Session has left `joined`.
-        await transport.connection.closed.catch(() => {})
+        await transport.connection.closed.catch((err: unknown) =>
+          logger.warn({ err }, "acp.connection.closed_with_error")
+        )
       }
     }
   }
@@ -792,7 +796,9 @@ export function createAcpConnection(
     if (!open.waiters) {
       open.waiters = Promise.withResolvers()
       // A part or close with nobody waiting is no unhandled rejection.
-      void open.waiters.promise.catch(() => {})
+      open.waiters.promise.catch((err: unknown) =>
+        logger.warn({ err }, "acp.session.waiter_failed")
+      )
     }
     return open.waiters.promise
   }
@@ -986,14 +992,16 @@ export function createAcpConnection(
     const transport = { connection, ready: handshake(connection) }
     // Whoever waits on the handshake hears its failure; the owner hears of
     // the close that causes it.
-    void transport.ready.catch(() => {})
+    transport.ready.catch((err: unknown) =>
+      logger.warn({ err }, "acp.transport.handshake_failed")
+    )
     live = transport
     const onClosed = () => {
       if (live !== transport) return
       live = undefined
       deliver({ type: "closed", code: closeCode })
     }
-    void connection.closed.then(onClosed, onClosed)
+    connection.closed.then(onClosed, onClosed)
     return opened.promise
   }
 
@@ -1211,7 +1219,10 @@ export function createAcpConnection(
     )
       inspecting = import("@statelyai/inspect")
         .then(({ createBrowserInspector }) => createBrowserInspector().inspect)
-        .catch(() => undefined)
+        .catch((err: unknown) => {
+          logger.debug({ err }, "acp.inspector.load_failed")
+          return undefined
+        })
         .then(openOwner)
     else openOwner(undefined)
   }

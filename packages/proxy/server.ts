@@ -293,9 +293,9 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
       // Stop accepting new work. Bun leaves this promise pending until every
       // connection is gone and never settles it once a peer has been upgraded,
       // so nothing waits on it and the drain below reads the request count.
-      void Promise.resolve()
+      Promise.resolve()
         .then(() => server.stop(false))
-        .catch(() => undefined)
+        .catch((err: unknown) => logger?.warn({ err }, "server.stop.failed"))
       const inFlight = () => server.pendingRequests ?? 0
       while (inFlight() > 0 && remainingMs() > 0)
         await sleep(Math.min(DRAIN_POLL_MS, remainingMs()))
@@ -311,7 +311,9 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
   }
 
   if (options.installSignalHandlers !== false) {
-    onSignal = () => void shutdown()
+    onSignal = () => {
+      shutdown().catch((err: unknown) => logger?.warn({ err }, "server.shutdown.failed"))
+    }
     process.once("SIGINT", onSignal)
     process.once("SIGTERM", onSignal)
   }

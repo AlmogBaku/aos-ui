@@ -580,7 +580,7 @@ export function GuestAosSurface({
       await connection.login(inviteToken)
       return resolved
     }
-    void open().then(
+    open().then(
       (resolved) => {
         if (disposed) return
         setLoaded({

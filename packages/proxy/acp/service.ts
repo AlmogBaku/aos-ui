@@ -138,7 +138,9 @@ export function createAcpService(options: AcpServiceOptions) {
         connections.delete(upgrade.connectionId)
         handshakeDeadline.clear()
         socket.close()
-        void withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS)
+        withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS).catch(
+          (err: unknown) => context.logger.warn({ err }, "acp.socket.close_failed")
+        )
       },
     }
   }

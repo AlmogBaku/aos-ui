@@ -1,4 +1,9 @@
-import { backoffDelay, defaultClock, type Clock } from "@aos/lifecycle"
+import { backoffDelay, defaultClock, type Clock, type Logger } from "@aos/lifecycle"
+import { tabAcpLogger } from "./log"
+
+// Lazy logger for background error reporting.
+let _clientLog: Logger | undefined
+const clientLog = () => (_clientLog ??= tabAcpLogger())
 import { AOS_METHODS, type AosSessionInfoMeta } from "@aos/protocol/acp"
 import type {
   RuntimeInfo,
@@ -69,7 +74,11 @@ export function createAcpWorkspaceClient({
   const store = createAcpSessionStore({
     connection,
     ...(now ? { now } : {}),
-    onTurnFinished: (sessionId) => void reportCreatedAgents(sessionId),
+    onTurnFinished: (sessionId) => {
+      reportCreatedAgents(sessionId).catch((err: unknown) =>
+        clientLog().warn({ err }, "agent.report_created_failed")
+      )
+    },
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
@@ -257,7 +266,7 @@ export function createAcpWorkspaceClient({
     if (relistTimer !== undefined) clock.clearTimeout(relistTimer)
     relistTimer = clock.setTimeout(() => {
       relistTimer = undefined
-      void reliableListSessions()
+      reliableListSessions().catch((err: unknown) => clientLog().warn({ err }, "sessions.relist_failed"))
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 

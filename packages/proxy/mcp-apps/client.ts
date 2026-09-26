@@ -9,6 +9,7 @@ import {
   type McpAppView,
   type ReadResourceResult,
 } from "../../protocol/mcp-apps"
+import type { Logger } from "../../lifecycle"
 import { isHttpsOrLoopback } from "../config"
 import { createMcpServerCache } from "../core/mcp-server-cache"
 import { MCP_APP_MIME_TYPE, sanitizeCsp, sanitizePermissions } from "./policy"
@@ -85,8 +86,9 @@ function endpointOf(key: string): McpAppEndpoint {
 }
 
 export function createMcpAppClient(
-  options: { fetch?: typeof fetch; servers?: McpServerOverrides } = {}
+  options: { fetch?: typeof fetch; servers?: McpServerOverrides; logger?: Logger } = {}
 ): McpAppClient {
+  const { logger } = options
   const overrides: McpServerOverrides = options.servers ?? new Map()
   const pool = new Map<string, Pooled>()
 
@@ -94,7 +96,9 @@ export function createMcpAppClient(
     if (pool.get(key) !== pooled) return
     pool.delete(key)
     clearTimeout(pooled.timer)
-    void pooled.client.then((client) => client.close()).catch(() => undefined)
+    pooled.client
+      .then((client) => client.close())
+      .catch((err: unknown) => logger?.warn({ err }, "mcp_app.client.close_failed"))
   }
 
   async function open({ name, url }: McpAppEndpoint) {

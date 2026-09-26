@@ -3,6 +3,12 @@ import type {
   AnyWireMessage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
+import type { Logger } from "@aos/lifecycle"
+import { tabAcpLogger } from "./log"
+
+// Lazy logger for cleanup error reporting; only created if an error fires.
+let _socketLog: Logger | undefined
+const socketLog = () => (_socketLog ??= tabAcpLogger())
 
 const CONNECTING = 0
 const OPEN = 1
@@ -28,7 +34,9 @@ export class PipedSocket extends EventTarget {
       app.connect({ readable: inbound.readable, writable: outbound.writable })
       this.#inbound = inbound.writable.getWriter()
       this.#outbound = outbound.readable.getReader()
-      void this.#pump(this.#outbound)
+      this.#pump(this.#outbound).catch((err: unknown) =>
+        socketLog().warn({ err }, "socket.pump_failed")
+      )
     }
     queueMicrotask(() => {
       if (this.readyState !== CONNECTING) return
@@ -55,7 +63,10 @@ export class PipedSocket extends EventTarget {
   send(data: string) {
     if (this.readyState !== OPEN || this.#halfOpen) return
     if (this.#held) this.#held.push(data)
-    else void this.#inbound?.write(JSON.parse(data) as AnyWireMessage)
+    else if (this.#inbound)
+      this.#inbound
+        .write(JSON.parse(data) as AnyWireMessage)
+        .catch((err: unknown) => socketLog().warn({ err }, "socket.write_failed"))
   }
 
   close(code = 1000, reason = "") {
@@ -92,8 +103,14 @@ export class PipedSocket extends EventTarget {
   #end(code: number, reason: string, wasClean: boolean) {
     if (this.readyState === CLOSED) return
     this.readyState = CLOSED
-    void this.#inbound?.close().catch(() => {})
-    void this.#outbound?.cancel().catch(() => {})
+    if (this.#inbound)
+      this.#inbound
+        .close()
+        .catch((err: unknown) => socketLog().warn({ err }, "socket.close_failed"))
+    if (this.#outbound)
+      this.#outbound
+        .cancel()
+        .catch((err: unknown) => socketLog().warn({ err }, "socket.cancel_failed"))
     this.dispatchEvent(new CloseEvent("close", { code, reason, wasClean }))
   }
 }

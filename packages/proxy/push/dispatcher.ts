@@ -192,7 +192,7 @@ export function createPushDispatcher({
     for (const device of departed)
       await registrations
         .remove(principalId, device.subscription.endpoint)
-        .catch(() => undefined)
+        .catch((err: unknown) => logger?.warn({ err }, "push.device.remove_failed"))
 
     logger?.info(
       {
@@ -216,8 +216,8 @@ export function createPushDispatcher({
     filter,
     presence: verdict,
     emit: (principalId, category, sessions, closedAt) => {
-      void deliver(principalId, category, sessions, closedAt).catch(
-        () => undefined
+      deliver(principalId, category, sessions, closedAt).catch(
+        (err: unknown) => logger?.warn({ err }, "push.deliver.failed")
       )
     },
     onSuppressed: (_principalId, category, reason, sessions) => {

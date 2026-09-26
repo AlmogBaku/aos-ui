@@ -344,7 +344,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
               if (stage) prompt = await stage.appendTo(text)
             } catch (cause) {
               // The coordinator never took the stage, so it is released here.
-              await stage?.cleanup().catch(() => undefined)
+              await stage?.cleanup().catch((err: unknown) =>
+                context.logger.warn({ err }, "turn.stage.cleanup_failed")
+              )
               throw cause
             }
             return {
