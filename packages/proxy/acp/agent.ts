@@ -29,9 +29,8 @@ import {
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
-import type { PromptTurnInput } from "../core/events"
+import { unlessAborted } from "../core/channel"
 import {
-  ServerTurnConflictError,
   type ServerRuntime,
   type SessionPatch,
   type SessionScope,
@@ -71,7 +70,6 @@ import {
   parseMeta,
   publicRequestError,
   refusalError,
-  turnInProgress,
 } from "./validation"
 
 /**
@@ -302,17 +300,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
   }
 
-  /** Admits one user turn in a Session this connection reaches. */
+  /**
+   * Admits one user turn in a Session this connection reaches, answering once
+   * the coordinator admitted or refused it. A turn that never started
+   * releases its stage: the client keeps its attachments and stages them anew.
+   */
   async function send(
     command: MemberCommands["send"],
     client: AgentContext
   ): Promise<CommandResults["send"]> {
     const scope = command.scope ?? sessions.scope(command.sessionId)
-    await workspace.session(scope)
-    if (coordinator.state(scope) !== "idle") throw turnInProgress()
     // Bytes were staged over REST; the prompt references the batch by id and
     // the stage appends its server-owned content to the user turn.
-    const { attachmentStageId } = command
+    const { attachmentStageId, clientId } = command
     const stage =
       attachmentStageId === undefined
         ? undefined
@@ -322,42 +322,31 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             attachmentStageId
           )
     if (attachmentStageId !== undefined && !stage) throw invalidRequest()
-    const messageId = crypto.randomUUID()
-    const input: PromptTurnInput = {
-      turnId: crypto.randomUUID(),
-      messageId,
-      prompt: stage ? await stage.appendTo(command.text) : command.text,
-      ...(command.rewindSourceId === undefined
-        ? {}
-        : { rewindSourceId: command.rewindSourceId }),
-    }
-    const content = echoedParts(command.content, stage?.artifactIds?.() ?? [])
     const membership = sessions.join(client, scope)
-    membership.afterResponse(async () => {
-      // Joined before admission, so a turn that wins the race still reaches
-      // this browser, and shown its own prompt as today.
-      membership.joinChannel()
-      await membership.emit({ kind: "prompt", messageId, content, own: true })
-      try {
-        await membership.startTurn(input, { stage, quota: command.quota })
-      } catch (cause) {
-        // The prompt was accepted and echoed, so its turn fails in view.
-        if (!(cause instanceof ServerTurnConflictError))
-          return membership.refuseTurn(input.turnId, cause)
-        // Another browser's turn won: report the conflict, then follow it.
-        await membership.report(cause)
-        await membership.catchUp()
-        return
+    try {
+      const prompt = {
+        prompt: stage ? await stage.appendTo(command.text) : command.text,
+        ...(command.rewindSourceId === undefined
+          ? {}
+          : { rewindSourceId: command.rewindSourceId }),
       }
-      await membership.announce({
-        turnId: input.turnId,
-        messageId,
-        content,
-        at: Date.now(),
-      })
-    })
-    membership.joined()
-    return { messageId }
+      return await membership.startTurn(
+        clientId === undefined
+          ? {
+              turnId: crypto.randomUUID(),
+              messageId: crypto.randomUUID(),
+              ...prompt,
+            }
+          : { clientId, ...prompt },
+        echoedParts(command.content, stage?.artifactIds?.() ?? []),
+        { stage, quota: command.quota }
+      )
+    } catch (cause) {
+      await stage?.cleanup().catch(() => undefined)
+      throw cause
+    } finally {
+      membership.joined()
+    }
   }
 
   app.onRequest(methods.agent.initialize, async ({ params }) => {
@@ -504,31 +493,40 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   })
 
-  app.onRequest(methods.agent.session.prompt, async ({ params, client }) => {
-    admit(methods.agent.session.prompt, "send")
-    const meta = parseMeta(AosPromptMetaSchema, params._meta)
-    if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
-    const text = promptText(params.prompt)
-    // A turn of attachments alone carries no text: its stage supplies the turn,
-    // or, for a rewind, the turn it replaces.
-    if (
-      !text &&
-      meta.attachmentStageId === undefined &&
-      meta.rewindSourceId === undefined
-    )
-      throw invalidRequest()
-    const { messageId } = await perform(
-      "send",
-      {
-        sessionId: params.sessionId,
-        content: promptParts(params.prompt),
-        text,
-        ...meta,
-      },
-      (command) => send(command, client)
-    )
-    return { _meta: { [AOS_META_KEY]: { messageId } } }
-  })
+  app.onRequest(
+    methods.agent.session.prompt,
+    async ({ params, client, signal }) => {
+      admit(methods.agent.session.prompt, "send")
+      const meta = parseMeta(AosPromptMetaSchema, params._meta)
+      if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
+      const text = promptText(params.prompt)
+      // A turn of attachments alone carries no text: its stage supplies the turn,
+      // or, for a rewind, the turn it replaces.
+      if (
+        !text &&
+        meta.attachmentStageId === undefined &&
+        meta.rewindSourceId === undefined
+      )
+        throw invalidRequest()
+      // A prompt its client cancelled is answered as cancelled. Its admission
+      // runs on: a turn admitted meanwhile streams, and a repeat of its client
+      // id finds it.
+      const { messageId } = await unlessAborted(
+        perform(
+          "send",
+          {
+            sessionId: params.sessionId,
+            content: promptParts(params.prompt),
+            text,
+            ...meta,
+          },
+          (command) => send(command, client)
+        ),
+        signal
+      )
+      return { _meta: { [AOS_META_KEY]: { messageId } } }
+    }
+  )
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
     log("acp.turn.cancel", { sessionId: params.sessionId })
@@ -648,15 +646,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         },
         async (command) => {
           // A connection steers only a Session it joined, as it stops one.
-          if (!sessions.membership(command.sessionId)) throw notFound()
-          const scope = command.scope ?? sessions.scope(command.sessionId)
-          const { turnId } = coordinator.snapshot(scope)
-          if (turnId === undefined) throw turnInProgress()
-          return await workspace.steer(scope, {
-            requestId: command.requestId,
-            expectedTurnId: turnId,
-            text: command.text,
-          })
+          const membership = sessions.membership(command.sessionId)
+          if (!membership) throw notFound()
+          return await membership.steer(command.requestId, command.text)
         }
       )
     }

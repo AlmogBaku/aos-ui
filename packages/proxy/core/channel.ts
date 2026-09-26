@@ -20,7 +20,6 @@ import {
   TurnEventKind,
   type ExecutionEvent,
   type PendingRequest,
-  type PromptTurnInput,
   type RequestReply,
 } from "./events"
 import {
@@ -41,11 +40,13 @@ import {
   type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
-import type {
-  CoordinatedTurnSubscription,
-  CoordinatorAccess,
-  SessionCoordinator,
-  StartOptions,
+import {
+  clientTurnIds,
+  type CoordinatedTurnSubscription,
+  type CoordinatorAccess,
+  type SendInput,
+  type SessionCoordinator,
+  type StartOptions,
 } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
 import { FanoutOverflowError } from "./subscriber-fanout"
@@ -437,9 +438,14 @@ function createChannelTable({
         own.delivered = turn.turnId
         own.fromChannel = false
       }
+      // A member already shown the turn, as a repeat's first sender was, is
+      // not shown it again.
       await Promise.all(
         [...channel.memberships]
-          .filter(([member]) => member !== sender)
+          .filter(
+            ([member, delivery]) =>
+              member !== sender && delivery.delivered !== turn.turnId
+          )
           .map(([member, delivery]) => send(member, delivery, turn))
       )
     },
@@ -582,7 +588,7 @@ export class MembershipDetachedError extends Error {
 }
 
 /** Settles as `work` does, unless `signal` aborts first: then with its reason. */
-function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
+export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
   return new Promise<T>((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
@@ -1032,9 +1038,31 @@ class Membership {
     return true
   }
 
-  /** Admits one user turn and subscribes to the segment it starts. */
-  async startTurn(input: PromptTurnInput, options: StartOptions = {}) {
-    await this.#exclusive(async () => {
+  /**
+   * Admits one user turn and subscribes to the segment it starts, settling
+   * once the coordinator admitted or refused it and the channel was shown
+   * the turn. This member is shown its prompt and then the turn once the
+   * answer is written. A turn another member won is followed instead; a
+   * repeat of the turn this member follows shows it nothing again, and one of
+   * a turn the channel was shown, which reached it as it joined, only the
+   * turn.
+   */
+  async startTurn(
+    input: SendInput,
+    content: readonly PromptPart[],
+    options: StartOptions = {}
+  ): Promise<CommandResults["send"]> {
+    // Joined before admission, so a turn that wins the race still reaches it.
+    this.joinChannel()
+    const { messageId } =
+      "clientId" in input
+        ? clientTurnIds(
+            this.#member.principal.id,
+            this.#scope.sessionId,
+            input.clientId
+          )
+        : input
+    const turn = await this.#exclusive(async () => {
       let subscription
       try {
         subscription = await this.#coordinator.start(
@@ -1047,10 +1075,36 @@ class Membership {
         // No turn started, so no turn end asks the runtime for one it started
         // meanwhile, which may be what refused this one.
         void this.#channels.recheck(this.#scope)
+        if (cause instanceof ServerTurnConflictError)
+          this.afterResponse(() => this.catchUp())
         throw cause
       }
-      this.#consume(subscription, 0)
+      if (subscription.turnId === this.#followedTurn) {
+        subscription.close()
+        return undefined
+      }
+      const { turnId } = subscription
+      const announced = this.#channels.current(this.#scope)?.turnId === turnId
+      const answered = new Promise<void>((resolve) => {
+        this.afterResponse(async () => resolve())
+      })
+      this.#consume(
+        subscription,
+        0,
+        announced
+          ? answered
+          : answered.then(() =>
+              this.emit({ kind: "prompt", messageId, content, own: true })
+            )
+      )
+      return announced
+        ? undefined
+        : { turnId, messageId, content, at: Date.now() }
     })
+    // A turn that started is answered as started, whatever showing it met.
+    if (turn)
+      await this.announce(turn).catch((cause: unknown) => this.report(cause))
+    return { messageId }
   }
 
   /**
@@ -1197,12 +1251,14 @@ class Membership {
     await this.emit({ kind: "error", cause })
   }
 
-  /** Reports the turn this member's accepted prompt was to start as failed. */
-  async refuseTurn(turnId: string, cause: unknown) {
-    await this.emit({
-      kind: "error",
-      cause,
-      turn: { turnId, sequence: this.#sequence },
+  /** Steers the turn this member follows, which a later turn has not replaced. */
+  steer(requestId: string, text: string) {
+    const expectedTurnId = this.#followedTurn
+    if (expectedTurnId === undefined) throw new ServerTurnConflictError()
+    return this.#coordinator.steer(this.#scope, {
+      requestId,
+      expectedTurnId,
+      text,
     })
   }
 
@@ -1388,9 +1444,11 @@ class Membership {
     }
   }
 
+  /** Follows one subscription, whose stream waits for `shown` when given. */
   #consume(
     subscription: CoordinatedTurnSubscription,
-    replayedCorrections: number
+    replayedCorrections: number,
+    shown?: Promise<void>
   ) {
     // A member that detached while its subscription was admitted keeps none.
     if (this.detached) {
@@ -1402,7 +1460,12 @@ class Membership {
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
     this.#send({ type: "followed" })
-    void this.#pump(subscription, this.#owner.generation, replayedCorrections)
+    void this.#pump(
+      subscription,
+      this.#owner.generation,
+      replayedCorrections,
+      shown
+    )
   }
 
   /**
@@ -1412,7 +1475,8 @@ class Membership {
   async #pump(
     subscription: CoordinatedTurnSubscription,
     generation: number,
-    replayedCorrections: number
+    replayedCorrections: number,
+    shown?: Promise<void>
   ) {
     const dropped = this.#dropped
     const stream: TurnStream = {
@@ -1424,6 +1488,7 @@ class Membership {
     }
     let overflow: FanoutOverflowError | undefined
     try {
+      await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
         this.#sequence = sequence

@@ -90,8 +90,14 @@ export function createCommandsMiddleware(): Middleware {
       // Rebuilt from the fields a guest may set; the history layer decides
       // which message an Edit or Retry may name.
       send: async (command, next) => {
-        const { sessionId, content, text, rewindSourceId, attachmentStageId } =
-          command
+        const {
+          sessionId,
+          content,
+          text,
+          rewindSourceId,
+          attachmentStageId,
+          clientId,
+        } = command
         if (
           [
             text,
@@ -107,6 +113,7 @@ export function createCommandsMiddleware(): Middleware {
           text,
           ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
           ...(attachmentStageId === undefined ? {} : { attachmentStageId }),
+          ...(clientId === undefined ? {} : { clientId }),
         })
       },
       steer: async ({ sessionId, requestId, text }, next) => {

@@ -19,7 +19,6 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
-  AOS_STOP_REASONS,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -1392,27 +1391,51 @@ describe("guest ACP listener", () => {
     await test.prompt("Export the notes")
     const signal = await withdrawal.promise
 
-    // The operator's answer names the Session by its provider scope alone.
-    await test.coordinator.answer(
-      { agentId: AGENT, providerSessionId: STORED },
-      {
-        requestId: QUESTION.requestId,
-        status: "resolved",
-        payload: { answers: [["later"]] },
-      }
-    )
+    // The operator's answer names the Session by its provider scope alone,
+    // and brings the channel into the turn it continues, as the operator's
+    // membership does.
+    const scope = { agentId: AGENT, providerSessionId: STORED }
+    const continued = await test.coordinator.answer(scope, {
+      requestId: QUESTION.requestId,
+      status: "resolved",
+      payload: { answers: [["later"]] },
+    })
+    if (!continued) throw new Error("The answer did not continue the turn")
+    test.listener.channels.continueTurn(scope, continued.from, continued.turnId)
+    await test.listener.channels.sync(scope)
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))
     // The guest follows the operator's reply to its end, past the withdrawal.
     await test.recorder.wait(
       (entry) =>
-        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes(continued.turnId) &&
         (entry.params as { update?: { state?: unknown } }).update?.state ===
           "idle",
-      "the turn to settle idle"
+      "the continued turn to settle idle"
     )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+  })
+
+  it("makes one turn of a prompt its client sends twice", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const send = () =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+        _meta: { [AOS_META_KEY]: { clientId: "send-1" } },
+      })
+
+    const first = await send()
+    expect(await send()).toEqual(first)
+    expect(test.start).toHaveBeenCalledOnce()
     test.close()
   })
 
@@ -1792,17 +1815,6 @@ const PUBLIC_CODES: readonly number[] = [
   METHOD_NOT_FOUND,
   RequestError.requestCancelled().code,
 ]
-
-/** The `state_update` a turn that failed in view ends on. */
-function failedState(socket: { frames: readonly Frame[] }) {
-  return vi.waitFor(() => {
-    const frame = socket.frames.find(({ params }) =>
-      JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
-    )
-    if (!frame) throw new Error("No failed state_update")
-    return frame
-  })
-}
 
 /** A reply's error carries a public code and nothing that describes the host. */
 function expectPublicError(reply: Frame) {
@@ -2272,7 +2284,7 @@ describe("guest scope and commands", () => {
     }
   )
 
-  it("reports a run that failed to start with a public code alone", async () => {
+  it("answers a run that failed to start with a public code alone", async () => {
     const test = harness({
       existing: true,
       fails: { start: new RequestError(-32603, OPERATOR_SECRET) },
@@ -2282,27 +2294,12 @@ describe("guest scope and commands", () => {
       await invite(test.invitations)
     )
 
-    await socket.request(methods.agent.session.prompt, {
-      sessionId: REF,
-      prompt: [{ type: "text", text: "Hello" }],
-    })
-    const failure = await failedState(socket)
-
-    expect(failure.params).toEqual({
-      sessionId: REF,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
-        _meta: {
-          [AOS_META_KEY]: {
-            sequence: expect.any(Number),
-            turnId: expect.any(String),
-            code: "internal_error",
-          },
-        },
-      },
-    })
+    expectPublicError(
+      await socket.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+      })
+    )
     socket.close()
   })
 
@@ -2342,15 +2339,13 @@ describe("guest scope and commands", () => {
       await invite(test.invitations, "second_ref"),
       "second_ref"
     )
-    await second.request(methods.agent.session.prompt, {
-      sessionId: "second_ref",
-      prompt: hello,
-    })
-
-    expect((await failedState(second)).params).toMatchObject({
-      update: {
-        _meta: { [AOS_META_KEY]: { code: "temporarily_unavailable" } },
-      },
+    expect(
+      await second.request(methods.agent.session.prompt, {
+        sessionId: "second_ref",
+        prompt: hello,
+      })
+    ).toMatchObject({
+      error: { code: AOS_JSONRPC_ERRORS.temporarilyUnavailable },
     })
     expect(test.start).toHaveBeenCalledTimes(2)
     first.close()

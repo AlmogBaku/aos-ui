@@ -1,5 +1,6 @@
 import {
   methods,
+  RequestError,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -514,15 +515,27 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("reports a stop the provider has not settled, then the cancelled turn", async () => {
-    const test = await harness()
+  it("answers a prompt its client cancelled as cancelled, then reports a stop the provider has not settled and the cancelled turn", async () => {
+    const admission = gate()
+    const test = await harness({ onStart: () => admission.held })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Long job" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
+    const cancelled = new AbortController()
+    const sent = test.agent.request(
+      methods.agent.session.prompt,
+      {
+        sessionId: CREATED,
+        prompt: [{ type: "text", text: "Long job" }],
+        _meta: { [AOS_META_KEY]: {} },
+      },
+      { cancellationSignal: cancelled.signal }
+    )
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    cancelled.abort()
+    await expect(sent).rejects.toMatchObject({
+      code: RequestError.requestCancelled().code,
+    })
+    // The turn it asked for was admitted meanwhile, and runs on.
+    admission.release()
     const source = test.sources[0]
     source?.emit(turnStarted())
     await test.recorder.wait(
@@ -1069,6 +1082,49 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("starts a prompt once the coordinator settled the uncertain turn before it", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await prompt(test, "Long job")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const lost = test.sources[0]
+    lost?.emit(turnStarted())
+    lost?.emit({
+      kind: TurnEventKind.TurnFailed,
+      message: "the transport dropped",
+      code: "AOS_CONNECTION_INTERRUPTED",
+    })
+    lost?.finish()
+    await waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("uncertain")
+    )
+    // Recovered, the provider reports the lost turn ended.
+    lost?.emit({ kind: TurnEventKind.TurnEnded })
+
+    await prompt(test, "Again")
+
+    expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+  })
+
+  it("makes one turn of a prompt its client repeats after reconnecting", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const meta = { clientId: "send-1" }
+    const messageId = await prompt(test, "Summarize", SESSION, meta)
+    // The reconnected browser sends again what it never saw answered.
+    const other = await test.connect("connection-2")
+    await other.list()
+
+    expect(await prompt(other, "Summarize", SESSION, meta)).toBe(messageId)
+    await replyWhileWatched(test.sources[0], "Done", [test, other])
+    expect(test.start).toHaveBeenCalledTimes(1)
+    expect(prompts(test.recorder)).toHaveLength(1)
+    expect(prompts(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
   it("refuses a prompt while a turn is in progress", async () => {
     const test = await harness()
     await test.create()
@@ -1319,7 +1375,7 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("refuses a lost Session with ACP's code and still names it not_found", async () => {
+  it("refuses a lost Session with ACP's code, to a resume and to a prompt", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
@@ -1334,18 +1390,13 @@ describe("Session rooms", () => {
         cwd: "/",
       })
     ).rejects.toMatchObject({ code: -32002 })
-    await prompt(test, "Summarize")
-    const failed = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
-      "a failed state_update"
-    )
-    expect(failed.params).toMatchObject({
-      update: { _meta: { [AOS_META_KEY]: { code: "not_found" } } },
+    await expect(prompt(test, "Summarize")).rejects.toMatchObject({
+      code: -32002,
     })
     test.close()
   })
 
-  it("shows nobody a prompt the provider refused", async () => {
+  it("answers a prompt the provider refused with its error, releasing its stage and showing nobody the prompt", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
@@ -1356,36 +1407,24 @@ describe("Session rooms", () => {
     const other = await test.connect("connection-2")
     await other.list()
     await open(other)
-
-    await prompt(test, "Summarize")
-    // The sender reads its accepted prompt's turn as one that failed at once.
-    const failed = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
-      "a failed state_update"
-    )
-    expect(failed.params).toMatchObject({
-      sessionId: SESSION,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
-        _meta: {
-          [AOS_META_KEY]: {
-            turnId: expect.any(String),
-            code: "internal_error",
-          },
-        },
-      },
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup,
     })
-    expect(
-      test.recorder.entries.some(
-        (entry) => entry.method === AOS_METHODS.notify.error
-      )
-    ).toBe(false)
+
+    await expect(
+      prompt(test, "Summarize", SESSION, { attachmentStageId })
+    ).rejects.toMatchObject({ code: RequestError.internalError().code })
+    // The composer keeps its attachments and stages them anew.
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
 
+    expect(prompts(test.recorder)).toEqual([])
     expect(prompts(other.recorder)).toEqual([])
     expect(prompts(late.recorder)).toEqual([])
     test.close()
@@ -1505,6 +1544,9 @@ describe("Session rooms", () => {
   it("continues a two-question turn once two browsers each answer one", async () => {
     const SECOND: PendingRequest = { ...QUESTION, requestId: "question-2" }
     const withdrawn: AbortSignal[] = []
+    // Neither browser answers before both were asked both questions.
+    const everyoneAsked = gate()
+    let asks = 0
     /**
      * Answers the question asked `mine`th, in the order the turn asks them, and
      * holds the other until it is withdrawn.
@@ -1512,8 +1554,12 @@ describe("Session rooms", () => {
     const answering = (mine: number) => {
       let asked = 0
       return (_params: unknown, signal: AbortSignal) => {
+        if (++asks === 4) everyoneAsked.release()
         if (asked++ === mine)
-          return Promise.resolve({ action: "accept" as const, content: {} })
+          return everyoneAsked.held.then(() => ({
+            action: "accept" as const,
+            content: {},
+          }))
         withdrawn.push(signal)
         return heldUntilWithdrawn(signal)
       }
@@ -2111,7 +2157,7 @@ describe("Session rooms", () => {
       onStart: () => admission.held,
     })
     await test.list()
-    const messageId = await prompt(test, "Summarize")
+    const sent = prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
     const other = await test.connect("connection-2")
@@ -2119,6 +2165,7 @@ describe("Session rooms", () => {
     await open(other)
     const from = other.recorder.entries.length
     admission.release()
+    const messageId = await sent
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(flow(other.recorder, SESSION, from)).toEqual([
@@ -2237,18 +2284,16 @@ describe("Session rooms", () => {
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
-    const messageId = await prompt(test, "First")
+    const sent = prompt(test, "First")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
-    // The winner is still being admitted, so the loser passes the idle check
-    // and loses at the coordinator.
-    await prompt(other, "Second")
-    const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
-    )
-    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    // The winner is still being admitted when the loser reaches the
+    // coordinator.
+    await expect(prompt(other, "Second")).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.turnInProgress,
+    })
     admission.release()
+    const messageId = await sent
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
@@ -2268,8 +2313,8 @@ describe("Session rooms", () => {
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
-    // The loser passes the idle check, then waits on its staged attachment
-    // while the winner is admitted and announced.
+    // The loser waits on its staged attachment while the winner is admitted
+    // and announced.
     const staged = gate()
     const appendTo = vi.fn(async (text: string) => {
       await staged.held
@@ -2290,12 +2335,9 @@ describe("Session rooms", () => {
     )
 
     staged.release()
-    await losing
-    const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
-    )
-    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    await expect(losing).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.turnInProgress,
+    })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
