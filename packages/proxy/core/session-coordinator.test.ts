@@ -3065,7 +3065,8 @@ describe("SessionCoordinator", () => {
     // second session is tracked, so a reload recovery for the first resets.
     const sessions = coordinator(
       {
-        start: vi.fn<ServerTurnEngine["start"]>()
+        start: vi
+          .fn<ServerTurnEngine["start"]>()
           .mockResolvedValueOnce(first)
           .mockResolvedValueOnce(second),
         recover: vi.fn(async () => second),
@@ -3564,11 +3565,9 @@ describe("SessionCoordinator", () => {
         recover: vi.fn(async () => source),
       }
       const sessions = coordinator(engine)
-      const unsubscribe = sessions.subscribeReadings(
-        scope,
-        "member-1",
-        { execution: async () => undefined }
-      )
+      const unsubscribe = sessions.subscribeReadings(scope, "member-1", {
+        execution: async () => undefined,
+      })
 
       await sessions.start(scope, input("run-1"), access("one"))
       expect(sessions.gauges().executions).toBe(1)
@@ -3588,11 +3587,9 @@ describe("SessionCoordinator", () => {
         recover: vi.fn(async () => source),
       }
       const sessions = coordinator(engine)
-      const unsubscribe = sessions.subscribeReadings(
-        scope,
-        "member-1",
-        { execution: async () => undefined }
-      )
+      const unsubscribe = sessions.subscribeReadings(scope, "member-1", {
+        execution: async () => undefined,
+      })
 
       await sessions.start(scope, input("run-1"), access("one"))
       source.emit(turnStarted)
@@ -3625,14 +3622,14 @@ describe("SessionCoordinator", () => {
         ),
       }
       const sessions = coordinator(engine)
-      const unsubscribe = sessions.subscribeReadings(
-        scope,
-        "member-1",
-        { execution: async () => undefined }
-      )
+      const unsubscribe = sessions.subscribeReadings(scope, "member-1", {
+        execution: async () => undefined,
+      })
 
       // The start promise is caught (turns uncertain); don't await it.
-      void sessions.start(scope, input("run-1"), access("one")).catch(() => undefined)
+      void sessions
+        .start(scope, input("run-1"), access("one"))
+        .catch(() => undefined)
       await advance(ADMISSION_DEADLINE_MS)
       // Turn is uncertain (start timed out), no execution segment.
       expect(sessions.gauges().uncertain).toBe(1)

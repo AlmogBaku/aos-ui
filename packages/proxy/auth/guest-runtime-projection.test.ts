@@ -60,7 +60,7 @@ describe("guest runtime projection", () => {
     })
   })
 
-    it("removes Agent-wide approval grants from guest capabilities", () => {
+  it("removes Agent-wide approval grants from guest capabilities", () => {
     const projected = projectGuestCapabilities({
       workspace: {
         models: {
