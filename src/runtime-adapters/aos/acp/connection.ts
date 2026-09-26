@@ -139,7 +139,7 @@ export type AcpConnectionOptions = {
    * The browser's compiled build id, sent as `info.version` in `initialize`.
    * Defaults to `__AOS_BUILD_ID__` (null on the dev server). When both the
    * browser and the proxy carry an id and they differ, the tab is reloaded
-   * once, guarded by `storage`.
+   * once per proxy build, which `storage` remembers.
    */
   buildId?: string | null
   /** Called when a build id mismatch triggers a reload; tests inject a spy. */
@@ -153,8 +153,8 @@ export type AcpConnectionOptions = {
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
-/** sessionStorage key that prevents a reload loop on build id mismatch. */
-const BUILD_ID_RELOADED_KEY = "aos-build-id-reloaded"
+/** sessionStorage key naming the proxy build the tab last reloaded for. */
+const RELOADED_FOR_BUILD_KEY = "aos-reloaded-for-build"
 
 /** Whether the proxy refused an invitation it cannot redeem. */
 export function isAuthenticationRequired(error: unknown) {
@@ -452,16 +452,20 @@ export function createAcpConnection(
       capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
-    // Both sides carry a build id: a mismatch means the proxy is serving a
-    // newer bundle. Reload once; the storage guard stops a loop.
-    if (buildId !== null && buildId !== undefined && reload && storage) {
-      const proxyVersion = response.info?.version
-      if (proxyVersion !== undefined && proxyVersion !== buildId) {
-        if (!storage.getItem(BUILD_ID_RELOADED_KEY)) {
-          storage.setItem(BUILD_ID_RELOADED_KEY, "1")
-          reload()
-        }
-      }
+    // Both sides carry a build id: a mismatch means the proxy serves another
+    // bundle. The tab reloads once per proxy build, so a reload that still
+    // loads the old bundle cannot loop, and a later deployment reloads again.
+    const proxyBuildId = response.info?.version
+    if (
+      buildId &&
+      proxyBuildId !== undefined &&
+      proxyBuildId !== buildId &&
+      reload &&
+      storage &&
+      storage.getItem(RELOADED_FOR_BUILD_KEY) !== proxyBuildId
+    ) {
+      storage.setItem(RELOADED_FOR_BUILD_KEY, proxyBuildId)
+      reload()
     }
     settleInitialized?.(meta)
     settleInitialized = undefined
