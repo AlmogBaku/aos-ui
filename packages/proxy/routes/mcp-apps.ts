@@ -10,7 +10,6 @@ import * as ids from "../core/ids"
 import type { ServerRuntime, SessionScope } from "../core/runtime"
 import { McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
-import { redactForLog } from "../redaction"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
@@ -172,14 +171,14 @@ export function registerMcpAppRoutes(
         sessionId
       )
       options.logger.info(
-        redactForLog({
-          event: "mcp_app.request",
+        {
           requestId: context.get("requestId"),
           operation,
           agentId,
           sessionId,
           toolCallId,
-        })
+        },
+        "mcp_app.request"
       )
       const outcome = await handleMcpAppRequest({
         runtime,

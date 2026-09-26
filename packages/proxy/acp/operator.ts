@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
@@ -8,7 +9,7 @@ import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
 import type { Channels } from "../core/channel"
 import * as translators from "./translate"
-import type { AcpConnectionContext, AcpLogger } from "./types"
+import type { AcpConnectionContext } from "./types"
 
 export type OperatorAcpServiceOptions = {
   publicOrigin: string
@@ -18,7 +19,7 @@ export type OperatorAcpServiceOptions = {
   /** The channels the guest listener shares, so both see one per Session. */
   channels: Channels
   /** Where this listener's connections write their structured lines. */
-  logger?: AcpLogger
+  logger: Logger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
   /** The workspace catalog the guest listener shares, with its row cache. */
@@ -65,7 +66,7 @@ export function createOperatorAcpService({
       translators,
       attachmentStages,
       channels,
-      logger,
+      logger: logger.child({ connectionId, role }),
       presence,
       buildId,
       readState: createReadState({

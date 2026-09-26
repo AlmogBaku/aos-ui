@@ -3,8 +3,9 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import type { PushRegistration } from "../../protocol/push"
 import { createProxyApp } from "../app"
 import type { RuntimeInstance } from "../core/runtime"
@@ -44,7 +45,7 @@ function registration(endpoint = ENDPOINT): PushRegistration {
 }
 
 async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
-  const logger = { info: vi.fn(), error: vi.fn() }
+  const logs = captureLogs()
   const directory = await mkdtemp(join(tmpdir(), "aos-push-routes-"))
   directories.push(directory)
   const registrations = await openPushRegistrations({
@@ -56,14 +57,14 @@ async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
   const app = createProxyApp({
     publicOrigin: ORIGIN,
     runtimeInstance,
-    logger,
+    logger: logs.logger,
     ...(options.push === false
       ? {}
       : { push: { publicKey: PUBLIC_KEY, registrations } }),
   })
   return {
     app,
-    logger,
+    logs,
     registrations,
     info: () => app.request(`${ORIGIN}/api/aos/v1/push`),
     put: (body: unknown, origin = ORIGIN) =>
@@ -196,10 +197,7 @@ describe("push routes", () => {
     await test.put(registration())
     await test.remove({ endpoint: ENDPOINT })
 
-    const logged = JSON.stringify([
-      ...test.logger.info.mock.calls,
-      ...test.logger.error.mock.calls,
-    ])
+    const logged = JSON.stringify(test.logs.records())
     expect(logged).toContain("/api/aos/v1/push/subscriptions")
     expect(logged).not.toContain("push.example")
     expect(logged).not.toContain("p256dh")

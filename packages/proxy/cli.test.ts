@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { stringify } from "yaml"
 
+import { captureLogs, type LogCapture } from "../../test/support/log-capture"
 import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
@@ -82,6 +83,10 @@ async function proxyConfig() {
   return { configFile, configHome }
 }
 
+/** The lines a start wrote at `error`, which a clean one writes none of. */
+const errors = (logs: LogCapture) =>
+  logs.records().filter(({ level }) => level === "error")
+
 /** A Hermes runtime that answers without a provider socket. */
 function stubbedHermesRuntime(): RuntimeFactory {
   return (config, limits) => {
@@ -109,18 +114,18 @@ function stubbedStart() {
 
 describe("proxy executable", () => {
   it("prints CLI help without reporting a startup failure", async () => {
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     const start = vi.fn()
 
     await expect(
       runProxyCli(["bun", "proxy", "--help"], {
-        createLogger: () => logger,
+        createLogger: () => logs.logger,
         start,
         getenv: () => undefined,
       })
     ).resolves.toBeUndefined()
     expect(start).not.toHaveBeenCalled()
-    expect(logger.error).not.toHaveBeenCalled()
+    expect(errors(logs)).toEqual([])
   })
 
   it("starts both listeners and closes the runtime exactly once", async () => {
@@ -128,7 +133,7 @@ describe("proxy executable", () => {
     const transportClose = vi.fn(async () => undefined)
     const staticHandler = vi.fn(async () => new Response("shell"))
     const exit = vi.fn()
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     /** Models one listener: shutdown announces, closes resources, settles. */
     const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
       const shutdown = vi.fn(async () => {
@@ -149,7 +154,7 @@ describe("proxy executable", () => {
               close: transportClose,
             }),
           }),
-        createLogger: () => logger,
+        createLogger: () => logs.logger,
         getenv: () => undefined,
         start,
         staticHandler,
@@ -252,23 +257,22 @@ describe("proxy executable", () => {
     expect(shutdowns[0]).toHaveBeenCalledOnce()
     expect(shutdowns[1]).toHaveBeenCalledOnce()
     expect(transportClose).toHaveBeenCalledOnce()
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "proxy.shutdown.started",
-        graceMs: 5_000,
-      })
-    )
-    expect(logger.info).toHaveBeenCalledWith({
-      event: "proxy.shutdown.completed",
-      forced: false,
-    })
-    expect(
-      logger.info.mock.calls.filter(
-        ([entry]) =>
-          (entry as { event: string }).event === "proxy.shutdown.started"
-      )
-    ).toHaveLength(1)
-    expect(logger.error).not.toHaveBeenCalled()
+    const shutdownLines = logs
+      .records()
+      .filter(({ message }) => message.startsWith("proxy.shutdown."))
+    expect(shutdownLines).toEqual([
+      {
+        level: "info",
+        message: "proxy.shutdown.started",
+        fields: { graceMs: 5_000 },
+      },
+      {
+        level: "info",
+        message: "proxy.shutdown.completed",
+        fields: { forced: false },
+      },
+    ])
+    expect(errors(logs)).toEqual([])
     expect(exit).toHaveBeenCalledExactlyOnceWith(0)
   })
 
@@ -277,7 +281,7 @@ describe("proxy executable", () => {
 
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--help"], {
-        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+        createLogger: () => captureLogs().logger,
         getenv: () => undefined,
         writeOut: (value) => {
           output += value
@@ -332,7 +336,7 @@ describe("proxy executable", () => {
           "en",
         ],
         {
-          createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+          createLogger: () => captureLogs().logger,
           getenv: (name) =>
             name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
@@ -398,7 +402,7 @@ describe("proxy executable", () => {
           "Continue.",
         ],
         {
-          createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+          createLogger: () => captureLogs().logger,
           getenv: () => undefined,
           randomBytes: () => {
             throw new Error("reference randomness was read")
@@ -424,7 +428,7 @@ describe("proxy executable", () => {
     const { configFile } = await proxyConfig()
     let output = ""
     await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-      createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+      createLogger: () => captureLogs().logger,
       getenv: (name) =>
         name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
       randomBytes: (size) => Buffer.alloc(size, 1),
@@ -447,11 +451,11 @@ describe("proxy executable", () => {
   it("serves the discovered configuration file when no flag is given", async () => {
     const { configHome } = await proxyConfig()
     const start = stubbedStart()
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
 
     const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
-      createLogger: () => logger,
+      createLogger: () => logs.logger,
       getenv: (name) => (name === "XDG_CONFIG_HOME" ? configHome : undefined),
       start,
       exit: vi.fn(),
@@ -461,14 +465,14 @@ describe("proxy executable", () => {
       1,
       expect.objectContaining({ host: "0.0.0.0", port: 4_100 })
     )
-    expect(logger.error).not.toHaveBeenCalled()
+    expect(errors(logs)).toEqual([])
     await lifecycle!.shutdown()
   })
 
   it("requires an explicit configuration file to mint an invitation", async () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+        createLogger: () => captureLogs().logger,
         getenv: () => undefined,
       })
     ).rejects.toThrow(/--config/u)
@@ -481,7 +485,7 @@ describe("proxy executable", () => {
     const failure = await runProxyCli(
       ["bun", "proxy", "serve", "--config", missing],
       {
-        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
+        createLogger: () => captureLogs().logger,
         getenv: () => undefined,
         start,
       }

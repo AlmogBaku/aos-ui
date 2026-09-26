@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import { createAosAcpAgent } from "../acp/agent"
 import { createAcpService } from "../acp/service"
 import type { Catalog } from "../core/catalog"
@@ -6,7 +7,6 @@ import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
 import type {
   AcpConnectionContext,
-  AcpLogger,
   ConnectionAuthentication,
 } from "../acp/types"
 import { PUBLIC_ERRORS } from "../acp/validation"
@@ -59,7 +59,7 @@ export type GuestAcpServiceOptions = {
   /** How many turns every guest together may hold at once. */
   guestActiveExecutions: number
   /** Where this listener's connections write their structured lines. */
-  logger?: AcpLogger
+  logger: Logger
   /** The browser build the static root carries; absent without one. */
   buildId?: string
   now?: () => number
@@ -220,7 +220,7 @@ export function createGuestConnection(
     translators,
     attachmentStages: options.attachmentStages,
     channels: options.channels,
-    logger: options.logger,
+    logger: options.logger.child({ connectionId, role }),
     buildId: options.buildId,
     authentication: createGuestAuthentication(options),
   }

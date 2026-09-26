@@ -32,16 +32,6 @@ import type {
 import type { PresenceRegistry } from "../push/presence"
 import type { Channels } from "../core/channel"
 import type { Activity, Member } from "../core/member"
-/**
- * Where the ACP listeners write their structured lines, in the shape the proxy
- * composition already receives. Every value passes through `redactForLog`
- * first. A context built without one logs nothing, which is what a harness
- * asserting only protocol behavior wants.
- */
-export type AcpLogger = {
-  info(value: unknown): void
-  error(value: unknown): void
-}
 
 export type WorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
@@ -75,14 +65,13 @@ type AcpConnectionBase = {
    * every guest connection and any deployment without push.
    */
   presence?: PresenceRegistry
-  logger?: AcpLogger
+  /** This connection's log, bound to its `connectionId` and `role`. */
+  logger: Logger
   /**
    * The browser build the static root carries, which `initialize` answers as
    * its version so a tab running another build reloads; absent without one.
    */
   buildId?: string
-  /** Where the connection's lifecycle owner logs; silent without one. */
-  ownerLogger?: Logger
 }
 
 /**

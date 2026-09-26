@@ -34,9 +34,8 @@ import {
   type AosExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
-import { SILENT, unlessAborted } from "../core/channel"
+import { unlessAborted } from "../core/channel"
 import type { PresenceReport } from "../push/presence"
-import { redactForLog } from "../redaction"
 import {
   createSessions,
   sessionInfoOf,
@@ -186,18 +185,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * unchanged one would write the watermark for a Session nobody just opened.
    */
   let exposure: PresenceReport | undefined
-
-  /** One structured, redacted line per connection-level ACP event. */
-  const log = (event: string, fields?: Record<string, unknown>) => {
-    context.logger?.info(
-      redactForLog({
-        event,
-        connectionId: context.connectionId,
-        role,
-        ...fields,
-      })
-    )
-  }
 
   /**
    * This connection's member stack. A guest that has not redeemed an
@@ -536,7 +523,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
-    log("acp.turn.cancel", { sessionId: params.sessionId })
+    context.logger.info({ sessionId: params.sessionId }, "acp.turn.cancel")
     // An unauthenticated guest reaches nothing here.
     if (!sessions.identity()) return
     admit(methods.agent.session.cancel, "stop")
@@ -710,11 +697,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onConnect(async (connection) => {
-    const logger = context.ownerLogger ?? SILENT
+    const { logger } = context
+    // The connection's logger already carries its `connectionId` and `role`.
     const owner = createOwner(connectionMachine(logger), {
       logger,
       clock: defaultClock,
-      bindings: { connectionId: context.connectionId, role },
+      bindings: {},
     })
     const { stack } = owner
     stack.defer(() => {
@@ -732,7 +720,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
-    log("acp.connection.opened")
+    logger.info({}, "acp.connection.opened")
     // The workspace's events reach this connection as its stack shows them.
     const show = (event: WorkspaceEvent) =>
       sessions.show(connection.client, event)
@@ -749,7 +737,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const expiry = context.authentication?.expire(() => connection.close())
     if (expiry) stack.defer(expiry)
     await connection.closed
-    log("acp.connection.closed")
+    logger.info({}, "acp.connection.closed")
     owner.actor.send({ type: "closed" })
   })
 

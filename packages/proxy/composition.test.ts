@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../test/support/log-capture"
 import type { HermesRpcTransport } from "./adapters/hermes/adapter"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
@@ -146,7 +147,7 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     expect(runtimeFactory).toHaveBeenCalledOnce()
@@ -178,7 +179,7 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     const response = await configured.app.request(
@@ -206,7 +207,7 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(transportFactory),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
       clock: () => 1_700_000_000_000,
     })
 
@@ -232,7 +233,7 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
       clock: () => 1_700_000_000_000,
     })
     const response = await configured.app.request(
@@ -282,7 +283,7 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     const response = await configured.app.request(
@@ -304,7 +305,7 @@ describe("configured proxy composition", () => {
   it("names the rejected field when invitation input is invalid", async () => {
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
     const post = (body: unknown) =>
       configured.app.request(
@@ -347,7 +348,7 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     const response = await configured.app.request(
@@ -377,7 +378,7 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     // One cache: the ACP listener keeps it current and the read-state gate reads it.
@@ -404,7 +405,7 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     expect(configured.push).toBeUndefined()
@@ -426,7 +427,7 @@ describe("configured proxy composition", () => {
     await expect(
       createConfiguredProxy(input, {
         runtimeFactory: async () => runtimeInstance,
-        logger: { info: vi.fn(), error: vi.fn() },
+        logger: captureLogs().logger,
       })
     ).rejects.toThrow("Push state directory")
   })
@@ -480,13 +481,13 @@ describe("configured proxy composition", () => {
       const fetchImpl = vi.fn(
         async () => new Response(audio, { status: 200 })
       ) as unknown as typeof fetch
-      const logger = { info: vi.fn(), error: vi.fn() }
+      const logs = captureLogs()
 
       const configured = await createConfiguredProxy(
         await voiceConfiguration(await secretFile("voice-key", "tts-secret")),
         {
           runtimeFactory: async () => runtimeInstance,
-          logger,
+          logger: logs.logger,
           fetch: fetchImpl,
         }
       )
@@ -507,13 +508,12 @@ describe("configured proxy composition", () => {
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(audio)
       // Fallback tried the runtime first, then said so without the text.
       expect(speak).toHaveBeenCalledOnce()
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: "voice.fallback",
-          direction: "speech",
-        })
-      )
-      expect(JSON.stringify(logger.info.mock.calls)).not.toContain("Hello")
+      expect(logs.records()).toContainEqual({
+        level: "info",
+        message: "voice.fallback",
+        fields: expect.objectContaining({ direction: "speech" }),
+      })
+      expect(JSON.stringify(logs.records())).not.toContain("Hello")
       const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock
         .calls[0] as [string, RequestInit]
       expect(url).toBe("https://tts.example.test/v1/audio/speech")
@@ -551,7 +551,7 @@ describe("configured proxy composition", () => {
       await expect(
         createConfiguredProxy(await voiceConfiguration(keyFile), {
           runtimeFactory: async () => runtimeInstance,
-          logger: { info: vi.fn(), error: vi.fn() },
+          logger: captureLogs().logger,
         })
       ).rejects.toThrow("Secret file permissions are too broad")
     })
@@ -564,7 +564,7 @@ describe("configured proxy composition", () => {
           throw new HermesAuthenticationError()
         }),
       })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
     })
 
     expect(

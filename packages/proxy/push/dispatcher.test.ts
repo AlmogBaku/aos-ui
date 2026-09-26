@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import {
   COALESCE_WINDOW_MS,
   PRESENCE_CLOSED_GRACE_MS,
@@ -114,7 +115,7 @@ function harness(options: HarnessOptions = {}) {
   )
   const sender: PushSender = { send }
   const presence = createPresenceRegistry({ now: clock.now })
-  const logger = { info: vi.fn() }
+  const logs = captureLogs()
 
   const dispatcher = createPushDispatcher({
     runtimeInstance,
@@ -123,7 +124,7 @@ function harness(options: HarnessOptions = {}) {
     presence,
     sender,
     principalOf: () => OPERATOR,
-    logger,
+    logger: logs.logger,
     now: clock.now,
     schedule: clock.schedule,
   })
@@ -135,7 +136,7 @@ function harness(options: HarnessOptions = {}) {
     rows: sessionRows,
     registrations,
     send,
-    logger,
+    logs,
     unsubscribe,
     stored,
     publish(event: ExecutionEvent) {
@@ -144,8 +145,8 @@ function harness(options: HarnessOptions = {}) {
   }
 }
 
-const lines = (logger: { info: ReturnType<typeof vi.fn> }) =>
-  logger.info.mock.calls.map(([value]) => value)
+const lines = (logs: LogCapture) =>
+  logs.records().map(({ message, fields }) => ({ event: message, ...fields }))
 
 describe("push dispatcher", () => {
   it("notifies only the devices that asked for the category", async () => {
@@ -232,7 +233,7 @@ describe("push dispatcher", () => {
 
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(0)
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.suppressed",
         category: "input",
@@ -293,7 +294,7 @@ describe("push dispatcher", () => {
 
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(0)
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.suppressed",
         category: "input",
@@ -319,7 +320,7 @@ describe("push dispatcher", () => {
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     expect(test.send).not.toHaveBeenCalled()
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.suppressed",
         category: "input",
@@ -329,7 +330,7 @@ describe("push dispatcher", () => {
         occurredAtMs: START + 500,
       },
     ])
-    const line = JSON.stringify(lines(test.logger))
+    const line = JSON.stringify(lines(test.logs))
     expect(line).not.toContain(SESSION)
     expect(line).not.toContain("session-2")
     expect(line).not.toContain(AGENT)
@@ -368,7 +369,7 @@ describe("push dispatcher", () => {
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     expect(test.send).not.toHaveBeenCalled()
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.suppressed",
         category: "input",
@@ -376,7 +377,7 @@ describe("push dispatcher", () => {
         sessions: 1,
       },
     ])
-    const line = JSON.stringify(lines(test.logger))
+    const line = JSON.stringify(lines(test.logs))
     expect(line).not.toContain(SESSION)
     expect(line).not.toContain(AGENT)
     expect(line).not.toContain("push.example")
@@ -458,7 +459,7 @@ describe("push dispatcher", () => {
 
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(0)
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.suppressed",
         category: "input",
@@ -491,7 +492,7 @@ describe("push dispatcher", () => {
     expect(
       test.stored.map(({ subscription }) => subscription.endpoint)
     ).toEqual(["https://push.example/device-1"])
-    expect(lines(test.logger)).toEqual([
+    expect(lines(test.logs)).toEqual([
       {
         event: "push.dispatched",
         category: "failure",
@@ -511,8 +512,8 @@ describe("push dispatcher", () => {
     test.publish(occurred("attention-requested"))
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
-    await vi.waitFor(() => expect(test.logger.info).toHaveBeenCalledOnce())
-    const line = JSON.stringify(lines(test.logger))
+    await vi.waitFor(() => expect(test.logs.records()).toHaveLength(1))
+    const line = JSON.stringify(lines(test.logs))
     expect(line).not.toContain("push.example")
     expect(line).not.toContain("p256dh")
     expect(line).not.toContain(SESSION)

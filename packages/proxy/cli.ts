@@ -35,7 +35,7 @@ if (import.meta.main) {
     // The only reader of the real environment.
     getenv: (name: string) => process.env[name],
   }).catch((error: unknown) => {
-    bootstrapLogger.error({ event: "proxy.start_failed", error })
+    bootstrapLogger.error({ err: error }, "proxy.start_failed")
     process.exitCode = 1
   })
 }

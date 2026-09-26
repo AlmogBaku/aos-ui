@@ -1,7 +1,7 @@
+import type { Logger } from "../lifecycle"
 import { createOperatorAcpService } from "./acp/operator"
 import { createCatalog } from "./core/catalog"
 import { createChannels } from "./core/channel"
-import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
   type RuntimeFactory,
@@ -41,7 +41,7 @@ import { withVoiceProviders, type VoiceProviders } from "./voice/runtime"
 
 export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
-  logger: AcpLogger
+  logger: Logger
   /** The credential values the log masks; every secret read here joins it. */
   credentials?: CredentialValues
   clock?: () => number

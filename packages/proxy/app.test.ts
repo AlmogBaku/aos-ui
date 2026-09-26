@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../test/support/log-capture"
 import { createProxyApp, type ProxyAppOptions } from "./app"
 import {
   HermesAuthenticationError,
@@ -63,7 +64,7 @@ function app(
   return createProxyApp({
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
-    logger: { info: vi.fn(), error: vi.fn() },
+    logger: captureLogs().logger,
     ...options,
   })
 }
@@ -287,11 +288,11 @@ describe("AOS V1 proxy", () => {
         throw new HermesHttpError(503)
       }),
     })
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     const proxy = createProxyApp({
       publicOrigin: origin,
       runtimeInstance: runtimeInstance(runtime),
-      logger,
+      logger: logs.logger,
     })
 
     // An artifact read is a REST route that reaches the provider, so an outage
@@ -301,21 +302,19 @@ describe("AOS V1 proxy", () => {
       503
     )
 
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "request.failed",
+    expect(logs.records()).toContainEqual({
+      level: "error",
+      message: "request.failed",
+      fields: expect.objectContaining({
         code: "temporarily_unavailable",
         path,
-      })
-    )
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "request.completed",
-        method: "GET",
-        status: 503,
-        path,
-      })
-    )
+      }),
+    })
+    expect(logs.records()).toContainEqual({
+      level: "info",
+      message: "request.completed",
+      fields: expect.objectContaining({ method: "GET", status: 503, path }),
+    })
   })
 
   it("opens an MCP App view only from the Session that holds its call", async () => {

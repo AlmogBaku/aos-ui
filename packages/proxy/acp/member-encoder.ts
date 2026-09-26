@@ -25,7 +25,6 @@ import {
 } from "../core/member"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import { redactForLog } from "../redaction"
 import { sessionInfoMeta } from "./agent-sessions"
 import { promptBlocks } from "./prompt-content"
 import { answeredQuestionOutbound } from "./translate/requests"
@@ -199,7 +198,7 @@ export type ClientReply =
 
 export type MemberEncoderOptions = {
   /** The connection the encoder logs for, and the translators it writes with. */
-  context: Pick<AcpConnectionContext, "connectionId" | "logger" | "translators">
+  context: Pick<AcpConnectionContext, "logger" | "translators">
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
   /** How the runtime acknowledges a steer, which a turn's translation reads. */
@@ -227,26 +226,16 @@ export function createMemberEncoder({
   report,
   live,
 }: MemberEncoderOptions): MemberConnection {
-  const { translators } = context
+  const { translators, logger } = context
   const states = new WeakMap<TurnStream, TranslateState>()
   /** The requests asked and not settled, by Session and requestId. */
   const asked = new Map<string, AbortController>()
   const askedKey = (sessionId: string, requestId: string) =>
     `${sessionId}\u0000${requestId}`
 
-  function log(
-    level: "info" | "error",
-    event: string,
-    fields: Record<string, unknown>
-  ) {
-    context.logger?.[level](
-      redactForLog({ event, connectionId: context.connectionId, ...fields })
-    )
-  }
-
   function update(sessionId: string, value: SessionUpdate) {
     const failure = turnFailureOf(value)
-    if (failure) log("error", "acp.turn.failed", { sessionId, ...failure })
+    if (failure) logger.error({ sessionId, ...failure }, "acp.turn.failed")
     return client.notify(methods.client.session.update, {
       sessionId,
       update: value,
@@ -396,11 +385,14 @@ export function createMemberEncoder({
         : []
     )
     for (const value of updates) await update(event.sessionId, value)
-    log("info", "acp.history.page", {
-      sessionId: event.sessionId,
-      offset: older.offset,
-      count: updates.length,
-    })
+    logger.info(
+      {
+        sessionId: event.sessionId,
+        offset: older.offset,
+        count: updates.length,
+      },
+      "acp.history.page"
+    )
   }
 
   /** Shows the member a prompt, as blocks rebuilt from its parts. */
@@ -470,11 +462,10 @@ export function createMemberEncoder({
         })
       case "error": {
         const failure = describe(event.cause)
-        log("error", "acp.error", {
-          sessionId,
-          errorCode: failure.code,
-          message: failure.message,
-        })
+        logger.error(
+          { sessionId, errorCode: failure.code, message: failure.message },
+          "acp.error"
+        )
         await client
           .notify(AOS_METHODS.notify.error, { sessionId, ...failure })
           .catch(() => undefined)

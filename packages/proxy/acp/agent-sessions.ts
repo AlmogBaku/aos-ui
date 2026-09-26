@@ -23,7 +23,6 @@ import {
   type MemberScope,
   type WorkspaceEvent,
 } from "../core/member"
-import { redactForLog } from "../redaction"
 import type { AcpConnectionContext } from "./types"
 import {
   authenticationRequired,
@@ -180,10 +179,7 @@ export function createSessions(
         level: "info" | "error",
         event: string,
         fields: Record<string, unknown>
-      ) =>
-        context.logger?.[level](
-          redactForLog({ event, connectionId: context.connectionId, ...fields })
-        )
+      ) => context.logger[level](fields, event)
       const membership = context.channels.join(memberOf(client), scope, {
         membershipId: `${context.connectionId}:${scope.sessionId}`,
         log,
