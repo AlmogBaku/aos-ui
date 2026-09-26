@@ -158,7 +158,8 @@ export class OpenClawClientRequestError extends Error {
   /** `uncertain`: a write was sent and never answered, so it may have landed. */
   constructor(
     readonly kind: "cancelled" | "rejected" | "timeout" | "unavailable",
-    readonly uncertain = false
+    readonly uncertain = false,
+    options?: ErrorOptions
   ) {
     super(
       kind === "cancelled"
@@ -167,7 +168,8 @@ export class OpenClawClientRequestError extends Error {
           ? "OpenClaw request was rejected"
           : kind === "timeout"
             ? "OpenClaw request timed out"
-            : "OpenClaw connection is unavailable"
+            : "OpenClaw connection is unavailable",
+      options
     )
     this.name = "OpenClawClientRequestError"
   }
@@ -492,7 +494,8 @@ export class OpenClawClient {
       },
       onConnectError: (error) => {
         const issue = connectionIssue(error)
-        if (issue.terminal) fail(new OpenClawClientConnectionError(issue.kind))
+        if (issue.terminal)
+          fail(new OpenClawClientConnectionError(issue.kind, { cause: error }))
       },
       onReconnectPaused: (info) =>
         fail(
@@ -525,7 +528,7 @@ export class OpenClawClient {
       throw this.#failed(
         error instanceof OpenClawClientConnectionError
           ? error
-          : new OpenClawClientConnectionError("unavailable")
+          : new OpenClawClientConnectionError("unavailable", { cause: error })
       )
     }
     return () => this.#release(gateway)
@@ -577,7 +580,8 @@ export class OpenClawClient {
       kind !== "rejected" &&
         WRITES.has(method) &&
         dispatch.requestSent &&
-        !dispatch.accepted
+        !dispatch.accepted,
+      { cause: error }
     )
   }
 

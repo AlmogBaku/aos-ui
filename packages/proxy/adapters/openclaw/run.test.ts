@@ -1768,6 +1768,7 @@ describe("OpenClaw run engine", () => {
       failure: {
         name: "OpenClawRunPublicError",
         code: "AOS_PROVIDER_UNAVAILABLE",
+        cause: native.abortError,
       },
     })
   })

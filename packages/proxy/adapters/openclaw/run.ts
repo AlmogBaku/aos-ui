@@ -113,9 +113,10 @@ export class OpenClawTurnPublicError extends Error {
   constructor(
     readonly code:
       "AOS_PROVIDER_UNAVAILABLE" | "AOS_SEND_UNCERTAIN" | "AOS_STOP_UNCERTAIN",
-    message: string
+    message: string,
+    options?: ErrorOptions
   ) {
-    super(message)
+    super(message, options)
     this.name = "OpenClawRunPublicError"
   }
 }
@@ -704,10 +705,11 @@ function mayHaveLanded(error: unknown, sent: boolean) {
   return error instanceof OpenClawClientRequestError ? error.uncertain : sent
 }
 
-function providerUnavailable() {
+function providerUnavailable(cause: unknown) {
   return new OpenClawTurnPublicError(
     "AOS_PROVIDER_UNAVAILABLE",
-    "OpenClaw is temporarily unavailable."
+    "OpenClaw is temporarily unavailable.",
+    { cause }
   )
 }
 
@@ -1033,7 +1035,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         await lease.release().catch(() => {})
         active.queue.close()
         active.resolveSettled()
-        throw providerUnavailable()
+        throw providerUnavailable(error)
       }
       return this.#handle(active)
     } catch (error) {
@@ -1041,7 +1043,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (error instanceof ServerTurnConflictError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
@@ -1122,7 +1124,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       this.#active.delete(key)
       await lease?.release().catch(() => {})
       if (error instanceof ServerTurnConflictError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
@@ -1277,7 +1279,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     } catch (error) {
       await lease?.release().catch(() => {})
       if (error instanceof OpenClawTurnPublicError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
@@ -1593,10 +1595,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (mayHaveLanded(error, sent))
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
-          "OpenClaw may have accepted the Stop request."
+          "OpenClaw may have accepted the Stop request.",
+          { cause: error }
         )
       waiting.stopping = false
-      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable(error))
     }
     return this.#waitingStatus(waiting)
   }
@@ -2087,11 +2090,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active.uncertain = true
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
-          "OpenClaw may have accepted the Stop request."
+          "OpenClaw may have accepted the Stop request.",
+          { cause: error }
         )
       }
       active.stopping = false
-      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable(error))
     }
     if (active.terminal) return "idle"
     if (status === "no-active-run") {

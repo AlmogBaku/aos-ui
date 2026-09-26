@@ -206,20 +206,19 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it("stops dialing on a pairing refusal without native detail, and dials again for the next start", async () => {
+  it("stops dialing on a pairing refusal, its native detail only a cause, and dials again for the next start", async () => {
     const clock = useFakeClock()
     const { client, gateway, gateways } = await setup(clock)
     const first = client.start()
+    const refusal = new GatewayClientRequestError({
+      message: "pair request pair-123 token=tok-test-1",
+      details: { code: "PAIRING_REQUIRED", requestId: "pair-123" },
+    })
 
-    gateway().options.onConnectError?.(
-      new GatewayClientRequestError({
-        message: "pair request pair-123 token=tok-test-1",
-        details: { code: "PAIRING_REQUIRED", requestId: "pair-123" },
-      })
-    )
+    gateway().options.onConnectError?.(refusal)
 
     await expect(first).rejects.toEqual(
-      new OpenClawClientConnectionError("pairing-required")
+      new OpenClawClientConnectionError("pairing-required", { cause: refusal })
     )
     await expect(client.request("sessions.list", {})).rejects.toEqual(
       new OpenClawClientConnectionError("pairing-required")
@@ -325,14 +324,16 @@ describe("OpenClaw client", () => {
     await timedOut
   })
 
-  it("sanitizes native request failures without preserving native error detail", async () => {
+  it("keeps a native request failure's detail out of its message, as its cause", async () => {
     const clock = useFakeClock()
     const { client, gateway } = await ready(clock)
-    gateway().requestError = new Error("native /private/path token=tok-test-1")
+    const native = new Error("native /private/path token=tok-test-1")
+    gateway().requestError = native
 
-    await expect(client.request("sessions.list", {})).rejects.toEqual(
-      new OpenClawClientRequestError("unavailable")
-    )
+    await expect(client.request("sessions.list", {})).rejects.toMatchObject({
+      kind: "unavailable",
+      cause: native,
+    })
     await expect(client.request("sessions.list", {})).rejects.not.toThrow(
       "native /private/path token=tok-test-1"
     )
