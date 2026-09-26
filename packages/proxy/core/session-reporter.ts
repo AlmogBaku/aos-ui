@@ -247,10 +247,10 @@ export class SessionReporter<
     this.#cells.clear()
   }
 
-  /** Releases one cell by key, disposing its owner. */
+  /** Releases one cell by key, disposing its owner, once no one listens. */
   release(key: string) {
     const cell = this.#cells.get(key)
-    if (!cell) return
+    if (!cell || cell.listeners.size > 0) return
     cell.owner.dispose()
     this.#cells.delete(key)
   }

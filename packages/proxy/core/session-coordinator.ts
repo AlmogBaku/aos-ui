@@ -857,7 +857,7 @@ export class SessionCoordinator {
   #closed = false
   /** Active cell subscriber count per session key; zero means evict when idle. */
   readonly #subscribers = new Map<string, number>()
-  /** Sessions to evict once their turn settles to idle. */
+  /** Sessions their last subscriber left, evicted once their turn rests. */
   readonly #pendingEvictions = new Set<string>()
   /** How many turns ended with their outcome unknown. */
   #deadlinesFired = 0
@@ -1617,36 +1617,38 @@ export class SessionCoordinator {
 
   #addSubscriber(key: string) {
     this.#subscribers.set(key, (this.#subscribers.get(key) ?? 0) + 1)
+    // A subscriber who returns keeps the Session.
+    this.#pendingEvictions.delete(key)
   }
 
   #removeSubscriber(key: string) {
     const count = (this.#subscribers.get(key) ?? 0) - 1
-    if (count <= 0) {
-      this.#subscribers.delete(key)
-      this.#checkEvict(key)
-    } else {
+    if (count > 0) {
       this.#subscribers.set(key, count)
+      return
     }
+    this.#subscribers.delete(key)
+    this.#pendingEvictions.add(key)
+    this.#evictIfSettled(key)
   }
 
   /**
-   * When the last subscriber of a session leaves, evict if the turn is idle;
-   * otherwise mark it for eviction once it settles.
+   * Evicts a Session its last subscriber left once its turn rests idle with no
+   * admission in flight; an admitting turn reads as idle but is not at rest.
    */
-  #checkEvict(key: string) {
-    if ((this.#subscribers.get(key) ?? 0) > 0) return
-    const { state } = this.#turnExecution(key)
-    if (state !== "idle") {
-      this.#pendingEvictions.add(key)
+  #evictIfSettled(key: string) {
+    if (this.#closed || !this.#pendingEvictions.has(key)) return
+    const turn = this.#turns.get(key)
+    if (
+      turn &&
+      (turn.admission !== undefined ||
+        turn.owner.actor.getSnapshot().value !== "idle")
+    )
       return
-    }
     this.#evict(key)
   }
 
-  /**
-   * Releases the session's turn owner and reporter cells. Called when the
-   * session is idle and its last subscriber has left.
-   */
+  /** Releases a resting Session's turn owner, journal, and reporter cells. */
   #evict(key: string) {
     this.#pendingEvictions.delete(key)
     const turn = this.#turns.get(key)
@@ -1655,7 +1657,9 @@ export class SessionCoordinator {
       this.#turns.delete(key)
       this.#capabilities.release(turn.capabilityKey)
     }
-    // Executions for idle sessions have no segment holding resources.
+    // Nothing resumes from a journal once its execution is gone.
+    const journal = this.#journals.get(key)
+    if (journal) this.#forgetJournal(journal)
     this.#executions.delete(key)
     for (const reporter of [this.#usage, this.#models, this.#execution])
       reporter.release(key)
@@ -1701,15 +1705,15 @@ export class SessionCoordinator {
     }
     // The execution reading changes with each move the turn makes.
     let reported = turnExecution(turn)
-    turn.owner.actor.subscribe(() => {
+    turn.owner.actor.subscribe((snapshot) => {
+      // After the hooks this move queued, so an outcome is delivered first.
+      if (snapshot.value === "idle" && this.#pendingEvictions.has(key))
+        later("turn.evict.failed", async () => this.#evictIfSettled(key))
       const moved = turnExecution(turn)
       if (moved.state === reported.state && moved.turnId === reported.turnId)
         return
       reported = moved
       this.#execution.report(key)
-      // Evict this session if it became idle while unsubscribed.
-      if (moved.state === "idle" && this.#pendingEvictions.has(key))
-        this.#evict(key)
     })
     this.#turns.set(key, turn)
     return turn
