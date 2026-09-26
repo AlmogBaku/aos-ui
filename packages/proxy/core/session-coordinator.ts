@@ -1076,6 +1076,7 @@ export class SessionCoordinator {
     input: CreateInput,
     principalId: string
   ): Promise<unknown> {
+    if (this.#closed) throw new Error("Session coordinator is closed")
     const create = () =>
       this.options.readings.createSession(agentId, input.title)
     if (input.clientId === undefined) return create()
