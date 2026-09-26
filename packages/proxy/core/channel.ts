@@ -542,7 +542,8 @@ class Membership {
   /** This member as the Session's channel addresses it. */
   readonly #delivery: MembershipDelivery
   #partChannel: (() => void) | undefined
-  readonly #partReadings: () => void
+  /** Set once the member subscribes to its Session's readings. */
+  #partReadings: (() => void) | undefined
 
   constructor(
     channels: ChannelTable,
@@ -554,19 +555,6 @@ class Membership {
     this.#member = member
     this.#scope = scope
     this.#options = options
-    const { feeds } = options
-    this.#partReadings = this.#coordinator.subscribeReadings(
-      scope,
-      options.membershipId,
-      {
-        ...(feeds.has("usage")
-          ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
-          : {}),
-        ...(feeds.has("model")
-          ? { model: (models) => this.#deliver({ kind: "model", models }) }
-          : {}),
-      }
-    )
     this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
@@ -666,7 +654,7 @@ class Membership {
         await this.reportExecution()
       // A resumed Session carries the window every earlier turn already grew;
       // only a report here keeps its composer from opening on an empty gauge.
-      if (usage) await this.reportUsage()
+      if (usage) this.reportUsage()
       if (this.#coordinator.state(this.#scope) === "waiting-for-input")
         this.reissuePending()
     })
@@ -955,15 +943,32 @@ class Membership {
 
   /**
    * Owes this member the Session's current context usage, which a joining
-   * member needs for its gauge. The coordinator's reporter defers a window
+   * member needs for its gauge. The first call subscribes the member to its
+   * Session's readings, which give the last value at once and read a stale
+   * one: joining alone subscribes nothing, so no reading overtakes the
+   * response a join is part of. The coordinator's reporter re-reads a window
    * that is unreadable right after joining, usually the provider's agent still
    * being built, and leaves the last reading standing if it never becomes
    * readable.
    */
   reportUsage() {
-    return this.#coordinator.reportUsage(
+    if (this.#parted) return
+    const { feeds, membershipId } = this.#options
+    if (this.#partReadings) {
+      this.#coordinator.reportUsage(this.#scope, membershipId)
+      return
+    }
+    this.#partReadings = this.#coordinator.subscribeReadings(
       this.#scope,
-      this.#options.membershipId
+      membershipId,
+      {
+        ...(feeds.has("usage")
+          ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
+          : {}),
+        ...(feeds.has("model")
+          ? { model: (models) => this.#deliver({ kind: "model", models }) }
+          : {}),
+      }
     )
   }
 
@@ -1020,7 +1025,7 @@ class Membership {
     for (const requestId of [...this.#offered]) this.#withdraw(requestId)
     this.#parted = true
     this.#partChannel?.()
-    this.#partReadings()
+    this.#partReadings?.()
     this.#subscription?.close()
     this.#subscription = undefined
   }

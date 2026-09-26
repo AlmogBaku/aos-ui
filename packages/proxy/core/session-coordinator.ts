@@ -40,6 +40,7 @@ import type { Role } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
+  type Session,
   type SessionContextResponse,
   type SessionModelsResponse,
   type TurnSteerRequest,
@@ -50,6 +51,22 @@ import { SubscriberFanout } from "./subscriber-fanout"
 
 export type SessionExecutionState =
   "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
+
+/** The Session status each execution state overlays on the provider's row. */
+const EXECUTION_STATUS: Record<SessionExecutionState, Session["status"]> = {
+  idle: "idle",
+  running: "running",
+  stopping: "running",
+  "waiting-for-input": "waiting-for-input",
+  uncertain: "failed",
+}
+
+/** One Session's execution as its reading holds it, outside the turn stream. */
+export type SessionExecution = {
+  state: SessionExecutionState
+  turnId?: string
+  status: Session["status"]
+}
 
 /** One Session's execution as a member reads it, outside the turn stream. */
 export type SessionSnapshot = {
@@ -105,21 +122,16 @@ export type SessionCoordinatorOptions = {
   clock?: Clock
 }
 
-/** What one subscriber takes of its Session's readings; it is owed only these. */
+/**
+ * What one subscriber takes of its Session's readings; it is owed only these,
+ * each the last value on subscribing and then each change.
+ */
 export type SessionReadingListeners = {
   usage?: ReadingListener<SessionContextResponse>
-  /** The model options, once the subscriber reads that the model switched. */
+  /** The model options, and each switch the subscriber reads or a config makes. */
   model?: ReadingListener<SessionModelsResponse>
+  execution?: ReadingListener<SessionExecution>
 }
-
-/**
- * What an unreadable context window waits before each re-read, in order. The
- * budget is bounded: a provider that has not built its agent within half a
- * minute is not building one, and the next turn owes a reading anyway.
- */
-const USAGE_RETRY_DELAYS_MS: readonly number[] = [
-  1_000, 2_000, 4_000, 8_000, 16_000,
-]
 
 /** One journaled event and the memory its raw form occupies. */
 type JournalEntry = { value: SequencedTurnEvent; bytes: number }
@@ -156,7 +168,11 @@ type SegmentJournal = {
 /** Where a turn rests between admissions, and where a refused one returns. */
 type RestingState = "idle" | "waiting-for-input" | "uncertain"
 
-type TurnContext = OwnerContext & { resting: RestingState }
+type TurnContext = OwnerContext & {
+  resting: RestingState
+  /** The turn the latest landed admission admitted. */
+  turnId?: string
+}
 
 /**
  * What moves one Session's turn: an admission and how it lands, the outcome
@@ -164,7 +180,7 @@ type TurnContext = OwnerContext & { resting: RestingState }
  */
 type TurnSignal =
   | { type: "admit" }
-  | { type: "admitted"; state: "running" | "waiting-for-input" }
+  | { type: "admitted"; state: "running" | "waiting-for-input"; turnId: string }
   /** The admission did not land, so the turn returns to where it rested. */
   | { type: "refused" }
   /** The provider holds no turn for the wait this admission refreshed. */
@@ -189,6 +205,10 @@ function turnMachine(logger: Logger, clock: Clock) {
     target: "admitting" as const,
     actions: turn.assign({ resting }),
   })
+  const land = turn.assign({
+    turnId: ({ event }) =>
+      event.type === "admitted" ? event.turnId : undefined,
+  })
   return turn.createMachine({
     context: { generation: 0, resting: "idle" },
     initial: "idle",
@@ -200,9 +220,9 @@ function turnMachine(logger: Logger, clock: Clock) {
             {
               guard: ({ event }) => event.state === "waiting-for-input",
               target: "waiting-for-input",
-              actions: "bumpGeneration",
+              actions: ["bumpGeneration", land],
             },
-            { target: "running", actions: "bumpGeneration" },
+            { target: "running", actions: ["bumpGeneration", land] },
           ],
           refused: [
             {
@@ -264,6 +284,18 @@ type Turn = {
   owner: Owner<ReturnType<typeof turnMachine>>
   /** The turnId an admission in flight admits. */
   admission?: string
+}
+
+/**
+ * Where a Session's turn is, as its actor holds it: an admission in flight
+ * reads as the state its turn rests in.
+ */
+function turnExecution(turn: Turn) {
+  const { value, context } = turn.owner.actor.getSnapshot()
+  return {
+    state: value === "admitting" ? context.resting : value,
+    turnId: context.turnId,
+  }
 }
 
 /** An admission in flight, and the generation it must land at. */
@@ -602,32 +634,52 @@ export class SessionCoordinator {
     listener: (event: ExecutionEvent) => void
   }>()
   #closed = false
-  /** Owed after every turn, on joining, and after a config change. */
+  /** Changed by every turn, and by a model switch. */
   readonly #usage: SessionReporter<SessionContextResponse>
-  /** Owed when the provider switches a Session's model mid-turn. */
+  /** Changed by a model switch; one the provider reports names its model. */
   readonly #models: SessionReporter<SessionModelsResponse, string>
+  /** Changed by each move of the Session's turn. */
+  readonly #execution: SessionReporter<SessionExecution>
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
     this.#logger = options.logger ?? SILENT
     this.#clock = options.clock ?? defaultClock
     this.#machine = turnMachine(this.#logger, this.#clock)
+    const cell = { logger: this.#logger, clock: this.#clock }
     this.#usage = new SessionReporter({
+      name: "usage",
       read: async (scope) =>
         SessionContextResponseSchema.parse(
           await readings.context(scope.agentId, scope.sessionId)
         ),
-      retryDelaysMs: USAGE_RETRY_DELAYS_MS,
+      ...cell,
     })
-    // An unreadable catalog leaves the options the client holds standing.
+    // A switch reported mid-turn may name a model the catalog does not yet.
     this.#models = new SessionReporter({
-      read: async (scope, selectedId: string) => ({
+      name: "models",
+      read: async (scope, selectedId) => ({
         ...SessionModelsResponseSchema.parse(
           await readings.models(scope.agentId, scope.sessionId)
         ),
-        selectedId,
+        ...(selectedId === undefined ? {} : { selectedId }),
       }),
-      retryDelaysMs: [],
+      ...cell,
+    })
+    this.#execution = new SessionReporter({
+      name: "execution",
+      read: async (scope) => {
+        const turn = this.#turns.get(scopeKey(scope))
+        const { state, turnId } = turn
+          ? turnExecution(turn)
+          : { state: "idle" as const, turnId: undefined }
+        return {
+          state,
+          ...(turnId === undefined ? {} : { turnId }),
+          status: EXECUTION_STATUS[state],
+        }
+      },
+      ...cell,
     })
     for (const value of [
       options.maxActiveExecutions,
@@ -651,26 +703,37 @@ export class SessionCoordinator {
         this.#usage.subscribe(key, scope, membershipId, listeners.usage),
       listeners.model &&
         this.#models.subscribe(key, scope, membershipId, listeners.model),
+      listeners.execution &&
+        this.#execution.subscribe(
+          key,
+          scope,
+          membershipId,
+          listeners.execution
+        ),
     ]
     return () => {
       for (const leave of leaves) leave?.()
     }
   }
 
-  /**
-   * Owes one subscriber, or every one, a current usage reading: the one a
-   * joining subscriber takes, or the one a config change moves. Resolves once
-   * the first attempt has delivered or deferred it.
-   */
+  /** Owes one subscriber a fresh usage reading: what a returning one takes. */
   reportUsage(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    membershipId?: string
+    membershipId: string
   ) {
-    return this.#usage.report(
-      scopeKey(scope),
-      undefined,
-      membershipId === undefined ? undefined : [membershipId]
-    )
+    this.#usage.report(scopeKey(scope), undefined, [membershipId])
+  }
+
+  /**
+   * Owes every subscriber the readings a model switch moves: the model
+   * options, and the usage, whose window belongs to the model.
+   */
+  reportModelSwitch(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">
+  ) {
+    const key = scopeKey(scope)
+    this.#models.report(key)
+    this.#usage.report(key)
   }
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
@@ -798,7 +861,7 @@ export class SessionCoordinator {
       const segment = this.#createSegment({
         cacheKey: key,
         turnId,
-        generation: this.#landed(turn, generation, discovered.state),
+        generation: this.#landed(turn, generation, discovered.state, turnId),
         handle: discovered.handle,
         // Only a stream that begins at the native turn's start can replay it;
         // any other joined the turn midway and has nothing a reload can trust.
@@ -886,7 +949,7 @@ export class SessionCoordinator {
         segment: this.#createSegment({
           cacheKey: key,
           turnId: input.turnId,
-          generation: this.#landed(turn, generation, "running"),
+          generation: this.#landed(turn, generation, "running", input.turnId),
           handle,
           history: { journal: "start", at },
           onTerminal: access.onTerminal,
@@ -1063,7 +1126,7 @@ export class SessionCoordinator {
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: request.turnId,
-        generation: this.#landed(turn, generation, "running"),
+        generation: this.#landed(turn, generation, "running", request.turnId),
         handle,
         // One turn keeps one journal and one monotonic sequence across its
         // segments: a browser cursor can never skip a recovered event.
@@ -1188,6 +1251,8 @@ export class SessionCoordinator {
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()
     for (const { owner } of this.#turns.values()) owner.dispose()
+    for (const reporter of [this.#usage, this.#models, this.#execution])
+      reporter.close()
   }
 
   /** One owner per Session, logging under its ids and the turn it moves. */
@@ -1205,6 +1270,15 @@ export class SessionCoordinator {
         bindings: { agentId: scope.agentId, sessionId: scope.sessionId },
       }),
     }
+    // The execution reading changes with each move the turn makes.
+    let reported = turnExecution(turn)
+    turn.owner.actor.subscribe(() => {
+      const moved = turnExecution(turn)
+      if (moved.state === reported.state && moved.turnId === reported.turnId)
+        return
+      reported = moved
+      this.#execution.report(key)
+    })
     this.#turns.set(key, turn)
     return turn
   }
@@ -1240,9 +1314,10 @@ export class SessionCoordinator {
   #landed(
     turn: Turn,
     generation: number,
-    state: "running" | "waiting-for-input"
+    state: "running" | "waiting-for-input",
+    turnId: string
   ) {
-    if (!this.#move(turn, generation, { type: "admitted", state }))
+    if (!this.#move(turn, generation, { type: "admitted", state, turnId }))
       throw new Error("Session coordinator is closed")
     return turn.owner.generation
   }
@@ -1262,7 +1337,7 @@ export class SessionCoordinator {
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: input.turnId,
-        generation: this.#landed(turn, generation, "running"),
+        generation: this.#landed(turn, generation, "running", input.turnId),
         handle,
         history: { journal: "start", at },
       })
@@ -1287,10 +1362,8 @@ export class SessionCoordinator {
     return {
       scope: init.scope,
       turn: init.turn,
-      // An admission in flight reads as the state its turn rests in.
       get state() {
-        const { value, context } = this.turn.owner.actor.getSnapshot()
-        return value === "admitting" ? context.resting : value
+        return turnExecution(this.turn).state
       },
       startedByRole: init.startedByRole,
       ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
@@ -1597,7 +1670,7 @@ export class SessionCoordinator {
     // code after a `yield` runs once the reader asks for the next event.
     const read = ({ event }: SequencedTurnEvent) => {
       if (event.kind === TurnEventKind.ModelChanged)
-        void models.report(segment.cacheKey, event.modelId, [membershipId])
+        models.report(segment.cacheKey, event.modelId, [membershipId])
     }
     let closed = false
     const events: AsyncIterable<SequencedTurnEvent> = {
@@ -1618,8 +1691,7 @@ export class SessionCoordinator {
           // Read to its end, failed or not, the segment moved the window. A
           // stream its reader closed, or dropped for falling behind, is owed
           // nothing: the reader follows another or resyncs.
-          if (!closed)
-            void usage.report(segment.cacheKey, undefined, [membershipId])
+          if (!closed) usage.report(segment.cacheKey, undefined, [membershipId])
         } finally {
           live.close()
         }
