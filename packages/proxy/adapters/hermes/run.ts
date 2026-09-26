@@ -49,6 +49,7 @@ import {
   TURN_FAILED_LOG,
   TURN_FAILURES,
   withDetail,
+  type DetachedTurnFailure,
   type TurnFailure,
 } from "./run-failures"
 import {
@@ -1228,7 +1229,7 @@ export class HermesTurnEngine {
    * the browser reconciles. Releasing the native observer freezes the watermark
    * at the last delivered frame, so a reconnect replays from there.
    */
-  #detach(active: ActiveTurn, failure: TurnFailure) {
+  #detach(active: ActiveTurn, failure: DetachedTurnFailure) {
     if (active.terminal || active.detached) return
     this.#emit(active, this.#failed(active, failure))
     active.uncertain = true

@@ -15,7 +15,6 @@ import { withinGrace } from "../../grace"
 import {
   HermesAuthenticationError,
   HermesRpcRejectedError,
-  HermesUnavailableError,
   type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
@@ -46,6 +45,7 @@ export type AttachmentSignal =
 export type AttachmentObserver = (signal: AttachmentSignal) => void
 
 type RegistryNative = {
+  /** Rejects with `HermesSessionGoneError` when Hermes has no such Session. */
   resume(
     scope: HermesAttachmentScope
   ): Promise<{ liveSessionId: string; running?: boolean; saved?: boolean }>
@@ -97,30 +97,31 @@ type Entry = {
 /** The full-jitter backoff a failed rebind is retried on. */
 export const REBIND_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 
-/** Hermes reports a stale or reaped live Session id with these codes. */
-const SESSION_GONE_CODES = new Set([4001, 4007])
+/** The codes Hermes rejects a call with when the Session it names is gone. */
+const SESSION_GONE_CODES = new Set([4001, 4007, -32602])
 
 /**
- * Hermes answered a session-scoped call with "that live Session is gone". It
- * extends the outage error so every public caller keeps its existing
- * classification, while a native client that maps transport failures can still
- * tell the registry to rebind the durable Session.
+ * Hermes rejected a call because the Session it named is gone. On a live id
+ * that means the binding must be rebound; only on the durable resume does it
+ * mean the Session itself is gone.
  */
-export class HermesSessionGoneError extends HermesUnavailableError {
-  constructor() {
-    super()
-    this.name = "HermesSessionGoneError"
-  }
-}
-
-/** True when Hermes said the addressed live Session no longer exists. */
 export function isSessionGone(error: unknown) {
   return (
-    error instanceof HermesSessionGoneError ||
-    (error instanceof HermesRpcRejectedError &&
-      error.code !== undefined &&
-      SESSION_GONE_CODES.has(error.code))
+    error instanceof HermesRpcRejectedError &&
+    error.code !== undefined &&
+    SESSION_GONE_CODES.has(error.code)
   )
+}
+
+/**
+ * The durable Session is gone: Hermes answered its resume with no record, so
+ * no rebind can bring it back.
+ */
+export class HermesSessionGoneError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The Hermes Session is gone", options)
+    this.name = "HermesSessionGoneError"
+  }
 }
 
 /** Hermes live Session ids are bounded native identifiers. */
@@ -417,7 +418,9 @@ export class HermesAttachmentRegistry {
     } catch (error) {
       // A later heal, restart or close owns this entry now.
       if (this.#stale(generation)) return
-      if (isSessionGone(error)) {
+      // Nothing is left to rebind: whoever addresses the Session next learns
+      // it is gone from its own resume.
+      if (error instanceof HermesSessionGoneError) {
         this.invalidate(previous)
         this.#signal(entry, { kind: "lost", reason: "rebound" })
         return
@@ -435,7 +438,7 @@ export class HermesAttachmentRegistry {
   }
 
   /**
-   * Retry a failed rebind on backoff until it succeeds, Hermes says the live
+   * Retry a failed rebind on backoff until it succeeds, Hermes says the
    * Session is gone, or a later generation takes the entry over.
    */
   #retryRebind(entry: Entry, generation: number, attempt: number) {

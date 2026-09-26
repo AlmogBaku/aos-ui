@@ -92,6 +92,8 @@ describe("Hermes native submit outcomes", () => {
 
   it.each([
     [4001, "session-gone"],
+    [4007, "session-gone"],
+    [-32602, "session-gone"],
     [4009, "busy"],
     [4090, "unknown"],
     [5070, "storage"],

@@ -2592,13 +2592,14 @@ describe("Hermes server adapter", () => {
     expect(router.calls("session.resume")).toHaveLength(3)
   })
 
-  it("re-resumes the durable Session when Hermes rejects a heal as gone", async () => {
+  it("reports a Session gone once its durable resume finds no record", async () => {
     let resumes = 0
     const router = rpcRouter({
       "session.resume": async () => {
         resumes += 1
-        if (resumes === 2) throw new HermesRpcRejectedError(4007)
-        return { session_id: resumes === 1 ? "live-first" : "live-second" }
+        if (resumes > 1)
+          throw new HermesRpcRejectedError(4007, "session not found")
+        return { session_id: "live-first" }
       },
     })
     const adapter = new HermesServerAdapter(router)
@@ -2620,10 +2621,10 @@ describe("Hermes server adapter", () => {
     await router.connection.restored()
 
     expect(signals).toEqual(["lost:rebound"])
-    await expect(adapter.native.resume(scope)).resolves.toMatchObject({
-      liveSessionId: "live-second",
-    })
-    expect(router.calls("session.resume")).toHaveLength(3)
+    const error = await adapter.turns
+      .start(scope, { turnId: "run-1", messageId: "user", prompt: "Hello" })
+      .catch((cause: unknown) => cause)
+    expect(adapter.publicError(error)?.kind).toBe("gone")
   })
 
   it("writes an attachment rebind failure to the runtime log", async () => {

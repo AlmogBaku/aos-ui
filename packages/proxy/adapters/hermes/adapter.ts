@@ -75,7 +75,7 @@ import type {
   ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
-import { failureOf } from "../../core/failures"
+import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
 import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
@@ -701,6 +701,7 @@ export class HermesServerAdapter implements ServerRuntime {
     if (
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
+      cause instanceof HermesSessionGoneError ||
       cause instanceof HermesWorkspaceScopeError ||
       cause instanceof HermesContentScopeError ||
       // The artifact is still authoritative history, but the provider no longer
@@ -716,15 +717,13 @@ export class HermesServerAdapter implements ServerRuntime {
       return failureOf("revision_conflict", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
-    if (
-      cause instanceof HermesTurnPublicError &&
-      cause.code === "AOS_STOP_UNCERTAIN"
-    )
-      return failureOf("uncertain", cause)
+    if (cause instanceof HermesTurnPublicError)
+      return (
+        publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+      )
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
-      cause instanceof HermesTurnPublicError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
@@ -1192,10 +1191,10 @@ export class HermesServerAdapter implements ServerRuntime {
         this.#retry
       )
     } catch (error) {
-      // A heal must learn that Hermes reaped this live Session so the registry
-      // can invalidate the binding and resume the durable Session again; every
-      // other transport failure stays an outage.
-      if (isSessionGone(error)) throw new HermesSessionGoneError()
+      // A resume addresses the durable Session, so a gone answer means Hermes
+      // holds no record of it; every other failure stays an outage.
+      if (isSessionGone(error))
+        throw new HermesSessionGoneError({ cause: error })
       throwUnavailable(error)
     }
     const liveSessionId =
