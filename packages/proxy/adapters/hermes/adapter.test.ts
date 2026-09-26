@@ -16,6 +16,8 @@ import {
   HermesRpcUncertainError,
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
+import { useFakeClock } from "../../../../test/support/fake-clock"
+import { captureLogs } from "../../../../test/support/log-capture"
 import { PendingRequestKind } from "../../core/events"
 import { ServerTurnSteerUncertainError } from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
@@ -2627,8 +2629,47 @@ describe("Hermes server adapter", () => {
     expect(adapter.publicError(error)?.kind).toBe("gone")
   })
 
+  it.each([
+    [
+      "its Session is gone",
+      () => new HermesRpcRejectedError(4007, "session not found"),
+      "gone",
+    ],
+    [
+      "Hermes refuses the token",
+      () => new HermesAuthenticationError(),
+      "runtime_authentication_required",
+    ],
+  ])(
+    "stops watching a Session's turns once %s",
+    async (_case, refusal, kind) => {
+      const clock = useFakeClock()
+      const router = rpcRouter({
+        "session.resume": async () => {
+          throw refusal()
+        },
+      })
+      const adapter = new HermesServerAdapter(router)
+      const onError = vi.fn()
+      const stop = adapter.turns.subscribeTurns(
+        {
+          agentId: "researcher",
+          providerSessionId: "stored",
+          sessionId: "stored",
+        },
+        { onTurn: vi.fn(), onError }
+      )
+      await clock.advance(60_000)
+
+      expect(router.calls("session.resume")).toHaveLength(1)
+      expect(onError).toHaveBeenCalledOnce()
+      expect(adapter.publicError(onError.mock.calls[0]![0])?.kind).toBe(kind)
+      stop()
+    }
+  )
+
   it("writes an attachment rebind failure to the runtime log", async () => {
-    const warn = vi.fn()
+    const logs = captureLogs()
     let resumes = 0
     const router = rpcRouter({
       "session.resume": async () => {
@@ -2637,7 +2678,7 @@ describe("Hermes server adapter", () => {
         return { session_id: "live-first" }
       },
     })
-    const adapter = new HermesServerAdapter(router, { log: { warn } })
+    const adapter = new HermesServerAdapter(router, { log: logs.logger })
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
@@ -2648,13 +2689,11 @@ describe("Hermes server adapter", () => {
 
     await router.connection.restored()
 
-    expect(warn).toHaveBeenCalledWith(
-      {
-        reason: expect.any(String),
-        attempt: 0,
-      },
-      "hermes.attachment.rebind_failed"
-    )
+    expect(logs.records()).toContainEqual({
+      level: "warn",
+      message: "hermes.attachment.rebind_failed",
+      fields: { reason: expect.any(String), attempt: 0 },
+    })
   })
 
   it("publishes each native failure class under its own public kind", async () => {

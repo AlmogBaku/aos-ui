@@ -4,11 +4,12 @@
  * timeouts and `AbortSignal`, JSON-RPC error typing, the `gateway.ping`
  * heartbeat, socket generations and server→client request routing; this wrapper
  * owns the dial URL and private token, redial and heal grace, the wire guard and
- * response bounds, error classification, one event fan-out, epoch changes and
- * `close()`.
+ * response bounds, error classification, one event fan-out, epoch changes, the
+ * link it reports and `close()`.
  */
 
 import { boundedQueue, Deadline, defaultClock } from "../../../lifecycle"
+import type { LinkState, ServerLink } from "../../core/link"
 import {
   isGatewayWebSocketUrl,
   JsonRpcGatewayClient,
@@ -127,6 +128,8 @@ export interface HermesRpcTransport {
   subscribeConnection?(handler: HermesConnectionHandler): () => void
   /** Whether a frame written now reaches Hermes; a synchronous answer needs it. */
   connected?(): boolean
+  /** Whether the socket is up now, and each time that changes. */
+  readonly link?: ServerLink
   close?(): Promise<void>
 }
 
@@ -251,6 +254,18 @@ export class HermesGateway implements HermesRpcTransport {
   readonly #eventListeners = new Set<(event: unknown) => void>()
   readonly #connectionHandlers = new Set<HermesConnectionHandler>()
   readonly #openWaiters = new Set<OpenWaiter>()
+  readonly #linkListeners = new Set<(state: LinkState) => void>()
+  #linkState: LinkState = "lost"
+  /** Up once an open socket's `restored` handlers ran, lost once it closes. */
+  readonly link: ServerLink = {
+    state: () => this.#linkState,
+    subscribe: (listener) => {
+      this.#linkListeners.add(listener)
+      return () => {
+        this.#linkListeners.delete(listener)
+      }
+    },
+  }
   /** Live requests by minted id, so the wire guard can find their bound. */
   readonly #inFlightById = new Map<string, PendingResponse>()
   /** The request being dispatched, awaiting the id `#mintRequestId` gives it. */
@@ -464,11 +479,18 @@ export class HermesGateway implements HermesRpcTransport {
       this.#clearHealGrace()
       // Rebinding first: a parked request must not be written before
       // `restored` handlers have re-registered their Sessions.
-      const release = () => this.#resolveOpenWaiters()
+      const generation = this.#generation
+      const release = () => {
+        this.#resolveOpenWaiters()
+        // A socket that closed while its handlers ran is not up.
+        if (this.#generation === generation && this.connected())
+          this.#setLink("ready")
+      }
       void this.#announceOpen().then(release, release)
       return
     }
     if (state !== "closed" && state !== "error") return
+    this.#setLink("lost")
     this.#armHealGrace()
     this.#scheduleRedial()
   }
@@ -547,6 +569,18 @@ export class HermesGateway implements HermesRpcTransport {
         call(handler)
       } catch (error) {
         this.#logHandlerFailure(phase, error)
+      }
+    }
+  }
+
+  #setLink(state: LinkState) {
+    if (state === this.#linkState) return
+    this.#linkState = state
+    for (const listener of [...this.#linkListeners]) {
+      try {
+        listener(state)
+      } catch (error) {
+        this.#logHandlerFailure("link", error)
       }
     }
   }
@@ -781,6 +815,8 @@ export class HermesGateway implements HermesRpcTransport {
   async close(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.#setLink("lost")
+    this.#linkListeners.clear()
     this.#clearHealGrace()
     clearTimeout(this.#redialTimer)
     this.#redialTimer = undefined

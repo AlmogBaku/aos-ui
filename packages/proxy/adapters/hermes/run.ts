@@ -10,6 +10,9 @@
  */
 import { z } from "zod"
 
+import { defaultClock, type Logger } from "../../../lifecycle"
+import { createLink, retryBudget, type LinkOptions } from "../../core/link"
+import { RETRY_BUDGET } from "../../core/limits"
 import {
   CompactionStatus,
   isRepliesTurn,
@@ -39,7 +42,7 @@ import {
   redactedText,
 } from "./tool-data"
 import { hermesRowMessageId } from "./history"
-import { boundedNativeBytes, sessionKey } from "./native"
+import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
 import { attachTurn, scheduleCatchUp } from "./run-attach"
 import {
@@ -91,7 +94,7 @@ import {
   type SettlingWatcher,
 } from "./run-state"
 import { sessionModelChoice } from "./session-model"
-import type { HermesLog } from "./gateway"
+import { HermesUnavailableError, type HermesLog } from "./gateway"
 import type {
   HermesTurnNative,
   HermesSubmitPrompt,
@@ -127,8 +130,6 @@ const REFUSAL_FAILURES: Record<
  * to be re-delivered before AOS reports the question lost.
  */
 const LOST_INTERACTION_GRACE_MS = 2_000
-/** Each retry's delay for a turn subscription; the last delay repeats. */
-const WATCH_RETRY_MS = [1_000, 5_000, 30_000]
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_REWIND_SOURCE_LENGTH = 256
@@ -149,9 +150,27 @@ export const hermesRecoveryToken = {
       : HermesPositionSchema.parse(JSON.parse(token)),
 }
 
+/** How a turn watch sorts its failures, what it rides on, and its log. */
+type HermesWatchOptions = Pick<
+  LinkOptions,
+  "publicError" | "upstream" | "logger"
+>
+
+/** The log of a watch built without one. */
+const UNLOGGED: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  child: () => UNLOGGED,
+}
+
 export class HermesTurnEngine {
   readonly #native: HermesTurnNative
   readonly #log: HermesLog
+  readonly #watch: HermesWatchOptions
+  /** Bounds the watches that redial at once when their upstream is up again. */
+  readonly #watchBudget = retryBudget(RETRY_BUDGET, defaultClock)
   readonly #active = new Map<string, ActiveTurn>()
   readonly #admissions = new Set<string>()
   readonly #settling = new Map<string, SettlingWatcher>()
@@ -166,11 +185,18 @@ export class HermesTurnEngine {
       lostInteractionGraceMs?: number
       /** Keyed by profile; a turn reads the names its profile last loaded. */
       mcpToolNames?: McpToolNames
+      /** Without it, a watch retries every failure and logs nothing. */
+      watch?: Partial<HermesWatchOptions>
     } = {}
   ) {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
     this.#log = options.log ?? { warn: () => undefined }
+    this.#watch = {
+      publicError: () => undefined,
+      logger: UNLOGGED,
+      ...options.watch,
+    }
     this.#lostInteractionGraceMs =
       options.lostInteractionGraceMs ?? LOST_INTERACTION_GRACE_MS
     this.#host = {
@@ -394,87 +420,102 @@ export class HermesTurnEngine {
   /**
    * Announces the turns Hermes runs on this Session without this engine: the
    * edge opens on a turn's `message.start`, or on a subscription that finds one
-   * running, and closes on that turn's end. Every lost stream is re-resumed,
-   * because a restarted or rebound live Session is only reachable that way.
+   * running, and closes on that turn's end. The watch is one core link: a lost
+   * stream is re-resumed on its backoff, because a restarted or rebound live
+   * Session is only reachable that way, and a Session gone or a token refused
+   * is not dialed again until the link it rides on is up again.
    */
   subscribeTurns(
     scope: HermesTurnScope,
     listener: ServerTurnListener
   ): () => void {
     const key = sessionKey(scope)
-    let stopped = false
+    const bindings = {
+      link: "turn-subscription",
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+    }
     let open = false
-    let failures = 0
-    let liveSessionId: string | undefined
-    let unsubscribe: (() => void) | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
+    /** A drop the link heard before it took the dial, which it hears once up. */
+    let held: (() => void) | undefined
     const announce = (own: boolean) => {
-      if (open || stopped) return
+      if (open) return
       open = true
       if (!own) listener.onTurn()
     }
-    const recheck = async (id: string) => {
+    /** Announces a turn Hermes runs now, unless its subscription is gone. */
+    const recheck = (liveSessionId: string, current: () => boolean) => {
       const own = this.#ownsTurn(key)
-      const status = await readStatus(this.#host, id)
-      if (status === "working" || status === "waiting") announce(own)
+      void readStatus(this.#host, liveSessionId)
+        .then((status) => {
+          if (current() && (status === "working" || status === "waiting"))
+            announce(own)
+        })
+        .catch((cause: unknown) =>
+          this.#watch.logger.warn(
+            { ...bindings, reason: publicReason(cause) },
+            "hermes.turn_watch.recheck_failed"
+          )
+        )
     }
-    const release = () => {
-      safelyUnsubscribe(unsubscribe)
-      unsubscribe = undefined
-      liveSessionId = undefined
-    }
-    const observer = (signal: AttachmentSignal) => {
-      if (stopped) return
-      if (signal.kind === "reattached") {
-        // Hermes kept the live Session, but the socket may have missed the
-        // turn's start or end.
-        open = false
-        if (liveSessionId) void recheck(liveSessionId)
-        return
+    const dial = async (
+      signal: AbortSignal,
+      lost: (cause: unknown) => void
+    ) => {
+      const { liveSessionId } = await this.#native.resume(scope)
+      let released = false
+      const current = () => !released && !signal.aborted
+      const observer = (attachment: AttachmentSignal) => {
+        if (released) return
+        if (attachment.kind === "reattached") {
+          // Hermes kept the live Session, but the socket may have missed the
+          // turn's start or end.
+          open = false
+          recheck(liveSessionId, current)
+          return
+        }
+        if (attachment.kind === "lost") {
+          const cause = new HermesUnavailableError()
+          if (link.state() === "ready") lost(cause)
+          else held = () => lost(cause)
+          return
+        }
+        const event = nativeEvent(attachment.event)
+        if (!event || event.session_id !== liveSessionId) return
+        if (event.type === "message.start") announce(this.#active.has(key))
+        else if (
+          event.type === "message.complete" ||
+          (event.type === "session.info" && payloadOf(event).running === false)
+        )
+          open = false
       }
-      if (signal.kind === "lost") {
-        release()
-        void subscribe()
-        return
-      }
-      const event = nativeEvent(signal.event)
-      if (!event || event.session_id !== liveSessionId) return
-      if (event.type === "message.start") announce(this.#active.has(key))
-      else if (
-        event.type === "message.complete" ||
-        (event.type === "session.info" && payloadOf(event).running === false)
-      )
-        open = false
-    }
-    const subscribe = async () => {
-      try {
-        const resumed = await this.#native.resume(scope)
-        if (stopped) return
-        open = false
-        liveSessionId = resumed.liveSessionId
-        const stop = await this.#native.subscribeLive(liveSessionId, observer)
-        if (stopped) return safelyUnsubscribe(stop)
-        unsubscribe = stop
-        failures = 0
-        await recheck(liveSessionId)
-      } catch (cause) {
-        if (stopped) return
-        release()
-        // One report per outage; the retries continue silently.
-        if (failures === 0) listener.onError(cause)
-        const delay =
-          WATCH_RETRY_MS[Math.min(failures, WATCH_RETRY_MS.length - 1)]
-        failures += 1
-        timer = setTimeout(() => void subscribe(), delay)
-        // Retrying is reconciliation, never a reason to keep the process alive.
-        if (typeof timer !== "number") timer.unref()
+      open = false
+      const stop = await this.#native.subscribeLive(liveSessionId, observer)
+      recheck(liveSessionId, current)
+      return () => {
+        released = true
+        safelyUnsubscribe(stop)
       }
     }
-    void subscribe()
+    const link = createLink({
+      dial,
+      publicError: this.#watch.publicError,
+      onError: (cause) => listener.onError(cause),
+      upstream: this.#watch.upstream,
+      budget: this.#watchBudget,
+      logger: this.#watch.logger,
+      clock: defaultClock,
+      bindings,
+    })
+    const unsubscribe = link.subscribe((state) => {
+      if (state !== "ready") return
+      const drop = held
+      held = undefined
+      drop?.()
+    })
     return () => {
-      stopped = true
-      clearTimeout(timer)
-      release()
+      unsubscribe()
+      link.dispose()
     }
   }
 

@@ -25,7 +25,6 @@ import {
   HermesHttpError,
   HermesUnavailableError,
   throwUnavailable,
-  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 import {
@@ -76,7 +75,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
-import { READY_LINK } from "../../core/link"
+import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
@@ -338,7 +337,8 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
-  readonly link = READY_LINK
+  /** The gateway's socket; a transport that owns none is taken as up. */
+  readonly link: ServerLink
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
@@ -369,7 +369,7 @@ export class HermesServerAdapter implements ServerRuntime {
     private readonly transport: HermesRpcTransport,
     options: {
       sessionIdleMs?: number
-      log?: HermesLog
+      log?: Logger
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
       /**
@@ -379,6 +379,7 @@ export class HermesServerAdapter implements ServerRuntime {
       mcp?: { client: McpAppClient; logger: Logger }
     } = {}
   ) {
+    this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
@@ -557,6 +558,13 @@ export class HermesServerAdapter implements ServerRuntime {
     this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
+      // A watch stops where the adapter reports a Session gone or the token
+      // refused, and redials once the gateway is up again.
+      watch: {
+        publicError: (cause) => this.publicError(cause),
+        upstream: this.link,
+        ...(options.log ? { logger: options.log } : {}),
+      },
     })
   }
 

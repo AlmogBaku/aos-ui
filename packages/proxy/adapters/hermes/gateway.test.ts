@@ -1012,18 +1012,24 @@ describe("Hermes gateway lifecycle and server requests", () => {
     await gateway.close()
   })
 
-  it("reports whether an answer written now can reach Hermes", async () => {
-    const { gateway, sockets } = harness()
+  it("reports whether an answer written now can reach Hermes, and its link", async () => {
+    const clock = useFakeClock()
+    const { gateway, sockets } = harness({ autoReady: true })
 
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
     await gateway.connect()
     expect(gateway.connected()).toBe(true)
+    await clock.advance(0)
+    expect(gateway.link.state()).toBe("ready")
 
     sockets[0]!.close(1006)
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
 
     await gateway.close()
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
   })
 
   it("re-delivers open requests from a resume result before it resolves", async () => {
