@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto"
 
 import {
+  backoffDelay,
   createOwner,
+  Deadline,
   defaultClock,
   ownerSetup,
   type Clock,
@@ -30,6 +32,7 @@ import {
   ServerTurnCapacityError,
   ServerTurnStopNotDispatchedError,
   ServerTurnSteerUnavailableError,
+  ServerTurnUncertainError,
   type RecoveryRequest,
   type ServerAttachmentStage,
   type ServerRuntime,
@@ -48,7 +51,12 @@ import {
   type TurnSteerRequest,
   type TurnSteerResponse,
 } from "../../protocol"
-import { CLIENT_ADMISSIONS } from "./limits"
+import {
+  ADMISSION_DEADLINE_MS,
+  CLIENT_ADMISSIONS,
+  RECONCILE_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
+} from "./limits"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -129,6 +137,8 @@ export type TurnQuota = {
 /** What a start carries beside its prompt. */
 export type StartOptions = {
   stage?: ServerAttachmentStage
+  /** Aborts the start: one aborted once dispatched leaves its turn uncertain. */
+  signal?: AbortSignal
   /** Refuses the start while the turns it counts reach its limit. */
   quota?: TurnQuota
 }
@@ -210,6 +220,14 @@ type TurnContext = OwnerContext & {
   resting: RestingState
   /** The turn the latest landed admission admitted. */
   turnId?: string
+  /** Clock time an uncertain turn no recover confirms running ends at. */
+  uncertainUntil: number
+  /**
+   * The reconciles this turn has made: the first asks at once and each later
+   * one waits on backoff, so a turn whose recovered stream keeps dropping never
+   * spins against its provider.
+   */
+  reconciles: number
 }
 
 /**
@@ -218,7 +236,12 @@ type TurnContext = OwnerContext & {
  */
 type TurnSignal =
   | { type: "admit" }
-  | { type: "admitted"; state: "running" | "waiting-for-input"; turnId: string }
+  | {
+      type: "admitted"
+      /** Uncertain for a start its provider never answered. */
+      state: "running" | "waiting-for-input" | "uncertain"
+      turnId: string
+    }
   /** The admission did not land, so the turn returns to where it rested. */
   | { type: "refused" }
   /** The provider holds no turn for the wait this admission refreshed. */
@@ -232,31 +255,67 @@ type TurnSignal =
   | { type: "undispatched" }
   | { type: "stopFailed" }
 
+/** What an uncertain turn asks its coordinator for, at its generation. */
+type TurnHooks = {
+  reconcile(generation: number): void
+  outcomeUnknown(generation: number): void
+}
+
 /**
  * One Session's turn lifecycle. Only a landed admission bumps the generation,
  * so an outcome reported for an earlier segment is stale by construction.
  * Idle ignores the stream: a turn that Stop settled stays settled. An outcome
  * the stream reports while an admission is in flight moves where the turn
  * rests, as that resting state would take it, so a refused admission returns
- * to where the stream left the turn.
+ * to where the stream left the turn. An uncertain turn asks `hooks` to
+ * reconcile it, and ends at its deadline with its outcome unknown.
  */
-function turnMachine(logger: Logger, clock: Clock) {
-  const turn = ownerSetup<TurnContext, TurnSignal>("turn", logger, clock)
+function turnMachine(logger: Logger, clock: Clock, hooks: TurnHooks) {
+  const turn = ownerSetup<TurnContext, TurnSignal>(
+    "turn",
+    logger,
+    clock
+  ).extend({
+    delays: {
+      outcomeUnknown: ({ context }) =>
+        Math.max(0, context.uncertainUntil - clock.now()),
+      reconcile: ({ context }) =>
+        context.reconciles === 0
+          ? 0
+          : backoffDelay(context.reconciles - 1, RECONCILE_BACKOFF),
+    },
+  })
   const admit = (resting: RestingState) => ({
     target: "admitting" as const,
-    actions: turn.assign({ resting }),
+    // An admission from rest begins a new turn, whose reconciles start over.
+    actions: turn.assign(
+      resting === "idle" ? { resting, reconciles: 0 } : { resting }
+    ),
   })
   const land = turn.assign({
     turnId: ({ event }) =>
       event.type === "admitted" ? event.turnId : undefined,
   })
+  // Every move into uncertainty starts its deadline over.
+  const doubt = turn.assign({
+    uncertainUntil: () => clock.now() + UNCERTAINTY_DEADLINE_MS,
+  })
+  const unsure = { target: "uncertain" as const, actions: doubt }
   const rest = (from: RestingState[], resting: RestingState) => ({
     guard: ({ context }: { context: TurnContext }) =>
       from.includes(context.resting),
-    actions: turn.assign({ resting }),
+    actions: [
+      turn.assign({ resting }),
+      ...(resting === "uncertain" ? [doubt] : []),
+    ],
   })
   return turn.createMachine({
-    context: { generation: 0, resting: "idle" },
+    context: {
+      generation: 0,
+      resting: "idle",
+      uncertainUntil: 0,
+      reconciles: 0,
+    },
     initial: "idle",
     states: {
       idle: { on: { admit: admit("idle") } },
@@ -267,6 +326,11 @@ function turnMachine(logger: Logger, clock: Clock) {
               guard: ({ event }) => event.state === "waiting-for-input",
               target: "waiting-for-input",
               actions: ["bumpGeneration", land],
+            },
+            {
+              guard: ({ event }) => event.state === "uncertain",
+              target: "uncertain",
+              actions: ["bumpGeneration", land, doubt],
             },
             { target: "running", actions: ["bumpGeneration", land] },
           ],
@@ -291,34 +355,50 @@ function turnMachine(logger: Logger, clock: Clock) {
         on: {
           ended: "idle",
           paused: "waiting-for-input",
-          lost: "uncertain",
+          lost: unsure,
           stopped: "idle",
           stopping: "stopping",
-          stopFailed: "uncertain",
+          stopFailed: unsure,
         },
       },
       stopping: {
         on: {
           ended: "idle",
           paused: "waiting-for-input",
-          lost: "uncertain",
+          lost: unsure,
           stopped: "idle",
           undispatched: "running",
-          stopFailed: "uncertain",
+          stopFailed: unsure,
         },
       },
       "waiting-for-input": {
         on: {
           admit: admit("waiting-for-input"),
           ended: "idle",
-          lost: "uncertain",
+          lost: unsure,
           stopped: "idle",
           stopping: "stopping",
-          stopFailed: "uncertain",
+          stopFailed: unsure,
         },
       },
-      // A Stop that cannot be confirmed leaves the stream to report the outcome.
+      // Reconciled at once, then on backoff, until a recover confirms the turn
+      // running or its deadline ends it. A refused reconcile re-enters, which
+      // arms both again.
       uncertain: {
+        after: {
+          outcomeUnknown: {
+            target: "idle",
+            actions: ({ context }) => hooks.outcomeUnknown(context.generation),
+          },
+          reconcile: {
+            actions: [
+              turn.assign({
+                reconciles: ({ context }) => context.reconciles + 1,
+              }),
+              ({ context }) => hooks.reconcile(context.generation),
+            ],
+          },
+        },
         on: {
           admit: admit("uncertain"),
           ended: "idle",
@@ -403,13 +483,6 @@ type Segment = {
    * turn joined midway, or adopted without a start.
    */
   startedAt?: number
-  /**
-   * Resolves once the provider has spoken for this segment: its first event, or
-   * the outcome this coordinator applied when its stream ended. An uncertain
-   * turn waits for that signal instead of for a timer.
-   */
-  spoken: Promise<void>
-  announce: () => void
 }
 
 /** How a segment relates to the replayable history of its turn. */
@@ -753,11 +826,17 @@ function settledNow(settled: Promise<void>) {
   ])
 }
 
+/** How an uncertain turn ends once no recover confirmed it by its deadline. */
+const OUTCOME_UNKNOWN = {
+  kind: TurnEventKind.TurnFailed,
+  code: "AOS_OUTCOME_UNKNOWN",
+  message: "AOS could not confirm how this turn ended.",
+} as const
+
 export class SessionCoordinator {
   readonly #executions = new Map<string, Execution>()
   readonly #journals = new Map<string, Segment>()
   readonly #turns = new Map<string, Turn>()
-  readonly #machine: ReturnType<typeof turnMachine>
   readonly #logger: Logger
   readonly #clock: Clock
   readonly #recoveries = new Map<string, Promise<Execution>>()
@@ -790,7 +869,6 @@ export class SessionCoordinator {
     this.#clock = options.clock ?? defaultClock
     this.#sends = new ClientAdmissions(this.#clock)
     this.#creates = new ClientAdmissions(this.#clock)
-    this.#machine = turnMachine(this.#logger, this.#clock)
     const cell = { logger: this.#logger, clock: this.#clock }
     this.#usage = new SessionReporter({
       name: "usage",
@@ -814,10 +892,7 @@ export class SessionCoordinator {
     this.#execution = new SessionReporter({
       name: "execution",
       read: async (scope) => {
-        const turn = this.#turns.get(scopeKey(scope))
-        const { state, turnId } = turn
-          ? turnExecution(turn)
-          : { state: "idle" as const, turnId: undefined }
+        const { state, turnId } = this.#turnExecution(scopeKey(scope))
         return {
           state,
           ...(turnId === undefined ? {} : { turnId }),
@@ -914,21 +989,24 @@ export class SessionCoordinator {
   }
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
-    return this.#executions.get(scopeKey(scope))?.state ?? "idle"
+    return this.#turnExecution(scopeKey(scope)).state
   }
 
   snapshot(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">
   ): SessionSnapshot {
-    const execution = this.#executions.get(scopeKey(scope))
-    if (!execution) return { state: "idle", requests: [] }
+    const key = scopeKey(scope)
+    const segment = this.#executions.get(key)?.segment
+    const { state, turnId } = this.#turnExecution(key)
+    // A start its provider never answered is an uncertain turn with no segment.
+    if (!segment && (state !== "uncertain" || turnId === undefined))
+      return { state, requests: [] }
+    const startedBy = this.#turns.get(key)?.startedBy
     return {
-      state: execution.state,
-      turnId: execution.segment.turnId,
-      requests: structuredClone(openRequests(execution.segment)),
-      ...(execution.turn.startedBy === undefined
-        ? {}
-        : { startedBy: execution.turn.startedBy }),
+      state,
+      turnId: segment?.turnId ?? turnId,
+      requests: segment ? structuredClone(openRequests(segment)) : [],
+      ...(startedBy === undefined ? {} : { startedBy }),
     }
   }
 
@@ -982,11 +1060,11 @@ export class SessionCoordinator {
   async discover(scope: SessionScope) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
+    // A turn in flight, or one being reconciled, is not the runtime's own.
+    const { state } = this.#turnExecution(key)
     if (
       !this.options.engine.discover ||
-      (existing &&
-        existing.state !== "waiting-for-input" &&
-        existing.state !== "idle")
+      (state !== "waiting-for-input" && state !== "idle")
     )
       return existing
     const inFlight = this.#discoveries.get(key)
@@ -994,7 +1072,7 @@ export class SessionCoordinator {
     const discovery = this.#discover(
       scope,
       key,
-      existing?.state === "waiting-for-input" ? existing : undefined
+      state === "waiting-for-input" ? existing : undefined
     )
     this.#discoveries.set(key, discovery)
     void discovery
@@ -1019,7 +1097,10 @@ export class SessionCoordinator {
       // Adopting a turn the runtime started after one this proxy ran is a
       // turn start; a turn lost to a restart, or a wait refreshed, is not.
       if (!existing && this.#executions.has(key)) this.#assertCapacity(key)
-      const discovered = await this.options.engine.discover!(scope, turnId)
+      const discovered = await new Deadline(
+        ADMISSION_DEADLINE_MS,
+        this.#clock
+      ).run((signal) => this.options.engine.discover!(scope, turnId, signal))
       if (!discovered) {
         if (existing && this.#move(turn, generation, { type: "cleared" })) {
           this.#resolveAttention(existing)
@@ -1129,8 +1210,9 @@ export class SessionCoordinator {
     scope: SessionScope,
     input: PromptTurnInput,
     access: CoordinatorAccess,
-    { stage, quota }: StartOptions
+    { stage, signal, quota }: StartOptions
   ): Promise<CoordinatedTurnSubscription> {
+    signal?.throwIfAborted()
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (existing?.segment.turnId === input.turnId) {
@@ -1139,25 +1221,19 @@ export class SessionCoordinator {
       return this.#repeat(existing, access)
     }
 
-    if (existing && existing.state !== "idle") {
-      if (
-        existing.state !== "uncertain" ||
-        !(await this.#settleUncertain(scope, existing, access))
-      )
-        throw new ServerTurnConflictError()
-    }
+    // An uncertain turn holds its Session until a reconcile settles it.
+    if (this.state(scope) !== "idle") throw new ServerTurnConflictError()
     this.#assertCapacity(key, quota)
     const { turn, generation } = this.#admit(
       scope,
       input.turnId,
       access.principalId
     )
+    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock, signal)
     try {
       const at = Date.now()
-      const handle = await this.options.engine.start(
-        scope,
-        input,
-        ...(stage ? [stage] : [])
+      const handle = await deadline.run(() =>
+        this.options.engine.start(scope, input, ...(stage ? [stage] : []))
       )
       const execution: Execution = this.#createExecution({
         scope,
@@ -1177,6 +1253,17 @@ export class SessionCoordinator {
       this.#trackJournal(execution.segment)
       this.#consume(execution, execution.segment)
       return this.#subscribe(execution.segment, 0, access)
+    } catch (error) {
+      if (!deadline.signal.aborted) throw error
+      // The provider may have admitted the turn, so it takes the Session from
+      // the turn before it, uncertain until a reconcile settles it.
+      this.#landed(turn, generation, "uncertain", input.turnId)
+      const previous = this.#executions.get(key)
+      if (previous) {
+        this.#forgetJournal(previous.segment)
+        this.#executions.delete(key)
+      }
+      throw new ServerTurnUncertainError()
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1251,9 +1338,11 @@ export class SessionCoordinator {
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
 
-    if (existing && existing.segment.turnId !== request.turnId)
+    // A start its provider never answered is a turn without a segment.
+    const current = existing?.segment.turnId ?? this.#turnExecution(key).turnId
+    if (current !== undefined && current !== request.turnId)
       throw new ServerTurnConflictError()
-    const recovered = await this.#recovery(scope, request, access, existing)
+    const recovered = await this.#recovery(scope, request, existing)
     if (recovered.segment.turnId !== request.turnId)
       throw new ServerTurnConflictError()
     // A recovery that replaced a known execution continues its sequence, so the
@@ -1268,7 +1357,6 @@ export class SessionCoordinator {
   #recovery(
     scope: SessionScope,
     request: CoordinatorRecoveryRequest,
-    access: CoordinatorAccess,
     existing: Execution | undefined
   ) {
     const key = scopeKey(scope)
@@ -1277,7 +1365,6 @@ export class SessionCoordinator {
     const recovery = this.#recoverExecution(
       scope,
       request,
-      access,
       existing,
       this.#admit(scope, request.turnId)
     )
@@ -1291,39 +1378,55 @@ export class SessionCoordinator {
   }
 
   /**
-   * The provider decides whether an uncertain turn is over. A recovery that
-   * settles it clears the way for this turn; a turn that keeps streaming, and a
-   * recovery that cannot be reached, stay authoritative.
+   * Asks the provider how an uncertain turn stands. A recovery that lands
+   * confirms the turn running, and its stream reports how the turn ends; one
+   * that fails leaves the turn uncertain for the next reconcile.
    */
-  async #settleUncertain(
-    scope: SessionScope,
-    execution: Execution,
-    access: CoordinatorAccess
-  ) {
-    const key = scopeKey(scope)
-    let recovered: Execution
-    try {
-      recovered = await this.#recovery(
-        scope,
-        { sessionId: scope.sessionId, turnId: execution.segment.turnId },
-        access,
-        execution
-      )
-    } catch {
-      return false
+  async #reconcile(scope: SessionScope, turn: Turn, generation: number) {
+    const { value, context } = turn.owner.actor.getSnapshot()
+    if (
+      this.#closed ||
+      turn.owner.stale(generation) ||
+      value !== "uncertain" ||
+      context.turnId === undefined
+    )
+      return
+    await this.#recovery(
+      scope,
+      { sessionId: scope.sessionId, turnId: context.turnId },
+      this.#executions.get(scopeKey(scope))
+    )
+  }
+
+  /**
+   * Ends a turn no recover confirmed running by its deadline. Its readers and
+   * observers learn it failed, and its journal keeps why for a redial.
+   */
+  async #outcomeUnknown(scope: SessionScope, turn: Turn, generation: number) {
+    const { turnId } = turnExecution(turn)
+    if (this.#closed || turn.owner.stale(generation) || turnId === undefined)
+      return
+    this.#logger.warn(
+      { agentId: scope.agentId, sessionId: scope.sessionId, turnId },
+      "turn.outcome-unknown"
+    )
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    const owned = segment?.turnId === turnId ? segment : undefined
+    if (owned) {
+      owned.terminal = true
+      this.#publish(owned, OUTCOME_UNKNOWN)
+      owned.fanout.close()
     }
-    // The provider answers this: the recovered segment either reports the
-    // outcome of the turn or speaks as a turn that is still streaming. Waiting on
-    // that signal is what keeps an already-terminal recovery, however many
-    // turns of the event loop it takes, from reading as a conflict.
-    await recovered.segment.spoken
-    return this.#executions.get(key)?.state === "idle"
+    this.#announce(scope, {
+      ...this.#origin(scope, turnId),
+      kind: "turn-failed",
+    })
+    await owned?.onTerminal?.(OUTCOME_UNKNOWN)
   }
 
   async #recoverExecution(
     scope: SessionScope,
     request: CoordinatorRecoveryRequest,
-    access: CoordinatorAccess,
     existing: Execution | undefined,
     { turn, generation }: Admission
   ) {
@@ -1337,7 +1440,9 @@ export class SessionCoordinator {
         turnId: request.turnId,
         ...(position ? { position } : {}),
       }
-      const handle = await this.options.engine.recover(scope, providerRequest)
+      const handle = await new Deadline(ADMISSION_DEADLINE_MS, this.#clock).run(
+        (signal) => this.options.engine.recover(scope, providerRequest, signal)
+      )
       const replaced = existing?.segment
       const segment = this.#createSegment({
         cacheKey: key,
@@ -1471,14 +1576,32 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     const known = this.#turns.get(key)
     if (known) return known
+    const { agentId, sessionId } = scope
+    // A hook runs once the move that asked for it has landed.
+    const later = (message: string, work: () => Promise<void>) =>
+      void Promise.resolve()
+        .then(work)
+        .catch((err: unknown) =>
+          this.#logger.warn({ err, agentId, sessionId }, message)
+        )
+    const machine = turnMachine(this.#logger, this.#clock, {
+      reconcile: (generation) =>
+        later("turn.reconcile.failed", () =>
+          this.#reconcile(scope, turn, generation)
+        ),
+      outcomeUnknown: (generation) =>
+        later("turn.outcome-unknown.failed", () =>
+          this.#outcomeUnknown(scope, turn, generation)
+        ),
+    })
     const turn: Turn = {
-      owner: createOwner(this.#machine, {
+      owner: createOwner(machine, {
         logger: namingTurn(
           this.#logger,
-          () => turn.admission ?? this.#executions.get(key)?.segment.turnId
+          () => turn.admission ?? turnExecution(turn).turnId
         ),
         clock: this.#clock,
-        bindings: { agentId: scope.agentId, sessionId: scope.sessionId },
+        bindings: { agentId, sessionId },
       }),
     }
     // The execution reading changes with each move the turn makes.
@@ -1492,6 +1615,14 @@ export class SessionCoordinator {
     })
     this.#turns.set(key, turn)
     return turn
+  }
+
+  /** Where a Session's turn is: one no admission has reached is idle. */
+  #turnExecution(key: string) {
+    const turn = this.#turns.get(key)
+    return turn
+      ? turnExecution(turn)
+      : { state: "idle" as const, turnId: undefined }
   }
 
   /**
@@ -1531,7 +1662,7 @@ export class SessionCoordinator {
   #landed(
     turn: Turn,
     generation: number,
-    state: "running" | "waiting-for-input",
+    state: "running" | "waiting-for-input" | "uncertain",
     turnId: string
   ) {
     if (!this.#move(turn, generation, { type: "admitted", state, turnId }))
@@ -1624,13 +1755,7 @@ export class SessionCoordinator {
   #createSegment(init: SegmentInit): Segment {
     const previous =
       init.history.journal === "continue" ? init.history.previous : undefined
-    let announce = () => {}
-    const spoken = new Promise<void>((resolve) => {
-      announce = resolve
-    })
     return {
-      spoken,
-      announce,
       cacheKey: init.cacheKey,
       turnId: init.turnId,
       generation: init.generation,
@@ -1668,10 +1793,10 @@ export class SessionCoordinator {
         kind: "turn-started",
       })
     void (async () => {
-      let terminal = false
       try {
         for await (const raw of segment.handle.events) {
-          if (execution.segment !== segment) return
+          // A turn whose outcome went unknown takes no more of its stream.
+          if (execution.segment !== segment || segment.terminal) return
           // Dated where the replay starts, so a reload counts from there.
           const event =
             raw.kind === TurnEventKind.TurnStarted && segment.startedAt
@@ -1701,10 +1826,8 @@ export class SessionCoordinator {
           const interrupted = isRedialableFailure(event)
           if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
-          segment.announce()
           if (ended) {
             this.#forgetJournal(segment)
-            terminal = true
             segment.terminal = true
             segment.requests = pendingRequestsOf(event)
             outcome(segment.requests.length ? "paused" : "ended")
@@ -1730,7 +1853,6 @@ export class SessionCoordinator {
             // The journal outlives an interrupt so a reload after recovery
             // still replays this turn from its beginning.
             if (!interrupted) this.#forgetJournal(segment)
-            terminal = true
             segment.terminal = true
             // Only a turn the provider may still be working on is uncertain. A
             // reset is definite: its journal cannot serve the browser's cursor,
@@ -1749,9 +1871,8 @@ export class SessionCoordinator {
         // event: the provider's settlement below is what decides the turn.
       } finally {
         segment.fanout.close()
-        if (!terminal && !turn.owner.stale(segment.generation))
+        if (!segment.terminal && !turn.owner.stale(segment.generation))
           outcome((await settledNow(segment.handle.settled)) ? "ended" : "lost")
-        segment.announce()
       }
     })()
   }

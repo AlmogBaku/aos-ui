@@ -12,14 +12,21 @@ import {
 
 import {
   ServerRequestStaleError,
+  ServerTurnCapacityError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
+  ServerTurnUncertainError,
   type ServerTurnEngine,
   type ServerAttachmentStage,
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
-import { CLIENT_ADMISSIONS } from "./limits"
+import {
+  ADMISSION_DEADLINE_MS,
+  CLIENT_ADMISSIONS,
+  RECONCILE_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
+} from "./limits"
 import {
   ServerClientIdReusedError,
   SessionCoordinator,
@@ -1919,6 +1926,7 @@ describe("SessionCoordinator", () => {
   })
 
   it("keeps an ambiguous Stop failure uncertain", async () => {
+    const { advance } = useFakeClock()
     const source = new EventSource()
     source.stop.mockRejectedValueOnce(new Error("Connection lost"))
     const recover = vi.fn(async (): Promise<ServerTurnHandle> => source)
@@ -1931,7 +1939,7 @@ describe("SessionCoordinator", () => {
     await expect(sessions.stop(scope)).rejects.toThrow("Connection lost")
     expect(sessions.state(scope)).toBe("uncertain")
 
-    // The stream reports the outcome while the next start is recovering the
+    // The stream reports the outcome while the reconcile is recovering the
     // turn, and that recovery fails: the turn rests where the stream left it.
     recover.mockImplementationOnce(async () => {
       const finished = new Promise<void>((resolve) => {
@@ -1946,9 +1954,7 @@ describe("SessionCoordinator", () => {
       await finished
       throw new Error("Provider unavailable")
     })
-    await expect(
-      sessions.start(scope, input("run-2"), access("operator"))
-    ).rejects.toThrow("already active")
+    await advance(0)
     expect(sessions.state(scope)).toBe("idle")
   })
 
@@ -2022,6 +2028,7 @@ describe("SessionCoordinator", () => {
   })
 
   it("does not reopen a Session whose stream died when Stop answers afterwards", async () => {
+    const { advance } = useFakeClock()
     const source = new EventSource()
     let answerStop = () => {}
     source.stop.mockImplementationOnce(
@@ -2032,14 +2039,16 @@ describe("SessionCoordinator", () => {
     )
     const sessions = coordinator({
       start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("provider unavailable")
+      }),
     })
     await sessions.start(scope, input("run-1"), access("operator"))
     const stopping = sessions.stop(scope)
 
     // The stream ends without a terminal event and without settling.
     source.close()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    await advance(0)
     answerStop()
 
     await expect(stopping).resolves.toBe("stopping")
@@ -2257,6 +2266,7 @@ describe("SessionCoordinator", () => {
   })
 
   it("preserves terminal resource ownership across uncertain recovery", async () => {
+    const { advance } = useFakeClock()
     const initial = new EventSource()
     const recovered = new EventSource()
     const onTerminal = vi.fn(async () => undefined)
@@ -2275,13 +2285,8 @@ describe("SessionCoordinator", () => {
       code: "AOS_SEND_UNCERTAIN",
     })
     initial.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    await advance(0)
 
-    await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1" },
-      access("operator")
-    )
     const terminal = {
       kind: TurnEventKind.TurnFailed,
       message: "Slash commands cannot be sent with attachments.",
@@ -2289,8 +2294,9 @@ describe("SessionCoordinator", () => {
     } as const
     recovered.emit(terminal)
     recovered.finish()
+    await advance(0)
 
-    await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledTimes(2))
+    expect(onTerminal).toHaveBeenCalledTimes(2)
     expect(onTerminal).toHaveBeenLastCalledWith(terminal)
   })
 
@@ -2740,7 +2746,8 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).toHaveBeenCalledOnce()
   })
 
-  it("recovers an uncertain execution before refusing a new turn", async () => {
+  it("reconciles an uncertain turn at once and admits the next once it settles", async () => {
+    const { advance } = useFakeClock()
     const interrupted = new EventSource()
     const recovered = new EventSource("token-7")
     const admitted = new EventSource()
@@ -2753,16 +2760,12 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
-    interrupted.emit({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_CONNECTION_INTERRUPTED",
-      message: "The provider connection was interrupted.",
-    })
+    interrupted.emit(interruptedError)
     interrupted.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
     // The provider answers the recovery with an already-finished run.
     recovered.emit(turnEnded)
     recovered.finish()
+    await advance(0)
 
     const subscription = await sessions.start(
       scope,
@@ -2771,15 +2774,15 @@ describe("SessionCoordinator", () => {
     )
 
     expect(subscription.turnId).toBe("run-2")
-    expect(engine.recover).toHaveBeenCalledWith(scope, {
-      sessionId: scope.sessionId,
-      turnId: "run-1",
-      position: "token-1",
-    })
-    expect(engine.start).toHaveBeenCalledTimes(2)
+    expect(engine.recover).toHaveBeenCalledWith(
+      scope,
+      { sessionId: scope.sessionId, turnId: "run-1", position: "token-1" },
+      expect.any(AbortSignal)
+    )
   })
 
   it("recovers without a position when the replaced segment names none", async () => {
+    const { advance } = useFakeClock()
     const restored = new EventSource(null)
     const recovered = new EventSource()
     const engine: ServerTurnEngine = {
@@ -2790,113 +2793,139 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("one"))
     restored.emit(interruptedError)
     restored.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
-
-    const redial = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
-      access("two")
-    )
+    await advance(0)
 
     // A fabricated position could never match a provider epoch, so the recovery
     // asks for the run itself rather than for an interval nothing owns.
-    expect(engine.recover).toHaveBeenCalledWith(scope, {
-      sessionId: scope.sessionId,
-      turnId: "run-1",
-    })
-    redial.close()
+    expect(engine.recover).toHaveBeenCalledWith(
+      scope,
+      { sessionId: scope.sessionId, turnId: "run-1" },
+      expect.any(AbortSignal)
+    )
   })
 
-  it("refuses a new turn when the recovered run is still running", async () => {
+  it("restarts the uncertainty deadline when a recover confirms the turn running", async () => {
+    const { advance } = useFakeClock()
     const interrupted = new EventSource()
     const recovered = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => interrupted),
-      recover: vi.fn(async () => recovered),
-    }
-    const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("one"))
-    interrupted.emit({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_CONNECTION_INTERRUPTED",
-      message: "The provider connection was interrupted.",
-    })
-    interrupted.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
-    recovered.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "still working",
-    })
-
-    await expect(
-      sessions.start(scope, input("run-2"), access("one"))
-    ).rejects.toThrow("already active")
-    expect(engine.recover).toHaveBeenCalledOnce()
-    expect(sessions.state(scope)).toBe("running")
-  })
-
-  it("admits a new turn when a recovered terminal needs more than one macrotask", async () => {
-    vi.useFakeTimers()
-    try {
-      const interrupted = new EventSource()
-      const recovered = new EventSource()
-      const admitted = new EventSource()
-      const engine: ServerTurnEngine = {
-        start: vi
-          .fn<ServerTurnEngine["start"]>()
-          .mockResolvedValueOnce(interrupted)
-          .mockResolvedValueOnce(admitted),
-        recover: vi.fn(async () => recovered),
-      }
-      const sessions = coordinator(engine)
-      await sessions.start(scope, input("run-1"), access("one"))
-      interrupted.emit(interruptedError)
-      interrupted.finish()
-      await vi.advanceTimersByTimeAsync(0)
-      expect(sessions.state(scope)).toBe("uncertain")
-
-      const turn = sessions.start(scope, input("run-2"), access("one"))
-      // The provider answers the recovery with a run that finished, and it
-      // takes more than the one event-loop turn a timer would have allowed.
-      await vi.advanceTimersByTimeAsync(0)
-      await vi.advanceTimersByTimeAsync(0)
-      recovered.emit(turnEnded)
-      recovered.finish()
-
-      await expect(turn).resolves.toMatchObject({ turnId: "run-2" })
-      expect(engine.start).toHaveBeenCalledTimes(2)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it("refuses a new turn when recovering an uncertain execution fails", async () => {
-    const interrupted = new EventSource()
+    let reachable = false
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => interrupted),
       recover: vi.fn(async () => {
-        throw new Error("provider unavailable")
+        if (!reachable) throw new Error("provider unavailable")
+        reachable = false
+        return recovered
       }),
     }
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("one"))
-    interrupted.emit({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_CONNECTION_INTERRUPTED",
-      message: "The provider connection was interrupted.",
-    })
+    interrupted.emit(interruptedError)
     interrupted.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
 
+    await advance(UNCERTAINTY_DEADLINE_MS - 60_000)
+    reachable = true
+    await advance(RECONCILE_BACKOFF.capMs)
+    expect(sessions.state(scope)).toBe("running")
+
+    // The confirmed turn drops again: its first deadline has passed, and only
+    // the one its confirmation started ends it.
+    recovered.emit(interruptedError)
+    recovered.finish()
+    await advance(60_000)
+    expect(sessions.state(scope)).toBe("uncertain")
+    await advance(UNCERTAINTY_DEADLINE_MS)
+    expect(sessions.state(scope)).toBe("idle")
+  })
+
+  it("ends a turn no recover confirms with its outcome unknown and frees its slot", async () => {
+    const { advance } = useFakeClock()
+    const interrupted = new EventSource()
+    const signals: AbortSignal[] = []
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(interrupted)
+        .mockResolvedValue(new EventSource()),
+      // The provider never answers, so each recover waits out its deadline.
+      recover: vi.fn<ServerTurnEngine["recover"]>(
+        (_target, _request, signal) =>
+          new Promise((_resolve, reject) => {
+            signals.push(signal!)
+            signal!.addEventListener("abort", () => reject(signal!.reason))
+          })
+      ),
+    }
+    const sessions = coordinator(engine, { maxActiveExecutions: 1 })
+    await sessions.start(scope, input("run-1"), access("one"))
+    interrupted.emit(interruptedError)
+    interrupted.finish()
+
+    await advance(ADMISSION_DEADLINE_MS)
+    expect(signals[0]?.aborted).toBe(true)
     await expect(
       sessions.start(scope, input("run-2"), access("one"))
     ).rejects.toThrow("already active")
-    expect(engine.recover).toHaveBeenCalledOnce()
-    expect(engine.start).toHaveBeenCalledOnce()
+    await expect(
+      sessions.start(otherScope, input("run-3"), access("one"))
+    ).rejects.toBeInstanceOf(ServerTurnCapacityError)
+
+    // The interrupt announced its own failure; the deadline announces the turn's.
+    const observed: ExecutionEvent[] = []
+    sessions.subscribeExecutions((event) => observed.push(event))
+    await advance(UNCERTAINTY_DEADLINE_MS)
+
+    expect(sessions.state(scope)).toBe("idle")
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-failed", "run-1"],
+    ])
+    await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
+      {
+        event: { kind: TurnEventKind.TurnFailed, code: "AOS_OUTCOME_UNKNOWN" },
+      }
+    )
+    await expect(
+      sessions.start(otherScope, input("run-3"), access("one"))
+    ).resolves.toBeDefined()
   })
 
-  it("keeps a Session uncertain when a Stop cannot be confirmed", async () => {
+  it("leaves a start its provider never answers uncertain at the admission deadline", async () => {
+    const { advance } = useFakeClock()
+    const recovered = new EventSource()
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValueOnce(new EventSource()),
+      recover: vi
+        .fn<ServerTurnEngine["recover"]>()
+        .mockRejectedValueOnce(new Error("provider unavailable"))
+        .mockResolvedValueOnce(recovered),
+    }
+    const sessions = coordinator(engine)
+    const hung = expect(
+      sessions.start(scope, input("run-1"), access("one"))
+    ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+
+    await advance(ADMISSION_DEADLINE_MS)
+    await hung
+    expect(sessions.state(scope)).toBe("uncertain")
+
+    // The provider settles the turn once a reconcile reaches it.
+    recovered.emit(turnEnded)
+    recovered.finish()
+    await advance(RECONCILE_BACKOFF.capMs)
+    expect(engine.recover).toHaveBeenCalledWith(
+      scope,
+      { sessionId: scope.sessionId, turnId: "run-1" },
+      expect.any(AbortSignal)
+    )
+    await expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).resolves.toMatchObject({ turnId: "run-2" })
+  })
+
+  it("keeps the journal of a turn whose Stop could not be confirmed", async () => {
+    const { advance } = useFakeClock()
     const stopped = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => stopped),
@@ -2908,7 +2937,8 @@ describe("SessionCoordinator", () => {
     stopped.emit(turnStarted)
     await readLive()
     // The adapter stopped consuming a run Hermes may still be running, so the
-    // turn is not over: the journal outlives the error and a new turn waits.
+    // turn is not over: the journal outlives the error, and the reconcile
+    // finds the run still going.
     stopped.emit({
       kind: TurnEventKind.TurnFailed,
       code: "AOS_STOP_UNCERTAIN",
@@ -2917,8 +2947,9 @@ describe("SessionCoordinator", () => {
     await readLive()
     stopped.finish()
     live.close()
+    await advance(0)
 
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    expect(sessions.state(scope)).toBe("running")
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       { event: { kind: TurnEventKind.TurnStarted } }
     )
@@ -3234,10 +3265,13 @@ describe("SessionCoordinator", () => {
   })
 
   it("leaves an execution uncertain when its provider stream ends unsettled", async () => {
+    const { advance } = useFakeClock()
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
+      recover: vi.fn(async () => {
+        throw new Error("provider unavailable")
+      }),
     }
     const sessions = coordinator(engine)
     const live = await sessions.start(scope, input("run-1"), access("one"))
@@ -3246,8 +3280,9 @@ describe("SessionCoordinator", () => {
     await readLive()
 
     source.close()
+    await advance(0)
 
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("uncertain"))
+    expect(sessions.state(scope)).toBe("uncertain")
   })
   it("observes the lifecycle of a run it drives under public identity", async () => {
     const source = new EventSource()
