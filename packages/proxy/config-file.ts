@@ -602,17 +602,6 @@ function invalidConfiguration(
   )
 }
 
-/**
- * A configuration error is the one start failure an operator must be able to
- * read, and `redactForLog` makes every `Error` opaque. Reporting it as a plain
- * object keeps that invariant for every other failure.
- */
-export function describeStartFailure(error: unknown): unknown {
-  return error instanceof ProxyConfigurationError
-    ? { name: error.name, message: error.message }
-    : error
-}
-
 export async function loadProxyConfig(
   options: ProxyConfigPathSource & ProxyConfigFileAccess
 ): Promise<ProxyConfig> {

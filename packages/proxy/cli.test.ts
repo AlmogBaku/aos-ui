@@ -8,7 +8,6 @@ import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
-import { describeStartFailure } from "./config-file"
 import { redactForLog } from "./redaction"
 import type { startProxyServer } from "./server"
 
@@ -115,7 +114,7 @@ describe("proxy executable", () => {
 
     await expect(
       runProxyCli(["bun", "proxy", "--help"], {
-        logger,
+        createLogger: () => logger,
         start,
         getenv: () => undefined,
       })
@@ -150,7 +149,7 @@ describe("proxy executable", () => {
               close: transportClose,
             }),
           }),
-        logger,
+        createLogger: () => logger,
         getenv: () => undefined,
         start,
         staticHandler,
@@ -278,7 +277,7 @@ describe("proxy executable", () => {
 
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--help"], {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
         getenv: () => undefined,
         writeOut: (value) => {
           output += value
@@ -333,7 +332,7 @@ describe("proxy executable", () => {
           "en",
         ],
         {
-          logger: { info: vi.fn(), error: vi.fn() },
+          createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
           getenv: (name) =>
             name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
@@ -399,7 +398,7 @@ describe("proxy executable", () => {
           "Continue.",
         ],
         {
-          logger: { info: vi.fn(), error: vi.fn() },
+          createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
           getenv: () => undefined,
           randomBytes: () => {
             throw new Error("reference randomness was read")
@@ -425,7 +424,7 @@ describe("proxy executable", () => {
     const { configFile } = await proxyConfig()
     let output = ""
     await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-      logger: { info: vi.fn(), error: vi.fn() },
+      createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
       getenv: (name) =>
         name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
       randomBytes: (size) => Buffer.alloc(size, 1),
@@ -452,7 +451,7 @@ describe("proxy executable", () => {
 
     const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
-      logger,
+      createLogger: () => logger,
       getenv: (name) => (name === "XDG_CONFIG_HOME" ? configHome : undefined),
       start,
       exit: vi.fn(),
@@ -469,7 +468,7 @@ describe("proxy executable", () => {
   it("requires an explicit configuration file to mint an invitation", async () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
         getenv: () => undefined,
       })
     ).rejects.toThrow(/--config/u)
@@ -482,24 +481,16 @@ describe("proxy executable", () => {
     const failure = await runProxyCli(
       ["bun", "proxy", "serve", "--config", missing],
       {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => ({ info: vi.fn(), error: vi.fn() }),
         getenv: () => undefined,
         start,
       }
     ).catch((error: unknown) => error)
 
     expect(start).not.toHaveBeenCalled()
-    expect(
-      redactForLog({
-        event: "proxy.start_failed",
-        error: describeStartFailure(failure),
-      })
-    ).toEqual({
-      event: "proxy.start_failed",
-      error: {
-        name: "ProxyConfigurationError",
-        message: expect.stringContaining(missing),
-      },
+    expect(redactForLog(failure)).toEqual({
+      name: "ProxyConfigurationError",
+      message: expect.stringContaining(missing),
     })
   })
 })

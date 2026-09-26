@@ -1,20 +1,14 @@
 import { runProxyCli } from "./cli/program"
-import { describeStartFailure } from "./config-file"
-import { redactForLog } from "./redaction"
+import { createProxyLogger } from "./cli/logger"
+import { CredentialValues } from "./redaction"
 import { createStaticHandler } from "./static"
 
 export { runProxyCli } from "./cli/program"
 
-const logger = {
-  info(value: unknown) {
-    console.info(JSON.stringify(redactForLog(value)))
-  },
-  error(value: unknown) {
-    console.error(JSON.stringify(redactForLog(value)))
-  },
-}
-
 if (import.meta.main) {
+  const credentials = new CredentialValues()
+  // Writes a start failure before the configuration, and so its level, has loaded.
+  const bootstrapLogger = createProxyLogger({ level: "info", credentials })
   const staticHandler = createStaticHandler({
     root: process.env.AOS_UI_STATIC_ROOT ?? "/app/dist",
     runtimeConfig:
@@ -22,15 +16,13 @@ if (import.meta.main) {
       "/run/aos-ui/runtime-config.json",
   })
   void runProxyCli(process.argv, {
-    logger,
+    createLogger: (level) => createProxyLogger({ level, credentials }),
+    credentials,
     staticHandler,
     // The only reader of the real environment.
     getenv: (name: string) => process.env[name],
   }).catch((error: unknown) => {
-    logger.error({
-      event: "proxy.start_failed",
-      error: describeStartFailure(error),
-    })
+    bootstrapLogger.error({ event: "proxy.start_failed", error })
     process.exitCode = 1
   })
 }

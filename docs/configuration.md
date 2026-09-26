@@ -237,10 +237,8 @@ schema validation.
 
 ### Errors {#config-errors}
 
-When the configuration is invalid, the proxy logs a structured start-failure
-event with name `ProxyConfigurationError`. The startup log entry
-(`proxy.start_failed`) is the readable form; `redactForLog`'s every-error-is-opaque
-rule applies to all other errors. The message begins with
+When the configuration is invalid, the proxy logs a `proxy.start_failed` event
+whose `error` is named `ProxyConfigurationError`. Its message begins with
 `Invalid proxy configuration in <path>:` followed by one indented line per
 field:
 
@@ -257,6 +255,12 @@ and names the field path that holds it. When a variable set the failing field, i
 name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
+
+Every logged error carries its name, message, native `code` or `reason`, and
+cause chain, never its stack. Before a line is written, the log masks every
+credential-named field, strips each URL's userinfo, query, and fragment, and
+replaces each voice key, MCP header value, guest invitation key, and VAPID
+private key the proxy has read with `[REDACTED]`.
 
 Runtime slash-command suggestions are enabled on the operator surface only.
 The guest listener advertises none and refuses any guest message or steer whose

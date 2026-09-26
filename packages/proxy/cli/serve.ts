@@ -123,7 +123,11 @@ export async function serveProxy(
     discover: true,
     ...nodeConfigFileAccess(dependencies),
   })
-  const configured = await createConfiguredProxy(input, dependencies)
+  const logger = dependencies.createLogger(input.log.level)
+  const configured = await createConfiguredProxy(input, {
+    ...dependencies,
+    logger,
+  })
   const start = dependencies.start ?? startProxyServer
   const graceMs = configured.config.shutdownGraceMs
   const listenerCount = configured.guest ? 2 : 1
@@ -139,7 +143,7 @@ export async function serveProxy(
   const announceShutdown = () => {
     if (shutdownAnnounced) return
     shutdownAnnounced = true
-    dependencies.logger.info({ event: "proxy.shutdown.started", graceMs })
+    logger.info({ event: "proxy.shutdown.started", graceMs })
   }
   const exit = dependencies.exit ?? ((code: number) => process.exit(code))
   let settledListeners = 0
@@ -154,8 +158,8 @@ export async function serveProxy(
     settledListeners += 1
     if (settledListeners < listenerCount) return
     if (forcedShutdown)
-      dependencies.logger.error({ event: "proxy.shutdown.forced", graceMs })
-    dependencies.logger.info({
+      logger.error({ event: "proxy.shutdown.forced", graceMs })
+    logger.info({
       event: "proxy.shutdown.completed",
       forced: forcedShutdown,
     })
@@ -205,7 +209,7 @@ export async function serveProxy(
       })
     : undefined
 
-  dependencies.logger.info({
+  logger.info({
     event: "proxy.started",
     host: configured.config.listen.host,
     port: configured.config.listen.port,

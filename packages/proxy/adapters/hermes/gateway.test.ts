@@ -8,6 +8,7 @@ import {
   HermesUnavailableError,
   type HermesGatewayOptions,
 } from "./gateway"
+import { createGatewayLog } from "./factory"
 import { MAX_EVENT_FRAME_BYTES } from "./gateway-socket"
 import { FakeSocket } from "./test-utils/fake-socket"
 import { nativeTurn } from "./test-utils/native-events"
@@ -821,11 +822,11 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("logs a refused socket factory apart from a failed handshake", async () => {
+  it("logs a refused socket factory apart from a failed handshake, never its token", async () => {
     vi.useFakeTimers()
-    const log = { warn: vi.fn() }
+    const lines: string[] = []
     const factory = vi.fn(() => {
-      throw new TypeError("socket refused for wss://hermes.internal/api/ws")
+      throw new TypeError(`socket refused for ${WS_URL}`)
     })
     const gateway = new HermesGateway({
       baseUrl: BASE_URL,
@@ -834,22 +835,27 @@ describe("Hermes gateway heartbeat and redial", () => {
       socketFactory: factory,
       backoff: { jitter: false },
       connectTimeoutMs: 1_000,
-      log,
+      log: createGatewayLog((line) => lines.push(line)),
     })
 
     await expect(gateway.connect()).rejects.toBeInstanceOf(
       HermesUnavailableError
     )
 
+    expect(lines.join("\n")).not.toContain("token=")
     expect(
-      log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.dial_failed"
-      )
+      lines
+        .map((line) => JSON.parse(line) as { event: string })
+        .filter(({ event }) => event === "hermes.gateway.dial_failed")
     ).toEqual([
-      [
-        "hermes.gateway.dial_failed",
-        { reason: "socket_factory_threw", error: "TypeError" },
-      ],
+      {
+        event: "hermes.gateway.dial_failed",
+        reason: "socket_factory_threw",
+        error: {
+          name: "TypeError",
+          message: "socket refused for ws://127.0.0.1:9119/api/ws",
+        },
+      },
     ])
     await gateway.close()
   })

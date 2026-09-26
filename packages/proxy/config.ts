@@ -3,6 +3,7 @@ import { z } from "zod"
 
 /** The proxy log's levels, quietest last; `info` is the default. */
 export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
+export type ProxyLogLevel = (typeof PROXY_LOG_LEVELS)[number]
 
 const AbsoluteSecretFileSchema = z
   .string()

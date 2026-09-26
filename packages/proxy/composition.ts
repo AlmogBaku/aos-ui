@@ -31,6 +31,7 @@ import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
+import { CredentialValues } from "./redaction"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -41,18 +42,27 @@ import { withVoiceProviders, type VoiceProviders } from "./voice/runtime"
 export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
   logger: AcpLogger
+  /** The credential values the log masks; every secret read here joins it. */
+  credentials?: CredentialValues
   clock?: () => number
   /** Reaches the configured speech providers; tests hand in a stub. */
   fetch?: typeof fetch
 }
 
+/** The composition's secret readers, each recording what it reads. */
+type SecretReaders = {
+  secret: (path: string) => Promise<string>
+  key: (path: string) => Promise<Uint8Array>
+}
+
 /** One provider per configured direction, each key read once at startup. */
 async function createVoiceProviders(
   voice: VoiceConfig,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  readers: SecretReaders
 ): Promise<VoiceProviders> {
   const apiKey = (file: string | undefined) =>
-    file === undefined ? undefined : readSecretFile(file)
+    file === undefined ? undefined : readers.secret(file)
   const [transcriptionKey, speechKey] = await Promise.all([
     apiKey(voice.transcription?.apiKeyFile),
     apiKey(voice.speech?.apiKeyFile),
@@ -86,12 +96,15 @@ async function createVoiceProviders(
 }
 
 /** Header values, each read once at startup from its own file. */
-async function readHeaderFiles(headers: Record<string, { file: string }>) {
+async function readHeaderFiles(
+  headers: Record<string, { file: string }>,
+  readers: SecretReaders
+) {
   return Object.fromEntries(
     await Promise.all(
       Object.entries(headers).map(
         async ([header, { file }]) =>
-          [header, await readSecretFile(file)] as const
+          [header, await readers.secret(file)] as const
       )
     )
   )
@@ -99,7 +112,8 @@ async function readHeaderFiles(headers: Record<string, { file: string }>) {
 
 /** Each configured fallback server: its URL override and its headers. */
 async function readMcpServerOverrides(
-  mcpApps: McpAppsConfig | undefined
+  mcpApps: McpAppsConfig | undefined,
+  readers: SecretReaders
 ): Promise<McpServerOverrides> {
   const servers = Object.entries(mcpApps?.fallback.servers ?? {})
   return new Map(
@@ -110,7 +124,9 @@ async function readMcpServerOverrides(
             name,
             {
               ...(url ? { url } : {}),
-              ...(headers ? { headers: await readHeaderFiles(headers) } : {}),
+              ...(headers
+                ? { headers: await readHeaderFiles(headers, readers) }
+                : {}),
             },
           ] as const
       )
@@ -130,9 +146,10 @@ async function createPushDelivery(
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
   dependencies: ConfiguredProxyDependencies,
-  clock: { now?: () => number }
+  clock: { now?: () => number },
+  readers: SecretReaders
 ) {
-  const privateKey = await readSecretKeyFile(push.vapid.privateKeyFile)
+  const privateKey = await readers.key(push.vapid.privateKeyFile)
   const registrations = await openPushRegistrations({
     stateDir: push.stateDir,
     logger: dependencies.logger,
@@ -164,7 +181,18 @@ export async function createConfiguredProxy(
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
-  const mcpServerOverrides = await readMcpServerOverrides(config.mcpApps)
+  const credentials = dependencies.credentials ?? new CredentialValues()
+  const readers: SecretReaders = {
+    secret: credentials.register(readSecretFile, (value) => [value]),
+    // A key file holds the key's base64url spelling, which is what could leak.
+    key: credentials.register(readSecretKeyFile, (key) => [
+      Buffer.from(key).toString("base64url"),
+    ]),
+  }
+  const mcpServerOverrides = await readMcpServerOverrides(
+    config.mcpApps,
+    readers
+  )
   const [nativeInstance, invitationKeys, voiceProviders] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
@@ -176,13 +204,13 @@ export async function createConfiguredProxy(
           config.guest.invitations.keys.map(
             async ({ id, secretFile }): Promise<GuestInvitationKey> => ({
               id,
-              secret: await readSecretKeyFile(secretFile),
+              secret: await readers.key(secretFile),
             })
           )
         )
       : Promise.resolve(undefined),
     config.voice
-      ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch)
+      ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch, readers)
       : Promise.resolve(undefined),
   ])
   // Proxy speech sits in front of the adapter for every listener at once, so the
@@ -288,7 +316,8 @@ export async function createConfiguredProxy(
         runtimeInstance,
         sessionRows,
         dependencies,
-        clock
+        clock,
+        readers
       )
     : undefined
   const acpService = createOperatorAcpService({

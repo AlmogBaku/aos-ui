@@ -417,16 +417,13 @@ export class HermesGateway implements HermesRpcTransport {
 
   /**
    * The redial ladder runs forever at the cap: log the outage once, not every
-   * rung; the next open re-arms this. Only the error type is recorded, because a
-   * native message may carry the dial URL and its token.
+   * rung; the next open re-arms this. The error is recorded whole: a native
+   * message may carry the dial URL, and the log strips its token.
    */
   #logDialFailure(reason: string, error: unknown) {
     if (this.#dialFailureLogged) return
     this.#dialFailureLogged = true
-    this.#log?.warn("hermes.gateway.dial_failed", {
-      reason,
-      error: publicReason(error),
-    })
+    this.#log?.warn("hermes.gateway.dial_failed", { reason, error })
   }
 
   #onSocketClose(event: { code: number }): boolean {
