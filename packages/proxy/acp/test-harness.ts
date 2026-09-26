@@ -44,6 +44,7 @@ import type {
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -626,6 +627,8 @@ export type HarnessOptions = {
     runtimeInstance: RuntimeInstance
     sessionRows: SessionRows
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
+  /** Where lifecycle owners log; a fresh capture by default. */
+  logs?: LogCapture
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -935,6 +938,7 @@ export async function harness(options: HarnessOptions = {}) {
     coordinator,
     runtimeInstance,
     faults,
+    logs: options.logs ?? captureLogs(),
     channels,
     scope,
     sources,
