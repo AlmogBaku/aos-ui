@@ -603,12 +603,18 @@ export function createAcpConnection(
     }
     for (const sessionId of [...updateListeners.keys()]) {
       if (gone.has(sessionId)) continue
-      const resumed = await resumeSession(sessionId, {
-        replayFromStart: false,
-        ...positions.get(sessionId),
-      })
-      if (resumed.meta.resync)
-        await resumeSession(sessionId, { replayFromStart: true })
+      try {
+        const resumed = await resumeSession(sessionId, {
+          replayFromStart: false,
+          ...positions.get(sessionId),
+        })
+        if (resumed.meta.resync)
+          await resumeSession(sessionId, { replayFromStart: true })
+      } catch (error) {
+        // A Session the proxy reported gone on the way, ahead of refusing it,
+        // is left behind rather than its siblings.
+        if (!gone.has(sessionId)) throw error
+      }
     }
   }
 

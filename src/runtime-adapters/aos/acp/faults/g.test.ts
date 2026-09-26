@@ -1,6 +1,6 @@
+import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, onTestFinished, vi } from "vitest"
 
-import { AOS_METHODS } from "../../../../../packages/protocol/acp"
 import {
   AGENT,
   chunk,
@@ -51,41 +51,47 @@ async function streamLive(test: Awaited<ReturnType<typeof harness>>) {
 }
 
 describe("browser gone Session faults", () => {
-  it("rejoins a Session the proxy reported gone no more, and still rejoins its sibling", async () => {
+  it("leaves a Session found gone while its tab was away, and still rejoins its sibling", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const { test, pipe, connection } = await connectBrowser({
       rows: [sessionRow(), sessionRow({ id: SIBLING })],
     })
-    const notices: unknown[] = []
-    connection.subscribeNotification(AOS_METHODS.notify.error, (params) =>
-      notices.push(params)
-    )
     // The tab follows a turn on SESSION, so its rejoin carries a cursor.
     const live = Promise.withResolvers<void>()
-    for (const sessionId of [SESSION, SIBLING]) {
-      connection.subscribeSessionUpdates(sessionId, (update) => {
-        if (JSON.stringify(update).includes("Live")) live.resolve()
-      })
+    const sibling: object[] = []
+    connection.subscribeSessionUpdates(SESSION, (update) => {
+      if (JSON.stringify(update).includes("Live")) live.resolve()
+    })
+    connection.subscribeSessionUpdates(SIBLING, (update) => {
+      sibling.push(update)
+    })
+    for (const sessionId of [SESSION, SIBLING])
       await connection.resumeSession(sessionId, {
         replayFromStart: true,
         agentId: AGENT,
       })
-    }
     await streamLive(test)
     await live.promise
 
+    // Another browser finds SESSION gone while the tab hears nothing, and then
+    // the tab's socket drops.
     const clock = useFakeClock()
+    pipe.sockets[0]!.halfOpen()
     test.faults.gone(test.scope)
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        replayFrom: { type: "start" },
+      })
+    ).rejects.toMatchObject({ code: -32002 })
+    sibling.length = 0
     pipe.sockets[0]!.drop()
-    await clock.advance(1_000)
-    expect(notices).toEqual([
-      { sessionId: SESSION, code: "not_found", message: "not_found" },
-    ])
-
-    pipe.sockets[1]!.drop()
     await clock.advance(10_000)
+
     expect(connection.status).toBe("ready")
-    expect(pipe.sockets).toHaveLength(3)
+    expect(pipe.sockets).toHaveLength(2)
+    expect(sibling.flatMap(shown)).toContain("state idle")
   })
 })
 
