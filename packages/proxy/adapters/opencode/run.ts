@@ -46,6 +46,7 @@ import {
   type ValidatedOpenCodeEvent,
 } from "./events"
 import { openCodePromptFiles } from "./content"
+import { OpenCodeLink } from "./link"
 
 const MAX_HISTORY_PAGES = 1_000
 const MAX_USER_TURN_BYTES = 1024 * 1024
@@ -122,7 +123,6 @@ type RetryLoop = Readonly<{
   attempt(signal: AbortSignal, recovered: () => void): Promise<void>
   /** Runs when each backoff ends, before the next attempt; never rejects. */
   poll?(): Promise<void>
-  failed?(error: unknown): void
 }>
 
 /**
@@ -163,9 +163,8 @@ function retryMachine(
             onDone: "backing-off",
             onError: {
               target: "backing-off",
-              actions: ({ event }) => {
+              actions: () => {
                 failures += 1
-                loop.failed?.(event.error)
               },
             },
           },
@@ -404,12 +403,15 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   /** Every retry loop still running, which close disposes. */
   readonly #owners = new Set<RetryOwner>()
   #closed = false
+  /** OpenCode's link, as each Session's foreign-turn watch meets it. */
+  readonly link: OpenCodeLink
 
   constructor(client: OpenCodeTurnClient, options: OpenCodeTurnEngineOptions) {
     this.#client = client
     this.#options = options
     this.#logger = options.logger
     this.#clock = options.clock ?? defaultClock
+    this.link = new OpenCodeLink({ logger: this.#logger, clock: this.#clock })
     this.#maxQueueEvents = positiveInteger(
       options.maxQueueEvents,
       DEFAULT_MAX_QUEUE_EVENTS
@@ -434,9 +436,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     )
   }
 
-  /** Disposes every retry loop, so no timer of this engine fires again. */
+  /** Stops every watch and retry loop, so no timer of this engine fires again. */
   close() {
     this.#closed = true
+    this.link.close()
     for (const owner of [...this.#owners]) owner.dispose()
   }
 
@@ -489,11 +492,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Subscribes to one Session's native log from its tail. A turn is foreign when its
-   * admission is not the one this engine last submitted for the Session.
+   * Watches one Session's native log from its tail on OpenCode's link, which
+   * redials it after a drop and stops once the Session is gone or OpenCode
+   * refuses the password. A turn is foreign when its admission is not the one
+   * this engine last submitted for the Session.
    */
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     const key = turnKey(scope)
+    const sessionId = scope.providerSessionId
     // Admissions only grow, so the last one considered dedupes repeats.
     let considered = -1
     const consider = (admission: ValidatedOpenCodeEvent | undefined) => {
@@ -503,46 +509,53 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (admission.data.messageID !== this.#ownAdmissions.get(key))
         listener.onTurn()
     }
-    const subscribe = async (signal: AbortSignal, recovered: () => void) => {
-      let source: OpenCodeSessionEvents | undefined
-      const onAbort = () => source?.abort()
-      signal.addEventListener("abort", onAbort, { once: true })
+    const dial = async (
+      signal: AbortSignal,
+      lost: (cause: unknown) => void
+    ) => {
+      const history = await this.#readHistory(sessionId, undefined, signal)
+      const tail = history.at(-1)?.seq ?? -1
+      const source = await this.#client.sessions.events(sessionId, {
+        ...(tail < 0 ? {} : { after: String(tail) }),
+        signal,
+      })
+      let released = false
+      const release = () => {
+        released = true
+        source.abort()
+      }
       try {
-        const history = await this.#readHistory(
-          scope.providerSessionId,
-          undefined,
-          signal
-        )
-        const tail = history.at(-1)?.seq ?? -1
-        source = await this.#client.sessions.events(scope.providerSessionId, {
-          ...(tail < 0 ? {} : { after: String(tail) }),
-          signal,
-        })
-        if (signal.aborted) return
-        if (await this.#active(scope.providerSessionId, signal)) {
-          const caughtUp = await this.#readHistory(
-            scope.providerSessionId,
-            tail,
-            signal
-          )
+        // A turn that started while the watch was down is announced now.
+        if (await this.#active(sessionId, signal)) {
+          const caughtUp = await this.#readHistory(sessionId, tail, signal)
+          signal.throwIfAborted()
           consider(latestAdmission([...history, ...caughtUp]))
         }
-        recovered()
-        for await (const value of source) {
-          if (signal.aborted) return
-          consider(validateOpenCodeLiveEvent(value, scope.providerSessionId))
-        }
-        throw new OpenCodeClientError("connection_interrupted")
-      } finally {
-        signal.removeEventListener("abort", onAbort)
-        source?.abort()
+      } catch (error) {
+        release()
+        throw error
       }
+      void (async () => {
+        for await (const value of source) {
+          if (released) return
+          consider(validateOpenCodeLiveEvent(value, sessionId))
+        }
+        // A lost read stream: nothing it asked of OpenCode happened.
+        throw new OpenCodeClientError("unavailable")
+      })().catch((cause: unknown) => {
+        if (!released) lost(cause)
+      })
+      return release
     }
-    const owner = this.#retry(scope, "turn-subscription", {
-      attempt: subscribe,
-      failed: (error) => listener.onError(error),
+    return this.link.watch({
+      dial,
+      onError: (cause) => listener.onError(cause),
+      bindings: {
+        link: "turn-subscription",
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+      },
     })
-    return () => owner?.dispose()
   }
 
   async #discoverWait(scope: SessionScope) {

@@ -19,16 +19,13 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
-import { failureOf } from "../../core/failures"
-import { READY_LINK } from "../../core/link"
+import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
 import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
-  OpenCodeClientAbortError,
   OpenCodeClientError,
-  OpenCodeMutationUncertainError,
   type OpenCodeClient,
   type OpenCodeFileContent,
   type OpenCodePageOptions,
@@ -50,10 +47,8 @@ import {
   storedOpenCodeToolCall,
   type OpenCodeMcpCatalog,
 } from "./mcp-apps"
-import {
-  OpenCodeInteractionPublicError,
-  OpenCodeInteractions,
-} from "./interactions"
+import { OpenCodeInteractions } from "./interactions"
+import { openCodeFailure } from "./failures"
 import {
   openCodeModelOptionId,
   parseOpenCodeMessageCatalog,
@@ -107,6 +102,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   creatorAgentId?: string
   /** The project's MCP servers; without them, no tool opens a view. */
   mcp?: OpenCodeMcpCatalog
+  /** The turn engine's watches' link; without one, the runtime is always up. */
+  link?: ServerLink
 }>
 
 /**
@@ -238,7 +235,7 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
-  readonly link = READY_LINK
+  readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly mcpApps?: ServerMcpApps
@@ -248,6 +245,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
     this.turns = options.turns
+    this.link = options.link ?? READY_LINK
     this.#workspace = createOpenCodeWorkspaceOperations({
       client: options.client,
       creatorAgentId: options.creatorAgentId,
@@ -288,46 +286,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   publicError(cause: unknown) {
-    if (cause instanceof OpenCodeMutationUncertainError)
-      return failureOf("uncertain", cause)
-    // A lost stream is a read: a write that may have landed is already a
-    // mutation-uncertain error.
-    if (cause instanceof OpenCodeClientAbortError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeClientError) {
-      if (cause.code === "authentication")
-        return failureOf("runtime_authentication_required", cause)
-      if (cause.code === "invalid_request")
-        return failureOf("invalid_request", cause)
-      if (cause.code === "not_found") return failureOf("gone", cause)
-      if (cause.code === "conflict")
-        return failureOf("revision_conflict", cause)
-      return failureOf("unavailable", cause)
-    }
-    if (
-      cause instanceof OpenCodeWorkspaceScopeError ||
-      // The receipt is still authoritative, but OpenCode cannot read its file:
-      // unlike a 503, "not found" never invites a retry that cannot succeed.
-      cause instanceof OpenCodeContentUnreadableError
-    )
-      return failureOf("gone", cause)
-    if (cause instanceof OpenCodeWorkspaceUnavailableError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeContentUnavailableError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeInteractionPublicError) {
-      if (cause.code === "AOS_INTERACTION_NOT_FOUND")
-        return failureOf("gone", cause)
-      if (cause.code === "AOS_MUTATION_UNCERTAIN")
-        return failureOf("uncertain", cause)
-      if (
-        cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-        cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
-      )
-        return failureOf("unavailable", cause)
-      return failureOf("invalid_request", cause)
-    }
-    return undefined
+    return openCodeFailure(cause)
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {

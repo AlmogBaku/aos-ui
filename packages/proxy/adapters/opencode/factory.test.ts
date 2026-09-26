@@ -76,7 +76,10 @@ describe("OpenCode runtime factory", () => {
         { ...services(), clientFactory: () => client() }
       )
 
-      expect(runtime.runtime.turns).toBeInstanceOf(OpenCodeTurnEngine)
+      const { turns } = runtime.runtime
+      expect(turns).toBeInstanceOf(OpenCodeTurnEngine)
+      // The runtime is up exactly when its engine's watches are.
+      expect(runtime.runtime.link).toBe((turns as OpenCodeTurnEngine).link)
       await runtime.close()
     } finally {
       await rm(directory, { recursive: true, force: true })
