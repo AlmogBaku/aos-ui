@@ -1531,6 +1531,19 @@ describe("Session rooms", () => {
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
     })
+    // A start that found its Session gone tells its sender, who holds no
+    // readings yet, and asks the runtime after it no more.
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "the not_found notice"
+    )
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([
+      {
+        method: AOS_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    expect(test.discover).not.toHaveBeenCalled()
     // The runtime reports a turn it started by itself, and the read that asks
     // for it never answers.
     await open(test)
