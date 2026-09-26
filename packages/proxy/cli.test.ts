@@ -9,6 +9,7 @@ import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
+import { installProcessHandlers } from "./cli/process-handlers"
 import { CredentialValues, redactForLog } from "./redaction"
 import type { startProxyServer } from "./server"
 
@@ -507,5 +508,53 @@ describe("proxy executable", () => {
       name: "ProxyConfigurationError",
       message: expect.stringContaining(missing),
     })
+  })
+})
+
+describe("process handlers", () => {
+  it("unhandledRejection logs one warn line and does not exit", () => {
+    const logs = captureLogs()
+    const exit = vi.fn()
+    const handlers = new Map<string, (arg: unknown) => void>()
+    const fakeProcess = {
+      on(event: string, handler: (arg: unknown) => void) {
+        handlers.set(event, handler)
+      },
+      exit,
+    }
+
+    installProcessHandlers(logs.logger, fakeProcess)
+
+    const reason = new Error("something went wrong")
+    handlers.get("unhandledRejection")!(reason)
+
+    expect(exit).not.toHaveBeenCalled()
+    const warns = logs.records().filter(({ level }) => level === "warn")
+    expect(warns).toHaveLength(1)
+    expect(warns[0]!.message).toBe("proxy.unhandled_rejection")
+    expect(warns[0]!.fields.err).toMatchObject({ message: "something went wrong" })
+  })
+
+  it("uncaughtException logs one error line and exits 1", () => {
+    const logs = captureLogs()
+    const exit = vi.fn()
+    const handlers = new Map<string, (arg: unknown) => void>()
+    const fakeProcess = {
+      on(event: string, handler: (arg: unknown) => void) {
+        handlers.set(event, handler)
+      },
+      exit,
+    }
+
+    installProcessHandlers(logs.logger, fakeProcess)
+
+    const error = new Error("fatal error")
+    handlers.get("uncaughtException")!(error)
+
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1)
+    const errorLines = logs.records().filter(({ level }) => level === "error")
+    expect(errorLines).toHaveLength(1)
+    expect(errorLines[0]!.message).toBe("proxy.uncaught_exception")
+    expect(errorLines[0]!.fields.err).toMatchObject({ message: "fatal error" })
   })
 })

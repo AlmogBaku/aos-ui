@@ -3,6 +3,7 @@ import { resolve } from "node:path"
 
 import { runProxyCli } from "./cli/program"
 import { createProxyLogger } from "./cli/logger"
+import { installProcessHandlers } from "./cli/process-handlers"
 import { CredentialValues } from "./redaction"
 import { createStaticHandler } from "./static"
 
@@ -20,6 +21,7 @@ if (import.meta.main) {
   const credentials = new CredentialValues()
   // Writes a start failure before the configuration, and so its level, has loaded.
   const bootstrapLogger = createProxyLogger({ level: "info", credentials })
+  installProcessHandlers(bootstrapLogger)
   const root = process.env.AOS_UI_STATIC_ROOT ?? "/app/dist"
   const staticHandler = createStaticHandler({
     root,
