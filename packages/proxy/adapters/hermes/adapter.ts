@@ -76,6 +76,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
@@ -337,6 +338,7 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>

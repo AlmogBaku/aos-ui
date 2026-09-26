@@ -43,6 +43,7 @@ import type {
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import { READY_LINK } from "../core/link"
 import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
@@ -757,6 +758,7 @@ export async function harness(options: HarnessOptions = {}) {
     resolveProviderSessionId: (_agentId, publicSessionId) =>
       providerId(publicSessionId),
     publicError: () => undefined,
+    link: READY_LINK,
     authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
@@ -836,6 +838,7 @@ export async function harness(options: HarnessOptions = {}) {
     runtime: faults.runtime,
     coordinator,
     rows: createSessionRows(options.now ? { now: options.now } : undefined),
+    logger: logs.logger,
   })
   const invalidationListeners = new Set<() => void>()
   const catalog: Catalog = {

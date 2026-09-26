@@ -23,6 +23,7 @@ import type {
 } from "../../protocol/mcp-apps"
 import type { PublicFailure } from "./failures"
 import type { ProviderSessionId, SessionId } from "./ids"
+import type { ServerLink } from "./link"
 
 export type SessionScope = {
   agentId: string
@@ -261,6 +262,8 @@ export interface ServerRuntime {
     publicSessionId: string
   ): ProviderSessionId | undefined
   publicError(cause: unknown): PublicFailure | undefined
+  /** Whether the native link is up; readings retry once it turns ready. */
+  readonly link: ServerLink
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>

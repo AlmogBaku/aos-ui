@@ -17,6 +17,7 @@ import type {
 } from "../core/runtime"
 import { failureOf } from "../core/failures"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { createGuestApp } from "./app"
 
@@ -198,6 +199,7 @@ function harness(options: { existing?: boolean } = {}) {
     speak,
     artifact,
     publicError,
+    link: READY_LINK,
   } as unknown as ServerRuntime
   const instance: RuntimeInstance = {
     id: "hermes-primary",

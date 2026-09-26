@@ -17,6 +17,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import {
   OpenClawClientConnectionError,
   OpenClawClientRequestError,
@@ -102,6 +103,7 @@ type OpenClawServerAdapterOptions = Readonly<{
  * remain in the OpenClaw leaves; the coordinator retains admission and turns.
  */
 export class OpenClawServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
   readonly #workspace

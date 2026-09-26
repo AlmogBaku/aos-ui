@@ -22,6 +22,7 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
@@ -244,6 +245,7 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly mcpApps?: ServerMcpApps

@@ -56,9 +56,11 @@ import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
   RECONCILE_BACKOFF,
+  RETRY_BUDGET,
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
 import { coreFailure } from "./failures"
+import { retryBudget } from "./link"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -177,11 +179,17 @@ export type SessionCoordinatorOptions = {
   /**
    * Reads a Session's context window and model catalog for its reporters,
    * writes the model choices a client makes, and creates the Sessions a
-   * client asks for; `publicError` tells a recover that met a Session gone.
+   * client asks for; `publicError` tells a recover that met a Session gone,
+   * and `link` turning ready takes every failed reading again.
    */
   readings: Pick<
     ServerRuntime,
-    "context" | "models" | "updateModel" | "createSession" | "publicError"
+    | "context"
+    | "models"
+    | "updateModel"
+    | "createSession"
+    | "publicError"
+    | "link"
   >
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
@@ -905,7 +913,13 @@ export class SessionCoordinator {
     this.#clock = options.clock ?? defaultClock
     this.#sends = new ClientAdmissions(this.#clock)
     this.#creates = new ClientAdmissions(this.#clock)
-    const cell = { logger: this.#logger, clock: this.#clock }
+    const cell = {
+      link: readings.link,
+      budget: retryBudget(RETRY_BUDGET, this.#clock),
+      publicError: (err: unknown) => this.#failure(err),
+      logger: this.#logger,
+      clock: this.#clock,
+    }
     this.#usage = new SessionReporter({
       name: "usage",
       read: async (scope) =>
@@ -1452,6 +1466,11 @@ export class SessionCoordinator {
     return recovery
   }
 
+  /** What a failure is, whether the core or the runtime raised it. */
+  #failure(err: unknown) {
+    return coreFailure(err) ?? this.options.readings.publicError(err)
+  }
+
   /**
    * Asks the provider how an uncertain turn stands. A recovery that lands
    * confirms the turn running, and its stream reports how the turn ends; one
@@ -1475,7 +1494,7 @@ export class SessionCoordinator {
         this.#executions.get(scopeKey(scope))
       )
     } catch (err) {
-      const failure = coreFailure(err) ?? this.options.readings.publicError(err)
+      const failure = this.#failure(err)
       if (
         failure?.kind !== "gone" ||
         !this.#move(turn, generation, { type: "ended" })

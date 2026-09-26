@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { ServerTurnStopNotDispatchedError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
+import { READY_LINK } from "../../core/link"
 import { OpenClawClientRequestError } from "./client"
 import { stageOpenClawChatAttachments } from "./content"
 import { createOpenClawHistory } from "./history"
@@ -192,7 +193,7 @@ function coordinator(engine: OpenClawTurnEngine) {
   return new SessionCoordinator({
     engine,
     // No test here subscribes anything to a reading.
-    readings: { context: vi.fn(), models: vi.fn() },
+    readings: { context: vi.fn(), models: vi.fn(), link: READY_LINK },
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,

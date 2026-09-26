@@ -56,6 +56,7 @@ import type {
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
@@ -480,6 +481,7 @@ function harness(options: HarnessOptions = {}) {
     resolveProviderSessionId:
       options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
+    link: READY_LINK,
     authState: unsupported,
     runtimeInfo,
     listAgents: unsupported,
@@ -544,6 +546,7 @@ function harness(options: HarnessOptions = {}) {
       runtime,
       coordinator,
       rows: createSessionRows({ now: () => NOW }),
+      logger: logs.logger,
     }),
     guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,

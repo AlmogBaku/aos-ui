@@ -34,6 +34,7 @@ import {
   type CoordinatedTurnSubscription,
   type SessionCoordinatorOptions,
 } from "./session-coordinator"
+import { READY_LINK } from "./link"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 class EventSource implements ServerTurnHandle {
@@ -144,6 +145,7 @@ function coordinator(
       context: vi.fn(),
       models: vi.fn(),
       publicError: () => undefined,
+      link: READY_LINK,
     },
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
@@ -1626,7 +1628,12 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce({ session: { id: "created-1" } })
         .mockResolvedValue({ session: { id: "created-2" } })
       const sessions = coordinator(engine(), {
-        readings: { context: vi.fn(), models: vi.fn(), createSession },
+        readings: {
+          context: vi.fn(),
+          models: vi.fn(),
+          createSession,
+          link: READY_LINK,
+        },
       })
       const create = { title: "Plans", clientId: "client-1" }
 
@@ -1655,7 +1662,12 @@ describe("SessionCoordinator", () => {
       const clock = useFakeClock()
       const createSession = vi.fn(async () => ({}))
       const sessions = coordinator(engine(), {
-        readings: { context: vi.fn(), models: vi.fn(), createSession },
+        readings: {
+          context: vi.fn(),
+          models: vi.fn(),
+          createSession,
+          link: READY_LINK,
+        },
       })
       const create = (clientId: string) =>
         sessions.createSession("researcher", { clientId }, "operator")
