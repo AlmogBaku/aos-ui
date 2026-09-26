@@ -268,6 +268,8 @@ export function createAcpConnection(
 
   let status: AcpConnectionStatus = "connecting"
   let started = false
+  /** Settles once a debug dev build has loaded its inspector and opened. */
+  let inspecting: Promise<void> | undefined
   let ended = false
   /** Opens, recovers and ends transports; `start` creates it. */
   let owner: Owner<typeof machine> | undefined
@@ -396,6 +398,8 @@ export function createAcpConnection(
     // reach the wire before the effect that owns the transport. The first call
     // opens it; `start` stays the only place that decides to.
     start()
+    // In a debug dev build the owner exists once the inspector has loaded.
+    if (inspecting) await inspecting
     const current = live
     if (ended || !current) throw new Error("The ACP connection is not open")
     await current.ready
@@ -768,22 +772,26 @@ export function createAcpConnection(
    * render React discards leaves no socket behind, and a closed connection
    * stays closed. Recovery after a close belongs to the owner.
    */
-  async function start() {
+  function start() {
     if (started || ended) return
     started = true
-    let inspect: Parameters<typeof createOwner>[1]["inspect"]
-    if (import.meta.env.DEV) {
-      // Only imported in dev builds; Rollup drops this block in production.
-      if (
-        acpDebugEnabled(
-          globalThis.location?.search ?? "",
-          globalThis.sessionStorage
-        )
-      ) {
-        const { createBrowserInspector } = await import("@statelyai/inspect")
-        inspect = createBrowserInspector().inspect
-      }
-    }
+    // Dev builds only: Rollup drops this branch, and the inspector with it, in
+    // production. An inspector that cannot load leaves the owner uninspected.
+    if (
+      import.meta.env.DEV &&
+      acpDebugEnabled(
+        globalThis.location?.search ?? "",
+        globalThis.sessionStorage
+      )
+    )
+      inspecting = import("@statelyai/inspect")
+        .then(({ createBrowserInspector }) => createBrowserInspector().inspect)
+        .catch(() => undefined)
+        .then(openOwner)
+    else openOwner(undefined)
+  }
+
+  function openOwner(inspect: Parameters<typeof createOwner>[1]["inspect"]) {
     if (ended) return
     owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
     owner.stack.defer(shutdown)

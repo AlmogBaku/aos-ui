@@ -6,7 +6,7 @@ import {
   type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, onTestFinished, vi } from "vitest"
 import { z } from "zod"
 
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
@@ -401,6 +401,22 @@ describe("ACP connection", () => {
     expect(pipe.sockets).toHaveLength(0)
     expect(connection.status).toBe("closed")
     await expect(connection.initialized).rejects.toThrow()
+  })
+
+  it("holds a first request until the debug inspector settles, and runs without one that cannot load", async () => {
+    vi.doMock("@statelyai/inspect", () => {
+      throw new Error("The inspector is unavailable")
+    })
+    globalThis.history.replaceState(null, "", "?debug=acp")
+    onTestFinished(() => {
+      vi.doUnmock("@statelyai/inspect")
+      globalThis.history.replaceState(null, "", "/")
+      globalThis.sessionStorage.clear()
+    })
+    const connection = connectInProcess(createProxyAgent())
+
+    await expect(connection.listAgents()).resolves.toBeDefined()
+    connection.close()
   })
 
   it("initializes with the negotiated AOS extension metadata", async () => {
