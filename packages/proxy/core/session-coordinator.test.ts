@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -3147,6 +3148,41 @@ describe("SessionCoordinator", () => {
       sessionId: scope.sessionId,
     })
     expect(Number.isNaN(Date.parse(observed[0]!.occurredAt))).toBe(false)
+  })
+
+  it("logs the transition that finishes a turn with the ids of that turn", async () => {
+    const source = new EventSource()
+    const logs = captureLogs()
+    const sessions = coordinator(
+      { start: vi.fn(async () => source), recover: vi.fn(async () => source) },
+      { logger: logs.logger }
+    )
+    const read = reader(
+      await sessions.start(scope, input("run-1"), access("one"))
+    )
+
+    source.emit(turnEnded)
+    await read()
+
+    expect(
+      logs
+        .records()
+        .filter(
+          ({ message, fields }) =>
+            message === "turn.transition" && fields.to === "idle"
+        )
+    ).toMatchObject([
+      {
+        fields: {
+          from: "running",
+          to: "idle",
+          generation: expect.any(Number),
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          turnId: "run-1",
+        },
+      },
+    ])
   })
 
   it("observes one attention request per pending request and resolves it on reply", async () => {

@@ -1,4 +1,14 @@
 import {
+  createOwner,
+  defaultClock,
+  ownerSetup,
+  type Clock,
+  type LogFields,
+  type Logger,
+  type Owner,
+  type OwnerContext,
+} from "../../lifecycle"
+import {
   TurnEventKind,
   isAwaitingStopFailure,
   isRedialableFailure,
@@ -90,6 +100,9 @@ export type SessionCoordinatorOptions = {
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
   maxSubscriberBytes: number
+  /** Where each turn owner writes its transitions; silent by default. */
+  logger?: Logger
+  clock?: Clock
 }
 
 /** What one subscriber takes of its Session's readings; it is owed only these. */
@@ -140,9 +153,155 @@ type SegmentJournal = {
   fromStart: boolean
 }
 
+/** Where a turn rests between admissions, and where a refused one returns. */
+type RestingState = "idle" | "waiting-for-input" | "uncertain"
+
+type TurnContext = OwnerContext & { resting: RestingState }
+
+/**
+ * What moves one Session's turn: an admission and how it lands, the outcome
+ * its provider stream reports, and what a Stop answers.
+ */
+type TurnSignal =
+  | { type: "admit" }
+  | { type: "admitted"; state: "running" | "waiting-for-input" }
+  /** The admission did not land, so the turn returns to where it rested. */
+  | { type: "refused" }
+  /** The provider holds no turn for the wait this admission refreshed. */
+  | { type: "cleared" }
+  | { type: "ended" }
+  | { type: "paused" }
+  /** The provider may still be working on a turn this proxy lost sight of. */
+  | { type: "lost" }
+  | { type: "stopped" }
+  | { type: "stopping" }
+  | { type: "undispatched" }
+  | { type: "stopFailed" }
+
+/**
+ * One Session's turn lifecycle. Only a landed admission bumps the generation,
+ * so an outcome reported for an earlier segment is stale by construction.
+ * Idle ignores the stream: a turn that Stop settled stays settled.
+ */
+function turnMachine(logger: Logger, clock: Clock) {
+  const turn = ownerSetup<TurnContext, TurnSignal>("turn", logger, clock)
+  const admit = (resting: RestingState) => ({
+    target: "admitting" as const,
+    actions: turn.assign({ resting }),
+  })
+  return turn.createMachine({
+    context: { generation: 0, resting: "idle" },
+    initial: "idle",
+    states: {
+      idle: { on: { admit: admit("idle") } },
+      admitting: {
+        on: {
+          admitted: [
+            {
+              guard: ({ event }) => event.state === "waiting-for-input",
+              target: "waiting-for-input",
+              actions: "bumpGeneration",
+            },
+            { target: "running", actions: "bumpGeneration" },
+          ],
+          refused: [
+            {
+              guard: ({ context }) => context.resting === "waiting-for-input",
+              target: "waiting-for-input",
+            },
+            {
+              guard: ({ context }) => context.resting === "uncertain",
+              target: "uncertain",
+            },
+            { target: "idle" },
+          ],
+          cleared: "idle",
+        },
+      },
+      running: {
+        on: {
+          ended: "idle",
+          paused: "waiting-for-input",
+          lost: "uncertain",
+          stopped: "idle",
+          stopping: "stopping",
+          stopFailed: "uncertain",
+        },
+      },
+      stopping: {
+        on: {
+          ended: "idle",
+          paused: "waiting-for-input",
+          lost: "uncertain",
+          stopped: "idle",
+          undispatched: "running",
+          stopFailed: "uncertain",
+        },
+      },
+      "waiting-for-input": {
+        on: {
+          admit: admit("waiting-for-input"),
+          ended: "idle",
+          lost: "uncertain",
+          stopped: "idle",
+          stopping: "stopping",
+          stopFailed: "uncertain",
+        },
+      },
+      // A Stop that cannot be confirmed leaves the stream to report the outcome.
+      uncertain: {
+        on: {
+          admit: admit("uncertain"),
+          ended: "idle",
+          paused: "waiting-for-input",
+        },
+      },
+    },
+  })
+}
+
+type Turn = {
+  owner: Owner<ReturnType<typeof turnMachine>>
+  /** The turnId an admission in flight admits. */
+  admission?: string
+}
+
+/** An admission in flight, and the generation it must land at. */
+type Admission = { turn: Turn; generation: number }
+
+const SILENT: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  child: () => SILENT,
+}
+
+/** A logger whose every line names the turn `turnId` reads when it writes. */
+function namingTurn(logger: Logger, turnId: () => string | undefined): Logger {
+  const at =
+    (level: Exclude<keyof Logger, "child">) =>
+    (fields: LogFields, message: string) => {
+      const id = turnId()
+      logger[level](
+        id === undefined ? fields : { turnId: id, ...fields },
+        message
+      )
+    }
+  return {
+    debug: at("debug"),
+    info: at("info"),
+    warn: at("warn"),
+    error: at("error"),
+    child: (bindings) => namingTurn(logger.child(bindings), turnId),
+  }
+}
+
 type Segment = {
   cacheKey: string
   turnId: string
+  /** The turn generation its admission landed as. */
+  generation: number
   handle: ServerTurnHandle
   fanout: SubscriberFanout<SequencedTurnEvent>
   journal?: SegmentJournal
@@ -205,6 +364,7 @@ function segmentJournal(history: SegmentHistory): SegmentJournal {
 type SegmentInit = {
   cacheKey: string
   turnId: string
+  generation: number
   handle: ServerTurnHandle
   history: SegmentHistory
   onTerminal?: (event: TurnEvent) => void | Promise<void>
@@ -212,7 +372,9 @@ type SegmentInit = {
 
 type Execution = {
   scope: SessionScope
-  state: SessionExecutionState
+  turn: Turn
+  /** Read from the turn owner, the one place a turn's state lives. */
+  readonly state: SessionExecutionState
   admissionId: string
   admissionFingerprint: string
   startedByRole: Role
@@ -234,7 +396,6 @@ type Execution = {
 /** Every field one admitted turn owns, shared by a new and a restarted one. */
 type AdmittedTurn = Pick<
   Execution,
-  | "state"
   | "admissionId"
   | "admissionFingerprint"
   | "segment"
@@ -243,7 +404,6 @@ type AdmittedTurn = Pick<
 >
 
 type TurnInit = {
-  state: SessionExecutionState
   turnId: string
   /** Exact admission request this turn is fingerprinted from. */
   request: unknown
@@ -252,6 +412,7 @@ type TurnInit = {
 
 type ExecutionInit = TurnInit & {
   scope: SessionScope
+  turn: Turn
   startedByRole: Role
   startedBy?: string
   controllers?: readonly string[]
@@ -263,7 +424,6 @@ type ExecutionInit = TurnInit & {
  */
 function admittedTurn(init: TurnInit): AdmittedTurn {
   return {
-    state: init.state,
     admissionId: init.turnId,
     admissionFingerprint: admissionFingerprint(init.request),
     segment: init.segment,
@@ -431,7 +591,10 @@ function settledNow(settled: Promise<void>) {
 export class SessionCoordinator {
   readonly #executions = new Map<string, Execution>()
   readonly #journals = new Map<string, Segment>()
-  readonly #admissions = new Set<string>()
+  readonly #turns = new Map<string, Turn>()
+  readonly #machine: ReturnType<typeof turnMachine>
+  readonly #logger: Logger
+  readonly #clock: Clock
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
   readonly #listeners = new Set<{
@@ -446,6 +609,9 @@ export class SessionCoordinator {
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
+    this.#logger = options.logger ?? SILENT
+    this.#clock = options.clock ?? defaultClock
+    this.#machine = turnMachine(this.#logger, this.#clock)
     this.#usage = new SessionReporter({
       read: async (scope) =>
         SessionContextResponseSchema.parse(
@@ -612,15 +778,14 @@ export class SessionCoordinator {
     role: Execution["startedByRole"],
     existing: Execution | undefined
   ) {
-    if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    this.#assertCapacity(role, existing)
-    this.#admissions.add(key)
+    const turnId =
+      existing?.segment.turnId ?? `aos-recovered-${crypto.randomUUID()}`
+    const { turn, generation } = this.#admit(scope, turnId)
     try {
-      const turnId =
-        existing?.segment.turnId ?? `aos-recovered-${crypto.randomUUID()}`
+      this.#assertCapacity(role, existing)
       const discovered = await this.options.engine.discover!(scope, turnId)
       if (!discovered) {
-        if (existing && this.#executions.get(key) === existing) {
+        if (existing && this.#move(turn, generation, { type: "cleared" })) {
           this.#resolveAttention(existing)
           this.#forgetJournal(existing.segment)
           existing.segment.fanout.close()
@@ -631,6 +796,7 @@ export class SessionCoordinator {
       const segment = this.#createSegment({
         cacheKey: key,
         turnId,
+        generation: this.#landed(turn, generation, discovered.state),
         handle: discovered.handle,
         // Only a stream that begins at the native turn's start can replay it;
         // any other joined the turn midway and has nothing a reload can trust.
@@ -644,7 +810,7 @@ export class SessionCoordinator {
         existing ??
         this.#createExecution({
           scope,
-          state: discovered.state,
+          turn,
           turnId,
           request: { turnId },
           startedByRole: role,
@@ -653,14 +819,13 @@ export class SessionCoordinator {
       if (existing) {
         this.#forgetJournal(existing.segment)
         existing.segment.fanout.close()
-        execution.state = discovered.state
         execution.segment = segment
       }
       this.#executions.set(key, execution)
       this.#consume(execution, segment)
       return execution
     } finally {
-      this.#admissions.delete(key)
+      this.#endAdmission(turn, generation)
     }
   }
 
@@ -700,8 +865,7 @@ export class SessionCoordinator {
         throw new ServerTurnConflictError()
     }
     this.#assertCapacity(access.role)
-    if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    this.#admissions.add(key)
+    const { turn, generation } = this.#admit(scope, input.turnId)
     try {
       const at = Date.now()
       const handle = await this.options.engine.start(
@@ -711,7 +875,7 @@ export class SessionCoordinator {
       )
       const execution: Execution = this.#createExecution({
         scope,
-        state: "running",
+        turn,
         turnId: input.turnId,
         request: input,
         startedByRole: access.role,
@@ -720,6 +884,7 @@ export class SessionCoordinator {
         segment: this.#createSegment({
           cacheKey: key,
           turnId: input.turnId,
+          generation: this.#landed(turn, generation, "running"),
           handle,
           history: { journal: "start", at },
           onTerminal: access.onTerminal,
@@ -730,7 +895,7 @@ export class SessionCoordinator {
       this.#consume(execution, execution.segment)
       return this.#subscribe(execution.segment, 0, access)
     } finally {
-      this.#admissions.delete(key)
+      this.#endAdmission(turn, generation)
     }
   }
 
@@ -829,8 +994,13 @@ export class SessionCoordinator {
     const inFlight = this.#recoveries.get(key)
     if (inFlight) return inFlight
     this.#assertCapacity(existing?.startedByRole ?? access.role, existing)
-    if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    const recovery = this.#recoverExecution(scope, request, access, existing)
+    const recovery = this.#recoverExecution(
+      scope,
+      request,
+      access,
+      existing,
+      this.#admit(scope, request.turnId)
+    )
     this.#recoveries.set(key, recovery)
     void recovery
       .finally(() => {
@@ -874,10 +1044,10 @@ export class SessionCoordinator {
     scope: SessionScope,
     request: CoordinatorRecoveryRequest,
     access: CoordinatorAccess,
-    existing: Execution | undefined
+    existing: Execution | undefined,
+    { turn, generation }: Admission
   ) {
     const key = scopeKey(scope)
-    this.#admissions.add(key)
     try {
       // A handle that cannot name where this browser stopped reading recovers
       // without a position: a fabricated one would never match a real epoch.
@@ -892,6 +1062,7 @@ export class SessionCoordinator {
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: request.turnId,
+        generation: this.#landed(turn, generation, "running"),
         handle,
         // One turn keeps one journal and one monotonic sequence across its
         // segments: a browser cursor can never skip a recovered event.
@@ -903,14 +1074,13 @@ export class SessionCoordinator {
         existing ??
         this.#createExecution({
           scope,
-          state: "running",
+          turn,
           turnId: request.turnId,
           request: providerRequest,
           startedByRole: access.role,
           segment,
         })
       if (existing) existing.segment.fanout.close()
-      execution.state = "running"
       execution.segment = segment
       if (access.canControl) execution.controllers.add(access.principalId)
       this.#executions.set(key, execution)
@@ -918,26 +1088,16 @@ export class SessionCoordinator {
       this.#consume(execution, segment)
       return execution
     } finally {
-      this.#admissions.delete(key)
+      this.#endAdmission(turn, generation)
     }
   }
 
   /**
-   * Whether a control answer still speaks for the execution it was issued
-   * against. The turn stream is the one place a turn ends, so an answer that
-   * arrives after the stream reported the outcome — `idle` or `uncertain`, the
-   * two states nothing more arrives for — or after the next turn replaced the
+   * The turn stream is the one place a turn ends, so a Stop that answers after
+   * the stream reported the outcome, or after the next turn replaced the
    * segment, is reported to its caller without reopening a Session that is
-   * already over.
+   * already over: the turn owner no longer takes it.
    */
-  #answerApplies(execution: Execution, segment: Segment) {
-    return (
-      execution.segment === segment &&
-      execution.state !== "idle" &&
-      execution.state !== "uncertain"
-    )
-  }
-
   async stop(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     principalId: string
@@ -947,23 +1107,21 @@ export class SessionCoordinator {
     return this.#withControl(execution, async () => {
       if (!execution.controllers.has(principalId))
         throw new ServerTurnControlError()
-      const stopped = execution.segment
+      const { turn } = execution
+      const { generation } = execution.segment
       try {
-        const status = await stopped.handle.stop()
-        if (this.#answerApplies(execution, stopped)) {
-          execution.state = status === "idle" ? "idle" : "stopping"
-          // Stopping a wait ends it without an answer.
-          if (status === "idle") this.#resolveAttention(execution)
-        }
+        const status = await execution.segment.handle.stop()
+        const type = status === "idle" ? "stopped" : "stopping"
+        // Stopping a wait ends it without an answer.
+        if (this.#move(turn, generation, { type }) && status === "idle")
+          this.#resolveAttention(execution)
         return status
       } catch (error) {
         if (error instanceof ServerTurnStopNotDispatchedError) {
-          if (this.#answerApplies(execution, stopped))
-            execution.state = "running"
+          this.#move(turn, generation, { type: "undispatched" })
           throw error.failure
         }
-        if (this.#answerApplies(execution, stopped))
-          execution.state = "uncertain"
+        this.#move(turn, generation, { type: "stopFailed" })
         throw error
       }
     })
@@ -1028,18 +1186,82 @@ export class SessionCoordinator {
     this.#closed = true
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()
+    for (const { owner } of this.#turns.values()) owner.dispose()
+  }
+
+  /** One owner per Session, logging under its ids and the turn it moves. */
+  #turn(scope: SessionScope): Turn {
+    const key = scopeKey(scope)
+    const known = this.#turns.get(key)
+    if (known) return known
+    const turn: Turn = {
+      owner: createOwner(this.#machine, {
+        logger: namingTurn(
+          this.#logger,
+          () => turn.admission ?? this.#executions.get(key)?.segment.turnId
+        ),
+        clock: this.#clock,
+        bindings: { agentId: scope.agentId, sessionId: scope.sessionId },
+      }),
+    }
+    this.#turns.set(key, turn)
+    return turn
+  }
+
+  /**
+   * Moves a turn for the generation that asks, when that move still applies:
+   * a stale generation or a move its state does not take changes nothing.
+   */
+  #move(turn: Turn, generation: number, event: TurnSignal) {
+    if (
+      turn.owner.stale(generation) ||
+      !turn.owner.actor.getSnapshot().can(event)
+    )
+      return false
+    turn.owner.actor.send(event)
+    return true
+  }
+
+  /** One admission at a time per Session: a second one conflicts. */
+  #admit(scope: SessionScope, turnId: string): Admission {
+    if (this.#closed) throw new Error("Session coordinator is closed")
+    const turn = this.#turn(scope)
+    const { generation } = turn.owner
+    turn.admission = turnId
+    if (!this.#move(turn, generation, { type: "admit" })) {
+      turn.admission = undefined
+      throw new ServerTurnConflictError()
+    }
+    return { turn, generation }
+  }
+
+  /** Lands an admission as the turn it admitted, at that turn's generation. */
+  #landed(
+    turn: Turn,
+    generation: number,
+    state: "running" | "waiting-for-input"
+  ) {
+    if (!this.#move(turn, generation, { type: "admitted", state }))
+      throw new Error("Session coordinator is closed")
+    return turn.owner.generation
+  }
+
+  /** An admission that did not land returns the turn to where it rested. */
+  #endAdmission(turn: Turn, generation: number) {
+    this.#move(turn, generation, { type: "refused" })
+    turn.admission = undefined
   }
 
   async #startSegment(execution: Execution, input: RepliesTurnInput) {
     const key = scopeKey(execution.scope)
-    if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    this.#admissions.add(key)
+    const { turn, generation } = this.#admit(execution.scope, input.turnId)
     try {
       const at = Date.now()
       const handle = await this.options.engine.start(execution.scope, input)
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: input.turnId,
+        generation: this.#landed(turn, generation, "running"),
         handle,
         history: { journal: "start", at },
       })
@@ -1048,7 +1270,6 @@ export class SessionCoordinator {
       Object.assign(
         execution,
         admittedTurn({
-          state: "running",
           turnId: input.turnId,
           request: input,
           segment,
@@ -1057,13 +1278,19 @@ export class SessionCoordinator {
       this.#trackJournal(segment)
       this.#consume(execution, segment)
     } finally {
-      this.#admissions.delete(key)
+      this.#endAdmission(turn, generation)
     }
   }
 
   #createExecution(init: ExecutionInit): Execution {
     return {
       scope: init.scope,
+      turn: init.turn,
+      // An admission in flight reads as the state its turn rests in.
+      get state() {
+        const { value, context } = this.turn.owner.actor.getSnapshot()
+        return value === "admitting" ? context.resting : value
+      },
       startedByRole: init.startedByRole,
       ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
       controllers: new Set(init.controllers ?? []),
@@ -1118,6 +1345,7 @@ export class SessionCoordinator {
       announce,
       cacheKey: init.cacheKey,
       turnId: init.turnId,
+      generation: init.generation,
       handle: init.handle,
       fanout: new SubscriberFanout<SequencedTurnEvent>({
         maxEvents: this.options.maxSubscriberEvents,
@@ -1141,6 +1369,9 @@ export class SessionCoordinator {
   }
 
   #consume(execution: Execution, segment: Segment) {
+    const { turn } = execution
+    const outcome = (type: "ended" | "paused" | "lost") =>
+      this.#move(turn, segment.generation, { type })
     // One start per consumed segment: a new turn, a reply, or a recovered
     // turn. A rediscovered wait is not a start, so it announces nothing here.
     if (execution.state === "running")
@@ -1188,9 +1419,7 @@ export class SessionCoordinator {
             terminal = true
             segment.terminal = true
             segment.requests = pendingRequestsOf(event)
-            execution.state = segment.requests.length
-              ? "waiting-for-input"
-              : "idle"
+            outcome(segment.requests.length ? "paused" : "ended")
             const origin = this.#origin(execution.scope, segment.turnId)
             if (segment.requests.length)
               for (const request of segment.requests)
@@ -1219,7 +1448,7 @@ export class SessionCoordinator {
             // reset is definite: its journal cannot serve the browser's cursor,
             // so the execution settles and the next turn is admitted, which the
             // adapter still refuses if the native Session is busy.
-            execution.state = interrupted ? "uncertain" : "idle"
+            outcome(interrupted ? "lost" : "ended")
             this.#announce(execution.scope, {
               ...this.#origin(execution.scope, segment.turnId),
               kind: "turn-failed",
@@ -1232,11 +1461,8 @@ export class SessionCoordinator {
         // event: the provider's settlement below is what decides the turn.
       } finally {
         segment.fanout.close()
-        if (!terminal && execution.segment === segment) {
-          const settled = await settledNow(segment.handle.settled)
-          if (execution.segment === segment)
-            execution.state = settled ? "idle" : "uncertain"
-        }
+        if (!terminal && !turn.owner.stale(segment.generation))
+          outcome((await settledNow(segment.handle.settled)) ? "ended" : "lost")
         segment.announce()
       }
     })()
