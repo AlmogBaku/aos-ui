@@ -48,12 +48,15 @@ import { runErrorMessage } from "@/lib/i18n/run-errors"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import {
   AOS_ACP_GUEST_PATH,
-  AOS_JSONRPC_ERRORS,
   type AosSessionResumeResponseMetaSchema,
 } from "@aos/protocol/acp"
 import { createAcpApprovals } from "./acp/acp-approvals"
 import { createAcpInteractions } from "./acp/acp-interactions"
-import { acpSocketUrl, createAcpConnection } from "./acp/connection"
+import {
+  acpSocketUrl,
+  createAcpConnection,
+  isAuthenticationRequired,
+} from "./acp/connection"
 import type { AcpConnection } from "./acp/types"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
@@ -118,16 +121,10 @@ class GuestRuntimeContextError extends Error {
   }
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
-
 /** An invitation the proxy refuses is finished; anything else may recover. */
 function failureOf(cause: unknown): GuestFailure {
   if (cause instanceof GuestRuntimeContextError) return cause.kind
-  return isRecord(cause) &&
-    cause.code === AOS_JSONRPC_ERRORS.authenticationRequired
-    ? "inactive"
-    : "unavailable"
+  return isAuthenticationRequired(cause) ? "inactive" : "unavailable"
 }
 
 /** The gateway, not decoded bearer claims, selects the guest's public scope. */

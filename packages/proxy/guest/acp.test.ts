@@ -73,6 +73,10 @@ const KEY = new Uint8Array(32).fill(7)
 const INSTRUCTION = "Load the interview skill."
 /** JSON-RPC reserves this code; the SDK's `methodNotFound` returns it. */
 const METHOD_NOT_FOUND = -32601
+/** ACP's own codes, as the SDK builds them. */
+const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+const NOT_FOUND = RequestError.resourceNotFound().code
+const INVALID_PARAMS = RequestError.invalidParams().code
 
 /** What the redeemed member's stack shows it of one event, if anything. */
 function shown(
@@ -768,7 +772,7 @@ describe("guest ACP listener", () => {
   it("answers every method with authentication required before login", async () => {
     const test = harness({ existing: true })
     await test.initialize()
-    const required = { code: AOS_JSONRPC_ERRORS.authenticationRequired }
+    const required = { code: AUTHENTICATION_REQUIRED }
 
     await expect(test.resume(REF)).rejects.toMatchObject(required)
     await expect(test.prompt("Hello")).rejects.toMatchObject(required)
@@ -841,7 +845,7 @@ describe("guest ACP listener", () => {
     await test.initialize()
 
     await expect(test.login(`${token}x`)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await test.login(token)
     await test.resume(REF)
@@ -874,10 +878,10 @@ describe("guest ACP listener", () => {
     await expect(
       test.login(await invite(test.invitations))
     ).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await expect(test.resume(REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     test.close()
   })
@@ -887,10 +891,10 @@ describe("guest ACP listener", () => {
     await test.initialize()
 
     await expect(test.login("not-a-token")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await expect(test.resume(REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     test.close()
   })
@@ -950,7 +954,7 @@ describe("guest ACP listener", () => {
     // The invitation's setup turn is not part of the guest conversation.
     expect(replayed).not.toContain(INSTRUCTION)
     await expect(test.resume("another-session")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
     test.close()
   })
@@ -1542,7 +1546,7 @@ describe("guest ACP listener", () => {
         cwd: "/",
         replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.notFound })
+    ).rejects.toMatchObject({ code: NOT_FOUND })
     const sent = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)
@@ -1628,14 +1632,14 @@ describe("guest ACP listener", () => {
     await expect(
       test.login(await invite(test.invitations, "other_ref"))
     ).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
 
     const resumed = await test.resume(REF, true)
     expect(resumed).toMatchObject({ _meta: { [AOS_META_KEY]: {} } })
     expect(JSON.stringify(updates(test.recorder))).not.toContain(INSTRUCTION)
     await expect(test.resume("other_ref")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
     test.close()
   })
@@ -1692,7 +1696,7 @@ describe("guest ACP listener", () => {
                 jsonrpc: "2.0",
                 id: "late",
                 error: expect.objectContaining({
-                  code: AOS_JSONRPC_ERRORS.authenticationRequired,
+                  code: AUTHENTICATION_REQUIRED,
                 }),
               },
             ]
@@ -1791,7 +1795,11 @@ const FAILURES: Array<[string, () => unknown]> = [
 /** Every code a guest's error reply may carry. */
 const PUBLIC_CODES: readonly number[] = [
   ...Object.values(AOS_JSONRPC_ERRORS),
+  AUTHENTICATION_REQUIRED,
+  NOT_FOUND,
+  INVALID_PARAMS,
   METHOD_NOT_FOUND,
+  RequestError.requestCancelled().code,
 ]
 
 /** A reply's error carries a public code and nothing that describes the host. */
@@ -1817,7 +1825,7 @@ describe("guest scope and commands", () => {
     const test = harness({ existing: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: AOS_JSONRPC_ERRORS.notFound }
+    const notFound = { code: NOT_FOUND }
 
     await expect(test.resume("another-session")).rejects.toMatchObject(notFound)
     await expect(test.prompt("Hello", "another-session")).rejects.toMatchObject(
@@ -1872,7 +1880,7 @@ describe("guest scope and commands", () => {
     const test = harness()
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: AOS_JSONRPC_ERRORS.notFound }
+    const notFound = { code: NOT_FOUND }
 
     await expect(test.steer("Shorter")).rejects.toMatchObject(notFound)
     await expect(
@@ -1897,7 +1905,7 @@ describe("guest scope and commands", () => {
     await test.login(await invite(test.invitations))
 
     await expect(test.prompt("Hello")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
     expect(test.start).not.toHaveBeenCalled()
     test.close()
@@ -1915,7 +1923,7 @@ describe("guest scope and commands", () => {
           sessionId: REF,
           prompt: blocks.map((text) => ({ type: "text" as const, text })),
         })
-      ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.invalidRequest })
+      ).rejects.toMatchObject({ code: INVALID_PARAMS })
 
       expect(test.resolveInvitedSession).not.toHaveBeenCalled()
       expect(test.start).not.toHaveBeenCalled()
@@ -1932,7 +1940,7 @@ describe("guest scope and commands", () => {
       await test.login(await invite(test.invitations))
 
       await expect(test.steer(blocks.join(""))).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.invalidRequest,
+        code: INVALID_PARAMS,
       })
       expect(test.resolveInvitedSession).not.toHaveBeenCalled()
       test.close()
@@ -2073,7 +2081,7 @@ describe("guest scope and commands", () => {
       await test.resume(REF)
 
       await expect(send(test, "missing-stage")).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.invalidRequest,
+        code: INVALID_PARAMS,
       })
       expect(test.start).not.toHaveBeenCalled()
       test.close()
@@ -2099,7 +2107,7 @@ describe("guest scope and commands", () => {
 
     // The invitation's setup turn is in the stored history, never shown.
     await expect(rewind("user-0")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
+      code: INVALID_PARAMS,
     })
     const from = test.recorder.entries.length
     await test.prompt("Hello")
@@ -2197,7 +2205,7 @@ describe("guest scope and commands", () => {
       _meta: { [AOS_META_KEY]: { smuggled: "operator-only" } },
     })
     expect(smuggledMeta.error).toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
+      code: INVALID_PARAMS,
     })
     const smuggledParam = await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2274,7 +2282,7 @@ describe("guest scope and commands", () => {
   it("reports a run that failed to start with a public code alone", async () => {
     const test = harness({
       existing: true,
-      fails: { start: new RequestError(-32000, OPERATOR_SECRET) },
+      fails: { start: new RequestError(-32603, OPERATOR_SECRET) },
     })
     const socket = await redeemedWire(
       test.listener,

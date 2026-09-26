@@ -1,3 +1,4 @@
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -26,13 +27,16 @@ import {
 } from "./index"
 import {
   AOS_ARTIFACT_URI_SCHEME,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
   AosExtensionsSchema,
   AosFocusNotificationSchema,
   AosHistoryPageTagSchema,
+  AosPromptMetaSchema,
   AosReplayBeforeSchema,
+  AosSessionNewMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
   AosSessionUpdateRequestSchema,
@@ -906,6 +910,30 @@ describe("AOS v1 normalized protocol", () => {
     expect(history.parse(undefined)).toBeUndefined()
   })
 
+  it("reads the client id a create or send repeats, and the resume position", () => {
+    expect(AosPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
+      clientId: "send-1",
+    })
+    expect(
+      AosSessionNewMetaSchema.parse({
+        agentId: "researcher",
+        clientId: "new-1",
+      })
+    ).toEqual({ agentId: "researcher", clientId: "new-1" })
+    for (const clientId of ["", 7]) {
+      expect(AosPromptMetaSchema.safeParse({ clientId }).success).toBe(false)
+      expect(
+        AosSessionNewMetaSchema.safeParse({ agentId: "researcher", clientId })
+          .success
+      ).toBe(false)
+    }
+    const { position } = AosSessionResumeResponseMetaSchema.shape
+    expect(position.parse({ turnId: "turn-1", sequence: 4 })).toEqual({
+      turnId: "turn-1",
+      sequence: 4,
+    })
+  })
+
   it("tells an older page's updates apart from live ones", () => {
     expect(
       AosHistoryPageTagSchema.parse({
@@ -939,8 +967,47 @@ describe("AOS v1 normalized protocol", () => {
     ).toBe(true)
   })
 
-  it("announces artifacts in the message stream, not as a notification", () => {
-    expect(Object.values(AOS_METHODS.notify)).not.toContain("_aos/artifact")
+  it("keeps the AOS extension to its method and error-code footprint", () => {
+    expect(AOS_METHODS).toEqual({
+      session: {
+        update: "_aos/session/update",
+        steer: "_aos/session/steer",
+        focus: "_aos/session/focus",
+      },
+      agents: {
+        list: "_aos/agents/list",
+        setVisibility: "_aos/agents/set_visibility",
+      },
+      notify: {
+        activity: "_aos/activity",
+        steerAccepted: "_aos/steer_accepted",
+        composerPrefill: "_aos/composer_prefill",
+        catalogInvalidated: "_aos/catalog_invalidated",
+        sessionInvalidated: "_aos/session_invalidated",
+        error: "_aos/error",
+      },
+    })
+    for (const code of Object.values(AOS_JSONRPC_ERRORS)) {
+      expect(code).toBeGreaterThanOrEqual(-32014)
+      expect(code).toBeLessThanOrEqual(-32010)
+    }
+  })
+
+  it("keeps every AOS error code clear of the codes ACP defines", () => {
+    // Each static builder the SDK ships is one ACP error, so an SDK that adds a
+    // code inside the AOS block fails here.
+    const builders = RequestError as unknown as Record<string, unknown>
+    const acpCodes = Object.getOwnPropertyNames(RequestError).flatMap(
+      (name) => {
+        const builder = builders[name]
+        const built: unknown =
+          typeof builder === "function" ? builder.call(RequestError) : undefined
+        return built instanceof RequestError ? [built.code] : []
+      }
+    )
+    expect(acpCodes).toContain(RequestError.authRequired().code)
+    for (const code of Object.values(AOS_JSONRPC_ERRORS))
+      expect(acpCodes).not.toContain(code)
   })
 })
 

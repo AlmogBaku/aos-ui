@@ -12,6 +12,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest"
 // temporary directory instead of overwriting the checkout's `dist/`.
 let outDir: string
 let chunks: Rollup.OutputChunk[]
+let buildId: string | undefined
 
 beforeAll(async () => {
   outDir = await mkdtemp(path.join(tmpdir(), "aos-ui-startup-bundle-"))
@@ -25,6 +26,8 @@ beforeAll(async () => {
     ? result.flatMap(({ output }) => output)
     : result.output
   chunks = outputs.filter((output) => output.type === "chunk")
+  const asset = outputs.find((output) => output.fileName === "build-id")
+  buildId = asset?.type === "asset" ? String(asset.source) : undefined
 }, 90_000)
 
 afterAll(async () => {
@@ -51,6 +54,14 @@ it("keeps runtime-specific workspace code out of the configuration bootstrap", (
   // the conversation before knowing which workspace the deployment serves.
   // Allow headroom above the measured 104 kB compressed bootstrap.
   expect(initialGzipBytes).toBeLessThan(120_000)
+})
+
+// A tab whose build differs from the proxy's reloads, so the id must change
+// with every chunk the page loads: the entry chunk's hash covers them all.
+it("names the build by its entry chunk's content hash", () => {
+  const entry = chunks.find((chunk) => chunk.isEntry)
+  expect(buildId).toMatch(/^[\w-]{8,}$/)
+  expect(entry?.fileName).toBe(`assets/${entry?.name}-${buildId}.js`)
 })
 
 /**

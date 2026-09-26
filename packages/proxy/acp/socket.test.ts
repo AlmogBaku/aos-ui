@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { AOS_JSONRPC_ERRORS, AOS_METHODS } from "../../protocol/acp"
+import { AOS_METHODS } from "../../protocol/acp"
 
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
-import { PUBLIC_ERRORS } from "./validation"
+import { authenticationRequired, PUBLIC_ERRORS } from "./validation"
 
 const NOW = 1_700_000_000_000
 
@@ -177,7 +177,7 @@ describe("ACP WebSocket shim", () => {
         jsonrpc: "2.0",
         id: 2,
         error: expect.objectContaining({
-          code: AOS_JSONRPC_ERRORS.authenticationRequired,
+          code: authenticationRequired().code,
         }),
       },
     ])

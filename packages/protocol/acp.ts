@@ -70,19 +70,16 @@ export const AOS_PERMISSION_KIND_SESSION = "_allow_session" as const
 export const AOS_PLAN_ID = "todos" as const
 
 /**
- * JSON-RPC error codes the proxy returns beyond the standard ones. Both ends
- * import this table; the proxy maps `ServerRuntimePublicError` codes onto it.
+ * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
+ * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
+ * these sit in their own block from -32010, clear of the codes ACP uses.
  */
 export const AOS_JSONRPC_ERRORS = {
-  authenticationRequired: -32001,
-  turnInProgress: -32002,
-  staleRequest: -32003,
-  notFound: -32004,
-  revisionConflict: -32005,
-  temporarilyUnavailable: -32006,
-  connectionInterrupted: -32007,
-  uncertainMutation: -32008,
-  invalidRequest: -32602,
+  turnInProgress: -32010,
+  staleRequest: -32011,
+  revisionConflict: -32012,
+  temporarilyUnavailable: -32013,
+  uncertainMutation: -32014,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
@@ -148,10 +145,17 @@ export const AosLoginMetaSchema = z.strictObject({
 // sessions
 // ---------------------------------------------------------------------------
 
+/**
+ * The id the browser picks for one create or send, so a retry of it is
+ * recognized as the same request rather than repeated.
+ */
+const ClientIdSchema = IdentifierSchema.optional()
+
 /** `NewSessionRequest._meta.aos` */
 export const AosSessionNewMetaSchema = z.strictObject({
   agentId: IdentifierSchema,
   title: z.string().min(1).max(4096).optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `ListSessionsRequest._meta.aos` */
@@ -247,15 +251,20 @@ export const AosHistoryPageTagSchema = readObject({
 })
 
 /**
- * `ResumeSessionResponse._meta.aos`. `resync: true` means `after` was beyond
- * bounded replay; the client must resume again with `replayFrom: { type:
- * "start" }`.
+ * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
+ * joined Session's stream stands at, which a later resume continues from.
+ * `resync: true` means `after` was beyond bounded replay; the client must
+ * resume again with `replayFrom: { type: "start" }`.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
   session: AosSessionInfoMetaSchema,
   execution: AosExecutionSchema,
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-  resync: z.boolean().optional(),
+  position: readObject({
+    turnId: IdentifierSchema,
+    sequence: SequenceSchema,
+  }).optional(),
+  resync: z.literal(true).optional(),
   /** Present whenever this resume replayed history. */
   history: AosHistoryCursorSchema.optional(),
 })
@@ -266,6 +275,7 @@ export const AosPromptMetaSchema = z.strictObject({
   rewindSourceId: IdentifierSchema.optional(),
   /** Server-staged attachment batch referenced by `resource_link` blocks. */
   attachmentStageId: IdentifierSchema.optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `_aos/session/update` params: exactly one intent per write. */
@@ -459,6 +469,14 @@ export const AosUsageMetaSchema = readObject({
   source: SessionContextResponseSchema.shape.source,
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
+})
+
+/**
+ * `available_commands_update._meta.aos`: the Session's capabilities beyond its
+ * slash commands travel with them, as one update.
+ */
+export const AosAvailableCommandsMetaSchema = readObject({
+  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
 })
 
 // ---------------------------------------------------------------------------

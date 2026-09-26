@@ -27,9 +27,13 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import type { ServerTurnListener, ServerRuntime } from "../core/runtime"
+import {
+  ServerSessionNotFoundError,
+  type ServerTurnListener,
+  type ServerRuntime,
+} from "../core/runtime"
 import { translateHistory } from "./translate/history"
-import { invalidRequest } from "./validation"
+import { invalidRequest, notFound } from "./validation"
 import {
   AGENT,
   CONNECTION,
@@ -1270,6 +1274,32 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  it("refuses a lost Session with ACP's code and still names it not_found", async () => {
+    const test = await harness({
+      providerIds: true,
+      onStart: () => {
+        throw new ServerSessionNotFoundError()
+      },
+    })
+    await test.list()
+
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: "missing",
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: -32002 })
+    await prompt(test, "Summarize")
+    const failed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
+      "a failed state_update"
+    )
+    expect(failed.params).toMatchObject({
+      update: { _meta: { [AOS_META_KEY]: { code: "not_found" } } },
+    })
+    test.close()
+  })
+
   it("shows nobody a prompt the provider refused", async () => {
     const test = await harness({
       providerIds: true,
@@ -2143,9 +2173,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
 
-    await expect(prompt(test, [])).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
-    })
+    await expect(prompt(test, [])).rejects.toMatchObject(invalidParams)
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
@@ -3186,7 +3214,7 @@ describe("History pages", () => {
     await test.list()
 
     await expect(older(test, cursorOf(500))).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: notFound().code,
     })
     await test.create()
     await expect(older(test, cursorOf(500), CREATED)).resolves.toEqual({
@@ -3197,7 +3225,7 @@ describe("History pages", () => {
       sessionId: SESSION,
     })
     await expect(older(test, cursorOf(500))).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: notFound().code,
     })
     test.close()
   })
