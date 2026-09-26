@@ -30,6 +30,21 @@ import {
 /** The bound on one native call, on one dial, and on a caller waiting for the link. */
 const CALL_MS = 15_000
 
+/**
+ * The calls that change native state: one sent and never answered may have
+ * landed. Every other call is a read, which the caller may simply repeat.
+ */
+const WRITES: ReadonlySet<string> = new Set([
+  "approval.resolve",
+  "chat.send",
+  "mcp.app.callTool",
+  "question.resolve",
+  "sessions.abort",
+  "sessions.create",
+  "sessions.delete",
+  "sessions.patch",
+])
+
 export type OpenClawRequestOptions = Readonly<{
   signal?: AbortSignal
   expectFinal?: boolean
@@ -140,10 +155,10 @@ export class OpenClawClientUnavailableError extends Error {
 }
 
 export class OpenClawClientRequestError extends Error {
+  /** `uncertain`: a write was sent and never answered, so it may have landed. */
   constructor(
     readonly kind: "cancelled" | "rejected" | "timeout" | "unavailable",
-    readonly requestSent = false,
-    readonly accepted = false
+    readonly uncertain = false
   ) {
     super(
       kind === "cancelled"
@@ -155,10 +170,6 @@ export class OpenClawClientRequestError extends Error {
             : "OpenClaw connection is unavailable"
     )
     this.name = "OpenClawClientRequestError"
-  }
-
-  get uncertain() {
-    return this.requestSent && !this.accepted
   }
 }
 
@@ -411,6 +422,7 @@ export class OpenClawClient {
       })
     } catch (error) {
       throw this.#sanitizeRequestError(
+        method,
         error,
         deadline.signal.aborted,
         options.signal,
@@ -547,6 +559,7 @@ export class OpenClawClient {
   }
 
   #sanitizeRequestError(
+    method: string,
     error: unknown,
     aborted: boolean,
     signal: AbortSignal | undefined,
@@ -561,8 +574,10 @@ export class OpenClawClient {
         : "unavailable"
     return new OpenClawClientRequestError(
       kind,
-      dispatch.requestSent,
-      dispatch.accepted
+      kind !== "rejected" &&
+        WRITES.has(method) &&
+        dispatch.requestSent &&
+        !dispatch.accepted
     )
   }
 

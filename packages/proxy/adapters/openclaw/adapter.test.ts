@@ -252,26 +252,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
     ).toBeUndefined()
   })
 
-  it("maps a failed agents-list or history read to unavailable, never uncertain", async () => {
-    // requestSent=true, accepted=false → uncertain without readOp
-    const uncertainRequest = new OpenClawClientRequestError("timeout", true)
-    const gateway = client({
-      request: vi.fn(async (method: string) => {
-        if (method === "agents.list") throw uncertainRequest
-        throw new Error(`Unexpected method ${method}`)
-      }),
-    })
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
-
-    await expect(adapter.listAgents()).rejects.toSatisfy(
-      (error) => adapter.publicError(error)?.kind === "unavailable"
-    )
-  })
-
   it("advertises and stages attachments only from negotiated HelloOk policy", async () => {
     const policy = {
       maxPayload: 30 * 1024 * 1024,
@@ -468,7 +448,7 @@ describe("OpenClaw artifact reads", () => {
       adapter.artifact("research", sessionKey, id)
     ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     answer = () => {
-      throw new OpenClawClientRequestError("rejected", true, false)
+      throw new OpenClawClientRequestError("rejected")
     }
     await expect(
       adapter.artifact("research", sessionKey, id)
@@ -479,7 +459,7 @@ describe("OpenClaw artifact reads", () => {
     const { adapter, request } = artifactAdapter({
       "chat.history": () => ({ messages: [] }),
       "artifacts.download": () => {
-        throw new OpenClawClientRequestError("rejected", true, false)
+        throw new OpenClawClientRequestError("rejected")
       },
     })
 

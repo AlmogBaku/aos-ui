@@ -106,11 +106,6 @@ class ControlledNative implements OpenClawRunRequestClient {
           : structuredClone(this.history)
       ) as T
     if (method === "sessions.abort") {
-      if (
-        this.abortError instanceof OpenClawClientRequestError &&
-        !this.abortError.requestSent
-      )
-        throw this.abortError
       options?.onSent?.()
       if (this.abortError) throw this.abortError
       return (
@@ -1682,11 +1677,7 @@ describe("OpenClaw run engine", () => {
 
   it("does not retry an abort whose dispatch outcome is uncertain", async () => {
     const native = new ControlledNative()
-    native.abortError = new OpenClawClientRequestError(
-      "unavailable",
-      true,
-      false
-    )
+    native.abortError = new OpenClawClientRequestError("unavailable", true)
     const subscriptions = new OpenClawSessionSubscriptions(native, logger)
     const engine = new OpenClawTurnEngine({
       watch,
@@ -1760,13 +1751,9 @@ describe("OpenClaw run engine", () => {
     await expect(handle.settled).resolves.toBeUndefined()
   })
 
-  it("signals a proven pre-dispatch Stop failure without making it uncertain", async () => {
+  it("signals a sent Stop the Gateway refused as not dispatched, never uncertain", async () => {
     const native = new ControlledNative()
-    native.abortError = new OpenClawClientRequestError(
-      "unavailable",
-      false,
-      false
-    )
+    native.abortError = new OpenClawClientRequestError("rejected")
     const subscriptions = new OpenClawSessionSubscriptions(native, logger)
     const engine = new OpenClawTurnEngine({
       watch,
@@ -1787,11 +1774,7 @@ describe("OpenClaw run engine", () => {
 
   it("does not retry a turn whose native dispatch may have been accepted", async () => {
     const native = new ControlledNative()
-    native.sendError = new OpenClawClientRequestError(
-      "unavailable",
-      true,
-      false
-    )
+    native.sendError = new OpenClawClientRequestError("unavailable", true)
     const subscriptions = new OpenClawSessionSubscriptions(native, logger)
     const engine = new OpenClawTurnEngine({
       watch,

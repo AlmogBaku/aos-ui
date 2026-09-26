@@ -15,6 +15,18 @@ import {
   type OpenClawRequestOptions,
 } from "./client"
 
+vi.mock("@openclaw/gateway-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@openclaw/gateway-client")>()
+  return {
+    ...actual,
+    // The official client marks every Gateway answer it builds; here a
+    // stub's GatewayClientRequestError stands for one.
+    isGatewayProtocolResponseError: (error: unknown) =>
+      error instanceof actual.GatewayClientRequestError,
+  }
+})
+
 class ControlledGatewayClient implements OpenClawGatewayClient {
   readonly requests: {
     method: string
@@ -281,7 +293,7 @@ describe("OpenClaw client", () => {
     }
   )
 
-  it("aborts a ready Gateway request on the caller's cancellation or the 15 s call deadline", async () => {
+  it("aborts a ready Gateway read on the caller's cancellation or the 15 s call deadline, never uncertain", async () => {
     const clock = useFakeClock()
     const { client, gateway } = await ready(clock)
     gateway().requestHandler = (options) =>
@@ -301,14 +313,13 @@ describe("OpenClaw client", () => {
     controller.abort()
     await expect(cancelled).rejects.toMatchObject({
       kind: "cancelled",
-      requestSent: true,
+      uncertain: false,
     })
     const timedOut = expect(
       client.request("sessions.list", {})
     ).rejects.toMatchObject({
       kind: "timeout",
-      requestSent: true,
-      uncertain: true,
+      uncertain: false,
     })
     await clock.advance(15_000)
     await timedOut
@@ -327,7 +338,7 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it("preserves a dispatched cancellation as uncertain without replaying it", async () => {
+  it("leaves a dispatched write uncertain unless the Gateway refused it", async () => {
     const clock = useFakeClock()
     const { client, gateway } = await ready(clock)
     const controller = new AbortController()
@@ -345,9 +356,18 @@ describe("OpenClaw client", () => {
       )
     ).rejects.toMatchObject({
       kind: "cancelled",
-      requestSent: true,
       uncertain: true,
     })
+
+    gateway().requestHandler = (options) => {
+      options?.onSent?.()
+      return Promise.reject(
+        new GatewayClientRequestError({ code: "INVALID_REQUEST" })
+      )
+    }
+    await expect(
+      client.request("chat.send", { text: "once" })
+    ).rejects.toMatchObject({ kind: "rejected", uncertain: false })
   })
 
   it("preserves official sent and accepted acknowledgement boundaries for a leaf", async () => {

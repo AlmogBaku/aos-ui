@@ -199,7 +199,7 @@ describe("OpenClaw MCP Apps", () => {
 
   it("reports a view the gateway no longer holds as not found", async () => {
     const expired = () => {
-      throw new OpenClawClientRequestError("rejected", true, true)
+      throw new OpenClawClientRequestError("rejected")
     }
     const { adapter, mcpApps } = gateway({
       "mcp.app.view": expired,

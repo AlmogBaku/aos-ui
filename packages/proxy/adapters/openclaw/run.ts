@@ -696,11 +696,12 @@ function finalAcknowledgement(value: unknown) {
   )
 }
 
-function requestWasSent(error: unknown, callbackObserved: boolean) {
-  return (
-    callbackObserved ||
-    (error instanceof OpenClawClientRequestError && error.requestSent)
-  )
+/**
+ * Whether a failed write may have landed: the client's word for its own
+ * failure, and a sent request for a failure after its answer.
+ */
+function mayHaveLanded(error: unknown, sent: boolean) {
+  return error instanceof OpenClawClientRequestError ? error.uncertain : sent
 }
 
 function providerUnavailable() {
@@ -1019,7 +1020,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       try {
         await admission
       } catch (error) {
-        if (requestWasSent(error, sent)) {
+        if (mayHaveLanded(error, sent)) {
           active.uncertain = true
           this.#markUncertain(
             active,
@@ -1589,7 +1590,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         return "idle"
       }
     } catch (error) {
-      if (requestWasSent(error, sent))
+      if (mayHaveLanded(error, sent))
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
           "OpenClaw may have accepted the Stop request."
@@ -2082,7 +2083,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         throw new Error("OpenClaw aborted a different run")
       status = acknowledgedStatus
     } catch (error) {
-      if (requestWasSent(error, sent)) {
+      if (mayHaveLanded(error, sent)) {
         active.uncertain = true
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",

@@ -84,21 +84,6 @@ async function readable(read: () => Promise<unknown>) {
   }
 }
 
-/**
- * Wraps a read operation so an uncertain transport failure becomes unavailable.
- * A read is never uncertain: whether the request landed is irrelevant because
- * the coordinator does not need to reconcile a read.
- */
-async function readOp<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn()
-  } catch (error) {
-    if (error instanceof OpenClawClientRequestError && error.uncertain)
-      throw new OpenClawWorkspaceUnavailableError()
-    throw error
-  }
-}
-
 /** Sorts every failure an OpenClaw leaf or its Gateway link raises. */
 export function openClawPublicError(cause: unknown) {
   const connection = openClawConnectionFailure(cause)
@@ -223,7 +208,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async listAgents() {
     await this.#start()
-    return readOp(() => this.#workspace.listAgents())
+    return this.#workspace.listAgents()
   }
 
   async updateAgentVisibility(
@@ -239,12 +224,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     await this.#start()
     if (offset + limit > SESSION_CATALOG_MAX_WINDOW)
       throw new OpenClawWorkspaceUnavailableError()
-    return readOp(() => this.#workspace.listAllSessions(limit, offset))
+    return this.#workspace.listAllSessions(limit, offset)
   }
 
   async listSessions(agentId: string, limit: number, offset: number) {
     await this.#start()
-    return readOp(() => this.#workspace.listSessions(agentId, limit, offset))
+    return this.#workspace.listSessions(agentId, limit, offset)
   }
 
   async history(
@@ -254,14 +239,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     offset: number
   ) {
     await this.#start()
-    return readOp(() =>
-      this.#history.history(agentId, providerSessionId, limit, offset)
-    )
+    return this.#history.history(agentId, providerSessionId, limit, offset)
   }
 
   async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    return readOp(() => this.#workspace.getSession(agentId, providerSessionId))
+    return this.#workspace.getSession(agentId, providerSessionId)
   }
 
   async createSession(agentId: string, _title?: string): Promise<unknown> {
