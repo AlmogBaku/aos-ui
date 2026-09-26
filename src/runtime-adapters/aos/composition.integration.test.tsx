@@ -1,7 +1,3 @@
-import type {
-  AgentApp,
-  AnyWireMessage,
-} from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -54,6 +50,7 @@ import type {
   TodoItem,
 } from "../contracts"
 import { runtimeAdapter } from "./composition"
+import { pipedSockets } from "./acp/test-socket"
 
 /**
  * The Phase B gate: the real operator ACP agent bridged in process to the real
@@ -474,49 +471,6 @@ function stageAttachmentsOverRest(proxy: ProxyAgentApp) {
   return { fetcher, requests, appended }
 }
 
-/** A WebSocket-shaped pipe to the in-process proxy agent. */
-function pipedSocket(app: AgentApp) {
-  return class PipedSocket extends EventTarget {
-    readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
-
-    constructor() {
-      super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      app.connect({
-        readable: this.#inbound.readable,
-        writable: outbound.writable,
-      })
-      this.#writer = this.#inbound.writable.getWriter()
-      void this.#pump(outbound.readable.getReader())
-      queueMicrotask(() => {
-        this.readyState = 1
-        this.dispatchEvent(new Event("open"))
-      })
-    }
-
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) return
-        this.dispatchEvent(
-          new MessageEvent("message", { data: JSON.stringify(value) })
-        )
-      }
-    }
-
-    send(data: string) {
-      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
-    }
-
-    close() {
-      this.readyState = 3
-      this.dispatchEvent(new Event("close"))
-    }
-  }
-}
-
 // The Thread reads the adapter the mounted provider supplied; a stable
 // component keeps the composer from remounting between renders.
 let activeInteractions: RuntimeInteractionAdapter | undefined
@@ -541,7 +495,7 @@ const components = { Composer: GatedComposer }
 async function mount(stored: readonly SessionMessage[] = STORED_MESSAGES) {
   const proxy = createProxyAgentApp(stored)
   const staging = stageAttachmentsOverRest(proxy)
-  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
   vi.stubGlobal("fetch", staging.fetcher)
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider

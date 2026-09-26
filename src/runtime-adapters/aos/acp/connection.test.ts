@@ -2,13 +2,10 @@ import {
   agent,
   methods,
   RequestError,
-  type AgentApp,
   type AgentContext,
-  type AnyWireMessage,
   type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -25,7 +22,10 @@ import {
   type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+
 import { createAcpConnection } from "./connection"
+import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
 const SESSION_ID = "session-1"
@@ -358,49 +358,6 @@ function createProxyAgent(
   }
 }
 
-/** A WebSocket-shaped pipe to an in-process agent app. */
-function pipedSocketConstructor(app: AgentApp): WebSocketConstructor {
-  return class PipedSocket extends EventTarget {
-    readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
-
-    constructor() {
-      super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      app.connect({
-        readable: this.#inbound.readable,
-        writable: outbound.writable,
-      })
-      this.#writer = this.#inbound.writable.getWriter()
-      void this.#pump(outbound.readable.getReader())
-      queueMicrotask(() => {
-        this.readyState = 1
-        this.dispatchEvent(new Event("open"))
-      })
-    }
-
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) return
-        this.dispatchEvent(
-          new MessageEvent("message", { data: JSON.stringify(value) })
-        )
-      }
-    }
-
-    send(data: string) {
-      void this.#writer.write(JSON.parse(data))
-    }
-
-    close() {
-      this.readyState = 3
-      this.dispatchEvent(new Event("close"))
-    }
-  }
-}
-
 function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
   const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
@@ -413,26 +370,20 @@ function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
 describe("ACP connection", () => {
   it("constructs no transport until it is started, and only one", async () => {
     const proxy = createProxyAgent()
-    const sockets: unknown[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
     })
 
-    expect(sockets).toHaveLength(0)
+    expect(pipe.sockets).toHaveLength(0)
 
     connection.start()
     connection.start()
     await connection.initialized
 
-    expect(sockets).toHaveLength(1)
+    expect(pipe.sockets).toHaveLength(1)
     connection.close()
     connection.close()
     expect(connection.status).toBe("closed")
@@ -440,23 +391,17 @@ describe("ACP connection", () => {
 
   it("stays closed when a connection is closed before it starts", async () => {
     const proxy = createProxyAgent()
-    const sockets: unknown[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
     })
 
     connection.close()
     connection.start()
 
-    expect(sockets).toHaveLength(0)
+    expect(pipe.sockets).toHaveLength(0)
     expect(connection.status).toBe("closed")
     await expect(connection.initialized).rejects.toThrow()
   })
@@ -896,17 +841,11 @@ describe("ACP connection", () => {
 
     it("waits for a recovering transport to rejoin before reading a page", async () => {
       const proxy = createProxyAgent({ page: olderPage, slowResume: true })
-      const sockets: { close: () => void }[] = []
-      const socketConstructor = pipedSocketConstructor(proxy.app)
+      const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
         url: "ws://proxy.test/api/aos/v1/acp",
-        socketConstructor: class extends socketConstructor {
-          constructor(url: string) {
-            super(url)
-            sockets.push(this)
-          }
-        },
+        socketConstructor: pipe.WebSocket,
         schedule: (_delayMs, task) => task(),
       })
       connection.start()
@@ -919,7 +858,7 @@ describe("ACP connection", () => {
           if (status === "reconnecting") resolve()
         })
       )
-      sockets[0]?.close()
+      pipe.sockets[0]?.drop()
       await recovering
       await connection.resumePage(SESSION_ID, "cursor-1")
 
@@ -937,20 +876,34 @@ describe("ACP connection", () => {
     })
   })
 
+  it("delivers no request over a half-open transport", async () => {
+    const clock = useFakeClock()
+    const proxy = createProxyAgent()
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/aos/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    await connection.initialized
+
+    pipe.sockets[0]?.halfOpen()
+    void connection.listAgents().catch(() => {})
+    await clock.advance(1_000)
+
+    expect(proxy.callsOf(AOS_METHODS.agents.list)).toEqual([])
+    connection.close()
+  })
+
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const proxy = createProxyAgent({ resyncOnResume: 2 })
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const delays: number[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
       schedule: (delayMs, task) => {
         delays.push(delayMs)
         task()
@@ -968,11 +921,13 @@ describe("ACP connection", () => {
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 4, turnId: "run-1" }
     )
-    await vi.waitFor(() =>
+    // A drop loses whatever is still in flight, so the first report lands first.
+    await vi.waitFor(() => {
       expect(connection.lastSequence(SESSION_ID)).toBeDefined()
-    )
+      expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
+    })
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
 
     await vi.waitFor(() =>
       expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
@@ -1002,23 +957,17 @@ describe("ACP connection", () => {
     )
     expect(reports[1]!.index).toBeLessThan(replays[1]!)
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
-    expect(sockets).toHaveLength(2)
+    expect(pipe.sockets).toHaveLength(2)
     connection.close()
   })
 
   it("redeems the invitation again before replaying a recovered transport", async () => {
     const proxy = createProxyAgent()
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
       schedule: (_delayMs, task) => task(),
     })
     connection.start()
@@ -1027,7 +976,7 @@ describe("ACP connection", () => {
     connection.subscribeSessionUpdates(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
 
     await vi.waitFor(() =>
       expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
@@ -1051,17 +1000,11 @@ describe("ACP connection", () => {
 
   it("ends the connection when the invitation can no longer be redeemed", async () => {
     const proxy = createProxyAgent({ refuseLoginAfter: 1 })
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
       schedule: (_delayMs, task) => task(),
     })
     connection.start()
@@ -1070,12 +1013,12 @@ describe("ACP connection", () => {
     connection.subscribeSessionUpdates(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
 
     await vi.waitFor(() => expect(connection.status).toBe("closed"))
     // A refused invitation stops the reconnect loop instead of replaying.
     expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
-    expect(sockets).toHaveLength(2)
+    expect(pipe.sockets).toHaveLength(2)
   })
 })
