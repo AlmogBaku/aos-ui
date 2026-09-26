@@ -1089,9 +1089,11 @@ describe("ACP workspace client", () => {
     expect(rest.readArtifact).toHaveBeenCalledWith(SESSION_ID, "artifact-1")
   })
 
-  describe("session list refresh (3.47)", () => {
+  describe("session list refresh", () => {
     it("never overwrites a newer row with a stale list entry", async () => {
-      const newerAt = "2026-09-20T10:00:00.000Z"
+      // Half a second after the stale entry below, which is written without
+      // milliseconds and so sorts after this one as a string.
+      const newerAt = "2026-09-19T10:00:00.500Z"
       const { client, setListed } = createClient()
 
       // First list with the newer updatedAt — the row cache now holds newerAt.
@@ -1099,12 +1101,14 @@ describe("ACP workspace client", () => {
         ...listEntry(),
         updatedAt: newerAt,
       } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
-      await client.getSessionMetadata([SESSION_ID])
       const [first] = await client.getSessionMetadata([SESSION_ID])
       expect(first?.updatedAt).toBe(newerAt)
 
-      // A second list with the older UPDATED_AT must not overwrite.
-      setListed(listEntry()) // UPDATED_AT < newerAt
+      // A second list with an older timestamp must not overwrite.
+      setListed({
+        ...listEntry(),
+        updatedAt: "2026-09-19T10:00:00Z",
+      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
       await client.listSessions()
 
       const [after] = await client.getSessionMetadata([SESSION_ID])

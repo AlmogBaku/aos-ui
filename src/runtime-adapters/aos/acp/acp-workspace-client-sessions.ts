@@ -163,7 +163,7 @@ export function createAcpSessionStore({
     if (
       incomingUpdatedAt !== undefined &&
       previous?.updatedAt !== undefined &&
-      incomingUpdatedAt < previous.updatedAt
+      Date.parse(incomingUpdatedAt) < Date.parse(previous.updatedAt)
     )
       return
     const unread = info.unread ?? previous?.unread
