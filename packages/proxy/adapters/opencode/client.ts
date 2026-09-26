@@ -8,9 +8,13 @@ import type {
   QuestionV2Reply,
 } from "@opencode-ai/sdk/v2/client"
 
+import { Deadline, defaultClock } from "../../../lifecycle"
+
 const MAX_IDENTIFIER_LENGTH = 512
 const MAX_PAGE_LIMIT = 100
 const MAX_DURABLE_EVENT_DATA_BYTES = 2 * 1024 * 1024
+/** The innermost bound on one native request that answers once. */
+const ADAPTER_CALL_DEADLINE_MS = 15_000
 
 export type OpenCodeClientErrorCode =
   | "authentication"
@@ -22,10 +26,16 @@ export type OpenCodeClientErrorCode =
   | "invalid_response"
   | "closed"
 
-/** A bounded provider error that deliberately retains no native error content. */
+/**
+ * A bounded provider error that deliberately retains no native response body;
+ * a transport failure is kept only as its cause.
+ */
 export class OpenCodeClientError extends Error {
-  constructor(readonly code: OpenCodeClientErrorCode) {
-    super(`OpenCode request ${code.replace(/_/gu, " ")}`)
+  constructor(
+    readonly code: OpenCodeClientErrorCode,
+    options?: ErrorOptions
+  ) {
+    super(`OpenCode request ${code.replace(/_/gu, " ")}`, options)
     this.name = "OpenCodeClientError"
   }
 }
@@ -42,8 +52,8 @@ export class OpenCodeClientAbortError extends Error {
 export class OpenCodeMutationUncertainError extends Error {
   readonly code = "uncertain_mutation"
 
-  constructor() {
-    super("OpenCode mutation acknowledgement is uncertain")
+  constructor(options?: ErrorOptions) {
+    super("OpenCode mutation acknowledgement is uncertain", options)
     this.name = "OpenCodeMutationUncertainError"
   }
 }
@@ -52,7 +62,8 @@ export type OpenCodeClientOptions = Readonly<{
   baseUrl: string
   directory: string
   username: string
-  password: string
+  /** Read on every request, so a rotated password applies to the next one. */
+  password: () => Promise<string>
   /** Test-only or server-runtime fetch implementation; never reaches browser code. */
   fetcher?: typeof fetch
 }>
@@ -196,6 +207,12 @@ export type OpenCodeFileContent = Readonly<{
 }>
 
 type OpenCodeSdk = ReturnType<typeof createOpencodeClient>
+
+/** The per-call options every native call is made with. */
+type NativeRequest = Readonly<{
+  signal: AbortSignal
+  headers: Readonly<{ authorization: string }>
+}>
 
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
@@ -341,7 +358,7 @@ function parseEvent(value: unknown): OpenCodeDurableEvent {
   return { id: envelope.id, event: envelope.event, data }
 }
 
-function statusError(status: number | undefined) {
+function statusError(status: number | undefined, options?: ErrorOptions) {
   if (status === 401 || status === 403)
     return new OpenCodeClientError("authentication")
   if (status === 400) return new OpenCodeClientError("invalid_request")
@@ -349,7 +366,21 @@ function statusError(status: number | undefined) {
   if (status === 409) return new OpenCodeClientError("conflict")
   if (status !== undefined && status >= 500)
     return new OpenCodeClientError("unavailable")
-  return new OpenCodeClientError("connection_interrupted")
+  return new OpenCodeClientError("connection_interrupted", options)
+}
+
+/**
+ * A failed native result: the status the server answered with, or, when none
+ * answered, the transport failure the SDK caught as the cause.
+ */
+function resultFailure(result: Record<string, unknown>) {
+  const { response } = result
+  if (response instanceof Response)
+    return { status: response.status, error: statusError(response.status) }
+  return {
+    status: undefined,
+    error: statusError(undefined, { cause: result.error }),
+  }
 }
 
 class OpenCodeHttpStatusError extends Error {
@@ -371,9 +402,7 @@ function validateOptions(options: OpenCodeClientOptions) {
     !isAbsolute(options.directory) ||
     hasControl(options.directory) ||
     !text(options.username) ||
-    !text(options.password) ||
-    hasControl(options.username) ||
-    hasControl(options.password)
+    hasControl(options.username)
   )
     throw new OpenCodeClientError("invalid_request")
 }
@@ -403,57 +432,53 @@ function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
 class Facade implements OpenCodeClient {
   readonly #sdk: OpenCodeSdk
   readonly #directory: string
+  readonly #username: string
+  readonly #password: () => Promise<string>
   readonly #controllers = new Set<AbortController>()
   #closed = false
 
   constructor(options: OpenCodeClientOptions) {
     validateOptions(options)
     this.#directory = options.directory
+    this.#username = options.username
+    this.#password = options.password
     this.#sdk = createOpencodeClient({
       baseUrl: options.baseUrl,
       directory: options.directory,
       fetch: discardNativeErrorBodies(
         options.fetcher ?? globalThis.fetch.bind(globalThis)
       ),
-      headers: {
-        authorization: `Basic ${Buffer.from(`${options.username}:${options.password}`, "utf8").toString("base64")}`,
-      },
     })
   }
 
   readonly catalog = {
     agents: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.v2.agent.list(undefined, { signal: requestSignal }),
+        (request) => this.#sdk.v2.agent.list(undefined, request),
         providerEnvelope,
         signal
       ),
     models: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.v2.model.list(undefined, { signal: requestSignal }),
+        (request) => this.#sdk.v2.model.list(undefined, request),
         providerEnvelope,
         signal
       ),
     providers: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.v2.provider.list(undefined, { signal: requestSignal }),
+        (request) => this.#sdk.v2.provider.list(undefined, request),
         providerEnvelope,
         signal
       ),
     commands: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.v2.command.list(undefined, { signal: requestSignal }),
+        (request) => this.#sdk.v2.command.list(undefined, request),
         providerEnvelope,
         signal
       ),
     config: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.config.get(undefined, { signal: requestSignal }),
+        (request) => this.#sdk.config.get(undefined, request),
         configRecord,
         signal
       ),
@@ -462,23 +487,23 @@ class Facade implements OpenCodeClient {
   readonly sessions: OpenCodeClient["sessions"] = {
     list: (options?: OpenCodePageOptions) =>
       this.#request(
-        (signal) => this.#sdk.v2.session.list(page(options), { signal }),
+        (request) => this.#sdk.v2.session.list(page(options), request),
         providerEnvelope,
         options?.signal
       ),
     get: (sessionId: string, signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.get(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
         providerEnvelope,
         signal
       ),
     create: (input, signal) =>
       this.#request(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.create(
             input
               ? {
@@ -489,14 +514,14 @@ class Facade implements OpenCodeClient {
                   ...(input.model ? { model: input.model } : {}),
                 }
               : undefined,
-            { signal: requestSignal }
+            request
           ),
         providerEnvelope,
         signal
       ),
     update: (sessionId, input, signal) =>
       this.#voidMutation(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.session.update(
             {
               sessionID: identifier(sessionId, "session"),
@@ -506,51 +531,50 @@ class Facade implements OpenCodeClient {
                 ? {}
                 : { metadata: { ...input.metadata } }),
             },
-            { signal: requestSignal }
+            request
           ),
         signal
       ),
     delete: (sessionId, signal) =>
       this.#voidMutation(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.session.delete(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
         signal
       ),
     switchModel: (sessionId, model, signal) =>
       this.#voidMutation(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.switchModel(
             {
               sessionID: identifier(sessionId, "session"),
               model: modelReference(model),
             },
-            { signal: requestSignal }
+            request
           ),
         signal
       ),
     active: (signal?: AbortSignal) =>
       this.#request(
-        (requestSignal) =>
-          this.#sdk.v2.session.active({ signal: requestSignal }),
+        (request) => this.#sdk.v2.session.active(request),
         providerEnvelope,
         signal
       ),
     messages: (sessionId, options) =>
       this.#request(
-        (signal) =>
+        (request) =>
           this.#sdk.v2.session.messages(
             { sessionID: identifier(sessionId, "session"), ...page(options) },
-            { signal }
+            request
           ),
         providerEnvelope,
         options?.signal
       ),
     history: (sessionId, options) =>
       this.#request(
-        (signal) => {
+        (request) => {
           if (
             options?.after !== undefined &&
             (!Number.isSafeInteger(options.after) || options.after < 0)
@@ -569,7 +593,7 @@ class Facade implements OpenCodeClient {
               ...(options?.after === undefined ? {} : { after: options.after }),
               ...(options?.limit === undefined ? {} : { limit: options.limit }),
             },
-            { signal }
+            request
           )
         },
         providerEnvelope,
@@ -577,27 +601,27 @@ class Facade implements OpenCodeClient {
       ),
     context: (sessionId, signal) =>
       this.#request(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.context(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
         providerEnvelope,
         signal
       ),
     todos: (sessionId, signal) =>
       this.#request(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.session.todo(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
         todoList,
         signal
       ),
     prompt: (sessionId, input, signal) =>
       this.#mutation(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.prompt(
             {
               sessionID: identifier(sessionId, "session"),
@@ -606,63 +630,66 @@ class Facade implements OpenCodeClient {
               ...(input.delivery ? { delivery: input.delivery } : {}),
               ...(input.resume === undefined ? {} : { resume: input.resume }),
             },
-            { signal: requestSignal }
+            request
           ),
         providerEnvelope,
         signal
       ),
     interrupt: (sessionId, signal) =>
       this.#voidMutation(
-        (requestSignal) =>
+        (request) =>
           this.#sdk.v2.session.interrupt(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
         signal
       ),
+    // A long poll that answers when the Session idles, so no call deadline.
     wait: (sessionId, signal) =>
-      this.#voidRequest(
-        (requestSignal) =>
+      this.#request(
+        (request) =>
           this.#sdk.v2.session.wait(
             { sessionID: identifier(sessionId, "session") },
-            { signal: requestSignal }
+            request
           ),
-        signal
+        () => undefined,
+        signal,
+        false
       ),
     events: (sessionId, options) => this.#events(sessionId, options),
     questions: {
       list: (sessionId, signal) =>
         this.#request(
-          (requestSignal) =>
+          (request) =>
             this.#sdk.v2.session.question.list(
               { sessionID: identifier(sessionId, "session") },
-              { signal: requestSignal }
+              request
             ),
           providerEnvelope,
           signal
         ),
       reply: (sessionId, requestId, reply, signal) =>
         this.#voidMutation(
-          (requestSignal) =>
+          (request) =>
             this.#sdk.v2.session.question.reply(
               {
                 sessionID: identifier(sessionId, "session"),
                 requestID: identifier(requestId, "question"),
                 questionV2Reply: reply,
               },
-              { signal: requestSignal }
+              request
             ),
           signal
         ),
       reject: (sessionId, requestId, signal) =>
         this.#voidMutation(
-          (requestSignal) =>
+          (request) =>
             this.#sdk.v2.session.question.reject(
               {
                 sessionID: identifier(sessionId, "session"),
                 requestID: identifier(requestId, "question"),
               },
-              { signal: requestSignal }
+              request
             ),
           signal
         ),
@@ -670,17 +697,17 @@ class Facade implements OpenCodeClient {
     permissions: {
       list: (sessionId, signal) =>
         this.#request(
-          (requestSignal) =>
+          (request) =>
             this.#sdk.v2.session.permission.list(
               { sessionID: identifier(sessionId, "session") },
-              { signal: requestSignal }
+              request
             ),
           providerEnvelope,
           signal
         ),
       reply: (sessionId, requestId, reply, message, signal) =>
         this.#voidMutation(
-          (requestSignal) =>
+          (request) =>
             this.#sdk.v2.session.permission.reply(
               {
                 sessionID: identifier(sessionId, "session"),
@@ -688,7 +715,7 @@ class Facade implements OpenCodeClient {
                 reply,
                 ...(message === undefined ? {} : { message }),
               },
-              { signal: requestSignal }
+              request
             ),
           signal
         ),
@@ -698,7 +725,7 @@ class Facade implements OpenCodeClient {
   readonly files: OpenCodeClient["files"] = {
     read: (path, signal) =>
       this.#request(
-        (requestSignal) => {
+        (request) => {
           const inside = isAbsolute(path) ? relative(this.#directory, path) : ""
           if (
             !inside ||
@@ -707,10 +734,7 @@ class Facade implements OpenCodeClient {
             isAbsolute(inside)
           )
             throw new OpenCodeClientError("not_found")
-          return this.#sdk.file.read(
-            { path: inside },
-            { signal: requestSignal }
-          )
+          return this.#sdk.file.read({ path: inside }, request)
         },
         fileContent,
         signal
@@ -724,57 +748,48 @@ class Facade implements OpenCodeClient {
   }
 
   async #request<T>(
-    operation: (signal: AbortSignal) => Promise<unknown>,
+    operation: (request: NativeRequest) => Promise<unknown>,
     validate: (value: unknown) => T,
-    callerSignal?: AbortSignal
+    callerSignal?: AbortSignal,
+    bounded = true
   ): Promise<T> {
-    const lease = this.#lease(callerSignal)
+    const lease = this.#lease(callerSignal, bounded)
     try {
-      const result = record(await operation(lease.controller.signal))
+      const result = record(await operation(await this.#native(lease.signal)))
       if (!result) throw new OpenCodeClientError("invalid_response")
-      if (result.error !== undefined) {
-        const response = result.response
-        const status =
-          response instanceof Response ? response.status : undefined
-        throw statusError(status)
-      }
+      if (result.error !== undefined) throw resultFailure(result).error
       if (!Object.hasOwn(result, "data"))
         throw new OpenCodeClientError("invalid_response")
       return validate(result.data)
     } catch (error) {
       if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
       if (error instanceof OpenCodeClientError) throw error
-      throw statusError(undefined)
+      throw statusError(undefined, { cause: error })
     } finally {
       lease.release()
     }
   }
 
-  async #voidRequest(
-    operation: (signal: AbortSignal) => Promise<unknown>,
-    callerSignal?: AbortSignal
-  ) {
-    await this.#request(operation, () => undefined, callerSignal)
-  }
-
   async #mutation<T>(
-    operation: (signal: AbortSignal) => Promise<unknown>,
+    operation: (request: NativeRequest) => Promise<unknown>,
     validate: (value: unknown) => T,
     callerSignal?: AbortSignal
   ): Promise<T> {
-    const lease = this.#lease(callerSignal)
+    const lease = this.#lease(callerSignal, true)
     let dispatched = false
     try {
-      if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
+      const request = await this.#native(lease.signal)
+      lease.signal.throwIfAborted()
       dispatched = true
-      const result = record(await operation(lease.controller.signal))
+      const result = record(await operation(request))
       if (!result) throw new OpenCodeMutationUncertainError()
       if (result.error !== undefined) {
-        const response = result.response
-        const status =
-          response instanceof Response ? response.status : undefined
-        if (status === undefined) throw new OpenCodeMutationUncertainError()
-        throw statusError(status)
+        const { status, error } = resultFailure(result)
+        // A lost answer or a server error after dispatch leaves the write's
+        // effect unknown; any other status is the server's refusal.
+        if (status === undefined || status >= 500)
+          throw new OpenCodeMutationUncertainError({ cause: error })
+        throw error
       }
       if (!Object.hasOwn(result, "data"))
         throw new OpenCodeMutationUncertainError()
@@ -790,17 +805,19 @@ class Facade implements OpenCodeClient {
       }
     } catch (error) {
       if (error instanceof OpenCodeClientError) throw error
-      if (dispatched) throw new OpenCodeMutationUncertainError()
-      if (error instanceof OpenCodeClientAbortError) throw error
+      if (dispatched)
+        throw error instanceof OpenCodeMutationUncertainError
+          ? error
+          : new OpenCodeMutationUncertainError({ cause: error })
       if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
-      throw statusError(undefined)
+      throw statusError(undefined, { cause: error })
     } finally {
       lease.release()
     }
   }
 
   async #voidMutation(
-    operation: (signal: AbortSignal) => Promise<unknown>,
+    operation: (request: NativeRequest) => Promise<unknown>,
     callerSignal?: AbortSignal
   ) {
     await this.#mutation(operation, () => undefined, callerSignal)
@@ -812,7 +829,7 @@ class Facade implements OpenCodeClient {
   ): Promise<OpenCodeSessionEvents> {
     identifier(sessionId, "session")
     if (options?.after !== undefined) identifier(options.after, "after")
-    const lease = this.#lease(options?.signal)
+    const lease = this.#lease(options?.signal, false)
     let streamError: unknown
     try {
       const source = await this.#sdk.v2.session.events(
@@ -821,7 +838,7 @@ class Facade implements OpenCodeClient {
           ...(options?.after === undefined ? {} : { after: options.after }),
         },
         {
-          signal: lease.controller.signal,
+          ...(await this.#native(lease.signal)),
           // AOS reconnects from the durable aggregate position itself.
           sseMaxRetryAttempts: 1,
           onSseError: (error) => {
@@ -837,7 +854,7 @@ class Facade implements OpenCodeClient {
         } catch (error) {
           if (lease.controller.signal.aborted) return
           if (error instanceof OpenCodeClientError) throw error
-          throw statusError(undefined)
+          throw statusError(undefined, { cause: error })
         } finally {
           lease.release()
         }
@@ -850,18 +867,49 @@ class Facade implements OpenCodeClient {
       lease.release()
       if (error instanceof OpenCodeClientError) throw error
       if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
-      throw statusError(undefined)
+      throw statusError(undefined, { cause: error })
     }
   }
 
-  #lease(callerSignal?: AbortSignal) {
+  /**
+   * The options for one native call, with the password read for it alone. A
+   * password that cannot be read or sent means the call is never made.
+   */
+  async #native(signal: AbortSignal): Promise<NativeRequest> {
+    let password: string
+    try {
+      password = await this.#password()
+    } catch (error) {
+      throw new OpenCodeClientError("unavailable", { cause: error })
+    }
+    if (!text(password) || hasControl(password))
+      throw new OpenCodeClientError("unavailable")
+    const basic = Buffer.from(`${this.#username}:${password}`, "utf8")
+    return {
+      signal,
+      headers: { authorization: `Basic ${basic.toString("base64")}` },
+    }
+  }
+
+  /**
+   * A native call's controller, which the caller and close abort, and the
+   * signal the call runs on: bounded by the adapter call deadline unless the
+   * call is a long poll or a stream.
+   */
+  #lease(callerSignal: AbortSignal | undefined, bounded: boolean) {
     if (this.#closed) throw new OpenCodeClientError("closed")
     const controller = new AbortController()
+    // The deadline listens on the controller before `release` does, so an
+    // abort reaches the call before release clears the deadline.
+    const deadline = bounded
+      ? new Deadline(ADAPTER_CALL_DEADLINE_MS, defaultClock, controller.signal)
+      : undefined
     const onAbort = () => controller.abort()
     let released = false
     const release = () => {
       if (released) return
       released = true
+      deadline?.clear()
       callerSignal?.removeEventListener("abort", onAbort)
       controller.signal.removeEventListener("abort", release)
       this.#controllers.delete(controller)
@@ -872,6 +920,7 @@ class Facade implements OpenCodeClient {
     if (callerSignal?.aborted) controller.abort()
     return {
       controller,
+      signal: deadline?.signal ?? controller.signal,
       release,
     }
   }
