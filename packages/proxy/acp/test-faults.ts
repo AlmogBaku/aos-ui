@@ -52,11 +52,21 @@ function names(arg: unknown, session: GoneSession) {
   )
 }
 
+/** The call's own signal, passed directly or as an options argument's `signal`. */
+function signalOf(args: unknown[]) {
+  for (const arg of args) {
+    const signal: unknown =
+      typeof arg === "object" && arg !== null && "signal" in arg
+        ? arg.signal
+        : arg
+    if (signal instanceof AbortSignal) return signal
+  }
+  return undefined
+}
+
 /** Settles only as the call's own signal aborts, and never without one. */
 function hang(args: unknown[]) {
-  const signal = args.find(
-    (arg): arg is AbortSignal => arg instanceof AbortSignal
-  )
+  const signal = signalOf(args)
   return new Promise<never>((_resolve, reject) => {
     signal?.addEventListener("abort", () => reject(signal.reason), {
       once: true,
