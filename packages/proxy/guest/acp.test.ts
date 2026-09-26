@@ -1799,6 +1799,7 @@ const PUBLIC_CODES: readonly number[] = [
   NOT_FOUND,
   INVALID_PARAMS,
   METHOD_NOT_FOUND,
+  RequestError.requestCancelled().code,
 ]
 
 /** A reply's error carries a public code and nothing that describes the host. */
