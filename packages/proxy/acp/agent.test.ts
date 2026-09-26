@@ -1509,18 +1509,18 @@ describe("Session rooms", () => {
   })
 
   it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered, which keeps its stage until its turn settles", async () => {
+    const watchers: ServerTurnListener[] = []
     const test = await harness({
       providerIds: true,
       onStart: () => {
         throw new ServerSessionNotFoundError()
       },
-      subscribeTurns: () => () => undefined,
+      subscribeTurns: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
     })
     await test.list()
-    const clock = useFakeClock()
-    // The refused start asks the runtime for a turn it may have lost to, and
-    // that read never answers.
-    test.faults.hangUntilAborted("discover")
 
     await expect(
       test.agent.request(methods.agent.session.resume, {
@@ -1531,6 +1531,12 @@ describe("Session rooms", () => {
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
     })
+    // The runtime reports a turn it started by itself, and the read that asks
+    // for it never answers.
+    await open(test)
+    const clock = useFakeClock()
+    test.faults.hangUntilAborted("discover")
+    watchers.at(-1)?.onTurn()
     // A read past its deadline changed nothing, so it is worth trying again.
     await clock.advance(ADMISSION_DEADLINE_MS)
     expect(

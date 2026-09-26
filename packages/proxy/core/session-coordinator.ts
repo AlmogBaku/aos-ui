@@ -906,6 +906,8 @@ export class SessionCoordinator {
     key: string
     listener: (cause: unknown) => void
   }>()
+  /** The failures that ended a Session, which a second report ends no more. */
+  readonly #ended = new WeakSet<object>()
   /** How many turns the uncertainty deadline ended with their outcome unknown. */
   #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
@@ -1053,22 +1055,24 @@ export class SessionCoordinator {
    * the model. `deliver` runs that report, so a caller's answer can land
    * before its own subscription hears it.
    */
-  async switchModel(
+  switchModel(
     scope: SessionScope,
     write: SessionModelUpdateRequest,
     deliver: (report: () => void) => void = (report) => report()
   ): Promise<SessionModelsResponse> {
-    const { readings } = this.options
-    await readings.updateModel(scope.agentId, scope.sessionId, write)
-    const models = SessionModelsResponseSchema.parse(
-      await readings.models(scope.agentId, scope.sessionId)
-    )
-    const key = scopeKey(scope)
-    deliver(() => {
-      this.#models.report(key)
-      this.#usage.report(key)
+    return this.#command(scope, async () => {
+      const { readings } = this.options
+      await readings.updateModel(scope.agentId, scope.sessionId, write)
+      const models = SessionModelsResponseSchema.parse(
+        await readings.models(scope.agentId, scope.sessionId)
+      )
+      const key = scopeKey(scope)
+      deliver(() => {
+        this.#models.report(key)
+        this.#usage.report(key)
+      })
+      return models
     })
-    return models
   }
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
@@ -1076,13 +1080,18 @@ export class SessionCoordinator {
   }
 
   /**
-   * Ends a Session a provider read or report found gone, when `cause` says it
-   * is: every subscriber to its readings hears it once, then its execution,
-   * journal and readings are dropped, so no later resume is served from them
-   * and nothing reads it again. Returns whether it was gone.
+   * Ends a Session a provider read, report or command found gone, when
+   * `cause` says it is: every subscriber to its readings hears it once, then
+   * its execution, journal and readings are dropped, so no later resume is
+   * served from them and nothing reads it again. One failure ends it once,
+   * however many layers report it. Returns whether it was gone.
    */
   endIfGone(scope: SessionScope, cause: unknown) {
     if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
+    if (typeof cause === "object" && cause !== null) {
+      if (this.#ended.has(cause)) return true
+      this.#ended.add(cause)
+    }
     const key = scopeKey(scope)
     const { agentId, sessionId } = scope
     this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
@@ -1305,37 +1314,45 @@ export class SessionCoordinator {
     )
   }
 
-  async start(
+  start(
     scope: SessionScope,
     input: SendInput,
     access: CoordinatorAccess,
     options: StartOptions = {}
   ): Promise<CoordinatedTurnSubscription> {
-    if (this.#closed) throw new Error("Session coordinator is closed")
-    if (!("clientId" in input))
-      return this.#startTurn(scope, input, access, options)
-    const { clientId, sent, prepare } = input
-    const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
-    const fingerprint = admissionFingerprint(sent)
-    const repeated = this.#sends.repeated(ids.turnId, fingerprint)
-    if (!repeated) {
-      const started = prepare().then(({ stage, ...prompt }) =>
-        this.#startStaged(scope, { ...ids, ...prompt }, access, options, stage)
-      )
-      this.#sends.remember(
-        ids.turnId,
-        fingerprint,
-        started.then(() => undefined)
-      )
-      return started
-    }
-    await repeated
-    const execution = this.#executions.get(scopeKey(scope))
-    if (execution?.segment.turnId === ids.turnId)
-      return this.#repeat(execution, access)
-    // The Session no longer holds the turn, so nothing of it is left to replay;
-    // the repeat's reader follows the Session from its history.
-    return { turnId: ids.turnId, events: ENDED, close: () => undefined }
+    return this.#command(scope, async () => {
+      if (this.#closed) throw new Error("Session coordinator is closed")
+      if (!("clientId" in input))
+        return this.#startTurn(scope, input, access, options)
+      const { clientId, sent, prepare } = input
+      const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
+      const fingerprint = admissionFingerprint(sent)
+      const repeated = this.#sends.repeated(ids.turnId, fingerprint)
+      if (!repeated) {
+        const started = prepare().then(({ stage, ...prompt }) =>
+          this.#startStaged(
+            scope,
+            { ...ids, ...prompt },
+            access,
+            options,
+            stage
+          )
+        )
+        this.#sends.remember(
+          ids.turnId,
+          fingerprint,
+          started.then(() => undefined)
+        )
+        return started
+      }
+      await repeated
+      const execution = this.#executions.get(scopeKey(scope))
+      if (execution?.segment.turnId === ids.turnId)
+        return this.#repeat(execution, access)
+      // The Session no longer holds the turn, so nothing of it is left to replay;
+      // the repeat's reader follows the Session from its history.
+      return { turnId: ids.turnId, events: ENDED, close: () => undefined }
+    })
   }
 
   /**
@@ -1456,7 +1473,9 @@ export class SessionCoordinator {
     )
     const turnId = crypto.randomUUID()
     try {
-      await this.#startSegment(execution, { turnId, replies })
+      await this.#command(execution.scope, () =>
+        this.#startSegment(execution, { turnId, replies })
+      )
     } catch (cause) {
       // Nothing continued the turn, so its requests are open again for the
       // next resume to reissue, exactly as before anyone answered.
@@ -2337,13 +2356,29 @@ export class SessionCoordinator {
     segment.fanout.publish(sequenced)
   }
 
+  /** Runs one command on a live execution, once the one before it settles. */
   #withControl<T>(execution: Execution, operation: () => Promise<T>) {
-    const result = execution.control.then(operation, operation)
+    const result = this.#command(execution.scope, () =>
+      execution.control.then(operation, operation)
+    )
     execution.control = result.then(
       () => undefined,
       () => undefined
     )
     return result
+  }
+
+  /**
+   * Runs one Session command. One that finds its Session gone ends it for
+   * every member first, so nothing retries it; its caller still hears why.
+   */
+  async #command<T>(scope: SessionScope, run: () => Promise<T>) {
+    try {
+      return await run()
+    } catch (cause) {
+      this.endIfGone(scope, cause)
+      throw cause
+    }
   }
 
   /**
