@@ -318,21 +318,20 @@ describe("browser connection faults", () => {
     const clock = useFakeClock()
     const { pipe, connection } = await connectBrowser()
     const frames = sentFrames()
-    // A joined Session produces inbound frames that reset the silence timer.
-    connection.subscribe(SESSION, { agentId: AGENT })
-    await connection.joined(SESSION)
+    const probes = () =>
+      frames.filter((f) => f.method === AOS_METHODS.session.focus)
+    connection.start()
+    await connection.initialized
 
-    // Seal inbound so only the join counts.
+    // An answer 15 s into the window starts it over; then inbound goes quiet.
+    await clock.advance(15_000)
+    await connection.listAgents()
     pipe.sockets[0]!.halfOpen()
     await clock.advance(LIVENESS_SILENCE_MS - 1)
-    expect(
-      frames.filter((f) => f.method === AOS_METHODS.session.focus)
-    ).toHaveLength(0)
+    expect(probes()).toHaveLength(0)
 
     await clock.advance(1)
-    expect(
-      frames.filter((f) => f.method === AOS_METHODS.session.focus)
-    ).toHaveLength(1)
+    expect(probes()).toHaveLength(1)
   })
 
   it("re-reports the focused Session in the liveness probe after reconnect", async () => {
