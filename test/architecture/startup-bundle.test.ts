@@ -32,7 +32,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (outDir) await rm(outDir, { recursive: true, force: true })
-
 })
 
 it("keeps runtime-specific workspace code out of the configuration bootstrap", () => {
@@ -65,17 +64,21 @@ it("names the build by its entry chunk's content hash", () => {
   expect(entry?.fileName).toBe(`assets/${entry?.name}-${buildId}.js`)
 })
 
-// The vite-plugin-pwa copies the define block but not the buildIdPlugin's
-// generateBundle hook, so the service worker build leaves the placeholder
-// untouched. No browser chunk should carry the placeholder after the build.
-it("replaces the build-id placeholder in every browser chunk", () => {
+// A stale tab reloads only if the id it compares is compiled in. The
+// vite-plugin-pwa copies the define block but not the buildIdPlugin's
+// generateBundle hook, so the service worker would keep the placeholder.
+it("compiles the build id in and leaves no placeholder in a chunk or the worker", async () => {
   const placeholder = "__AOS_BUILD_ID_PLACEHOLDER__"
-  expect(buildId).toBeDefined()
-  for (const chunk of chunks) {
-    expect(chunk.code, `${chunk.fileName} still has the placeholder`).not.toContain(
+  for (const chunk of chunks)
+    expect(chunk.code, `${chunk.fileName} has the placeholder`).not.toContain(
       placeholder
     )
-  }
+  const worker = await readFile(path.join(outDir, "sw.js"), "utf8")
+  expect(worker, "sw.js has the placeholder").not.toContain(placeholder)
+  // Every chunk importing the entry names it, and so its hash; only a quoted
+  // literal is the id compiled in.
+  const literal = new RegExp(`["'\`]${buildId}["'\`]`)
+  expect(chunks.some((chunk) => literal.test(chunk.code))).toBe(true)
 })
 
 /**
