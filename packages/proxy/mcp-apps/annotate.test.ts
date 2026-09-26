@@ -10,6 +10,7 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { withMcpApps } from "./annotate"
 
 /** A provider segment the test feeds by hand, as a native engine would. */
@@ -115,6 +116,8 @@ function harness(describeView: ServerMcpApps["describe"]) {
   const runtime = withMcpApps({
     turns: engine,
     mcpApps: apps,
+    publicError: () => undefined,
+    link: READY_LINK,
   } as unknown as ServerRuntime)
   const sessions = new SessionCoordinator({
     engine: runtime.turns,

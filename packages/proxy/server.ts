@@ -22,6 +22,8 @@ const DRAIN_POLL_MS = 10
 const WS_IDLE_TIMEOUT_S = 120
 const WS_MAX_PAYLOAD = 1_100_000
 const WS_BACKPRESSURE_LIMIT = 16 * 1_024 * 1_024
+/** A WebSocket's `readyState` while it is open. */
+const WS_OPEN = 1
 
 /** One authorized upgrade: its principal and any headers the 101 must carry. */
 export type SocketUpgrade = {
@@ -37,10 +39,13 @@ export type ProxySocket = {
 
 export type ProxySocketPeer = {
   /**
-   * Returns the number of bytes sent, or -1 when the frame was dropped because
-   * the peer's backpressure limit is exceeded or its socket is already closed.
+   * Bun's answer: the bytes written, -1 for a frame queued behind
+   * backpressure, or 0 for one dropped, past the backpressure limit or on a
+   * socket already closing.
    */
   send(raw: string): number
+  /** Whether the socket is open, rather than closing or closed. */
+  isOpen(): boolean
   close(code: number, reason: string): void
 }
 
@@ -72,6 +77,7 @@ type SocketData<Upgrade extends SocketUpgrade> = {
 }
 type SocketPeer<Upgrade extends SocketUpgrade> = {
   data: SocketData<Upgrade>
+  readonly readyState: number
   send(raw: string): number
   close(code?: number, reason?: string): void
 }
@@ -193,6 +199,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
             try {
               peer.data.socket = mount.service.open(peer.data.authorization, {
                 send: (raw) => peer.send(raw),
+                isOpen: () => peer.readyState === WS_OPEN,
                 close: (code, reason) => peer.close(code, reason),
               })
               mount.peers.add(peer)

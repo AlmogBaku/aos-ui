@@ -723,7 +723,8 @@ function installAcpStub(script: AcpScript) {
       // by `_meta.aos.after` reports only what the dropped transport missed.
       this.handlers.set("session/resume", (params, id) => {
         // A subagent's own Session opens with nothing stored.
-        if (params.sessionId !== script.sessionId) return this.respond(id, {})
+        if (params.sessionId !== script.sessionId)
+          return this.respond(id, { _meta: { aos: {} } })
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
         // An older page is its own read: tagged updates and a cursor, with no
@@ -755,7 +756,7 @@ function installAcpStub(script: AcpScript) {
             script.recovered.messageId,
             script.recovered.text
           )
-        this.respond(id, {})
+        this.respond(id, { _meta: { aos: {} } })
         this.restate()
         this.update({ sessionUpdate: "usage_update", ...script.usage })
       })

@@ -480,3 +480,24 @@ describe("logging", () => {
     expect(named).toEqual([])
   })
 })
+
+describe("ServerRuntime interface", () => {
+  /**
+   * D8: the proxy calls neither `authState` nor `subscribeSessionInvalidation`;
+   * each adapter retains its own implementation but the interface exposes
+   * neither.
+   */
+  it("exposes neither authState nor subscribeSessionInvalidation", async () => {
+    const source = stripComments(
+      await readFile(join(import.meta.dirname, "core/runtime.ts"), "utf8")
+    )
+    const members = /export interface ServerRuntime \{([\s\S]*?)\n\}/u.exec(
+      source
+    )?.[1]
+
+    expect(members).toBeDefined()
+    expect(members).not.toMatch(
+      /\b(?:authState|subscribeSessionInvalidation)\b/u
+    )
+  })
+})

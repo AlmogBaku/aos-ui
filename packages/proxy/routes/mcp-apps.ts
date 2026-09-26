@@ -120,7 +120,7 @@ export async function handleMcpAppRequest(input: {
     if (
       error instanceof McpAppNotFoundError ||
       error instanceof McpAppResourceError ||
-      runtime.publicError(error)?.code === "not_found"
+      runtime.publicError(error)?.kind === "gone"
     )
       return failure.not_found
     if (error instanceof McpAppRefusedError) return failure.forbidden

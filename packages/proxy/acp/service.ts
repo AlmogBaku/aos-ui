@@ -34,10 +34,13 @@ export type AcpUpgrade = {
 
 export type AcpPeer = {
   /**
-   * Returns the number of bytes sent, or -1 when the frame was dropped because
-   * the peer's backpressure limit is exceeded or its socket is already closed.
+   * Bun's answer: the bytes written, -1 for a frame queued behind
+   * backpressure, or 0 for one dropped, past the backpressure limit or on a
+   * socket already closing.
    */
   send(raw: string): number
+  /** Whether the socket is open, rather than closing or closed. */
+  isOpen(): boolean
   close(code: number, reason: string): void
 }
 
@@ -74,6 +77,8 @@ export type AcpServiceOptions = {
 export function createAcpService(options: AcpServiceOptions) {
   const { principalId } = options
   const clock = options.clock ?? defaultClock
+  /** The connections open on this listener, which the health gauges count. */
+  const connections = new Set<string>()
 
   async function authorizeUpgrade(
     request: Request
@@ -101,12 +106,13 @@ export function createAcpService(options: AcpServiceOptions) {
     const socket = createAcpSocket({
       close: (code, reason) => peer.close(code, reason),
       send: (raw) => {
-        const result = peer.send(raw)
-        if (result < 0)
-          context.logger.warn(
-            { connectionId: context.connectionId },
-            "acp.send.dropped"
-          )
+        const sent = peer.send(raw)
+        if (sent > 0) return
+        if (sent < 0) context.logger.debug({}, "acp.send.backpressure")
+        // A closing socket drops what is still written to it, as a reloading
+        // tab's does; a drop on an open one is a reader past the limit.
+        else if (peer.isOpen()) context.logger.warn({}, "acp.send.dropped")
+        else context.logger.debug({}, "acp.send.dropped")
       },
       // The upgrade's principal holds for the connection's whole life.
       lapsed: () => context.authentication?.lapsed() ?? false,
@@ -125,9 +131,11 @@ export function createAcpService(options: AcpServiceOptions) {
       { once: true }
     )
     prepared.accept(socket.socket)
+    connections.add(upgrade.connectionId)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
+        connections.delete(upgrade.connectionId)
         handshakeDeadline.clear()
         socket.close()
         void withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS)
@@ -135,5 +143,5 @@ export function createAcpService(options: AcpServiceOptions) {
     }
   }
 
-  return { authorizeUpgrade, open }
+  return { authorizeUpgrade, open, sockets: () => connections.size }
 }

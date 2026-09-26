@@ -132,9 +132,11 @@ export async function executeSlashCommand(
   liveSessionId: string,
   name: string,
   args: string,
+  signal?: AbortSignal,
   depth = 0
 ): Promise<HermesSlashExecution> {
   if (depth >= 4) throw new HermesUnavailableError()
+  const options = { signal, maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
   let result: unknown
   try {
     result = await transport.request(
@@ -143,7 +145,7 @@ export async function executeSlashCommand(
         command: `${name}${args ? ` ${args}` : ""}`,
         session_id: liveSessionId,
       },
-      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+      options
     )
   } catch (error) {
     if (
@@ -154,7 +156,7 @@ export async function executeSlashCommand(
     result = await transport.request(
       "command.dispatch",
       { session_id: liveSessionId, name, arg: args },
-      { maxResponseBytes: MAX_COMMAND_RESPONSE_BYTES }
+      options
     )
   }
   if (!isRecord(result)) throw new HermesUnavailableError()
@@ -169,6 +171,7 @@ export async function executeSlashCommand(
       liveSessionId,
       target[1]!,
       [target[2], args].filter(Boolean).join(" "),
+      signal,
       depth + 1
     )
   }

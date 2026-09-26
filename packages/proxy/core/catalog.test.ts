@@ -3,8 +3,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { Session } from "../../protocol"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import { createCatalog } from "./catalog"
 import * as ids from "./ids"
+import { READY_LINK } from "./link"
 import type { ServerRuntime } from "./runtime"
 import type { SessionExecutionState } from "./session-coordinator"
 import { createSessionRows } from "./session-rows"
@@ -30,11 +33,16 @@ function harness(
     held?: Session
     state?: SessionExecutionState
     updateSession?: () => Promise<void>
+    subscribeCatalogChanges?: ServerRuntime["subscribeCatalogChanges"]
   } = {}
 ) {
   const updateSession = vi.fn(options.updateSession ?? (async () => undefined))
-  // The runtime surface is wide; these tests reach for the list and the row.
+  // The runtime surface is wide; these tests reach for the list, the row, and
+  // the change feed.
   const runtime = {
+    publicError: () => undefined,
+    link: READY_LINK,
+    subscribeCatalogChanges: options.subscribeCatalogChanges,
     resolveProviderSessionId: (_agentId: string, publicId: string) =>
       `stored-${publicId}`,
     listAllSessions: async (limit: number, offset: number) => ({
@@ -51,6 +59,7 @@ function harness(
     runtime,
     coordinator: { state: () => options.state ?? "idle" },
     rows,
+    logger: captureLogs().logger,
   })
   return { catalog, rows, updateSession }
 }
@@ -111,5 +120,22 @@ describe("createCatalog", () => {
       unread: false,
     })
     expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+  })
+
+  it("starts the runtime's change feed again when it fails to start", async () => {
+    const clock = useFakeClock()
+    const subscribeCatalogChanges = vi
+      .fn<NonNullable<ServerRuntime["subscribeCatalogChanges"]>>()
+      .mockRejectedValueOnce(new Error("socket closed"))
+      .mockResolvedValue(() => undefined)
+    const { catalog } = harness({ subscribeCatalogChanges })
+    const listener = vi.fn()
+
+    catalog.invalidation.subscribe(listener)
+    await clock.advance(250)
+
+    expect(subscribeCatalogChanges).toHaveBeenCalledTimes(2)
+    subscribeCatalogChanges.mock.calls[1]![0]()
+    expect(listener).toHaveBeenCalledOnce()
   })
 })

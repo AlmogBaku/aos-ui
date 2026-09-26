@@ -24,9 +24,10 @@ export async function createHermesRuntime(
   dependencies: HermesRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
   const { logger, credentials } = dependencies
-  const token = await credentials.register(readSecretFile, (value) => [value])(
-    config.tokenFile
-  )
+  // Registered, so the log masks every value it reads, a rotated token too.
+  const readToken = credentials.register(readSecretFile, (value) => [value])
+  // Read once up front: a missing or unreadable token file fails the boot.
+  await readToken(config.tokenFile)
   const transportFactory =
     dependencies.transportFactory ??
     ((options: HermesGatewayOptions) => new HermesGateway(options))
@@ -35,7 +36,10 @@ export async function createHermesRuntime(
   // boundary reports the code of every authoritative Hermes rejection.
   const transport = transportFactory({
     baseUrl: config.baseUrl,
-    credentials: async () => ({ "X-Hermes-Session-Token": token }),
+    // Re-read on every dial and call, so a rotated token needs no restart.
+    credentials: async () => ({
+      "X-Hermes-Session-Token": await readToken(config.tokenFile),
+    }),
     log: logger,
   })
   // Eager dial: the gateway owns its redial ladder from here, so a Hermes that

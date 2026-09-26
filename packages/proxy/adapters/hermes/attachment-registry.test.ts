@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   HermesAttachmentRegistry,
+  REBIND_BACKOFF,
   type AttachmentSignal,
 } from "./attachment-registry"
 import {
@@ -238,7 +240,8 @@ describe("HermesAttachmentRegistry", () => {
     expect(resume).toHaveBeenCalledTimes(3)
   })
 
-  it("resumes again on the next ensure after a heal it could not rebind", async () => {
+  it("retries a heal it could not rebind until the binding is rebound", async () => {
+    const clock = useFakeClock()
     const gateway = fakeGateway()
     const resume = vi
       .fn<() => Promise<{ liveSessionId: string }>>()
@@ -257,11 +260,17 @@ describe("HermesAttachmentRegistry", () => {
     await gateway.restored()
     expect(observer).not.toHaveBeenCalled()
 
+    // The first retry fires within its full-jitter ceiling.
+    await clock.advance(REBIND_BACKOFF.baseMs)
+    expect(resume).toHaveBeenCalledTimes(3)
+    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+
+    // Rebound on this socket: the next caller takes the binding as it stands.
     await expect(registry.ensure(scope)).resolves.toMatchObject({
       liveSessionId: "live-healed",
     })
     expect(resume).toHaveBeenCalledTimes(3)
-    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+    await registry.close()
   })
 
   it("resumes again on the next ensure for a binding the heal skipped", async () => {
@@ -549,6 +558,49 @@ describe("HermesAttachmentRegistry", () => {
       liveSessionId: "live-second",
     })
     vi.useRealTimers()
+  })
+
+  it("keeps no record of a Session whose turns settled, however its binding ended", async () => {
+    const clock = useFakeClock()
+    const gateway = fakeGateway()
+    const forget = vi.fn()
+    const registry = new HermesAttachmentRegistry(
+      {
+        resume: async (value) => {
+          if (value.providerSessionId === "refused")
+            throw new HermesUnavailableError()
+          return {
+            liveSessionId: `live-${value.providerSessionId}`,
+            saved: value.providerSessionId !== "draft",
+          }
+        },
+        close: async () => undefined,
+        forget,
+      },
+      gateway.transport,
+      { idleMs: 1_000 }
+    )
+    const [stored, draft, restarted] = await Promise.all(
+      ["stored", "draft", "restarted"].map((id) =>
+        registry.subscribe({ ...scope, providerSessionId: id }, vi.fn())
+      )
+    )
+
+    // Two turns settle and go idle: one is closed, the draft only unbound.
+    stored!()
+    draft!()
+    await clock.advance(1_000)
+    // Hermes restarts under a running turn, which then settles.
+    gateway.epochChanged()
+    restarted!()
+    await expect(
+      registry.ensure({ ...scope, providerSessionId: "refused" })
+    ).rejects.toThrow(HermesUnavailableError)
+
+    expect(registry.size).toBe(0)
+    expect(
+      forget.mock.calls.map(([value]) => value.providerSessionId).sort()
+    ).toEqual(["draft", "refused", "restarted", "stored"])
   })
 
   it("registers no observer when a subscription cannot be retained", async () => {

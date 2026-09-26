@@ -30,7 +30,11 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { READING_BACKOFF } from "../core/limits"
+import {
+  ADMISSION_DEADLINE_MS,
+  READING_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
+} from "../core/limits"
 import {
   ServerSessionNotFoundError,
   type ServerTurnListener,
@@ -1504,14 +1508,19 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("refuses a lost Session with ACP's code, to a resume and to a prompt", async () => {
+  it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered, which keeps its stage until its turn settles", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
         throw new ServerSessionNotFoundError()
       },
+      subscribeTurns: () => () => undefined,
     })
     await test.list()
+    const clock = useFakeClock()
+    // The refused start asks the runtime for a turn it may have lost to, and
+    // that read never answers.
+    test.faults.hangUntilAborted("discover")
 
     await expect(
       test.agent.request(methods.agent.session.resume, {
@@ -1522,6 +1531,31 @@ describe("Session rooms", () => {
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
     })
+    // A read past its deadline changed nothing, so it is worth trying again.
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    expect(
+      test.logs.records().filter(({ message }) => message === "channel.failed")
+    ).toMatchObject([{ fields: { errorCode: "temporarily_unavailable" } }])
+
+    // A start past its deadline may have landed: reconcile, never resend, and
+    // keep what it staged while the provider may be reading it.
+    test.faults.hangUntilAborted("start")
+    test.recover.mockRejectedValue(new Error("provider unavailable"))
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup,
+    })
+    const unanswered = expect(
+      prompt(test, "Again", SESSION, { attachmentStageId })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.uncertainMutation })
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    await unanswered
+    expect(cleanup).not.toHaveBeenCalled()
+    // No reconcile confirmed the turn by its deadline, so it never started.
+    await clock.advance(UNCERTAINTY_DEADLINE_MS)
+    expect(cleanup).toHaveBeenCalledOnce()
     test.close()
   })
 

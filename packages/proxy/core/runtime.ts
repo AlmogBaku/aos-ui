@@ -6,7 +6,6 @@ import type {
 } from "./events"
 import type {
   AgentCatalogResponse,
-  RuntimeAuthState,
   RuntimeInfo,
   Session,
   SessionCatalogResponse,
@@ -21,7 +20,9 @@ import type {
   McpAppView,
   ReadResourceResult,
 } from "../../protocol/mcp-apps"
+import type { PublicFailure } from "./failures"
 import type { ProviderSessionId, SessionId } from "./ids"
+import type { ServerLink } from "./link"
 
 export type SessionScope = {
   agentId: string
@@ -225,18 +226,6 @@ export type ServerAttachmentStages = {
   ): ServerAttachmentStage | undefined
 }
 
-export type ServerRuntimePublicError = {
-  code:
-    | "runtime_authentication_required"
-    | "invalid_request"
-    | "not_found"
-    | "revision_conflict"
-    | "temporarily_unavailable"
-    | "connection_interrupted"
-    | "uncertain_mutation"
-  status: 400 | 401 | 404 | 409 | 503
-}
-
 /**
  * Native semantics the ACP layer reads instead of assuming one provider's. An
  * absent field is the neutral reading: an exposure acknowledges only an unread
@@ -271,8 +260,9 @@ export interface ServerRuntime {
     agentId: string,
     publicSessionId: string
   ): ProviderSessionId | undefined
-  publicError(cause: unknown): ServerRuntimePublicError | undefined
-  authState(): Promise<RuntimeAuthState>
+  publicError(cause: unknown): PublicFailure | undefined
+  /** Whether the native link is up; readings retry once it turns ready. */
+  readonly link: ServerLink
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>
   updateAgentVisibility(
@@ -333,12 +323,6 @@ export interface ServerRuntime {
     patch: SessionModelUpdateRequest
   ): Promise<unknown>
   context(agentId: string, publicSessionId: string): Promise<unknown>
-  subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ): Promise<() => void>
   /**
    * Payload-less wake when the provider's Session catalog changed (Hermes
    * `sessions.changed`). Absent when the provider has no such signal.
@@ -412,4 +396,12 @@ export type ServerMcpApps = {
     toolCallId: string,
     uri: string
   ): Promise<ReadResourceResult>
+  /**
+   * Frees the running calls `observe` kept for this Session, once the proxy
+   * deleted it or a recover found it gone.
+   */
+  reportSessionGone?(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): void
 }

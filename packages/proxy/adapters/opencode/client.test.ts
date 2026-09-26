@@ -2,6 +2,8 @@ import { createServer } from "node:http"
 
 import { describe, expect, it } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
@@ -60,29 +62,34 @@ async function nativeServer(
   }
 }
 
-function client(baseUrl: string) {
+function client(
+  baseUrl: string,
+  password: () => Promise<string> = async () => "pw-test-1"
+) {
   return createOpenCodeClient({
     baseUrl,
     directory: "/workspaces/aos",
     username: "operator",
-    password: "password",
+    password,
   })
 }
 
 describe("OpenCodeClient", () => {
-  it("binds Session pagination to the configured server, directory, and Basic credential", async () => {
+  it("binds Session pagination to the configured server, directory, and a Basic credential read for each request", async () => {
+    const authorizations: (string | null)[] = []
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session")
       expect(request.url.searchParams.get("limit")).toBe("20")
       expect(request.url.searchParams.get("cursor")).toBe("next-page")
       expect(request.directory).toBe("/workspaces/aos")
-      expect(request.authorization).toBe("Basic b3BlcmF0b3I6cGFzc3dvcmQ=")
+      authorizations.push(request.authorization)
       return Response.json({
         data: [],
         cursor: { previous: "previous-page", next: "following-page" },
       })
     })
-    const subject = client(server.baseUrl)
+    let password = "pw-test-1"
+    const subject = client(server.baseUrl, async () => password)
 
     try {
       await expect(
@@ -91,6 +98,12 @@ describe("OpenCodeClient", () => {
         data: [],
         cursor: { previous: "previous-page", next: "following-page" },
       })
+      password = "pw-test-2"
+      await subject.sessions.list({ limit: 20, cursor: "next-page" })
+      expect(authorizations).toEqual([
+        "Basic b3BlcmF0b3I6cHctdGVzdC0x",
+        "Basic b3BlcmF0b3I6cHctdGVzdC0y",
+      ])
     } finally {
       await subject.close()
       await server.close()
@@ -402,27 +415,63 @@ describe("OpenCodeClient", () => {
     await server.close()
   })
 
-  it("classifies a lost mutation acknowledgement as uncertain after the server received it", async () => {
-    let received = false
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/prompt")
-      received = true
-      return { drop: true }
-    })
-    const subject = client(server.baseUrl)
+  it.each([
+    { answer: "a lost acknowledgement", response: () => ({ drop: true }) },
+    {
+      answer: "a server error",
+      response: () => Response.json({}, { status: 503 }),
+    },
+  ] satisfies { answer: string; response: () => NativeResponse }[])(
+    "classifies $answer to a mutation the server received as uncertain",
+    async ({ response }) => {
+      let received = false
+      const server = await nativeServer((request) => {
+        expect(request.url.pathname).toBe("/api/session/session-1/prompt")
+        received = true
+        return response()
+      })
+      const subject = client(server.baseUrl)
 
-    try {
-      await expect(
-        subject.sessions.prompt("session-1", {
-          id: "admission-1",
-          prompt: { text: "continue" },
-        })
-      ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
-      expect(received).toBe(true)
-    } finally {
-      await subject.close()
-      await server.close()
+      try {
+        await expect(
+          subject.sessions.prompt("session-1", {
+            id: "admission-1",
+            prompt: { text: "continue" },
+          })
+        ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
+        expect(received).toBe(true)
+      } finally {
+        await subject.close()
+        await server.close()
+      }
     }
+  )
+
+  it("ends a native call that never answers at the adapter call deadline", async () => {
+    const clock = useFakeClock()
+    const subject = createOpenCodeClient({
+      baseUrl: "http://127.0.0.1:1",
+      directory: "/workspaces/aos",
+      username: "operator",
+      password: async () => "pw-test-1",
+      fetcher: async (input) =>
+        new Promise<Response>((_resolve, reject) => {
+          const { signal } = input as Request
+          signal.addEventListener("abort", () => reject(signal.reason))
+        }),
+    })
+    const listed = subject.sessions.list().catch((error: unknown) => error)
+
+    await clock.advance(14_999)
+    await expect(
+      Promise.race([listed, Promise.resolve("pending")])
+    ).resolves.toBe("pending")
+    await clock.advance(1)
+    await expect(listed).resolves.toMatchObject({
+      name: "OpenCodeClientError",
+      code: "connection_interrupted",
+    })
+    await subject.close()
   })
 
   it("classifies a malformed successful mutation acknowledgement as uncertain", async () => {

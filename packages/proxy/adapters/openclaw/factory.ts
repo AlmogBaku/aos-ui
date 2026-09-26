@@ -153,15 +153,14 @@ export async function createOpenClawRuntime(
   dependencies: OpenClawRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
   const credentials = await readCredentials(config, dependencies.credentials)
+  const { logger } = dependencies
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
-  let generation = 1
-  let transition = Promise.resolve()
-  const replaceGeneration = (reason: "gap" | "reconnect") => {
-    generation += 1
-    transition = transition
-      .catch(() => undefined)
-      .then(async () => state.subscriptions?.replaceGeneration(reason))
-  }
+  const resubscribe = (reason: "gap" | "reconnect") =>
+    void state.subscriptions
+      ?.replaceGeneration(reason)
+      .catch((err: unknown) =>
+        logger.warn({ err, reason }, "openclaw.subscription.replace_failed")
+      )
   const client = (
     dependencies.clientFactory ?? ((options) => new OpenClawClient(options))
   )({
@@ -183,20 +182,21 @@ export async function createOpenClawRuntime(
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     ],
     onEvent(event) {
-      const eventGeneration = generation
-      void transition
-        .then(() => state.subscriptions?.accept(event, eventGeneration))
-        .catch(() => undefined)
+      state.subscriptions?.accept(event, state.subscriptions.generation)
     },
     onGap() {
-      replaceGeneration("gap")
+      resubscribe("gap")
+    },
+    // Every hello, the first included, re-subscribes on a fresh generation.
+    onReady() {
+      resubscribe("reconnect")
     },
     onClose(close) {
       if (close.phase === "post-hello" && close.recoverable)
-        replaceGeneration("reconnect")
+        state.subscriptions?.pause()
     },
   })
-  const subscriptions = new OpenClawSessionSubscriptions(client)
+  const subscriptions = new OpenClawSessionSubscriptions(client, logger)
   state.subscriptions = subscriptions
   const interactions = new OpenClawInteractions(client)
   const mcpToolNames = createOpenClawMcpToolNames(client)
@@ -223,7 +223,12 @@ export async function createOpenClawRuntime(
       },
     })
   )
-  const sessions = createCoordinator(runtime, limits, dependencies.logger)
+  const sessions = createCoordinator(runtime, limits, logger)
+  // Startup never waits on the Gateway: the first hello resubscribes, and a
+  // caller waits on its own bounded start.
+  void Promise.resolve(client.start()).catch((err: unknown) =>
+    logger.warn({ err }, "openclaw.gateway.start_failed")
+  )
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,
@@ -232,6 +237,7 @@ export async function createOpenClawRuntime(
     close() {
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
+        subscriptions.close()
         await runtime.close()
       })
       return closePromise

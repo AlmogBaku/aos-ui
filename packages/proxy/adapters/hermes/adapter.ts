@@ -75,6 +75,8 @@ import type {
   ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
+import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
@@ -336,13 +338,12 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
-  /** Live Session id to retained-record key, for events that carry only the id. */
-  readonly #liveInfoKeys = new Map<string, string>()
   readonly #invitedSessionCreates = new Map<
     string,
     Promise<{ providerSessionId: ids.ProviderSessionId; created: boolean }>
@@ -484,6 +485,10 @@ export class HermesServerAdapter implements ServerRuntime {
       {
         resume: (scope) => this.#resumeNative(scope),
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
+        forget: (scope) =>
+          this.#attachmentInfo.delete(
+            attachmentInfoKey(scope.agentId, scope.providerSessionId)
+          ),
       },
       // The registry requires event subscriptions, so a transport that cannot
       // subscribe is adapted here rather than silently skipped there: such a
@@ -692,7 +697,7 @@ export class HermesServerAdapter implements ServerRuntime {
 
   publicError(cause: unknown) {
     if (cause instanceof HermesAuthenticationError)
-      return { code: "runtime_authentication_required", status: 401 } as const
+      return failureOf("runtime_authentication_required", cause)
     if (
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
@@ -703,19 +708,19 @@ export class HermesServerAdapter implements ServerRuntime {
       // never invites a retry that cannot succeed.
       cause instanceof HermesContentUnreadableError
     )
-      return { code: "not_found", status: 404 } as const
+      return failureOf("gone", cause)
     if (
       cause instanceof HermesRevisionConflictError ||
       cause instanceof HermesSessionConflictError
     )
-      return { code: "revision_conflict", status: 409 } as const
+      return failureOf("revision_conflict", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (
       cause instanceof HermesTurnPublicError &&
       cause.code === "AOS_STOP_UNCERTAIN"
     )
-      return { code: "uncertain_mutation", status: 409 } as const
+      return failureOf("uncertain", cause)
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
@@ -724,11 +729,12 @@ export class HermesServerAdapter implements ServerRuntime {
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
     )
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     if (cause instanceof HermesInteractionPublicError)
-      return cause.code === "AOS_INTERACTION_NOT_FOUND"
-        ? ({ code: "not_found", status: 404 } as const)
-        : ({ code: "invalid_request", status: 400 } as const)
+      return failureOf(
+        cause.code === "AOS_INTERACTION_NOT_FOUND" ? "gone" : "invalid_request",
+        cause
+      )
     return undefined
   }
 
@@ -766,9 +772,10 @@ export class HermesServerAdapter implements ServerRuntime {
   #retainObservedInfo(event: unknown) {
     if (!isRecord(event) || event.type !== "session.info") return
     if (!validLiveSessionId(event.session_id)) return
-    const key = this.#liveInfoKeys.get(event.session_id)
+    const bound = this.#attachments.scopeFor(event.session_id)
     const payload = isRecord(event.payload) ? event.payload : undefined
-    if (!key || !payload) return
+    if (!bound || !payload) return
+    const key = attachmentInfoKey(bound.agentId, bound.providerSessionId)
     const retained = this.#attachmentInfo.get(key)
     this.#attachmentInfo.set(key, {
       ...retained,
@@ -1196,14 +1203,10 @@ export class HermesServerAdapter implements ServerRuntime {
         ? payload.session_id
         : undefined
     if (!liveSessionId || !isRecord(payload)) throw new HermesUnavailableError()
-    const key = attachmentInfoKey(scope.agentId, scope.providerSessionId)
-    this.#attachmentInfo.set(key, payload)
-    // A re-resumed Session answers under a new live id; the previous one can
-    // never name this Session again.
-    for (const [observed, mapped] of this.#liveInfoKeys)
-      if (mapped === key && observed !== liveSessionId)
-        this.#liveInfoKeys.delete(observed)
-    this.#liveInfoKeys.set(liveSessionId, key)
+    this.#attachmentInfo.set(
+      attachmentInfoKey(scope.agentId, scope.providerSessionId),
+      payload
+    )
     return {
       liveSessionId,
       saved: !isUnpersistedDraft(

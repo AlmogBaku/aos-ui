@@ -260,6 +260,7 @@ export async function createConfiguredProxy(
     runtime: runtimeInstance.runtime,
     coordinator: sessions,
     rows: sessionRows,
+    logger: dependencies.logger,
   })
   const channels = createChannels({
     coordinator: sessions,
@@ -355,6 +356,19 @@ export async function createConfiguredProxy(
           },
         }
       : {}),
+    health: () => ({
+      links: [
+        {
+          name: runtimeInstance.id,
+          state: runtimeInstance.runtime.link.state(),
+        },
+      ],
+      gauges: {
+        sockets: acpService.sockets() + (guest?.acpService.sockets() ?? 0),
+        memberships: channels.memberships(),
+        ...sessions.gauges(),
+      },
+    }),
     readiness: async () => {
       try {
         return (await runtimeInstance.runtime.runtimeInfo()).status ===

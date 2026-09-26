@@ -58,6 +58,17 @@ async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
     publicOrigin: ORIGIN,
     runtimeInstance,
     logger: logs.logger,
+    health: () => ({
+      links: [],
+      gauges: {
+        sockets: 0,
+        memberships: 0,
+        executions: 0,
+        uncertain: 0,
+        deadlinesFired: 0,
+        journalBytes: 0,
+      },
+    }),
     ...(options.push === false
       ? {}
       : { push: { publicKey: PUBLIC_KEY, registrations } }),

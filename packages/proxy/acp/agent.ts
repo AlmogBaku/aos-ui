@@ -309,8 +309,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   /**
    * Admits one user turn in a Session this connection reaches, answering once
    * the coordinator admitted or refused it; `signal` aborts the admission.
-   * Only a first admission takes its stage, and a turn that never started
-   * releases it: the client keeps its attachments and stages them anew.
+   * Only a first admission takes its stage, and the coordinator releases it
+   * if the turn never starts: the client keeps its attachments and stages them
+   * anew.
    */
   async function send(
     command: MemberCommands["send"],
@@ -338,8 +339,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
               )
               if (!stage) throw invalidParams()
             }
+            let prompt = text
+            try {
+              if (stage) prompt = await stage.appendTo(text)
+            } catch (cause) {
+              // The coordinator never took the stage, so it is released here.
+              await stage?.cleanup().catch(() => undefined)
+              throw cause
+            }
             return {
-              prompt: stage ? await stage.appendTo(text) : text,
+              prompt,
               ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
               ...(stage ? { stage } : {}),
             }
@@ -348,9 +357,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
         { quota: command.quota, signal }
       )
-    } catch (cause) {
-      await stage?.cleanup().catch(() => undefined)
-      throw cause
     } finally {
       membership.joined()
     }

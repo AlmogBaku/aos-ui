@@ -11,12 +11,26 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
+import { HermesTurnPublicError } from "./adapters/hermes/run-failures"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { RuntimeInstance, ServerMcpApps } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 import { McpAppNotFoundError } from "./mcp-apps/fallback"
 
 const origin = "http://127.0.0.1:3000"
+
+/** Idle health readings, for an app whose liveness no case reads. */
+const health = () => ({
+  links: [],
+  gauges: {
+    sockets: 0,
+    memberships: 0,
+    executions: 0,
+    uncertain: 0,
+    deadlinesFired: 0,
+    journalBytes: 0,
+  },
+})
 
 function session(agentId = "researcher", id = "stored") {
   return {
@@ -66,6 +80,7 @@ function app(
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
     logger: captureLogs().logger,
+    health,
     ...options,
   })
 }
@@ -236,8 +251,9 @@ describe("AOS V1 proxy", () => {
       }),
     }
 
+    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
     const response = await app(new HermesServerAdapter(transport)).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+      path,
       stageRequest
     )
 
@@ -247,6 +263,18 @@ describe("AOS V1 proxy", () => {
         code: "temporarily_unavailable",
         description: expect.any(String),
       },
+    })
+
+    // A write that may have landed is no caller error: the route answers it
+    // 503, under the code that says to reconcile first.
+    const uncertain = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(uncertain, "getSession").mockRejectedValue(
+      new HermesTurnPublicError("AOS_STOP_UNCERTAIN", "Stop was not confirmed.")
+    )
+    const reconcile = await app(uncertain).request(path, stageRequest)
+    expect(reconcile.status).toBe(503)
+    expect(await reconcile.json()).toMatchObject({
+      error: { code: "uncertain_mutation" },
     })
   })
 
@@ -294,6 +322,7 @@ describe("AOS V1 proxy", () => {
       publicOrigin: origin,
       runtimeInstance: runtimeInstance(runtime),
       logger: logs.logger,
+      health,
     })
 
     // An artifact read is a REST route that reaches the provider, so an outage

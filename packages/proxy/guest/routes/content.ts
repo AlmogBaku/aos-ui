@@ -280,8 +280,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         // failure is an outage worth retrying. The projected body carries a
         // fixed description, so neither answer names a native path.
         const gone =
-          routes.options.runtime.runtime.publicError(error)?.code ===
-          "not_found"
+          routes.options.runtime.runtime.publicError(error)?.kind === "gone"
         return routes.projectedError(
           identity,
           agentId,

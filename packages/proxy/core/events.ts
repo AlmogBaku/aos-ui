@@ -9,6 +9,7 @@ import {
   TurnSteerResponseSchema,
   SessionTodosResponseSchema,
 } from "../../protocol"
+import { publicFailure, TURN_FAILURES } from "./failures"
 
 // The facts a stored Session message also carries live in the protocol, so a
 // reload replays them; adapters keep reaching them through this vocabulary.
@@ -437,19 +438,11 @@ export function isTurnEvent(candidate: unknown): candidate is TurnEvent {
   return TurnEventSchema.safeParse(candidate).success
 }
 
-/** Error codes after which Send, Stop, steer, and replies must not be retried. */
-export const UNCERTAIN_ERROR_CODES = [
-  "AOS_SEND_UNCERTAIN",
-  "AOS_INTERACTION_UNCERTAIN",
-  "AOS_STOP_UNCERTAIN",
-  "AOS_CONNECTION_INTERRUPTED",
-  "AOS_RESET_REQUIRED",
-] as const
-
+/** A failure after which Send, Stop, steer, and replies must not be retried. */
 export function isUncertainFailure(event: TurnEvent): boolean {
   return (
     event.kind === TurnEventKind.TurnFailed &&
-    UNCERTAIN_ERROR_CODES.some((code) => code === event.code)
+    publicFailure(event, TURN_FAILURES)?.kind === "uncertain"
   )
 }
 

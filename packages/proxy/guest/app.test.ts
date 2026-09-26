@@ -15,7 +15,9 @@ import type {
   ServerTurnEngine,
   ServerRuntime,
 } from "../core/runtime"
+import { failureOf } from "../core/failures"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { createGuestApp } from "./app"
 
@@ -197,6 +199,7 @@ function harness(options: { existing?: boolean } = {}) {
     speak,
     artifact,
     publicError,
+    link: READY_LINK,
   } as unknown as ServerRuntime
   const instance: RuntimeInstance = {
     id: "hermes-primary",
@@ -525,9 +528,9 @@ describe("guest app", () => {
     const outage = new Error("Hermes request failed")
     subject.publicError.mockImplementation((cause) =>
       cause === unreadable
-        ? { code: "not_found", status: 404 }
+        ? failureOf("gone", cause)
         : cause === outage
-          ? { code: "temporarily_unavailable", status: 503 }
+          ? failureOf("unavailable", cause)
           : undefined
     )
     const invite = await token(subject.invitationService)

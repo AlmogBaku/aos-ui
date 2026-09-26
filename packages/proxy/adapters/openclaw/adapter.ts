@@ -16,6 +16,8 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
+import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import {
   OpenClawClientConnectionError,
   OpenClawClientRequestError,
@@ -101,6 +103,7 @@ type OpenClawServerAdapterOptions = Readonly<{
  * remain in the OpenClaw leaves; the coordinator retains admission and turns.
  */
 export class OpenClawServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
   readonly #workspace
@@ -109,7 +112,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
   readonly #subscribeSession: OpenClawHistorySubscription
   readonly #gatewayOrigin?: string
   readonly #fetch: typeof fetch
-  #ready?: Promise<void>
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
@@ -162,9 +164,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
       cause.kind !== "unavailable" &&
       cause.kind !== "rate-limited"
     )
-      return { code: "runtime_authentication_required", status: 401 } as const
+      return failureOf("runtime_authentication_required", cause)
     if (cause instanceof OpenClawClientRequestError && cause.uncertain)
-      return { code: "uncertain_mutation", status: 503 } as const
+      return failureOf("uncertain", cause)
     if (
       cause instanceof OpenClawWorkspaceOwnershipError ||
       // The artifact is still authoritative, but OpenClaw cannot read it:
@@ -173,13 +175,13 @@ export class OpenClawServerAdapter implements ServerRuntime {
       (cause instanceof OpenClawInteractionPublicError &&
         cause.code === "AOS_INTERACTION_NOT_FOUND")
     )
-      return { code: "not_found", status: 404 } as const
+      return failureOf("gone", cause)
     if (
       cause instanceof OpenClawContentPublicError ||
       (cause instanceof OpenClawInteractionPublicError &&
         cause.code === "AOS_INVALID_INTERACTION")
     )
-      return { code: "invalid_request", status: 400 } as const
+      return failureOf("invalid_request", cause)
     if (
       cause instanceof OpenClawClientConnectionError ||
       cause instanceof OpenClawClientRequestError ||
@@ -192,7 +194,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
       (cause instanceof OpenClawInteractionPublicError &&
         cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
     )
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     return undefined
   }
 
@@ -452,9 +454,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#close
   }
 
+  /** Never cached: a failed start leaves the next call to dial again. */
   #start() {
-    this.#ready ??= Promise.resolve(this.#client.start())
-    return this.#ready
+    return Promise.resolve(this.#client.start())
   }
 
   #runtimeInfo(status: "ready" | "unavailable"): RuntimeInfo {

@@ -72,7 +72,6 @@ const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
   signal?: AbortSignal
-  timeoutMs?: number | null
   expectFinal?: boolean
   onSent?: () => void
   onAccepted?: (payload: unknown) => void
@@ -755,7 +754,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   async start(
     scope: SessionScope,
     candidate: Parameters<ServerTurnEngine["start"]>[1],
-    attachmentStage?: ServerAttachmentStage
+    attachmentStage?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle> {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
@@ -943,7 +943,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           )
           return this.#handle(active)
         }
-        await this.#reconcile(active).catch(() => this.#markInterrupted(active))
+        await this.#reconcile(active).catch(() => this.#markStreamLost(active))
         return this.#handle(active)
       }
 
@@ -957,6 +957,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       })
       const request = this.#client
         .request<unknown>("chat.send", sendParams!, {
+          // An abandoned admission stops the native request until it is accepted.
+          signal,
           expectFinal: true,
           onSent: () => {
             sent = true
@@ -989,14 +991,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           }
           if (active && !active.terminal)
             void this.#reconcile(active).catch(() =>
-              this.#markInterrupted(active)
+              this.#markStreamLost(active)
             )
         })
         .catch((error: unknown) => {
           if (!admitted) rejectAdmission(error)
           else if (active && !active.terminal)
             void this.#reconcile(active).catch(() =>
-              this.#markInterrupted(active)
+              this.#markStreamLost(active)
             )
         })
       void request
@@ -1055,7 +1057,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
       existing.queue.push({ kind: TurnEventKind.TurnStarted })
       await this.#reconcile(existing).catch(() =>
-        this.#markInterrupted(existing)
+        this.#markStreamLost(existing)
       )
       return this.#handle(existing)
     }
@@ -1372,9 +1374,15 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return authoritativelyIdle(history)
   }
 
-  /** Makes `active` the Session's run and remembers its native run as AOS's. */
+  /**
+   * Makes `active` the Session's run and remembers its native run as AOS's.
+   * Its settlement frees the Session's MCP names; the next turn loads fresh.
+   */
   #register(key: string, active: ActiveRun) {
     this.#active.set(key, active)
+    void active.settled.then(() =>
+      this.#mcpToolNames?.forget(active.scope.agentId, active.nativeSessionKey)
+    )
     if (!active.nativeRunId) return
     const run = `${key}\u0000${active.nativeRunId}`
     this.#admitted.delete(run)
@@ -1460,7 +1468,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     try {
       await this.#reconcile(active, fence)
     } catch (error) {
-      this.#markInterrupted(active)
+      this.#markStreamLost(active)
       throw error
     }
   }
@@ -1590,7 +1598,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active.gapPending = true
         void this.#subscriptions
           .replaceGeneration("gap")
-          .catch(() => this.#markInterrupted(active))
+          .catch(() => this.#markStreamLost(active))
           .finally(() => {
             active.gapPending = false
           })
@@ -2069,12 +2077,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return active.terminal ? "idle" : "stopping"
   }
 
-  #markInterrupted(active: ActiveRun) {
+  /** The turn's stream was lost mid-turn: OpenClaw may still be running it. */
+  #markStreamLost(active: ActiveRun) {
     if (active.terminal || active.uncertain) return
     this.#markUncertain(
       active,
-      "AOS_CONNECTION_INTERRUPTED",
-      "OpenClaw connection was interrupted."
+      "AOS_SEND_UNCERTAIN",
+      "OpenClaw may still be running this turn."
     )
   }
 

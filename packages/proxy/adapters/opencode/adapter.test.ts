@@ -146,7 +146,7 @@ describe("OpenCode server adapter", () => {
         selectedId: '["openai","unknown"]',
       })
       .catch((error: unknown) => error)
-    expect(adapter.publicError(unknown)).toMatchObject({ status: 400 })
+    expect(adapter.publicError(unknown)?.kind).toBe("invalid_request")
     expect(native.sessions.switchModel).toHaveBeenCalledTimes(1)
     await expect(
       adapter.context("research", "session-1")
@@ -762,8 +762,8 @@ describe("OpenCode server adapter", () => {
           name: "OpenCodeContentUnreadableError",
         })
         expect(
-          adapter.publicError(await failure.catch((error) => error))
-        ).toEqual({ code: "not_found", status: 404 })
+          adapter.publicError(await failure.catch((error) => error))?.kind
+        ).toBe("gone")
       }
     })
 

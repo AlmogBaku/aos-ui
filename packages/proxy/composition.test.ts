@@ -17,6 +17,7 @@ import { createConfiguredProxy } from "./composition"
 import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
+import { READY_LINK } from "./core/link"
 import { CredentialValues } from "./redaction"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 
@@ -454,6 +455,7 @@ describe("configured proxy composition", () => {
       const runtime = {
         runtimeInfo: async () => ({ status: "ready" }),
         publicError: () => undefined,
+        link: READY_LINK,
         workspaceCapabilities: async () => CAPABILITIES,
         speak,
         turns: {},
@@ -573,7 +575,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {
+  it("keeps liveness up with a native link down and reports rejected Hermes credentials as not ready", async () => {
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({
         request: vi.fn(async () => {
@@ -583,14 +585,26 @@ describe("configured proxy composition", () => {
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
     })
+    vi.spyOn(configured.runtimeInstance.runtime.link, "state").mockReturnValue(
+      "lost"
+    )
 
-    expect(
-      (
-        await configured.app.request(
-          "https://aos.example.test/api/aos/v1/healthz"
-        )
-      ).status
-    ).toBe(200)
+    const health = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/healthz"
+    )
+    expect(health.status).toBe(200)
+    await expect(health.json()).resolves.toEqual({
+      status: "degraded",
+      links: [{ name: "hermes-main", state: "lost" }],
+      gauges: {
+        sockets: 0,
+        memberships: 0,
+        executions: 0,
+        uncertain: 0,
+        deadlinesFired: 0,
+        journalBytes: 0,
+      },
+    })
     expect(
       (
         await configured.app.request(

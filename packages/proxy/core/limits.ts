@@ -12,6 +12,21 @@ export const READING_BACKOFF = { baseMs: 1_000, capMs: 16_000 }
 export const READING_RETRIES = 5
 
 /**
+ * The retries at once that owners sharing one budget may take, a burst and a
+ * refill each second; past it they keep to their backoff.
+ */
+export const RETRY_BUDGET = { burst: 32, perSecond: 16 }
+
+/** The backoff a native link redials on, with full jitter. */
+export const LINK_BACKOFF = { baseMs: 250, capMs: 5_000 }
+
+/**
+ * The consecutive failed dials that open a native link's circuit, and how
+ * long it stays open before one trial dial.
+ */
+export const LINK_BREAKER = { failures: 5, halfOpenAfterMs: 10_000 }
+
+/**
  * The admissions a client may repeat under its client id, sends and creates
  * each: how many are remembered, and for how long. A repeat after either is
  * admitted afresh.
