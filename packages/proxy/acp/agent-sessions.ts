@@ -4,25 +4,15 @@ import type {
   SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import {
-  SessionCreateResponseSchema,
-  SessionModelsResponseSchema,
-  type TurnSteerRequest,
-  type Session,
-  type SessionHistoryResponse,
-  type SessionModelUpdateRequest,
-} from "../../protocol"
+import { type Session, type SessionHistoryResponse } from "../../protocol"
 import {
   AOS_META_KEY,
   type AosHistoryCursor,
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
 import * as ids from "../core/ids"
-import type { SessionPatch, SessionScope } from "../core/runtime"
-import type {
-  CreateInput,
-  SessionExecutionState,
-} from "../core/session-coordinator"
+import type { SessionScope } from "../core/runtime"
+import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { Membership } from "../core/channel"
 import {
@@ -38,14 +28,12 @@ import {
   errorNotificationOf,
   invalidParams,
   notFound,
-  publicRequestError,
 } from "./validation"
 
 /**
- * The Session half of the ACP agent: the normalized runtime reads and writes
- * the handlers need, the `_meta.aos` projections of a Session row, and the
- * per-connection registry of which Agent owns a Session and which Sessions
- * this connection has resumed.
+ * The Session half of the ACP agent: the `_meta.aos` projections of a Session
+ * row, and the per-connection registry of which Agent owns a Session and
+ * which Sessions this connection has joined.
  */
 
 /** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
@@ -170,93 +158,6 @@ export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
 }
 
 /**
- * The normalized reads and writes the handlers need, parsed with their
- * protocol schemas and with every provider or coordinator failure already
- * mapped to its JSON-RPC error. Detail reads take the provider Session id and
- * workspace reads the public one, exactly as the normalized HTTP routes do.
- */
-export function createWorkspace(
-  context: Pick<
-    AcpConnectionContext,
-    "runtimeInstance" | "sessionRows" | "principalId"
-  >
-) {
-  const { runtime, sessions: coordinator } = context.runtimeInstance
-  const call = async <T>(operation: () => Promise<T>) => {
-    try {
-      return await operation()
-    } catch (cause) {
-      throw publicRequestError(runtime, cause)
-    }
-  }
-  return {
-    scope(agentId: string, publicSessionId: string): SessionScope {
-      const providerSessionId = runtime.resolveProviderSessionId(
-        agentId,
-        publicSessionId
-      )
-      if (!providerSessionId) throw notFound()
-      return {
-        agentId,
-        providerSessionId,
-        sessionId: ids.sessionId(publicSessionId),
-      }
-    },
-    info: () => call(() => runtime.runtimeInfo()),
-    agents: () => call(() => runtime.listAgents()),
-    setVisibility: (
-      agentId: string,
-      visibility: "visible" | "hidden",
-      revision: string
-    ) =>
-      call(() => runtime.updateAgentVisibility(agentId, visibility, revision)),
-    list: (agentId: string | undefined, limit: number, offset: number) =>
-      call(() =>
-        agentId === undefined
-          ? runtime.listAllSessions(limit, offset)
-          : runtime.listSessions(agentId, limit, offset)
-      ),
-    /** A repeat of a client id answers the Session its first create made. */
-    create: (agentId: string, input: CreateInput) =>
-      call(async () => {
-        const created = SessionCreateResponseSchema.parse(
-          await coordinator.createSession(agentId, input, context.principalId)
-        )
-        return created.session.id
-      }),
-    session: (scope: SessionScope) =>
-      call(async () =>
-        context.sessionRows.rememberDetail(
-          await runtime.getSession(scope.agentId, scope.providerSessionId)
-        )
-      ),
-    history: (scope: SessionScope, limit: number, offset = 0) =>
-      call(() =>
-        runtime.history(scope.agentId, scope.providerSessionId, limit, offset)
-      ),
-    update: (scope: SessionScope, patch: SessionPatch) =>
-      call(() =>
-        runtime.updateSession(scope.agentId, scope.providerSessionId, patch)
-      ),
-    delete: (scope: SessionScope) =>
-      call(() => runtime.deleteSession(scope.agentId, scope.providerSessionId)),
-    models: (scope: SessionScope) =>
-      call(async () =>
-        SessionModelsResponseSchema.parse(
-          await runtime.models(scope.agentId, scope.sessionId)
-        )
-      ),
-    updateModel: (scope: SessionScope, patch: SessionModelUpdateRequest) =>
-      call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
-    /** Steers the Session's live turn. */
-    steer: (scope: SessionScope, request: TurnSteerRequest) =>
-      call(() => coordinator.steer(scope, request)),
-  }
-}
-
-export type Workspace = ReturnType<typeof createWorkspace>
-
-/**
  * Per-connection Session registry. ACP addresses a Session by its public id
  * alone, so the connection remembers the Agent each listed or created Session
  * belongs to and refuses an id it has never been told about. `connect` writes
@@ -266,7 +167,6 @@ export function createSessions(
   context: AcpConnectionContext,
   connect: (client: AgentContext) => MemberConnection
 ) {
-  const workspace = createWorkspace(context)
   const coordinator = context.runtimeInstance.sessions
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
@@ -316,11 +216,18 @@ export function createSessions(
       : row.status
   }
 
+  /** Reads the Session's row, which reaches each of its members as it changes. */
+  async function readRow(scope: SessionScope) {
+    context.sessionRows.rememberDetail(
+      await runtime.getSession(scope.agentId, scope.providerSessionId)
+    )
+  }
+
   return {
-    workspace,
     remember,
     identity,
     status,
+    readRow,
 
     owner(publicSessionId: string) {
       return owners.get(publicSessionId)
@@ -331,10 +238,18 @@ export function createSessions(
       if (!owners.has(publicSessionId)) owners.set(publicSessionId, agentId)
     },
 
-    scope(publicSessionId: string) {
+    scope(publicSessionId: string): SessionScope {
       const agentId = owners.get(publicSessionId)
-      if (agentId === undefined) throw notFound()
-      return workspace.scope(agentId, publicSessionId)
+      const providerSessionId =
+        agentId === undefined
+          ? undefined
+          : runtime.resolveProviderSessionId(agentId, publicSessionId)
+      if (agentId === undefined || !providerSessionId) throw notFound()
+      return {
+        agentId,
+        providerSessionId,
+        sessionId: ids.sessionId(publicSessionId),
+      }
     },
 
     /**
@@ -369,7 +284,7 @@ export function createSessions(
           )
           // A Session this connection never listed is read once for its row.
           if (hasSession(scope) && !context.sessionRows.get(agentId, sessionId))
-            void workspace.session(scope).catch((cause: unknown) =>
+            void readRow(scope).catch((cause: unknown) =>
               log("error", "session.read.failed", {
                 sessionId,
                 errorCode: errorNotificationOf(runtime, cause).code,

@@ -9,6 +9,8 @@ import {
 
 import {
   SESSION_CATALOG_MAX_WINDOW,
+  SessionCreateResponseSchema,
+  SessionModelsResponseSchema,
   type SessionHistoryResponse,
 } from "../../protocol"
 import {
@@ -74,9 +76,9 @@ import {
 
 /**
  * The per-connection ACP v2 agent that fronts the coordinator and the runtime.
- * One handler per method: it validates `_meta.aos`, calls the same normalized
- * operations the HTTP routes call, and leaves the turn stream itself to the
- * Session attachment.
+ * One handler per method: it validates `_meta.aos`, runs its command through
+ * the member stack, and leaves what reaches a Session's members to its
+ * channel.
  */
 
 /** The bounded history one `replayFrom: { type: "start" }` resume replays. */
@@ -159,8 +161,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         }),
     })
   )
-  const { workspace } = sessions
-
   const app = agent({ name: "aos-proxy" })
 
   /**
@@ -217,7 +217,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /** One history page, `offset` rows back from the newest. */
   function readHistory(scope: SessionScope, offset = 0) {
-    return workspace.history(scope, HISTORY_REPLAY_LIMIT, offset)
+    return runtime.history(
+      scope.agentId,
+      scope.providerSessionId,
+      HISTORY_REPLAY_LIMIT,
+      offset
+    )
   }
 
   /** Whether this client reads older pages itself (`initialize`). */
@@ -357,7 +362,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // A connection still to authenticate learns nothing about the deployment
     // it reached.
     const { authentication } = context
-    const info = authentication ? undefined : await workspace.info()
+    const info = authentication
+      ? undefined
+      : await runtime.runtimeInfo().catch((cause: unknown) => {
+          throw publicRequestError(runtime, cause)
+        })
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
@@ -411,11 +420,15 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
       },
       async ({ agentId, ...input }) => {
-        const sessionId = await workspace.create(agentId, input)
+        // A repeat of a client id answers the Session its first create made.
+        const created = SessionCreateResponseSchema.parse(
+          await coordinator.createSession(agentId, input, context.principalId)
+        )
+        const sessionId = created.session.id
         sessions.remember([{ id: sessionId, agentId }])
         // The row, capabilities and model options follow the answer as
         // updates.
-        sessions.join(client, workspace.scope(agentId, sessionId)).joined()
+        sessions.join(client, sessions.scope(sessionId)).joined()
         return { sessionId }
       }
     )
@@ -432,7 +445,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         offset: decodeCursor(params.cursor),
       },
       async ({ agentId, offset }) => {
-        const page = await workspace.list(agentId, SESSION_LIST_LIMIT, offset)
+        const page = await (agentId === undefined
+          ? runtime.listAllSessions(SESSION_LIST_LIMIT, offset)
+          : runtime.listSessions(agentId, SESSION_LIST_LIMIT, offset))
         sessions.remember(page.sessions)
         context.sessionRows.rememberList(page.sessions)
         const next = offset + page.sessions.length
@@ -552,14 +567,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async (command) => {
         const scope = sessions.scope(command.sessionId)
         if (!command.write) throw invalidParams()
-        await workspace.updateModel(scope, command.write)
-        const models = await workspace.models(scope)
-        // A switch restates the model options and the usage, whose window
-        // belongs to the model, for every browser on the Session.
-        const membership = sessions.membership(command.sessionId)
-        membership?.afterResponse(async () =>
-          coordinator.reportModelSwitch(scope)
+        await runtime.updateModel(scope.agentId, scope.sessionId, command.write)
+        const models = SessionModelsResponseSchema.parse(
+          await runtime.models(scope.agentId, scope.sessionId)
         )
+        // A switch restates the model options and the usage, whose window
+        // belongs to the model, to every member of the Session: to this
+        // connection once the answer is written, if it is one.
+        const membership = sessions.membership(command.sessionId)
+        if (membership)
+          membership.afterResponse(async () =>
+            coordinator.reportModelSwitch(scope)
+          )
+        else coordinator.reportModelSwitch(scope)
         return { models }
       }
     )
@@ -581,7 +601,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId },
       async (command) => {
         const scope = sessions.scope(command.sessionId)
-        await workspace.delete(scope)
+        await runtime.deleteSession(scope.agentId, scope.providerSessionId)
         sessions.forget(scope)
         await client.notify(AOS_METHODS.notify.catalogInvalidated)
       }
@@ -614,11 +634,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             await readState?.markRead(scope.agentId, scope.sessionId)
             return
           }
-          await workspace.update(scope, command.patch)
-          const row = await workspace.session(scope)
-          await sessions
-            .join(client, scope)
-            .emit({ kind: "session-info", row, status: sessions.status(row) })
+          await runtime.updateSession(
+            scope.agentId,
+            scope.providerSessionId,
+            command.patch
+          )
+          // The new row reaches each member of the Session; a connection that
+          // is not one is not made one.
+          await sessions.readRow(scope)
           // Archiving and pinning move the Session's membership and order in
           // the catalog, which only a relist settles; a provider's catalog
           // watcher may be debounced or absent. A rename or a read marker
@@ -692,7 +715,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(AOS_METHODS.agents.list, withoutParams, async () => {
     admit(AOS_METHODS.agents.list, "agents")
-    return await perform("agents", {}, () => workspace.agents())
+    return await perform("agents", {}, () => runtime.listAgents())
   })
 
   app.onRequest(
@@ -709,7 +732,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           revision: params.revision,
         },
         (command) =>
-          workspace.setVisibility(
+          runtime.updateAgentVisibility(
             command.agentId,
             command.visibility,
             command.revision

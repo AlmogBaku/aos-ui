@@ -7,6 +7,7 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
@@ -85,6 +86,30 @@ function sequencesOf(recorder: Recorder) {
       ? [parsed.data.update._meta[AOS_META_KEY].sequence]
       : []
   })
+}
+
+/** A recorded model options update that names `model` selected. */
+function selects(model: string) {
+  return (entry: Recorded) => {
+    const params = JSON.stringify(entry.params)
+    return (
+      entry.method === methods.client.session.update &&
+      params.includes("config_option_update") &&
+      params.includes(`"currentValue":"${model}"`)
+    )
+  }
+}
+
+/** The Session rows this connection was shown since entry `from`. */
+function rowsSince(recorder: Recorder, from: number) {
+  return recorder.entries
+    .slice(from)
+    .filter(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes("session_info_update")
+    )
+    .map((entry) => entry.params)
 }
 
 /** Every catalog relist this connection has asked the client for. */
@@ -576,9 +601,12 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("writes the Session model a config option selects", async () => {
+  it("writes the Session model a config option selects and tells every browser on the Session", async () => {
     const test = await harness()
     await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
 
     const written = await test.agent.request(
       methods.agent.session.setConfigOption,
@@ -591,10 +619,15 @@ describe("AOS ACP agent", () => {
     expect(written).toMatchObject({
       configOptions: [{ configId: "model", currentValue: "opus" }],
     })
+    // The browser that switched never opened the Session, so the switch
+    // reaches the one that did without making the other a member.
+    await other.recorder.wait(selects("opus"), "the switched model options")
+    expect(updates(test.recorder)).toEqual([])
     test.close()
+    other.close()
   })
 
-  it("restates context usage after a config option changes the model", async () => {
+  it("restates the model options and context usage after a config option changes the model, once it is answered", async () => {
     const test = await harness()
     await test.list()
     await test.agent.request(methods.agent.session.resume, {
@@ -609,9 +642,22 @@ describe("AOS ACP agent", () => {
       type: "id",
       value: "opus",
     })
+    test.recorder.add({ method: "switch-answered", params: undefined })
 
     // The window's size belongs to the model, so a switch owes a fresh reading.
     await usageOf(test, 2)
+    await test.recorder.wait(selects("opus"), "the switched model options")
+    const order = test.recorder.entries.map((entry) =>
+      entry.method === "switch-answered"
+        ? entry.method
+        : selects("opus")(entry)
+          ? "config_option_update"
+          : undefined
+    )
+    expect(order.filter(Boolean)).toEqual([
+      "switch-answered",
+      "config_option_update",
+    ])
     test.close()
   })
 
@@ -833,9 +879,13 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
-  it("renames a Session and reports the new row", async () => {
+  it("renames a Session for every browser on it, leaving the one that renamed it no membership", async () => {
     const test = await harness()
     await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const clock = useFakeClock()
 
     await test.agent.request(AOS_METHODS.session.update, {
       sessionId: SESSION,
@@ -845,32 +895,47 @@ describe("AOS ACP agent", () => {
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       title: "Renamed",
     })
-    expect(updates(test.recorder)).toMatchObject([
-      {
-        sessionId: SESSION,
-        update: {
-          sessionUpdate: "session_info_update",
-          title: "Renamed",
-          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
-        },
+    const renamed = await other.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Renamed"),
+      "the renamed row"
+    )
+    expect(renamed.params).toMatchObject({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Renamed",
+        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
       },
-    ])
+    })
+    // A membership the rename made would wait out its join deadline.
+    await clock.advance(30_000)
+    expect(
+      test.logs.transitions({ owner: "membership", sessionId: SESSION })
+    ).not.toContainEqual(["joining", "detached"])
     test.close()
+    other.close()
   })
 
-  it("pins a Session and asks the acting client to relist", async () => {
+  it("pins a Session, shows the browser that pinned it the row once, and asks it to relist", async () => {
     const test = await harness()
     await test.list()
+    await open(test)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("session_info"),
+      "the Session's row"
+    )
+    const from = test.recorder.entries.length
 
     await test.agent.request(AOS_METHODS.session.update, {
       sessionId: SESSION,
       pinned: true,
     })
+    await settled()
 
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       pinned: true,
     })
-    expect(updates(test.recorder)).toMatchObject([
+    expect(rowsSince(test.recorder, from)).toMatchObject([
       {
         sessionId: SESSION,
         update: {
