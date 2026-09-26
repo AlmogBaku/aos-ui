@@ -824,7 +824,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
     let lease: OpenClawSessionLease | undefined
     try {
-      const holder: { active?: ActiveRun } = {}
+      const holder: { active?: ActiveRun; lost?: { cause: unknown } } = {}
       let admissionDirty = false
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.providerSessionId },
@@ -834,7 +834,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
-        }
+        },
+        this.#leaseLost(holder)
       )
       let baseline: HistorySnapshot
       do {
@@ -880,6 +881,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (!replies)
         await this.#enableAosTools(scope.agentId, baseline.sessionKey)
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
+      if (holder.lost) throw holder.lost.cause
 
       const queue = new EventQueue(() => {
         if (holder.active)
@@ -1079,7 +1081,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
     let lease: OpenClawSessionLease | undefined
     try {
-      const holder: { active?: ActiveRun } = {}
+      const holder: { active?: ActiveRun; lost?: { cause: unknown } } = {}
       let recoveryDirty = false
       lease = await this.#subscriptions.acquire(
         { agentId: scope.agentId, sessionKey: scope.providerSessionId },
@@ -1089,7 +1091,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
-        }
+        },
+        this.#leaseLost(holder)
       )
       let baseline: HistorySnapshot
       do {
@@ -1106,6 +1109,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           ? baseline.inFlightRun
           : undefined
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
+      if (holder.lost) throw holder.lost.cause
       const active = this.#bindRun(scope, request.turnId, lease, holder, {
         baseline,
         nativeRunId: nativeRunId ?? "",
@@ -1172,6 +1176,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
+          else discoveryDirty = true
+        },
+        () => {
+          if (holder.active) this.#markStreamLost(holder.active)
           else discoveryDirty = true
         }
       )
@@ -1313,13 +1321,20 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         announced = undefined
         /** Whether the first check ran: until then there is no recheck. */
         let checked = false
+        /** A subscription lost before the watch is up fails the dial. */
+        let dropped: { cause: unknown } | undefined
         const acquired = await this.#subscriptions.acquire(
           { agentId: scope.agentId, sessionKey: scope.providerSessionId },
           (event) => announce(progressRunId(event), false),
           // The subscription outlives a Gateway reconnect; a recheck that
-          // fails after one takes the watch down to subscribe again.
+          // fails after one, or a re-subscribe that fails, takes the watch
+          // down to subscribe again.
           async () => {
             if (checked) await check(acquired, true).catch(lost)
+          },
+          (cause) => {
+            if (checked) lost(cause)
+            else dropped = { cause }
           }
         )
         const release = () =>
@@ -1331,6 +1346,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         try {
           signal.throwIfAborted()
           await check(acquired, false)
+          if (dropped) throw dropped.cause
         } catch (error) {
           release()
           throw error
@@ -1479,6 +1495,17 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     holder.active = active
     this.#register(scopeKey(scope), active)
     return active
+  }
+
+  /**
+   * Hears that `holder`'s lease could not re-subscribe: a bound run has lost
+   * its stream, and an admission not yet bound fails before it binds.
+   */
+  #leaseLost(holder: { active?: ActiveRun; lost?: { cause: unknown } }) {
+    return (cause: unknown) => {
+      if (holder.active) this.#markStreamLost(holder.active)
+      else holder.lost = { cause }
+    }
   }
 
   /** Delivers a subscribed event to a bound run, or defers it to reconciliation. */

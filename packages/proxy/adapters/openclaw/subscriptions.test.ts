@@ -337,16 +337,17 @@ describe("OpenClaw Session subscriptions", () => {
     expect(listener).toHaveBeenCalledOnce()
   })
 
-  it("keeps delivering while one lease's re-subscribe fails, and retries that lease", async () => {
+  it("keeps delivering while one lease's re-subscribe fails, and tells that lease it is lost", async () => {
     const clock = useFakeClock()
     const { calls, client } = requestClient()
+    const dropped = new Error("link dropped")
     let failWriting = false
     const subscriptions = new OpenClawSessionSubscriptions(
       {
         request<T>(method: string, params: Record<string, unknown>) {
           if (failWriting && params.key === "agent:writing:main") {
             failWriting = false
-            return Promise.reject(new Error("link dropped"))
+            return Promise.reject(dropped)
           }
           return client.request<T>(method, params)
         },
@@ -354,13 +355,16 @@ describe("OpenClaw Session subscriptions", () => {
       logger
     )
     const research = vi.fn()
+    const lost = vi.fn()
     await subscriptions.acquire(
       { agentId: "research", sessionKey: "agent:research:main" },
       research
     )
     await subscriptions.acquire(
       { agentId: "writing", sessionKey: "agent:writing:main" },
-      vi.fn()
+      vi.fn(),
+      undefined,
+      lost
     )
     failWriting = true
 
@@ -382,11 +386,13 @@ describe("OpenClaw Session subscriptions", () => {
       subscriptions.generation
     )
     expect(research).toHaveBeenCalledOnce()
+    expect(lost).toHaveBeenCalledExactlyOnceWith(dropped)
 
-    await clock.advance(1_000)
+    // Its holder owns the retry: nothing here subscribes it again.
+    await clock.advance(60_000)
     expect(
       calls.filter(({ params }) => params.key === "agent:writing:main")
-    ).toHaveLength(2)
+    ).toHaveLength(1)
   })
 
   it("repeats global reconciliation when an earlier Session dirties during a later lease read", async () => {

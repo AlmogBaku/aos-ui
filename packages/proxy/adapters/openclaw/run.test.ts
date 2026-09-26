@@ -2505,6 +2505,31 @@ describe("OpenClaw run engine runtime-started turns", () => {
     expect(turns.onTurn).toHaveBeenCalledOnce()
   })
 
+  it("ends a bound turn uncertain and redials its watch when a reconnect cannot re-subscribe them", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const native = new ControlledNative()
+    const { subscriptions, engine } = engineFor(native)
+    const turns = watcher()
+    engine.subscribeTurns(scope, turns)
+    await clock.advance(0)
+    const handle = await engine.start(scope, input())
+
+    native.subscriptionRequest = async () => {
+      throw new Error("link dropped")
+    }
+    await subscriptions.replaceGeneration("reconnect")
+    native.subscriptionRequest = undefined
+    const failed = calls(native, "sessions.messages.subscribe")
+
+    expect((await drain(handle.events)).at(-1)).toMatchObject({
+      kind: TurnEventKind.TurnFailed,
+      code: "AOS_SEND_UNCERTAIN",
+    })
+    await clock.advance(125)
+    expect(calls(native, "sessions.messages.subscribe")).toBe(failed + 1)
+  })
+
   it("stops idempotently and releases its subscription", async () => {
     const native = new ControlledNative()
     const { subscriptions, turns, stop } = await watching(native)
