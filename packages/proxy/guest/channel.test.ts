@@ -125,13 +125,9 @@ describe("guest in a Session channel", () => {
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 
-    await guest.agent.notify(AOS_METHODS.session.focus, {
+    await guest.agent.request(AOS_METHODS.session.focus, {
       sessionId: GUEST_REF,
     })
-    // One round trip after the notification proves the listener has handled it.
-    await expect(
-      guest.agent.request(methods.agent.session.list, {})
-    ).rejects.toThrow()
 
     expect(test.presence.set).not.toHaveBeenCalled()
     expect(test.readState.focus).not.toHaveBeenCalled()

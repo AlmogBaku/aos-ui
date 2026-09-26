@@ -601,7 +601,7 @@ describe("operator ACP listener", () => {
     )
     expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
     await vi.waitFor(() => expect(test.clock.pending()).toBe(1))
     test.clock.advance(500)
 

@@ -20,7 +20,7 @@ import {
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
-  AosFocusNotificationSchema,
+  AosFocusRequestSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
   AosClientCapabilitiesMetaSchema,
@@ -642,19 +642,21 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   )
 
-  app.onNotification(
+  app.onRequest(
     AOS_METHODS.session.focus,
     undecoded,
     async ({ params: raw }) => {
-      if (!sessions.identity()) return
       admit(AOS_METHODS.session.focus, "focus")
-      const params = AosFocusNotificationSchema.parse(raw)
+      const { sessionId, foreground, idle } = AosFocusRequestSchema.parse(raw)
+      // A report naming no Session changes nothing; its answer is what the
+      // browser probes its link for.
+      if (sessionId === undefined) return {}
       await perform(
         "focus",
         {
-          sessionId: params.sessionId,
-          foreground: params.foreground ?? params.sessionId !== null,
-          idle: params.idle ?? false,
+          sessionId,
+          foreground: foreground ?? sessionId !== null,
+          idle: idle ?? false,
         },
         async (report: PresenceReport) => {
           context.presence?.set(
@@ -675,6 +677,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           readState?.focus(agentId, report.sessionId)
         }
       )
+      return {}
     }
   )
 

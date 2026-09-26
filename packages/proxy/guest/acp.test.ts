@@ -802,11 +802,14 @@ describe("guest ACP listener", () => {
     await expect(
       test.agent.request(AOS_METHODS.agents.list, undefined)
     ).rejects.toMatchObject(required)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).rejects.toMatchObject(required)
     expect(test.resolveInvitedSession).not.toHaveBeenCalled()
     test.close()
   })
 
-  it("stops nothing, reports no focus and sends no feed before login", async () => {
+  it("stops nothing and sends no feed before login", async () => {
     const test = harness({
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
@@ -833,10 +836,6 @@ describe("guest ACP listener", () => {
 
     socket.send({
       method: methods.agent.session.cancel,
-      params: { sessionId: REF },
-    })
-    socket.send({
-      method: AOS_METHODS.session.focus,
       params: { sessionId: REF },
     })
     await settled()
@@ -1517,8 +1516,9 @@ describe("guest ACP listener", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: REF })
-    await test.resume(REF)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).resolves.toEqual({})
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()

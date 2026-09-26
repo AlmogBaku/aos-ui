@@ -1073,16 +1073,21 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
-  it("reports Session focus and blur to read state", async () => {
+  it("reports Session focus and blur to read state, and a report naming no Session as no change", async () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() =>
-      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
-    )
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: null })
-    await waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
+    // The report the browser probes its link with.
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, {})
+    ).resolves.toEqual({})
+    expect(test.readState.focus).toHaveBeenCalledTimes(1)
+    expect(test.readState.blur).not.toHaveBeenCalled()
+    expect(test.presence.set).toHaveBeenCalledTimes(1)
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: null })
+    expect(test.readState.blur).toHaveBeenCalled()
     test.close()
   })
 
@@ -1090,15 +1095,13 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: SESSION,
-        foreground: true,
-        idle: false,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: SESSION,
+      foreground: true,
+      idle: false,
+    })
     test.close()
   })
 
@@ -1106,19 +1109,17 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: SESSION,
       foreground: false,
       idle: true,
     })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: SESSION,
-        foreground: false,
-        idle: true,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: SESSION,
+      foreground: false,
+      idle: true,
+    })
     test.close()
   })
 
@@ -1126,18 +1127,16 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: null,
       foreground: true,
     })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: null,
-        foreground: true,
-        idle: false,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
     expect(test.readState.blur).toHaveBeenCalled()
     test.close()
   })
@@ -1146,26 +1145,23 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() =>
-      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
-    )
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: SESSION,
       foreground: true,
       idle: false,
     })
 
-    await waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
+    expect(test.presence.set).toHaveBeenCalledTimes(3)
     expect(test.readState.focus).toHaveBeenCalledTimes(1)
     test.close()
   })
 
   it("forgets this connection's presence when it closes", async () => {
     const test = await harness()
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() => expect(test.presence.set).toHaveBeenCalled())
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    expect(test.presence.set).toHaveBeenCalled()
 
     test.close()
 
