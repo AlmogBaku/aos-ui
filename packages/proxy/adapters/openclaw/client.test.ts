@@ -113,7 +113,7 @@ async function ready(
 }
 
 describe("OpenClaw client", () => {
-  it("fails closed without a gateway while a pre-provisioned device token is missing", async () => {
+  it("fails closed without a gateway while a pre-provisioned device token is missing, and at once while the breaker holds its dials", async () => {
     const clock = useFakeClock()
     const { client, gateways } = await setup(clock, {
       credentials: async () => credentials(""),
@@ -125,6 +125,12 @@ describe("OpenClaw client", () => {
     await clock.advance(250)
     await started
     expect(gateways).toHaveLength(0)
+
+    // Five failed dials open the breaker: a start does not wait out its deadline.
+    await clock.advance(5_000)
+    await expect(client.start()).rejects.toEqual(
+      new OpenClawClientConnectionError("unavailable")
+    )
   })
 
   it("starts one exact-v4 Gateway connection with the configured server credentials and policy", async () => {

@@ -20,6 +20,7 @@ import {
 
 import { Deadline, defaultClock, type Logger } from "../../../lifecycle"
 import { failureOf } from "../../core/failures"
+import { LINK_BREAKER } from "../../core/limits"
 import {
   createLink,
   type Link,
@@ -27,8 +28,10 @@ import {
   type ServerLink,
 } from "../../core/link"
 
-/** The bound on one native call, on one dial, and on a caller waiting for the link. */
+/** The bound on one native call and on one dial. */
 const CALL_MS = 15_000
+/** The bound on a caller waiting for the link, so its call after it ends inside a 30 s admission. */
+const START_MS = 10_000
 
 /**
  * The calls that change native state: one sent and never answered may have
@@ -325,6 +328,8 @@ export class OpenClawClient {
   #gateway?: OpenClawGatewayClient
   /** Why the link is down, until it is next up. */
   #failure?: Error
+  /** The dials failed since the link was last up: at the breaker's count, it no longer dials. */
+  #failedDials = 0
   #policy?: OpenClawNegotiatedPolicy
   #closing?: Promise<void>
   #stopped = false
@@ -358,20 +363,31 @@ export class OpenClawClient {
     this.link.subscribe((state) => {
       if (state !== "ready") return
       this.#failure = undefined
+      this.#failedDials = 0
       this.#settle()
     })
   }
 
   /**
    * Resolves once the link is up. A refused link dials again at once; one
-   * backing off keeps to its backoff. Each call waits on its own deadline, so
-   * a failed start is never reused.
+   * backing off keeps to its backoff. While the breaker holds the dials, a
+   * start fails at once. Each call waits on its own deadline, so a failed
+   * start is never reused.
    */
   start(): Promise<void> {
     if (this.#stopped)
       return Promise.reject(new OpenClawClientUnavailableError())
     if (this.link.state() === "ready") return Promise.resolve()
-    const deadline = new Deadline(CALL_MS)
+    if (
+      openClawConnectionFailure(this.#failure)?.kind ===
+      "runtime_authentication_required"
+    )
+      for (const listener of [...this.#demand]) listener("ready")
+    if (this.#failedDials >= LINK_BREAKER.failures)
+      return Promise.reject(
+        this.#failure ?? new OpenClawClientUnavailableError()
+      )
+    const deadline = new Deadline(START_MS)
     const ready = new Promise<void>((resolve, reject) => {
       const waiter = { resolve, reject }
       this.#waiters.add(waiter)
@@ -379,11 +395,6 @@ export class OpenClawClient {
         this.#waiters.delete(waiter)
       )
     })
-    if (
-      openClawConnectionFailure(this.#failure)?.kind ===
-      "runtime_authentication_required"
-    )
-      for (const listener of [...this.#demand]) listener("ready")
     return deadline
       .run(() => ready)
       .catch((error: unknown) => {
@@ -534,9 +545,10 @@ export class OpenClawClient {
     return () => this.#release(gateway)
   }
 
-  /** Records why the link is down and rejects every waiting start with it. */
+  /** Records why a dial failed and rejects every waiting start with it. */
   #failed(error: OpenClawClientConnectionError) {
     this.#failure = error
+    this.#failedDials += 1
     this.#settle(error)
     return error
   }
