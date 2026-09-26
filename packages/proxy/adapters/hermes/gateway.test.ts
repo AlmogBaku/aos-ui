@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { createProxyLogger } from "../../cli/logger"
+import { CredentialValues } from "../../redaction"
 import {
   HermesAuthenticationError,
   HermesGateway,
@@ -821,9 +823,14 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("logs a refused socket factory apart from a failed handshake", async () => {
+  it("logs a refused socket factory apart from a failed handshake, without its token", async () => {
     vi.useFakeTimers()
-    const log = { warn: vi.fn() }
+    const lines: string[] = []
+    const log = createProxyLogger({
+      level: "warn",
+      credentials: new CredentialValues(),
+      destination: { write: (line) => void lines.push(line) },
+    })
     const factory = vi.fn(() => {
       throw new TypeError(`socket refused for ${WS_URL}`)
     })
@@ -842,15 +849,19 @@ describe("Hermes gateway heartbeat and redial", () => {
     )
 
     expect(
-      log.warn.mock.calls.filter(
-        ([, event]) => event === "hermes.gateway.dial_failed"
-      )
+      lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter(({ msg }) => msg === "hermes.gateway.dial_failed")
     ).toEqual([
-      [
-        { reason: "socket_factory_threw", error: expect.any(TypeError) },
-        "hermes.gateway.dial_failed",
-      ],
+      expect.objectContaining({
+        reason: "socket_factory_threw",
+        error: {
+          name: "TypeError",
+          message: "socket refused for ws://127.0.0.1:9119/api/ws",
+        },
+      }),
     ])
+    expect(lines.join("")).not.toMatch(/token=|native-secret/u)
     await gateway.close()
   })
 
