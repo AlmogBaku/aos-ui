@@ -836,18 +836,22 @@ describe("ACP connection", () => {
     })
 
     it("waits for a recovering transport to rejoin before reading a page", async () => {
+      const clock = useFakeClock()
       const proxy = createProxyAgent({ page: olderPage, slowResume: true })
       const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
         url: "ws://proxy.test/api/aos/v1/acp",
         socketConstructor: pipe.WebSocket,
-        schedule: (_delayMs, task) => task(),
       })
       connection.start()
       await connection.initialized
       connection.subscribeSessionUpdates(SESSION_ID, () => {})
-      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+      const resumed = connection.resumeSession(SESSION_ID, {
+        replayFromStart: false,
+      })
+      await clock.advance(20)
+      await resumed
 
       const recovering = new Promise<void>((resolve) =>
         connection.subscribeStatus((status) => {
@@ -856,7 +860,9 @@ describe("ACP connection", () => {
       )
       pipe.sockets[0]?.drop()
       await recovering
-      await connection.resumePage(SESSION_ID, "cursor-1")
+      const page = connection.resumePage(SESSION_ID, "cursor-1")
+      await clock.advance(300)
+      await page
 
       const order = proxy.calls.flatMap(({ method, params }) =>
         method === RESUME_REPLIED
@@ -893,17 +899,13 @@ describe("ACP connection", () => {
   })
 
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
+    const clock = useFakeClock()
     const proxy = createProxyAgent({ resyncOnResume: 2 })
     const pipe = pipedSockets(() => proxy.app)
-    const delays: number[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
       socketConstructor: pipe.WebSocket,
-      schedule: (delayMs, task) => {
-        delays.push(delayMs)
-        task()
-      },
     })
     connection.start()
     await connection.initialized
@@ -918,17 +920,14 @@ describe("ACP connection", () => {
       { sequence: 4, turnId: "run-1" }
     )
     // A drop loses whatever is still in flight, so the first report lands first.
-    await vi.waitFor(() => {
-      expect(connection.lastSequence(SESSION_ID)).toBeDefined()
-      expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
-    })
+    await clock.advance(0)
+    expect(connection.lastSequence(SESSION_ID)).toBeDefined()
+    expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
 
     pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() =>
-      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
-    )
-    expect(delays).toEqual([250])
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
     expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
         [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
@@ -952,19 +951,19 @@ describe("ACP connection", () => {
       call.method === methods.agent.session.resume ? [index] : []
     )
     expect(reports[1]!.index).toBeLessThan(replays[1]!)
-    await vi.waitFor(() => expect(connection.status).toBe("ready"))
+    expect(connection.status).toBe("ready")
     expect(pipe.sockets).toHaveLength(2)
     connection.close()
   })
 
   it("redeems the invitation again before replaying a recovered transport", async () => {
+    const clock = useFakeClock()
     const proxy = createProxyAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
       socketConstructor: pipe.WebSocket,
-      schedule: (_delayMs, task) => task(),
     })
     connection.start()
     await connection.initialized
@@ -973,10 +972,9 @@ describe("ACP connection", () => {
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
     pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() =>
-      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
-    )
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
     expect(
       proxy.calls
         .map(({ method }) => method)
@@ -995,13 +993,13 @@ describe("ACP connection", () => {
   })
 
   it("ends the connection when the invitation can no longer be redeemed", async () => {
+    const clock = useFakeClock()
     const proxy = createProxyAgent({ refuseLoginAfter: 1 })
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
       socketConstructor: pipe.WebSocket,
-      schedule: (_delayMs, task) => task(),
     })
     connection.start()
     await connection.initialized
@@ -1010,8 +1008,9 @@ describe("ACP connection", () => {
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
     pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() => expect(connection.status).toBe("closed"))
+    expect(connection.status).toBe("closed")
     // A refused invitation stops the reconnect loop instead of replaying.
     expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
