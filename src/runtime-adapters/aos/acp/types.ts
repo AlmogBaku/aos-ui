@@ -79,8 +79,9 @@ export type AcpSessionReplayListener = () =>
 
 /**
  * Where one opened Session stands: `joining` until the proxy has joined it,
- * `joined` while it follows the Session, `unavailable` while a refused join
- * waits out its backoff, and `gone` once the provider no longer has it.
+ * `joined` while it follows the Session, `unavailable` while a failed join
+ * waits out its backoff or one the transport refuses waits for the next, and
+ * `gone` once the provider no longer has it.
  */
 export type AcpSessionState = "joining" | "joined" | "unavailable" | "gone"
 

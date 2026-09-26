@@ -20,6 +20,7 @@ import { LIVENESS_SILENCE_MS, PART_GRACE_MS } from "../limits"
 import { PipedSocket, pipedSockets } from "../test-socket"
 
 const SIBLING = "session-2"
+const MALFORMED = "session-3"
 
 /**
  * A browser connection to the harness proxy over piped sockets, not started.
@@ -207,7 +208,7 @@ describe("browser connection faults", () => {
     ])
   })
 
-  it("never resumes a Session its provider has gone from, while a sibling waits out its refusal", async () => {
+  it("never resumes a Session its provider has gone from, nor one its transport refuses, while a sibling waits out its failure", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const clock = useFakeClock()
     const { connection, faults } = await connectBrowser({
@@ -222,17 +223,25 @@ describe("browser connection faults", () => {
 
     connection.subscribe(SESSION, { agentId: AGENT })
     connection.subscribe(SIBLING, { agentId: AGENT })
+    // The proxy refuses a malformed resume however often it is sent.
+    connection.subscribe(MALFORMED, { agentId: "agent\u0001" })
     await clock.advance(0)
     expect(connection.sessionState(SESSION)).toBe("gone")
     expect(connection.sessionState(SIBLING)).toBe("unavailable")
+    expect(connection.sessionState(MALFORMED)).toBe("unavailable")
 
     await clock.advance(125)
     expect(connection.sessionState(SIBLING)).toBe("joined")
+    await clock.advance(5_000)
     expect(methodsOf(frames, SESSION)).toEqual(["session/resume"])
     expect(methodsOf(frames, SIBLING)).toEqual([
       "session/resume",
       "session/resume",
     ])
+    expect(methodsOf(frames, MALFORMED)).toEqual(["session/resume"])
+    await expect(connection.joined(MALFORMED)).rejects.toMatchObject({
+      code: -32602,
+    })
   })
 
   it("sends a write made during a rejoin once the Session has joined, and resends it with its client id", async () => {

@@ -177,6 +177,31 @@ function isGone(error: unknown) {
   return codeOf(error) === RESOURCE_NOT_FOUND
 }
 
+/**
+ * The codes of a join refusal that resending on the same transport cannot
+ * change: a request the proxy rejects as malformed or not permitted, or a
+ * member or runtime that needs authenticating again.
+ */
+const REFUSED_ON_TRANSPORT = new Set<unknown>([
+  RequestError.invalidRequest().code,
+  RequestError.methodNotFound("").code,
+  RequestError.invalidParams().code,
+  AUTHENTICATION_REQUIRED,
+])
+
+/** Whether a join failed for good on this transport, its answer included. */
+function isRefused(error: unknown) {
+  return error instanceof z.ZodError || REFUSED_ON_TRANSPORT.has(codeOf(error))
+}
+
+/** What a Session owner's state shows as; any other one is still joining. */
+const SESSION_STATES = new Map<unknown, AcpSessionState>([
+  ["joined", "joined"],
+  ["unavailable", "unavailable"],
+  ["refused", "unavailable"],
+  ["gone", "gone"],
+])
+
 /** A request's own deadline fired, as opposed to its transport closing. */
 function isTimeout(error: unknown) {
   return error instanceof DOMException && error.name === "TimeoutError"
@@ -327,6 +352,8 @@ export function createAcpConnection(
       delivered: boolean
     }
     waiters?: PromiseWithResolvers<void>
+    /** Why the transport refused the join, while the Session stays refused. */
+    refusal?: unknown
     grace?: unknown
   }
   const sessions = new Map<string, OpenSession>()
@@ -748,12 +775,20 @@ export function createAcpConnection(
     return new Error("The Session is not open on this ACP connection")
   }
 
+  /** Holds a Session its transport refused until the next transport. */
+  function refuse(sessionId: string, error: unknown) {
+    logger.warn({ err: error, sessionId }, "acp.session.refused")
+    const open = sessions.get(sessionId)
+    if (open) open.refusal = error
+  }
+
   function joined(sessionId: string) {
     const open = sessions.get(sessionId)
     if (!open) return Promise.reject(notOpen())
     if (open.state === "joined") return Promise.resolve()
     if (open.state === "gone")
       return Promise.reject(RequestError.resourceNotFound())
+    if (open.refusal !== undefined) return Promise.reject(open.refusal)
     if (!open.waiters) {
       open.waiters = Promise.withResolvers()
       // A part or close with nobody waiting is no unhandled rejection.
@@ -774,15 +809,15 @@ export function createAcpConnection(
 
   /** Mirrors the owner's state onto the record and its listeners. */
   function mirror(open: OpenSession, value: unknown) {
-    const next: AcpSessionState =
-      value === "joined" || value === "unavailable" || value === "gone"
-        ? value
-        : "joining"
+    if (value !== "refused") open.refusal = undefined
+    const next = SESSION_STATES.get(value) ?? "joining"
     if (next === open.state) return
     open.state = next
+    const failure =
+      next === "gone" ? RequestError.resourceNotFound() : open.refusal
     if (next === "joined") open.waiters?.resolve()
-    if (next === "gone") open.waiters?.reject(RequestError.resourceNotFound())
-    if (next === "joined" || next === "gone") open.waiters = undefined
+    if (failure !== undefined) open.waiters?.reject(failure)
+    if (next === "joined" || failure !== undefined) open.waiters = undefined
     for (const listener of open.listeners) listener.state?.(next)
   }
 
@@ -1103,8 +1138,9 @@ export function createAcpConnection(
 
   /**
    * One opened Session's owner. It joins while the transport is ready, waits
-   * out a refused join on its own backoff, rejoins after a reconnect, and
-   * ends for good once the provider reports the Session gone.
+   * out a failed join on its own backoff, holds one the transport refuses
+   * until the next transport, rejoins after a reconnect, and ends for good
+   * once the provider reports the Session gone.
    */
   function sessionMachine(
     sessionId: string,
@@ -1127,6 +1163,12 @@ export function createAcpConnection(
             onError: [
               { guard: ({ event }) => isGone(event.error), target: "gone" },
               { guard: "transportLost", target: "detached" },
+              {
+                guard: ({ event }) => isRefused(event.error),
+                target: "refused",
+                actions: ({ context, event }) =>
+                  refuse(context.sessionId, event.error),
+              },
               { target: "unavailable" },
             ],
           },
@@ -1143,6 +1185,7 @@ export function createAcpConnection(
           after: { retry: { target: "joining", actions: "countAttempt" } },
           on: { lost: "detached" },
         },
+        refused: { meta: { log: "info" }, on: { lost: "detached" } },
         detached: { on: { ready: "joining" } },
         gone: { type: "final", meta: { log: "info" } },
       },
