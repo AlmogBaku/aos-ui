@@ -6,7 +6,6 @@ import { captureLogs } from "../../../../test/support/log-capture"
 import {
   OpenClawClient,
   OpenClawClientConnectionError,
-  OpenClawClientRequestError,
   OpenClawClientUnavailableError,
   type OpenClawClientCredentials,
   type OpenClawClientOptions,
