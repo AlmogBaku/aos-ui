@@ -708,6 +708,28 @@ function providerUnavailable() {
   )
 }
 
+/** Encodes an OpenClaw run position as an opaque recovery token. */
+function encodeOpenClawToken(generation: string, lastSeen: number): string {
+  return JSON.stringify({ generation, lastSeen })
+}
+
+/** Decodes an OpenClaw recovery token minted by this adapter. */
+function decodeOpenClawToken(token: string): { generation: string; lastSeen: number } {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  const parsed = JSON.parse(token)
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof (parsed as Record<string, unknown>).generation !== "string" ||
+    typeof (parsed as Record<string, unknown>).lastSeen !== "number"
+  )
+    throw new Error("OpenClaw recovery token is invalid")
+  return {
+    generation: (parsed as Record<string, unknown>).generation as string,
+    lastSeen: (parsed as Record<string, unknown>).lastSeen as number,
+  }
+}
+
 export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #client: OpenClawRunRequestClient
   readonly #subscriptions: OpenClawSessionSubscriptions
@@ -1073,7 +1095,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const active = this.#bindRun(scope, request.turnId, lease, holder, {
         baseline,
         nativeRunId: nativeRunId ?? "",
-        lastSeen: request.position?.lastSeen ?? 0,
+        lastSeen: (request.position ? decodeOpenClawToken(request.position) : undefined)?.lastSeen ?? 0,
         ...(inFlightSnapshot ? { shown: inFlightSnapshot } : {}),
       })
       if (!nativeRunId)
@@ -1235,10 +1257,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             })(),
             settled: Promise.resolve(),
             stop: () => this.#stopWaiting(waiting),
-            recoveryPosition: () => ({
-              epoch: String(generation),
-              lastSeen: 0,
-            }),
+            recoveryPosition: () => encodeOpenClawToken(String(generation), 0),
           },
         }
       }
@@ -1454,10 +1473,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => this.#stop(active),
-      recoveryPosition: () => ({
-        epoch: String(this.#subscriptions.generation),
-        lastSeen: active.lastSeen,
-      }),
+      recoveryPosition: () => encodeOpenClawToken(String(this.#subscriptions.generation), active.lastSeen),
     }
   }
 

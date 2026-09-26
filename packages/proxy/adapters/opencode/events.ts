@@ -593,8 +593,8 @@ export class OpenCodeEventProjector {
     this.#resolveMcpTool = options.resolveMcpTool
   }
 
-  recoveryPosition() {
-    return { epoch: this.#epoch, lastSeen: this.#lastSeen }
+  recoveryPosition(): string {
+    return JSON.stringify({ epoch: this.#epoch, lastSeen: this.#lastSeen })
   }
 
   markStopping() {
