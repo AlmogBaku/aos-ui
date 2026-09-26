@@ -5,10 +5,11 @@ import { redactForLog, redactText, type CredentialValues } from "../redaction"
 
 /**
  * The proxy's structured log: one JSON line per record at `level`, on stdout
- * unless a destination is given. Every record and every child's bindings pass
+ * unless a destination is given. Every record and the root's bindings pass
  * `redactForLog`, and every finished line loses its URL credentials and every
  * credential value the proxy has read, so the message and the error pino
- * copies into it are covered as well.
+ * copies into it are covered as well. pino gives a child's bindings only that
+ * line pass, not `redactForLog`, so a child binds ids and never a credential.
  */
 export function createProxyLogger({
   level,
