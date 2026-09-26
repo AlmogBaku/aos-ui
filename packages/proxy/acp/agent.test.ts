@@ -987,8 +987,9 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("steers the active run and reports the delivery", async () => {
-    const test = await harness()
+  it("steers only the run a browser follows, and reports the delivery", async () => {
+    const opening = gate()
+    const test = await harness({ beforeHistory: () => opening.held })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
@@ -1002,6 +1003,24 @@ describe("AOS ACP agent", () => {
         test.coordinator.state({ agentId: AGENT, providerSessionId: CREATED })
       ).toBe("running")
     )
+    // A browser still opening the Session follows no turn, so it steers none.
+    const other = await test.connect("connection-2")
+    await other.list()
+    const opened = other.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    await expect(
+      other.agent.request(AOS_METHODS.session.steer, {
+        sessionId: CREATED,
+        requestId: "steer-0",
+        text: "Stop there",
+      })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+    opening.release()
+    await opened
 
     const steered = await test.agent.request(AOS_METHODS.session.steer, {
       sessionId: CREATED,
@@ -1021,6 +1040,7 @@ describe("AOS ACP agent", () => {
       delivery: "steered",
     })
     test.close()
+    other.close()
   })
 
   it("reports Session focus and blur to read state", async () => {
