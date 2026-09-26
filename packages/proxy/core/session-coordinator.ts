@@ -2091,7 +2091,6 @@ export class SessionCoordinator {
       event: {
         kind: TurnEventKind.TurnFailed,
         code: "AOS_RESET_REQUIRED",
-        message: "AOS turn history must be reloaded before continuing.",
       },
     }
     const events: AsyncIterable<SequencedTurnEvent> = {
