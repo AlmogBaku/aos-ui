@@ -1713,6 +1713,47 @@ describe("OpenCodeRunEngine foreign turns", () => {
     stop()
   })
 
+  it("keeps hearing refusals after one overtook the credential's check", async () => {
+    const clock = useFakeClock()
+    // Half of each full-jitter ceiling, so no backoff is drawn as zero.
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const failure = new OpenCodeClientError("authentication")
+    let accepted = false
+    const state = client({
+      history: vi.fn(async () => {
+        if (accepted) return { data: [], hasMore: false }
+        throw failure
+      }),
+    })
+    const checks: PromiseWithResolvers<boolean>[] = []
+    const engine = new OpenCodeTurnEngine(
+      {
+        ...state.native,
+        credentialRefused: () => {
+          const check = Promise.withResolvers<boolean>()
+          checks.push(check)
+          return check.promise
+        },
+      },
+      { logger }
+    )
+    // The refusal lands during the credential's first check, so a second
+    // check begins before the first one lands.
+    const stop = engine.subscribeTurns(scope, watcher())
+    await clock.advance(1_000)
+    for (const check of checks) check.resolve(false)
+    await clock.advance(0)
+    // The redialed watch is refused again, and the password then changes.
+    expect(state.sessions.history).toHaveBeenCalledTimes(2)
+    accepted = true
+    await clock.advance(1_000)
+    checks.at(-1)!.resolve(false)
+    await clock.advance(0)
+
+    expect(engine.link.state()).toBe("ready")
+    stop()
+  })
+
   it("stops once, ending its stream and every retry", async () => {
     const clock = useFakeClock()
     // Half of each full-jitter ceiling, so no backoff is drawn as zero.

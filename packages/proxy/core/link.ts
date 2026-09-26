@@ -54,7 +54,11 @@ export function retryBudget(
 export type LinkOptions = {
   /**
    * Brings the link up, resolving once it is up with what takes it down
-   * again; `lost` hears it drop once it is up. Throws when it cannot come up.
+   * again. Throws when it cannot come up. `lost` hears it drop from the
+   * moment the dial starts, and is ignored once the link has left this dial.
+   * A dial a drop overtook is aborted and taken down when it lands, possibly
+   * after the next dial began, so what takes it down touches only what this
+   * dial brought up.
    */
   dial(
     signal: AbortSignal,

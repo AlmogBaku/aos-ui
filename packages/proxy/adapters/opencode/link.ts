@@ -25,7 +25,11 @@ export class OpenCodeLink implements ServerLink {
   readonly #stops = new Set<() => void>()
   readonly #listeners = new Set<(state: LinkState) => void>()
   readonly #credential: Link
-  /** Takes the credential down, from its latest dial on. */
+  /**
+   * Takes the credential down, from its latest dial on. It is never cleared:
+   * the link ignores it once it has left that dial, and the next dial
+   * replaces it.
+   */
   #refuse: ((cause: unknown) => void) | undefined
   #closed = false
 
@@ -42,9 +46,6 @@ export class OpenCodeLink implements ServerLink {
         this.#refuse = lost
         if (await options.credentialRefused())
           throw new OpenCodeClientError("authentication")
-        return () => {
-          this.#refuse = undefined
-        }
       },
       // A refused password is waited out on backoff, never an end.
       publicError: () => undefined,
