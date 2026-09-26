@@ -9,6 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { afterEach, describe, expect, it } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import type { SessionScope } from "../core/runtime"
 import {
   createMcpAppClient,
@@ -146,7 +147,7 @@ function fallback(
     fetch: server.fetch,
     servers: options.servers,
   })
-  const logged: unknown[] = []
+  const logs = captureLogs()
   const apps = createMcpAppsFallback(
     {
       servers: async () => [
@@ -159,9 +160,9 @@ function fallback(
       storedCall: async (_scope, toolCallId) => stored[toolCallId],
     },
     client,
-    (entry) => logged.push(entry)
+    logs.logger
   )
-  return { apps, seen: server.seen, logged }
+  return { apps, seen: server.seen, logs }
 }
 
 describe("MCP Apps fallback host", () => {
@@ -245,7 +246,7 @@ describe("MCP Apps fallback host", () => {
     ])
 
     it("sends them to a server that requires them", async () => {
-      const { apps, logged } = fallback({
+      const { apps, logs } = fallback({
         weatherUrl: "https://weather.test/mcp",
         authorization: SECRET,
         servers,
@@ -260,7 +261,7 @@ describe("MCP Apps fallback host", () => {
       await expect(apps.open(scope, "call-forecast")).resolves.toMatchObject({
         html: "<!doctype html><p>Forecast</p>",
       })
-      expect(JSON.stringify(logged)).not.toContain("s3cret")
+      expect(JSON.stringify(logs.records())).not.toContain("s3cret")
     })
 
     it("refuses to send them over plain HTTP, and falls back to text", async () => {

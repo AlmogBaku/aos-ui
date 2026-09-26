@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { TurnEventKind, type TurnEvent } from "../core/events"
 import type {
   ServerMcpApps,
@@ -121,6 +122,7 @@ function harness(describeView: ServerMcpApps["describe"]) {
     maxActiveExecutions: 8,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
+    logger: captureLogs().logger,
   })
   return { native, engine, apps, sessions }
 }

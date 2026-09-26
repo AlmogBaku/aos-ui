@@ -1139,8 +1139,8 @@ describe("HermesRunEngine", () => {
       },
     ])
     expect(warn).toHaveBeenCalledWith(
-      "hermes.turn.failed",
-      expect.objectContaining({ failureReason: "resumed-turn-not-started" })
+      expect.objectContaining({ failureReason: "resumed-turn-not-started" }),
+      "hermes.turn.failed"
     )
   })
 
@@ -1633,8 +1633,8 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(log.warn.mock.calls).toEqual([
       [
-        "hermes.turn.native_error",
         expect.objectContaining({ verdict: "advisory", status: "working" }),
+        "hermes.turn.native_error",
       ],
     ])
   })
@@ -1662,11 +1662,11 @@ describe("HermesRunEngine", () => {
       code: "AOS_PROVIDER_RUN_FAILED",
     })
     expect(
-      log.warn.mock.calls.filter(([event]) => event === "hermes.turn.failed")
+      log.warn.mock.calls.filter(([, event]) => event === "hermes.turn.failed")
     ).toEqual([
       [
-        "hermes.turn.failed",
         expect.objectContaining({ nativeMessage: "terminal provider crash" }),
+        "hermes.turn.failed",
       ],
     ])
   })
@@ -5367,7 +5367,7 @@ describe("HermesRunEngine", () => {
       code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
     })
     expect(
-      log.warn.mock.calls.filter(([event]) => event === "hermes.turn.failed")
+      log.warn.mock.calls.filter(([, event]) => event === "hermes.turn.failed")
     ).toHaveLength(1)
   })
 
@@ -5745,10 +5745,9 @@ describe("HermesRunEngine", () => {
     )
 
     expect(
-      log.warn.mock.calls.filter(([event]) => event === "hermes.turn.failed")
+      log.warn.mock.calls.filter(([, event]) => event === "hermes.turn.failed")
     ).toEqual([
       [
-        "hermes.turn.failed",
         expect.objectContaining({
           code: "bad_request",
           layer: "provider",
@@ -5756,6 +5755,7 @@ describe("HermesRunEngine", () => {
           failureReason: "provider_rejected",
           nativeMessage: "https://hermes.internal/api/prompt",
         }),
+        "hermes.turn.failed",
       ],
     ])
     expect(JSON.stringify(events)).not.toContain("native-secret")
@@ -5763,11 +5763,11 @@ describe("HermesRunEngine", () => {
     const bounded = { warn: vi.fn() }
     await failedTurn({ error: "boom ".repeat(200) }, { log: bounded })
     const failures = bounded.warn.mock.calls.filter(
-      ([event]) => event === "hermes.turn.failed"
+      ([, event]) => event === "hermes.turn.failed"
     )
     expect(failures).toHaveLength(1)
     expect(
-      (failures[0]![1] as { nativeMessage: string }).nativeMessage
+      (failures[0]![0] as { nativeMessage: string }).nativeMessage
     ).toHaveLength(200)
   })
 
@@ -5815,8 +5815,8 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
     expect(log.warn.mock.calls).toEqual([
       [
-        "hermes.turn.native_error",
         expect.objectContaining({ verdict: "advisory", status: "working" }),
+        "hermes.turn.native_error",
       ],
     ])
   })
@@ -5873,8 +5873,8 @@ describe("HermesRunEngine", () => {
         },
       ])
       expect(log.warn).toHaveBeenCalledWith(
-        "hermes.turn.failed",
-        expect.objectContaining({ failureReason: "queued-turn-not-started" })
+        expect.objectContaining({ failureReason: "queued-turn-not-started" }),
+        "hermes.turn.failed"
       )
       // The Session fence is released, so the next Send is admitted.
       await expect(

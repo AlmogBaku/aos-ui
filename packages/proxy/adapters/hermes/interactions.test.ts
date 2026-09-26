@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { PendingRequestKind } from "../../core/events"
+import type { HermesLog } from "./gateway"
 import { HermesInteractions, type HermesInteractionScope } from "./interactions"
 import { serverRequests } from "./test-utils/server-requests"
 
@@ -23,7 +24,7 @@ function harness(
     running?: boolean
     /** Result whose `open_requests` a resume re-delivers before it resolves. */
     resumeResult?: unknown
-    log?: { warn: (event: string, fields: Record<string, unknown>) => void }
+    log?: HermesLog
   } = {}
 ) {
   const requests = serverRequests()
@@ -433,8 +434,8 @@ describe("HermesInteractions server requests", () => {
       })
 
     expect(warn.mock.calls).toEqual([
-      ["hermes.interactions.request_declined", { method: "clarify" }],
-      ["hermes.interactions.request_unanswered", { method: "clarify" }],
+      [{ method: "clarify" }, "hermes.interactions.request_declined"],
+      [{ method: "clarify" }, "hermes.interactions.request_unanswered"],
     ])
   })
 
@@ -1165,8 +1166,8 @@ describe("HermesInteractions server requests", () => {
     const long = `sudo.${"x".repeat(200)}`
     requests.deliver(long, { session_id: LIVE })
     expect(warn).toHaveBeenCalledWith(
-      "hermes.interactions.request_unanswered",
-      { method: long.slice(0, 64) }
+      { method: long.slice(0, 64) },
+      "hermes.interactions.request_unanswered"
     )
     // Hermes owns the method text and the volume: one line per distinct method,
     // truncated, and the remembered set is capped.

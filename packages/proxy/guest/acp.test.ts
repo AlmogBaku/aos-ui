@@ -520,6 +520,7 @@ function harness(options: HarnessOptions = {}) {
     maxActiveExecutions: 8,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
+    logger: captureLogs().logger,
   })
   coordinator.bindCapabilities(runtime)
   const runtimeInstance: RuntimeInstance = {
@@ -538,7 +539,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    channels: createChannels({ coordinator, runtime }),
+    channels: createChannels({ coordinator, runtime, logger: logs.logger }),
     catalog: createCatalog({
       runtime,
       coordinator,

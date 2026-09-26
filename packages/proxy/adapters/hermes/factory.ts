@@ -1,61 +1,42 @@
 import { createCoordinator } from "../create-coordinator"
+import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance } from "../../core/runtime"
 import type { RuntimeConfig, RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
-import { redactForLog } from "../../redaction"
 import { withMcpApps } from "../../mcp-apps/annotate"
-import {
-  createMcpAppClient,
-  type McpServerOverrides,
-} from "../../mcp-apps/client"
+import { createMcpAppClient } from "../../mcp-apps/client"
 import { HermesServerAdapter } from "./adapter"
 import {
   HermesGateway,
   type HermesGatewayOptions,
-  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 
 type HermesRuntimeConfig = RuntimeConfig & { kind: "hermes" }
 
-export type HermesRuntimeFactoryDependencies = {
+export type HermesRuntimeFactoryDependencies = RuntimeServices & {
   transportFactory?: (options: HermesGatewayOptions) => HermesRpcTransport
-  mcpServerOverrides?: McpServerOverrides
-}
-
-/**
- * Redacted server-side gateway log. The gateway only ever passes its own event
- * names and bounded fields — never the token, the dial URL or a native payload
- * — and every line still goes through the proxy's shared `redactForLog` and is
- * written as one structured JSON record, like every other proxy log path.
- */
-export function createGatewayLog(
-  write: (line: string) => void = (line) => console.warn(line)
-): HermesLog {
-  return {
-    warn(event: string, fields: Record<string, unknown>) {
-      write(JSON.stringify(redactForLog({ event, ...fields })))
-    },
-  }
 }
 
 export async function createHermesRuntime(
   config: HermesRuntimeConfig,
   limits: RuntimeLimits,
-  dependencies: HermesRuntimeFactoryDependencies = {}
+  dependencies: HermesRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const token = await readSecretFile(config.tokenFile)
+  const { logger, credentials } = dependencies
+  const token = await credentials.register(readSecretFile, (value) => [value])(
+    config.tokenFile
+  )
   const transportFactory =
     dependencies.transportFactory ??
     ((options: HermesGatewayOptions) => new HermesGateway(options))
-  // One redacted log for the whole runtime: the gateway reports transport
-  // outages, the attachment registry reports rebinding failures, and the native
-  // run boundary reports the code of every authoritative Hermes rejection.
-  const log = createGatewayLog()
+  // One log for the whole runtime: the gateway reports transport outages, the
+  // attachment registry reports rebinding failures, and the native run
+  // boundary reports the code of every authoritative Hermes rejection.
   const transport = transportFactory({
     baseUrl: config.baseUrl,
     credentials: async () => ({ "X-Hermes-Session-Token": token }),
-    log,
+    log: logger,
   })
   // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
   // is not up yet is retried in the background instead of failing whichever
@@ -69,11 +50,11 @@ export async function createHermesRuntime(
   const runtime = withMcpApps(
     new HermesServerAdapter(transport, {
       sessionIdleMs: config.sessionIdleMs,
-      log,
-      mcpAppClient,
+      log: logger,
+      mcp: { client: mcpAppClient, logger },
     })
   )
-  const sessions = createCoordinator(runtime, limits)
+  const sessions = createCoordinator(runtime, limits, logger)
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,

@@ -9,7 +9,7 @@ import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
-import { redactForLog } from "./redaction"
+import { CredentialValues, redactForLog } from "./redaction"
 import type { startProxyServer } from "./server"
 
 const temporaryDirectories: string[] = []
@@ -89,10 +89,11 @@ const errors = (logs: LogCapture) =>
 
 /** A Hermes runtime that answers without a provider socket. */
 function stubbedHermesRuntime(): RuntimeFactory {
-  return (config, limits) => {
+  return (config, limits, services) => {
     if (config.kind !== "hermes")
       throw new Error("the configuration fixture selects Hermes")
     return createHermesRuntime(config, limits, {
+      ...services,
       transportFactory: () => ({
         request: vi.fn(),
         close: vi.fn(async () => undefined),
@@ -120,6 +121,7 @@ describe("proxy executable", () => {
     await expect(
       runProxyCli(["bun", "proxy", "--help"], {
         createLogger: () => logs.logger,
+        credentials: new CredentialValues(),
         start,
         getenv: () => undefined,
       })
@@ -147,14 +149,16 @@ describe("proxy executable", () => {
     const lifecycle = await runProxyCli(
       ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
       {
-        runtimeFactory: (config, limits) =>
+        runtimeFactory: (config, limits, services) =>
           createHermesRuntime(config, limits, {
+            ...services,
             transportFactory: () => ({
               request: vi.fn(),
               close: transportClose,
             }),
           }),
         createLogger: () => logs.logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         start,
         staticHandler,
@@ -282,6 +286,7 @@ describe("proxy executable", () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--help"], {
         createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         writeOut: (value) => {
           output += value
@@ -337,6 +342,7 @@ describe("proxy executable", () => {
         ],
         {
           createLogger: () => captureLogs().logger,
+          credentials: new CredentialValues(),
           getenv: (name) =>
             name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
@@ -403,6 +409,7 @@ describe("proxy executable", () => {
         ],
         {
           createLogger: () => captureLogs().logger,
+          credentials: new CredentialValues(),
           getenv: () => undefined,
           randomBytes: () => {
             throw new Error("reference randomness was read")
@@ -429,6 +436,7 @@ describe("proxy executable", () => {
     let output = ""
     await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
       createLogger: () => captureLogs().logger,
+      credentials: new CredentialValues(),
       getenv: (name) =>
         name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
       randomBytes: (size) => Buffer.alloc(size, 1),
@@ -456,6 +464,7 @@ describe("proxy executable", () => {
     const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
       createLogger: () => logs.logger,
+      credentials: new CredentialValues(),
       getenv: (name) => (name === "XDG_CONFIG_HOME" ? configHome : undefined),
       start,
       exit: vi.fn(),
@@ -473,6 +482,7 @@ describe("proxy executable", () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
         createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
       })
     ).rejects.toThrow(/--config/u)
@@ -486,6 +496,7 @@ describe("proxy executable", () => {
       ["bun", "proxy", "serve", "--config", missing],
       {
         createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         start,
       }

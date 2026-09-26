@@ -373,9 +373,12 @@ export class HermesAttachmentRegistry {
         // live id, but it is no longer known to be attached to this socket:
         // mark it so the next ensure() resumes it before anyone addresses it.
         entry.stale = true
-        this.#log?.warn("hermes.attachment.rebind_failed", {
-          reason: publicReason(error),
-        })
+        this.#log?.warn(
+          {
+            reason: publicReason(error),
+          },
+          "hermes.attachment.rebind_failed"
+        )
         return
       }
       this.invalidate(previous)
@@ -433,10 +436,13 @@ export class HermesAttachmentRegistry {
       try {
         observer(signal)
       } catch (error) {
-        this.#log?.warn("hermes.attachment.observer_failed", {
-          kind: signal.kind,
-          reason: publicReason(error),
-        })
+        this.#log?.warn(
+          {
+            kind: signal.kind,
+            reason: publicReason(error),
+          },
+          "hermes.attachment.observer_failed"
+        )
       }
   }
 

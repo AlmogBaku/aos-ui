@@ -143,6 +143,7 @@ function coordinator(
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
+    logger: captureLogs().logger,
     ...limits,
   })
 }

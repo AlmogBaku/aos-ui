@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { defaultClock } from "../../lifecycle"
 import {
   PendingRequestKind,
@@ -96,6 +97,7 @@ function harness() {
       (scope) => snapshots.get(key(scope)) ?? { state: "idle" }
     ),
     runtime: NO_HISTORY,
+    logger: captureLogs().logger,
     clock: { ...defaultClock, now: () => clock.now },
     backstopMs: 1_000,
   })
@@ -456,6 +458,7 @@ function adoptingHarness() {
   const channels = createChannels({
     coordinator: reporting(() => state),
     runtime: NO_HISTORY,
+    logger: captureLogs().logger,
     adoption: {
       subscribeTurns(_scope, watcher) {
         watchers.push(watcher)
@@ -723,7 +726,11 @@ function joined(
     },
     live: () => state.live,
   }
-  const membership = createChannels({ coordinator, runtime: NO_HISTORY }).join(
+  const membership = createChannels({
+    coordinator,
+    runtime: NO_HISTORY,
+    logger: captureLogs().logger,
+  }).join(
     {
       principal: { id: GUEST, role: "guest" },
       middleware: [middleware],

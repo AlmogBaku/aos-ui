@@ -31,7 +31,7 @@ import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
-import { CredentialValues } from "./redaction"
+import type { CredentialValues } from "./redaction"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -43,7 +43,7 @@ export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
   logger: Logger
   /** The credential values the log masks; every secret read here joins it. */
-  credentials?: CredentialValues
+  credentials: CredentialValues
   clock?: () => number
   /** The browser build the static root carries, read once at start. */
   buildId?: string
@@ -183,7 +183,7 @@ export async function createConfiguredProxy(
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
-  const credentials = dependencies.credentials ?? new CredentialValues()
+  const { credentials } = dependencies
   const readers: SecretReaders = {
     secret: credentials.register(readSecretFile, (value) => [value]),
     // A key file holds the key's base64url spelling, which is what could leak.
@@ -199,7 +199,7 @@ export async function createConfiguredProxy(
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
       config.limits,
-      mcpServerOverrides
+      { logger: dependencies.logger, credentials, mcpServerOverrides }
     ),
     config.guest
       ? Promise.all(
@@ -264,6 +264,7 @@ export async function createConfiguredProxy(
   const channels = createChannels({
     coordinator: sessions,
     runtime: runtimeInstance.runtime,
+    logger: dependencies.logger,
     // A channel adopts what the runtime starts only where the runtime
     // reports it.
     ...(turns.subscribeTurns

@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import type { RuntimeLimits } from "../config"
 import type { ServerRuntime } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -9,7 +10,8 @@ import { SessionCoordinator } from "../core/session-coordinator"
  */
 export function createCoordinator(
   runtime: ServerRuntime,
-  limits: RuntimeLimits
+  limits: RuntimeLimits,
+  logger: Logger
 ): SessionCoordinator {
   return new SessionCoordinator({
     engine: runtime.turns,
@@ -17,5 +19,6 @@ export function createCoordinator(
     maxActiveExecutions: limits.activeExecutions,
     maxSubscriberEvents: limits.subscriberEvents,
     maxSubscriberBytes: limits.subscriberBytes,
+    logger,
   })
 }

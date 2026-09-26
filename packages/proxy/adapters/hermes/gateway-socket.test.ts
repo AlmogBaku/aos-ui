@@ -134,7 +134,7 @@ describe("guarded Hermes gateway socket", () => {
     expect(onFault).not.toHaveBeenCalled()
     expect(socket.readyState).toBe(1)
     expect(log.warn).toHaveBeenCalledTimes(1)
-    const [, fields] = log.warn.mock.calls[0]!
+    const [fields] = log.warn.mock.calls[0]!
     expect(JSON.stringify(fields)).not.toContain("live-secret")
   })
 

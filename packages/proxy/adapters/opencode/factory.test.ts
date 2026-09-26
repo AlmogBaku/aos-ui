@@ -4,11 +4,19 @@ import { join } from "node:path"
 
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
 import type { ServerTurnEngine } from "../../core/runtime"
 import type { OpenCodeAdapterClient } from "./adapter"
 import { createOpenCodeRuntime } from "./factory"
+import { CredentialValues } from "../../redaction"
 import { OpenCodeTurnEngine } from "./run"
+
+/** The services the proxy hands a runtime, logging to a capture. */
+const services = () => ({
+  logger: captureLogs().logger,
+  credentials: new CredentialValues(),
+})
 
 const limits: RuntimeLimits = {
   activeExecutions: 4,
@@ -64,7 +72,7 @@ describe("OpenCode runtime factory", () => {
           passwordFile,
         },
         limits,
-        { clientFactory: () => client() }
+        { ...services(), clientFactory: () => client() }
       )
 
       expect(runtime.runtime.turns).toBeInstanceOf(OpenCodeTurnEngine)
@@ -93,7 +101,7 @@ describe("OpenCode runtime factory", () => {
           passwordFile,
         },
         limits,
-        { clientFactory, turns }
+        { ...services(), clientFactory, turns }
       )
 
       expect(runtime.id).toBe("opencode-local")

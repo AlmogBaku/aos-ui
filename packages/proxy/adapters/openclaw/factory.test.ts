@@ -5,9 +5,17 @@ import { join } from "node:path"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
+import { CredentialValues } from "../../redaction"
 import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
+
+/** The services the proxy hands a runtime, logging to a capture. */
+const services = () => ({
+  logger: captureLogs().logger,
+  credentials: new CredentialValues(),
+})
 
 const temporaryDirectories: string[] = []
 const limits: RuntimeLimits = {
@@ -70,6 +78,7 @@ describe("OpenClaw runtime factory", () => {
       },
       limits,
       {
+        ...services(),
         clientFactory: (input) => {
           options = input
           return client
@@ -127,7 +136,8 @@ describe("OpenClaw runtime factory", () => {
           deviceIdentityFile: identityFile,
           deviceTokenFile: tokenFile,
         },
-        limits
+        limits,
+        services()
       )
     ).rejects.toThrow("Invalid OpenClaw device identity")
   })
@@ -144,7 +154,8 @@ describe("OpenClaw runtime factory", () => {
           deviceIdentityFile: files.identityFile,
           deviceTokenFile: files.tokenFile,
         },
-        limits
+        limits,
+        services()
       )
     ).rejects.toThrow("Invalid OpenClaw device identity")
   })
@@ -207,6 +218,7 @@ describe("OpenClaw runtime factory", () => {
       },
       limits,
       {
+        ...services(),
         clientFactory: () => ({
           start: vi.fn(async () => undefined),
           stopAndWait: vi.fn(async () => undefined),

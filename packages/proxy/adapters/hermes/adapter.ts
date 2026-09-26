@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 
+import type { Logger } from "../../../lifecycle"
 import {
   AgentCatalogResponseSchema,
   RuntimeInfoSchema,
@@ -370,20 +371,23 @@ export class HermesServerAdapter implements ServerRuntime {
       log?: HermesLog
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
-      /** The proxy's own MCP client; without one, no tool opens a view. */
-      mcpAppClient?: McpAppClient
+      /**
+       * The proxy's own MCP client and the log of what it reaches upstream;
+       * without one, no tool opens a view.
+       */
+      mcp?: { client: McpAppClient; logger: Logger }
     } = {}
   ) {
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
-    if (this.#dashboard && options.mcpAppClient) {
+    if (this.#dashboard && options.mcp) {
       const dashboard = this.#dashboard
       const apps = createHermesMcpApps({
         servers: (profile) => dashboard.listMcpServers(profile),
         rawHistory: (scope) => this.#rawHistory(scope),
-        client: options.mcpAppClient,
+        ...options.mcp,
       })
       this.mcpApps = apps.mcpApps
       this.#mcpToolNames = apps.names

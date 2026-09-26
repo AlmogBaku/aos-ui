@@ -1,12 +1,10 @@
 import { createCoordinator } from "../create-coordinator"
+import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance, ServerTurnEngine } from "../../core/runtime"
 import type { RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
 import { withMcpApps } from "../../mcp-apps/annotate"
-import {
-  createMcpAppClient,
-  type McpServerOverrides,
-} from "../../mcp-apps/client"
+import { createMcpAppClient } from "../../mcp-apps/client"
 import { createOpenCodeClient, type OpenCodeClientOptions } from "./client"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 import { OpenCodeInteractions } from "./interactions"
@@ -26,20 +24,26 @@ export type OpenCodeRuntimeConfig = Readonly<{
   passwordFile: string
 }>
 
-export type OpenCodeRuntimeFactoryDependencies = Readonly<{
-  clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
-  /** Test-only override; production builds exactly one native turn engine. */
-  turns?: ServerTurnEngine
-  creatorAgentId?: string
-  mcpServerOverrides?: McpServerOverrides
-}>
+export type OpenCodeRuntimeFactoryDependencies = RuntimeServices &
+  Readonly<{
+    clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
+    /** Test-only override; production builds exactly one native turn engine. */
+    turns?: ServerTurnEngine
+    creatorAgentId?: string
+  }>
 
 export async function createOpenCodeRuntime(
   config: OpenCodeRuntimeConfig,
   limits: RuntimeLimits,
-  dependencies: OpenCodeRuntimeFactoryDependencies = {}
+  dependencies: OpenCodeRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const password = await readSecretFile(config.passwordFile)
+  const { logger, credentials } = dependencies
+  // Basic auth sends the password inside `user:password` in base64, a spelling
+  // of it that could leak on its own.
+  const password = await credentials.register(readSecretFile, (value) => [
+    value,
+    Buffer.from(`${config.username}:${value}`, "utf8").toString("base64"),
+  ])(config.passwordFile)
   const client = (dependencies.clientFactory ?? createOpenCodeClient)({
     baseUrl: config.baseUrl,
     directory: config.directory,
@@ -56,7 +60,7 @@ export async function createOpenCodeRuntime(
     : undefined
   const mcp =
     mcpAppClient &&
-    createOpenCodeMcpCatalog(() => catalog.config!(), mcpAppClient)
+    createOpenCodeMcpCatalog(() => catalog.config!(), mcpAppClient, logger)
   const turns =
     dependencies.turns ??
     new OpenCodeTurnEngine(client, {
@@ -73,7 +77,7 @@ export async function createOpenCodeRuntime(
       ...(mcp ? { mcp } : {}),
     })
   )
-  const sessions = createCoordinator(runtime, limits)
+  const sessions = createCoordinator(runtime, limits, logger)
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,

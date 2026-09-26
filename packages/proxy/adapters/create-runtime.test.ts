@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import type { RuntimeConfig, RuntimeLimits } from "../config"
+import { CredentialValues } from "../redaction"
 
 const factories = vi.hoisted(() => ({
   hermes: vi.fn(),
@@ -16,7 +18,7 @@ vi.mock("./openclaw/factory", () => ({
   createOpenClawRuntime: factories.openclaw,
 }))
 
-import { createRuntimeInstance } from "./create-runtime"
+import { createRuntimeInstance, type RuntimeServices } from "./create-runtime"
 
 const limits: RuntimeLimits = {
   activeExecutions: 8,
@@ -24,6 +26,11 @@ const limits: RuntimeLimits = {
   operatorEventPeers: 8,
   subscriberEvents: 64,
   subscriberBytes: 64 * 1024,
+}
+
+const services: RuntimeServices = {
+  logger: captureLogs().logger,
+  credentials: new CredentialValues(),
 }
 
 describe("runtime selection", () => {
@@ -39,16 +46,14 @@ describe("runtime selection", () => {
       passwordFile: "/run/secrets/opencode-password",
     } satisfies Extract<RuntimeConfig, { kind: "opencode" }>
 
-    const mcpServerOverrides = new Map([
-      ["desktop", { headers: { Authorization: "Bearer test" } }],
-    ])
-
-    await expect(
-      createRuntimeInstance(config, limits, mcpServerOverrides)
-    ).resolves.toBe(selected)
-    expect(factories.opencode).toHaveBeenCalledExactlyOnceWith(config, limits, {
-      mcpServerOverrides,
-    })
+    await expect(createRuntimeInstance(config, limits, services)).resolves.toBe(
+      selected
+    )
+    expect(factories.opencode).toHaveBeenCalledExactlyOnceWith(
+      config,
+      limits,
+      services
+    )
     expect(factories.hermes).not.toHaveBeenCalled()
   })
 
@@ -63,8 +68,14 @@ describe("runtime selection", () => {
       deviceTokenFile: "/run/secrets/openclaw-device-token",
     } satisfies Extract<RuntimeConfig, { kind: "openclaw" }>
 
-    await expect(createRuntimeInstance(config, limits)).resolves.toBe(selected)
-    expect(factories.openclaw).toHaveBeenCalledExactlyOnceWith(config, limits)
+    await expect(createRuntimeInstance(config, limits, services)).resolves.toBe(
+      selected
+    )
+    expect(factories.openclaw).toHaveBeenCalledExactlyOnceWith(
+      config,
+      limits,
+      services
+    )
     expect(factories.hermes).not.toHaveBeenCalled()
     expect(factories.opencode).not.toHaveBeenCalled()
   })

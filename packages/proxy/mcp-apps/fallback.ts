@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 
+import type { Logger } from "../../lifecycle"
 import type { CallToolResult } from "../../protocol/mcp-apps"
 import { isAosToolName, isAosUiServerName } from "../core/aos-tool-names"
 import type {
@@ -7,7 +8,6 @@ import type {
   ServerMcpApps,
   SessionScope,
 } from "../core/runtime"
-import { redactForLog } from "../redaction"
 import type { McpAppClient, McpAppEndpoint } from "./client"
 import {
   declaredResourceUri,
@@ -67,22 +67,6 @@ export class McpAppRefusedError extends Error {
 
 type Resolved = { endpoint: McpAppEndpoint; server: string; tool: string }
 
-/** What one view request reached upstream; never its arguments. */
-export type McpAppUpstreamLog = (fields: {
-  operation: "open" | "tools/call" | "resources/read"
-  agentId: string
-  sessionId: string
-  toolCallId: string
-  server: string
-  tool?: string
-  uri?: string
-}) => void
-
-const writeUpstreamLog: McpAppUpstreamLog = (fields) =>
-  console.info(
-    JSON.stringify(redactForLog({ event: "mcp_app.upstream", ...fields }))
-  )
-
 /** Running calls the fallback remembers, across every Session it serves. */
 const MAX_LIVE_CALLS = 256
 
@@ -103,7 +87,7 @@ function splitToolName(
 export function createMcpAppsFallback(
   source: McpAppsSource,
   client: McpAppClient,
-  log: McpAppUpstreamLog = writeUpstreamLog
+  logger: Logger
 ): ServerMcpApps {
   /** Flagged calls of running turns, until the runtime stores them. */
   const live = new Map<string, StoredMcpToolCall>()
@@ -161,19 +145,27 @@ export function createMcpAppsFallback(
     return { call, resolved }
   }
 
+  /** What one view request reached upstream; never its arguments. */
   function logged(
     scope: SessionScope,
     toolCallId: string,
     resolved: Resolved,
-    fields: Pick<Parameters<McpAppUpstreamLog>[0], "operation" | "tool" | "uri">
+    fields: {
+      operation: "open" | "tools/call" | "resources/read"
+      tool?: string
+      uri?: string
+    }
   ) {
-    log({
-      agentId: scope.agentId,
-      sessionId: scope.sessionId,
-      toolCallId,
-      server: resolved.server,
-      ...fields,
-    })
+    logger.info(
+      {
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        toolCallId,
+        server: resolved.server,
+        ...fields,
+      },
+      "mcp_app.upstream"
+    )
   }
 
   return {

@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import type { Logger } from "../../../lifecycle"
 import type { CallToolResult } from "../../../protocol/mcp-apps"
 import { CallToolResultSchema } from "../../../protocol/mcp-apps"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
@@ -17,12 +18,7 @@ import {
   type McpToolNames,
 } from "../../mcp-apps/tool-names"
 import { HERMES_MCP_TOOL_NAMES } from "./mcp-tool-names"
-import {
-  isRecord,
-  parseJson,
-  trimmedText,
-  unwrappedToolText,
-} from "./native"
+import { isRecord, parseJson, trimmedText, unwrappedToolText } from "./native"
 import { projectHermesToolCall } from "./tool-data"
 
 /**
@@ -155,6 +151,7 @@ export function createHermesMcpApps(input: {
   servers: (profile: string) => Promise<unknown>
   rawHistory: (scope: SessionScope) => Promise<readonly unknown[]>
   client: McpAppClient
+  logger: Logger
 }): HermesMcpApps {
   const servers = createMcpServerCache<McpAppServer>(async (profile) =>
     hermesMcpServers(await input.servers(profile), input.client.credentialed)
@@ -172,7 +169,8 @@ export function createHermesMcpApps(input: {
         return storedCall(rows, toolCallId, resolve)
       },
     },
-    input.client
+    input.client,
+    input.logger
   )
   return { mcpApps, names }
 }

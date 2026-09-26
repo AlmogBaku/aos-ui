@@ -8,7 +8,6 @@ import {
   HermesUnavailableError,
   type HermesGatewayOptions,
 } from "./gateway"
-import { createGatewayLog } from "./factory"
 import { MAX_EVENT_FRAME_BYTES } from "./gateway-socket"
 import { FakeSocket } from "./test-utils/fake-socket"
 import { nativeTurn } from "./test-utils/native-events"
@@ -660,7 +659,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     await vi.advanceTimersByTimeAsync(30_000)
     const dialFailures = () =>
       log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.dial_failed"
+        ([, event]) => event === "hermes.gateway.dial_failed"
       )
     expect(dialFailures()).toHaveLength(1)
 
@@ -822,9 +821,9 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("logs a refused socket factory apart from a failed handshake, never its token", async () => {
+  it("logs a refused socket factory apart from a failed handshake", async () => {
     vi.useFakeTimers()
-    const lines: string[] = []
+    const log = { warn: vi.fn() }
     const factory = vi.fn(() => {
       throw new TypeError(`socket refused for ${WS_URL}`)
     })
@@ -835,27 +834,22 @@ describe("Hermes gateway heartbeat and redial", () => {
       socketFactory: factory,
       backoff: { jitter: false },
       connectTimeoutMs: 1_000,
-      log: createGatewayLog((line) => lines.push(line)),
+      log,
     })
 
     await expect(gateway.connect()).rejects.toBeInstanceOf(
       HermesUnavailableError
     )
 
-    expect(lines.join("\n")).not.toContain("token=")
     expect(
-      lines
-        .map((line) => JSON.parse(line) as { event: string })
-        .filter(({ event }) => event === "hermes.gateway.dial_failed")
+      log.warn.mock.calls.filter(
+        ([, event]) => event === "hermes.gateway.dial_failed"
+      )
     ).toEqual([
-      {
-        event: "hermes.gateway.dial_failed",
-        reason: "socket_factory_threw",
-        error: {
-          name: "TypeError",
-          message: "socket refused for ws://127.0.0.1:9119/api/ws",
-        },
-      },
+      [
+        { reason: "socket_factory_threw", error: expect.any(TypeError) },
+        "hermes.gateway.dial_failed",
+      ],
     ])
     await gateway.close()
   })
@@ -869,8 +863,8 @@ describe("Hermes gateway heartbeat and redial", () => {
 
     expect(
       log.warn.mock.calls
-        .filter(([event]) => event === "hermes.gateway.dial_failed")
-        .map(([, fields]) => (fields as { reason?: unknown }).reason)
+        .filter(([, event]) => event === "hermes.gateway.dial_failed")
+        .map(([fields]) => (fields as { reason?: unknown }).reason)
     ).toEqual(["handshake_failed"])
     await gateway.close()
   })
@@ -918,7 +912,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     await expect(parked).resolves.toEqual({ profiles: [] })
     expect(
       log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.handler_failed"
+        ([, event]) => event === "hermes.gateway.handler_failed"
       )
     ).toHaveLength(1)
     await gateway.close()
@@ -1098,8 +1092,8 @@ describe("Hermes gateway lifecycle and server requests", () => {
     await flush()
 
     expect(log.warn).toHaveBeenCalledWith(
-      "hermes.gateway.capabilities_unacknowledged",
-      {}
+      {},
+      "hermes.gateway.capabilities_unacknowledged"
     )
     // The dial itself is still open; requests can still be issued.
     expect(gateway.connected()).toBe(true)

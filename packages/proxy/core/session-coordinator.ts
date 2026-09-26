@@ -186,8 +186,8 @@ export type SessionCoordinatorOptions = {
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
   maxSubscriberBytes: number
-  /** Where each turn owner writes its transitions; silent by default. */
-  logger?: Logger
+  /** Where each turn owner writes its transitions. */
+  logger: Logger
   clock?: Clock
 }
 
@@ -457,14 +457,6 @@ function turnExecution(turn: Turn) {
 
 /** An admission in flight, and the generation it must land at. */
 type Admission = { turn: Turn; generation: number }
-
-const SILENT: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  child: () => SILENT,
-}
 
 /** A logger whose every line names the turn `turnId` reads when it writes. */
 function namingTurn(logger: Logger, turnId: () => string | undefined): Logger {
@@ -900,7 +892,7 @@ export class SessionCoordinator {
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
-    this.#logger = options.logger ?? SILENT
+    this.#logger = options.logger
     this.#clock = options.clock ?? defaultClock
     this.#sends = new ClientAdmissions(this.#clock)
     this.#creates = new ClientAdmissions(this.#clock)

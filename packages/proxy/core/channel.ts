@@ -510,8 +510,8 @@ type CreateChannelsOptions = Omit<
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
   runtime: Pick<ServerRuntime, "history">
-  /** Where each membership writes its transitions; silent by default. */
-  logger?: Logger
+  /** Where each membership writes its transitions. */
+  logger: Logger
   clock?: Clock
 }
 
@@ -535,15 +535,6 @@ export type MembershipOptions = {
 type MembershipContext = MembershipOptions & {
   coordinator: SessionCoordinator
   clock: Clock
-}
-
-/** A logger that writes nothing, for an owner no deployment observes. */
-export const SILENT: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  child: () => SILENT,
 }
 
 /**
@@ -620,14 +611,13 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
 }
 
 export function createChannels(options: CreateChannelsOptions) {
-  const { coordinator, runtime } = options
+  const { coordinator, runtime, logger } = options
   const clock = options.clock ?? defaultClock
   const channels = createChannelTable({
     ...options,
     clock,
     snapshot: (scope) => coordinator.snapshot(scope),
   })
-  const logger = options.logger ?? SILENT
   const machine = membershipMachine(logger, clock)
   /** The memberships reading an older page: one page at a time each. */
   const paging = new WeakSet<Membership>()

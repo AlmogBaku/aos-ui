@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../../test/support/log-capture"
 import { EventSource } from "../../acp/test-harness"
 import { providerSessionId, sessionId } from "../../core/ids"
 import { runCommand } from "../../core/member"
@@ -21,6 +22,7 @@ function coordinator() {
     maxActiveExecutions: 64,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
+    logger: captureLogs().logger,
   })
 }
 
