@@ -2646,6 +2646,7 @@ describe("Hermes server adapter", () => {
     expect(warn).toHaveBeenCalledWith(
       {
         reason: expect.any(String),
+        attempt: 0,
       },
       "hermes.attachment.rebind_failed"
     )

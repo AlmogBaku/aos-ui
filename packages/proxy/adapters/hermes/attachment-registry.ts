@@ -10,8 +10,10 @@
  * heal, dropped only when Hermes says the live id is gone, and cleared when
  * Hermes restarts.
  */
+import { backoffDelay } from "../../../lifecycle"
 import { withinGrace } from "../../grace"
 import {
+  HermesAuthenticationError,
   HermesRpcRejectedError,
   HermesUnavailableError,
   type HermesLog,
@@ -79,13 +81,19 @@ type Entry = {
   /** A running entry already spent its extra idle window without a frame. */
   graced?: boolean
   /**
-   * The live id is bound but no longer known to be attached to the current
-   * socket, because a heal skipped this entry or its resume failed. The next
-   * `ensure()` resumes it so the durable Session is rebound before anyone
-   * addresses it again.
+   * The socket generation Hermes last answered a resume for this entry in. A
+   * live id from an earlier one is no longer known to be attached to the
+   * current socket, because a heal skipped this entry or its rebind has not
+   * succeeded yet: the next `ensure()` resumes it so the durable Session is
+   * rebound before anyone addresses it again.
    */
-  stale?: boolean
+  generation: number
+  /** The pending retry of a rebind that failed. */
+  rebindRetry?: ReturnType<typeof setTimeout>
 }
+
+/** The full-jitter backoff a failed rebind is retried on. */
+export const REBIND_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 
 /** Hermes reports a stale or reaped live Session id with these codes. */
 const SESSION_GONE_CODES = new Set([4001, 4007])
@@ -132,6 +140,8 @@ export class HermesAttachmentRegistry {
   readonly #log: HermesLog | undefined
   readonly #stopEvents: () => void
   readonly #stopConnection: () => void
+  /** Moves on every heal, restart and close. */
+  #generation = 0
 
   constructor(
     private readonly native: RegistryNative,
@@ -176,7 +186,7 @@ export class HermesAttachmentRegistry {
     if (entry.resuming) return entry.resuming
     if (
       entry.attachment.liveSessionId &&
-      !entry.stale &&
+      !this.#stale(entry.generation) &&
       (!options.refresh || this.#resumedWithin(entry, options.freshForMs))
     ) {
       // Using a cached binding counts as activity: its idle window restarts.
@@ -255,31 +265,30 @@ export class HermesAttachmentRegistry {
   }
 
   /**
-   * The socket is open again. Re-resume every bound Session someone still cares
-   * about before the gateway releases callers waiting on the connection, so no
-   * later call targets a live id this heal replaced.
+   * The socket is open again, a new generation. Re-resume every bound Session
+   * someone still cares about before the gateway releases callers waiting on
+   * the connection, so no later call targets a live id this heal replaced.
+   * Every other binding is stale from here: it is not worth a resume now, and
+   * whoever addresses it next resumes it onto the current socket first.
    */
   async rebindAll(): Promise<void> {
+    const generation = ++this.#generation
     const pending: Array<Promise<void>> = []
-    for (const entry of [...this.#entries.values()]) {
-      if (!entry.attachment.liveSessionId) continue
-      if (entry.observers.size === 0 && entry.retainers.size === 0) {
-        // Nobody is waiting on this Session, so it is not worth a resume now;
-        // whoever addresses it next resumes it onto the current socket first.
-        entry.stale = true
-        continue
-      }
-      pending.push(this.#rebind(entry))
-    }
+    for (const entry of [...this.#entries.values()])
+      if (entry.attachment.liveSessionId && this.#inUse(entry))
+        pending.push(this.#rebind(entry, generation))
     await Promise.all(pending)
   }
 
   async close() {
     this.#stopEvents()
     this.#stopConnection()
+    // A rebind still in flight must not schedule a retry past close.
+    this.#generation += 1
     const closing: Array<Promise<void>> = []
     for (const entry of this.#entries.values()) {
       this.#cancelIdle(entry)
+      clearTimeout(entry.rebindRetry)
       // Shutdown detaches work. A retained or running Session can still be
       // working, stopping, waiting for input, or reconciling; never issue
       // native Stop or close it as a side effect of AOS going away.
@@ -322,6 +331,7 @@ export class HermesAttachmentRegistry {
         observers: new Set(),
         running: false,
         saved: true,
+        generation: this.#generation,
       }
       this.#entries.set(id, entry)
     }
@@ -347,7 +357,8 @@ export class HermesAttachmentRegistry {
     if (!liveSessionId) throw new Error("Hermes returned an invalid Session")
     if (previous) this.#byLiveId.delete(previous)
     entry.attachment = { ...entry.attachment, liveSessionId }
-    entry.stale = false
+    // A reply only arrives on the socket that is open now.
+    entry.generation = this.#generation
     entry.resumedAt = this.#now()
     if (typeof resumed.running === "boolean") entry.running = resumed.running
     entry.saved = resumed.saved !== false
@@ -360,30 +371,73 @@ export class HermesAttachmentRegistry {
     return entry.attachment
   }
 
-  async #rebind(entry: Entry) {
+  /** True for a binding or a rebind from an earlier socket generation. */
+  #stale(generation: number) {
+    return generation !== this.#generation
+  }
+
+  /** Someone observes or retains this Session. */
+  #inUse(entry: Entry) {
+    return entry.observers.size > 0 || entry.retainers.size > 0
+  }
+
+  async #rebind(entry: Entry, generation: number, attempt = 0) {
     const previous = entry.attachment.liveSessionId
     try {
       // A live id that changed is announced by #resume, which owns the remap.
       const attachment = await this.#resumeOnce(entry)
-      if (attachment.liveSessionId === previous)
+      if (!this.#stale(generation) && attachment.liveSessionId === previous)
         this.#signal(entry, { kind: "reattached" })
     } catch (error) {
-      if (!isSessionGone(error)) {
-        // The binding stays addressable for a caller that already holds the
-        // live id, but it is no longer known to be attached to this socket:
-        // mark it so the next ensure() resumes it before anyone addresses it.
-        entry.stale = true
-        this.#log?.warn(
-          {
-            reason: publicReason(error),
-          },
-          "hermes.attachment.rebind_failed"
-        )
+      // A later heal, restart or close owns this entry now.
+      if (this.#stale(generation)) return
+      if (isSessionGone(error)) {
+        this.invalidate(previous)
+        this.#signal(entry, { kind: "lost", reason: "rebound" })
         return
       }
-      this.invalidate(previous)
-      this.#signal(entry, { kind: "lost", reason: "rebound" })
+      // The binding stays addressable for a caller that already holds the
+      // live id, but it stays stale until a retry or the next ensure()
+      // resumes it. A refused token waits for the heal a new token brings.
+      this.#log?.warn(
+        { reason: publicReason(error), attempt },
+        "hermes.attachment.rebind_failed"
+      )
+      if (!(error instanceof HermesAuthenticationError))
+        this.#retryRebind(entry, generation, attempt)
     }
+  }
+
+  /**
+   * Retry a failed rebind on backoff until it succeeds, Hermes says the live
+   * Session is gone, or a later generation takes the entry over.
+   */
+  #retryRebind(entry: Entry, generation: number, attempt: number) {
+    clearTimeout(entry.rebindRetry)
+    const retry = setTimeout(
+      () => {
+        entry.rebindRetry = undefined
+        // A caller's ensure() may have rebound it, or nobody needs it any more.
+        if (
+          this.#stale(generation) ||
+          !this.#stale(entry.generation) ||
+          !entry.attachment.liveSessionId ||
+          !this.#inUse(entry)
+        )
+          return
+        void this.#rebind(entry, generation, attempt + 1).catch(
+          (error: unknown) =>
+            this.#log?.warn(
+              { reason: publicReason(error) },
+              "hermes.attachment.rebind_failed"
+            )
+        )
+      },
+      backoffDelay(attempt, REBIND_BACKOFF)
+    )
+    // Like the idle close, a retry never keeps the process alive.
+    if (typeof retry !== "number") retry.unref()
+    entry.rebindRetry = retry
   }
 
   #reportLoss(reason: "disconnected" | "restart") {
@@ -393,6 +447,7 @@ export class HermesAttachmentRegistry {
 
   /** Hermes restarted: every live id it minted before is dead. */
   #restart() {
+    this.#generation += 1
     this.#byLiveId.clear()
     for (const entry of this.#entries.values()) {
       this.#cancelIdle(entry)

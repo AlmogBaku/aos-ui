@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   HermesAttachmentRegistry,
+  REBIND_BACKOFF,
   type AttachmentSignal,
 } from "./attachment-registry"
 import {
@@ -238,7 +240,8 @@ describe("HermesAttachmentRegistry", () => {
     expect(resume).toHaveBeenCalledTimes(3)
   })
 
-  it("resumes again on the next ensure after a heal it could not rebind", async () => {
+  it("retries a heal it could not rebind until the binding is rebound", async () => {
+    const clock = useFakeClock()
     const gateway = fakeGateway()
     const resume = vi
       .fn<() => Promise<{ liveSessionId: string }>>()
@@ -257,11 +260,17 @@ describe("HermesAttachmentRegistry", () => {
     await gateway.restored()
     expect(observer).not.toHaveBeenCalled()
 
+    // The first retry fires within its full-jitter ceiling.
+    await clock.advance(REBIND_BACKOFF.baseMs)
+    expect(resume).toHaveBeenCalledTimes(3)
+    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+
+    // Rebound on this socket: the next caller takes the binding as it stands.
     await expect(registry.ensure(scope)).resolves.toMatchObject({
       liveSessionId: "live-healed",
     })
     expect(resume).toHaveBeenCalledTimes(3)
-    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+    await registry.close()
   })
 
   it("resumes again on the next ensure for a binding the heal skipped", async () => {
