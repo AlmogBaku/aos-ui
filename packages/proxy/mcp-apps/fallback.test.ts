@@ -10,7 +10,13 @@ import {
 import { afterEach, describe, expect, it } from "vitest"
 
 import { captureLogs } from "../../../test/support/log-capture"
-import type { SessionScope } from "../core/runtime"
+import * as ids from "../core/ids"
+import {
+  ServerSessionNotFoundError,
+  type ServerRuntime,
+  type SessionScope,
+} from "../core/runtime"
+import { withMcpApps } from "./annotate"
 import {
   createMcpAppClient,
   McpAppConnectionRefusedError,
@@ -280,20 +286,55 @@ describe("MCP Apps fallback host", () => {
     })
   })
 
-  it("clears the Session's live calls when reportSessionGone is called", async () => {
+  it("keeps the newest running calls of the newest Sessions until a Session is gone", async () => {
     const { apps } = fallback()
-    // A live call without a stored counterpart is found via the live cache.
-    apps.observe?.(scope, {
-      toolCallId: "live-only",
-      toolName: "mcp__weather__show-forecast",
-      result: { content: [{ type: "text", text: "Sunny" }] },
+    const runtime = withMcpApps({
+      mcpApps: apps,
+      turns: {
+        start: async () => Promise.reject(new Error("unused")),
+        recover: async () => Promise.reject(new ServerSessionNotFoundError()),
+      },
+      deleteSession: async () => undefined,
+      publicError: () => undefined,
+    } as unknown as ServerRuntime)
+    const session = (n: number): SessionScope => ({
+      agentId: "agent-1",
+      providerSessionId: ids.providerSessionId(`session-${n}`),
+      sessionId: ids.sessionId(`session-${n}`),
     })
-    apps.reportSessionGone?.(scope.agentId, scope.providerSessionId)
-    // After the Session is gone, owned() can find neither a stored call nor a
-    // live one, so every operation on it throws McpAppNotFoundError.
-    await expect(apps.open(scope, "live-only")).rejects.toBeInstanceOf(
+    const observe = (at: SessionScope, toolCallId: string) =>
+      apps.observe?.(at, {
+        toolCallId,
+        toolName: "mcp__weather__show-forecast",
+      })
+    const view = { html: "<!doctype html><p>Forecast</p>" }
+
+    // A Session keeps its newest 32 running calls.
+    for (let call = 0; call <= 32; call++) observe(scope, `live-${call}`)
+    await expect(apps.open(scope, "live-1")).resolves.toMatchObject(view)
+    await expect(apps.open(scope, "live-0")).rejects.toBeInstanceOf(
       McpAppNotFoundError
     )
+    // The fallback keeps the newest 8 Sessions.
+    for (let n = 2; n <= 9; n++) observe(session(n), "live-0")
+    await expect(apps.open(scope, "live-1")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    // A Session deleted, or one a recover finds gone, keeps none.
+    await runtime.deleteSession("agent-1", session(2).providerSessionId)
+    await expect(
+      runtime.turns.recover(session(3), {
+        sessionId: session(3).sessionId,
+        turnId: "turn-1",
+      })
+    ).rejects.toBeInstanceOf(ServerSessionNotFoundError)
+    await expect(apps.open(session(2), "live-0")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    await expect(apps.open(session(3), "live-0")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    await expect(apps.open(session(4), "live-0")).resolves.toMatchObject(view)
   })
 
   describe("with an operator-configured URL", () => {
