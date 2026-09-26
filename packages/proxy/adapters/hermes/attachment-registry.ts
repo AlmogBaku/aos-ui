@@ -50,6 +50,8 @@ type RegistryNative = {
     scope: HermesAttachmentScope
   ): Promise<{ liveSessionId: string; running?: boolean; saved?: boolean }>
   close(liveSessionId: string): Promise<void>
+  /** The registry dropped this Session's entry; drop what is kept beside it. */
+  forget?(scope: HermesAttachmentScope): void
 }
 
 /**
@@ -166,6 +168,11 @@ export class HermesAttachmentRegistry {
     })
   }
 
+  /** How many durable Sessions the registry holds an entry for. */
+  get size() {
+    return this.#entries.size
+  }
+
   /**
    * The live Session behind a durable one, resuming it when AOS has no usable
    * binding. `refresh` asks Hermes again even when one exists: a caller that
@@ -216,6 +223,7 @@ export class HermesAttachmentRegistry {
       if (count <= 1) entry.retainers.delete(reason)
       else entry.retainers.set(reason, count - 1)
       this.#scheduleIdle(entry)
+      this.#forget(entry)
     }
   }
 
@@ -262,6 +270,7 @@ export class HermesAttachmentRegistry {
     this.#cancelIdle(entry)
     entry.attachment = { ...entry.attachment, liveSessionId: "" }
     entry.running = false
+    this.#forget(entry)
   }
 
   /**
@@ -344,10 +353,27 @@ export class HermesAttachmentRegistry {
       entry.resuming = resuming
       const clear = () => {
         if (entry.resuming === resuming) entry.resuming = undefined
+        this.#forget(entry)
       }
       void resuming.then(clear, clear)
     }
     return entry.resuming
+  }
+
+  /**
+   * Drop an entry nobody holds once it has no live Session. A resume reads
+   * everything it kept again, so keeping it would only grow with every Session
+   * the process ever touched.
+   */
+  #forget(entry: Entry) {
+    if (entry.attachment.liveSessionId || entry.resuming || this.#inUse(entry))
+      return
+    const key = sessionKey(entry.attachment)
+    if (this.#entries.get(key) !== entry) return
+    this.#cancelIdle(entry)
+    clearTimeout(entry.rebindRetry)
+    this.#entries.delete(key)
+    this.native.forget?.(entry.attachment)
   }
 
   async #resume(entry: Entry) {
@@ -449,10 +475,11 @@ export class HermesAttachmentRegistry {
   #restart() {
     this.#generation += 1
     this.#byLiveId.clear()
-    for (const entry of this.#entries.values()) {
+    for (const entry of [...this.#entries.values()]) {
       this.#cancelIdle(entry)
       entry.attachment = { ...entry.attachment, liveSessionId: "" }
       entry.running = false
+      this.#forget(entry)
     }
     this.#reportLoss("restart")
   }
@@ -535,6 +562,7 @@ export class HermesAttachmentRegistry {
       this.#byLiveId.delete(liveSessionId)
       entry.attachment = { ...entry.attachment, liveSessionId: "" }
       void this.native.close(liveSessionId).catch(() => undefined)
+      this.#forget(entry)
     }, this.#idleMs)
     // Idle retention is housekeeping: it must never be the reason the process
     // stays alive after everything else has been closed.

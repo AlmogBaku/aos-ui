@@ -16,6 +16,7 @@ import type {
 } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
+import type { Todo } from "../todos"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
 import { EventQueue, startedTurnQueue } from "./event-queue"
@@ -110,6 +111,8 @@ export type ActiveTurn = {
   cost?: Cost
   /** The model the Session last reported; a change is published. */
   model?: SessionModelChoice
+  /** The Todo list this run last published; an unchanged one is not sent again. */
+  plan?: Todo[]
   /** The call each background process Hermes streams output for belongs to. */
   terminals: Map<string, { toolCallId: string; terminalId: string }>
   /** The call that spawned each subagent Hermes reports on. */

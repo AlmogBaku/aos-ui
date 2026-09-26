@@ -154,7 +154,6 @@ export class HermesTurnEngine {
   readonly #active = new Map<string, ActiveTurn>()
   readonly #admissions = new Set<string>()
   readonly #settling = new Map<string, SettlingWatcher>()
-  readonly #plans = new Map<string, Todo[]>()
   readonly #host: TurnEngineHost
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
@@ -1074,11 +1073,10 @@ export class HermesTurnEngine {
 
   /** Publish the Session's whole Todo list whenever it changed. */
   #emitPlan(active: ActiveTurn, todos: Todo[]) {
-    const key = sessionKey(active.scope)
-    const previous = this.#plans.get(key)
+    const previous = active.plan
     if (previous && JSON.stringify(previous) === JSON.stringify(todos)) return
     if (this.#emit(active, { kind: TurnEventKind.PlanUpdated, todos }))
-      this.#plans.set(key, structuredClone(todos))
+      active.plan = structuredClone(todos)
   }
 
   #ensureMessageId(active: ActiveTurn) {

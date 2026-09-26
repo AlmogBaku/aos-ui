@@ -560,6 +560,49 @@ describe("HermesAttachmentRegistry", () => {
     vi.useRealTimers()
   })
 
+  it("keeps no record of a Session whose turns settled, however its binding ended", async () => {
+    const clock = useFakeClock()
+    const gateway = fakeGateway()
+    const forget = vi.fn()
+    const registry = new HermesAttachmentRegistry(
+      {
+        resume: async (value) => {
+          if (value.providerSessionId === "refused")
+            throw new HermesUnavailableError()
+          return {
+            liveSessionId: `live-${value.providerSessionId}`,
+            saved: value.providerSessionId !== "draft",
+          }
+        },
+        close: async () => undefined,
+        forget,
+      },
+      gateway.transport,
+      { idleMs: 1_000 }
+    )
+    const [stored, draft, restarted] = await Promise.all(
+      ["stored", "draft", "restarted"].map((id) =>
+        registry.subscribe({ ...scope, providerSessionId: id }, vi.fn())
+      )
+    )
+
+    // Two turns settle and go idle: one is closed, the draft only unbound.
+    stored!()
+    draft!()
+    await clock.advance(1_000)
+    // Hermes restarts under a running turn, which then settles.
+    gateway.epochChanged()
+    restarted!()
+    await expect(
+      registry.ensure({ ...scope, providerSessionId: "refused" })
+    ).rejects.toThrow(HermesUnavailableError)
+
+    expect(registry.size).toBe(0)
+    expect(
+      forget.mock.calls.map(([value]) => value.providerSessionId).sort()
+    ).toEqual(["draft", "refused", "restarted", "stored"])
+  })
+
   it("registers no observer when a subscription cannot be retained", async () => {
     const gateway = fakeGateway()
     let resumes = 0
