@@ -4,7 +4,7 @@ import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import { FIXTURE_MCP_APP_TOOL } from "./fixture-mcp-apps"
 import { fixturePresentationPart } from "./fixture-presentations"
 import type { ThreadMessage } from "@assistant-ui/react"
-import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+import { withAosToolArtifact } from "@/lib/tool-artifact"
 
 // Assistant UI's public type lives in @assistant-ui/react. Re-exporting a local
 // alias keeps all fixture-only provider payloads inside this adapter directory.

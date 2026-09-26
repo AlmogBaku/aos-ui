@@ -2,7 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react"
 
-import type { AosDiffChange } from "./tool-artifact"
+import type { AosDiffChange } from "@/lib/tool-artifact"
 import type { RichToolPhase } from "./types"
 
 export type ToolUiLocale = "en" | "he"

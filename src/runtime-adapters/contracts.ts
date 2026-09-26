@@ -265,6 +265,36 @@ export type McpAppAdapter = {
   ): Promise<ReadResourceResult>
 }
 
+/**
+ * What the last settled turn used, in raw tokens, as the provider reported it.
+ * Every count is optional: a provider reports only what it measures.
+ */
+export type ComposerTurnUsage = {
+  readonly inputTokens?: number | undefined
+  readonly outputTokens?: number | undefined
+  readonly thoughtTokens?: number | undefined
+  readonly cachedReadTokens?: number | undefined
+  readonly cachedWriteTokens?: number | undefined
+  readonly totalTokens?: number | undefined
+}
+
+/** The model and reasoning effort the provider says the Session is on. */
+export type ComposerModelCurrent = {
+  readonly selectedId: string
+  readonly effortId?: string | undefined
+}
+
+/**
+ * A provider-side model change the composer follows as it happens, for
+ * example after a slash command or another client switched the Session.
+ * `current` returns the same reference until the next change replaces it,
+ * which is what `useSyncExternalStore` requires.
+ */
+export type ComposerModelFeed = {
+  readonly current: () => ComposerModelCurrent | undefined
+  readonly subscribe: (listener: () => void) => () => void
+}
+
 /** The complete provider-neutral browser interface consumed by the workspace. */
 export type HarnessRuntime = {
   assistantRuntime: AssistantRuntime

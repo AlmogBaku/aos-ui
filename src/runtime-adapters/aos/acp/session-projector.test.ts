@@ -5,11 +5,12 @@ import { describe, expect, it } from "vitest"
 import { AOS_METHODS, AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
-import { COMPACTION_DATA_PART_NAME } from "@/components/assistant-ui/elements/compaction-divider"
-import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
-import { permissionProviderMetadata } from "@/components/tool-ui/payloads/permission"
-import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+import { COMPACTION_DATA_PART_NAME, steerMessageId } from "@/lib/message-parts"
+import {
+  permissionProviderMetadata,
+  readAosToolArtifact,
+} from "@/lib/tool-artifact"
 
 import type { AcpApproval } from "./acp-approvals"
 import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"

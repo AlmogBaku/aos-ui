@@ -20,7 +20,7 @@ import {
   type QuestionPayload,
 } from "./payloads/question-flow"
 import { useToolUiLocale, type ToolUiToolName } from "./locale"
-import { readAosToolArtifact } from "./tool-artifact"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 import type { RichToolPart, RichToolRendererComponent } from "./types"
 
 const QuestionFlowTool = lazy(() =>

@@ -10,7 +10,7 @@ import {
 } from "./aos-tool-fallback"
 import { normalizeRichToolState } from "./lifecycle"
 import { RichToolRenderer, richToolRegistry } from "./registry"
-import { readAosToolArtifact } from "./tool-artifact"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 import type { RichToolFallbackComponent, RichToolPart } from "./types"
 
 function isRegisteredRichTool(part: RichToolPart) {

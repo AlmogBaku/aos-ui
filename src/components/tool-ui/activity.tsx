@@ -17,7 +17,7 @@ import {
   type ToolUiActivityStatus,
 } from "./locale"
 import { openSessionLinkInPlace, useToolUiSessionLink } from "./session-link"
-import type { AosSubagent } from "./tool-artifact"
+import type { AosSubagent } from "@/lib/tool-artifact"
 import { formatToolDuration } from "./tool-call-presentation"
 import type { RichToolPart } from "./types"
 

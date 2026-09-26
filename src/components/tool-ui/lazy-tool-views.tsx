@@ -8,7 +8,7 @@ import { stripAnsi } from "./strip-ansi"
 import { terminalStatus } from "./terminal/terminal-status"
 import type { TerminalProps } from "./terminal/terminal"
 import { DiffTextFallback, type ToolDiffProps } from "./tool-diff-text"
-import type { AosTerminal } from "./tool-artifact"
+import type { AosTerminal } from "@/lib/tool-artifact"
 
 const ToolDiff = lazy(() =>
   import("./tool-diff").then((module) => ({ default: module.ToolDiff }))

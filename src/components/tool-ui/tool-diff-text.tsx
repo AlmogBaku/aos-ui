@@ -1,5 +1,5 @@
 import type { ToolDiffLabels } from "./locale"
-import type { AosDiff } from "./tool-artifact"
+import type { AosDiff } from "@/lib/tool-artifact"
 
 export type ToolDiffProps = {
   diffs: readonly AosDiff[]

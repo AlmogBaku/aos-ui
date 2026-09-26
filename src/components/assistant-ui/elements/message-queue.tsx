@@ -12,12 +12,7 @@ import { CornerDownRightIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import { Button } from "@/components/ui/button"
-
-/**
- * The id the projector gives an accepted correction's user turn; the queue row
- * watches for it.
- */
-export const steerMessageId = (requestId: string) => `steer:${requestId}`
+import { steerMessageId } from "@/lib/message-parts"
 
 export type MessageQueueLabels = {
   readonly region: string

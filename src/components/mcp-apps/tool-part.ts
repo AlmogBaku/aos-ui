@@ -1,7 +1,4 @@
-import {
-  readAosToolArtifact,
-  withAosToolArtifact,
-} from "@/components/tool-ui/tool-artifact"
+import { readAosToolArtifact, withAosToolArtifact } from "@/lib/tool-artifact"
 
 /**
  * How a tool call that declares an MCP App view reaches the message surface:

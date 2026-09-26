@@ -28,7 +28,7 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import { LazyVisualBoundary } from "./lazy-boundary"
-import { permissionProviderMetadata } from "./payloads/permission"
+import { permissionProviderMetadata } from "@/lib/tool-artifact"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
 

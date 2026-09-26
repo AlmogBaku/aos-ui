@@ -14,10 +14,9 @@ import {
   ToolUiLocaleProvider,
   ToolUiSessionLinkProvider,
   isAosRichTool,
-  withAosToolArtifact,
-  type AosToolArtifact,
   type RichToolPart,
 } from "./index"
+import { withAosToolArtifact, type AosToolArtifact } from "@/lib/tool-artifact"
 
 afterEach(cleanup)
 
