@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
-import { READY_LINK } from "../../core/link"
+import { READY_LINK, type LinkState, type ServerLink } from "../../core/link"
 import { CredentialValues } from "../../redaction"
 import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
@@ -163,10 +163,27 @@ describe("OpenClaw runtime factory", () => {
     ).rejects.toThrow("Invalid OpenClaw device identity")
   })
 
-  it("flags a stored call that opened a native MCP App view", async () => {
+  it("flags a stored call that opened a native MCP App view, re-subscribing the read's Session when the link is up again", async () => {
     const files = await credentials()
     const sessionKey = "agent:research:main"
     const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
+    let linkState: LinkState = "ready"
+    const linkListeners = new Set<(state: LinkState) => void>()
+    const link: ServerLink = {
+      state: () => linkState,
+      subscribe: (listener) => {
+        linkListeners.add(listener)
+        return () => linkListeners.delete(listener)
+      },
+    }
+    const setLink = (state: LinkState) => {
+      linkState = state
+      for (const listener of linkListeners) listener(state)
+    }
+    const reading = Promise.withResolvers<void>()
+    const readable = Promise.withResolvers<void>()
+    const resubscribed = Promise.withResolvers<void>()
+    let subscribes = 0
     const request = vi.fn(async (method: string) => {
       if (method === "agents.list")
         return {
@@ -177,10 +194,14 @@ describe("OpenClaw runtime factory", () => {
         }
       if (method === "sessions.list")
         return { sessions: [{ key: sessionKey, agentId: "research" }] }
+      if (method === "sessions.messages.subscribe" && ++subscribes === 2)
+        resubscribed.resolve()
       if (method.startsWith("sessions.messages.")) return { key: sessionKey }
       if (method === "tools.effective")
         return { agentId: "research", profile: "default", groups: [] }
-      if (method === "chat.history")
+      if (method === "chat.history") {
+        reading.resolve()
+        await readable.promise
         return {
           messages: [
             {
@@ -209,6 +230,7 @@ describe("OpenClaw runtime factory", () => {
           ],
           sessionInfo: { hasActiveRun: false, activeRunIds: [] },
         }
+      }
       throw new Error(`Unexpected method ${method}`)
     })
     const instance = await createOpenClawRuntime(
@@ -223,7 +245,7 @@ describe("OpenClaw runtime factory", () => {
       {
         ...services(),
         clientFactory: () => ({
-          link: READY_LINK,
+          link,
           start: vi.fn(async () => undefined),
           stopAndWait: vi.fn(async () => undefined),
           request,
@@ -231,7 +253,13 @@ describe("OpenClaw runtime factory", () => {
       }
     )
 
-    const page = await instance.runtime.history("research", sessionKey, 200, 0)
+    const read = instance.runtime.history("research", sessionKey, 200, 0)
+    await reading.promise
+    setLink("lost")
+    setLink("ready")
+    await resubscribed.promise
+    readable.resolve()
+    const page = await read
     expect(page.messages[0]!.content[0]).toMatchObject({
       toolName: "mcp__excalidraw__create_view",
       app: true,
