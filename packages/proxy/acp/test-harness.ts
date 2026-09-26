@@ -781,13 +781,16 @@ export async function harness(options: HarnessOptions = {}) {
   // Everything reads the runtime through its faults, which forward every
   // call until a test arms one.
   const faults = withFaults(runtime)
+  const logs = options.logs ?? captureLogs()
   const coordinator = new SessionCoordinator({
     engine: faults.runtime.turns,
     readings: faults.runtime,
     maxActiveExecutions: 8,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
     maxSubscriberBytes: 256 * 1024,
+    logger: logs.logger,
   })
+  coordinator.bindCapabilities(faults.runtime)
   const runtimeInstance: RuntimeInstance = {
     id: "test",
     runtime: faults.runtime,
@@ -828,6 +831,7 @@ export async function harness(options: HarnessOptions = {}) {
   const composed = options.compose?.({ runtimeInstance, sessionRows })
   const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
+    logger: logs.logger,
     snapshot: (channelScope) => coordinator.snapshot(channelScope),
     ...(subscribeTurns
       ? {
@@ -936,7 +940,7 @@ export async function harness(options: HarnessOptions = {}) {
     coordinator,
     runtimeInstance,
     faults,
-    logs: options.logs ?? captureLogs(),
+    logs,
     channels,
     scope,
     sources,

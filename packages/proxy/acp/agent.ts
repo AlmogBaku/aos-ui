@@ -72,6 +72,7 @@ import {
   invalidRequest,
   notFound,
   parseMeta,
+  publicRequestError,
   refusalError,
   turnInProgress,
 } from "./validation"
@@ -302,10 +303,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
       await workspace.discover(scope)
     const membership = sessions.join(client, scope)
-    const resumed = await membership.resume(
-      command,
-      command.fromStart ? () => readReplay(scope) : undefined
-    )
+    const resumed = await membership
+      .resume(command, command.fromStart ? () => readReplay(scope) : undefined)
+      .catch((cause: unknown) => {
+        // A join its deadline ended is worth another try.
+        throw publicRequestError(runtime, cause)
+      })
     const execution = coordinator.snapshot(scope)
     // Every provider read the response needs settles before the follow-up is
     // scheduled: it fires on the next task, so a read awaited after it lets
@@ -313,7 +316,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // start listening for them.
     const models = addressed ? undefined : await workspace.models(scope)
     const capabilities = await workspace.capabilities(scope)
-    membership.afterResume(execution.turnId, !addressed)
+    membership.joined({ turnId: execution.turnId })
     return {
       agentId: scope.agentId,
       ...(row ? { row } : {}),
@@ -378,6 +381,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         at: Date.now(),
       })
     })
+    membership.joined()
     return { messageId }
   }
 
@@ -450,11 +454,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.remember([row])
         const capabilities = await workspace.capabilities(scope)
         const models = await workspace.models(scope)
-        const membership = sessions.join(client, scope)
-        membership.afterResponse(async () => {
-          await membership.emit({ kind: "commands", capabilities })
-          membership.reportUsage()
-        })
+        sessions.join(client, scope).joined()
         return { sessionId, row, capabilities, models }
       }
     )
@@ -793,19 +793,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
-      feeds.has("session-rows")
-        ? context.sessionRows.subscribe((row) => {
-            const membership = sessions.membership(row.id)
-            if (membership)
-              void membership
-                .emit({
-                  kind: "session-info",
-                  row,
-                  status: sessions.status(row),
-                })
-                .catch(() => undefined)
-          })
-        : undefined,
       feeds.has("catalog")
         ? await runtime.subscribeCatalogChanges?.(() =>
             notify(AOS_METHODS.notify.catalogInvalidated)

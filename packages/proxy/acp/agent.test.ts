@@ -167,7 +167,7 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("creates a Session and pushes its commands and context usage", async () => {
+  it("creates a Session and joins its creator to the Session's row, commands, model options and usage", async () => {
     const test = await harness()
 
     const created = await test.create()
@@ -185,17 +185,33 @@ describe("AOS ACP agent", () => {
       },
     })
     await test.recorder.wait(
-      (entry) =>
-        entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes("usage_update"),
-      "an update carrying usage_update"
+      () => updates(test.recorder).length === 4,
+      "the created Session's readings"
     )
-    expect(updates(test.recorder)).toMatchObject([
+    // Each reading is a cell of its own, so no order holds between them.
+    const readings = updates(test.recorder).sort((left, right) =>
+      left.update.sessionUpdate.localeCompare(right.update.sessionUpdate)
+    )
+    expect(readings).toMatchObject([
       {
         sessionId: CREATED,
         update: {
           sessionUpdate: "available_commands_update",
           availableCommands: [{ name: "plan", description: "Draft a plan" }],
+        },
+      },
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [{ configId: "model", currentValue: "sonnet" }],
+        },
+      },
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
         },
       },
       {
@@ -383,17 +399,20 @@ describe("AOS ACP agent", () => {
       "an update carrying end_turn"
     )
     // `session/new` and the settled turn each push readings out of band: the
-    // new Session's model options and usage, then the window the turn grew.
+    // new Session's row, commands, model options and usage, then the window
+    // the turn grew.
     await usageOf(test, 2)
     expect(
       updates(test.recorder).filter(
         (update) =>
-          !["usage_update", "config_option_update"].some((reading) =>
-            JSON.stringify(update).includes(reading)
-          )
+          ![
+            "session_info_update",
+            "available_commands_update",
+            "usage_update",
+            "config_option_update",
+          ].some((reading) => JSON.stringify(update).includes(reading))
       )
     ).toMatchObject([
-      { update: { sessionUpdate: "available_commands_update" } },
       {
         update: {
           sessionUpdate: "user_message",
@@ -732,7 +751,7 @@ describe("AOS ACP agent", () => {
     }
   })
 
-  it("brings every operator browser each usage and model reading exactly once", async () => {
+  it("brings every operator browser its usage and model options once on joining and once after each switch", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await open(test)

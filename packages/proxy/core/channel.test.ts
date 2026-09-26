@@ -670,7 +670,6 @@ function joined(
   const log: string[] = []
   const state = { live: true }
   const coordinator = {
-    subscribeReadings: () => () => undefined,
     snapshot: () => ({
       state: requests.length > 0 ? "waiting-for-input" : "idle",
       turnId: "turn-1",
@@ -742,6 +741,7 @@ function joined(
       log: () => undefined,
       describe: () => ({ code: "failed", message: "failed" }),
       feeds: new Set(),
+      subscribeRow: () => () => undefined,
     }
   )
   membership.joinChannel()

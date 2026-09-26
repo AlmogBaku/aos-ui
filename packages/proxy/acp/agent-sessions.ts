@@ -318,27 +318,28 @@ export function createSessions(
     for (const row of rows) owners.set(row.id, row.agentId)
   }
 
+  /** The live status of a row, whether or not this connection resumed it. */
+  function status(row: Session) {
+    const providerSessionId = runtime.resolveProviderSessionId(
+      row.agentId,
+      row.id
+    )
+    return providerSessionId
+      ? overlaidStatus(
+          coordinator.state({
+            agentId: row.agentId,
+            providerSessionId,
+          }),
+          row.status
+        )
+      : row.status
+  }
+
   return {
     workspace,
     remember,
     identity,
-
-    /** The live status of a row, whether or not this connection resumed it. */
-    status(row: Session) {
-      const providerSessionId = runtime.resolveProviderSessionId(
-        row.agentId,
-        row.id
-      )
-      return providerSessionId
-        ? overlaidStatus(
-            coordinator.state({
-              agentId: row.agentId,
-              providerSessionId,
-            }),
-            row.status
-          )
-        : row.status
-    },
+    status,
 
     owner(publicSessionId: string) {
       return owners.get(publicSessionId)
@@ -355,10 +356,13 @@ export function createSessions(
       return workspace.scope(agentId, publicSessionId)
     },
 
-    /** The Session's membership on this connection, joined on first use. */
+    /**
+     * The Session's membership on this connection, joined on first use and
+     * again once the last one detached.
+     */
     join(client: AgentContext, scope: SessionScope) {
       const existing = memberships.get(scope.sessionId)
-      if (existing) return existing
+      if (existing && !existing.detached) return existing
       const membership = context.channels.join(memberOf(client), scope, {
         coordinator,
         membershipId: `${context.connectionId}:${scope.sessionId}`,
@@ -372,13 +376,21 @@ export function createSessions(
           ),
         describe: (cause) => errorNotificationOf(runtime, cause),
         feeds: context.feeds,
+        subscribeRow: (listener) =>
+          context.sessionRows.subscribeRow(
+            scope.agentId,
+            scope.sessionId,
+            (row) => listener(row, status(row))
+          ),
       })
       memberships.set(scope.sessionId, membership)
       return membership
     },
 
+    /** The Session's membership on this connection, while it lasts. */
     membership(publicSessionId: string) {
-      return memberships.get(publicSessionId)
+      const membership = memberships.get(publicSessionId)
+      return membership?.detached ? undefined : membership
     },
 
     part(publicSessionId: string) {

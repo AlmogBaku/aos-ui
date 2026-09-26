@@ -1,4 +1,13 @@
-import type { SessionHistoryResponse } from "../../protocol"
+import {
+  createOwner,
+  defaultClock,
+  ownerSetup,
+  type Clock,
+  type Logger,
+  type Owner,
+  type OwnerContext,
+} from "../../lifecycle"
+import type { Session, SessionHistoryResponse } from "../../protocol"
 import {
   beforeLiveTurn,
   lastPromptIndex,
@@ -35,6 +44,7 @@ import type {
   SessionCoordinator,
   StartOptions,
 } from "./session-coordinator"
+import type { SessionRow } from "./session-rows"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 /**
@@ -470,7 +480,11 @@ function createChannelTable({
   }
 }
 
-type CreateChannelsOptions = Parameters<typeof createChannelTable>[0]
+type CreateChannelsOptions = Parameters<typeof createChannelTable>[0] & {
+  /** Where each membership writes its transitions; silent by default. */
+  logger?: Logger
+  clock?: Clock
+}
 
 /** How a transport joins one member to one Session. */
 export type MembershipOptions = {
@@ -487,15 +501,120 @@ export type MembershipOptions = {
   describe: (cause: unknown) => { code: string; message: string }
   /** The readings this member is given, as authentication chose them. */
   feeds: ReadonlySet<Feed>
+  /**
+   * The Session's row as a replaying cell, with the status its execution
+   * overlays on it: the known row at once, then each change.
+   */
+  subscribeRow: (
+    listener: (row: SessionRow, status: Session["status"]) => void
+  ) => () => void
+}
+
+/** How long a join may take to land before its membership detaches. */
+const JOIN_DEADLINE_MS = 30_000
+/** How long a member that fell behind keeps its place for its view to rejoin. */
+const PAUSED_DEADLINE_MS = 30_000
+
+const SILENT: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  child: () => SILENT,
+}
+
+/**
+ * What moves a membership: a join and the answer that lands it, each stream
+ * it follows, falling behind that stream's bounds, and parting.
+ */
+type MembershipSignal =
+  | { type: "join" }
+  | { type: "joined" }
+  | { type: "followed" }
+  | { type: "fell-behind" }
+  | { type: "part" }
+
+/**
+ * One membership's lifetime: joining until the answer to its join lands,
+ * joined while it follows its Session, paused once it fell behind until its
+ * view rejoins, and detached for good once it parts or a deadline passes.
+ * Each stream it follows is a generation of its own, so a stream another one
+ * replaced settles nothing.
+ */
+function membershipMachine(logger: Logger, clock: Clock) {
+  return ownerSetup<OwnerContext, MembershipSignal>(
+    "membership",
+    logger,
+    clock
+  ).createMachine({
+    context: { generation: 0 },
+    initial: "joining",
+    on: {
+      followed: { actions: "bumpGeneration" },
+      part: ".detached",
+    },
+    states: {
+      joining: {
+        after: { [JOIN_DEADLINE_MS]: "detached" },
+        on: {
+          // A membership a read or write made first gives each join its
+          // whole deadline.
+          join: { target: "joining", reenter: true },
+          joined: "joined",
+          "fell-behind": "paused",
+        },
+      },
+      joined: { on: { join: "joining", "fell-behind": "paused" } },
+      paused: {
+        after: { [PAUSED_DEADLINE_MS]: "detached" },
+        on: { join: "joining" },
+      },
+      detached: { type: "final" },
+    },
+  })
+}
+
+type MembershipOwner = Owner<ReturnType<typeof membershipMachine>>
+
+/** A join its membership's end cut short, which the next join may land. */
+export class MembershipDetachedError extends Error {
+  constructor() {
+    super("The membership detached before its join landed")
+    this.name = "MembershipDetachedError"
+  }
+}
+
+/** Settles as `work` does, unless `signal` aborts first: then with its reason. */
+function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) abort()
+    void work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort))
+  })
 }
 
 export function createChannels(options: CreateChannelsOptions) {
   const channels = createChannelTable(options)
+  const logger = options.logger ?? SILENT
+  const clock = options.clock ?? defaultClock
+  const machine = membershipMachine(logger, clock)
   return {
     ...channels,
-    /** Joins one member to one Session until the membership parts. */
+    /** Joins one member to one Session until the membership detaches. */
     join(member: Member, scope: SessionScope, membership: MembershipOptions) {
-      return new Membership(channels, member, scope, membership)
+      const owner = createOwner(machine, {
+        logger,
+        clock,
+        bindings: {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          membershipId: membership.membershipId,
+        },
+      })
+      return new Membership(channels, member, scope, membership, owner)
     },
   }
 }
@@ -504,10 +623,10 @@ export function createChannels(options: CreateChannelsOptions) {
  * One Session as one member observes it: at most one coordinator
  * subscription, the cursor it has reached, and the requests it was asked.
  *
- * A membership owns only the member's subscriber lifetime. Parting releases
- * the subscription and its place in the Session's channel, and nothing else:
- * the native Session, the coordinator's logical execution, and a pending
- * request all outlive it.
+ * A membership owns only the member's subscriber lifetime. Detaching
+ * releases the subscription, its place in the Session's channel and the
+ * readings it was given, and nothing else: the native Session, the
+ * coordinator's logical execution, and a pending request all outlive it.
  */
 class Membership {
   readonly #channels: ChannelTable
@@ -526,7 +645,6 @@ class Membership {
   readonly #delivered = new Set<string>()
   #sequence = 0
   #stopRequested = false
-  #parted = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
   /** The turn this member last asked its client to rebuild the view for. */
@@ -543,19 +661,33 @@ class Membership {
   /** This member as the Session's channel addresses it. */
   readonly #delivery: MembershipDelivery
   #partChannel: (() => void) | undefined
-  /** Set once the member subscribes to its Session's readings. */
-  #partReadings: (() => void) | undefined
+  /** Releases the Session's readings, which the member is given once joined. */
+  #cells: (() => void) | undefined
+  readonly #owner: MembershipOwner
+  /** Aborts as the membership detaches, which ends a join still in flight. */
+  readonly #detaching: AbortSignal
 
   constructor(
     channels: ChannelTable,
     member: Member,
     scope: SessionScope,
-    options: MembershipOptions
+    options: MembershipOptions,
+    owner: MembershipOwner
   ) {
     this.#channels = channels
     this.#member = member
     this.#scope = scope
     this.#options = options
+    this.#owner = owner
+    this.#detaching = owner.stack.adopt(new AbortController(), (controller) =>
+      controller.abort(new MembershipDetachedError())
+    ).signal
+    owner.stack.defer(() => {
+      this.#partChannel?.()
+      this.#releaseCells()
+      this.#subscription?.close()
+      this.#subscription = undefined
+    })
     this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
@@ -569,7 +701,7 @@ class Membership {
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
       report: (cause) => {
-        if (this.#parted) return
+        if (this.detached) return
         const failure = options.describe(cause)
         this.#log("error", "channel.failed", {
           errorCode: failure.code,
@@ -584,16 +716,21 @@ class Membership {
     return this.#scope
   }
 
+  /** Whether this membership is over: it parted, or a deadline passed. */
+  get detached() {
+    return this.#owner.stack.disposed
+  }
+
   /**
    * Shows this member one event of its Session, through its stack. A member
-   * that parted is shown nothing, and neither is one whose stack hides it: a
+   * that detached is shown nothing, and neither is one whose stack hides it: a
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
    * rides on the send starting now. What the stack declines runs once the
    * event is delivered.
    */
   emit(event: SessionEvent): Promise<void> {
-    if (this.#parted) return Promise.resolve()
+    if (this.detached) return Promise.resolve()
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
@@ -615,9 +752,19 @@ class Membership {
    * resume replays, which rebuilds the view first; without it the view keeps
    * what it holds up to `position`. Either way the member then joins the
    * channel and follows the live turn. Returns the page it replayed, and
-   * `resync` when the view must rebuild itself.
+   * `resync` when the view must rebuild itself. A join that has not landed
+   * by its deadline detaches the membership, and the resume rejects then.
    */
-  async resume(
+  resume(
+    position: ResumePosition,
+    read?: () => Promise<SessionHistoryResponse>
+  ) {
+    this.#releaseCells()
+    this.#send({ type: "join" })
+    return unlessAborted(this.#resume(position, read), this.#detaching)
+  }
+
+  async #resume(
     position: ResumePosition,
     read?: () => Promise<SessionHistoryResponse>
   ): Promise<{ history?: SessionHistoryResponse; resync?: true }> {
@@ -642,22 +789,16 @@ class Membership {
   }
 
   /**
-   * Owes this member what a resume's response cannot carry, once it lands:
-   * the execution, unless the turn it named as `turnId` was replaced since;
-   * the context `usage`, when asked; and the requests a recovered wait still
-   * holds.
+   * Lands this member's join once the response to it has been written. From
+   * then on the member is given its Session's readings, each the last value
+   * at once and then each change, so none overtakes that response. A resume
+   * that `answered` with the execution of one turn has it restated.
    */
-  afterResume(turnId: string | undefined, usage: boolean) {
+  joined(answered?: { turnId: string | undefined }) {
     this.afterResponse(async () => {
-      // A turn admitted since this response was built reports itself on its
-      // own stream; restating it here would run ahead of that stream.
-      if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
-        await this.reportExecution()
-      // A resumed Session carries the window every earlier turn already grew;
-      // only a report here keeps its composer from opening on an empty gauge.
-      if (usage) this.reportUsage()
-      if (this.#coordinator.state(this.#scope) === "waiting-for-input")
-        this.reissuePending()
+      if (!this.#owner.actor.getSnapshot().matches("joining")) return
+      this.#send({ type: "joined" })
+      this.#cells = this.#subscribeCells(answered)
     })
   }
 
@@ -881,7 +1022,7 @@ class Membership {
    */
   joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
-    if (this.#parted) return
+    if (this.detached) return
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -940,34 +1081,74 @@ class Membership {
   }
 
   /**
-   * Owes this member the Session's current context usage, which a joining
-   * member needs for its gauge. The first call subscribes the member to its
-   * Session's readings, which give the last value at once and read a stale
-   * one: joining alone subscribes nothing, so no reading overtakes the
-   * response a join is part of. The coordinator's reporter re-reads a window
-   * that is unreadable right after joining, usually the provider's agent still
-   * being built, and leaves the last reading standing if it never becomes
-   * readable.
+   * Subscribes this member to its Session's readings, the ones its feeds give
+   * it. The coordinator's reporter re-reads a value that is unreadable right
+   * after joining, usually the provider's agent still being built, and leaves
+   * the last reading standing if it never becomes readable. The execution is
+   * restated once, for the resume that `answered` with it: each later move
+   * reaches the member on its turn's stream, which a reading would run ahead
+   * of.
    */
-  reportUsage() {
-    if (this.#parted) return
-    const { feeds, membershipId } = this.#options
-    if (this.#partReadings) {
-      this.#coordinator.reportUsage(this.#scope, membershipId)
-      return
-    }
-    this.#partReadings = this.#coordinator.subscribeReadings(
-      this.#scope,
+  #subscribeCells(answered?: { turnId: string | undefined }) {
+    const { coordinator, feeds, membershipId } = this.#options
+    const { agentId, sessionId } = this.#scope
+    let restating = answered
+    const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
+      execution: async () => {
+        const turn = restating
+        restating = undefined
+        if (turn)
+          await this.#restate(turn.turnId).catch((cause: unknown) =>
+            this.report(cause)
+          )
+      },
+      ...(feeds.has("usage")
+        ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
+        : {}),
+      ...(feeds.has("model")
+        ? { model: (models) => this.#deliver({ kind: "model", models }) }
+        : {}),
+    })
+    const capabilities = coordinator.subscribeCapabilities(
+      { agentId, sessionId },
       membershipId,
-      {
-        ...(feeds.has("usage")
-          ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
-          : {}),
-        ...(feeds.has("model")
-          ? { model: (models) => this.#deliver({ kind: "model", models }) }
-          : {}),
-      }
+      (capabilities) => this.#deliver({ kind: "commands", capabilities })
     )
+    const row = feeds.has("session-rows")
+      ? this.#options.subscribeRow(
+          (row, status) =>
+            void this.#deliver({ kind: "session-info", row, status })
+        )
+      : undefined
+    return () => {
+      readings()
+      capabilities()
+      row?.()
+    }
+  }
+
+  /**
+   * Restates the execution a resume answered with, unless the turn it named
+   * as `turnId` was replaced since, and asks again the requests a recovered
+   * wait still holds.
+   */
+  async #restate(turnId: string | undefined) {
+    // A turn admitted since the answer was built reports itself on its own
+    // stream; restating it here would run ahead of that stream.
+    if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
+      await this.reportExecution()
+    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+      this.reissuePending()
+  }
+
+  #releaseCells() {
+    this.#cells?.()
+    this.#cells = undefined
+  }
+
+  /** Moves this membership, which nothing moves once it detached. */
+  #send(signal: MembershipSignal) {
+    if (!this.detached) this.#owner.actor.send(signal)
   }
 
   /** Asks again the requests a recovered wait is still holding. */
@@ -1019,13 +1200,10 @@ class Membership {
     await this.#settle(reply)
   }
 
+  /** Detaches this member, first withdrawing each request it was offered. */
   part() {
     for (const requestId of [...this.#offered]) this.#withdraw(requestId)
-    this.#parted = true
-    this.#partChannel?.()
-    this.#partReadings?.()
-    this.#subscription?.close()
-    this.#subscription = undefined
+    this.#send({ type: "part" })
   }
 
   /** Gives the Session one reply of this member's. */
@@ -1052,7 +1230,7 @@ class Membership {
    */
   async #decline(requestId: string) {
     if (
-      this.#parted ||
+      this.detached ||
       !this.#offered.has(requestId) ||
       !this.#member.connection.live()
     )
@@ -1086,7 +1264,7 @@ class Membership {
     replayedCorrections = 0
   ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
-      if (this.#parted) return undefined
+      if (this.detached) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
       if (state === "idle" || turnId === undefined) return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
@@ -1179,8 +1357,8 @@ class Membership {
     subscription: CoordinatedTurnSubscription,
     replayedCorrections: number
   ) {
-    // A member that parted while its subscription was admitted keeps none.
-    if (this.#parted) {
+    // A member that detached while its subscription was admitted keeps none.
+    if (this.detached) {
       subscription.close()
       return
     }
@@ -1188,12 +1366,17 @@ class Membership {
     // A restarted stream is the same segment, whose Stop stays acknowledged.
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
-    void this.#pump(subscription, replayedCorrections)
+    this.#send({ type: "followed" })
+    void this.#pump(subscription, this.#owner.generation, replayedCorrections)
   }
 
-  /** Shows one subscription's segment to the member, event by event. */
+  /**
+   * Shows one subscription's segment to the member, event by event. The
+   * stream is the membership's `generation` until a later follow replaces it.
+   */
   async #pump(
     subscription: CoordinatedTurnSubscription,
+    generation: number,
     replayedCorrections: number
   ) {
     const dropped = this.#dropped
@@ -1223,7 +1406,7 @@ class Membership {
       if (cause instanceof FanoutOverflowError) overflow = cause
       else await this.report(cause)
     } finally {
-      if (this.#subscription === subscription) this.#subscription = undefined
+      if (!this.#owner.stale(generation)) this.#subscription = undefined
     }
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
@@ -1247,6 +1430,7 @@ class Membership {
       events: overflow.events,
       bytes: overflow.bytes,
     })
+    this.#send({ type: "fell-behind" })
     await this.#invalidate()
   }
 

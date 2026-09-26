@@ -12,6 +12,7 @@ import {
   type ServerRuntime,
   type ServerRuntimePublicError,
 } from "../core/runtime"
+import { MembershipDetachedError } from "../core/channel"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
 
@@ -163,7 +164,8 @@ function coordinatorError(cause: unknown) {
   if (cause instanceof ServerRequestStaleError) return staleRequest()
   if (
     cause instanceof ServerTurnCapacityError ||
-    cause instanceof ServerTurnSteerUnavailableError
+    cause instanceof ServerTurnSteerUnavailableError ||
+    cause instanceof MembershipDetachedError
   )
     return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()

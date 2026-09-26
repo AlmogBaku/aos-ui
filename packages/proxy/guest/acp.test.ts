@@ -517,6 +517,7 @@ function harness(options: HarnessOptions = {}) {
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
   })
+  coordinator.bindCapabilities(runtime)
   const runtimeInstance: RuntimeInstance = {
     id: RUNTIME_ID,
     runtime,
