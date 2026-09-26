@@ -617,7 +617,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        {}
+        expect.objectContaining({})
       )
     })
     expect(visible(result.current)).toEqual([
@@ -645,7 +645,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        { rewindSourceId: "provider-u1" }
+        expect.objectContaining({ rewindSourceId: "provider-u1" })
       )
     })
     expect(visible(result.current)).toEqual([
@@ -675,9 +675,11 @@ describe("useAcpRuntime", () => {
       result.current.thread.startRun({ parentId: "u1" })
     })
     await waitFor(() => {
-      expect(fake.prompt).toHaveBeenCalledWith(SESSION_ID, [], {
-        rewindSourceId: "provider-u1",
-      })
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [],
+        expect.objectContaining({ rewindSourceId: "provider-u1" })
+      )
     })
   })
 
@@ -808,7 +810,7 @@ describe("useAcpRuntime", () => {
         expect(fake.prompt).toHaveBeenCalledWith(
           SESSION_ID,
           [{ type: "text", text: "Ship it now" }],
-          { rewindSourceId: "provider-u1" }
+          expect.objectContaining({ rewindSourceId: "provider-u1" })
         )
       })
       await fail(fake)
@@ -904,7 +906,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        {}
+        expect.objectContaining({})
       )
     })
     expect(resolveSessionId).toHaveBeenCalledTimes(1)
@@ -955,7 +957,7 @@ describe("useAcpRuntime", () => {
             mimeType: "image/png",
           },
         ],
-        { attachmentStageId: "stage-1" }
+        expect.objectContaining({ attachmentStageId: "stage-1" })
       )
     })
     expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [attachment])
@@ -1039,7 +1041,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Also check the logs" }],
-        {}
+        expect.objectContaining({})
       )
     })
   })
@@ -1690,5 +1692,74 @@ describe("useAcpRuntime extras", () => {
     })
     expect(screen.getByText("Run: running")).toBeInTheDocument()
     expect(screen.getByRole("listitem")).toHaveTextContent("Ship it")
+  })
+})
+
+describe("useAcpRuntime clientId (3.49)", () => {
+  it("includes a clientId in the prompt meta and uses different ids per send", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    const capturedIds: Array<string | undefined> = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(fake.prompt as any).mockImplementation(
+      async (
+        _sid: string,
+        _blocks: unknown,
+        meta: Record<string, unknown>
+      ) => {
+        capturedIds.push(meta.clientId as string | undefined)
+        return { messageId: `u${capturedIds.length}` }
+      }
+    )
+
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Send one" }],
+      })
+    })
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Send two" }],
+      })
+    })
+
+    await waitFor(() => expect(capturedIds).toHaveLength(2))
+    expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(capturedIds[1]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(capturedIds[0]).not.toBe(capturedIds[1])
+  })
+
+  it("keeps the clientId stable when the prompt is retried after transport cancellation", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    const capturedIds: Array<string | undefined> = []
+    let attempt = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(fake.prompt as any).mockImplementation(
+      async (
+        _sid: string,
+        _blocks: unknown,
+        meta: Record<string, unknown>
+      ) => {
+        attempt += 1
+        capturedIds.push(meta.clientId as string | undefined)
+        if (attempt === 1) throw RequestError.requestCancelled()
+        return { messageId: "u1" }
+      }
+    )
+
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Ship it" }],
+      })
+    })
+
+    await waitFor(() => expect(capturedIds).toHaveLength(2))
+    expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)
+    // Same clientId used on the retry so the proxy can deduplicate.
+    expect(capturedIds[0]).toBe(capturedIds[1])
   })
 })

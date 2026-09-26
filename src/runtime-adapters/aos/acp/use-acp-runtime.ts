@@ -47,6 +47,7 @@ import {
 } from "@/runtime-adapters/thread-history"
 
 import type { AcpApprovals } from "./acp-approvals"
+import { isRequestCancelled } from "./connection"
 import type { AcpConnection } from "./types"
 import {
   applyApprovals,
@@ -563,8 +564,7 @@ function createAcpController({
         undefined
       )
     )
-    try {
-      const { messageId } = await connection.prompt(sessionId, content, meta)
+    const settle = (messageId: string) => {
       // Only an accepted turn replaces anything: the provider has dropped the
       // turns this one replaces, so the projection follows it here and the
       // rewound tail stops lingering beside the resent one. A refused prompt
@@ -579,12 +579,27 @@ function createAcpController({
         cursorStale = true
         transcripts += 1
       }
-    } catch (error) {
+    }
+    const fail = (error: unknown) => {
       const kept = state.messages
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
       commit(retainMessages(state, kept))
       throw refuse(error)
+    }
+    try {
+      const { messageId } = await connection.prompt(sessionId, content, meta)
+      settle(messageId)
+    } catch (firstError) {
+      // Retry once on transport cancellation with the same clientId so the
+      // proxy can deduplicate the redelivered turn.
+      if (!isRequestCancelled(firstError)) return fail(firstError)
+      try {
+        const { messageId } = await connection.prompt(sessionId, content, meta)
+        settle(messageId)
+      } catch (retryError) {
+        fail(retryError)
+      }
     }
   }
 
@@ -701,6 +716,9 @@ function createAcpController({
       } catch (error) {
         throw refuse(error)
       }
+      // A clientId is generated once per send and kept stable across a retry
+      // so the proxy can deduplicate the turn on reconnect.
+      const clientId = crypto.randomUUID()
       const rewound = rewindFor(message.sourceId)
       await prompt(
         sessionId,
@@ -710,6 +728,7 @@ function createAcpController({
           ...(staged === undefined
             ? {}
             : { attachmentStageId: staged.stageId }),
+          clientId,
         },
         rewound?.sourceId
       )
@@ -730,10 +749,11 @@ function createAcpController({
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a
       // rejection here. The refusal reaches the operator on the turn the prompt
       // reported it on; rethrowing would only raise an unobserved rejection.
+      const clientId = crypto.randomUUID()
       await prompt(
         sessionId,
         blocks,
-        { ...rewound?.meta },
+        { ...rewound?.meta, clientId },
         rewound?.sourceId
       ).catch((error: unknown) => {
         if (!isMessageNotSentError(error)) throw error
