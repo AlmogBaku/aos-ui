@@ -132,6 +132,7 @@ const workspaceCopy = {
     pending: "Pending",
     completed: "Completed",
     failed: "Failed",
+    capacity: "The AOS server is full. Reconnecting shortly.",
   },
   he: {
     retry: "ניסיון חוזר",
@@ -146,6 +147,7 @@ const workspaceCopy = {
     pending: "ממתינה",
     completed: "הושלמה",
     failed: "נכשלה",
+    capacity: "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
   },
 } satisfies Record<Locale, Record<string, unknown>>
 
@@ -462,6 +464,7 @@ function WorkspaceContent({
   const {
     environmentLabel,
     activityCoverage,
+    connectionStatus,
     composer: composerFeatures,
   } = bundle
   const assistantInstructions = bundle.assistantConfig?.instructions
@@ -691,6 +694,15 @@ function WorkspaceContent({
         onActionError={(reason) => setActionError(toError(reason))}
       >
         <div className="relative h-full min-h-0">
+          {/* Mounted empty so the text is announced when it appears. */}
+          <p
+            className="pointer-events-none absolute inset-x-0 top-2 z-10 px-4 text-center text-sm text-muted-foreground"
+            role="status"
+          >
+            {connectionStatus === "capacity"
+              ? workspaceCopy[locale].capacity
+              : null}
+          </p>
           {workspaceError ? (
             <WorkspaceError
               key={workspaceError.message}

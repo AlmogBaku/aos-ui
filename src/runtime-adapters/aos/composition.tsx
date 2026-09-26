@@ -107,6 +107,11 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [connection])
+  const connectionStatus = useSyncExternalStore(
+    connection.subscribeStatus,
+    () => connection.status,
+    () => connection.status
+  )
   const client = useMemo(
     () => createAcpWorkspaceClient({ connection, rest }),
     [connection, rest]
@@ -444,6 +449,7 @@ function ReadyAosRuntimeProvider({
     media,
     activityCoverage: "workspace",
     push,
+    connectionStatus: connectionStatus === "capacity" ? "capacity" : undefined,
   })
 }
 

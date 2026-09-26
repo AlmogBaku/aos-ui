@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useEffect, useState } from "react"
 
 import { en } from "@/lib/i18n/dictionaries/en"
-import type { WorkspaceAdapter } from "@/runtime-adapters/contracts"
+import { he } from "@/lib/i18n/dictionaries/he"
+import type {
+  HarnessRuntime,
+  WorkspaceAdapter,
+} from "@/runtime-adapters/contracts"
 
 import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
 import { AosUiWorkspace } from "./aos-ui-workspace"
@@ -115,6 +119,38 @@ describe("AosUiApp fixture composition", () => {
       focus.mockRestore()
     }
   })
+
+  it.each([
+    ["en", "The AOS server is full. Reconnecting shortly."],
+    ["he", "שרת AOS מלא כרגע. מתחברים מחדש בקרוב."],
+  ] as const)(
+    "tells the %s reader the server is full until the connection returns",
+    async (locale, capacityText) => {
+      function CapacityFixture({
+        connectionStatus,
+      }: Pick<HarnessRuntime, "connectionStatus">) {
+        const bundle = useFixtureRuntimeBundle()
+        return (
+          <AosUiWorkspace
+            runtime={{ ...asHarnessRuntime(bundle), connectionStatus }}
+            locale={locale}
+            dictionary={locale === "he" ? he : en}
+            now={FIXTURE_NOW}
+          />
+        )
+      }
+      const { rerender } = render(
+        <CapacityFixture connectionStatus="capacity" />
+      )
+
+      expect(await screen.findByText(capacityText)).toHaveAttribute(
+        "role",
+        "status"
+      )
+      rerender(<CapacityFixture />)
+      expect(screen.queryByText(capacityText)).toBeNull()
+    }
+  )
 
   it("removes an idle Session tab when it reaches the exact 12-hour boundary", async () => {
     vi.useFakeTimers()

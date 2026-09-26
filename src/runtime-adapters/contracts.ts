@@ -326,6 +326,11 @@ export type HarnessRuntime = {
   /** Present only where the provider can subscribe this device to Web Push. */
   push?: PushSubscriptionManager
   environmentLabel?: string
+  /**
+   * Present only while the provider's server is full; the runtime keeps
+   * retrying the connection on its own.
+   */
+  connectionStatus?: "capacity"
 }
 
 export type WorkspaceCapabilities = {
