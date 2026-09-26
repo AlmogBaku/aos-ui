@@ -178,17 +178,6 @@ export const AosSessionInfoMetaSchema = readObject({
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 
-export const AosExecutionSchema = readObject({
-  status: SessionStatusSchema,
-  turnId: IdentifierSchema.optional(),
-})
-
-/** `NewSessionResponse._meta.aos` */
-export const AosSessionNewResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-})
-
 /** `ResumeSessionRequest._meta.aos` */
 export const AosSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */
@@ -254,12 +243,10 @@ export const AosHistoryPageTagSchema = readObject({
  * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
  * `resync: true` means `after` was beyond bounded replay; the client must
- * resume again with `replayFrom: { type: "start" }`.
+ * resume again with `replayFrom: { type: "start" }`. The Session's row,
+ * execution, models and capabilities follow the answer as updates.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  execution: AosExecutionSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
   position: readObject({
     turnId: IdentifierSchema,
     sequence: SequenceSchema,
@@ -304,13 +291,15 @@ export const AosSteerRequestSchema = z.strictObject({
 export const AosSteerResponseSchema = TurnSteerResponseSchema
 
 /**
- * `_aos/session/focus` notification: the exposed Session, or none, plus the
- * workspace presence the browser re-sends every `PRESENCE_HEARTBEAT_MS`. An
- * absent `foreground` means an exposed Session is in the foreground, and an
- * absent `idle` means the operator is still interacting.
+ * `_aos/session/focus` request, answered `{}`: the exposed Session, or none,
+ * plus the workspace presence the browser re-sends every
+ * `PRESENCE_HEARTBEAT_MS`. A report without a `sessionId` changes nothing, so
+ * the browser can probe its link with `{}`. An absent `foreground` means an
+ * exposed Session is in the foreground, and an absent `idle` means the operator
+ * is still interacting.
  */
-export const AosFocusNotificationSchema = z.strictObject({
-  sessionId: IdentifierSchema.nullable(),
+export const AosFocusRequestSchema = z.strictObject({
+  sessionId: IdentifierSchema.nullable().optional(),
   foreground: z.boolean().optional(),
   idle: z.boolean().optional(),
 })

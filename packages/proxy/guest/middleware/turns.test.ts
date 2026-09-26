@@ -501,10 +501,6 @@ describe("a tool call flagged an MCP App only at its finish", () => {
 })
 
 describe("guest turns layer", () => {
-  /** One event through a guest's turns layer. */
-  const shown = (event: MemberEvent) =>
-    runEvents([createTurnsMiddleware()], event, { decline: () => undefined })
-
   it("drops the answer to a question asked by a call the guest was not shown", () => {
     const layer = [createTurnsMiddleware()]
     const act = { decline: () => undefined }
@@ -548,15 +544,5 @@ describe("guest turns layer", () => {
       kind: "question-answered",
       request: { toolCallId: "app-call" },
     })
-  })
-
-  it("drops a command list, which only an operator's feed emits", () => {
-    expect(
-      shown({
-        sessionId: "ref",
-        kind: "commands",
-        capabilities: {},
-      } as MemberEvent)
-    ).toBeUndefined()
   })
 })

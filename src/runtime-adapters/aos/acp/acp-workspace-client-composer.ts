@@ -9,10 +9,10 @@ import type { z } from "zod"
 
 import type { SlashCommand } from "@aos/protocol"
 import {
+  AosAvailableCommandsMetaSchema,
   AosStateMetaSchema,
   AosUsageMetaSchema,
   type AosCost,
-  type AosSessionResumeResponseMetaSchema,
 } from "@aos/protocol/acp"
 
 import type {
@@ -41,7 +41,7 @@ const MODEL_CATEGORY = "model"
 const EFFORT_CATEGORY = "thought_level"
 
 type AcpCapabilities = z.infer<
-  typeof AosSessionResumeResponseMetaSchema
+  typeof AosAvailableCommandsMetaSchema
 >["capabilities"]
 
 type UsageUpdate = Extract<SessionUpdate, { sessionUpdate: "usage_update" }>
@@ -67,7 +67,7 @@ export type AcpTurnUsage = {
 }
 
 type SessionEntry = {
-  capabilities: AcpCapabilities
+  capabilities?: AcpCapabilities
   projection: AcpModelProjection
   /** The model the projection names, the same reference until it changes. */
   current?: ComposerModelCurrent
@@ -239,17 +239,16 @@ export function foldTurnUsage(
 }
 
 /** Slash commands stay part of the capability projection the composer reads. */
-function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
-  if (!entry.commands) return entry.capabilities
+function capabilitiesOf(
+  capabilities: AcpCapabilities,
+  commands: SlashCommand[] | undefined
+): AosWorkspaceCapabilities {
+  if (!commands) return capabilities
   return {
-    ...entry.capabilities,
+    ...capabilities,
     workspace: {
-      ...entry.capabilities.workspace,
-      slashCommands: {
-        status: "available",
-        scope: "session",
-        commands: entry.commands,
-      },
+      ...capabilities.workspace,
+      slashCommands: { status: "available", scope: "session", commands },
     },
   }
 }
@@ -261,6 +260,8 @@ export function createAcpComposerStore(connection: AcpConnection) {
   const early = new Map<string, [SessionUpdate, unknown][]>()
   const contextListeners = new Map<string, Set<() => void>>()
   const modelListeners = new Map<string, Set<() => void>>()
+  /** Told whenever a Session reports its capabilities or its config options. */
+  const reportListeners = new Map<string, Set<() => void>>()
   const feeds = new Map<string, ComposerModelFeed>()
 
   function listen(
@@ -307,13 +308,17 @@ export function createAcpComposerStore(connection: AcpConnection) {
       early.get(sessionId)?.push([update, meta])
       return
     }
-    if (SessionUpdate.isConfigOptionUpdate(update))
+    if (SessionUpdate.isConfigOptionUpdate(update)) {
       project(known, sessionId, projectModels(update.configOptions))
-    else if (SessionUpdate.isAvailableCommandsUpdate(update))
+      notify(reportListeners, sessionId)
+    } else if (SessionUpdate.isAvailableCommandsUpdate(update)) {
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
       )
-    else if (SessionUpdate.isUsageUpdate(update)) {
+      const aos = AosAvailableCommandsMetaSchema.safeParse(meta)
+      if (aos.success) known.capabilities = aos.data.capabilities
+      notify(reportListeners, sessionId)
+    } else if (SessionUpdate.isUsageUpdate(update)) {
       const context = projectContext(update, meta)
       if (!context) return
       known.context = context
@@ -331,25 +336,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
     }
   }
 
-  /** Records what `session/new` and `session/resume` reported for a Session. */
-  function resume(
-    sessionId: string,
-    resumed: {
-      configOptions: readonly SessionConfigOption[]
-      capabilities: AcpCapabilities
-    }
-  ) {
-    const previous = sessions.get(sessionId)
-    const known: SessionEntry = {
-      capabilities: resumed.capabilities,
-      projection: {},
-      ...(previous?.current ? { current: previous.current } : {}),
-      ...(previous?.context ? { context: previous.context } : {}),
-      ...(previous?.turns ? { turns: previous.turns } : {}),
-      ...(previous?.commands ? { commands: previous.commands } : {}),
-    }
-    sessions.set(sessionId, known)
-    project(known, sessionId, projectModels(resumed.configOptions))
+  /**
+   * Opens the Session's projection once `session/new` or `session/resume`
+   * answered. What the Session reports follows the answer as updates.
+   */
+  function resume(sessionId: string) {
+    if (!sessions.has(sessionId)) sessions.set(sessionId, { projection: {} })
     observe(sessionId)
     const held = early.get(sessionId) ?? []
     early.delete(sessionId)
@@ -388,7 +380,28 @@ export function createAcpComposerStore(connection: AcpConnection) {
     return feed
   }
 
-  function models(sessionId: string) {
+  /** Resolves once the Session has reported what `read` finds. */
+  function until<T>(
+    sessionId: string,
+    read: (known: SessionEntry) => T | undefined
+  ) {
+    const found = () => {
+      const known = sessions.get(sessionId)
+      return known && read(known)
+    }
+    return new Promise<T>((resolve) => {
+      const now = found()
+      if (now !== undefined) return resolve(now)
+      const leave = listen(reportListeners, sessionId, () => {
+        const reported = found()
+        if (reported === undefined) return
+        leave()
+        resolve(reported)
+      })
+    })
+  }
+
+  function projectedModels(sessionId: string) {
     const projected = entry(sessionId).projection.models
     if (!projected) throw new Error("The Session reports no models")
     return projected
@@ -411,14 +424,20 @@ export function createAcpComposerStore(connection: AcpConnection) {
         await connection.setConfigOption(sessionId, configId, valueId)
       )
     )
-    return models(sessionId)
+    return projectedModels(sessionId)
   }
 
   return {
     observe,
     resume,
-    capabilities: (sessionId: string) => capabilitiesOf(entry(sessionId)),
-    models,
+    capabilities: (sessionId: string) =>
+      until(
+        sessionId,
+        ({ capabilities, commands }) =>
+          capabilities && capabilitiesOf(capabilities, commands)
+      ),
+    models: (sessionId: string) =>
+      until(sessionId, ({ projection }) => projection.models),
     /** The newest reading, or none while the provider has reported none. */
     context: (sessionId: string) => sessions.get(sessionId)?.context,
     /** The settled turns' spend, notified with the context. */

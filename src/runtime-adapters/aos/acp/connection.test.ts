@@ -9,7 +9,6 @@ import {
 import { describe, expect, it, onTestFinished, vi } from "vitest"
 import { z } from "zod"
 
-import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
   AOS_METHODS,
@@ -18,7 +17,6 @@ import {
   AOS_STOP_REASONS,
   AosReplayBeforeSchema,
   type AosHistoryCursor,
-  type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
 import { useFakeClock } from "../../../../test/support/fake-clock"
@@ -32,73 +30,6 @@ const SESSION_ID = "session-1"
 const AGENT_ID = "agent-1"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const CLIENT_INFO = { name: "aos-ui", version: "1.2.3" }
-
-type AcpCapabilities = z.infer<
-  typeof AosSessionNewResponseMetaSchema
->["capabilities"]
-
-const unavailable = { status: "unavailable", reason: "not-supported" } as const
-
-function capabilities(): AcpCapabilities {
-  return {
-    workspace: {
-      slashCommands: {
-        status: "available",
-        scope: "session",
-        commands: [{ name: "help" }],
-      },
-      models: {
-        status: "available",
-        scope: "session",
-        selection: "native-session",
-        choices: "provider-reported",
-      },
-      context: {
-        status: "available",
-        scope: "session",
-        source: "provider-usage-or-estimate",
-        breakdown: "provider-categories",
-      },
-      todos: unavailable,
-      activity: unavailable,
-    },
-    interactions: {
-      steering: {
-        status: "available",
-        scope: "active-turn",
-        semantics: "visible-user-message",
-        input: "text",
-        fallback: "provider-queue",
-      },
-      approvals: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        choices: [{ value: "once", scope: "request" }],
-        maxPending: 8,
-      },
-      questions: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-empty-answer",
-        maxQuestions: 8,
-        maxChoicesPerQuestion: 8,
-        maxAnswerValuesPerQuestion: 8,
-        maxStringBytes: 4_096,
-      },
-      reactions: unavailable,
-    },
-    content: {
-      attachments: unavailable,
-      artifacts: unavailable,
-      mcpApps: unavailable,
-      transcription: unavailable,
-      speech: unavailable,
-    },
-  }
-}
 
 function sessionInfoMeta() {
   return { agentId: AGENT_ID, status: "idle", archived: false, unread: true }
@@ -195,16 +126,7 @@ function createProxyAgent(
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       record(methods.agent.session.new, params)
-      return {
-        sessionId: SESSION_ID,
-        configOptions: [modelOption("sonnet")],
-        _meta: {
-          [AOS_META_KEY]: {
-            session: sessionInfoMeta(),
-            capabilities: capabilities(),
-          },
-        },
-      }
+      return { sessionId: SESSION_ID }
     })
     .onRequest(methods.agent.session.list, ({ params }) => {
       record(methods.agent.session.list, params)
@@ -246,12 +168,8 @@ function createProxyAgent(
       record(RESUME_REPLIED, params)
       const replayed = replayFrom?.type === "start"
       return {
-        configOptions: [modelOption("opus")],
         _meta: {
           [AOS_META_KEY]: {
-            session: sessionInfoMeta(),
-            execution: { status: "running", turnId: "run-1" },
-            capabilities: capabilities(),
             ...(resumes === options.resyncOnResume ? { resync: true } : {}),
             ...(replayed && options.history
               ? { history: options.history }
@@ -477,9 +395,7 @@ describe("ACP connection", () => {
       agentId: AGENT_ID,
       title: "Weekly report",
     })
-    expect(created.sessionId).toBe(SESSION_ID)
-    expect(created.configOptions).toHaveLength(1)
-    expect(created.meta.session).toMatchObject({ agentId: AGENT_ID })
+    expect(created).toEqual({ sessionId: SESSION_ID })
     expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
       cwd: "/",
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
@@ -496,16 +412,13 @@ describe("ACP connection", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
 
-    const resumed = await connection.resumeSession(SESSION_ID, {
+    await connection.resumeSession(SESSION_ID, {
       replayFromStart: false,
       after: 12,
       turnId: "run-1",
     })
-    expect(resumed.meta.execution).toEqual({
-      status: "running",
-      turnId: "run-1",
-    })
-    // The owner reported by `session/new` travels on every later resume.
+    // The Agent `session/new` created the Session in travels on every later
+    // resume.
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
       _meta: {

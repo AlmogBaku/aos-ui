@@ -19,7 +19,6 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
-  AOS_STOP_REASONS,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -43,6 +42,7 @@ import {
   type GuestInvitationService,
 } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog } from "../core/catalog"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -428,8 +428,8 @@ type HarnessOptions = {
     agentId: string,
     sessionId: string
   ) => string | undefined
-  /** What the invited lookup, the capabilities read or a run's start throws instead. */
-  fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
+  /** What the invited lookup or a run's start throws instead. */
+  fails?: { lookup?: unknown; start?: unknown }
   /** How many turns every guest together may hold; four by default. */
   guestActiveExecutions?: number
 }
@@ -460,10 +460,7 @@ function harness(options: HarnessOptions = {}) {
   const updateSession = vi.fn(async () => undefined)
   const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
-  const workspaceCapabilities = vi.fn(async () => {
-    if (options.fails?.capabilities) throw options.fails.capabilities
-    return CAPABILITIES
-  })
+  const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(
     async (_agentId: string, _sessionId: string, _limit: number, offset = 0) =>
       options.history?.(offset) ?? HISTORY
@@ -474,6 +471,7 @@ function harness(options: HarnessOptions = {}) {
     limit,
     offset,
   }))
+  let catalogChanged: (() => void) | undefined
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
@@ -488,8 +486,10 @@ function harness(options: HarnessOptions = {}) {
     listAllSessions,
     listSessions: unsupported,
     history,
+    // The operator's row of the invited Session, under the id the guest's
+    // row cell is keyed by.
     getSession: async () => ({
-      id: STORED,
+      id: REF,
       agentId: AGENT,
       title: "Operator-owned title",
       archived: false,
@@ -504,7 +504,10 @@ function harness(options: HarnessOptions = {}) {
     updateModel: unsupported,
     context: options.readings ? async () => USAGE : unsupported,
     subscribeSessionInvalidation: unsupported,
-    subscribeCatalogChanges: unsupported,
+    async subscribeCatalogChanges(listener) {
+      catalogChanged = listener
+      return () => undefined
+    },
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
@@ -517,6 +520,7 @@ function harness(options: HarnessOptions = {}) {
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
   })
+  coordinator.bindCapabilities(runtime)
   const runtimeInstance: RuntimeInstance = {
     id: RUNTIME_ID,
     runtime,
@@ -536,8 +540,11 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    channels: createChannels({
-      snapshot: (scope) => coordinator.snapshot(scope),
+    channels: createChannels({ coordinator, runtime }),
+    catalog: createCatalog({
+      runtime,
+      coordinator,
+      rows: createSessionRows({ now: () => NOW }),
     }),
     guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,
@@ -547,11 +554,7 @@ function harness(options: HarnessOptions = {}) {
     },
     cancel: () => undefined,
   }
-  const context = createGuestConnection(
-    listener,
-    createSessionRows({ now: () => NOW }),
-    "connection-1"
-  )
+  const context = createGuestConnection(listener, "connection-1")
 
   const { connection, recorder } = connectClient(context, {
     name: "aos-guest-browser",
@@ -578,6 +581,11 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     listAllSessions,
+    /** The runtime reports that its Session list changed. */
+    changeCatalog() {
+      if (!catalogChanged) throw new Error("Nothing watches the catalog")
+      catalogChanged()
+    },
     /** Advertises paging older history, as the AOS browser does, by default. */
     initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
@@ -794,11 +802,14 @@ describe("guest ACP listener", () => {
     await expect(
       test.agent.request(AOS_METHODS.agents.list, undefined)
     ).rejects.toMatchObject(required)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).rejects.toMatchObject(required)
     expect(test.resolveInvitedSession).not.toHaveBeenCalled()
     test.close()
   })
 
-  it("stops nothing, reports no focus and sends no feed before login", async () => {
+  it("stops nothing and sends no feed before login", async () => {
     const test = harness({
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
@@ -825,10 +836,6 @@ describe("guest ACP listener", () => {
 
     socket.send({
       method: methods.agent.session.cancel,
-      params: { sessionId: REF },
-    })
-    socket.send({
-      method: AOS_METHODS.session.focus,
       params: { sessionId: REF },
     })
     await settled()
@@ -910,33 +917,36 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "idle", archived: false },
-          execution: { status: "idle" },
-        },
-      },
-    })
-    // The operator's own Session title never travels to a guest.
-    expect(JSON.stringify(resumed)).not.toContain("Operator-owned title")
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          capabilities: {
-            workspace: {
-              slashCommands: { status: "unavailable" },
-              models: { status: "unavailable" },
+    // The answer says only where the replay ended.
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    const commands = await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(commands.params).toMatchObject({
+      sessionId: REF,
+      update: {
+        availableCommands: [],
+        _meta: {
+          [AOS_META_KEY]: {
+            capabilities: {
+              workspace: {
+                slashCommands: { status: "unavailable" },
+                models: { status: "unavailable" },
+              },
+              interactions: { steering: CAPABILITIES.interactions.steering },
             },
-            interactions: { steering: CAPABILITIES.interactions.steering },
           },
         },
       },
     })
-    expect(JSON.stringify(resumed)).not.toContain("Draft a plan")
+    expect(JSON.stringify(commands.params)).not.toContain("Draft a plan")
     expect(test.history).toHaveBeenCalledWith(AGENT, STORED, 500, 0)
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
+    // The operator's own Session title never travels to a guest.
+    expect(replayed).not.toContain("Operator-owned title")
     expect(replayed).not.toContain("private reasoning")
     expect(replayed).not.toContain(OPERATOR_PATH)
     expect(replayed).not.toContain("+new")
@@ -1041,9 +1051,7 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: { [AOS_META_KEY]: { execution: { status: "idle" } } },
-    })
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: {} } })
     expect(test.resolveInvitedSession).toHaveBeenCalledWith(
       AGENT,
       REF,
@@ -1055,7 +1063,28 @@ describe("guest ACP listener", () => {
       expect.anything()
     )
     expect(test.history).not.toHaveBeenCalled()
-    expect(updates(test.recorder)).toEqual([])
+    // What the guest can do there is all it is shown before its first Send.
+    await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(updates(test.recorder)).toMatchObject([
+      {
+        sessionId: REF,
+        update: {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [],
+          _meta: {
+            [AOS_META_KEY]: {
+              capabilities: {
+                workspace: { slashCommands: { status: "unavailable" } },
+              },
+            },
+          },
+        },
+      },
+    ])
     test.close()
   })
 
@@ -1370,27 +1399,51 @@ describe("guest ACP listener", () => {
     await test.prompt("Export the notes")
     const signal = await withdrawal.promise
 
-    // The operator's answer names the Session by its provider scope alone.
-    await test.coordinator.answer(
-      { agentId: AGENT, providerSessionId: STORED },
-      {
-        requestId: QUESTION.requestId,
-        status: "resolved",
-        payload: { answers: [["later"]] },
-      }
-    )
+    // The operator's answer names the Session by its provider scope alone,
+    // and brings the channel into the turn it continues, as the operator's
+    // membership does.
+    const scope = { agentId: AGENT, providerSessionId: STORED }
+    const continued = await test.coordinator.answer(scope, {
+      requestId: QUESTION.requestId,
+      status: "resolved",
+      payload: { answers: [["later"]] },
+    })
+    if (!continued) throw new Error("The answer did not continue the turn")
+    test.listener.channels.continueTurn(scope, continued.from, continued.turnId)
+    await test.listener.channels.sync(scope)
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))
     // The guest follows the operator's reply to its end, past the withdrawal.
     await test.recorder.wait(
       (entry) =>
-        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes(continued.turnId) &&
         (entry.params as { update?: { state?: unknown } }).update?.state ===
           "idle",
-      "the turn to settle idle"
+      "the continued turn to settle idle"
     )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+  })
+
+  it("makes one turn of a prompt its client sends twice", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const send = () =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+        _meta: { [AOS_META_KEY]: { clientId: "send-1" } },
+      })
+
+    const first = await send()
+    expect(await send()).toEqual(first)
+    expect(test.start).toHaveBeenCalledOnce()
     test.close()
   })
 
@@ -1463,8 +1516,9 @@ describe("guest ACP listener", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: REF })
-    await test.resume(REF)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).resolves.toEqual({})
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
@@ -1644,37 +1698,6 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("sends a guest no usage or model reading", async () => {
-    const test = harness({
-      readings: true,
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          { kind: TurnEventKind.ModelChanged, modelId: "opus" },
-          ...RUN_EVENTS.slice(1),
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview")
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes('"idle"'),
-      'an update carrying "idle"'
-    )
-    await settled()
-
-    const kinds = updates(test.recorder).map(
-      (params) =>
-        (params as { update: { sessionUpdate: string } }).update.sessionUpdate
-    )
-    expect(kinds).toContain("agent_message_chunk")
-    expect(kinds).not.toContain("usage_update")
-    expect(kinds).not.toContain("config_option_update")
-    test.close()
-  })
-
   it.each(ACTING_FRAMES)(
     "refuses %s once the invitation lapsed, before its timer fires",
     async (_name, frame) => {
@@ -1801,17 +1824,6 @@ const PUBLIC_CODES: readonly number[] = [
   METHOD_NOT_FOUND,
   RequestError.requestCancelled().code,
 ]
-
-/** The `state_update` a turn that failed in view ends on. */
-function failedState(socket: { frames: readonly Frame[] }) {
-  return vi.waitFor(() => {
-    const frame = socket.frames.find(({ params }) =>
-      JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
-    )
-    if (!frame) throw new Error("No failed state_update")
-    return frame
-  })
-}
 
 /** A reply's error carries a public code and nothing that describes the host. */
 function expectPublicError(reply: Frame) {
@@ -2280,29 +2292,7 @@ describe("guest scope and commands", () => {
     }
   )
 
-  it.each(FAILURES)(
-    "answers %s from a provider call with a public code alone",
-    async (_name, failure) => {
-      const test = harness({
-        existing: true,
-        fails: { capabilities: failure() },
-      })
-      const socket = await loggedInWire(
-        test.listener,
-        await invite(test.invitations)
-      )
-
-      expectPublicError(
-        await socket.request(methods.agent.session.resume, {
-          sessionId: REF,
-          cwd: "/",
-        })
-      )
-      socket.close()
-    }
-  )
-
-  it("reports a run that failed to start with a public code alone", async () => {
+  it("answers a run that failed to start with a public code alone", async () => {
     const test = harness({
       existing: true,
       fails: { start: new RequestError(-32603, OPERATOR_SECRET) },
@@ -2312,27 +2302,12 @@ describe("guest scope and commands", () => {
       await invite(test.invitations)
     )
 
-    await socket.request(methods.agent.session.prompt, {
-      sessionId: REF,
-      prompt: [{ type: "text", text: "Hello" }],
-    })
-    const failure = await failedState(socket)
-
-    expect(failure.params).toEqual({
-      sessionId: REF,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
-        _meta: {
-          [AOS_META_KEY]: {
-            sequence: expect.any(Number),
-            turnId: expect.any(String),
-            code: "internal_error",
-          },
-        },
-      },
-    })
+    expectPublicError(
+      await socket.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+      })
+    )
     socket.close()
   })
 
@@ -2372,15 +2347,13 @@ describe("guest scope and commands", () => {
       await invite(test.invitations, "second_ref"),
       "second_ref"
     )
-    await second.request(methods.agent.session.prompt, {
-      sessionId: "second_ref",
-      prompt: hello,
-    })
-
-    expect((await failedState(second)).params).toMatchObject({
-      update: {
-        _meta: { [AOS_META_KEY]: { code: "temporarily_unavailable" } },
-      },
+    expect(
+      await second.request(methods.agent.session.prompt, {
+        sessionId: "second_ref",
+        prompt: hello,
+      })
+    ).toMatchObject({
+      error: { code: AOS_JSONRPC_ERRORS.temporarilyUnavailable },
     })
     expect(test.start).toHaveBeenCalledTimes(2)
     first.close()
@@ -2410,8 +2383,8 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest no Session row, command list, catalog signal or read state", async () => {
-    const test = harness({ existing: true })
+  it("sends a guest its command list and no Session row, usage, model, catalog signal or read state", async () => {
+    const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
@@ -2421,14 +2394,17 @@ describe("guest scope and commands", () => {
       (entry) => JSON.stringify(entry.params).includes('"idle"'),
       'an update carrying "idle"'
     )
+    test.changeCatalog()
     await settled()
 
     const kinds = updates(test.recorder).map(
       (params) =>
         (params as { update: { sessionUpdate: string } }).update.sessionUpdate
     )
+    expect(kinds).toContain("available_commands_update")
     expect(kinds).not.toContain("session_info_update")
-    expect(kinds).not.toContain("available_commands_update")
+    expect(kinds).not.toContain("usage_update")
+    expect(kinds).not.toContain("config_option_update")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
     test.close()

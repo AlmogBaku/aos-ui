@@ -9,11 +9,13 @@ import {
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
   ServerSessionNotFoundError,
-  type ServerRuntime,
   type ServerRuntimePublicError,
 } from "../core/runtime"
+import { MembershipDetachedError } from "../core/channel"
+import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
+import type { AcpConnectionContext } from "./types"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
@@ -34,11 +36,11 @@ export function parseMeta<Schema extends z.ZodType>(
   meta: AcpMeta
 ): z.output<Schema> {
   const parsed = schema.safeParse(meta?.[AOS_META_KEY] ?? {})
-  if (!parsed.success) throw invalidRequest()
+  if (!parsed.success) throw invalidParams()
   return parsed.data
 }
 
-export function invalidRequest() {
+export function invalidParams() {
   return RequestError.invalidParams()
 }
 
@@ -58,7 +60,7 @@ export function notFound() {
 export function refusalError(refusal: CommandRefusal) {
   switch (refusal) {
     case "invalid":
-      return invalidRequest()
+      return invalidParams()
     case "not-found":
       return notFound()
     case "authentication-required":
@@ -100,7 +102,7 @@ const RUNTIME_ERRORS: Readonly<
   Record<ServerRuntimePublicError["code"], () => RequestError>
 > = {
   runtime_authentication_required: authenticationRequired,
-  invalid_request: invalidRequest,
+  invalid_request: invalidParams,
   not_found: notFound,
   revision_conflict: revisionConflict,
   temporarily_unavailable: temporarilyUnavailable,
@@ -116,7 +118,7 @@ const RUNTIME_ERRORS: Readonly<
 const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   (
     [
-      [invalidRequest(), "invalid_request"],
+      [invalidParams(), "invalid_request"],
       [authenticationRequired(), "authentication_required"],
       [notFound(), "not_found"],
       [RequestError.methodNotFound(""), "method_not_found"],
@@ -163,20 +165,28 @@ function coordinatorError(cause: unknown) {
   if (cause instanceof ServerRequestStaleError) return staleRequest()
   if (
     cause instanceof ServerTurnCapacityError ||
-    cause instanceof ServerTurnSteerUnavailableError
+    cause instanceof ServerTurnSteerUnavailableError ||
+    cause instanceof MembershipDetachedError
   )
     return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
   if (cause instanceof ServerSessionNotFoundError) return notFound()
+  if (cause instanceof ServerClientIdReusedError) return invalidParams()
   return undefined
 }
 
-/** The JSON-RPC error a proxy failure travels as, or the failure itself. */
-export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
+/**
+ * The JSON-RPC error a proxy failure travels as, or the failure itself;
+ * `publicError` is the runtime's classifier.
+ */
+export function publicRequestError(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
   const mapped = coordinatorError(cause)
   if (mapped) return mapped
-  const publicError = runtime.publicError(cause)
-  return publicError ? RUNTIME_ERRORS[publicError.code]() : cause
+  const classified = publicError(cause)
+  return classified ? RUNTIME_ERRORS[classified.code]() : cause
 }
 
 /**
@@ -184,8 +194,11 @@ export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
  * The proxy has no operator-facing copy: a public failure travels as its
  * machine code, and the browser owns the localized sentence.
  */
-export function errorNotificationOf(runtime: ServerRuntime, cause: unknown) {
-  const mapped = publicRequestError(runtime, cause)
+export function errorNotificationOf(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
+  const mapped = publicRequestError(publicError, cause)
   const code =
     (mapped instanceof RequestError && PUBLIC_ERROR_NAMES.get(mapped.code)) ||
     "internal_error"

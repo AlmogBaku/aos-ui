@@ -14,7 +14,6 @@ import {
   AosElicitationMetaSchema,
   AosPlanMetaSchema,
   AosPromptResponseMetaSchema,
-  AosSessionResumeResponseMetaSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -143,19 +142,18 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
     pagesHistory: false,
     // An operator who never answers declines, which the listener cancels.
     question: options.question ?? (async () => ({ action: "decline" })),
-    compose: ({ runtimeInstance, sessionRows }) => ({
+    compose: ({ runtimeInstance, catalog }) => ({
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
-        role: "operator",
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now: clock.now,
         schedule: clock.schedule,
         cancel: clock.cancel,
         onUnreadChanged: () => undefined,
       }),
       activityFeed: createActivityFeed({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        coordinator: runtimeInstance.sessions,
         now: clock.now,
       }),
     }),
@@ -603,7 +601,7 @@ describe("operator ACP listener", () => {
     )
     expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
     await vi.waitFor(() => expect(test.clock.pending()).toBe(1))
     test.clock.advance(500)
 
@@ -626,10 +624,10 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
-  it("replays history before answering a resume that reports an idle execution", async () => {
+  it("replays history before answering the resume of an idle Session", async () => {
     const test = await harness()
 
-    const resumed = await test.agent.request(methods.agent.session.resume, {
+    await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
@@ -668,10 +666,6 @@ describe("operator ACP listener", () => {
         },
       },
     ])
-    expect(
-      AosSessionResumeResponseMetaSchema.parse(aosMetaOf(resumed)).execution
-        .status
-    ).toBe("idle")
     test.close()
   })
 

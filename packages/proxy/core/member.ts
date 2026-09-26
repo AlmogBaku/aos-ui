@@ -2,7 +2,6 @@ import type { z } from "zod"
 
 import type {
   AgentCatalogResponse,
-  Session,
   SessionContextResponse,
   SessionHistoryResponse,
   SessionModelsResponse,
@@ -12,6 +11,7 @@ import type {
   VisibilityUpdateResponse,
 } from "../../protocol"
 import type { PendingRequest, RequestReply, TurnEvent } from "./events"
+import type { ProviderSessionId } from "./ids"
 import type { SessionPatch, SessionScope } from "./runtime"
 import type { SessionExecutionState, TurnQuota } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
@@ -50,24 +50,6 @@ export type Principal = {
   id: string
   role: Role
 }
-
-/**
- * A proxy-owned feed a connection subscribes to only when its member is given
- * it: a Session's usage and model readings, the Agent's activity, read state,
- * the Session rows, and the catalog's changes.
- */
-export type Feed =
-  "usage" | "model" | "activity" | "read-state" | "session-rows" | "catalog"
-
-/** What an operator is given: every feed. */
-export const EVERY_FEED: ReadonlySet<Feed> = new Set<Feed>([
-  "usage",
-  "model",
-  "activity",
-  "read-state",
-  "session-rows",
-  "catalog",
-])
 
 /**
  * One coordinator subscription as a member reads it. An encoder keys the
@@ -125,23 +107,48 @@ export type SessionEvent =
     }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }
-  | { kind: "session-info"; row: SessionRow; status: Session["status"] }
+  /** The Session's row, whose status is the one its live execution overlays. */
+  | { kind: "session-info"; row: SessionRow }
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
   /** The member's view is incomplete and must be rebuilt from history. */
   | { kind: "invalidated" }
-  /**
-   * A failure that has no request to answer. `turn` names the turn this
-   * member's accepted prompt was to start, when the failure is that it never
-   * did.
-   */
-  | {
-      kind: "error"
-      cause: unknown
-      turn?: { turnId: string; sequence: number }
-    }
+  /** A failure that has no request to answer. */
+  | { kind: "error"; cause: unknown }
 
-/** One Session event, addressed by the Session's public id. */
-export type MemberEvent = { sessionId: string } & SessionEvent
+/**
+ * One content-free workspace event about a Session the member may observe:
+ * a turn's start and end, a request for attention and its resolution, and a
+ * change of read state.
+ */
+export type Activity = {
+  agentId: string
+  sessionId: string
+  occurredAt: string
+} & (
+  | {
+      type: "turn-started" | "turn-finished" | "turn-failed"
+      turnId: string
+    }
+  | {
+      type: "attention-requested"
+      requestId: string
+      attentionKind: "question" | "permission"
+    }
+  | { type: "attention-resolved"; requestId: string }
+  | { type: "unread-changed"; unread: boolean }
+)
+
+/** What a member is shown of the workspace, outside any one Session. */
+export type WorkspaceEvent =
+  /** The Session list changed and must be read again. */
+  { kind: "catalog-invalidated" } | { kind: "activity"; activity: Activity }
+
+/**
+ * One member event: a Session's, addressed by the Session's public id, or the
+ * workspace's.
+ */
+export type MemberEvent =
+  ({ sessionId: string } & SessionEvent) | WorkspaceEvent
 
 /** Where a member's events leave the Channel, implemented by the transport. */
 export type MemberConnection = {
@@ -153,11 +160,23 @@ export type MemberConnection = {
 
 /**
  * What a middleware may do beyond shaping an event. `decline` refuses one
- * permission request this member was asked, in a turn this member started;
- * the Channel runs it once the request was delivered, and ignores any other.
+ * request this member was asked, as the layer decided; the Channel runs it
+ * once the request was delivered, while the Session still holds it.
  */
 export type MemberAct = {
   decline(requestId: string): void
+}
+
+/**
+ * The Session a member addresses. A fresh invitation names its Session before
+ * the runtime holds one, so it has no provider Session until its first Send.
+ */
+export type MemberScope = Omit<SessionScope, "providerSessionId"> & {
+  providerSessionId?: ProviderSessionId
+}
+
+export function hasSession(scope: MemberScope): scope is SessionScope {
+  return scope.providerSessionId !== undefined
 }
 
 /**
@@ -168,7 +187,7 @@ export type MemberCommands = {
   resume: {
     sessionId: string
     agentId?: string
-    scope?: SessionScope
+    scope?: MemberScope
     /** Replay the Session's history before following it. */
     fromStart: boolean
     /** Where the member's view already reaches in the live turn. */
@@ -184,6 +203,8 @@ export type MemberCommands = {
     /** The message an Edit or Retry replaces. */
     rewindSourceId?: string
     attachmentStageId?: string
+    /** A client id names a send its client may repeat. */
+    clientId?: string
     /** The cap a middleware counts this turn under, beside the global one. */
     quota?: TurnQuota
   }
@@ -204,7 +225,8 @@ export type MemberCommands = {
   }
   focus: { sessionId: string | null; foreground: boolean; idle: boolean }
   list: { agentId?: string; offset: number }
-  new: { agentId: string; title?: string }
+  /** A client id names a create its client may repeat. */
+  new: { agentId: string; title?: string; clientId?: string }
   delete: { sessionId: string }
   /** `{ unread: false }` marks the Session read. */
   update: { sessionId: string; patch: SessionPatch }
@@ -223,12 +245,6 @@ export type CommandKind = keyof MemberCommands
 /** What each command answers, before a transport encodes it. */
 export type CommandResults = {
   resume: {
-    agentId: string
-    /** The Session's row, read only for a Session in this connection's catalog. */
-    row?: SessionRow
-    execution: { state: SessionExecutionState; turnId?: string }
-    capabilities: WorkspaceCapabilities
-    models?: SessionModelsResponse
     /** The view must rebuild itself from history. */
     resync?: true
     /** The page a from-start resume replayed. */
@@ -241,13 +257,8 @@ export type CommandResults = {
   close: void
   answer: void
   focus: void
-  list: { rows: readonly Session[]; nextOffset?: number }
-  new: {
-    sessionId: string
-    row: SessionRow
-    capabilities: WorkspaceCapabilities
-    models: SessionModelsResponse
-  }
+  list: { rows: readonly SessionRow[]; nextOffset?: number }
+  new: { sessionId: string }
   delete: void
   update: void
   "set-config": { models: SessionModelsResponse }
@@ -344,4 +355,15 @@ export type Member = {
   /** The member's stack, outermost first; the operator's is empty. */
   middleware: readonly Middleware[]
   connection: MemberConnection
+}
+
+/**
+ * Shows a member one workspace event through its stack. A workspace event
+ * names no Session, so it carries no request a layer could decline.
+ */
+export function showWorkspace(member: Member, event: WorkspaceEvent) {
+  const shown = runEvents(member.middleware, event, {
+    decline: () => undefined,
+  })
+  return shown ? member.connection.send(shown) : Promise.resolve()
 }

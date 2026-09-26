@@ -90,8 +90,6 @@ function capabilities(options: { steering?: boolean } = {}) {
   }
 }
 
-const sessionInfo = { agentId: AGENT_ID, status: "idle", archived: false }
-
 function guestRuntimeContext() {
   return {
     runtimeId: "hermes-primary",
@@ -216,23 +214,23 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     .onRequest(methods.agent.session.resume, ({ params }) => {
       calls.push(methods.agent.session.resume)
       redeemedOrThrow()
+      // What the invited Session supports follows the answer as an update.
       queueMicrotask(() => {
         resumed = true
-        for (const update of waiting.splice(0))
+        for (const update of [
+          {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [],
+            _meta: { [AOS_META_KEY]: { capabilities: capabilities(options) } },
+          } satisfies SessionUpdate,
+          ...waiting.splice(0),
+        ])
           void peer?.notify(methods.client.session.update, {
             sessionId: params.sessionId,
             update,
           })
       })
-      return {
-        _meta: {
-          [AOS_META_KEY]: {
-            session: sessionInfo,
-            execution: { status: "idle" },
-            capabilities: capabilities(options),
-          },
-        },
-      }
+      return { _meta: { [AOS_META_KEY]: {} } }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       calls.push(methods.agent.session.prompt)

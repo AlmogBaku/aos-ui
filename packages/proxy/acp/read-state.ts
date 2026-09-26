@@ -1,5 +1,5 @@
-import type { RuntimeInstance } from "../core/runtime"
-import type { SessionRows } from "../core/session-rows"
+import type { Catalog } from "../core/catalog"
+import type { ServerRuntimeTranslation } from "../core/runtime"
 import type { ReadState } from "./types"
 
 /** Collapses a burst of exposure and activity into one watermark write. */
@@ -12,8 +12,9 @@ type TimerHandle = ReturnType<typeof setTimeout>
 type Target = { agentId: string; sessionId: string }
 
 export type ReadStateOptions = {
-  runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  catalog: Pick<Catalog, "info" | "rows" | "markRead">
+  /** The execution events after which the runtime marks a Session unread. */
+  relighting?: ServerRuntimeTranslation["relighting"]
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => TimerHandle
   cancel?: (handle: TimerHandle) => void
@@ -26,15 +27,14 @@ function sameTarget(left: Target, right: Target) {
 }
 
 export function createReadState({
-  runtimeInstance,
-  sessionRows,
+  catalog,
+  relighting,
   now = Date.now,
   schedule = setTimeout,
   cancel = clearTimeout,
   onUnreadChanged,
 }: ReadStateOptions): ReadState {
-  const { runtime } = runtimeInstance
-  const relighting = runtime.translation?.relighting
+  const { rows } = catalog
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let releaseFocus: (() => void) | undefined
@@ -51,15 +51,19 @@ export function createReadState({
   const keyOf = ({ agentId, sessionId }: Target) =>
     `${agentId}\u0000${sessionId}`
 
-  /** Cached once per runtime: only some providers keep a read watermark. */
+  /**
+   * Whether the runtime keeps a read watermark, which only some do. Only an
+   * answer is kept: a failed read is asked again on the next write.
+   */
   const tracks = () => {
-    tracked ??= runtime
-      .runtimeInfo()
-      .then(
-        ({ capabilities }) =>
-          capabilities.sessionReadState?.status === "available"
-      )
-      .catch(() => false)
+    tracked ??= catalog.info().then(
+      ({ capabilities }) =>
+        capabilities.sessionReadState?.status === "available",
+      () => {
+        tracked = undefined
+        return false
+      }
+    )
     return tracked
   }
 
@@ -67,22 +71,6 @@ export function createReadState({
     if (!pending) return
     cancel(pending.handle)
     pending = undefined
-  }
-
-  const markRead = async (agentId: string, sessionId: string) => {
-    sessionRows.markRead(agentId, sessionId)
-    onUnreadChanged(agentId, sessionId, false)
-    const providerSessionId = runtime.resolveProviderSessionId(
-      agentId,
-      sessionId
-    )
-    if (!providerSessionId) return
-    try {
-      await runtime.updateSession(agentId, providerSessionId, { unread: false })
-    } catch {
-      // A Session the provider has not created yet rejects the write. Read
-      // state is advisory: the optimistic row stands and a later list corrects.
-    }
   }
 
   const write = async (target: Target, forced: boolean) => {
@@ -99,7 +87,9 @@ export function createReadState({
     }
     if (!(await tracks()) || closed) return
     writtenAt.set(key, now())
-    await markRead(target.agentId, target.sessionId)
+    const written = catalog.markRead(target.agentId, target.sessionId)
+    onUnreadChanged(target.agentId, target.sessionId, false)
+    await written
   }
 
   /**
@@ -140,13 +130,10 @@ export function createReadState({
        * never an operator who wants it kept unread: the row stays read and the
        * provider gets the acknowledgement instead of the browser a flash.
        */
-      releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
-        arm(target, false)
-      )
+      releaseFocus = rows.holdRead(agentId, sessionId, () => arm(target, false))
       // A watermark that moves only on a write needs one acknowledgement per
       // exposure, even for a row that already reads read.
-      if (relighting || sessionRows.get(agentId, sessionId)?.unread)
-        arm(target, true)
+      if (relighting || rows.get(agentId, sessionId)?.unread) arm(target, true)
     },
 
     blur: unfocus,
@@ -156,8 +143,6 @@ export function createReadState({
       if (!relighting?.includes(event.kind)) return
       arm(focused, false)
     },
-
-    markRead,
 
     close() {
       closed = true

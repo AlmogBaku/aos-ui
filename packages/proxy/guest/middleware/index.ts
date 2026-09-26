@@ -1,5 +1,6 @@
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
+import { createFeedsMiddleware } from "./feeds"
 import { createHistoryMiddleware } from "./history"
 import { createPermissionsMiddleware } from "./permissions"
 import { createQuotaMiddleware } from "./quota"
@@ -29,7 +30,7 @@ export type GuestMiddlewareOptions = GuestScopeOptions & {
 /**
  * A guest member's stack, outermost first. A refused command never reaches
  * scope, so a refused first Send never creates the conversation, and the
- * commands layer projects what a resume answers last on the way out.
+ * commands layer projects the commands event last on the way out.
  */
 export function createGuestMiddleware(
   options: GuestMiddlewareOptions
@@ -40,6 +41,7 @@ export function createGuestMiddleware(
     createHistoryMiddleware(options),
     createTurnsMiddleware(),
     createPermissionsMiddleware({ principalId: options.grant.principalId }),
+    createFeedsMiddleware(),
     createQuotaMiddleware({ limit: options.guestActiveExecutions }),
   ]
 }

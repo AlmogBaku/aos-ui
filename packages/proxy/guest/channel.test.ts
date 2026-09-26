@@ -40,7 +40,6 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { createSessionRows } from "../core/session-rows"
 import { createGuestConnection } from "./acp"
 
 /**
@@ -95,9 +94,9 @@ async function connectGuest(
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
       channels: test.channels,
+      catalog: test.catalog,
       guestActiveExecutions: 2,
     },
-    createSessionRows(),
     "guest-connection"
   )
   const { connection, recorder } = connectClient(context, {
@@ -126,13 +125,9 @@ describe("guest in a Session channel", () => {
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 
-    await guest.agent.notify(AOS_METHODS.session.focus, {
+    await guest.agent.request(AOS_METHODS.session.focus, {
       sessionId: GUEST_REF,
     })
-    // One round trip after the notification proves the listener has handled it.
-    await expect(
-      guest.agent.request(methods.agent.session.list, {})
-    ).rejects.toThrow()
 
     expect(test.presence.set).not.toHaveBeenCalled()
     expect(test.readState.focus).not.toHaveBeenCalled()
@@ -158,7 +153,7 @@ describe("guest in a Session channel", () => {
     guest.close()
   })
 
-  it("shows a guest an operator's prompt as its text alone, and lets it Stop", async () => {
+  it("shows a guest an operator's prompt as its text alone, and lets it steer and Stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const guest = await connectGuest(test)
@@ -192,6 +187,12 @@ describe("guest in a Session channel", () => {
     expect(prompts(other.recorder)).toEqual([
       [{ type: "text", text: "Summarize" }, attachment],
     ])
+    await guest.agent.request(AOS_METHODS.session.steer, {
+      sessionId: GUEST_REF,
+      requestId: "steer-1",
+      text: "Shorter",
+    })
+    expect(test.sources[0]?.steer).toHaveBeenCalledOnce()
     await guest.agent.notify(methods.agent.session.cancel, {
       sessionId: GUEST_REF,
     })

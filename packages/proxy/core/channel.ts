@@ -1,40 +1,60 @@
-import type { SessionHistoryResponse } from "../../protocol"
+import {
+  createOwner,
+  defaultClock,
+  ownerSetup,
+  type Clock,
+  type Logger,
+  type Owner,
+  type OwnerContext,
+} from "../../lifecycle"
+import type {
+  SessionHistoryResponse,
+  SessionModelsResponse,
+  SessionModelUpdateRequest,
+} from "../../protocol"
+import { JOIN_DEADLINE_MS, PAUSED_DEADLINE_MS } from "./limits"
 import {
   beforeLiveTurn,
   lastPromptIndex,
   persistedCorrections,
 } from "./replay-page"
 import {
-  PendingRequestKind,
   ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
   type PendingRequest,
-  type PromptTurnInput,
   type RequestReply,
 } from "./events"
 import {
+  CommandRefusedError,
+  hasSession,
   promptText,
   runEvents,
-  type Feed,
+  type CommandResults,
   type Member,
+  type MemberScope,
   type PromptPart,
   type SessionEvent,
   type TurnStream,
-  type Role,
 } from "./member"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
+  ServerTurnUncertainError,
+  type ServerRuntime,
   type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
-import type {
-  CoordinatedTurnSubscription,
-  CoordinatorAccess,
-  SessionCoordinator,
-  StartOptions,
+import {
+  clientTurnIds,
+  type CoordinatedTurnSubscription,
+  type CoordinatorAccess,
+  type ClientSend,
+  type CreateInput,
+  type SessionCoordinator,
+  type StartOptions,
 } from "./session-coordinator"
+import type { SessionRow } from "./session-rows"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 /**
@@ -53,7 +73,7 @@ export type ChannelTurn = {
   turnId: string
   messageId: string
   content: readonly PromptPart[]
-  /** Epoch ms when the turn was admitted. */
+  /** When the turn was admitted, on the channels' monotonic clock. */
   at: number
 }
 
@@ -87,8 +107,6 @@ export type ChannelAdoption = {
 type Delivery = {
   /** The member's own scope, which an adoption runs under. */
   scope: SessionScope
-  /** Which member an adoption runs as: an operator comes first. */
-  role: Role
   /** The turnId whose prompt this member already holds. */
   delivered?: string
   /** Whether the channel sent that prompt, rather than the member owning it. */
@@ -127,6 +145,22 @@ function declineReply(request: PendingRequest): RequestReply {
 
 /** Where a resuming view already reaches in the live turn. */
 export type ResumePosition = { turnId?: string; after?: number }
+
+/** The bounded history one from-start read or one older page reads. */
+const HISTORY_REPLAY_LIMIT = 500
+
+/** How far back history pages reach; older history reads as truncated. */
+export const HISTORY_MAX_OFFSET = 100_000
+
+/** Whether an older page exists within the reach, past the one just read. */
+export function hasOlderPage(page: SessionHistoryResponse) {
+  return (
+    !page.truncated &&
+    page.nextOffset < page.total &&
+    page.nextOffset > page.offset &&
+    page.nextOffset < HISTORY_MAX_OFFSET
+  )
+}
 
 /**
  * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
@@ -180,27 +214,25 @@ async function attempt<T>(
 }
 
 /**
- * The member an adoption runs as. An operator comes first: the coordinator
- * reports the turn under this member's thread, and activity and push read it.
+ * The member an adoption runs as: the first to join. The coordinator reports
+ * the turn under this member's Session, and activity and push read it.
  */
 function adopter(channel: Channel) {
-  const memberships = [...channel.memberships]
-  return (
-    memberships.find(([, { role }]) => role === "operator") ?? memberships[0]
-  )
+  return [...channel.memberships].at(0)
 }
 
 function createChannelTable({
   snapshot,
   adoption,
-  now = Date.now,
+  clock,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
   snapshot: (scope: ChannelScope) => { state: string; turnId?: string }
   /** Absent when the runtime cannot report the turns it starts. */
   adoption?: ChannelAdoption
-  now?: () => number
+  /** The monotonic clock a turn's admission and the backstop read. */
+  clock: Clock
   backstopMs?: number
 }) {
   const channels = new Map<string, Channel>()
@@ -217,7 +249,7 @@ function createChannelTable({
     // A question may wait on a person indefinitely; the backstop only guards
     // against a turn the coordinator never reports as ended.
     const expired =
-      state !== "waiting-for-input" && now() - turn.at > backstopMs
+      state !== "waiting-for-input" && clock.now() - turn.at > backstopMs
     if (live && !expired) return turn
     channel.turn = undefined
     return undefined
@@ -359,7 +391,7 @@ function createChannelTable({
     add(
       scope: SessionScope,
       member: MembershipDelivery,
-      options: { hasPrompt: boolean; role?: Role }
+      options: { hasPrompt: boolean }
     ) {
       const key = channelKey(scope)
       let channel = channels.get(key)
@@ -377,12 +409,7 @@ function createChannelTable({
         }
       }
       if (joined.memberships.has(member)) return remove
-      const delivery: Delivery = {
-        scope,
-        role: options.role ?? "operator",
-        fromChannel: false,
-      }
-      join(joined, member, delivery, options.hasPrompt)
+      join(joined, member, { scope, fromChannel: false }, options.hasPrompt)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
@@ -404,7 +431,7 @@ function createChannelTable({
         join(
           channel,
           member,
-          { scope: delivery.scope, role: delivery.role, fromChannel: false },
+          { scope: delivery.scope, fromChannel: false },
           options.hasPrompt
         )
     },
@@ -424,9 +451,14 @@ function createChannelTable({
         own.delivered = turn.turnId
         own.fromChannel = false
       }
+      // A member already shown the turn, as a repeat's first sender was, is
+      // not shown it again.
       await Promise.all(
         [...channel.memberships]
-          .filter(([member]) => member !== sender)
+          .filter(
+            ([member, delivery]) =>
+              member !== sender && delivery.delivered !== turn.turnId
+          )
           .map(([member, delivery]) => send(member, delivery, turn))
       )
     },
@@ -460,8 +492,9 @@ function createChannelTable({
     },
 
     /**
-     * A member's own start failed without a turn to end, so no turn end asks
-     * the runtime; this asks once instead.
+     * Asks the runtime once for a turn no turn end will report: one a
+     * member's failed start may have lost to, or one behind a wait a resume
+     * found.
      */
     async recheck(scope: ChannelScope) {
       const channel = channels.get(channelKey(scope))
@@ -470,11 +503,20 @@ function createChannelTable({
   }
 }
 
-type CreateChannelsOptions = Parameters<typeof createChannelTable>[0]
+type CreateChannelsOptions = Omit<
+  Parameters<typeof createChannelTable>[0],
+  "snapshot" | "clock"
+> & {
+  coordinator: SessionCoordinator
+  /** Where a resume and an older page read the Session's history. */
+  runtime: Pick<ServerRuntime, "history">
+  /** Where each membership writes its transitions; silent by default. */
+  logger?: Logger
+  clock?: Clock
+}
 
 /** How a transport joins one member to one Session. */
 export type MembershipOptions = {
-  coordinator: SessionCoordinator
   /** The membership the coordinator knows this member's stream by. */
   membershipId: string
   /** One structured line per Session-level event; the transport redacts it. */
@@ -485,17 +527,244 @@ export type MembershipOptions = {
   ) => void
   /** The public code and message a failure is logged under. */
   describe: (cause: unknown) => { code: string; message: string }
-  /** The readings this member is given, as authentication chose them. */
-  feeds: ReadonlySet<Feed>
+  /** The Session's row as a replaying cell: the known row, then each change. */
+  subscribeRow: (listener: (row: SessionRow) => void) => () => void
+}
+
+/** A membership's options, with the coordinator and clock its channels share. */
+type MembershipContext = MembershipOptions & {
+  coordinator: SessionCoordinator
+  clock: Clock
+}
+
+/** A logger that writes nothing, for an owner no deployment observes. */
+export const SILENT: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  child: () => SILENT,
+}
+
+/**
+ * What moves a membership: a join and the answer that lands it, each stream
+ * it follows, falling behind that stream's bounds, and parting.
+ */
+type MembershipSignal =
+  | { type: "join" }
+  | { type: "joined" }
+  | { type: "followed" }
+  | { type: "fell-behind" }
+  | { type: "part" }
+
+/**
+ * One membership's lifetime: joining until the answer to its join lands,
+ * joined while it follows its Session, paused once it fell behind until its
+ * view rejoins, and detached for good once it parts or a deadline passes.
+ * Each stream it follows is a generation of its own, so a stream another one
+ * replaced settles nothing.
+ */
+function membershipMachine(logger: Logger, clock: Clock) {
+  return ownerSetup<OwnerContext, MembershipSignal>(
+    "membership",
+    logger,
+    clock
+  ).createMachine({
+    context: { generation: 0 },
+    initial: "joining",
+    on: {
+      followed: { actions: "bumpGeneration" },
+      part: ".detached",
+    },
+    states: {
+      joining: {
+        after: { [JOIN_DEADLINE_MS]: "detached" },
+        on: {
+          // A membership a read or write made first gives each join its
+          // whole deadline.
+          join: { target: "joining", reenter: true },
+          joined: "joined",
+          "fell-behind": "paused",
+        },
+      },
+      joined: { on: { join: "joining", "fell-behind": "paused" } },
+      paused: {
+        after: { [PAUSED_DEADLINE_MS]: "detached" },
+        on: { join: "joining" },
+      },
+      detached: { type: "final" },
+    },
+  })
+}
+
+type MembershipOwner = Owner<ReturnType<typeof membershipMachine>>
+
+/** A join its membership's end cut short, which the next join may land. */
+export class MembershipDetachedError extends Error {
+  constructor() {
+    super("The membership detached before its join landed")
+    this.name = "MembershipDetachedError"
+  }
+}
+
+/** Settles as `work` does, unless `signal` aborts first: then with its reason. */
+export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) abort()
+    void work
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort))
+  })
 }
 
 export function createChannels(options: CreateChannelsOptions) {
-  const channels = createChannelTable(options)
+  const { coordinator, runtime } = options
+  const clock = options.clock ?? defaultClock
+  const channels = createChannelTable({
+    ...options,
+    clock,
+    snapshot: (scope) => coordinator.snapshot(scope),
+  })
+  const logger = options.logger ?? SILENT
+  const machine = membershipMachine(logger, clock)
+  /** The memberships reading an older page: one page at a time each. */
+  const paging = new WeakSet<Membership>()
+
+  /** One history page, `offset` rows back from the newest. */
+  function readHistory(scope: SessionScope, offset = 0) {
+    return runtime.history(
+      scope.agentId,
+      scope.providerSessionId,
+      HISTORY_REPLAY_LIMIT,
+      offset
+    )
+  }
+
+  /**
+   * The history a from-start resume replays. ACP replays all retained
+   * history; a member that pages older history itself gets the newest page
+   * and where the page before it starts. Either way the reach bounds the
+   * reading.
+   */
+  async function readReplay(scope: SessionScope, paged: boolean) {
+    const newest = await readHistory(scope)
+    if (paged) return newest
+    const older: SessionHistoryResponse["messages"][] = []
+    // A turn stored between two reads shifts the offsets, so the same message
+    // can come back on the next older page.
+    const seen = new Set(newest.messages.map(({ id }) => id))
+    let page = newest
+    while (hasOlderPage(page)) {
+      page = await readHistory(scope, page.nextOffset)
+      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
+      for (const { id } of page.messages) seen.add(id)
+    }
+    return {
+      ...newest,
+      messages: [...older.flat(), ...newest.messages],
+      nextOffset: page.nextOffset,
+      truncated: page.truncated,
+    }
+  }
+
   return {
     ...channels,
-    /** Joins one member to one Session until the membership parts. */
-    join(member: Member, scope: SessionScope, membership: MembershipOptions) {
-      return new Membership(channels, member, scope, membership)
+    /** Joins one member to one Session until the membership detaches. */
+    join(member: Member, scope: MemberScope, membership: MembershipOptions) {
+      const owner = createOwner(machine, {
+        logger,
+        clock,
+        bindings: {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          membershipId: membership.membershipId,
+        },
+      })
+      return new Membership(
+        channels,
+        member,
+        scope,
+        { ...membership, coordinator, clock },
+        owner
+      )
+    },
+
+    /**
+     * Resumes one member's view of its Session, rebuilt from its history
+     * first when `replay` asks: the newest page alone for a member that
+     * `paged` older history itself. The join lands once the answer is
+     * written, and the Session's execution, readings and row reach the member
+     * as events after it. A Session waiting on input asks its runtime whether
+     * the wait still stands, which the answer does not wait for.
+     */
+    async resume(
+      membership: Membership,
+      position: ResumePosition,
+      replay?: { paged: boolean }
+    ): Promise<CommandResults["resume"]> {
+      const resumed = await membership.resume(
+        position,
+        replay && (() => readReplay(membership.scope, replay.paged))
+      )
+      if (membership.pending) {
+        membership.joined()
+        return resumed
+      }
+      const { scope } = membership
+      const { state, turnId } = coordinator.snapshot(scope)
+      membership.joined({ turnId })
+      if (state === "waiting-for-input") void channels.recheck(scope)
+      return resumed
+    },
+
+    /**
+     * Shows one member an older page of its Session, as tagged updates ahead
+     * of the answer. A member reads one page at a time.
+     */
+    async olderPage(
+      membership: Membership,
+      older: { cursor: string; offset: number }
+    ): Promise<CommandResults["older-page"]> {
+      if (paging.has(membership)) throw new CommandRefusedError("invalid")
+      paging.add(membership)
+      try {
+        const page = await readHistory(membership.scope, older.offset)
+        // A cursor past this Session's history was never issued for it. One
+        // at its end was: a runtime that estimates `total` learns the start
+        // only by reading an empty page there.
+        if (older.offset > page.total) throw new CommandRefusedError("invalid")
+        await membership.showOlderPage(page, older)
+        return { page }
+      } finally {
+        paging.delete(membership)
+      }
+    },
+
+    /**
+     * Creates a Session in `agentId` for `principalId`. A repeat of a client
+     * id answers the Session its first create made.
+     */
+    createSession(agentId: string, input: CreateInput, principalId: string) {
+      return coordinator.createSession(agentId, input, principalId)
+    },
+
+    /**
+     * Switches the Session's model. Every member hears the switch, and the
+     * `membership` that asked for it once its answer is written.
+     */
+    switchModel(
+      scope: SessionScope,
+      write: SessionModelUpdateRequest,
+      membership?: Membership
+    ): Promise<SessionModelsResponse> {
+      return coordinator.switchModel(
+        scope,
+        write,
+        membership &&
+          ((report) => membership.afterResponse(async () => report()))
+      )
     },
   }
 }
@@ -504,16 +773,16 @@ export function createChannels(options: CreateChannelsOptions) {
  * One Session as one member observes it: at most one coordinator
  * subscription, the cursor it has reached, and the requests it was asked.
  *
- * A membership owns only the member's subscriber lifetime. Parting releases
- * the subscription and its place in the Session's channel, and nothing else:
- * the native Session, the coordinator's logical execution, and a pending
- * request all outlive it.
+ * A membership owns only the member's subscriber lifetime. Detaching
+ * releases the subscription, its place in the Session's channel and the
+ * readings it was given, and nothing else: the native Session, the
+ * coordinator's logical execution, and a pending request all outlive it.
  */
 class Membership {
   readonly #channels: ChannelTable
   readonly #member: Member
-  readonly #scope: SessionScope
-  readonly #options: MembershipOptions
+  readonly #addressed: MemberScope
+  readonly #options: MembershipContext
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
@@ -526,7 +795,6 @@ class Membership {
   readonly #delivered = new Set<string>()
   #sequence = 0
   #stopRequested = false
-  #parted = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
   /** The turn this member last asked its client to rebuild the view for. */
@@ -543,19 +811,33 @@ class Membership {
   /** This member as the Session's channel addresses it. */
   readonly #delivery: MembershipDelivery
   #partChannel: (() => void) | undefined
-  /** Set once the member subscribes to its Session's readings. */
-  #partReadings: (() => void) | undefined
+  /** Releases the Session's readings, which the member is given once joined. */
+  #cells: (() => void) | undefined
+  readonly #owner: MembershipOwner
+  /** Aborts as the membership detaches, which ends a join still in flight. */
+  readonly #detaching: AbortSignal
 
   constructor(
     channels: ChannelTable,
     member: Member,
-    scope: SessionScope,
-    options: MembershipOptions
+    scope: MemberScope,
+    options: MembershipContext,
+    owner: MembershipOwner
   ) {
     this.#channels = channels
     this.#member = member
-    this.#scope = scope
+    this.#addressed = scope
     this.#options = options
+    this.#owner = owner
+    this.#detaching = owner.stack.adopt(new AbortController(), (controller) =>
+      controller.abort(new MembershipDetachedError())
+    ).signal
+    owner.stack.defer(() => {
+      this.#partChannel?.()
+      this.#releaseCells()
+      this.#subscription?.close()
+      this.#subscription = undefined
+    })
     this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
@@ -569,7 +851,7 @@ class Membership {
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
       report: (cause) => {
-        if (this.#parted) return
+        if (this.detached) return
         const failure = options.describe(cause)
         this.#log("error", "channel.failed", {
           errorCode: failure.code,
@@ -585,19 +867,39 @@ class Membership {
   }
 
   /**
+   * Whether this member addresses an invitation whose Session does not exist
+   * yet. It is shown what it can do until its first Send creates the Session,
+   * which joins it anew.
+   */
+  get pending() {
+    return !hasSession(this.#addressed)
+  }
+
+  get #scope(): SessionScope {
+    if (!hasSession(this.#addressed))
+      throw new Error("The invited Session does not exist yet")
+    return this.#addressed
+  }
+
+  /** Whether this membership is over: it parted, or a deadline passed. */
+  get detached() {
+    return this.#owner.stack.disposed
+  }
+
+  /**
    * Shows this member one event of its Session, through its stack. A member
-   * that parted is shown nothing, and neither is one whose stack hides it: a
+   * that detached is shown nothing, and neither is one whose stack hides it: a
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
    * rides on the send starting now. What the stack declines runs once the
    * event is delivered.
    */
   emit(event: SessionEvent): Promise<void> {
-    if (this.#parted) return Promise.resolve()
+    if (this.detached) return Promise.resolve()
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
-      { sessionId: this.#scope.sessionId, ...event },
+      { sessionId: this.#addressed.sessionId, ...event },
       { decline: (requestId) => declines.add(requestId) }
     )
     if (shown?.kind === "request-asked")
@@ -615,12 +917,24 @@ class Membership {
    * resume replays, which rebuilds the view first; without it the view keeps
    * what it holds up to `position`. Either way the member then joins the
    * channel and follows the live turn. Returns the page it replayed, and
-   * `resync` when the view must rebuild itself.
+   * `resync` when the view must rebuild itself. A join that has not landed
+   * by its deadline detaches the membership, and the resume rejects then.
    */
-  async resume(
+  resume(
+    position: ResumePosition,
+    read?: () => Promise<SessionHistoryResponse>
+  ) {
+    this.#releaseCells()
+    this.#send({ type: "join" })
+    return unlessAborted(this.#resume(position, read), this.#detaching)
+  }
+
+  async #resume(
     position: ResumePosition,
     read?: () => Promise<SessionHistoryResponse>
   ): Promise<{ history?: SessionHistoryResponse; resync?: true }> {
+    // A fresh invitation has no history to replay and no turn to follow.
+    if (this.pending) return {}
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
     const replay = read ? await this.#replayHistory(read) : undefined
@@ -642,22 +956,16 @@ class Membership {
   }
 
   /**
-   * Owes this member what a resume's response cannot carry, once it lands:
-   * the execution, unless the turn it named as `turnId` was replaced since;
-   * the context `usage`, when asked; and the requests a recovered wait still
-   * holds.
+   * Lands this member's join once the response to it has been written. From
+   * then on the member is given its Session's readings, each the last value
+   * at once and then each change, so none overtakes that response. A resume
+   * that `answered` with the execution of one turn has it restated.
    */
-  afterResume(turnId: string | undefined, usage: boolean) {
+  joined(answered?: { turnId: string | undefined }) {
     this.afterResponse(async () => {
-      // A turn admitted since this response was built reports itself on its
-      // own stream; restating it here would run ahead of that stream.
-      if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
-        await this.reportExecution()
-      // A resumed Session carries the window every earlier turn already grew;
-      // only a report here keeps its composer from opening on an empty gauge.
-      if (usage) this.reportUsage()
-      if (this.#coordinator.state(this.#scope) === "waiting-for-input")
-        this.reissuePending()
+      if (!this.#owner.actor.getSnapshot().matches("joining")) return
+      this.#send({ type: "joined" })
+      this.#cells = this.#subscribeCells(answered)
     })
   }
 
@@ -852,26 +1160,90 @@ class Membership {
     await this.#invalidate()
     return true
   }
-
-  /** Admits one user turn and subscribes to the segment it starts. */
-  async startTurn(input: PromptTurnInput, options: StartOptions = {}) {
-    await this.#exclusive(async () => {
-      let subscription
-      try {
-        subscription = await this.#coordinator.start(
-          this.#scope,
-          input,
-          this.#access(),
-          options
-        )
-      } catch (cause) {
-        // No turn started, so no turn end asks the runtime for one it started
-        // meanwhile, which may be what refused this one.
-        void this.#channels.recheck(this.#scope)
-        throw cause
+  /**
+   * Admits one user turn and subscribes to the segment it starts, settling
+   * once the coordinator admitted or refused it and the channel was shown
+   * the turn. This member is shown its prompt and then the turn once the
+   * answer is written. A turn another member won is followed instead; a
+   * repeat of the turn this member follows shows it nothing again, and one of
+   * a turn the channel was shown, which reached it as it joined, only the
+   * turn. `echo` reads the prompt as members are shown it, once admitted.
+   */
+  async startTurn(
+    input: ClientSend,
+    echo: () => readonly PromptPart[],
+    options: StartOptions = {}
+  ): Promise<CommandResults["send"]> {
+    // Joined before admission, so a turn that wins the race still reaches it.
+    this.joinChannel()
+    const { messageId } = clientTurnIds(
+      this.#member.principal.id,
+      this.#scope.sessionId,
+      input.clientId
+    )
+    // Entered from the admission to the showing, so no follow subscribes this
+    // member to the turn first. A first admission enters once its prompt is
+    // prepared, so a slow one keeps no other turn from reaching this member.
+    let entered: Promise<() => void> | undefined
+    const enter = () => (entered ??= this.#enter())
+    let subscription
+    try {
+      subscription = await this.#coordinator.start(
+        this.#scope,
+        {
+          ...input,
+          prepare: async () => {
+            const prepared = await input.prepare()
+            await enter()
+            return prepared
+          },
+        },
+        this.#access(),
+        options
+      )
+    } catch (cause) {
+      void entered?.then((release) => release())
+      // No turn started, so no turn end asks the runtime for one it started
+      // meanwhile, which may be what refused this one.
+      void this.#channels.recheck(this.#scope)
+      if (cause instanceof ServerTurnConflictError)
+        this.afterResponse(() => this.catchUp())
+      // A start the provider may have taken is shown to every member as the
+      // coordinator settles it.
+      if (cause instanceof ServerTurnUncertainError)
+        this.afterResponse(() => this.#channels.sync(this.#scope))
+      throw cause
+    }
+    const release = await enter()
+    let turn: ChannelTurn
+    try {
+      if (subscription.turnId === this.#followedTurn) {
+        subscription.close()
+        return { messageId }
       }
-      this.#consume(subscription, 0)
-    })
+      const { turnId } = subscription
+      const content = echo()
+      const announced = this.#channels.current(this.#scope)?.turnId === turnId
+      const answered = new Promise<void>((resolve) => {
+        this.afterResponse(async () => resolve())
+      })
+      this.#consume(
+        subscription,
+        0,
+        announced
+          ? answered
+          : answered.then(() =>
+              this.emit({ kind: "prompt", messageId, content, own: true })
+            )
+      )
+      if (announced) return { messageId }
+      turn = { turnId, messageId, content, at: this.#options.clock.now() }
+    } finally {
+      release()
+    }
+    // A turn that started is answered as started, whatever showing it met.
+    await this.announce(turn).catch((cause: unknown) => this.report(cause))
+    return { messageId }
   }
 
   /**
@@ -881,11 +1253,10 @@ class Membership {
    */
   joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
-    if (this.#parted) return
+    if (this.detached) return
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
-        role: this.#member.principal.role,
       })
       // A request the Session resolves, through another member's answer or a
       // Stop, is withdrawn here so this member stops offering it.
@@ -940,34 +1311,71 @@ class Membership {
   }
 
   /**
-   * Owes this member the Session's current context usage, which a joining
-   * member needs for its gauge. The first call subscribes the member to its
-   * Session's readings, which give the last value at once and read a stale
-   * one: joining alone subscribes nothing, so no reading overtakes the
-   * response a join is part of. The coordinator's reporter re-reads a window
-   * that is unreadable right after joining, usually the provider's agent still
-   * being built, and leaves the last reading standing if it never becomes
-   * readable.
+   * Subscribes this member to its Session's readings, which its stack shows it
+   * or hides. The coordinator's reporter re-reads a value that is unreadable
+   * right after joining, usually the provider's agent still being built, and
+   * leaves the last reading standing if it never becomes readable. The
+   * execution is restated once, for the resume that `answered` with it: each
+   * later move reaches the member on its turn's stream, which a reading would
+   * run ahead of.
    */
-  reportUsage() {
-    if (this.#parted) return
-    const { feeds, membershipId } = this.#options
-    if (this.#partReadings) {
-      this.#coordinator.reportUsage(this.#scope, membershipId)
-      return
-    }
-    this.#partReadings = this.#coordinator.subscribeReadings(
-      this.#scope,
-      membershipId,
-      {
-        ...(feeds.has("usage")
-          ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
-          : {}),
-        ...(feeds.has("model")
-          ? { model: (models) => this.#deliver({ kind: "model", models }) }
-          : {}),
-      }
+  #subscribeCells(answered?: { turnId: string | undefined }) {
+    const { coordinator, membershipId } = this.#options
+    const { agentId, sessionId } = this.#addressed
+    const subscribeCapabilities = () =>
+      coordinator.subscribeCapabilities(
+        { agentId, sessionId },
+        membershipId,
+        (capabilities) => this.#deliver({ kind: "commands", capabilities })
+      )
+    // A fresh invitation has no Session to read, only what it can do there.
+    if (this.pending) return subscribeCapabilities()
+    let restating = answered
+    const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
+      execution: async () => {
+        const turn = restating
+        restating = undefined
+        if (turn)
+          await this.#restate(turn.turnId).catch((cause: unknown) =>
+            this.report(cause)
+          )
+      },
+      usage: (usage) => this.#deliver({ kind: "usage", usage }),
+      model: (models) => this.#deliver({ kind: "model", models }),
+    })
+    const capabilities = subscribeCapabilities()
+    const row = this.#options.subscribeRow(
+      (row) => void this.#deliver({ kind: "session-info", row })
     )
+    return () => {
+      readings()
+      capabilities()
+      row()
+    }
+  }
+
+  /**
+   * Restates the execution a resume answered with, unless the turn it named
+   * as `turnId` was replaced since, and asks again the requests a recovered
+   * wait still holds.
+   */
+  async #restate(turnId: string | undefined) {
+    // A turn admitted since the answer was built reports itself on its own
+    // stream; restating it here would run ahead of that stream.
+    if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
+      await this.reportExecution()
+    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+      this.reissuePending()
+  }
+
+  #releaseCells() {
+    this.#cells?.()
+    this.#cells = undefined
+  }
+
+  /** Moves this membership, which nothing moves once it detached. */
+  #send(signal: MembershipSignal) {
+    if (!this.detached) this.#owner.actor.send(signal)
   }
 
   /** Asks again the requests a recovered wait is still holding. */
@@ -981,12 +1389,14 @@ class Membership {
     await this.emit({ kind: "error", cause })
   }
 
-  /** Reports the turn this member's accepted prompt was to start as failed. */
-  async refuseTurn(turnId: string, cause: unknown) {
-    await this.emit({
-      kind: "error",
-      cause,
-      turn: { turnId, sequence: this.#sequence },
+  /** Steers the turn this member follows, which a later turn has not replaced. */
+  steer(requestId: string, text: string) {
+    const expectedTurnId = this.#followedTurn
+    if (expectedTurnId === undefined) throw new ServerTurnConflictError()
+    return this.#coordinator.steer(this.#scope, {
+      requestId,
+      expectedTurnId,
+      text,
     })
   }
 
@@ -1019,13 +1429,10 @@ class Membership {
     await this.#settle(reply)
   }
 
+  /** Detaches this member, first withdrawing each request it was offered. */
   part() {
     for (const requestId of [...this.#offered]) this.#withdraw(requestId)
-    this.#parted = true
-    this.#partChannel?.()
-    this.#partReadings?.()
-    this.#subscription?.close()
-    this.#subscription = undefined
+    this.#send({ type: "part" })
   }
 
   /** Gives the Session one reply of this member's. */
@@ -1045,27 +1452,22 @@ class Membership {
   }
 
   /**
-   * Declines one permission request for this member. Only a request this
-   * member was offered and has not settled, in a turn this member started,
-   * while its credential holds; any other decline, a second one from another
-   * tab included, is dropped silently.
+   * Declines one request as the member's stack decided, which alone knows
+   * which requests are its to decline. Only a request this member was offered
+   * and the Session still holds, while its credential holds; any other
+   * decline, a second one from another tab included, is dropped silently.
    */
   async #decline(requestId: string) {
     if (
-      this.#parted ||
+      this.detached ||
       !this.#offered.has(requestId) ||
       !this.#member.connection.live()
     )
       return
-    const open = this.#coordinator.snapshot(this.#scope)
-    const request = open.requests.find(
-      (pending) => pending.requestId === requestId
-    )
-    if (
-      request?.kind !== PendingRequestKind.Permission ||
-      open.startedBy !== this.#member.principal.id
-    )
-      return
+    const request = this.#coordinator
+      .snapshot(this.#scope)
+      .requests.find((pending) => pending.requestId === requestId)
+    if (!request) return
     try {
       await this.#settle(declineReply(request))
     } catch (cause) {
@@ -1086,7 +1488,7 @@ class Membership {
     replayedCorrections = 0
   ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
-      if (this.#parted) return undefined
+      if (this.detached) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
       if (state === "idle" || turnId === undefined) return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
@@ -1123,6 +1525,15 @@ class Membership {
     }
   }
 
+  /** Enters one subscribing task that holds until the returned release. */
+  #enter() {
+    return new Promise<() => void>((entered) => {
+      void this.#exclusive(
+        () => new Promise<void>((release) => entered(() => release()))
+      )
+    })
+  }
+
   /** Asks the member to reload the Session from history. */
   async #invalidate() {
     await this.emit({ kind: "invalidated" }).catch(() => undefined)
@@ -1146,7 +1557,7 @@ class Membership {
     fields: Record<string, unknown>
   ) {
     this.#options.log(level, event, {
-      sessionId: this.#scope.sessionId,
+      sessionId: this.#addressed.sessionId,
       ...fields,
     })
   }
@@ -1164,10 +1575,7 @@ class Membership {
     )
   }
 
-  /**
-   * How the coordinator sees one subscription of this member. A member may
-   * Stop any turn in its Session, not only one it started.
-   */
+  /** How the coordinator sees one subscription of this member. */
   #access(): CoordinatorAccess {
     return {
       membershipId: this.#options.membershipId,
@@ -1175,12 +1583,14 @@ class Membership {
     }
   }
 
+  /** Follows one subscription, whose stream waits for `shown` when given. */
   #consume(
     subscription: CoordinatedTurnSubscription,
-    replayedCorrections: number
+    replayedCorrections: number,
+    shown?: Promise<void>
   ) {
-    // A member that parted while its subscription was admitted keeps none.
-    if (this.#parted) {
+    // A member that detached while its subscription was admitted keeps none.
+    if (this.detached) {
       subscription.close()
       return
     }
@@ -1188,13 +1598,24 @@ class Membership {
     // A restarted stream is the same segment, whose Stop stays acknowledged.
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
-    void this.#pump(subscription, replayedCorrections)
+    this.#send({ type: "followed" })
+    void this.#pump(
+      subscription,
+      this.#owner.generation,
+      replayedCorrections,
+      shown
+    )
   }
 
-  /** Shows one subscription's segment to the member, event by event. */
+  /**
+   * Shows one subscription's segment to the member, event by event. The
+   * stream is the membership's `generation` until a later follow replaces it.
+   */
   async #pump(
     subscription: CoordinatedTurnSubscription,
-    replayedCorrections: number
+    generation: number,
+    replayedCorrections: number,
+    shown?: Promise<void>
   ) {
     const dropped = this.#dropped
     const stream: TurnStream = {
@@ -1206,6 +1627,7 @@ class Membership {
     }
     let overflow: FanoutOverflowError | undefined
     try {
+      await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
         this.#sequence = sequence
@@ -1223,7 +1645,7 @@ class Membership {
       if (cause instanceof FanoutOverflowError) overflow = cause
       else await this.report(cause)
     } finally {
-      if (this.#subscription === subscription) this.#subscription = undefined
+      if (!this.#owner.stale(generation)) this.#subscription = undefined
     }
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
@@ -1247,6 +1669,7 @@ class Membership {
       events: overflow.events,
       bytes: overflow.bytes,
     })
+    this.#send({ type: "fell-behind" })
     await this.#invalidate()
   }
 

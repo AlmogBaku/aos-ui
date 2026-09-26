@@ -10,12 +10,14 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
+import type { Logger } from "../../lifecycle"
 import type {
   SessionHistoryResponse,
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { AosActivityNotification, AosExtensions } from "../../protocol/acp"
+import type { AosExtensions } from "../../protocol/acp"
+import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
   PendingRequest,
@@ -23,14 +25,13 @@ import type {
   TurnEvent,
 } from "../core/events"
 import type {
-  RuntimeInstance,
   ServerAttachmentStages,
+  ServerRuntimePublicError,
   ServerRuntimeTranslation,
 } from "../core/runtime"
-import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channels } from "../core/channel"
-import type { Feed, Member } from "../core/member"
+import type { Activity, Member } from "../core/member"
 /**
  * Where the ACP listeners write their structured lines, in the shape the proxy
  * composition already receives. Every value passes through `redactForLog`
@@ -50,8 +51,16 @@ export type WorkspaceCapabilities = z.infer<
 type AcpConnectionBase = {
   connectionId: string
   principalId: string
-  runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  /**
+   * The runtime's classifier of a failure's public code, a function of the
+   * failure alone. The connection reaches a provider only through the catalog
+   * and the channels.
+   */
+  publicError(cause: unknown): ServerRuntimePublicError | undefined
+  /** The runtime's `ServerRuntimeTranslation.steerAck`, a static hint. */
+  steerAck?: ServerRuntimeTranslation["steerAck"]
+  /** The one workspace catalog per proxy process, which both listeners share. */
+  catalog: Catalog
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
@@ -67,8 +76,13 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
-  /** The feeds this connection's member is given, chosen at join. */
-  feeds: ReadonlySet<Feed>
+  /**
+   * The browser build the static root carries, which `initialize` answers as
+   * its version so a tab running another build reloads; absent without one.
+   */
+  buildId?: string
+  /** Where the connection's lifecycle owner logs; silent without one. */
+  ownerLogger?: Logger
 }
 
 /**
@@ -204,18 +218,17 @@ export interface ReadState {
   focus(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
-  markRead(agentId: string, sessionId: string): Promise<void>
   close(): void
 }
 
 /**
- * Per-connection, bounded, in-memory activity feed hydrated from coordinator
- * snapshots and the session list. Implemented in `activity-feed.ts`.
+ * The workspace's activity, hydrated from coordinator snapshots and the
+ * session list for each connection that opens it. Implemented in
+ * `activity-feed.ts`.
  */
 export interface ActivityFeed {
-  snapshot(): readonly AosActivityNotification[]
-  subscribe(listener: (event: AosActivityNotification) => void): () => void
-  close(): void
+  /** Shows `listener` what needs a badge now, then each change, until the stop. */
+  open(listener: (activity: Activity) => void): () => void
 }
 
 // ---------------------------------------------------------------------------

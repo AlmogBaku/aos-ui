@@ -48,6 +48,7 @@ import {
   type Session,
   type SessionContextResponse,
   type SessionModelsResponse,
+  type SessionModelUpdateRequest,
   type TurnSteerRequest,
   type TurnSteerResponse,
 } from "../../protocol"
@@ -64,7 +65,10 @@ export type SessionExecutionState =
   "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
 
 /** The Session status each execution state overlays on the provider's row. */
-const EXECUTION_STATUS: Record<SessionExecutionState, Session["status"]> = {
+export const EXECUTION_STATUS: Record<
+  SessionExecutionState,
+  Session["status"]
+> = {
   idle: "idle",
   running: "running",
   stopping: "running",
@@ -121,9 +125,23 @@ export type CoordinatedTurnSubscription = {
  * A prompt to admit. A client id names a send its client may repeat, and the
  * turn and message ids derive from it; without one, the caller mints them.
  */
-export type SendInput =
-  | PromptTurnInput
-  | (Omit<PromptTurnInput, "turnId" | "messageId"> & { clientId: string })
+export type SendInput = PromptTurnInput | ClientSend
+
+/**
+ * A send its client may repeat. A repeat carries the same `sent`, what the
+ * client sent, and answers the first admission's result; only a first
+ * admission runs `prepare`, so a repeat never takes what the first took.
+ */
+export type ClientSend = {
+  clientId: string
+  sent: unknown
+  prepare(): Promise<PreparedSend>
+}
+
+/** A first admission's prompt, and the attachment stage it took. */
+export type PreparedSend = Omit<PromptTurnInput, "turnId" | "messageId"> & {
+  stage?: ServerAttachmentStage
+}
 
 /**
  * A cap on the turns some principals hold at once: `predicate` picks, by its
@@ -136,7 +154,6 @@ export type TurnQuota = {
 
 /** What a start carries beside its prompt. */
 export type StartOptions = {
-  stage?: ServerAttachmentStage
   /** Aborts the start: one aborted once dispatched leaves its turn uncertain. */
   signal?: AbortSignal
   /** Refuses the start while the turns it counts reach its limit. */
@@ -157,10 +174,14 @@ export class ServerClientIdReusedError extends Error {
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
   /**
-   * Reads a Session's context window and model catalog for its reporters, and
-   * creates the Sessions a client asks for.
+   * Reads a Session's context window and model catalog for its reporters,
+   * writes the model choices a client makes, and creates the Sessions a
+   * client asks for.
    */
-  readings: Pick<ServerRuntime, "context" | "models" | "createSession">
+  readings: Pick<
+    ServerRuntime,
+    "context" | "models" | "updateModel" | "createSession"
+  >
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
@@ -984,24 +1005,29 @@ export class SessionCoordinator {
     )
   }
 
-  /** Owes one subscriber a fresh usage reading: what a returning one takes. */
-  reportUsage(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    membershipId: string
-  ) {
-    this.#usage.report(scopeKey(scope), undefined, [membershipId])
-  }
-
   /**
-   * Owes every subscriber the readings a model switch moves: the model
-   * options, and the usage, whose window belongs to the model.
+   * Writes one model choice and answers the model options a read after it
+   * shows. Every subscriber is then owed the readings the switch moves, each
+   * read afresh: the model options, and the usage, whose window belongs to
+   * the model. `deliver` runs that report, so a caller's answer can land
+   * before its own subscription hears it.
    */
-  reportModelSwitch(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">
-  ) {
+  async switchModel(
+    scope: SessionScope,
+    write: SessionModelUpdateRequest,
+    deliver: (report: () => void) => void = (report) => report()
+  ): Promise<SessionModelsResponse> {
+    const { readings } = this.options
+    await readings.updateModel(scope.agentId, scope.sessionId, write)
+    const models = SessionModelsResponseSchema.parse(
+      await readings.models(scope.agentId, scope.sessionId)
+    )
     const key = scopeKey(scope)
-    this.#models.report(key)
-    this.#usage.report(key)
+    deliver(() => {
+      this.#models.report(key)
+      this.#usage.report(key)
+    })
+    return models
   }
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
@@ -1213,19 +1239,13 @@ export class SessionCoordinator {
     if (this.#closed) throw new Error("Session coordinator is closed")
     if (!("clientId" in input))
       return this.#startTurn(scope, input, access, options)
-    const { clientId, ...prompt } = input
+    const { clientId, sent, prepare } = input
     const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
-    const fingerprint = admissionFingerprint({
-      ...prompt,
-      attachments: options.stage?.artifactIds?.() ?? [],
-    })
+    const fingerprint = admissionFingerprint(sent)
     const repeated = this.#sends.repeated(ids.turnId, fingerprint)
     if (!repeated) {
-      const started = this.#startTurn(
-        scope,
-        { ...ids, ...prompt },
-        access,
-        options
+      const started = prepare().then(({ stage, ...prompt }) =>
+        this.#startTurn(scope, { ...ids, ...prompt }, access, options, stage)
       )
       this.#sends.remember(
         ids.turnId,
@@ -1247,7 +1267,8 @@ export class SessionCoordinator {
     scope: SessionScope,
     input: PromptTurnInput,
     access: CoordinatorAccess,
-    { stage, signal, quota }: StartOptions
+    { signal, quota }: StartOptions,
+    stage?: ServerAttachmentStage
   ): Promise<CoordinatedTurnSubscription> {
     signal?.throwIfAborted()
     const key = scopeKey(scope)

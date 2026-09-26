@@ -8,15 +8,19 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  SESSION_CATALOG_MAX_WINDOW,
-  type SessionHistoryResponse,
-} from "../../protocol"
+  createOwner,
+  defaultClock,
+  ownerSetup,
+  type Logger,
+  type OwnerContext,
+} from "../../lifecycle"
+import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
-  AosFocusNotificationSchema,
+  AosFocusRequestSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
   AosClientCapabilitiesMetaSchema,
@@ -29,20 +33,12 @@ import {
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
-import type { PromptTurnInput } from "../core/events"
-import {
-  ServerTurnConflictError,
-  type ServerRuntime,
-  type SessionPatch,
-  type SessionScope,
-} from "../core/runtime"
+import type { Catalog } from "../core/catalog"
+import { SILENT, unlessAborted } from "../core/channel"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
   createSessions,
-  executionMeta,
-  overlaidStatus,
-  sessionInfoMeta,
   sessionInfoOf,
   decodeCursor,
   decodeHistoryCursor,
@@ -64,29 +60,27 @@ import {
   type CommandResults,
   type Middleware,
   type MemberCommands,
+  type WorkspaceEvent,
 } from "../core/member"
-import { createMemberEncoder } from "./member-encoder"
+import { createMemberEncoder, type ClientReply } from "./member-encoder"
+import { shownAnswers } from "./translate/requests"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
-  invalidRequest,
+  errorNotificationOf,
+  invalidParams,
   notFound,
   parseMeta,
+  publicRequestError,
   refusalError,
-  turnInProgress,
 } from "./validation"
 
 /**
- * The per-connection ACP v2 agent that fronts the coordinator and the runtime.
- * One handler per method: it validates `_meta.aos`, calls the same normalized
- * operations the HTTP routes call, and leaves the turn stream itself to the
- * Session attachment.
+ * The per-connection ACP v2 agent that fronts the catalog and the channels.
+ * One handler per method: it validates `_meta.aos`, runs its command through
+ * the member stack, and leaves what reaches a Session's members to its
+ * channel.
  */
-
-/** The bounded history one `replayFrom: { type: "start" }` resume replays. */
-const HISTORY_REPLAY_LIMIT = 500
-/** One `session/list` page; the cursor carries the next offset. */
-const SESSION_LIST_LIMIT = 50
 
 /** Extension methods with no params still need a parser for the SDK. */
 const withoutParams = () => undefined
@@ -101,13 +95,13 @@ const undecoded = (params: unknown) => params
  * The operator listener's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
-function operatorExtensions(runtime: ServerRuntime): AosExtensions {
+function operatorExtensions(catalog: Catalog): AosExtensions {
   return {
     steer: true,
     rewind: true,
     composerPrefill: true,
     agents: true,
-    invalidation: runtime.subscribeCatalogChanges !== undefined,
+    invalidation: catalog.invalidation.signaled,
     activity: true,
     readState: true,
     focus: true,
@@ -124,7 +118,7 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
 function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
   if (!replayFrom || replayFrom.type === "start") return undefined
   const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
-  if (!parsed.success) throw invalidRequest()
+  if (!parsed.success) throw invalidParams()
   return parsed.data.cursor
 }
 
@@ -141,26 +135,49 @@ function sameExposure(
   )
 }
 
+/** What moves a connection: its handshake landing, and its socket closing. */
+type ConnectionSignal = { type: "initialized" } | { type: "closed" }
+
+/**
+ * One connection's lifetime: handshaking until `initialize` is answered, ready
+ * while it serves its browser, and closed once its socket closes or its
+ * handshake fails. What it holds is on its stack, so every exit releases it.
+ */
+function connectionMachine(logger: Logger) {
+  return ownerSetup<OwnerContext, ConnectionSignal>(
+    "connection",
+    logger,
+    defaultClock
+  ).createMachine({
+    context: { generation: 0 },
+    initial: "handshaking",
+    on: { closed: ".closed" },
+    states: {
+      handshaking: { on: { initialized: "ready" } },
+      ready: {},
+      closed: { type: "final" },
+    },
+  })
+}
+
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { role, translators, feeds } = context
-  const readState = feeds.has("read-state") ? context.readState : undefined
-  const activityFeed = feeds.has("activity") ? context.activityFeed : undefined
-  const { runtime, sessions: coordinator } = context.runtimeInstance
+  const { role, translators, readState, activityFeed, catalog } = context
+  /** The extensions this connection is served, which `initialize` reports. */
+  const extensions =
+    context.authentication?.extensions ?? operatorExtensions(catalog)
   const sessions = createSessions(context, (client) =>
     createMemberEncoder({
       context,
       client,
-      membership: (sessionId) => sessions.membership(sessionId),
-      answer: (command) =>
-        perform("answer", command, async ({ sessionId, ...answer }) => {
-          await sessions
-            .membership(sessionId)
-            ?.answer(answer.request, answer.reply, answer.answers)
-        }),
+      steerAck: context.steerAck,
+      describe: (cause) => errorNotificationOf(context.publicError, cause),
+      replied,
+      report: (sessionId, cause) =>
+        sessions.membership(sessionId)?.report(cause),
+      // The upgrade's principal holds for the connection's whole life.
+      live: () => context.authentication?.live() ?? true,
     })
   )
-  const { workspace } = sessions
-
   const app = agent({ name: "aos-proxy" })
 
   /**
@@ -211,46 +228,45 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     } catch (cause) {
       throw cause instanceof CommandRefusedError
         ? refusalError(cause.refusal)
-        : cause
+        : publicRequestError(context.publicError, cause)
     }
   }
 
-  /** One history page, `offset` rows back from the newest. */
-  function readHistory(scope: SessionScope, offset = 0) {
-    return workspace.history(scope, HISTORY_REPLAY_LIMIT, offset)
+  /**
+   * Decodes the client's reply to one request this connection was asked and
+   * gives it through the stack. A request settled since, or never handed to
+   * this member, is stale.
+   */
+  async function replied(
+    sessionId: string,
+    requestId: string,
+    { kind, response }: ClientReply
+  ) {
+    const membership = sessions.membership(sessionId)
+    if (!membership) return
+    const request = membership.request(requestId)
+    await perform(
+      "answer",
+      {
+        sessionId,
+        request,
+        ...(kind === "permission"
+          ? { reply: translators.replyFromPermission(request, response) }
+          : {
+              reply: translators.replyFromElicitation(request, response),
+              answers: shownAnswers(request, response),
+            }),
+      },
+      async ({ sessionId, ...answer }) => {
+        await sessions
+          .membership(sessionId)
+          ?.answer(answer.request, answer.reply, answer.answers)
+      }
+    )
   }
 
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
-
-  /**
-   * The history a from-start resume replays. ACP replays all retained
-   * history; a client that pages older history itself gets the newest page
-   * and the cursor before it. Either way the reach bounds the reading.
-   */
-  async function readReplay(scope: SessionScope) {
-    const newest = await readHistory(scope)
-    if (clientPagesHistory) return newest
-    const older: SessionHistoryResponse["messages"][] = []
-    // A turn stored between two reads shifts the offsets, so the same message
-    // can come back on the next older page.
-    const seen = new Set(newest.messages.map(({ id }) => id))
-    let page = newest
-    while (historyCursor(page).nextCursor !== undefined) {
-      page = await readHistory(scope, page.nextOffset)
-      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
-      for (const { id } of page.messages) seen.add(id)
-    }
-    return {
-      ...newest,
-      messages: [...older.flat(), ...newest.messages],
-      nextOffset: page.nextOffset,
-      truncated: page.truncated,
-    }
-  }
-
-  /** The Sessions this connection is reading an older page of. */
-  const paging = new Set<string>()
 
   /**
    * One older page of a Session this connection resumed, however it did, as
@@ -262,123 +278,82 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
     const membership = sessions.membership(sessionId)
     if (!membership) throw notFound()
-    const offset = decodeHistoryCursor(cursor)
-    if (paging.has(sessionId)) throw invalidRequest()
-    paging.add(sessionId)
-    try {
-      const page = await readHistory(membership.scope, offset)
-      // A cursor past this Session's history was never issued for it. One at
-      // its end was: a runtime that estimates `total` learns the start only
-      // by reading an empty page there.
-      if (offset > page.total) throw invalidRequest()
-      await membership.showOlderPage(page, { cursor, offset })
-      return { page }
-    } finally {
-      paging.delete(sessionId)
-    }
+    return context.channels.olderPage(membership, {
+      cursor,
+      offset: decodeHistoryCursor(cursor),
+    })
   }
 
   /**
    * Resumes one Session on this connection and follows it. A command that
-   * names its `scope` addresses a Session outside this connection's catalog:
-   * it adopts nothing and reads no row, models or usage, and only a wait can
-   * hide a recoverable execution there.
+   * names its `scope` addresses a Session outside this connection's catalog,
+   * and adopts nothing.
    */
   async function resume(
     command: MemberCommands["resume"],
     client: AgentContext
   ): Promise<CommandResults["resume"]> {
-    const addressed = command.scope
-    if (!addressed && command.agentId !== undefined)
+    if (!command.scope && command.agentId !== undefined)
       sessions.adopt(command.sessionId, command.agentId)
-    const scope = addressed ?? sessions.scope(command.sessionId)
-    const row = addressed ? undefined : await workspace.session(scope)
-    // The same preamble the history route runs: only a wait or a Session the
-    // provider still calls running can hide a recoverable execution.
-    const state = coordinator.state(scope)
-    if (
-      state === "waiting-for-input" ||
-      (state === "idle" && row?.status === "running")
+    const membership = sessions.join(
+      client,
+      command.scope ?? sessions.scope(command.sessionId)
     )
-      await workspace.discover(scope)
-    const membership = sessions.join(client, scope)
-    const resumed = await membership.resume(
+    return context.channels.resume(
+      membership,
       command,
-      command.fromStart ? () => readReplay(scope) : undefined
+      command.fromStart ? { paged: clientPagesHistory } : undefined
     )
-    const execution = coordinator.snapshot(scope)
-    // Every provider read the response needs settles before the follow-up is
-    // scheduled: it fires on the next task, so a read awaited after it lets
-    // the notifications overtake the very response that tells the browser to
-    // start listening for them.
-    const models = addressed ? undefined : await workspace.models(scope)
-    const capabilities = await workspace.capabilities(scope)
-    membership.afterResume(execution.turnId, !addressed)
-    return {
-      agentId: scope.agentId,
-      ...(row ? { row } : {}),
-      execution,
-      capabilities,
-      ...(models ? { models } : {}),
-      ...resumed,
-    }
   }
 
-  /** Admits one user turn in a Session this connection reaches. */
+  /**
+   * Admits one user turn in a Session this connection reaches, answering once
+   * the coordinator admitted or refused it; `signal` aborts the admission.
+   * Only a first admission takes its stage, and a turn that never started
+   * releases it: the client keeps its attachments and stages them anew.
+   */
   async function send(
     command: MemberCommands["send"],
-    client: AgentContext
+    client: AgentContext,
+    signal: AbortSignal
   ): Promise<CommandResults["send"]> {
     const scope = command.scope ?? sessions.scope(command.sessionId)
-    await workspace.session(scope)
-    if (coordinator.state(scope) !== "idle") throw turnInProgress()
-    // Bytes were staged over REST; the prompt references the batch by id and
-    // the stage appends its server-owned content to the user turn.
-    const { attachmentStageId } = command
-    const stage =
-      attachmentStageId === undefined
-        ? undefined
-        : context.attachmentStages.take(
-            scope.agentId,
-            scope.sessionId,
-            attachmentStageId
-          )
-    if (attachmentStageId !== undefined && !stage) throw invalidRequest()
-    const messageId = crypto.randomUUID()
-    const input: PromptTurnInput = {
-      turnId: crypto.randomUUID(),
-      messageId,
-      prompt: stage ? await stage.appendTo(command.text) : command.text,
-      ...(command.rewindSourceId === undefined
-        ? {}
-        : { rewindSourceId: command.rewindSourceId }),
-    }
-    const content = echoedParts(command.content, stage?.artifactIds?.() ?? [])
+    const { text, attachmentStageId, rewindSourceId } = command
+    let stage: ReturnType<typeof context.attachmentStages.take>
     const membership = sessions.join(client, scope)
-    membership.afterResponse(async () => {
-      // Joined before admission, so a turn that wins the race still reaches
-      // this browser, and shown its own prompt as today.
-      membership.joinChannel()
-      await membership.emit({ kind: "prompt", messageId, content, own: true })
-      try {
-        await membership.startTurn(input, { stage, quota: command.quota })
-      } catch (cause) {
-        // The prompt was accepted and echoed, so its turn fails in view.
-        if (!(cause instanceof ServerTurnConflictError))
-          return membership.refuseTurn(input.turnId, cause)
-        // Another browser's turn won: report the conflict, then follow it.
-        await membership.report(cause)
-        await membership.catchUp()
-        return
-      }
-      await membership.announce({
-        turnId: input.turnId,
-        messageId,
-        content,
-        at: Date.now(),
-      })
-    })
-    return { messageId }
+    try {
+      return await membership.startTurn(
+        {
+          // A send without a client id is one no repeat names.
+          clientId: command.clientId ?? crypto.randomUUID(),
+          sent: { text, attachmentStageId, rewindSourceId },
+          // Bytes were staged over REST; the prompt references the batch by
+          // id and the stage appends its server-owned content to the turn.
+          prepare: async () => {
+            if (attachmentStageId !== undefined) {
+              stage = context.attachmentStages.take(
+                scope.agentId,
+                scope.sessionId,
+                attachmentStageId
+              )
+              if (!stage) throw invalidParams()
+            }
+            return {
+              prompt: stage ? await stage.appendTo(text) : text,
+              ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
+              ...(stage ? { stage } : {}),
+            }
+          },
+        },
+        () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
+        { quota: command.quota, signal }
+      )
+    } catch (cause) {
+      await stage?.cleanup().catch(() => undefined)
+      throw cause
+    } finally {
+      membership.joined()
+    }
   }
 
   app.onRequest(methods.agent.initialize, async ({ params }) => {
@@ -389,14 +364,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // A connection still to authenticate learns nothing about the deployment
     // it reached.
     const { authentication } = context
-    const info = authentication ? undefined : await workspace.info()
+    const info = authentication
+      ? undefined
+      : await catalog.info().catch((cause: unknown) => {
+          throw publicRequestError(context.publicError, cause)
+        })
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
         name: "aos-proxy",
         ...(info ? { title: info.runtime.name } : {}),
-        // The proxy versions the AOS extension contract, not a build.
-        version: `${AOS_EXTENSION_VERSION}`,
+        // The build the proxy serves, so a tab running another one reloads; a
+        // proxy serving none versions the AOS extension contract instead.
+        version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
         session: {
@@ -409,9 +389,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
           role,
-          extensions: authentication
-            ? authentication.extensions
-            : operatorExtensions(runtime),
+          extensions,
         },
       },
     }
@@ -437,37 +415,31 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.new, async ({ params, client }) => {
     admit(methods.agent.session.new, "new")
     const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
-    const created = await perform(
+    const { sessionId } = await perform(
       "new",
       {
         agentId: meta.agentId,
         ...(meta.title === undefined ? {} : { title: meta.title }),
+        ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
       },
-      async ({ agentId, title }) => {
-        const sessionId = await workspace.create(agentId, title)
-        const scope = workspace.scope(agentId, sessionId)
-        const row = await workspace.session(scope)
-        sessions.remember([row])
-        const capabilities = await workspace.capabilities(scope)
-        const models = await workspace.models(scope)
-        const membership = sessions.join(client, scope)
-        membership.afterResponse(async () => {
-          await membership.emit({ kind: "commands", capabilities })
-          membership.reportUsage()
-        })
-        return { sessionId, row, capabilities, models }
+      async ({ agentId, ...input }) => {
+        // A repeat of a client id answers the Session its first create made.
+        const created = SessionCreateResponseSchema.parse(
+          await context.channels.createSession(
+            agentId,
+            input,
+            context.principalId
+          )
+        )
+        const sessionId = created.session.id
+        sessions.remember([{ id: sessionId, agentId }])
+        // The row, capabilities and model options follow the answer as
+        // updates.
+        sessions.join(client, sessions.scope(sessionId)).joined()
+        return { sessionId }
       }
     )
-    return {
-      sessionId: created.sessionId,
-      configOptions: translators.configOptionsOf(created.models),
-      _meta: {
-        [AOS_META_KEY]: {
-          session: sessionInfoMeta(created.row, sessions.status(created.row)),
-          capabilities: created.capabilities,
-        },
-      },
-    }
+    return { sessionId }
   })
 
   app.onRequest(methods.agent.session.list, async ({ params }) => {
@@ -480,26 +452,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         offset: decodeCursor(params.cursor),
       },
       async ({ agentId, offset }) => {
-        const page = await workspace.list(agentId, SESSION_LIST_LIMIT, offset)
-        sessions.remember(page.sessions)
-        context.sessionRows.rememberList(page.sessions)
-        const next = offset + page.sessions.length
-        return {
-          rows: page.sessions.map(
-            (session) =>
-              context.sessionRows.get(session.agentId, session.id) ?? session
-          ),
-          // No cursor points past the catalog window, which no runtime serves.
-          ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
-            ? { nextOffset: next }
-            : {}),
-        }
+        const page = await catalog.list(agentId, offset)
+        sessions.remember(page.rows)
+        return page
       }
     )
     return {
-      sessions: listed.rows.map((row) =>
-        sessionInfoOf(row, sessions.status(row))
-      ),
+      sessions: listed.rows.map(sessionInfoOf),
       ...(listed.nextOffset === undefined
         ? {}
         : { nextCursor: encodeCursor(listed.nextOffset) }),
@@ -530,21 +489,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       },
       (command) => resume(command, client)
     )
-    const { row, execution, models, history } = resumed
+    const { history } = resumed
     return {
-      ...(models ? { configOptions: translators.configOptionsOf(models) } : {}),
       _meta: {
         [AOS_META_KEY]: {
-          // A Session outside the catalog shows its live state, not a row.
-          session: row
-            ? sessionInfoMeta(row, sessions.status(row))
-            : {
-                agentId: resumed.agentId,
-                status: overlaidStatus(execution.state, "idle"),
-                archived: false,
-              },
-          execution: executionMeta(execution),
-          capabilities: resumed.capabilities,
           ...(resumed.resync ? { resync: true } : {}),
           ...(history === undefined ? {} : { history: historyCursor(history) }),
         },
@@ -552,31 +500,40 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   })
 
-  app.onRequest(methods.agent.session.prompt, async ({ params, client }) => {
-    admit(methods.agent.session.prompt, "send")
-    const meta = parseMeta(AosPromptMetaSchema, params._meta)
-    if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
-    const text = promptText(params.prompt)
-    // A turn of attachments alone carries no text: its stage supplies the turn,
-    // or, for a rewind, the turn it replaces.
-    if (
-      !text &&
-      meta.attachmentStageId === undefined &&
-      meta.rewindSourceId === undefined
-    )
-      throw invalidRequest()
-    const { messageId } = await perform(
-      "send",
-      {
-        sessionId: params.sessionId,
-        content: promptParts(params.prompt),
-        text,
-        ...meta,
-      },
-      (command) => send(command, client)
-    )
-    return { _meta: { [AOS_META_KEY]: { messageId } } }
-  })
+  app.onRequest(
+    methods.agent.session.prompt,
+    async ({ params, client, signal }) => {
+      admit(methods.agent.session.prompt, "send")
+      const meta = parseMeta(AosPromptMetaSchema, params._meta)
+      if (!params.prompt.every(isPromptBlock)) throw invalidParams()
+      const text = promptText(params.prompt)
+      // A turn of attachments alone carries no text: its stage supplies the turn,
+      // or, for a rewind, the turn it replaces.
+      if (
+        !text &&
+        meta.attachmentStageId === undefined &&
+        meta.rewindSourceId === undefined
+      )
+        throw invalidParams()
+      // A prompt its client cancelled is answered as cancelled, and its
+      // admission is aborted: one the provider may have taken leaves its turn
+      // uncertain until the coordinator settles it.
+      const { messageId } = await unlessAborted(
+        perform(
+          "send",
+          {
+            sessionId: params.sessionId,
+            content: promptParts(params.prompt),
+            text,
+            ...meta,
+          },
+          (command) => send(command, client, signal)
+        ),
+        signal
+      )
+      return { _meta: { [AOS_META_KEY]: { messageId } } }
+    }
+  )
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
     log("acp.turn.cancel", { sessionId: params.sessionId })
@@ -600,17 +557,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       "set-config",
       { sessionId: params.sessionId, ...(write ? { write } : {}) },
       async (command) => {
-        const scope = sessions.scope(command.sessionId)
-        if (!command.write) throw invalidRequest()
-        await workspace.updateModel(scope, command.write)
-        const models = await workspace.models(scope)
-        // A switch restates the model options and the usage, whose window
-        // belongs to the model, for every browser on the Session.
-        const membership = sessions.membership(command.sessionId)
-        membership?.afterResponse(async () =>
-          coordinator.reportModelSwitch(scope)
-        )
-        return { models }
+        if (!command.write) throw invalidParams()
+        return {
+          models: await context.channels.switchModel(
+            sessions.scope(command.sessionId),
+            command.write,
+            sessions.membership(command.sessionId)
+          ),
+        }
       }
     )
     return { configOptions: translators.configOptionsOf(models) }
@@ -624,16 +578,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return {}
   })
 
-  app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
+  app.onRequest(methods.agent.session.delete, async ({ params }) => {
     admit(methods.agent.session.delete, "delete")
     await perform(
       "delete",
       { sessionId: params.sessionId },
       async (command) => {
-        const scope = sessions.scope(command.sessionId)
-        await workspace.delete(scope)
-        sessions.forget(scope)
-        await client.notify(AOS_METHODS.notify.catalogInvalidated)
+        await catalog.delete(sessions.scope(command.sessionId))
+        sessions.forget(command.sessionId)
       }
     )
     return {}
@@ -642,10 +594,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     AOS_METHODS.session.update,
     undecoded,
-    async ({ params: raw, client }) => {
+    async ({ params: raw }) => {
       admit(AOS_METHODS.session.update, "update")
       const params = AosSessionUpdateRequestSchema.parse(raw)
-      const patch: SessionPatch =
+      const patch: MemberCommands["update"]["patch"] =
         params.unread === false
           ? { unread: false }
           : params.title !== undefined
@@ -658,24 +610,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await perform(
         "update",
         { sessionId: params.sessionId, patch },
-        async (command) => {
-          const scope = sessions.scope(command.sessionId)
-          if ("unread" in command.patch && !command.patch.unread) {
-            await readState?.markRead(scope.agentId, scope.sessionId)
-            return
-          }
-          await workspace.update(scope, command.patch)
-          const row = await workspace.session(scope)
-          await sessions
-            .join(client, scope)
-            .emit({ kind: "session-info", row, status: sessions.status(row) })
-          // Archiving and pinning move the Session's membership and order in
-          // the catalog, which only a relist settles; a provider's catalog
-          // watcher may be debounced or absent. A rename or a read marker
-          // moves neither.
-          if ("archived" in command.patch || "pinned" in command.patch)
-            await client.notify(AOS_METHODS.notify.catalogInvalidated)
-        }
+        // The new row reaches each member of the Session; a connection that
+        // is not one is not made one.
+        (command) =>
+          catalog.update(sessions.scope(command.sessionId), command.patch)
       )
       return {}
     }
@@ -696,33 +634,29 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         },
         async (command) => {
           // A connection steers only a Session it joined, as it stops one.
-          if (!sessions.membership(command.sessionId)) throw notFound()
-          const scope = command.scope ?? sessions.scope(command.sessionId)
-          const { turnId } = coordinator.snapshot(scope)
-          if (turnId === undefined) throw turnInProgress()
-          return await workspace.steer(scope, {
-            requestId: command.requestId,
-            expectedTurnId: turnId,
-            text: command.text,
-          })
+          const membership = sessions.membership(command.sessionId)
+          if (!membership) throw notFound()
+          return await membership.steer(command.requestId, command.text)
         }
       )
     }
   )
 
-  app.onNotification(
+  app.onRequest(
     AOS_METHODS.session.focus,
     undecoded,
     async ({ params: raw }) => {
-      if (!sessions.identity()) return
       admit(AOS_METHODS.session.focus, "focus")
-      const params = AosFocusNotificationSchema.parse(raw)
+      const { sessionId, foreground, idle } = AosFocusRequestSchema.parse(raw)
+      // A report naming no Session changes nothing; its answer is what the
+      // browser probes its link for.
+      if (sessionId === undefined) return {}
       await perform(
         "focus",
         {
-          sessionId: params.sessionId,
-          foreground: params.foreground ?? params.sessionId !== null,
-          idle: params.idle ?? false,
+          sessionId,
+          foreground: foreground ?? sessionId !== null,
+          idle: idle ?? false,
         },
         async (report: PresenceReport) => {
           context.presence?.set(
@@ -743,12 +677,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           readState?.focus(agentId, report.sessionId)
         }
       )
+      return {}
     }
   )
 
   app.onRequest(AOS_METHODS.agents.list, withoutParams, async () => {
     admit(AOS_METHODS.agents.list, "agents")
-    return await perform("agents", {}, () => workspace.agents())
+    return await perform("agents", {}, () => catalog.agents())
   })
 
   app.onRequest(
@@ -765,7 +700,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           revision: params.revision,
         },
         (command) =>
-          workspace.setVisibility(
+          catalog.setVisibility(
             command.agentId,
             command.visibility,
             command.revision
@@ -775,52 +710,47 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onConnect(async (connection) => {
-    const { client } = connection
+    const logger = context.ownerLogger ?? SILENT
+    const owner = createOwner(connectionMachine(logger), {
+      logger,
+      clock: defaultClock,
+      bindings: { connectionId: context.connectionId, role },
+    })
+    const { stack } = owner
+    stack.defer(() => {
+      sessions.close()
+      context.presence?.clear(context.principalId, context.connectionId)
+      readState?.close()
+    })
     try {
       await connection.initialized
     } catch {
+      // A handshake that failed, or a socket closed before it, opened nothing.
+      owner.actor.send({ type: "closed" })
       return
     }
+    owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
     log("acp.connection.opened")
-    const notify = (method: `_${string}`, params?: unknown) => {
-      void client.notify(method, params).catch(() => undefined)
-    }
-    for (const event of activityFeed?.snapshot() ?? [])
-      notify(AOS_METHODS.notify.activity, event)
-    const stops = [
-      activityFeed?.subscribe((event) =>
-        notify(AOS_METHODS.notify.activity, event)
-      ),
-      feeds.has("session-rows")
-        ? context.sessionRows.subscribe((row) => {
-            const membership = sessions.membership(row.id)
-            if (membership)
-              void membership
-                .emit({
-                  kind: "session-info",
-                  row,
-                  status: sessions.status(row),
-                })
-                .catch(() => undefined)
-          })
-        : undefined,
-      feeds.has("catalog")
-        ? await runtime.subscribeCatalogChanges?.(() =>
-            notify(AOS_METHODS.notify.catalogInvalidated)
-          )
-        : undefined,
-      // A connection that authenticated over ACP ends with its credential.
-      context.authentication?.expire(() => connection.close()),
-    ]
+    // The workspace's events reach this connection as its stack shows them.
+    const show = (event: WorkspaceEvent) =>
+      sessions.show(connection.client, event)
+    if (activityFeed)
+      stack.defer(
+        activityFeed.open((activity) => show({ kind: "activity", activity }))
+      )
+    stack.defer(
+      catalog.invalidation.subscribe(() =>
+        show({ kind: "catalog-invalidated" })
+      )
+    )
+    // A connection that authenticated over ACP ends with its credential.
+    const expiry = context.authentication?.expire(() => connection.close())
+    if (expiry) stack.defer(expiry)
     await connection.closed
     log("acp.connection.closed")
-    for (const stop of stops) stop?.()
-    sessions.close()
-    context.presence?.clear(context.principalId, context.connectionId)
-    context.readState?.close()
-    context.activityFeed?.close()
+    owner.actor.send({ type: "closed" })
   })
 
   return app

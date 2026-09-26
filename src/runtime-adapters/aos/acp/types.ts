@@ -20,7 +20,6 @@ import type {
   AosPromptMetaSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
-  AosSessionNewResponseMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosSessionUpdateRequestSchema,
   AosSetVisibilityRequestSchema,
@@ -102,11 +101,10 @@ export interface AcpConnection {
    */
   login(token: string): Promise<void>
 
-  newSession(meta: z.infer<typeof AosSessionNewMetaSchema>): Promise<{
-    sessionId: string
-    configOptions: SessionConfigOption[]
-    meta: z.infer<typeof AosSessionNewResponseMetaSchema>
-  }>
+  /** The new Session's row, capabilities and config options follow as updates. */
+  newSession(
+    meta: z.infer<typeof AosSessionNewMetaSchema>
+  ): Promise<{ sessionId: string }>
   listSessions(
     meta: z.infer<typeof AosSessionListMetaSchema>,
     cursor?: string
@@ -114,10 +112,7 @@ export interface AcpConnection {
   resumeSession(
     sessionId: string,
     options: AcpResumeOptions
-  ): Promise<{
-    configOptions: SessionConfigOption[]
-    meta: z.infer<typeof AosSessionResumeResponseMetaSchema>
-  }>
+  ): Promise<{ meta: z.infer<typeof AosSessionResumeResponseMetaSchema> }>
   /**
    * Reads the page before `cursor` of a Session this connection has resumed.
    * Its updates come back here and never reach `subscribeSessionUpdates` or the

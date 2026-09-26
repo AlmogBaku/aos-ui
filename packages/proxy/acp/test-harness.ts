@@ -27,7 +27,6 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
-  type AosActivityNotification,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -47,13 +46,19 @@ import type {
 import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog, type Catalog } from "../core/catalog"
+import type { Activity } from "../core/member"
 import { SessionCoordinator } from "../core/session-coordinator"
-import { EVERY_FEED } from "../core/member"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
+import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
 import { withFaults } from "./test-faults"
-import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
+import type {
+  AcpConnectionContext,
+  AcpOutbound,
+  ActivityFeed,
+  Translators,
+} from "./types"
 
 export const AGENT = "researcher"
 export const PRINCIPAL = "operator"
@@ -563,7 +568,7 @@ export function connectClient(
 export type HarnessOptions = {
   rows?: Session[]
   total?: number
-  activity?: AosActivityNotification[]
+  activity?: Activity[]
   /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
   permission?: (
     params: unknown,
@@ -625,10 +630,12 @@ export type HarnessOptions = {
    */
   compose?: (parts: {
     runtimeInstance: RuntimeInstance
-    sessionRows: SessionRows
+    catalog: Catalog
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
   /** Where lifecycle owners log; a fresh capture by default. */
   logs?: LogCapture
+  /** The browser build the static root carries; absent stands for none. */
+  buildId?: string
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -682,6 +689,13 @@ export async function harness(options: HarnessOptions = {}) {
   )
   const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
     rows.delete(sessionId)
+  })
+  const createSession = vi.fn(async (agentId: string, title?: string) => {
+    rows.set(
+      CREATED,
+      sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
+    )
+    return { session: { id: CREATED, agentId } }
   })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
@@ -752,13 +766,7 @@ export async function harness(options: HarnessOptions = {}) {
       listAllSessions(limit, offset),
     history,
     getSession,
-    createSession: async (agentId, title) => {
-      rows.set(
-        CREATED,
-        sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
-      )
-      return { session: { id: CREATED, agentId } }
-    },
+    createSession,
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
@@ -781,13 +789,16 @@ export async function harness(options: HarnessOptions = {}) {
   // Everything reads the runtime through its faults, which forward every
   // call until a test arms one.
   const faults = withFaults(runtime)
+  const logs = options.logs ?? captureLogs()
   const coordinator = new SessionCoordinator({
     engine: faults.runtime.turns,
     readings: faults.runtime,
     maxActiveExecutions: 8,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
     maxSubscriberBytes: 256 * 1024,
+    logger: logs.logger,
   })
+  coordinator.bindCapabilities(faults.runtime)
   const runtimeInstance: RuntimeInstance = {
     id: "test",
     runtime: faults.runtime,
@@ -799,7 +810,6 @@ export async function harness(options: HarnessOptions = {}) {
     focus: vi.fn(),
     blur: vi.fn(),
     onExecution: vi.fn(),
-    markRead: vi.fn(async () => undefined),
     close: vi.fn(),
   }
   const presence = {
@@ -810,25 +820,45 @@ export async function harness(options: HarnessOptions = {}) {
     lastPresentAt: vi.fn(() => undefined),
     connected: vi.fn(() => false),
   }
-  const activityListeners = new Set<(event: AosActivityNotification) => void>()
-  const activityFeed = {
-    snapshot: () => options.activity ?? [],
-    subscribe: (listener: (event: AosActivityNotification) => void) => {
+  const activityListeners = new Set<(event: Activity) => void>()
+  const activityFeed: ActivityFeed = {
+    open(listener) {
+      for (const activity of options.activity ?? []) listener(activity)
       activityListeners.add(listener)
-      return () => activityListeners.delete(listener)
+      return () => {
+        activityListeners.delete(listener)
+      }
     },
-    close: vi.fn(),
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
-  // A listener's connections share its row cache, as the operator's do.
-  const sessionRows = createSessionRows(
-    options.now ? { now: options.now } : undefined
-  )
-  const composed = options.compose?.({ runtimeInstance, sessionRows })
+  // Every connection shares the process's one catalog, as both listeners do.
+  const shared = createCatalog({
+    runtime: faults.runtime,
+    coordinator,
+    rows: createSessionRows(options.now ? { now: options.now } : undefined),
+  })
+  const invalidationListeners = new Set<() => void>()
+  const catalog: Catalog = {
+    ...shared,
+    invalidation: {
+      signaled: shared.invalidation.signaled,
+      subscribe(listener) {
+        invalidationListeners.add(listener)
+        const stop = shared.invalidation.subscribe(listener)
+        return () => {
+          invalidationListeners.delete(listener)
+          stop()
+        }
+      },
+    },
+  }
+  const composed = options.compose?.({ runtimeInstance, catalog })
   const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
-    snapshot: (channelScope) => coordinator.snapshot(channelScope),
+    logger: logs.logger,
+    coordinator,
+    runtime: faults.runtime,
     ...(subscribeTurns
       ? {
           adoption: {
@@ -850,8 +880,9 @@ export async function harness(options: HarnessOptions = {}) {
     return {
       connectionId,
       principalId: PRINCIPAL,
-      runtimeInstance,
-      sessionRows,
+      publicError: (cause) => faults.runtime.publicError(cause),
+      steerAck: faults.runtime.translation?.steerAck,
+      catalog,
       readState: composed?.readState ?? readState,
       translators: {
         ...base,
@@ -864,8 +895,9 @@ export async function harness(options: HarnessOptions = {}) {
       channels,
       presence,
       logger,
+      ownerLogger: logs.logger,
+      buildId: options.buildId,
       role: "operator",
-      feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
   }
@@ -906,11 +938,11 @@ export async function harness(options: HarnessOptions = {}) {
       attachmentStages: context.attachmentStages,
       /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
       list: () => connection.agent.request(methods.agent.session.list, {}),
-      create: () =>
+      create: (meta: { title?: string; clientId?: string } = {}) =>
         connection.agent.request(methods.agent.session.new, {
           cwd: "/",
           _meta: {
-            [AOS_META_KEY]: { agentId: AGENT },
+            [AOS_META_KEY]: { agentId: AGENT, ...meta },
           },
         }),
     }
@@ -936,12 +968,14 @@ export async function harness(options: HarnessOptions = {}) {
     coordinator,
     runtimeInstance,
     faults,
-    logs: options.logs ?? captureLogs(),
+    logs,
     channels,
+    catalog,
     scope,
     sources,
     start,
     discover,
+    createSession,
     updateSession,
     deleteSession,
     updateModel,
@@ -956,9 +990,11 @@ export async function harness(options: HarnessOptions = {}) {
       [...logger.info.mock.calls, ...logger.error.mock.calls].map(
         ([value]) => value
       ),
-    publishActivity(event: AosActivityNotification) {
+    publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },
+    /** The feeds the open connections observe; a closed one leaves none. */
+    observers: () => activityListeners.size + invalidationListeners.size,
   }
 }
 

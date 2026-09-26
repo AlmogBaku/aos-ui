@@ -66,14 +66,17 @@ function createStore({ resumed = true } = {}) {
         : configOptions("sonnet", value),
   } as unknown as AcpConnection
   const store = createAcpComposerStore(connection)
-  const resume = () =>
-    store.resume(SESSION_ID, {
-      configOptions: configOptions("sonnet", "low"),
-      capabilities: {} as never,
-    })
-  if (resumed) resume()
   const emit = (update: SessionUpdate, meta?: Record<string, unknown>) =>
     onUpdate(update, meta)
+  // The Session's config options follow the answer as an update.
+  const resume = () => {
+    store.resume(SESSION_ID)
+    emit({
+      sessionUpdate: "config_option_update",
+      configOptions: configOptions("sonnet", "low"),
+    })
+  }
+  if (resumed) resume()
   const idle = (usage?: unknown, cost?: unknown) =>
     emit(
       {

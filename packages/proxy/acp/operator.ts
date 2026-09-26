@@ -1,7 +1,6 @@
-import { EVERY_FEED } from "../core/member"
+import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
@@ -22,18 +21,17 @@ export type OperatorAcpServiceOptions = {
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
-  /**
-   * The row cache this listener maintains. Push delivery reads the same one to
-   * gate a notification on read state; absent means this listener owns the only
-   * cache.
-   */
-  sessionRows?: SessionRows
+  /** The workspace catalog the guest listener shares, with its row cache. */
+  catalog: Catalog
+  /** The browser build the static root carries; absent without one. */
+  buildId?: string
   now?: () => number
 }
 
 /**
- * The operator listener's ACP service: one Session row cache per deployment and,
- * per accepted connection, its own read-state service and activity feed.
+ * The operator listener's ACP service: the deployment's one catalog and
+ * activity feed, which each connection opens once initialized, and per
+ * accepted connection its own read-state service.
  */
 export function createOperatorAcpService({
   publicOrigin,
@@ -42,10 +40,16 @@ export function createOperatorAcpService({
   channels,
   logger,
   presence,
+  catalog,
+  buildId,
   now = Date.now,
-  sessionRows = createSessionRows({ now }),
 }: OperatorAcpServiceOptions) {
   const role = "operator" as const
+  const activityFeed = createActivityFeed({
+    catalog,
+    coordinator: runtimeInstance.sessions,
+    now,
+  })
   const service = createAcpService({
     publicOrigin,
     role,
@@ -55,27 +59,28 @@ export function createOperatorAcpService({
       connectionId,
       principalId,
       role,
-      runtimeInstance,
-      sessionRows,
+      publicError: (cause) => runtimeInstance.runtime.publicError(cause),
+      steerAck: runtimeInstance.runtime.translation?.steerAck,
+      catalog,
       translators,
       attachmentStages,
       channels,
       logger,
       presence,
-      feeds: EVERY_FEED,
+      buildId,
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now,
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,
       }),
-      activityFeed: createActivityFeed({ runtimeInstance, sessionRows, now }),
+      activityFeed,
     }),
   })
   // The cache is part of the listener's surface: push delivery gates on the
   // rows this listener keeps current, and there is only ever one of them. The
   // channels are exposed alike, so the composition can show both listeners
   // share them.
-  return { ...service, sessionRows, channels }
+  return { ...service, sessionRows: catalog.rows, channels }
 }

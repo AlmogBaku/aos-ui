@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
 import type { Session } from "../../protocol"
-import type { AosActivityNotification } from "../../protocol/acp"
+import { createCatalog } from "../core/catalog"
 import type { ExecutionEvent, PendingRequest } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
+import type { Activity } from "../core/member"
+import type { ServerRuntime } from "../core/runtime"
+import type { SessionExecutionState } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createActivityFeed } from "./activity-feed"
 
@@ -11,7 +14,7 @@ const AGENT = "researcher"
 const AT = "2026-09-19T10:00:00.000Z"
 
 type Execution = {
-  state: string
+  state: SessionExecutionState
   turnId?: string
   requests: PendingRequest[]
 }
@@ -33,8 +36,6 @@ function harness(
     sessions?: Session[]
     executions?: Record<string, Execution>
     now?: () => number
-    limit?: number
-    maxAgeMs?: number
   } = {}
 ) {
   let deliver: ((event: ExecutionEvent) => void) | undefined
@@ -45,34 +46,30 @@ function harness(
     limit: 100,
     offset: 0,
   }))
-  // The coordinator and the runtime are wide shared surfaces; the feed reads
-  // only the subscription, the execution snapshot, and one catalog page.
-  const runtimeInstance = {
-    id: "hermes-primary",
-    runtime: {
-      listAllSessions,
-      resolveProviderSessionId: (_agentId: string, publicId: string) =>
-        `stored-${publicId}`,
+  const execution = ({ providerSessionId }: { providerSessionId: string }) =>
+    options.executions?.[providerSessionId] ?? {
+      state: "idle" as const,
+      requests: [],
+    }
+  // The runtime is a wide shared surface; the feed reads one catalog page.
+  const runtime = {
+    listAllSessions,
+    resolveProviderSessionId: (_agentId: string, publicId: string) =>
+      `stored-${publicId}`,
+  } as unknown as ServerRuntime
+  const coordinator = {
+    state: (scope: { providerSessionId: string }) => execution(scope).state,
+    snapshot: execution,
+    subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
+      deliver = listener
+      return unsubscribe
     },
-    sessions: {
-      subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
-        deliver = listener
-        return unsubscribe
-      },
-      snapshot: ({
-        providerSessionId: sessionId,
-      }: {
-        providerSessionId: string
-      }) => options.executions?.[sessionId] ?? { state: "idle", requests: [] },
-    },
-  } as unknown as RuntimeInstance
+  }
   const sessionRows = createSessionRows()
   const feed = createActivityFeed({
-    runtimeInstance,
-    sessionRows,
+    catalog: createCatalog({ runtime, coordinator, rows: sessionRows }),
+    coordinator,
     ...(options.now ? { now: options.now } : {}),
-    ...(options.limit === undefined ? {} : { limit: options.limit }),
-    ...(options.maxAgeMs === undefined ? {} : { maxAgeMs: options.maxAgeMs }),
   })
   return {
     feed,
@@ -92,6 +89,7 @@ function lifecycle(
 
 describe("createActivityFeed", () => {
   it("hydrates unread rows, pending attention, and failed turns", async () => {
+    const clock = useFakeClock()
     const { feed, sessionRows } = harness({
       sessions: [
         session({ id: "session-1", unread: true }),
@@ -113,9 +111,11 @@ describe("createActivityFeed", () => {
       },
     })
 
-    await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(5))
+    const seen: Activity[] = []
+    feed.open((activity) => seen.push(activity))
+    await clock.advance(0)
 
-    expect(feed.snapshot()).toEqual([
+    expect(seen).toEqual([
       expect.objectContaining({
         type: "unread-changed",
         agentId: AGENT,
@@ -148,13 +148,14 @@ describe("createActivityFeed", () => {
     expect(sessionRows.get(AGENT, "session-1")?.unread).toBe(true)
   })
 
-  it("publishes live execution events and every unread flip", async () => {
-    const { deliver, feed, sessionRows } = harness({
+  it("publishes live execution events and every unread flip until its stop", async () => {
+    const clock = useFakeClock()
+    const { deliver, feed, sessionRows, unsubscribe } = harness({
       sessions: [session({ unread: true })],
     })
-    await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
-    const seen: AosActivityNotification[] = []
-    const unsubscribe = feed.subscribe((event) => seen.push(event))
+    const seen: Activity[] = []
+    const stop = feed.open((activity) => seen.push(activity))
+    await clock.advance(0)
 
     deliver(lifecycle("turn-started", "run-1"))
     deliver({
@@ -178,6 +179,7 @@ describe("createActivityFeed", () => {
     sessionRows.rememberList([session({ title: "Renamed", unread: false })])
 
     expect(seen).toEqual([
+      expect.objectContaining({ type: "unread-changed", unread: true }),
       expect.objectContaining({ type: "turn-started", turnId: "run-1" }),
       expect.objectContaining({
         type: "attention-requested",
@@ -192,49 +194,10 @@ describe("createActivityFeed", () => {
       expect.objectContaining({ type: "unread-changed", unread: false }),
     ])
 
-    unsubscribe()
+    stop()
+    deliver(lifecycle("turn-started", "run-2"))
     sessionRows.rememberList([session({ unread: true })])
-    expect(seen).toHaveLength(5)
-    expect(feed.snapshot()).toHaveLength(7)
-  })
-
-  it("keeps only the newest events inside the age window", () => {
-    let clock = Date.parse(AT)
-    const { deliver, feed } = harness({
-      now: () => clock,
-      limit: 3,
-      maxAgeMs: 10_000,
-    })
-
-    for (const turnId of ["run-1", "run-2", "run-3", "run-4"])
-      deliver(lifecycle("turn-started", turnId, new Date(clock).toISOString()))
-
-    expect(
-      feed.snapshot().map((event) => "turnId" in event && event.turnId)
-    ).toEqual(["run-2", "run-3", "run-4"])
-
-    clock += 20_000
-    deliver(lifecycle("turn-started", "run-5", new Date(clock).toISOString()))
-
-    expect(
-      feed.snapshot().map((event) => "turnId" in event && event.turnId)
-    ).toEqual(["run-5"])
-  })
-
-  it("stops observing and publishing after close", async () => {
-    const { deliver, feed, sessionRows, unsubscribe } = harness({
-      sessions: [session({ unread: true })],
-    })
-    await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
-    const seen: AosActivityNotification[] = []
-    feed.subscribe((event) => seen.push(event))
-
-    feed.close()
-    deliver(lifecycle("turn-started", "run-1"))
-    sessionRows.rememberList([session({ unread: false })])
-
-    expect(unsubscribe).toHaveBeenCalledTimes(1)
-    expect(seen).toEqual([])
-    expect(feed.snapshot()).toHaveLength(1)
+    expect(seen).toHaveLength(6)
+    expect(unsubscribe).toHaveBeenCalledOnce()
   })
 })

@@ -29,6 +29,12 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }
 
+/** A module only tests may import, by its path under the proxy. */
+const TEST_ONLY_MODULE =
+  /(?:^|\/)(?:test-harness|test-faults|runtime-contract)\.ts$|(?:^|\/)test-utils\//u
+const TEST_ONLY_IMPORT =
+  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|test-utils\/)/u
+
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
@@ -167,6 +173,24 @@ describe("runtime adapter boundary", () => {
       }
       expect(selectors, provider).toEqual([selector])
     }
+  })
+
+  /**
+   * The harness, the fault wrapper, the contract suite and the adapters' test
+   * fixtures stand in for a provider, so only a test may reach one.
+   */
+  it("keeps the test-only modules out of production code", async () => {
+    const proxyRoot = import.meta.dirname
+    const importers: string[] = []
+
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (TEST_ONLY_MODULE.test(file)) continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (TEST_ONLY_IMPORT.test(source)) importers.push(file)
+    }
+
+    expect(importers).toEqual([])
   })
 })
 
@@ -322,8 +346,7 @@ describe("member boundary", () => {
 
   /**
    * A2: the core and the ACP transport are role-blind. Nothing reads a
-   * guest's grant, and a principal's role is read only where a membership
-   * reports it for an adoption's preference for an operator.
+   * guest's grant or a principal's role.
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
@@ -342,8 +365,76 @@ describe("member boundary", () => {
       roleReaders.push(...reads.map(() => path))
     }
 
-    expect(roleReaders).toEqual([join(proxyRoot, "core/channel.ts")])
+    expect(roleReaders).toEqual([])
   })
+
+  /**
+   * The coordinator owns a turn's states; a channel reads them and moves
+   * none. The one machine the channel sets up is its membership's.
+   */
+  it("leaves every turn-state transition to the coordinator", async () => {
+    const source = stripComments(
+      await readFile(join(proxyRoot, "core/channel.ts"), "utf8")
+    )
+    const machines = [
+      ...source.matchAll(/\bownerSetup\b[^(]*\(\s*["'`]([\w-]+)["'`]/gu),
+    ].map(([, kind]) => kind)
+
+    expect(machines).toEqual(["membership"])
+    expect(source).not.toMatch(
+      /\bstate\s*(?::|=(?!=))\s*["'`](?:idle|running|stopping|waiting-for-input|uncertain)["'`]/u
+    )
+  })
+  /**
+   * The connection reaches a provider through the channels and the catalog
+   * alone: its context carries neither the runtime nor the coordinator, only
+   * the runtime's error classifier and its static translation hint, and its
+   * agent imports nothing of either.
+   */
+  it("keeps the runtime and the coordinator off the connection", async () => {
+    for (const file of ["acp/agent.ts", "acp/agent-sessions.ts"]) {
+      const source = stripComments(
+        await readFile(join(proxyRoot, file), "utf8")
+      )
+      expect(source, file).not.toMatch(
+        importsFrom("core\\/(?:runtime|session-coordinator)")
+      )
+    }
+    const context = stripComments(
+      await readFile(join(proxyRoot, "acp/types.ts"), "utf8")
+    )
+    expect(context).not.toMatch(
+      /\b(?:RuntimeInstance|ServerRuntime|SessionCoordinator)\b|\bruntimeInstance\b/u
+    )
+  })
+
+  /**
+   * The member encoder alone turns member events into ACP updates and
+   * notifications, from the event it is given: it reaches neither a
+   * membership nor the runtime. The translators the encoder writes with are
+   * its own pure helpers, and the test harness stands in for a provider.
+   */
+  it("builds every ACP update in the member encoder alone", async () => {
+    const encoder = stripComments(
+      await readFile(join(proxyRoot, "acp/member-encoder.ts"), "utf8")
+    )
+    expect(encoder).not.toMatch(importsFrom("core\\/(?:channel|runtime)"))
+    expect(encoder).not.toMatch(/\bServerRuntime\b|\bruntimeInstance\b/u)
+
+    const builders: string[] = []
+    const notifiers: string[] = []
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (file.startsWith("acp/translate/") || /\/test-[\w-]+\.ts$/u.test(file))
+        continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/\bsessionUpdate\s*:/u.test(source)) builders.push(file)
+      if (/\.notify\s*\(/u.test(source)) notifiers.push(file)
+    }
+    expect(builders).toEqual(["acp/member-encoder.ts"])
+    expect(notifiers).toEqual(["acp/member-encoder.ts"])
+  })
+
   /**
    * A2: the ACP transport never branches on the role. The translators and
    * the member encoder never name it, and the files that carry it as the
