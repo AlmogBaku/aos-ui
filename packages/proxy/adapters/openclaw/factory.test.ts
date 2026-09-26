@@ -113,6 +113,7 @@ describe("OpenClaw runtime factory", () => {
     )
     expect(options?.onEvent).toEqual(expect.any(Function))
     expect(options?.onGap).toEqual(expect.any(Function))
+    expect(options?.onReady).toEqual(expect.any(Function))
     expect(options?.onClose).toEqual(expect.any(Function))
 
     await Promise.all([instance.close(), instance.close()])

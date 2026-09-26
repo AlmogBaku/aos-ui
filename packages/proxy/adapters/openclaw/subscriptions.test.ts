@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+import { captureLogs } from "../../../../test/support/log-capture"
 import {
   OpenClawSessionSubscriptions,
   type OpenClawSubscriptionRequestClient,
 } from "./subscriptions"
+
+const logger = captureLogs().logger
 
 function requestClient() {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -31,7 +35,7 @@ function requestClient() {
 describe("OpenClaw Session subscriptions", () => {
   it("leases one official targeted observer to local consumers without coupling release to execution", async () => {
     const { calls, client } = requestClient()
-    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
 
     const first = await subscriptions.acquire(
       { agentId: "research", sessionKey: "agent:research:main" },
@@ -79,7 +83,7 @@ describe("OpenClaw Session subscriptions", () => {
 
   it("routes only validated native events for the exact Agent and Session", async () => {
     const { client } = requestClient()
-    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
     const research = vi.fn()
     const writing = vi.fn()
     await subscriptions.acquire(
@@ -145,7 +149,7 @@ describe("OpenClaw Session subscriptions", () => {
           ? acknowledgement.promise
           : { key: params.key }
     )
-    const subscriptions = new OpenClawSessionSubscriptions({ request })
+    const subscriptions = new OpenClawSessionSubscriptions({ request }, logger)
     const listener = vi.fn()
     const acquiring = subscriptions.acquire(
       { agentId: "research", sessionKey: "global" },
@@ -261,7 +265,7 @@ describe("OpenClaw Session subscriptions", () => {
 
   it("retires stale socket generations, resubscribes demand, and requests authoritative reconciliation", async () => {
     const { calls, client } = requestClient()
-    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
     const listener = vi.fn()
     let releaseFirstReconcile = () => {}
     const firstReconcile = new Promise<void>((resolve) => {
@@ -333,9 +337,61 @@ describe("OpenClaw Session subscriptions", () => {
     expect(listener).toHaveBeenCalledOnce()
   })
 
+  it("keeps delivering while one lease's re-subscribe fails, and retries that lease", async () => {
+    const clock = useFakeClock()
+    const { calls, client } = requestClient()
+    let failWriting = false
+    const subscriptions = new OpenClawSessionSubscriptions(
+      {
+        request<T>(method: string, params: Record<string, unknown>) {
+          if (failWriting && params.key === "agent:writing:main") {
+            failWriting = false
+            return Promise.reject(new Error("link dropped"))
+          }
+          return client.request<T>(method, params)
+        },
+      },
+      logger
+    )
+    const research = vi.fn()
+    await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:main" },
+      research
+    )
+    await subscriptions.acquire(
+      { agentId: "writing", sessionKey: "agent:writing:main" },
+      vi.fn()
+    )
+    failWriting = true
+
+    await subscriptions.replaceGeneration("reconnect")
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "chat",
+        seq: 1,
+        payload: {
+          runId: "native-run",
+          sessionKey: "agent:research:main",
+          agentId: "research",
+          seq: 1,
+          state: "delta",
+          deltaText: "hello",
+        },
+      },
+      subscriptions.generation
+    )
+    expect(research).toHaveBeenCalledOnce()
+
+    await clock.advance(1_000)
+    expect(
+      calls.filter(({ params }) => params.key === "agent:writing:main")
+    ).toHaveLength(2)
+  })
+
   it("repeats global reconciliation when an earlier Session dirties during a later lease read", async () => {
     const { client } = requestClient()
-    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
     const releaseWriting = deferred<void>()
     const research = vi.fn(async () => {})
     const writing = vi.fn(async () => {
@@ -389,7 +445,7 @@ describe("OpenClaw Session subscriptions", () => {
           : {}
       ),
     }
-    const subscriptions = new OpenClawSessionSubscriptions(client)
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
     const lease = await subscriptions.acquire(
       { agentId: "research", sessionKey: "agent:research:main" },
       vi.fn()
@@ -409,12 +465,15 @@ describe("OpenClaw Session subscriptions", () => {
     })
 
     for (const sessionKey of ["agent:foreign:main", "agent:research:other"]) {
-      const invalid = new OpenClawSessionSubscriptions({
-        request: vi.fn(async () => ({
-          key: "agent:research:main",
-          approvalReplay: { ...replay, sessionKey },
-        })),
-      })
+      const invalid = new OpenClawSessionSubscriptions(
+        {
+          request: vi.fn(async () => ({
+            key: "agent:research:main",
+            approvalReplay: { ...replay, sessionKey },
+          })),
+        },
+        logger
+      )
       await expect(
         invalid.acquire(
           { agentId: "research", sessionKey: "agent:research:main" },
@@ -425,17 +484,20 @@ describe("OpenClaw Session subscriptions", () => {
   })
 
   it("rejects a coupled acknowledgement and replay for another same-Agent Session", async () => {
-    const subscriptions = new OpenClawSessionSubscriptions({
-      request: vi.fn(async () => ({
-        key: "agent:research:other",
-        approvalReplay: {
-          sessionKey: "agent:research:other",
-          updatedAtMs: 1,
-          approvals: [],
-          truncated: false,
-        },
-      })),
-    })
+    const subscriptions = new OpenClawSessionSubscriptions(
+      {
+        request: vi.fn(async () => ({
+          key: "agent:research:other",
+          approvalReplay: {
+            sessionKey: "agent:research:other",
+            updatedAtMs: 1,
+            approvals: [],
+            truncated: false,
+          },
+        })),
+      },
+      logger
+    )
 
     await expect(
       subscriptions.acquire(
@@ -452,12 +514,15 @@ describe("OpenClaw Session subscriptions", () => {
       approvals: [],
       truncated: false,
     }
-    const subscriptions = new OpenClawSessionSubscriptions({
-      request: vi.fn(async () => ({
-        key: "agent:research:work",
-        approvalReplay: replay,
-      })),
-    })
+    const subscriptions = new OpenClawSessionSubscriptions(
+      {
+        request: vi.fn(async () => ({
+          key: "agent:research:work",
+          approvalReplay: replay,
+        })),
+      },
+      logger
+    )
 
     const lease = await subscriptions.acquire(
       { agentId: "research", sessionKey: "main" },
@@ -476,12 +541,15 @@ describe("OpenClaw Session subscriptions", () => {
       approvals: [],
       truncated: false,
     }
-    const subscriptions = new OpenClawSessionSubscriptions({
-      request: vi.fn(async () => ({
-        key: "global",
-        approvalReplay: replay,
-      })),
-    })
+    const subscriptions = new OpenClawSessionSubscriptions(
+      {
+        request: vi.fn(async () => ({
+          key: "global",
+          approvalReplay: replay,
+        })),
+      },
+      logger
+    )
 
     const lease = await subscriptions.acquire(
       { agentId: "research", sessionKey: "agent:research:main" },

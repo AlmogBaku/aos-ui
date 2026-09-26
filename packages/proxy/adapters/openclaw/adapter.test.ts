@@ -87,8 +87,14 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
 }
 
 describe("OpenClaw ServerRuntime assembly", () => {
-  it("starts one provider client and composes exact owned workspace and history reads", async () => {
-    const gateway = client()
+  it("retries a failed provider start and composes exact owned workspace and history reads", async () => {
+    const gateway = client({
+      start: vi
+        .fn(async () => undefined)
+        .mockRejectedValueOnce(
+          new OpenClawClientConnectionError("unavailable")
+        ),
+    })
     const subscribe = vi.fn(async () => () => undefined)
     const adapter = new OpenClawServerAdapter({
       client: gateway,
@@ -96,6 +102,10 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: subscribe,
     })
 
+    await expect(adapter.authState()).resolves.toEqual({
+      status: "unavailable",
+      reason: "temporarily-unavailable",
+    })
     await expect(adapter.authState()).resolves.toEqual({
       status: "authenticated",
     })
@@ -128,7 +138,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
       maxTokens: 100,
       source: "provider-usage",
     })
-    expect(gateway.start).toHaveBeenCalledTimes(1)
     expect(subscribe).toHaveBeenCalledWith(
       "research",
       sessionKey,

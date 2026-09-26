@@ -109,7 +109,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
   readonly #subscribeSession: OpenClawHistorySubscription
   readonly #gatewayOrigin?: string
   readonly #fetch: typeof fetch
-  #ready?: Promise<void>
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
@@ -452,9 +451,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#close
   }
 
+  /** Never cached: a failed start leaves the next call to dial again. */
   #start() {
-    this.#ready ??= Promise.resolve(this.#client.start())
-    return this.#ready
+    return Promise.resolve(this.#client.start())
   }
 
   #runtimeInfo(status: "ready" | "unavailable"): RuntimeInfo {

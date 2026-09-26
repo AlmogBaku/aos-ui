@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
-import {
-  GatewayClientRequestError,
-  GatewayClientRequestTimeoutError,
-} from "@openclaw/gateway-client"
+import { GatewayClientRequestError } from "@openclaw/gateway-client"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   OpenClawClient,
   OpenClawClientConnectionError,
@@ -104,8 +102,9 @@ describe("OpenClaw client", () => {
     await expect(started).resolves.toBeUndefined()
   })
 
-  it("retains only validated negotiated attachment limits from HelloOk", async () => {
-    const { client, gateway } = setup()
+  it("re-reads validated negotiated attachment limits from every HelloOk", async () => {
+    const onReady = vi.fn()
+    const { client, gateway } = setup({ onReady })
     const started = client.start()
 
     gateway().options.onHelloOk?.({
@@ -128,6 +127,14 @@ describe("OpenClaw client", () => {
         maxImageBytes: 10 * 1024 * 1024,
       },
     })
+
+    gateway().options.onHelloOk?.({
+      protocol: 4,
+      policy: { maxPayload: 1024 },
+    } as never)
+
+    expect(client.negotiatedPolicy()).toEqual({ maxPayload: 1024 })
+    expect(onReady).toHaveBeenCalledTimes(2)
   })
 
   it("does not manufacture attachment policy from missing or malformed HelloOk policy", async () => {
@@ -156,9 +163,9 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it("disposes terminal pairing-rejected readiness without exposing the native detail", async () => {
+  it("rejects a pairing-rejected start without native detail and never caches it", async () => {
     const { client, gateway } = setup()
-    const started = client.start()
+    const first = client.start()
 
     gateway().options.onConnectError?.(
       new GatewayClientRequestError({
@@ -167,13 +174,17 @@ describe("OpenClaw client", () => {
       })
     )
 
-    await expect(started).rejects.toEqual(
+    await expect(first).rejects.toEqual(
       new OpenClawClientConnectionError("pairing-required")
     )
-    await vi.waitFor(() => expect(gateway().stopAndWait).toHaveBeenCalledOnce())
     await expect(client.request("sessions.list", {})).rejects.toEqual(
       new OpenClawClientUnavailableError()
     )
+    const second = client.start()
+    gateway().options.onHelloOk?.({ protocol: 4 } as never)
+
+    await expect(second).resolves.toBeUndefined()
+    expect(gateway().stopAndWait).not.toHaveBeenCalled()
   })
 
   it("keeps readiness usable through a transient transport failure until the Gateway reconnects", async () => {
@@ -236,40 +247,43 @@ describe("OpenClaw client", () => {
       await expect(started).rejects.toEqual(
         new OpenClawClientConnectionError(kind)
       )
-      await vi.waitFor(() =>
-        expect(gateway().stopAndWait).toHaveBeenCalledOnce()
-      )
     }
   )
 
-  it("passes the caller cancellation, acknowledgement hooks, and bounded deadline to a ready Gateway request", async () => {
-    const { client, gateway } = setup({ requestTimeoutMs: 321 })
+  it("aborts a ready Gateway request on the caller's cancellation or the 15 s call deadline", async () => {
+    const clock = useFakeClock()
+    const { client, gateway } = setup()
     const started = client.start()
     gateway().options.onHelloOk?.({ protocol: 4 } as never)
     await started
+    gateway().requestHandler = (options) =>
+      new Promise((_resolve, reject) => {
+        options?.onSent?.()
+        options?.signal?.addEventListener("abort", () =>
+          reject(new Error("native abort detail"))
+        )
+      })
     const controller = new AbortController()
-    const onSent = vi.fn()
-    const onAccepted = vi.fn()
 
-    await expect(
-      client.request(
-        "sessions.list",
-        { limit: 3 },
-        { signal: controller.signal, onSent, onAccepted }
-      )
-    ).resolves.toEqual({ ok: true })
-    expect(gateway().requests).toEqual([
-      {
-        method: "sessions.list",
-        params: { limit: 3 },
-        options: {
-          signal: controller.signal,
-          timeoutMs: 321,
-          onSent: expect.any(Function),
-          onAccepted: expect.any(Function),
-        },
-      },
-    ])
+    const cancelled = client.request(
+      "sessions.list",
+      {},
+      { signal: controller.signal }
+    )
+    controller.abort()
+    await expect(cancelled).rejects.toMatchObject({
+      kind: "cancelled",
+      requestSent: true,
+    })
+    const timedOut = expect(
+      client.request("sessions.list", {})
+    ).rejects.toMatchObject({
+      kind: "timeout",
+      requestSent: true,
+      uncertain: true,
+    })
+    await clock.advance(15_000)
+    await timedOut
   })
 
   it("sanitizes native request failures without preserving native error detail", async () => {
@@ -285,29 +299,6 @@ describe("OpenClaw client", () => {
     await expect(client.request("sessions.list", {})).rejects.not.toThrow(
       "native /private/path token=secret"
     )
-  })
-
-  it("sanitizes an official request timeout without exposing its method or timeout", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
-    gateway().requestHandler = (options) => {
-      options?.onSent?.()
-      return Promise.reject(
-        new GatewayClientRequestTimeoutError({
-          method: "sessions.list",
-          timeoutMs: 321,
-          requestSent: true,
-        })
-      )
-    }
-
-    await expect(client.request("sessions.list", {})).rejects.toMatchObject({
-      kind: "timeout",
-      requestSent: true,
-      uncertain: true,
-    })
   })
 
   it("preserves a dispatched cancellation as uncertain without replaying it", async () => {
@@ -355,7 +346,8 @@ describe("OpenClaw client", () => {
     expect(onAccepted).toHaveBeenCalledWith({ id: "native-ack" })
   })
 
-  it("keeps an accepted request pending until its final response when a leaf requires it", async () => {
+  it("keeps an accepted request pending past the call deadline until its final response when a leaf requires it", async () => {
+    const clock = useFakeClock()
     const { client, gateway } = setup()
     const started = client.start()
     gateway().options.onHelloOk?.({ protocol: 4 } as never)
@@ -363,7 +355,10 @@ describe("OpenClaw client", () => {
     const onAccepted = vi.fn()
     let deliverFinal: ((payload: { status: "final" }) => void) | undefined
     gateway().requestHandler = (options) =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
+        options?.signal?.addEventListener("abort", () =>
+          reject(new Error("aborted"))
+        )
         options?.onSent?.()
         if (options?.expectFinal) {
           options.onAccepted?.({ status: "accepted" })
@@ -378,21 +373,20 @@ describe("OpenClaw client", () => {
       { text: "once" },
       { expectFinal: true, onAccepted }
     )
-    await vi.waitFor(() =>
-      expect(onAccepted).toHaveBeenCalledWith({ status: "accepted" })
-    )
+    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted" })
     let settled = false
     void request.then(() => {
       settled = true
     })
-    await Promise.resolve()
+    await clock.advance(15_000)
     expect(settled).toBe(false)
 
     deliverFinal?.({ status: "final" })
     await expect(request).resolves.toEqual({ status: "final" })
   })
 
-  it("forwards paused and closed transport state without native close detail", async () => {
+  it("forwards paused and closed transport state without native close detail, then redials", async () => {
+    const clock = useFakeClock()
     const onReconnectPaused = vi.fn()
     const onClose = vi.fn()
     const { client, gateway } = setup({ onReconnectPaused, onClose })
@@ -417,6 +411,8 @@ describe("OpenClaw client", () => {
       phase: "post-hello",
       recoverable: true,
     })
+    await clock.advance(1_000)
+    expect(gateway().start).toHaveBeenCalledTimes(2)
   })
 
   it("forwards event and gap notifications to server observers and stops idempotently", async () => {
