@@ -8,6 +8,7 @@
  * adapter's redaction rule keeps private. The server log keeps its own shorter,
  * redacted copy.
  */
+import type { TURN_FAILURES as SHARED_TURN_FAILURES } from "../../core/failures"
 import { redactForLog } from "../../redaction"
 import { containsCredentialValue, trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
@@ -20,6 +21,14 @@ const MAX_PUBLIC_DETAIL_CHARS = 500
 export type TurnFailure = {
   readonly code: string
   readonly message: string
+}
+
+/**
+ * A failure that may leave the turn alive in Hermes. Its code is one the shared
+ * turn-failure table names, so core keeps the turn for the browser to redial.
+ */
+export type DetachedTurnFailure = TurnFailure & {
+  readonly code: keyof typeof SHARED_TURN_FAILURES
 }
 
 /**

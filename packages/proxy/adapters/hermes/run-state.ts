@@ -23,6 +23,7 @@ import { EventQueue, startedTurnQueue } from "./event-queue"
 import {
   TURN_FAILURES,
   TURN_RESET_LOG,
+  type DetachedTurnFailure,
   type NativeFailure,
   type TurnFailure,
 } from "./run-failures"
@@ -147,7 +148,7 @@ export type TurnEngineHost = {
   finish(active: ActiveTurn, ending?: TurnEnding, confirmedIdle?: boolean): void
   requireAction(active: ActiveTurn, requests: PendingRequest[]): void
   fail(active: ActiveTurn, failure: TurnFailure): void
-  detach(active: ActiveTurn, failure: TurnFailure): void
+  detach(active: ActiveTurn, failure: DetachedTurnFailure): void
   settle(active: ActiveTurn): void
 }
 
