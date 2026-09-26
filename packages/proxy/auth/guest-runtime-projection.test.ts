@@ -5,6 +5,7 @@ import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   projectGuestCapabilities,
   projectGuestError,
+  publicTurnError,
 } from "./guest-runtime-projection"
 
 const authorization: VerifiedGuestAuthorization = {
@@ -52,7 +53,14 @@ describe("guest runtime projection", () => {
     })
   })
 
-  it("removes Agent-wide approval grants from guest capabilities", () => {
+  it("maps AOS_OUTCOME_UNKNOWN to request_failed (non-retryable) in guest turn errors", () => {
+    expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
+      code: "request_failed",
+      retryable: false,
+    })
+  })
+
+    it("removes Agent-wide approval grants from guest capabilities", () => {
     const projected = projectGuestCapabilities({
       workspace: {
         models: {
