@@ -53,9 +53,9 @@ describe("guest runtime projection", () => {
     })
   })
 
-  it("maps AOS_OUTCOME_UNKNOWN to request_failed (non-retryable) in guest turn errors", () => {
+  it("keeps a turn whose outcome is unknown distinct from a failed one, and final", () => {
     expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
-      code: "request_failed",
+      code: "AOS_OUTCOME_UNKNOWN",
       retryable: false,
     })
   })

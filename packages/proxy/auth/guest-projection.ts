@@ -88,6 +88,7 @@ const TRANSPORTS: readonly Transport[] = ["rest", "turn", "artifact", "error"]
 const publicErrorCodes = [
   "AOS_CONNECTION_INTERRUPTED",
   "AOS_INTERACTION_UNCERTAIN",
+  "AOS_OUTCOME_UNKNOWN",
   "AOS_SEND_UNCERTAIN",
   "AOS_STOP_UNCERTAIN",
   "forbidden",
@@ -104,6 +105,8 @@ const publicErrorDescriptions: Record<GuestPublicErrorCode, string> = {
     "The connection was interrupted. Reconnect to continue.",
   AOS_INTERACTION_UNCERTAIN:
     "The response may have been accepted. Reconnect to confirm.",
+  AOS_OUTCOME_UNKNOWN:
+    "AOS could not confirm how the run ended. Its work may be incomplete.",
   AOS_SEND_UNCERTAIN:
     "The message may have been accepted. Reconnect to confirm.",
   AOS_STOP_UNCERTAIN: "Stop may have been accepted. Reconnect to confirm.",
