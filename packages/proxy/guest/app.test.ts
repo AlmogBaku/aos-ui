@@ -3,6 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import {
   createGuestInvitationService,
@@ -206,6 +207,7 @@ function harness(options: { existing?: boolean } = {}) {
       maxActiveExecutions: 8,
       maxSubscriberEvents: 32,
       maxSubscriberBytes: 256 * 1024,
+      logger: captureLogs().logger,
     }),
     close: vi.fn(async () => undefined),
   }

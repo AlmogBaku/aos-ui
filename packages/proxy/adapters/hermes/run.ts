@@ -500,7 +500,7 @@ export class HermesTurnEngine {
       const status = await readStatus(this.#host, liveSessionId)
       if (status !== "waiting" || !unchanged()) return
       const { code, message } = TURN_FAILURES.interactionLost
-      this.#log.warn(TURN_FAILED_LOG, { publicCode: code })
+      this.#log.warn({ publicCode: code }, TURN_FAILED_LOG)
       this.#emit(active, {
         kind: TurnEventKind.TurnFailed,
         message,

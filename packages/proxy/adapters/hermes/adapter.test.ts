@@ -2643,9 +2643,12 @@ describe("Hermes server adapter", () => {
 
     await router.connection.restored()
 
-    expect(warn).toHaveBeenCalledWith("hermes.attachment.rebind_failed", {
-      reason: expect.any(String),
-    })
+    expect(warn).toHaveBeenCalledWith(
+      {
+        reason: expect.any(String),
+      },
+      "hermes.attachment.rebind_failed"
+    )
   })
 
   it("publishes each native failure class under its own public error code", async () => {

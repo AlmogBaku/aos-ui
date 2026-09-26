@@ -4,6 +4,7 @@ import {
   RequestError,
   type AgentApp,
   type AgentContext,
+  type JsonRpcId,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
@@ -34,9 +35,8 @@ import {
   type AosExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
-import { SILENT, unlessAborted } from "../core/channel"
+import { unlessAborted } from "../core/channel"
 import type { PresenceReport } from "../push/presence"
-import { redactForLog } from "../redaction"
 import {
   createSessions,
   sessionInfoOf,
@@ -71,6 +71,7 @@ import {
   invalidParams,
   notFound,
   parseMeta,
+  publicCodeOf,
   publicRequestError,
   refusalError,
 } from "./validation"
@@ -187,18 +188,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    */
   let exposure: PresenceReport | undefined
 
-  /** One structured, redacted line per connection-level ACP event. */
-  const log = (event: string, fields?: Record<string, unknown>) => {
-    context.logger?.info(
-      redactForLog({
-        event,
-        connectionId: context.connectionId,
-        role,
-        ...fields,
-      })
-    )
-  }
-
   /**
    * This connection's member stack. A guest that has not redeemed an
    * invitation reaches nothing.
@@ -217,18 +206,28 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (!admits(stack(), kind)) throw RequestError.methodNotFound(method)
   }
 
-  /** Runs one decoded command through the stack, its refusals as ACP errors. */
+  /**
+   * Runs one decoded command through the stack, its refusals as ACP errors. A
+   * failed command writes one line, naming the request that sent it.
+   */
   async function perform<K extends CommandKind>(
     kind: K,
     command: MemberCommands[K],
-    execute: CommandNext<K>
+    execute: CommandNext<K>,
+    requestId?: JsonRpcId
   ): Promise<CommandResults[K]> {
     try {
       return await runCommand(stack(), kind, command, execute)
     } catch (cause) {
-      throw cause instanceof CommandRefusedError
-        ? refusalError(cause.refusal)
-        : publicRequestError(context.publicError, cause)
+      const error =
+        cause instanceof CommandRefusedError
+          ? refusalError(cause.refusal)
+          : publicRequestError(context.publicError, cause)
+      context.logger.warn(
+        { command: kind, requestId, errorCode: publicCodeOf(error) },
+        "connection.command.failed"
+      )
+      throw error
     }
   }
 
@@ -412,37 +411,41 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return {}
   })
 
-  app.onRequest(methods.agent.session.new, async ({ params, client }) => {
-    admit(methods.agent.session.new, "new")
-    const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
-    const { sessionId } = await perform(
-      "new",
-      {
-        agentId: meta.agentId,
-        ...(meta.title === undefined ? {} : { title: meta.title }),
-        ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
-      },
-      async ({ agentId, ...input }) => {
-        // A repeat of a client id answers the Session its first create made.
-        const created = SessionCreateResponseSchema.parse(
-          await context.channels.createSession(
-            agentId,
-            input,
-            context.principalId
+  app.onRequest(
+    methods.agent.session.new,
+    async ({ params, client, requestId }) => {
+      admit(methods.agent.session.new, "new")
+      const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
+      const { sessionId } = await perform(
+        "new",
+        {
+          agentId: meta.agentId,
+          ...(meta.title === undefined ? {} : { title: meta.title }),
+          ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
+        },
+        async ({ agentId, ...input }) => {
+          // A repeat of a client id answers the Session its first create made.
+          const created = SessionCreateResponseSchema.parse(
+            await context.channels.createSession(
+              agentId,
+              input,
+              context.principalId
+            )
           )
-        )
-        const sessionId = created.session.id
-        sessions.remember([{ id: sessionId, agentId }])
-        // The row, capabilities and model options follow the answer as
-        // updates.
-        sessions.join(client, sessions.scope(sessionId)).joined()
-        return { sessionId }
-      }
-    )
-    return { sessionId }
-  })
+          const sessionId = created.session.id
+          sessions.remember([{ id: sessionId, agentId }])
+          // The row, capabilities and model options follow the answer as
+          // updates.
+          sessions.join(client, sessions.scope(sessionId)).joined()
+          return { sessionId }
+        },
+        requestId
+      )
+      return { sessionId }
+    }
+  )
 
-  app.onRequest(methods.agent.session.list, async ({ params }) => {
+  app.onRequest(methods.agent.session.list, async ({ params, requestId }) => {
     admit(methods.agent.session.list, "list")
     const meta = parseMeta(AosSessionListMetaSchema, params._meta)
     const listed = await perform(
@@ -455,7 +458,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const page = await catalog.list(agentId, offset)
         sessions.remember(page.rows)
         return page
-      }
+      },
+      requestId
     )
     return {
       sessions: listed.rows.map(sessionInfoOf),
@@ -465,44 +469,51 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   })
 
-  app.onRequest(methods.agent.session.resume, async ({ params, client }) => {
-    const method = methods.agent.session.resume
-    stack()
-    const cursor = olderPageCursor(params.replayFrom)
-    if (cursor !== undefined) {
-      admit(method, "older-page")
-      const { page } = await perform(
-        "older-page",
-        { sessionId: params.sessionId, cursor },
-        replayOlder
-      )
-      return { _meta: { [AOS_META_KEY]: { history: historyCursor(page) } } }
-    }
-    admit(method, "resume")
-    const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
-    const resumed = await perform(
-      "resume",
-      {
-        sessionId: params.sessionId,
-        ...meta,
-        fromStart: params.replayFrom?.type === "start",
-      },
-      (command) => resume(command, client)
-    )
-    const { history } = resumed
-    return {
-      _meta: {
-        [AOS_META_KEY]: {
-          ...(resumed.resync ? { resync: true } : {}),
-          ...(history === undefined ? {} : { history: historyCursor(history) }),
+  app.onRequest(
+    methods.agent.session.resume,
+    async ({ params, client, requestId }) => {
+      const method = methods.agent.session.resume
+      stack()
+      const cursor = olderPageCursor(params.replayFrom)
+      if (cursor !== undefined) {
+        admit(method, "older-page")
+        const { page } = await perform(
+          "older-page",
+          { sessionId: params.sessionId, cursor },
+          replayOlder,
+          requestId
+        )
+        return { _meta: { [AOS_META_KEY]: { history: historyCursor(page) } } }
+      }
+      admit(method, "resume")
+      const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+      const resumed = await perform(
+        "resume",
+        {
+          sessionId: params.sessionId,
+          ...meta,
+          fromStart: params.replayFrom?.type === "start",
         },
-      },
+        (command) => resume(command, client),
+        requestId
+      )
+      const { history } = resumed
+      return {
+        _meta: {
+          [AOS_META_KEY]: {
+            ...(resumed.resync ? { resync: true } : {}),
+            ...(history === undefined
+              ? {}
+              : { history: historyCursor(history) }),
+          },
+        },
+      }
     }
-  })
+  )
 
   app.onRequest(
     methods.agent.session.prompt,
-    async ({ params, client, signal }) => {
+    async ({ params, client, signal, requestId }) => {
       admit(methods.agent.session.prompt, "send")
       const meta = parseMeta(AosPromptMetaSchema, params._meta)
       if (!params.prompt.every(isPromptBlock)) throw invalidParams()
@@ -527,7 +538,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             text,
             ...meta,
           },
-          (command) => send(command, client, signal)
+          (command) => send(command, client, signal),
+          requestId
         ),
         signal
       )
@@ -536,7 +548,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onNotification(methods.agent.session.cancel, async ({ params }) => {
-    log("acp.turn.cancel", { sessionId: params.sessionId })
+    context.logger.info({ sessionId: params.sessionId }, "acp.turn.cancel")
     // An unauthenticated guest reaches nothing here.
     if (!sessions.identity()) return
     admit(methods.agent.session.cancel, "stop")
@@ -550,35 +562,44 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     })
   })
 
-  app.onRequest(methods.agent.session.setConfigOption, async ({ params }) => {
-    admit(methods.agent.session.setConfigOption, "set-config")
-    const write = translators.configWriteOf(params.configId, params.value)
-    const { models } = await perform(
-      "set-config",
-      { sessionId: params.sessionId, ...(write ? { write } : {}) },
-      async (command) => {
-        if (!command.write) throw invalidParams()
-        return {
-          models: await context.channels.switchModel(
-            sessions.scope(command.sessionId),
-            command.write,
-            sessions.membership(command.sessionId)
-          ),
-        }
-      }
-    )
-    return { configOptions: translators.configOptionsOf(models) }
-  })
+  app.onRequest(
+    methods.agent.session.setConfigOption,
+    async ({ params, requestId }) => {
+      admit(methods.agent.session.setConfigOption, "set-config")
+      const write = translators.configWriteOf(params.configId, params.value)
+      const { models } = await perform(
+        "set-config",
+        { sessionId: params.sessionId, ...(write ? { write } : {}) },
+        async (command) => {
+          if (!command.write) throw invalidParams()
+          return {
+            models: await context.channels.switchModel(
+              sessions.scope(command.sessionId),
+              command.write,
+              sessions.membership(command.sessionId)
+            ),
+          }
+        },
+        requestId
+      )
+      return { configOptions: translators.configOptionsOf(models) }
+    }
+  )
 
-  app.onRequest(methods.agent.session.close, async ({ params }) => {
+  app.onRequest(methods.agent.session.close, async ({ params, requestId }) => {
     admit(methods.agent.session.close, "close")
-    await perform("close", { sessionId: params.sessionId }, async (command) => {
-      sessions.part(command.sessionId)
-    })
+    await perform(
+      "close",
+      { sessionId: params.sessionId },
+      async (command) => {
+        sessions.part(command.sessionId)
+      },
+      requestId
+    )
     return {}
   })
 
-  app.onRequest(methods.agent.session.delete, async ({ params }) => {
+  app.onRequest(methods.agent.session.delete, async ({ params, requestId }) => {
     admit(methods.agent.session.delete, "delete")
     await perform(
       "delete",
@@ -586,7 +607,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async (command) => {
         await catalog.delete(sessions.scope(command.sessionId))
         sessions.forget(command.sessionId)
-      }
+      },
+      requestId
     )
     return {}
   })
@@ -594,7 +616,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     AOS_METHODS.session.update,
     undecoded,
-    async ({ params: raw }) => {
+    async ({ params: raw, requestId }) => {
       admit(AOS_METHODS.session.update, "update")
       const params = AosSessionUpdateRequestSchema.parse(raw)
       const patch: MemberCommands["update"]["patch"] =
@@ -613,7 +635,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         // The new row reaches each member of the Session; a connection that
         // is not one is not made one.
         (command) =>
-          catalog.update(sessions.scope(command.sessionId), command.patch)
+          catalog.update(sessions.scope(command.sessionId), command.patch),
+        requestId
       )
       return {}
     }
@@ -622,7 +645,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     AOS_METHODS.session.steer,
     undecoded,
-    async ({ params: raw }) => {
+    async ({ params: raw, requestId }) => {
       admit(AOS_METHODS.session.steer, "steer")
       const params = AosSteerRequestSchema.parse(raw)
       return await perform(
@@ -637,7 +660,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           const membership = sessions.membership(command.sessionId)
           if (!membership) throw notFound()
           return await membership.steer(command.requestId, command.text)
-        }
+        },
+        requestId
       )
     }
   )
@@ -645,7 +669,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     AOS_METHODS.session.focus,
     undecoded,
-    async ({ params: raw }) => {
+    async ({ params: raw, requestId }) => {
       admit(AOS_METHODS.session.focus, "focus")
       const { sessionId, foreground, idle } = AosFocusRequestSchema.parse(raw)
       // A report naming no Session changes nothing; its answer is what the
@@ -675,21 +699,26 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           if (agentId === undefined) return
           exposure = report
           readState?.focus(agentId, report.sessionId)
-        }
+        },
+        requestId
       )
       return {}
     }
   )
 
-  app.onRequest(AOS_METHODS.agents.list, withoutParams, async () => {
-    admit(AOS_METHODS.agents.list, "agents")
-    return await perform("agents", {}, () => catalog.agents())
-  })
+  app.onRequest(
+    AOS_METHODS.agents.list,
+    withoutParams,
+    async ({ requestId }) => {
+      admit(AOS_METHODS.agents.list, "agents")
+      return await perform("agents", {}, () => catalog.agents(), requestId)
+    }
+  )
 
   app.onRequest(
     AOS_METHODS.agents.setVisibility,
     undecoded,
-    async ({ params: raw }) => {
+    async ({ params: raw, requestId }) => {
       admit(AOS_METHODS.agents.setVisibility, "set-visibility")
       const params = AosSetVisibilityRequestSchema.parse(raw)
       return await perform(
@@ -704,17 +733,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             command.agentId,
             command.visibility,
             command.revision
-          )
+          ),
+        requestId
       )
     }
   )
 
   app.onConnect(async (connection) => {
-    const logger = context.ownerLogger ?? SILENT
+    const { logger } = context
+    // The connection's logger already carries its `connectionId` and `role`.
     const owner = createOwner(connectionMachine(logger), {
       logger,
       clock: defaultClock,
-      bindings: { connectionId: context.connectionId, role },
+      bindings: {},
     })
     const { stack } = owner
     stack.defer(() => {
@@ -732,7 +763,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
-    log("acp.connection.opened")
+    logger.info({}, "acp.connection.opened")
     // The workspace's events reach this connection as its stack shows them.
     const show = (event: WorkspaceEvent) =>
       sessions.show(connection.client, event)
@@ -749,7 +780,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const expiry = context.authentication?.expire(() => connection.close())
     if (expiry) stack.defer(expiry)
     await connection.closed
-    log("acp.connection.closed")
+    logger.info({}, "acp.connection.closed")
     owner.actor.send({ type: "closed" })
   })
 

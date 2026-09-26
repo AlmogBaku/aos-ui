@@ -1356,7 +1356,7 @@ describe("AOS ACP agent", () => {
     )
   })
 
-  it("logs the connection, the Stop it received, and the reply it settled", async () => {
+  it("logs the connection, its Session's membership, the Stop it received, and the reply it settled", async () => {
     const test = await harness()
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1397,9 +1397,20 @@ describe("AOS ACP agent", () => {
       connectionId: "connection-1",
       role: "operator",
     })
+    expect(test.logs.records()).toContainEqual(
+      expect.objectContaining({
+        message: "membership.transition",
+        fields: expect.objectContaining({
+          connectionId: "connection-1",
+          sessionId: CREATED,
+          to: "joined",
+        }),
+      })
+    )
     expect(test.logged()).toContainEqual({
-      event: "acp.request.answered",
+      event: "membership.request.answered",
       connectionId: "connection-1",
+      role: "operator",
       sessionId: CREATED,
       requestId: "approval-1",
       status: "resolved",

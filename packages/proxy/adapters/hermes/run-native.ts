@@ -416,11 +416,14 @@ export class HermesNativeRuntime implements HermesTurnNative {
       // A rewind is the one submit that destroys durable rows, so the address it
       // truncates before is reported exactly as Hermes receives it. The prompt
       // replacing those rows is never logged.
-      this.#log?.warn("hermes.rewind.submit", {
-        sessionId: prompt.scope.providerSessionId,
-        rewindSourceId: prompt.rewindSourceId,
-        ...rewind,
-      })
+      this.#log?.warn(
+        {
+          sessionId: prompt.scope.providerSessionId,
+          rewindSourceId: prompt.rewindSourceId,
+          ...rewind,
+        },
+        "hermes.rewind.submit"
+      )
     }
 
     if (invocation) {
@@ -559,7 +562,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     // while it compacts, and leaves the surface to queue it for the next turn.
     // `queued` keeps the submit from interrupting the turn still running.
     if (isRecord(payload) && payload.status === "rejected") {
-      this.#log?.warn("hermes.native.redirect_rejected", {})
+      this.#log?.warn({}, "hermes.native.redirect_rejected")
       const outcome = await this.#submitPrompt(liveSessionId, {
         text,
         queued: true,
@@ -669,11 +672,14 @@ export class HermesNativeRuntime implements HermesTurnNative {
    * reaches only a public failure, and only redaction-checked.
    */
   #logRejection(method: string, error: HermesRpcRejectedError) {
-    this.#log?.warn("hermes.native.rejected", {
-      method,
-      ...(error.code === undefined ? {} : { code: error.code }),
-      ...(error.reason === undefined ? {} : { reason: error.reason }),
-    })
+    this.#log?.warn(
+      {
+        method,
+        ...(error.code === undefined ? {} : { code: error.code }),
+        ...(error.reason === undefined ? {} : { reason: error.reason }),
+      },
+      "hermes.native.rejected"
+    )
   }
 
   async #since(

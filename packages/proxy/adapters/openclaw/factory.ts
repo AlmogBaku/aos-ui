@@ -10,8 +10,10 @@ import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 
 import type { RuntimeLimits } from "../../config"
 import { createCoordinator } from "../create-coordinator"
+import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance } from "../../core/runtime"
 import { withMcpApps } from "../../mcp-apps/annotate"
+import type { CredentialValues } from "../../redaction"
 import { readSecretFile } from "../../secrets"
 import { OpenClawServerAdapter } from "./adapter"
 import {
@@ -36,9 +38,10 @@ type OpenClawRuntimeClient = OpenClawGatewayClient & {
   negotiatedPolicy?(): ReturnType<OpenClawClient["negotiatedPolicy"]>
 }
 
-export type OpenClawRuntimeFactoryDependencies = Readonly<{
-  clientFactory?: (options: OpenClawClientOptions) => OpenClawRuntimeClient
-}>
+export type OpenClawRuntimeFactoryDependencies = RuntimeServices &
+  Readonly<{
+    clientFactory?: (options: OpenClawClientOptions) => OpenClawRuntimeClient
+  }>
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex")
 
@@ -74,14 +77,12 @@ function privateKey(privateKeyPem: string) {
   }
 }
 
-async function readCredentials(config: OpenClawRuntimeConfig) {
-  const [encodedIdentity, deviceToken] = await Promise.all([
-    readSecretFile(config.deviceIdentityFile),
-    readSecretFile(config.deviceTokenFile),
-  ])
+/** The device identity file, checked against the key pair it carries. */
+async function readDeviceIdentity(path: string) {
+  const encoded = await readSecretFile(path)
   let value: unknown
   try {
-    value = JSON.parse(encodedIdentity)
+    value = JSON.parse(encoded)
   } catch {
     throw new Error("Invalid OpenClaw device identity")
   }
@@ -109,11 +110,26 @@ async function readCredentials(config: OpenClawRuntimeConfig) {
   )
     throw new Error("Invalid OpenClaw device identity")
   return {
-    deviceIdentity: {
-      deviceId: value.deviceId,
-      privateKeyPem: value.privateKeyPem,
-      publicKeyPem: value.publicKeyPem,
-    },
+    deviceId: value.deviceId,
+    privateKeyPem: value.privateKeyPem,
+    publicKeyPem: value.publicKeyPem,
+  }
+}
+
+async function readCredentials(
+  config: OpenClawRuntimeConfig,
+  credentials: CredentialValues
+) {
+  const [deviceIdentity, deviceToken] = await Promise.all([
+    credentials.register(readDeviceIdentity, ({ privateKeyPem }) => [
+      privateKeyPem,
+    ])(config.deviceIdentityFile),
+    credentials.register(readSecretFile, (value) => [value])(
+      config.deviceTokenFile
+    ),
+  ])
+  return {
+    deviceIdentity,
     deviceToken,
     signDevicePayload: (pem: string, payload: string) =>
       sign(null, Buffer.from(payload, "utf8"), privateKey(pem)).toString(
@@ -134,9 +150,9 @@ function gatewayHttpOrigin(baseUrl: string) {
 export async function createOpenClawRuntime(
   config: OpenClawRuntimeConfig,
   limits: RuntimeLimits,
-  dependencies: OpenClawRuntimeFactoryDependencies = {}
+  dependencies: OpenClawRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const credentials = await readCredentials(config)
+  const credentials = await readCredentials(config, dependencies.credentials)
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
   let generation = 1
   let transition = Promise.resolve()
@@ -207,7 +223,7 @@ export async function createOpenClawRuntime(
       },
     })
   )
-  const sessions = createCoordinator(runtime, limits)
+  const sessions = createCoordinator(runtime, limits, dependencies.logger)
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,

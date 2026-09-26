@@ -57,6 +57,7 @@ import type {
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   createGuestAcpService,
   createGuestConnection,
@@ -519,6 +520,7 @@ function harness(options: HarnessOptions = {}) {
     maxActiveExecutions: 8,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
+    logger: captureLogs().logger,
   })
   coordinator.bindCapabilities(runtime)
   const runtimeInstance: RuntimeInstance = {
@@ -530,17 +532,14 @@ function harness(options: HarnessOptions = {}) {
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
   const clock = { now: NOW }
   const invitations = invitationService(options.ttlSeconds)
-  const logs: unknown[] = []
+  const logs = captureLogs()
   const listener: GuestAcpServiceOptions = {
-    logger: {
-      info: (line) => logs.push(line),
-      error: (line) => logs.push(line),
-    },
+    logger: logs.logger,
     publicOrigin: ORIGIN,
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    channels: createChannels({ coordinator, runtime }),
+    channels: createChannels({ coordinator, runtime, logger: logs.logger }),
     catalog: createCatalog({
       runtime,
       coordinator,
@@ -863,8 +862,8 @@ describe("guest ACP listener", () => {
     await test.prompt("Start the interview")
     await settled()
 
-    expect(test.logs).not.toEqual([])
-    const logged = JSON.stringify(test.logs)
+    expect(test.logs.records()).not.toEqual([])
+    const logged = JSON.stringify(test.logs.records())
     expect(logged).not.toContain(token)
     expect(logged).not.toContain(INSTRUCTION)
     test.close()

@@ -96,6 +96,7 @@ async function connectGuest(
       channels: test.channels,
       catalog: test.catalog,
       guestActiveExecutions: 2,
+      logger: test.logs.logger,
     },
     "guest-connection"
   )

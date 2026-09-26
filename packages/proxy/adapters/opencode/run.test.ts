@@ -1,3 +1,4 @@
+import { captureLogs } from "../../../../test/support/log-capture"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -1050,6 +1051,7 @@ describe("OpenCodeRunEngine", () => {
       maxActiveExecutions: 8,
       maxSubscriberEvents: 8,
       maxSubscriberBytes: 64 * 1024,
+      logger: captureLogs().logger,
     })
     const access = {
       membershipId: "operator",

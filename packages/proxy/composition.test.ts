@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../test/support/log-capture"
 import type { HermesRpcTransport } from "./adapters/hermes/adapter"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
@@ -16,6 +17,7 @@ import { createConfiguredProxy } from "./composition"
 import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
+import { CredentialValues } from "./redaction"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 
 const directories: string[] = []
@@ -121,8 +123,8 @@ function hermesRuntimeFactory(
     Parameters<typeof createHermesRuntime>[2]
   >["transportFactory"]
 ): RuntimeFactory {
-  return (config, limits) =>
-    createHermesRuntime(config, limits, { transportFactory })
+  return (config, limits, services) =>
+    createHermesRuntime(config, limits, { ...services, transportFactory })
 }
 
 describe("configured proxy composition", () => {
@@ -143,18 +145,21 @@ describe("configured proxy composition", () => {
       close: vi.fn(async () => undefined),
     } as unknown as RuntimeInstance
     const runtimeFactory = vi.fn(async () => runtimeInstance)
+    const logger = captureLogs().logger
+    const credentials = new CredentialValues()
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger,
+      credentials,
     })
 
     expect(runtimeFactory).toHaveBeenCalledOnce()
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      input.runtime,
-      input.limits,
-      new Map()
-    )
+    expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits, {
+      logger,
+      credentials,
+      mcpServerOverrides: new Map(),
+    })
     expect(configured.runtimeInstance).toBe(runtimeInstance)
     expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
     // The guest listener serves ACP beside its HTTP routes.
@@ -178,7 +183,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -206,7 +212,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(transportFactory),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
       clock: () => 1_700_000_000_000,
     })
 
@@ -232,7 +239,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
       clock: () => 1_700_000_000_000,
     })
     const response = await configured.app.request(
@@ -282,7 +290,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -304,7 +313,8 @@ describe("configured proxy composition", () => {
   it("names the rejected field when invitation input is invalid", async () => {
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
     const post = (body: unknown) =>
       configured.app.request(
@@ -347,7 +357,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -377,7 +388,8 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     // One cache: the ACP listener keeps it current and the read-state gate reads it.
@@ -404,7 +416,8 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     expect(configured.push).toBeUndefined()
@@ -426,7 +439,8 @@ describe("configured proxy composition", () => {
     await expect(
       createConfiguredProxy(input, {
         runtimeFactory: async () => runtimeInstance,
-        logger: { info: vi.fn(), error: vi.fn() },
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
       })
     ).rejects.toThrow("Push state directory")
   })
@@ -453,6 +467,7 @@ describe("configured proxy composition", () => {
           maxActiveExecutions: 1,
           maxSubscriberEvents: 1,
           maxSubscriberBytes: 1,
+          logger: captureLogs().logger,
         }),
         close: vi.fn(async () => undefined),
       } as unknown as RuntimeInstance
@@ -480,13 +495,14 @@ describe("configured proxy composition", () => {
       const fetchImpl = vi.fn(
         async () => new Response(audio, { status: 200 })
       ) as unknown as typeof fetch
-      const logger = { info: vi.fn(), error: vi.fn() }
+      const logs = captureLogs()
 
       const configured = await createConfiguredProxy(
         await voiceConfiguration(await secretFile("voice-key", "tts-secret")),
         {
           runtimeFactory: async () => runtimeInstance,
-          logger,
+          logger: logs.logger,
+          credentials: new CredentialValues(),
           fetch: fetchImpl,
         }
       )
@@ -507,13 +523,12 @@ describe("configured proxy composition", () => {
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(audio)
       // Fallback tried the runtime first, then said so without the text.
       expect(speak).toHaveBeenCalledOnce()
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: "voice.fallback",
-          direction: "speech",
-        })
-      )
-      expect(JSON.stringify(logger.info.mock.calls)).not.toContain("Hello")
+      expect(logs.records()).toContainEqual({
+        level: "info",
+        message: "voice.fallback",
+        fields: expect.objectContaining({ direction: "speech" }),
+      })
+      expect(JSON.stringify(logs.records())).not.toContain("Hello")
       const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock
         .calls[0] as [string, RequestInit]
       expect(url).toBe("https://tts.example.test/v1/audio/speech")
@@ -551,7 +566,8 @@ describe("configured proxy composition", () => {
       await expect(
         createConfiguredProxy(await voiceConfiguration(keyFile), {
           runtimeFactory: async () => runtimeInstance,
-          logger: { info: vi.fn(), error: vi.fn() },
+          logger: captureLogs().logger,
+          credentials: new CredentialValues(),
         })
       ).rejects.toThrow("Secret file permissions are too broad")
     })
@@ -564,7 +580,8 @@ describe("configured proxy composition", () => {
           throw new HermesAuthenticationError()
         }),
       })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     expect(

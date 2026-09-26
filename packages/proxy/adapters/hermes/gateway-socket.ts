@@ -24,6 +24,7 @@
  * the vendored client.
  */
 
+import type { Logger } from "../../../lifecycle"
 import { boundedJsonShape, isRecord } from "./native"
 
 /** Hard ceiling for any inbound frame; above it the socket is not trusted. */
@@ -39,9 +40,8 @@ export interface HermesSocket {
   close(): void
 }
 
-export type HermesLog = {
-  warn(event: string, fields: Record<string, unknown>): void
-}
+/** The one level the Hermes adapter logs at, on the proxy's logger. */
+export type HermesLog = Pick<Logger, "warn">
 
 export type GuardedSocketOptions = {
   /** Protocol fault: the caller invalidates the socket generation. */
@@ -97,7 +97,7 @@ export function guardedHermesSocket(
 
   const fault = (reason: string) => {
     dead = true
-    options.log?.warn("hermes.gateway.frame_rejected", { reason })
+    options.log?.warn({ reason }, "hermes.gateway.frame_rejected")
     options.onFault(reason)
   }
 
@@ -123,9 +123,12 @@ export function guardedHermesSocket(
       if (decoded.bytes > MAX_EVENT_FRAME_BYTES) {
         // A dropped event leaves a seq hole; the run layer catches up from the
         // native replay ring rather than losing the whole socket.
-        options.log?.warn("hermes.gateway.event_frame_dropped", {
-          bytes: decoded.bytes,
-        })
+        options.log?.warn(
+          {
+            bytes: decoded.bytes,
+          },
+          "hermes.gateway.event_frame_dropped"
+        )
         return
       }
       listener({ data: decoded.text })
@@ -134,10 +137,13 @@ export function guardedHermesSocket(
     if (typeof frame.id === "string") {
       const limit = options.responseLimit(frame.id)
       if (limit !== undefined && decoded.bytes > limit) {
-        options.log?.warn("hermes.gateway.response_too_large", {
-          bytes: decoded.bytes,
-          limit,
-        })
+        options.log?.warn(
+          {
+            bytes: decoded.bytes,
+            limit,
+          },
+          "hermes.gateway.response_too_large"
+        )
         options.onOversizedResponse(frame.id)
         return
       }

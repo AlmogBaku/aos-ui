@@ -1161,9 +1161,12 @@ export class HermesInteractions {
       try {
         listener(request)
       } catch (error) {
-        this.#log?.warn("hermes.interactions.listener_failed", {
-          reason: publicReason(error),
-        })
+        this.#log?.warn(
+          {
+            reason: publicReason(error),
+          },
+          "hermes.interactions.listener_failed"
+        )
       }
   }
 
@@ -1196,7 +1199,7 @@ export class HermesInteractions {
     )
       return
     this.#loggedMethods.add(key)
-    this.#log?.warn(event, { method: name })
+    this.#log?.warn({ method: name }, event)
   }
 
   #complete(

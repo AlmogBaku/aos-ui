@@ -169,7 +169,6 @@ export function failTurn(
   const failure = override ?? active.failure ?? {}
   const { code, message } = publicTurnFailure(failure)
   host.log.warn(
-    TURN_FAILED_LOG,
     loggedFields({
       publicCode: code,
       code: failure.code,
@@ -177,7 +176,8 @@ export function failTurn(
       retryable: failure.retryable,
       failureReason: failure.failureReason,
       nativeMessage: loggedNativeMessage(failure),
-    })
+    }),
+    TURN_FAILED_LOG
   )
   host.fail(active, { code, message })
 }
@@ -241,12 +241,12 @@ export async function reconcileNativeError(
         ? "terminal"
         : "advisory"
   host.log.warn(
-    TURN_NATIVE_ERROR_LOG,
     loggedFields({
       verdict,
       status,
       nativeMessage: loggedNativeMessage(failure),
-    })
+    }),
+    TURN_NATIVE_ERROR_LOG
   )
   if (active.terminal || verdict === "unconfirmed") return
   if (verdict === "advisory") {

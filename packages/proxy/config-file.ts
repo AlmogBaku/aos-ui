@@ -476,6 +476,7 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
     suffix: "VOICE_SPEECH_FORMAT",
     type: "string",
   },
+  { path: ["log", "level"], suffix: "LOG_LEVEL", type: "string" },
   { path: ["shutdownGraceMs"], suffix: "SHUTDOWN_GRACE_MS", type: "int" },
 ]
 
@@ -599,17 +600,6 @@ function invalidConfiguration(
   return new ProxyConfigurationError(
     `Invalid proxy configuration in ${location}:\n${[...new Set(reported)].join("\n")}`
   )
-}
-
-/**
- * A configuration error is the one start failure an operator must be able to
- * read, and `redactForLog` makes every `Error` opaque. Reporting it as a plain
- * object keeps that invariant for every other failure.
- */
-export function describeStartFailure(error: unknown): unknown {
-  return error instanceof ProxyConfigurationError
-    ? { name: error.name, message: error.message }
-    : error
 }
 
 export async function loadProxyConfig(

@@ -1,7 +1,6 @@
+import type { Logger } from "../../lifecycle"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../protocol"
-import type { AcpLogger } from "../acp/types"
 import type { ServerRuntime } from "../core/runtime"
-import { redactForLog } from "../redaction"
 import type { VoiceSynthesizer, VoiceTranscriber } from "./openai-compatible"
 import { VoiceProviderError } from "./openai-compatible"
 
@@ -28,18 +27,18 @@ type VoiceDirection = "transcription" | "speech"
 export function withVoiceProviders(
   native: ServerRuntime,
   providers: VoiceProviders,
-  logger: AcpLogger
+  logger: Logger
 ): ServerRuntime {
   const replaces = (mode: VoiceMode, nativeStatus: string) =>
     mode === "override" || nativeStatus !== "available"
 
   const noteFallback = (direction: VoiceDirection, error: unknown) =>
     logger.info(
-      redactForLog({
-        event: "voice.fallback",
+      {
         direction,
         nativeCode: native.publicError(error)?.code ?? "unclassified",
-      })
+      },
+      "voice.fallback"
     )
 
   const overrides: Pick<

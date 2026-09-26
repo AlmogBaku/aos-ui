@@ -89,6 +89,7 @@ the load.
 | `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
 | `mcpApps`         | Optional per-server URL override and headers for the MCP Apps fallback (see [MCP Apps fallback](#mcp-apps-fallback) below).                   |
+| `log`             | Proxy log. `level` is `debug`, `info`, `warn`, or `error`; `debug` adds every owner state change and is never a production setting.           |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
@@ -155,6 +156,7 @@ default; a minimal local file contains only those three fields.
 | `limits.operatorEventPeers`          | `256`       |
 | `limits.subscriberEvents`            | `512`       |
 | `limits.subscriberBytes`             | `2097152`   |
+| `log.level`                          | `info`      |
 | `shutdownGraceMs`                    | `5000`      |
 | `runtime.sessionIdleMs` (Hermes)     | `300000`    |
 | `guest.invitations.ttlSeconds`       | `259200`    |
@@ -230,14 +232,13 @@ schema validation.
 | `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int    | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string | may create `voice` block         |
+| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string | always                           |
 | `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int    | always                           |
 
 ### Errors {#config-errors}
 
-When the configuration is invalid, the proxy logs a structured start-failure
-event with name `ProxyConfigurationError`. The startup log entry
-(`proxy.start_failed`) is the readable form; `redactForLog`'s every-error-is-opaque
-rule applies to all other errors. The message begins with
+When the configuration is invalid, the proxy logs a `proxy.start_failed` event
+whose `error` is named `ProxyConfigurationError`. Its message begins with
 `Invalid proxy configuration in <path>:` followed by one indented line per
 field:
 
@@ -254,6 +255,12 @@ and names the field path that holds it. When a variable set the failing field, i
 name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
+
+Every logged error carries its name, message, native `code` or `reason`, and
+cause chain, never its stack. Before a line is written, the log masks every
+credential-named field, strips each URL's userinfo, query, and fragment, and
+replaces each voice key, MCP header value, guest invitation key, and VAPID
+private key the proxy has read with `[REDACTED]`.
 
 Runtime slash-command suggestions are enabled on the operator surface only.
 The guest listener advertises none and refuses any guest message or steer whose

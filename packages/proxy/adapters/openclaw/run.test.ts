@@ -1,3 +1,4 @@
+import { captureLogs } from "../../../../test/support/log-capture"
 import {
   PendingRequestKind,
   StopReason,
@@ -195,6 +196,7 @@ function coordinator(engine: OpenClawTurnEngine) {
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
+    logger: captureLogs().logger,
   })
 }
 

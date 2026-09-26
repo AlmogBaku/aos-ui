@@ -37,6 +37,7 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
       subscriberEvents: 512,
       subscriberBytes: 2_097_152,
     },
+    log: { level: "info" as const },
     shutdownGraceMs: 5_000,
   }
 }
@@ -55,6 +56,9 @@ function validPush() {
 describe("proxy configuration and secret boundary", () => {
   it("accepts the minimal server-token-only V1 configuration", () => {
     expect(parseProxyConfig(validConfig())).toEqual(validConfig())
+    expect(parseProxyConfig({ ...validConfig(), log: {} })).toEqual(
+      validConfig()
+    )
   })
 
   it("accepts the exact private OpenCode runtime configuration", () => {

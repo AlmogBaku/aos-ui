@@ -831,7 +831,6 @@ export async function harness(options: HarnessOptions = {}) {
     },
   }
 
-  const logger = { info: vi.fn(), error: vi.fn() }
   // Every connection shares the process's one catalog, as both listeners do.
   const shared = createCatalog({
     runtime: faults.runtime,
@@ -894,8 +893,7 @@ export async function harness(options: HarnessOptions = {}) {
       attachmentStages: new AttachmentStageRegistry(),
       channels,
       presence,
-      logger,
-      ownerLogger: logs.logger,
+      logger: logs.logger.child({ connectionId, role: "operator" }),
       buildId: options.buildId,
       role: "operator",
       activityFeed: composed?.activityFeed ?? activityFeed,
@@ -984,12 +982,11 @@ export async function harness(options: HarnessOptions = {}) {
     readState,
     presence,
     rows,
-    logger,
-    /** Every structured line the connection wrote, whatever its level. */
+    /** Every structured line the proxy wrote, whatever its level. */
     logged: () =>
-      [...logger.info.mock.calls, ...logger.error.mock.calls].map(
-        ([value]) => value
-      ),
+      logs
+        .records()
+        .map(({ message, fields }) => ({ event: message, ...fields })),
     publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },

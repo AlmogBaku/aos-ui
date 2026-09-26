@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import type { Logger } from "../../../lifecycle"
 import type { SessionMessage } from "../../../protocol"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
 import type { ServerMcpApps } from "../../core/runtime"
@@ -95,7 +96,8 @@ export function storedOpenCodeToolCall(
 /** The project's MCP servers and tool names, shared by the run engine and the adapter. */
 export function createOpenCodeMcpCatalog(
   config: () => Promise<Record<string, unknown>>,
-  client: McpAppClient
+  client: McpAppClient,
+  logger: Logger
 ) {
   const servers = createMcpServerCache<McpAppServer>(async () =>
     openCodeMcpServers(await config(), client.credentialed)
@@ -104,7 +106,7 @@ export function createOpenCodeMcpCatalog(
     OPENCODE_MCP_TOOL_NAMES,
     mcpToolCatalog(servers, client)
   )
-  return { servers, names, client }
+  return { servers, names, client, logger }
 }
 
 export type OpenCodeMcpCatalog = ReturnType<typeof createOpenCodeMcpCatalog>
@@ -123,6 +125,7 @@ export function createOpenCodeMcpApps(
       storedCall: (scope, toolCallId) =>
         storedCall(scope.agentId, scope.providerSessionId, toolCallId),
     },
-    catalog.client
+    catalog.client,
+    catalog.logger
   )
 }

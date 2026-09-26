@@ -4,14 +4,12 @@ import { describe, expect, it } from "vitest"
 
 import { parseProxyConfig } from "./config"
 import {
-  describeStartFailure,
   loadProxyConfig,
   PROXY_ENV_OVERRIDES,
   PROXY_ENV_PREFIX,
   ProxyConfigurationError,
   resolveProxyConfigPath,
 } from "./config-file"
-import { redactForLog } from "./redaction"
 
 /** Every test reads its own synthetic environment; none reads the real one. */
 function env(values: Record<string, string | undefined>) {
@@ -224,6 +222,7 @@ const MINIMAL_CONFIG = {
     subscriberEvents: 512,
     subscriberBytes: 2_097_152,
   },
+  log: { level: "info" },
   shutdownGraceMs: 5_000,
 }
 
@@ -581,6 +580,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
   VOICE_SPEECH_TIMEOUT_MS: "60000",
   VOICE_SPEECH_VOICE: "synthetic-voice",
   VOICE_SPEECH_FORMAT: "mp3",
+  LOG_LEVEL: "debug",
   SHUTDOWN_GRACE_MS: "5000",
 }
 
@@ -890,6 +890,7 @@ runtime:
           format: "mp3",
         },
       },
+      log: { level: "debug" },
       shutdownGraceMs: 5_000,
     })
 
@@ -969,30 +970,5 @@ runtime:
     expect(message).not.toContain("SYNTHETIC-TOKEN-9f3a")
     expect(message).toContain("publicOrigin")
     expect(message).toContain("  (document root): 1 unrecognized key")
-  })
-
-  it("survives the log redactor a start failure is written through", async () => {
-    const error = await loadError({
-      flag: CONFIG_PATH,
-      getenv: env({}),
-      ...access({ [CONFIG_PATH]: { source: "deploymentId: local-dev\n" } }),
-    })
-
-    expect(
-      redactForLog({
-        event: "proxy.start_failed",
-        error: describeStartFailure(error),
-      })
-    ).toEqual({
-      event: "proxy.start_failed",
-      error: { name: "ProxyConfigurationError", message: error.message },
-    })
-    expect(error.message).toContain("publicOrigin")
-
-    // Every other failure stays opaque, as the shared redactor intends.
-    expect(redactForLog(describeStartFailure(new Error("boom")))).toEqual({
-      name: "Error",
-      message: "Upstream request failed",
-    })
   })
 })

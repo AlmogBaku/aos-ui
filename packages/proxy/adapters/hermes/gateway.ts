@@ -361,7 +361,7 @@ export class HermesGateway implements HermesRpcTransport {
     } catch {
       // An older Hermes has no such method and sends no server requests; the
       // dial itself stands, and interactions simply stay unavailable.
-      this.#log?.warn("hermes.gateway.capabilities_unacknowledged", {})
+      this.#log?.warn({}, "hermes.gateway.capabilities_unacknowledged")
     }
   }
 
@@ -417,24 +417,24 @@ export class HermesGateway implements HermesRpcTransport {
 
   /**
    * The redial ladder runs forever at the cap: log the outage once, not every
-   * rung; the next open re-arms this. Only the error type is recorded, because a
-   * native message may carry the dial URL and its token.
+   * rung; the next open re-arms this. The error is recorded whole: a native
+   * message may carry the dial URL, and the log strips its token.
    */
   #logDialFailure(reason: string, error: unknown) {
     if (this.#dialFailureLogged) return
     this.#dialFailureLogged = true
-    this.#log?.warn("hermes.gateway.dial_failed", {
-      reason,
-      error: publicReason(error),
-    })
+    this.#log?.warn({ reason, error }, "hermes.gateway.dial_failed")
   }
 
   #onSocketClose(event: { code: number }): boolean {
     if (AUTH_CLOSE_CODES.has(event.code)) {
       this.#authFailed = true
-      this.#log?.warn("hermes.gateway.authentication_rejected", {
-        close_code: event.code,
-      })
+      this.#log?.warn(
+        {
+          close_code: event.code,
+        },
+        "hermes.gateway.authentication_rejected"
+      )
     }
     // Never intercept: the vendored `closed` transition arms heal and redial.
     return false
@@ -538,10 +538,13 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   #logHandlerFailure(phase: string, error: unknown) {
-    this.#log?.warn("hermes.gateway.handler_failed", {
-      phase,
-      reason: publicReason(error),
-    })
+    this.#log?.warn(
+      {
+        phase,
+        reason: publicReason(error),
+      },
+      "hermes.gateway.handler_failed"
+    )
   }
 
   #onGatewayEvent(event: GatewayEvent) {
@@ -562,7 +565,7 @@ export class HermesGateway implements HermesRpcTransport {
     const previous = this.#epoch
     this.#epoch = epoch
     const changed = previous !== undefined && previous !== epoch
-    if (changed) this.#log?.warn("hermes.gateway.replay_epoch_changed", {})
+    if (changed) this.#log?.warn({}, "hermes.gateway.replay_epoch_changed")
     // The wait armed by this generation's open owns the verdict, so handlers
     // learn a restart instead of a restore rather than both in turn.
     if (this.#readyWaiter) {

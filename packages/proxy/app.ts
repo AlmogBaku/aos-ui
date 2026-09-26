@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
+import type { Logger } from "../lifecycle"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
@@ -11,18 +12,12 @@ import {
   type ServerRuntime,
 } from "./core/runtime"
 import type { PushRegistrations } from "./push/registrations"
-import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
 import { registerMcpAppRoutes } from "./routes/mcp-apps"
 import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerPushRoutes } from "./routes/push"
 import { registerRuntimeRoute } from "./routes/runtime"
-
-type Logger = {
-  info(value: unknown): void
-  error(value: unknown): void
-}
 
 export type ProxyAppOptions = {
   publicOrigin: string
@@ -91,14 +86,14 @@ export function createProxyApp(options: ProxyAppOptions) {
       context.header(name, value)
     context.header("x-request-id", requestId)
     options.logger.info(
-      redactForLog({
-        event: "request.completed",
+      {
         requestId,
         method: context.req.method,
         path: requestPath(context.req.url),
         status: context.res.status,
         durationMs: Math.max(0, clock() - startedAt),
-      })
+      },
+      "request.completed"
     )
   })
 
@@ -169,13 +164,13 @@ export function createProxyApp(options: ProxyAppOptions) {
           ? [runtimeError.code, runtimeError.status]
           : ["internal_error", 500]
     options.logger.error(
-      redactForLog({
-        event: "request.failed",
+      {
         requestId: context.get("requestId"),
         path: requestPath(context.req.url),
         code,
-        error: cause,
-      })
+        err: cause,
+      },
+      "request.failed"
     )
     return errorResponse(code, status)
   })

@@ -264,10 +264,13 @@ describe("Hermes native submit outcomes", () => {
       turnId: "run-1",
     })
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.native.rejected", {
-      method: "prompt.submit",
-      code: 4090,
-    })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        method: "prompt.submit",
+        code: 4090,
+      },
+      "hermes.native.rejected"
+    )
   })
 
   it("reports a lost transport acknowledgement as uncertain", async () => {
@@ -343,12 +346,15 @@ describe("Hermes native submit outcomes", () => {
       rewindSourceId: "hermes-row-12",
     })
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.rewind.submit", {
-      sessionId: "stored",
-      rewindSourceId: "hermes-row-12",
-      confirm_truncate: true,
-      truncate_before_row_id: 12,
-    })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        sessionId: "stored",
+        rewindSourceId: "hermes-row-12",
+        confirm_truncate: true,
+        truncate_before_row_id: 12,
+      },
+      "hermes.rewind.submit"
+    )
   })
 
   it("rewinds a just-sent prompt by the id its completion receipt saved it under", async () => {

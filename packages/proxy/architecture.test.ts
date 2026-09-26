@@ -451,3 +451,32 @@ describe("member boundary", () => {
     }
   })
 })
+
+describe("logging", () => {
+  const proxyRoot = import.meta.dirname
+
+  /** D13: the redacting root is the only way a proxy line reaches stdout. */
+  it("writes every proxy line through the injected logger", async () => {
+    const writers: string[] = []
+
+    for (const path of await productionFiles(proxyRoot)) {
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/\bconsole\.\w+/u.test(source))
+        writers.push(relative(proxyRoot, path))
+    }
+
+    expect(writers).toEqual([])
+  })
+
+  /** Core names each event after the owner that writes it, never the wire. */
+  it("names no core event after ACP", async () => {
+    const named: string[] = []
+
+    for (const path of await productionFiles(join(proxyRoot, "core"))) {
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/["'`]acp\./u.test(source)) named.push(relative(proxyRoot, path))
+    }
+
+    expect(named).toEqual([])
+  })
+})

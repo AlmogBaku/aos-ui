@@ -10,8 +10,9 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import type { PushRegistration } from "../../protocol/push"
 import {
   openPushRegistrations,
@@ -117,20 +118,17 @@ describe("push registration file", () => {
       join(directory, PUSH_REGISTRATIONS_FILE),
       '{"version":1,"principals":{"operator":[{"subscription":{"endpoint":"https://push.example.test/leak"}}]}}'
     )
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
 
     const registrations = await openPushRegistrations({
       stateDir: directory,
-      logger,
+      logger: logs.logger,
     })
 
     expect(registrations.list("operator")).toEqual([])
-    expect(logger.error).toHaveBeenCalledWith({
-      event: "push.registrations.invalid",
-    })
-    expect(JSON.stringify(logger.error.mock.calls)).not.toContain(
-      "push.example"
-    )
+    expect(logs.records()).toEqual([
+      { level: "error", message: "push.registrations.invalid", fields: {} },
+    ])
   })
 
   it("refuses to open a state directory that is not there", async () => {

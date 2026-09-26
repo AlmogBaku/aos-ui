@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { createProxyLogger } from "../../cli/logger"
+import { CredentialValues } from "../../redaction"
 import {
   HermesAuthenticationError,
   HermesGateway,
@@ -659,7 +661,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     await vi.advanceTimersByTimeAsync(30_000)
     const dialFailures = () =>
       log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.dial_failed"
+        ([, event]) => event === "hermes.gateway.dial_failed"
       )
     expect(dialFailures()).toHaveLength(1)
 
@@ -821,11 +823,16 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("logs a refused socket factory apart from a failed handshake", async () => {
+  it("logs a refused socket factory apart from a failed handshake, without its token", async () => {
     vi.useFakeTimers()
-    const log = { warn: vi.fn() }
+    const lines: string[] = []
+    const log = createProxyLogger({
+      level: "warn",
+      credentials: new CredentialValues(),
+      destination: { write: (line) => void lines.push(line) },
+    })
     const factory = vi.fn(() => {
-      throw new TypeError("socket refused for wss://hermes.internal/api/ws")
+      throw new TypeError(`socket refused for ${WS_URL}`)
     })
     const gateway = new HermesGateway({
       baseUrl: BASE_URL,
@@ -842,15 +849,19 @@ describe("Hermes gateway heartbeat and redial", () => {
     )
 
     expect(
-      log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.dial_failed"
-      )
+      lines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter(({ msg }) => msg === "hermes.gateway.dial_failed")
     ).toEqual([
-      [
-        "hermes.gateway.dial_failed",
-        { reason: "socket_factory_threw", error: "TypeError" },
-      ],
+      expect.objectContaining({
+        reason: "socket_factory_threw",
+        error: {
+          name: "TypeError",
+          message: "socket refused for ws://127.0.0.1:9119/api/ws",
+        },
+      }),
     ])
+    expect(lines.join("")).not.toMatch(/token=|native-secret/u)
     await gateway.close()
   })
 
@@ -863,8 +874,8 @@ describe("Hermes gateway heartbeat and redial", () => {
 
     expect(
       log.warn.mock.calls
-        .filter(([event]) => event === "hermes.gateway.dial_failed")
-        .map(([, fields]) => (fields as { reason?: unknown }).reason)
+        .filter(([, event]) => event === "hermes.gateway.dial_failed")
+        .map(([fields]) => (fields as { reason?: unknown }).reason)
     ).toEqual(["handshake_failed"])
     await gateway.close()
   })
@@ -912,7 +923,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     await expect(parked).resolves.toEqual({ profiles: [] })
     expect(
       log.warn.mock.calls.filter(
-        ([event]) => event === "hermes.gateway.handler_failed"
+        ([, event]) => event === "hermes.gateway.handler_failed"
       )
     ).toHaveLength(1)
     await gateway.close()
@@ -1092,8 +1103,8 @@ describe("Hermes gateway lifecycle and server requests", () => {
     await flush()
 
     expect(log.warn).toHaveBeenCalledWith(
-      "hermes.gateway.capabilities_unacknowledged",
-      {}
+      {},
+      "hermes.gateway.capabilities_unacknowledged"
     )
     // The dial itself is still open; requests can still be issued.
     expect(gateway.connected()).toBe(true)

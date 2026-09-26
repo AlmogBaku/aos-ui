@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import {
   categoryOf,
   COALESCE_WINDOW_MS,
@@ -8,7 +9,6 @@ import {
 } from "../../protocol/push"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
-import { redactForLog } from "../redaction"
 import {
   createPushCoalescer,
   type CoalescedSession,
@@ -26,8 +26,6 @@ const URGENCY: Readonly<Record<PushCategory, PushUrgency>> = {
   completion: "normal",
 }
 
-type DispatcherLogger = { info(value: unknown): void }
-
 export type PushDispatcherOptions = {
   runtimeInstance: RuntimeInstance
   /** The same rows the ACP listener maintains, so read state gates delivery. */
@@ -37,7 +35,7 @@ export type PushDispatcherOptions = {
   sender: PushSender
   /** Which principal one Agent's events notify. */
   principalOf(agentId: string): string
-  logger?: DispatcherLogger
+  logger?: Logger
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => () => void
 }
@@ -80,15 +78,7 @@ export function createPushDispatcher({
     sessions: number,
     decision?: { readAtMs: number; occurredAtMs: number }
   ) => {
-    logger?.info(
-      redactForLog({
-        event: "push.suppressed",
-        category,
-        reason,
-        sessions,
-        ...decision,
-      })
-    )
+    logger?.info({ category, reason, sessions, ...decision }, "push.suppressed")
   }
 
   /**
@@ -205,8 +195,7 @@ export function createPushDispatcher({
         .catch(() => undefined)
 
     logger?.info(
-      redactForLog({
-        event: "push.dispatched",
+      {
         category,
         count: sessions.length,
         devices: devices.length,
@@ -214,7 +203,8 @@ export function createPushDispatcher({
         gone,
         failed,
         statuses,
-      })
+      },
+      "push.dispatched"
     )
   }
 

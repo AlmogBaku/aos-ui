@@ -34,6 +34,7 @@ function connectionContext(
     translators: {} as AcpConnectionContext["translators"],
     channels: {} as AcpConnectionContext["channels"],
     attachmentStages: {} as AcpConnectionContext["attachmentStages"],
+    logger: {} as AcpConnectionContext["logger"],
   }
 }
 

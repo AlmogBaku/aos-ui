@@ -1,10 +1,15 @@
 import type { ConfiguredProxyDependencies } from "../composition"
+import type { ProxyLogLevel } from "../config"
 import type { ProxyConfigFileAccess } from "../config-file"
 import type { startProxyServer } from "../server"
 import type { StaticHandler } from "../static"
 
-export type ProxyCliDependencies = ConfiguredProxyDependencies &
+export type ProxyCliDependencies = Omit<ConfiguredProxyDependencies, "logger"> &
   Partial<ProxyConfigFileAccess> & {
+    /** Builds the proxy log once the configuration has named its level. */
+    createLogger: (
+      level: ProxyLogLevel
+    ) => ConfiguredProxyDependencies["logger"]
     start?: typeof startProxyServer
     staticHandler?: StaticHandler
     /**
