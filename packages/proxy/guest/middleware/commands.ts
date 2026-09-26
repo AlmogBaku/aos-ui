@@ -57,16 +57,16 @@ function refusedText(text: string) {
 
 /**
  * The invited Session's capabilities, projected to what the guest listener
- * serves. The member contract carries the workspace shape, so the fields the
- * REST projection drops outright are reported unavailable here instead. A guest
- * steers the conversation as an operator does, and runs no slash command.
+ * serves, or `undefined` when they are unusable. The member contract carries
+ * the workspace shape, so the fields the REST projection drops outright are
+ * reported unavailable here instead. A guest steers the conversation as an
+ * operator does, and runs no slash command.
  */
 function projectCapabilities(
   value: WorkspaceCapabilities
-): WorkspaceCapabilities {
+): WorkspaceCapabilities | undefined {
   const projected = projectGuestCapabilities(value)
-  if (!projected)
-    throw new Error("The invited Session reported unusable capabilities")
+  if (!projected) return undefined
   return SessionWorkspaceCapabilitiesResponseSchema.parse({
     workspace: {
       slashCommands: OPERATOR_ONLY,
@@ -89,10 +89,10 @@ export function createCommandsMiddleware(): Middleware {
     commands: {
       resume: async (command, next) => {
         const resumed = await next(command)
-        return {
-          ...resumed,
-          capabilities: projectCapabilities(resumed.capabilities),
-        }
+        const capabilities = projectCapabilities(resumed.capabilities)
+        if (!capabilities)
+          throw new Error("The invited Session reported unusable capabilities")
+        return { ...resumed, capabilities }
       },
       // Rebuilt from the fields a guest may set; the history layer decides
       // which message an Edit or Retry may name.
@@ -122,6 +122,13 @@ export function createCommandsMiddleware(): Middleware {
       },
       // Read state belongs to the operator; a guest's exposure moves nothing.
       focus: async () => undefined,
+    },
+    // A command list reaches a guest as what it may use, and one it cannot
+    // read not at all.
+    event(event) {
+      if (event.kind !== "commands") return event
+      const capabilities = projectCapabilities(event.capabilities)
+      return capabilities && { ...event, capabilities }
     },
   }
 }
