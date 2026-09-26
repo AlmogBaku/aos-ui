@@ -223,7 +223,12 @@ export async function createOpenClawRuntime(
           { agentId, sessionKey },
           onInvalidate
         )
-        return () => void lease.release()
+        return () =>
+          void lease
+            .release()
+            .catch((err: unknown) =>
+              logger.warn({ err }, "openclaw.history.release_failed")
+            )
       },
     })
   )
