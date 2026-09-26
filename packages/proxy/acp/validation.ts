@@ -18,8 +18,9 @@ import type { PublicErrors } from "./socket"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
- * payloads the shared contract defines, and the JSON-RPC error code a proxy
- * failure travels as. Every code comes from `AOS_JSONRPC_ERRORS`.
+ * payloads the shared contract defines, and the JSON-RPC error a proxy
+ * failure travels as. An error ACP defines is the SDK's own `RequestError`;
+ * only the rest take their code from `AOS_JSONRPC_ERRORS`.
  */
 
 type AcpMeta = { readonly [key: string]: unknown } | null | undefined
@@ -39,7 +40,7 @@ export function parseMeta<Schema extends z.ZodType>(
 }
 
 export function invalidRequest() {
-  return new RequestError(AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request")
+  return RequestError.invalidParams()
 }
 
 /**
@@ -47,14 +48,11 @@ export function invalidRequest() {
  * for.
  */
 export function authenticationRequired() {
-  return new RequestError(
-    AOS_JSONRPC_ERRORS.authenticationRequired,
-    "authentication_required"
-  )
+  return RequestError.authRequired()
 }
 
 export function notFound() {
-  return new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+  return RequestError.resourceNotFound()
 }
 
 /** The JSON-RPC error a member stack's refusal travels as. */
@@ -84,39 +82,58 @@ export function staleRequest() {
   return new RequestError(AOS_JSONRPC_ERRORS.staleRequest, "stale_request")
 }
 
-const PUBLIC_ERROR_CODES: Readonly<
-  Record<ServerRuntimePublicError["code"], number>
-> = {
-  runtime_authentication_required: AOS_JSONRPC_ERRORS.authenticationRequired,
-  invalid_request: AOS_JSONRPC_ERRORS.invalidRequest,
-  not_found: AOS_JSONRPC_ERRORS.notFound,
-  revision_conflict: AOS_JSONRPC_ERRORS.revisionConflict,
-  temporarily_unavailable: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-  connection_interrupted: AOS_JSONRPC_ERRORS.connectionInterrupted,
-  uncertain_mutation: AOS_JSONRPC_ERRORS.uncertainMutation,
+function revisionConflict() {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.revisionConflict,
+    "revision_conflict"
+  )
 }
 
-/** JSON-RPC's own code for a method the connection does not serve. */
-const METHOD_NOT_FOUND = -32601
+function uncertainMutation() {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.uncertainMutation,
+    "uncertain_mutation"
+  )
+}
 
-/** Every error code a public reply carries, with the name it travels as. */
-const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map([
-  [AOS_JSONRPC_ERRORS.authenticationRequired, "authentication_required"],
-  [AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress"],
-  [AOS_JSONRPC_ERRORS.staleRequest, "stale_request"],
-  [AOS_JSONRPC_ERRORS.notFound, "not_found"],
-  [AOS_JSONRPC_ERRORS.revisionConflict, "revision_conflict"],
-  [AOS_JSONRPC_ERRORS.temporarilyUnavailable, "temporarily_unavailable"],
-  [AOS_JSONRPC_ERRORS.connectionInterrupted, "connection_interrupted"],
-  [AOS_JSONRPC_ERRORS.uncertainMutation, "uncertain_mutation"],
-  [AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request"],
-  [METHOD_NOT_FOUND, "method_not_found"],
-])
+/** The error each public runtime failure travels as. */
+const RUNTIME_ERRORS: Readonly<
+  Record<ServerRuntimePublicError["code"], () => RequestError>
+> = {
+  runtime_authentication_required: authenticationRequired,
+  invalid_request: invalidRequest,
+  not_found: notFound,
+  revision_conflict: revisionConflict,
+  temporarily_unavailable: temporarilyUnavailable,
+  // A dropped connection is a failure the next attempt may not meet.
+  connection_interrupted: temporarilyUnavailable,
+  uncertain_mutation: uncertainMutation,
+}
+
+/**
+ * Every error code a public reply carries, with the machine name it travels
+ * as: the message of a public reply, and the code an `_aos/error` reports.
+ */
+const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
+  (
+    [
+      [invalidRequest(), "invalid_request"],
+      [authenticationRequired(), "authentication_required"],
+      [notFound(), "not_found"],
+      [RequestError.methodNotFound(""), "method_not_found"],
+      [RequestError.requestCancelled(), "request_cancelled"],
+      [turnInProgress(), "turn_in_progress"],
+      [staleRequest(), "stale_request"],
+      [revisionConflict(), "revision_conflict"],
+      [temporarilyUnavailable(), "temporarily_unavailable"],
+      [uncertainMutation(), "uncertain_mutation"],
+    ] as const
+  ).map(([error, name]) => [error.code, name])
+)
 
 /** Every code an `_aos/error` notification reports a failure with. */
 const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
   ...PUBLIC_ERROR_NAMES.values(),
-  ...Object.keys(PUBLIC_ERROR_CODES),
   "internal_error",
 ])
 
@@ -150,11 +167,7 @@ function coordinatorError(cause: unknown) {
     cause instanceof ServerTurnSteerUnavailableError
   )
     return temporarilyUnavailable()
-  if (cause instanceof ServerTurnSteerUncertainError)
-    return new RequestError(
-      AOS_JSONRPC_ERRORS.uncertainMutation,
-      "uncertain_mutation"
-    )
+  if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
   if (
     cause instanceof ServerTurnControlError ||
     cause instanceof ServerSessionNotFoundError
@@ -168,9 +181,7 @@ export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
   const mapped = coordinatorError(cause)
   if (mapped) return mapped
   const publicError = runtime.publicError(cause)
-  return publicError
-    ? new RequestError(PUBLIC_ERROR_CODES[publicError.code], publicError.code)
-    : cause
+  return publicError ? RUNTIME_ERRORS[publicError.code]() : cause
 }
 
 /**
@@ -180,7 +191,8 @@ export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
  */
 export function errorNotificationOf(runtime: ServerRuntime, cause: unknown) {
   const mapped = publicRequestError(runtime, cause)
-  return mapped instanceof RequestError
-    ? { code: mapped.message, message: mapped.message }
-    : { code: "internal_error", message: "internal_error" }
+  const code =
+    (mapped instanceof RequestError && PUBLIC_ERROR_NAMES.get(mapped.code)) ||
+    "internal_error"
+  return { code, message: code }
 }

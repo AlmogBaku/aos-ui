@@ -70,19 +70,16 @@ export const AOS_PERMISSION_KIND_SESSION = "_allow_session" as const
 export const AOS_PLAN_ID = "todos" as const
 
 /**
- * JSON-RPC error codes the proxy returns beyond the standard ones. Both ends
- * import this table; the proxy maps `ServerRuntimePublicError` codes onto it.
+ * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
+ * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
+ * these sit in their own block from -32010, clear of the codes ACP uses.
  */
 export const AOS_JSONRPC_ERRORS = {
-  authenticationRequired: -32001,
-  turnInProgress: -32002,
-  staleRequest: -32003,
-  notFound: -32004,
-  revisionConflict: -32005,
-  temporarilyUnavailable: -32006,
-  connectionInterrupted: -32007,
-  uncertainMutation: -32008,
-  invalidRequest: -32602,
+  turnInProgress: -32010,
+  staleRequest: -32011,
+  revisionConflict: -32012,
+  temporarilyUnavailable: -32013,
+  uncertainMutation: -32014,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]

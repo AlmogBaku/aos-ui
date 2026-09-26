@@ -1,6 +1,7 @@
 import {
   client,
   methods,
+  RequestError,
   type AgentApp,
   type AnyWireMessage,
   type ClientConnection,
@@ -22,7 +23,6 @@ import {
   ACP_PROTOCOL_VERSION,
   AOS_ACP_OPERATOR_PATH,
   AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
@@ -100,13 +100,16 @@ export type AcpConnectionOptions = {
   schedule?: (delayMs: number, task: () => void) => void
 }
 
-/** The code the proxy refuses an invitation it cannot redeem with. */
-function isAuthenticationRequired(error: unknown) {
+/** ACP's code for a request that needs authentication, as the SDK builds it. */
+const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+
+/** Whether the proxy refused an invitation it cannot redeem. */
+export function isAuthenticationRequired(error: unknown) {
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === AOS_JSONRPC_ERRORS.authenticationRequired
+    error.code === AUTHENTICATION_REQUIRED
   )
 }
 

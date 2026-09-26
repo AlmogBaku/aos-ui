@@ -501,9 +501,7 @@ describe("useAcpRuntime", () => {
 
     it("stops at a refusal the provider will not take back", async () => {
       const fake = createFakeConnection()
-      fake.resumeSession.mockRejectedValue(
-        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
-      )
+      fake.resumeSession.mockRejectedValue(RequestError.resourceNotFound())
       const { result } = mountSession(fake, SESSION_ID)
       await settleAttempt()
       expect(fake.resumeSession).toHaveBeenCalledTimes(1)
@@ -1582,9 +1580,7 @@ describe("useAcpRuntime older history", () => {
       await retry(fake, result.current)
       await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
 
-      fake.resumeSession.mockRejectedValueOnce(
-        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
-      )
+      fake.resumeSession.mockRejectedValueOnce(RequestError.resourceNotFound())
       let load: Promise<void> | undefined
       await act(async () => {
         load = historyOf(result.current)?.loadOlder()

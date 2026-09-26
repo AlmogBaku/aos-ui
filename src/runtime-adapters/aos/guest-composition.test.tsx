@@ -22,7 +22,6 @@ import { z } from "zod"
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
@@ -119,11 +118,7 @@ const prefillParams = (text: string) => ({
   text,
 })
 
-const authenticationRequired = () =>
-  new RequestError(
-    AOS_JSONRPC_ERRORS.authenticationRequired,
-    "authentication_required"
-  )
+const authenticationRequired = () => RequestError.authRequired()
 
 type GuestProxyOptions = {
   token?: string

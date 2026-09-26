@@ -15,7 +15,6 @@ import { z } from "zod"
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
@@ -188,10 +187,7 @@ function createProxyAgent(
         options.refuseLoginAfter !== undefined &&
         logins > options.refuseLoginAfter
       )
-        throw new RequestError(
-          AOS_JSONRPC_ERRORS.authenticationRequired,
-          "authentication_required"
-        )
+        throw RequestError.authRequired()
       return {}
     })
     .onRequest(methods.agent.session.new, ({ params }) => {

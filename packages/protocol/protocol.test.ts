@@ -1,3 +1,4 @@
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -26,6 +27,7 @@ import {
 } from "./index"
 import {
   AOS_ARTIFACT_URI_SCHEME,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
@@ -941,6 +943,23 @@ describe("AOS v1 normalized protocol", () => {
 
   it("announces artifacts in the message stream, not as a notification", () => {
     expect(Object.values(AOS_METHODS.notify)).not.toContain("_aos/artifact")
+  })
+
+  it("keeps every AOS error code clear of the codes ACP defines", () => {
+    // Each static builder the SDK ships is one ACP error, so an SDK that adds a
+    // code inside the AOS block fails here.
+    const builders = RequestError as unknown as Record<string, unknown>
+    const acpCodes = Object.getOwnPropertyNames(RequestError).flatMap(
+      (name) => {
+        const builder = builders[name]
+        const built: unknown =
+          typeof builder === "function" ? builder.call(RequestError) : undefined
+        return built instanceof RequestError ? [built.code] : []
+      }
+    )
+    expect(acpCodes).toContain(RequestError.authRequired().code)
+    for (const code of Object.values(AOS_JSONRPC_ERRORS))
+      expect(acpCodes).not.toContain(code)
   })
 })
 
