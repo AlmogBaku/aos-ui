@@ -1,6 +1,5 @@
 /**
- * Harness-level checks for the O2 lane: process-level fault handlers over a
- * real Bun process. Runs under `bun test` (not vitest) because the relevant
+ * The process-level fault handlers over a real Bun process. Runs under `bun test` (not vitest) because the relevant
  * behavior — Bun 1.3.10 exiting on an unhandled rejection before the handler
  * intercepts it — can only be verified in a real process.
  */

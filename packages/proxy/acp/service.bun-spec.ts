@@ -1,6 +1,5 @@
 /**
- * Harness-level faults for the O2 lane: proxy handshake deadline over a real
- * Bun WebSocket. Runs under `bun test` (not vitest) because it needs Bun's
+ * The proxy handshake deadline over a real Bun WebSocket. Runs under `bun test` (not vitest) because it needs Bun's
  * actual WebSocket server and client.
  *
  * These tests use a short `handshakeDeadlineMs` override so they do not wait
@@ -9,10 +8,10 @@
 import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "bun:test"
 
-import { createAcpService } from "../service"
-import { startProxyServer } from "../../server"
-import type { AcpConnectionContext } from "../types"
-import { OPERATOR_PRINCIPAL } from "../../core/principal"
+import { createAcpService } from "./service"
+import { startProxyServer } from "../server"
+import type { AcpConnectionContext } from "./types"
+import { OPERATOR_PRINCIPAL } from "../core/principal"
 
 const ACP_PATH = "/api/aos/v1/acp"
 
