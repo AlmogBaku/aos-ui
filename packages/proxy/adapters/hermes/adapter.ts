@@ -12,7 +12,6 @@ import {
   VisibilityUpdateResponseSchema,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionMessage,
@@ -969,17 +968,6 @@ export class HermesServerAdapter implements ServerRuntime {
     return this.#content.speak(agentId, text, signal)
   }
 
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.transport.request("profiles.list", { include_sessions: false })
-      return { status: "authenticated" }
-    } catch (error) {
-      if (error instanceof HermesAuthenticationError)
-        return { status: "authentication-required" }
-      return { status: "unavailable", reason: "temporarily-unavailable" }
-    }
-  }
-
   /** The validated native profile rows, one per distinct Agent id. */
   async #profiles(): Promise<NativeRecord[]> {
     try {
@@ -1232,23 +1220,6 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch {
       // Idle retention is best-effort; it must never close the shared socket.
     }
-  }
-
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ) {
-    const providerSessionId = storedSessionIdentity(agentId, publicSessionId)
-    if (!providerSessionId) throw new HermesSessionNotFoundError()
-    return this.#attachments.subscribe(
-      { agentId, providerSessionId, sessionId: publicSessionId },
-      (signal) => {
-        if (signal.kind === "event") listener()
-        else if (signal.kind === "lost") reset?.()
-      }
-    )
   }
 
   /**

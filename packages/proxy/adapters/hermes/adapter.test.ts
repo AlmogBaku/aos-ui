@@ -162,7 +162,12 @@ describe("Hermes server adapter", () => {
       }),
     })
 
-    await adapter.subscribeSessionInvalidation("researcher", "stored", vi.fn())
+    await adapter.native.resume({
+      agentId: "researcher",
+      providerSessionId: "stored",
+      sessionId: "stored",
+    })
+    await adapter.native.subscribeLive("live-secret", vi.fn())
     await expect(adapter.models("researcher", "stored")).resolves.toMatchObject(
       { selectedId: '["native","small"]' }
     )
@@ -2517,16 +2522,12 @@ describe("Hermes server adapter", () => {
         throw new Error("connection refused")
       }),
     })
-    await expect(unauthenticated.authState()).resolves.toEqual({
-      status: "authentication-required",
-    })
     await expect(unauthenticated.listAgents()).rejects.toBeInstanceOf(
       HermesAuthenticationError
     )
-    await expect(unavailable.authState()).resolves.toEqual({
-      status: "unavailable",
-      reason: "temporarily-unavailable",
-    })
+    await expect(unavailable.listAgents()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
   })
 
   it("rejects an oversized native live Session identity", async () => {
