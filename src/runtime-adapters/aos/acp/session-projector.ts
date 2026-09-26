@@ -25,9 +25,9 @@ import {
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
   COMPACTION_DATA_PART_NAME,
+  steerMessageId,
   type AosCompaction,
-} from "@/components/assistant-ui/elements/compaction-divider"
-import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+} from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
 import { isSettledApproval, type AcpApproval } from "./acp-approvals"

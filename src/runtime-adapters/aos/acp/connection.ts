@@ -12,6 +12,7 @@ import {
   type ParamsParser,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SendRequestOptions,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   createWebSocketStream,
@@ -19,6 +20,17 @@ import {
 } from "@agentclientprotocol/sdk/experimental/ws-client"
 import { z } from "zod"
 
+import {
+  backoffDelay,
+  createOwner,
+  Deadline,
+  defaultClock,
+  fromAbortable,
+  ownerSetup,
+  type Clock,
+  type Logger,
+  type Owner,
+} from "@aos/lifecycle"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_ACP_OPERATOR_PATH,
@@ -45,6 +57,15 @@ import {
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
+import {
+  CAPACITY_BACKOFF,
+  HANDSHAKE_DEADLINE_MS,
+  RECONNECT_BACKOFF,
+  REQUEST_DEADLINE_MS,
+  STABLE_AFTER_MS,
+  type RequestTier,
+} from "./limits"
+import { acpDebugEnabled, loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionStatus,
@@ -61,8 +82,18 @@ import type {
  * Everything above this module consumes `AcpConnection`, never the SDK.
  */
 
-const INITIAL_RECONNECT_MS = 250
-const MAX_RECONNECT_MS = 5_000
+/** The close codes the proxy ends a connection with on purpose. */
+const TRY_AGAIN_LATER = 1013
+const POLICY_VIOLATION = 1008
+
+/** Where a connection logs when its caller passes no logger. */
+const SILENT_LOGGER: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  child: () => SILENT_LOGGER,
+}
 
 /**
  * ACP requires a workspace root on `session/new` and `session/resume`. Agent
@@ -97,11 +128,33 @@ export type AcpConnectionOptions = {
   socketConstructor?: WebSocketConstructor
   /** Pairs in process with an agent app instead of opening a socket. */
   connectAgent?: AgentApp
-  schedule?: (delayMs: number, task: () => void) => void
+  /** Times every deadline and backoff; tests fake it. */
+  clock?: Clock
+  /**
+   * Where the connection logs its owner's transitions and every wire frame;
+   * silent by default.
+   */
+  logger?: Logger
+  /**
+   * The browser's compiled build id, sent as `info.version` in `initialize`.
+   * Defaults to `__AOS_BUILD_ID__` (null on the dev server). When both the
+   * browser and the proxy carry an id and they differ, the tab is reloaded
+   * once per proxy build, which `storage` remembers.
+   */
+  buildId?: string | null
+  /** Called when a build id mismatch triggers a reload; tests inject a spy. */
+  reload?: () => void
+  /** Persists the reload guard across the reload; tests inject a fake. */
+  storage?: {
+    getItem(key: string): string | null
+    setItem(key: string, value: string): void
+  }
 }
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+/** sessionStorage key naming the proxy build the tab last reloaded for. */
+const RELOADED_FOR_BUILD_KEY = "aos-reloaded-for-build"
 
 /** Whether the proxy refused an invitation it cannot redeem. */
 export function isAuthenticationRequired(error: unknown) {
@@ -147,15 +200,56 @@ function subscribeKeyed<Listener>(
   }
 }
 
+/** One opened transport; a reconnect replaces it with another. */
+type Transport = {
+  connection: ClientConnection
+  /** Settles once the proxy answers `initialize`. */
+  ready: Promise<void>
+}
+
+type ConnectionEvent =
+  { type: "closed"; code: number | undefined } | { type: "close" }
+
+/**
+ * The constructor a transport opens its socket with. It reports the open and
+ * the close code, which the SDK drops, and its listeners run before the ones
+ * the SDK attaches once the socket is constructed.
+ */
+function observedSocket(
+  Socket: WebSocketConstructor,
+  onOpen: () => void,
+  onClose: (code: number | undefined) => void
+): WebSocketConstructor {
+  return class extends Socket {
+    constructor(...args: ConstructorParameters<WebSocketConstructor>) {
+      super(...args)
+      this.addEventListener?.("open", onOpen)
+      this.addEventListener?.("close", (event) =>
+        onClose(event instanceof CloseEvent ? event.code : undefined)
+      )
+    }
+  }
+}
+
 export function createAcpConnection(
   options: AcpConnectionOptions
 ): AcpConnection {
-  const { clientInfo, connectAgent } = options
-  const schedule =
-    options.schedule ??
-    ((delayMs, task) => {
-      setTimeout(task, delayMs)
-    })
+  const {
+    clientInfo,
+    connectAgent,
+    clock = defaultClock,
+    logger = SILENT_LOGGER,
+    reload,
+    storage,
+  } = options
+  // __AOS_BUILD_ID__ is injected by Vite's define plugin at build time.
+  // It is not available in the test environment, so guard with typeof.
+  const buildId =
+    "buildId" in options
+      ? options.buildId
+      : typeof __AOS_BUILD_ID__ !== "undefined"
+        ? (__AOS_BUILD_ID__ ?? null)
+        : null
   const updateListeners = new Map<string, Set<AcpSessionUpdateListener>>()
   const replayListeners = new Map<string, Set<AcpSessionReplayListener>>()
   const notificationListeners = new Map<
@@ -174,10 +268,13 @@ export function createAcpConnection(
 
   let status: AcpConnectionStatus = "connecting"
   let started = false
-  let closed = false
-  let live: { connection: ClientConnection; ready: Promise<void> } | undefined
-  let reconnectDelayMs = INITIAL_RECONNECT_MS
-  let reconnecting = false
+  /** Settles once a debug dev build has loaded its inspector and opened. */
+  let inspecting: Promise<void> | undefined
+  let ended = false
+  /** Opens, recovers and ends transports; `start` creates it. */
+  let owner: Owner<typeof machine> | undefined
+  let live: Transport | undefined
+  /** Set once a transport is lost, until a replacement recovers. */
   let recovering = false
   /** Settles once a recovered transport has rejoined every Session. */
   let rejoined: PromiseWithResolvers<void> | undefined
@@ -296,44 +393,96 @@ export function createAcpConnection(
         listener(params)
     })
 
-  async function withAgent(): Promise<ClientContext> {
+  async function readyTransport(): Promise<Transport> {
     // React commits children before their parent, so a consumer's effect can
     // reach the wire before the effect that owns the transport. The first call
     // opens it; `start` stays the only place that decides to.
     start()
+    // In a debug dev build the owner exists once the inspector has loaded.
+    if (inspecting) await inspecting
     const current = live
-    if (closed || !current) throw new Error("The ACP connection is not open")
+    if (ended || !current) throw new Error("The ACP connection is not open")
     await current.ready
-    return current.connection.agent
+    return current
+  }
+
+  /**
+   * Sends one request under its tier's deadline. A reply that never comes
+   * means the transport has stalled, so it is closed and the connection
+   * reconnects.
+   */
+  async function request<Response>(
+    tier: RequestTier,
+    send: (
+      agent: ClientContext,
+      options: SendRequestOptions
+    ) => Promise<Response>
+  ) {
+    const { connection } = await readyTransport()
+    const deadline = new Deadline(REQUEST_DEADLINE_MS[tier], clock)
+    try {
+      return await deadline.run((cancellationSignal) =>
+        send(connection.agent, { cancellationSignal })
+      )
+    } catch (error) {
+      if (deadline.signal.aborted) connection.close(error)
+      throw error
+    }
   }
 
   /** Notifications have no reply; the proxy reports failures as `_aos/error`. */
   function notifyAgent(send: (agent: ClientContext) => Promise<void>) {
-    void withAgent()
-      .then(send)
+    void readyTransport()
+      .then(({ connection }) => send(connection.agent))
       .catch(() => {})
   }
 
   async function handshake(connection: ClientConnection) {
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: { name: clientInfo.name, version: clientInfo.version },
+      info: {
+        name: clientInfo.name,
+        // Send the compiled build id so the proxy can detect a stale tab.
+        // On the dev server and in the service worker, buildId is null and
+        // the proxy's version acts as the AOS extension version instead.
+        version: buildId ?? clientInfo.version,
+      },
       // This client pages older history itself, so a from-start resume may
       // replay only the newest page.
       capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
+    // Both sides carry a build id: a mismatch means the proxy serves another
+    // bundle. The tab reloads once per proxy build, so a reload that still
+    // loads the old bundle cannot loop, and a later deployment reloads again.
+    const proxyBuildId = response.info?.version
+    if (
+      buildId &&
+      proxyBuildId !== undefined &&
+      proxyBuildId !== buildId &&
+      reload &&
+      storage &&
+      storage.getItem(RELOADED_FOR_BUILD_KEY) !== proxyBuildId
+    ) {
+      storage.setItem(RELOADED_FOR_BUILD_KEY, proxyBuildId)
+      reload()
+    }
     settleInitialized?.(meta)
     settleInitialized = undefined
     failInitialized = undefined
   }
 
   async function login(token: string) {
-    const agent = await withAgent()
-    await agent.request(methods.agent.auth.login, {
-      methodId: AOS_AUTH_METHOD_INVITE,
-      _meta: { [AOS_META_KEY]: { token } },
-    })
+    await request("short", (agent, options) =>
+      agent.request(
+        methods.agent.auth.login,
+        {
+          methodId: AOS_AUTH_METHOD_INVITE,
+          _meta: { [AOS_META_KEY]: { token } },
+        },
+        options
+      )
+    )
     invitation = token
   }
 
@@ -353,7 +502,8 @@ export function createAcpConnection(
   }
 
   async function resumeSession(sessionId: string, resume: AcpResumeOptions) {
-    const agent = await withAgent()
+    // Only a transport that can carry the replay drops what it replaces.
+    await readyTransport()
     const agentId = resume.agentId ?? owners.get(sessionId)
     // A from-start replay resends the whole Session, and its turns arrive as
     // chunks: whoever projects this one drops what the replay replaces first, or
@@ -364,18 +514,32 @@ export function createAcpConnection(
         )
       : []
     try {
-      const response = await agent.request(methods.agent.session.resume, {
-        sessionId,
-        cwd: SERVER_OWNED_CWD,
-        ...(resume.replayFromStart ? { replayFrom: { type: "start" } } : {}),
-        _meta: {
-          [AOS_META_KEY]: {
-            ...(agentId === undefined ? {} : { agentId }),
-            ...(resume.after === undefined ? {} : { after: resume.after }),
-            ...(resume.turnId === undefined ? {} : { turnId: resume.turnId }),
-          },
-        },
-      })
+      const response = await request(
+        resume.replayFromStart ? "long" : "medium",
+        (agent, options) =>
+          agent.request(
+            methods.agent.session.resume,
+            {
+              sessionId,
+              cwd: SERVER_OWNED_CWD,
+              ...(resume.replayFromStart
+                ? { replayFrom: { type: "start" } }
+                : {}),
+              _meta: {
+                [AOS_META_KEY]: {
+                  ...(agentId === undefined ? {} : { agentId }),
+                  ...(resume.after === undefined
+                    ? {}
+                    : { after: resume.after }),
+                  ...(resume.turnId === undefined
+                    ? {}
+                    : { turnId: resume.turnId }),
+                },
+              },
+            },
+            options
+          )
+      )
       const meta = AosSessionResumeResponseMetaSchema.parse(
         aosMetaOf(response._meta)
       )
@@ -396,15 +560,20 @@ export function createAcpConnection(
     // The proxy reads a page only for a Session this connection has resumed,
     // which a recovered transport has not done until it rejoins.
     await rejoined?.promise
-    const agent = await withAgent()
     const updates: AcpHistoryPage["updates"][number][] = []
     pages.set(sessionId, updates)
     try {
-      const response = await agent.request(methods.agent.session.resume, {
-        sessionId,
-        cwd: SERVER_OWNED_CWD,
-        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
-      })
+      const response = await request("medium", (agent, options) =>
+        agent.request(
+          methods.agent.session.resume,
+          {
+            sessionId,
+            cwd: SERVER_OWNED_CWD,
+            replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
+          },
+          options
+        )
+      )
       const { history } = AosHistoryPageResponseMetaSchema.parse(
         aosMetaOf(response._meta)
       )
@@ -419,8 +588,8 @@ export function createAcpConnection(
     // A closed connection loses its presence, so the new one carries the last
     // report again before any replay can make this tab look attended.
     if (lastFocus) {
-      const agent = await withAgent()
-      await agent.notify(AOS_METHODS.session.focus, lastFocus)
+      const { connection } = await readyTransport()
+      await connection.agent.notify(AOS_METHODS.session.focus, lastFocus)
     }
     for (const sessionId of [...updateListeners.keys()]) {
       const resumed = await resumeSession(sessionId, {
@@ -432,84 +601,210 @@ export function createAcpConnection(
     }
   }
 
-  function scheduleReconnect() {
-    if (reconnecting) return
-    reconnecting = true
-    const delayMs = reconnectDelayMs
-    reconnectDelayMs = Math.min(delayMs * 2, MAX_RECONNECT_MS)
-    schedule(delayMs, () => {
-      reconnecting = false
-      if (!closed) open()
-    })
+  /**
+   * What a transport owes once it is ready. Consumers resume Sessions on the
+   * first transport themselves; only a recovered one owes them a replay.
+   */
+  async function recover() {
+    if (!recovering) return
+    recovering = false
+    // The new transport is unauthenticated, so a guest connection redeems
+    // its invitation again before anything that login authorizes.
+    if (invitation !== undefined && !(await reloginOrClose(invitation))) return
+    await rejoin()
+    rejoined?.resolve()
+    rejoined = undefined
   }
 
-  function open() {
+  /** Hands the owner an event; an ended connection has none left to take. */
+  function deliver(event: ConnectionEvent) {
+    if (!ended) owner?.actor.send(event)
+  }
+
+  /** Opens a transport as the live one; settles once its socket is open. */
+  function openTransport() {
+    const opened = Promise.withResolvers<void>()
+    let closeCode: number | undefined
     const connection = connectAgent
       ? app.connect(connectAgent)
       : app.connect(
-          createWebSocketStream<AnyWireMessage>(
-            options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
-            options.socketConstructor
-              ? { WebSocket: options.socketConstructor }
-              : {}
+          loggedStream(
+            createWebSocketStream<AnyWireMessage>(
+              options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
+              {
+                WebSocket: observedSocket(
+                  options.socketConstructor ?? globalThis.WebSocket,
+                  () => opened.resolve(),
+                  (code) => {
+                    closeCode = code
+                  }
+                ),
+              }
+            ),
+            logger
           )
         )
-    const current = { connection, ready: handshake(connection) }
-    live = current
-    // A handshake or replay that cannot complete leaves an unusable
-    // connection; closing it runs the same recovery as a dropped transport.
-    void current.ready
-      .then(async () => {
-        reconnectDelayMs = INITIAL_RECONNECT_MS
-        setStatus("ready")
-        // Consumers resume Sessions on the first connection themselves; only a
-        // recovered transport owes them a replay.
-        if (!recovering) return
-        recovering = false
-        // The new transport is unauthenticated, so a guest connection redeems
-        // its invitation again before anything that login authorizes.
-        if (invitation !== undefined && !(await reloginOrClose(invitation)))
-          return
-        await rejoin()
-        rejoined?.resolve()
-        rejoined = undefined
-      })
-      .catch((error: unknown) => connection.close(error))
+    // In-process pairing has no socket to wait for.
+    if (connectAgent) opened.resolve()
+    const transport = { connection, ready: handshake(connection) }
+    // Whoever waits on the handshake hears its failure; the owner hears of
+    // the close that causes it.
+    void transport.ready.catch(() => {})
+    live = transport
     const onClosed = () => {
-      if (live === current) live = undefined
-      if (closed) return
-      // In-process pairing has no transport to reopen.
-      if (connectAgent) {
-        setStatus("closed")
-        return
-      }
-      recovering = true
-      if (!rejoined) {
-        rejoined = Promise.withResolvers()
-        // Closing mid-recovery must not raise an unhandled rejection when no
-        // page read is waiting.
-        void rejoined.promise.catch(() => {})
-      }
-      setStatus("reconnecting")
-      scheduleReconnect()
+      if (live !== transport) return
+      live = undefined
+      deliver({ type: "closed", code: closeCode })
     }
     void connection.closed.then(onClosed, onClosed)
+    return opened.promise
   }
+
+  const actors = {
+    open: fromAbortable(() => openTransport()),
+    handshake: fromAbortable(() => readyTransport()),
+    recover: fromAbortable(() => recover()),
+  }
+  const connectionSetup = ownerSetup<
+    { generation: number; attempt: number },
+    ConnectionEvent,
+    typeof actors
+  >("connection", logger, clock, actors)
+  /** Where a closed transport leaves the connection, by its close code. */
+  const onTransportClosed = [
+    { guard: "inProcess", target: "closed" },
+    { guard: "policyViolation", target: "closed" },
+    { guard: "tryAgainLater", target: "capacity" },
+    { target: "reconnecting" },
+  ] as const
+  const machine = connectionSetup
+    .extend({
+      delays: {
+        handshake: HANDSHAKE_DEADLINE_MS,
+        stable: STABLE_AFTER_MS,
+        reconnect: ({ context }) =>
+          backoffDelay(context.attempt, RECONNECT_BACKOFF),
+        capacity: () =>
+          CAPACITY_BACKOFF.minMs +
+          Math.floor(
+            Math.random() * (CAPACITY_BACKOFF.maxMs - CAPACITY_BACKOFF.minMs)
+          ),
+      },
+      guards: {
+        // In-process pairing has no transport to reopen.
+        inProcess: () => connectAgent !== undefined,
+        policyViolation: ({ event }) =>
+          event.type === "closed" && event.code === POLICY_VIOLATION,
+        tryAgainLater: ({ event }) =>
+          event.type === "closed" && event.code === TRY_AGAIN_LATER,
+      },
+      actions: {
+        // A handshake or replay that cannot complete leaves an unusable
+        // transport; closing it recovers as a dropped one does.
+        closeTransport: () => live?.connection.close(),
+        markReady: () => setStatus("ready"),
+        lose: (
+          _,
+          { status: next }: { status: "reconnecting" | "capacity" }
+        ) => {
+          recovering = true
+          if (!rejoined) {
+            rejoined = Promise.withResolvers()
+            // Closing mid-recovery must not raise an unhandled rejection when
+            // no page read is waiting.
+            void rejoined.promise.catch(() => {})
+          }
+          setStatus(next)
+        },
+        countAttempt: connectionSetup.assign({
+          attempt: ({ context }) => context.attempt + 1,
+        }),
+        resetAttempts: connectionSetup.assign({ attempt: 0 }),
+      },
+    })
+    .createMachine({
+      context: { generation: 0, attempt: 0 },
+      initial: "connecting",
+      on: { close: ".closed" },
+      states: {
+        connecting: {
+          entry: "bumpGeneration",
+          invoke: { src: "open", onDone: "handshaking" },
+          on: { closed: onTransportClosed },
+          after: { handshake: { actions: "closeTransport" } },
+        },
+        handshaking: {
+          invoke: {
+            src: "handshake",
+            onDone: "ready",
+            onError: { actions: "closeTransport" },
+          },
+          on: { closed: onTransportClosed },
+          after: { handshake: { actions: "closeTransport" } },
+        },
+        ready: {
+          entry: "markReady",
+          // Every Session rejoined, or a transport up long enough, starts the
+          // backoff over.
+          invoke: {
+            src: "recover",
+            onDone: { actions: "resetAttempts" },
+            onError: { actions: "closeTransport" },
+          },
+          on: { closed: onTransportClosed },
+          after: { stable: { actions: "resetAttempts" } },
+        },
+        reconnecting: {
+          meta: { log: "info" },
+          entry: { type: "lose", params: { status: "reconnecting" } },
+          after: {
+            reconnect: { target: "connecting", actions: "countAttempt" },
+          },
+        },
+        // The proxy is full: the wait is long, and the status says why.
+        capacity: {
+          meta: { log: "info" },
+          entry: { type: "lose", params: { status: "capacity" } },
+          after: { capacity: "connecting" },
+        },
+        closed: { type: "final", meta: { log: "info" } },
+      },
+    })
 
   /**
    * Opens the transport, once. Creating a connection performs no I/O, so a
    * render React discards leaves no socket behind, and a closed connection
-   * stays closed. Recovery after a drop belongs to `scheduleReconnect`.
+   * stays closed. Recovery after a close belongs to the owner.
    */
   function start() {
-    if (started || closed) return
+    if (started || ended) return
     started = true
-    open()
+    // Dev builds only: Rollup drops this branch, and the inspector with it, in
+    // production. An inspector that cannot load leaves the owner uninspected.
+    if (
+      import.meta.env.DEV &&
+      acpDebugEnabled(
+        globalThis.location?.search ?? "",
+        globalThis.sessionStorage
+      )
+    )
+      inspecting = import("@statelyai/inspect")
+        .then(({ createBrowserInspector }) => createBrowserInspector().inspect)
+        .catch(() => undefined)
+        .then(openOwner)
+    else openOwner(undefined)
   }
 
-  function closeConnection() {
-    if (closed) return
-    closed = true
+  function openOwner(inspect: Parameters<typeof createOwner>[1]["inspect"]) {
+    if (ended) return
+    owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
+    owner.stack.defer(shutdown)
+  }
+
+  /** Ends the connection for good: nothing reconnects, and every waiter fails. */
+  function shutdown() {
+    if (ended) return
+    ended = true
     setStatus("closed")
     failInitialized?.(new Error("The ACP connection closed"))
     failInitialized = undefined
@@ -518,6 +813,11 @@ export function createAcpConnection(
     rejoined = undefined
     live?.connection.close()
     live = undefined
+  }
+
+  function closeConnection() {
+    if (owner) deliver({ type: "close" })
+    else shutdown()
   }
 
   return {
@@ -531,11 +831,13 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
-      const agent = await withAgent()
-      const response = await agent.request(methods.agent.session.new, {
-        cwd: SERVER_OWNED_CWD,
-        _meta: { [AOS_META_KEY]: meta },
-      })
+      const response = await request("short", (agent, options) =>
+        agent.request(
+          methods.agent.session.new,
+          { cwd: SERVER_OWNED_CWD, _meta: { [AOS_META_KEY]: meta } },
+          options
+        )
+      )
       const created = AosSessionNewResponseMetaSchema.parse(
         aosMetaOf(response._meta)
       )
@@ -548,11 +850,16 @@ export function createAcpConnection(
     },
 
     async listSessions(meta, cursor) {
-      const agent = await withAgent()
-      const response = await agent.request(methods.agent.session.list, {
-        ...(cursor === undefined ? {} : { cursor }),
-        _meta: { [AOS_META_KEY]: meta },
-      })
+      const response = await request("short", (agent, options) =>
+        agent.request(
+          methods.agent.session.list,
+          {
+            ...(cursor === undefined ? {} : { cursor }),
+            _meta: { [AOS_META_KEY]: meta },
+          },
+          options
+        )
+      )
       return {
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
@@ -564,12 +871,13 @@ export function createAcpConnection(
     history: (sessionId) => histories.get(sessionId),
 
     async prompt(sessionId, blocks: ContentBlock[], meta) {
-      const agent = await withAgent()
-      const response = await agent.request(methods.agent.session.prompt, {
-        sessionId,
-        prompt: blocks,
-        _meta: { [AOS_META_KEY]: meta },
-      })
+      const response = await request("long", (agent, options) =>
+        agent.request(
+          methods.agent.session.prompt,
+          { sessionId, prompt: blocks, _meta: { [AOS_META_KEY]: meta } },
+          options
+        )
+      )
       return AosPromptResponseMetaSchema.parse(aosMetaOf(response._meta))
     },
 
@@ -580,33 +888,39 @@ export function createAcpConnection(
     },
 
     async setConfigOption(sessionId, configId, value) {
-      const agent = await withAgent()
-      const response = await agent.request(
-        methods.agent.session.setConfigOption,
-        { sessionId, configId, type: "id", value }
+      const response = await request("medium", (agent, options) =>
+        agent.request(
+          methods.agent.session.setConfigOption,
+          { sessionId, configId, type: "id", value },
+          options
+        )
       )
       return response.configOptions
     },
 
     async closeSession(sessionId) {
-      const agent = await withAgent()
-      await agent.request(methods.agent.session.close, { sessionId })
+      await request("short", (agent, options) =>
+        agent.request(methods.agent.session.close, { sessionId }, options)
+      )
     },
 
     async deleteSession(sessionId) {
-      const agent = await withAgent()
-      await agent.request(methods.agent.session.delete, { sessionId })
+      await request("short", (agent, options) =>
+        agent.request(methods.agent.session.delete, { sessionId }, options)
+      )
     },
 
-    async updateSession(request) {
-      const agent = await withAgent()
-      await agent.request(AOS_METHODS.session.update, request)
+    async updateSession(update) {
+      await request("short", (agent, options) =>
+        agent.request(AOS_METHODS.session.update, update, options)
+      )
     },
 
-    async steer(request) {
-      const agent = await withAgent()
+    async steer(steer) {
       return AosSteerResponseSchema.parse(
-        await agent.request(AOS_METHODS.session.steer, request)
+        await request("medium", (agent, options) =>
+          agent.request(AOS_METHODS.session.steer, steer, options)
+        )
       )
     },
 
@@ -621,16 +935,18 @@ export function createAcpConnection(
     },
 
     async listAgents() {
-      const agent = await withAgent()
       return AosAgentsListResponseSchema.parse(
-        await agent.request(AOS_METHODS.agents.list)
+        await request("short", (agent, options) =>
+          agent.request(AOS_METHODS.agents.list, undefined, options)
+        )
       )
     },
 
-    async setVisibility(request) {
-      const agent = await withAgent()
+    async setVisibility(visibility) {
       return AosSetVisibilityResponseSchema.parse(
-        await agent.request(AOS_METHODS.agents.setVisibility, request)
+        await request("short", (agent, options) =>
+          agent.request(AOS_METHODS.agents.setVisibility, visibility, options)
+        )
       )
     },
 

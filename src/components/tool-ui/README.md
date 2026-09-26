@@ -38,7 +38,7 @@ permission) are imported with `React.lazy` to keep the main bundle lean.
 
 ## Tool artifact views
 
-`tool-artifact.ts` is the browser contract for what a tool call carries beyond
+`src/lib/tool-artifact.ts` is the browser contract for what a tool call carries beyond
 its args and result: `ToolCallMessagePart.artifact` holds `{ aos:
 AosToolArtifact }` with the ACP tool kind, locations, diffs, terminals,
 subagent metadata, and the state of an MCP App view the tool declares (`app`,

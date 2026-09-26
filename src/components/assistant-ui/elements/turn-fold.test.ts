@@ -2,10 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
 import { enToolUiLabels, heToolUiLabels } from "@/components/tool-ui/locale"
-import {
-  withAosToolArtifact,
-  type AosToolKind,
-} from "@/components/tool-ui/tool-artifact"
+import { withAosToolArtifact, type AosToolKind } from "@/lib/tool-artifact"
 import {
   createTurnGroupBy,
   describeToolRun,

@@ -32,6 +32,20 @@ const productionBrowserRestrictedImports = [
   "../**/packages/proxy/**",
 ]
 
+const productionBrowserPattern = {
+  group: productionBrowserRestrictedImports,
+  message:
+    "Browser code must not import the proxy, native implementations, or private Assistant UI internals.",
+}
+
+/** The UI the browser ACP client serves, which it must never depend on. */
+const componentImports = [
+  "@/components",
+  "@/components/*",
+  "../**/components",
+  "../**/components/**",
+]
+
 export default defineConfig([
   globalIgnores([
     "dist/**",
@@ -85,12 +99,24 @@ export default defineConfig([
     rules: {
       "no-restricted-imports": [
         "error",
+        { patterns: [productionBrowserPattern] },
+      ],
+    },
+  },
+  {
+    // A later block replaces the rule's options, so it repeats the browser ban.
+    files: ["src/runtime-adapters/aos/acp/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
         {
           patterns: [
+            productionBrowserPattern,
             {
-              group: productionBrowserRestrictedImports,
+              group: componentImports,
               message:
-                "Browser code must not import the proxy, native implementations, or private Assistant UI internals.",
+                "The ACP client must not import UI components; what it shares with them lives in src/runtime-adapters/contracts.ts or src/lib.",
             },
           ],
         },

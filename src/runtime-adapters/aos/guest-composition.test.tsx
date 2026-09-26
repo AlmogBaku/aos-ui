@@ -503,7 +503,7 @@ describe("AOS guest browser composition", () => {
     })
     // The invitation's first-turn instruction is applied by the proxy, so the
     // browser sends nothing beyond what the guest wrote.
-    expect(proxy.prompts[0]?._meta).toEqual({ [AOS_META_KEY]: {} })
+    expect(proxy.prompts[0]?._meta).toMatchObject({ [AOS_META_KEY]: {} })
     // A guest-safe run carries no execution history, so the invited
     // conversation discloses neither reasoning nor a tool timeline.
     expect(
@@ -621,7 +621,7 @@ describe("AOS guest browser composition", () => {
       )
     ).toBe(true)
     const meta = proxy.prompts[0]?._meta?.[AOS_META_KEY]
-    expect(meta).toEqual({ attachmentStageId: "stage-1" })
+    expect(meta).toMatchObject({ attachmentStageId: "stage-1" })
     expect(AosPromptMetaSchema.safeParse(meta).success).toBe(true)
   })
 

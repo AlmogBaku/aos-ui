@@ -495,8 +495,11 @@ declare global {
       connections: number
       /** The newest `_meta.aos.sequence` the stub has emitted. */
       sequence: number
-      /** Drops the live transport, as a proxy restart would. */
-      dropSocket: () => void
+      /**
+       * Closes the live transport with a close code: 1006 by default, as a
+       * proxy restart would, or 1013 as a proxy at capacity would.
+       */
+      dropSocket: (code?: number) => void
       /** Sends the held `_aos/before` page, if one is waiting. */
       releasePage: () => void
     }
@@ -547,7 +550,7 @@ function installAcpStub(script: AcpScript) {
     constructor() {
       super()
       stub.connections += 1
-      stub.dropSocket = () => this.closeTransport()
+      stub.dropSocket = (code) => this.closeTransport(code)
       this.registerHandlers()
       queueMicrotask(() => {
         this.readyState = 1
@@ -565,10 +568,10 @@ function installAcpStub(script: AcpScript) {
       this.closeTransport()
     }
 
-    closeTransport() {
+    closeTransport(code = 1006) {
       if (this.readyState === 3) return
       this.readyState = 3
-      this.dispatchEvent(new Event("close"))
+      this.dispatchEvent(new CloseEvent("close", { code }))
     }
 
     accept(message: Record<string, unknown>) {
@@ -967,6 +970,26 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
     .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
+})
+
+test("AOS proxy at capacity is waited out before the browser reconnects", async ({
+  page,
+}) => {
+  await page.clock.install()
+  await serveAcp(page)
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
+
+  // A 1013 close holds the reopen for 30 to 60 s, where any other close
+  // reopens within the 250 ms first backoff.
+  await page.evaluate(() => window.__acpStub.dropSocket(1013))
+  await page.clock.runFor(29_000)
+  expect(await page.evaluate(() => window.__acpStub.connections)).toBe(1)
+  await page.clock.runFor(31_000)
+  await expect
+    .poll(async () => (await recorded(page, "initialize")).length)
+    .toBe(2)
 })
 
 test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({

@@ -124,6 +124,14 @@ describe("runtime package import boundaries", () => {
       "packages/proxy/core/example.ts",
       'import { createOwner } from "@aos/lifecycle"',
     ],
+    [
+      "src/runtime-adapters/aos/acp/example.ts",
+      'import { Button } from "@/components/ui/button"',
+    ],
+    [
+      "src/runtime-adapters/aos/acp/example.ts",
+      'import { runProxyCli } from "../../../../packages/proxy/cli"',
+    ],
   ])(
     "keeps each package out of code it must not import: %s %s",
     async (filePath, code) => {

@@ -43,21 +43,6 @@ export { DiffChangesList, DiffTextFallback } from "./tool-diff-text"
 export type { ToolDiffProps } from "./tool-diff-text"
 export { stripAnsi } from "./strip-ansi"
 export {
-  diffStats,
-  readAosToolArtifact,
-  withAosToolArtifact,
-} from "./tool-artifact"
-export type {
-  AosDiff,
-  AosDiffChange,
-  AosDiffStats,
-  AosSubagent,
-  AosTerminal,
-  AosToolArtifact,
-  AosToolKind,
-  AosToolLocation,
-} from "./tool-artifact"
-export {
   formatToolDuration,
   formatToolLocation,
   toolActionKind,

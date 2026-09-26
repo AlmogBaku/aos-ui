@@ -34,8 +34,9 @@ import type {
  * workspace client consume it and are tested against a fake.
  */
 
+/** `capacity` is a reconnect the proxy asked to wait out, being full. */
 export type AcpConnectionStatus =
-  "connecting" | "ready" | "reconnecting" | "closed"
+  "connecting" | "ready" | "reconnecting" | "capacity" | "closed"
 
 /** A server→client request awaiting the operator's answer. */
 export type AcpPendingRequest =

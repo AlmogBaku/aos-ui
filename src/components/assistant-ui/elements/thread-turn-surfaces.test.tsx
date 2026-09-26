@@ -7,10 +7,8 @@ import { act, cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 
-import type {
-  ComposerFeatureViewModel,
-  ComposerModelCurrent,
-} from "@/components/assistant-ui/composer-features"
+import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
+import type { ComposerModelCurrent } from "@/runtime-adapters/contracts"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
 import {
   AosToolPresentation,

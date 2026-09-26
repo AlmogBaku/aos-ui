@@ -13,14 +13,14 @@ import {
 
 import type { AosSubagent } from "@aos/protocol/acp"
 
-import { permissionProviderMetadata } from "@/components/tool-ui/payloads/permission"
 import {
+  permissionProviderMetadata,
   readAosToolArtifact,
   withAosToolArtifact,
   type AosDiff,
   type AosTerminal,
   type AosToolArtifact,
-} from "@/components/tool-ui/tool-artifact"
+} from "@/lib/tool-artifact"
 
 import type { AcpApproval } from "./acp-approvals"
 import type { ProjectedTerminal } from "./projector-terminals"

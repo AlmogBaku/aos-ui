@@ -16,7 +16,7 @@ import { Copy, Check, Terminal as TerminalIcon } from "lucide-react"
 
 import type { ToolTerminalLabels } from "../locale"
 import { useCopyToClipboard } from "../shared/use-copy-to-clipboard"
-import type { AosTerminal } from "../tool-artifact"
+import type { AosTerminal } from "@/lib/tool-artifact"
 import { stripAnsi } from "../strip-ansi"
 import { terminalStatus } from "./terminal-status"
 import { Button, cn } from "./_adapter"

@@ -30,6 +30,7 @@ import { createAcpInteractions } from "./acp/acp-interactions"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
 import { createAcpConnection } from "./acp/connection"
+import { tabAcpLogger } from "./acp/log"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -88,7 +89,13 @@ function ReadyAosRuntimeProvider({
   )
   useEffect(() => () => push.stop(), [push])
   const connection = useMemo(
-    () => createAcpConnection({ clientInfo: CLIENT_INFO }),
+    () =>
+      createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        logger: tabAcpLogger(),
+        reload: () => globalThis.location.reload(),
+        storage: globalThis.sessionStorage,
+      }),
     []
   )
   const connectionMounted = useRef(false)
@@ -107,6 +114,11 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [connection])
+  const connectionStatus = useSyncExternalStore(
+    connection.subscribeStatus,
+    () => connection.status,
+    () => connection.status
+  )
   const client = useMemo(
     () => createAcpWorkspaceClient({ connection, rest }),
     [connection, rest]
@@ -444,6 +456,7 @@ function ReadyAosRuntimeProvider({
     media,
     activityCoverage: "workspace",
     push,
+    connectionStatus: connectionStatus === "capacity" ? "capacity" : undefined,
   })
 }
 

@@ -12,12 +12,14 @@ import {
 import {
   composerUsageFromTokens,
   type ComposerFeatureViewModel,
-  type ComposerModelFeed,
   type ComposerModelSelectionState,
   type ComposerModelUpdate,
   type ComposerSessionCost,
-  type ComposerTurnUsage,
 } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerModelFeed,
+  ComposerTurnUsage,
+} from "@/runtime-adapters/contracts"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import type {
   SessionModelUpdateRequest,

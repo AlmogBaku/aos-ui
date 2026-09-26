@@ -1,10 +1,8 @@
 "use client"
 
 import { useRef, useState } from "react"
-import {
-  readPermissionAction,
-  type PermissionPayload,
-} from "./payloads/permission"
+import { readPermissionAction } from "@/lib/tool-artifact"
+import type { PermissionPayload } from "./payloads/permission"
 
 import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
 

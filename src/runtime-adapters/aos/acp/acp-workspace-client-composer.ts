@@ -19,7 +19,7 @@ import type {
   ComposerModelCurrent,
   ComposerModelFeed,
   ComposerTurnUsage,
-} from "@/components/assistant-ui/composer-features"
+} from "@/runtime-adapters/contracts"
 
 import type {
   AosContext,

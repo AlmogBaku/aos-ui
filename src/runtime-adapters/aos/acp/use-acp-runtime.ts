@@ -701,6 +701,9 @@ function createAcpController({
       } catch (error) {
         throw refuse(error)
       }
+      // Every send carries a fresh clientId, so the proxy can recognize the
+      // same turn delivered twice.
+      const clientId = crypto.randomUUID()
       const rewound = rewindFor(message.sourceId)
       await prompt(
         sessionId,
@@ -710,6 +713,7 @@ function createAcpController({
           ...(staged === undefined
             ? {}
             : { attachmentStageId: staged.stageId }),
+          clientId,
         },
         rewound?.sourceId
       )
@@ -730,10 +734,11 @@ function createAcpController({
       // Assistant UI's Retry is fire-and-forget, so no caller can observe a
       // rejection here. The refusal reaches the operator on the turn the prompt
       // reported it on; rethrowing would only raise an unobserved rejection.
+      const clientId = crypto.randomUUID()
       await prompt(
         sessionId,
         blocks,
-        { ...rewound?.meta },
+        { ...rewound?.meta, clientId },
         rewound?.sourceId
       ).catch((error: unknown) => {
         if (!isMessageNotSentError(error)) throw error

@@ -3,10 +3,12 @@ import { useCallback, useMemo, useState, useSyncExternalStore } from "react"
 
 import type {
   ComposerFeatureViewModel,
-  ComposerModelCurrent,
-  ComposerModelFeed,
   ComposerModelUpdate,
 } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerModelCurrent,
+  ComposerModelFeed,
+} from "@/runtime-adapters/contracts"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import { FIXTURE_SLASH_COMMANDS } from "./fixture-slash-commands"
 

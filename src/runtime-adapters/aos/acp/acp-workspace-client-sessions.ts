@@ -146,6 +146,9 @@ export function createAcpSessionStore({
   /**
    * `unread` and `pinned` are absent when unknowable on this read and never
    * overwrite; `archived` is on every provider read of a Session.
+   * A row older than what is already stored (by `updatedAt`) is silently
+   * dropped: a live event that arrived before a list page must not be
+   * overwritten by the stale page.
    */
   function put(
     sessionId: string,
@@ -153,6 +156,16 @@ export function createAcpSessionStore({
     updatedAt?: string | null
   ) {
     const previous = rows.get(sessionId)
+    const incomingUpdatedAt =
+      updatedAt !== undefined && updatedAt !== null ? updatedAt : undefined
+    // Refuse a list row whose timestamp is behind a live event the store
+    // already folded in: the live event is the more current truth.
+    if (
+      incomingUpdatedAt !== undefined &&
+      previous?.updatedAt !== undefined &&
+      Date.parse(incomingUpdatedAt) < Date.parse(previous.updatedAt)
+    )
+      return
     const unread = info.unread ?? previous?.unread
     const pinned = info.pinned ?? previous?.pinned
     write(sessionId, {

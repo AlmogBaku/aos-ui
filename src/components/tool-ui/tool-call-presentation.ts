@@ -20,7 +20,7 @@ import {
   readAosToolArtifact,
   type AosToolKind,
   type AosToolLocation,
-} from "./tool-artifact"
+} from "@/lib/tool-artifact"
 
 export const DEFAULT_TOOL_ACTIONS: ToolUiLocaleLabels["assistant"]["toolActions"] =
   {
