@@ -196,6 +196,9 @@ export async function createConfiguredProxy(
         ),
       }
     : nativeInstance
+  // The coordinator was built on the adapter's runtime; its capabilities read
+  // through the wrapped one, so a provider's speech reaches every subscriber.
+  runtimeInstance.sessions.bindCapabilities(runtimeInstance.runtime)
   const invitations =
     config.guest && invitationKeys
       ? createGuestInvitationService({

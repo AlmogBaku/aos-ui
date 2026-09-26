@@ -11,8 +11,11 @@ import {
   HermesAuthenticationError,
   type HermesGatewayOptions,
 } from "./adapters/hermes/gateway"
+import { CAPABILITIES } from "./acp/test-harness"
 import { createConfiguredProxy } from "./composition"
+import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
+import { SessionCoordinator } from "./core/session-coordinator"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 
 const directories: string[] = []
@@ -98,7 +101,7 @@ function observableRuntime() {
       publicError: () => undefined,
       turns: {},
     },
-    sessions: { subscribeExecutions },
+    sessions: { subscribeExecutions, bindCapabilities: vi.fn() },
     close: vi.fn(async () => undefined),
   } as unknown as RuntimeInstance
   return { subscribeExecutions, runtimeInstance }
@@ -136,7 +139,7 @@ describe("configured proxy composition", () => {
     const runtimeInstance = {
       id: "test-runtime",
       runtime,
-      sessions: {},
+      sessions: { bindCapabilities: vi.fn() },
       close: vi.fn(async () => undefined),
     } as unknown as RuntimeInstance
     const runtimeFactory = vi.fn(async () => runtimeInstance)
@@ -434,15 +437,24 @@ describe("configured proxy composition", () => {
       const speak = vi.fn(async () => {
         throw new Error("native speech unavailable")
       })
+      const runtime = {
+        runtimeInfo: async () => ({ status: "ready" }),
+        publicError: () => undefined,
+        workspaceCapabilities: async () => CAPABILITIES,
+        speak,
+        turns: {},
+      } as unknown as ServerRuntime
       const runtimeInstance = {
         id: "test-runtime",
-        runtime: {
-          runtimeInfo: async () => ({ status: "ready" }),
-          publicError: () => undefined,
-          speak,
-          turns: {},
-        },
-        sessions: {},
+        runtime,
+        sessions: new SessionCoordinator({
+          engine: runtime.turns,
+          readings: runtime,
+          maxActiveExecutions: 1,
+          maxGuestActiveExecutions: 1,
+          maxSubscriberEvents: 1,
+          maxSubscriberBytes: 1,
+        }),
         close: vi.fn(async () => undefined),
       } as unknown as RuntimeInstance
       return { speak, runtimeInstance }
@@ -508,6 +520,18 @@ describe("configured proxy composition", () => {
       expect(url).toBe("https://tts.example.test/v1/audio/speech")
       expect(new Headers(init.headers).get("authorization")).toBe(
         "Bearer tts-secret"
+      )
+      // A Session's capabilities offer the provider's speech too.
+      const capabilities = await new Promise<{ content: { speech: unknown } }>(
+        (resolve) =>
+          runtimeInstance.sessions.subscribeCapabilities(
+            { agentId: "researcher", sessionId: sessionId("session-1") },
+            "browser-1",
+            async (value) => resolve(value)
+          )
+      )
+      expect(capabilities.content.speech).toEqual(
+        expect.objectContaining({ status: "available", scope: "agent" })
       )
       // Both listeners and readiness still see one runtime instance.
       expect(configured.guest).toBeUndefined()

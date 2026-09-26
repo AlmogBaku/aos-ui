@@ -36,10 +36,11 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
-import type { Role } from "./member"
+import type { Role, WorkspaceCapabilities } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
   type Session,
   type SessionContextResponse,
   type SessionModelsResponse,
@@ -470,6 +471,13 @@ function scopeKey(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
   return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
+/** A Session's capabilities are read by its public id. */
+type CapabilityScope = Pick<SessionScope, "agentId" | "sessionId">
+
+function capabilityKey(scope: CapabilityScope) {
+  return `${scope.agentId}\u0000${scope.sessionId}`
+}
+
 function safeEventBytes(event: TurnEvent) {
   try {
     return new TextEncoder().encode(JSON.stringify(event)).byteLength
@@ -640,6 +648,13 @@ export class SessionCoordinator {
   readonly #models: SessionReporter<SessionModelsResponse, string>
   /** Changed by each move of the Session's turn. */
   readonly #execution: SessionReporter<SessionExecution>
+  /** Read through the runtime the composition binds. */
+  readonly #capabilities: SessionReporter<
+    WorkspaceCapabilities,
+    void,
+    CapabilityScope
+  >
+  #workspace: Pick<ServerRuntime, "workspaceCapabilities"> | undefined
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
@@ -681,6 +696,17 @@ export class SessionCoordinator {
       },
       ...cell,
     })
+    this.#capabilities = new SessionReporter({
+      name: "capabilities",
+      read: async (scope) => {
+        const workspace = this.#workspace
+        if (!workspace) throw new Error("Session capabilities are not bound")
+        return SessionWorkspaceCapabilitiesResponseSchema.parse(
+          await workspace.workspaceCapabilities(scope.agentId, scope.sessionId)
+        )
+      },
+      ...cell,
+    })
     for (const value of [
       options.maxActiveExecutions,
       options.maxGuestActiveExecutions,
@@ -714,6 +740,28 @@ export class SessionCoordinator {
     return () => {
       for (const leave of leaves) leave?.()
     }
+  }
+
+  /**
+   * Reads capabilities through `runtime` from here on: the one the listeners
+   * serve, whose wrappers amend what the adapter reports.
+   */
+  bindCapabilities(runtime: Pick<ServerRuntime, "workspaceCapabilities">) {
+    this.#workspace = runtime
+  }
+
+  /** Subscribes one subscriber to its Session's capabilities, until it leaves. */
+  subscribeCapabilities(
+    scope: CapabilityScope,
+    membershipId: string,
+    listener: ReadingListener<WorkspaceCapabilities>
+  ) {
+    return this.#capabilities.subscribe(
+      capabilityKey(scope),
+      scope,
+      membershipId,
+      listener
+    )
   }
 
   /** Owes one subscriber a fresh usage reading: what a returning one takes. */
@@ -1251,7 +1299,12 @@ export class SessionCoordinator {
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()
     for (const { owner } of this.#turns.values()) owner.dispose()
-    for (const reporter of [this.#usage, this.#models, this.#execution])
+    for (const reporter of [
+      this.#usage,
+      this.#models,
+      this.#execution,
+      this.#capabilities,
+    ])
       reporter.close()
   }
 
