@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto"
 
 import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 
+import { Deadline, defaultClock, type Clock } from "../../lifecycle"
 import { withinGrace } from "../grace"
+import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { createAcpSocket, type AcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import type { Role } from "../core/member"
@@ -31,7 +33,11 @@ export type AcpUpgrade = {
 }
 
 export type AcpPeer = {
-  send(raw: string): void
+  /**
+   * Returns the number of bytes sent, or -1 when the frame was dropped because
+   * the peer's backpressure limit is exceeded or its socket is already closed.
+   */
+  send(raw: string): number
   close(code: number, reason: string): void
 }
 
@@ -50,6 +56,16 @@ export type AcpServiceOptions = {
   principalId: string
   /** How this listener shows a failure; as written by default. */
   publicErrors?: PublicErrors
+  /**
+   * The clock the handshake deadline and the connection machine run on.
+   * Uses the default performance clock when absent.
+   */
+  clock?: Clock
+  /**
+   * Overrides the handshake deadline duration. Used in tests only; production
+   * uses HANDSHAKE_DEADLINE_MS.
+   */
+  handshakeDeadlineMs?: number
 }
 
 /**
@@ -57,6 +73,7 @@ export type AcpServiceOptions = {
  */
 export function createAcpService(options: AcpServiceOptions) {
   const { principalId } = options
+  const clock = options.clock ?? defaultClock
 
   async function authorizeUpgrade(
     request: Request
@@ -76,23 +93,42 @@ export function createAcpService(options: AcpServiceOptions) {
       upgrade.connectionId,
       upgrade.principalId
     )
+    // Thread the clock into the context so the connection machine and the
+    // handshake deadline share the same injected clock.
+    context.clock = clock
     const server = new AcpServer({ createAgent: () => options.agent(context) })
     const prepared = server.prepareWebSocketUpgrade()
-    const holder: { socket?: AcpSocket } = {}
     const socket = createAcpSocket({
-      close: peer.close,
-      notify() {
-        for (const raw of holder.socket?.drain() ?? []) peer.send(raw)
+      close: (code, reason) => peer.close(code, reason),
+      send: (raw) => {
+        const result = peer.send(raw)
+        if (result < 0)
+          context.logger.warn(
+            { connectionId: context.connectionId },
+            "acp.send.dropped"
+          )
       },
       // The upgrade's principal holds for the connection's whole life.
       lapsed: () => context.authentication?.lapsed() ?? false,
       ...(options.publicErrors ? { publicErrors: options.publicErrors } : {}),
     })
-    holder.socket = socket
+    // Arm the handshake deadline: a peer that has not completed initialize
+    // within the deadline is closed with 4408.
+    const deadlineMs = options.handshakeDeadlineMs ?? HANDSHAKE_DEADLINE_MS
+    const handshakeDeadline = new Deadline(deadlineMs, clock)
+    context.handshakeComplete = () => handshakeDeadline.clear()
+    handshakeDeadline.signal.addEventListener(
+      "abort",
+      () => {
+        socket.socket.close(4408, "Handshake deadline")
+      },
+      { once: true }
+    )
     prepared.accept(socket.socket)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
+        handshakeDeadline.clear()
         socket.close()
         void withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS)
       },

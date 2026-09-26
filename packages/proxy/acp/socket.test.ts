@@ -11,9 +11,11 @@ function harness(overrides: Partial<AcpSocketOptions> = {}) {
   const closed: Array<{ code: number; reason: string }> = []
   const messages: string[] = []
   const closes: unknown[] = []
+  const sent: string[] = []
   let now = NOW
   const socket = createAcpSocket({
     close: (code, reason) => closed.push({ code, reason }),
+    send: (raw) => sent.push(raw),
     now: () => now,
     ...overrides,
   })
@@ -26,6 +28,7 @@ function harness(overrides: Partial<AcpSocketOptions> = {}) {
     closed,
     messages,
     closes,
+    sent,
     advance(milliseconds: number) {
       now += milliseconds
     },
@@ -80,25 +83,8 @@ describe("ACP WebSocket shim", () => {
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
   })
 
-  it("queues outbound frames for the peer and notifies once per frame", () => {
-    let notified = 0
-    const { socket } = harness({
-      notify: () => {
-        notified += 1
-      },
-    })
-
-    socket.socket.send("first")
-    socket.socket.send("second")
-
-    expect(notified).toBe(2)
-    expect(socket.drain(1)).toEqual(["first"])
-    expect(socket.drain()).toEqual(["second"])
-    expect(socket.drain()).toEqual([])
-  })
-
   it("writes a listener's error notice as its Session and a public code alone", () => {
-    const { socket } = harness({ publicErrors: PUBLIC_ERRORS })
+    const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
     const notice = (params: Record<string, unknown>) =>
       socket.socket.send(
         JSON.stringify({
@@ -112,7 +98,7 @@ describe("ACP WebSocket shim", () => {
     notice({ sessionId: "ref", code: "private detail", detail: "private" })
     notice({ code: 7, message: "private" })
 
-    expect(socket.drain().map((raw) => JSON.parse(raw) as unknown)).toEqual([
+    expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
       {
         jsonrpc: "2.0",
         method: AOS_METHODS.notify.error,
@@ -135,34 +121,13 @@ describe("ACP WebSocket shim", () => {
     ])
   })
 
-  it("closes with 1013 when the outbound queue overflows its byte budget", () => {
-    const { socket, closed } = harness({ maxOutputBytes: 8 })
-
-    socket.socket.send("12345")
-    socket.socket.send("67890")
-
-    expect(closed).toEqual([{ code: 1013, reason: "ACP output overloaded" }])
-    expect(socket.drain()).toEqual([])
-  })
-
-  it("closes with 1013 when the outbound queue overflows its frame budget", () => {
-    const { socket, closed } = harness({ maxOutputFrames: 1 })
-
-    socket.socket.send("first")
-    socket.socket.send("second")
-
-    expect(closed).toEqual([{ code: 1013, reason: "ACP output overloaded" }])
-  })
-
   it("refuses a request once the credential lapsed, as the last frame before it closes", () => {
     let lapsed = false
     const written: string[] = []
-    const holder: { socket?: ReturnType<typeof harness>["socket"] } = {}
     const test = harness({
       lapsed: () => lapsed,
-      notify: () => written.push(...(holder.socket?.drain() ?? [])),
+      send: (raw) => written.push(raw),
     })
-    holder.socket = test.socket
     test.socket.receive('{"jsonrpc":"2.0","id":1,"method":"session/prompt"}')
 
     lapsed = true
@@ -190,13 +155,12 @@ describe("ACP WebSocket shim", () => {
     const written: string[] = []
     const test = harness({
       lapsed: () => true,
-      notify: () => written.push("notified"),
+      send: (raw) => written.push(raw),
     })
 
     test.socket.socket.send('{"jsonrpc":"2.0","method":"session/update"}')
 
     expect(written).toEqual([])
-    expect(test.socket.drain()).toEqual([])
     expect(test.closed).toEqual([
       { code: 1008, reason: "ACP credential lapsed" },
     ])
@@ -215,7 +179,7 @@ describe("ACP WebSocket shim", () => {
   })
 
   it("ends the SDK session on a transport close without closing the peer", () => {
-    const { socket, closed, closes, messages } = harness()
+    const { socket, closed, closes, messages, sent } = harness()
 
     socket.close()
     socket.close()
@@ -225,6 +189,6 @@ describe("ACP WebSocket shim", () => {
     expect(closes).toHaveLength(1)
     expect(closed).toEqual([])
     expect(messages).toEqual([])
-    expect(socket.drain()).toEqual([])
+    expect(sent).toEqual([])
   })
 })

@@ -2,6 +2,7 @@ import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import { OPERATOR_PRINCIPAL } from "../core/principal"
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
 
@@ -23,6 +24,15 @@ function initializeFrame(id: number) {
 /** One classifier for every context, so two contexts compare equal. */
 const unclassified = () => undefined
 
+/** A no-op logger for tests that do not assert log output. */
+const silentLogger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  child: () => silentLogger,
+} as unknown as AcpConnectionContext["logger"]
+
 function connectionContext(
   connectionId: string,
   principalId: string
@@ -37,7 +47,25 @@ function connectionContext(
     activityFeed: {} as AcpConnectionContext["activityFeed"],
     translators: {} as AcpConnectionContext["translators"],
     channels: {} as AcpConnectionContext["channels"],
+    logger: silentLogger,
+    attachmentStages: {} as AcpConnectionContext["attachmentStages"],
   }
+}
+
+/**
+ * A minimal test agent that handles initialize and signals handshake-complete
+ * via the context callback, mirroring what `createAosAcpAgent` does.
+ */
+function testAgent(context: AcpConnectionContext) {
+  return agent({ name: "spec" })
+    .onRequest(AGENT_METHODS.initialize, () => ({
+      protocolVersion: 2,
+      info: { name: "spec", version: "0" },
+    }))
+    .onConnect(async (connection) => {
+      await connection.initialized.catch(() => undefined)
+      context.handshakeComplete?.()
+    })
 }
 
 function service() {
@@ -50,13 +78,7 @@ function service() {
       principalId: OPERATOR_PRINCIPAL,
       agent(context) {
         contexts.push(context)
-        return agent({ name: "spec" }).onRequest(
-          AGENT_METHODS.initialize,
-          () => ({
-            protocolVersion: 2,
-            info: { name: "spec", version: "0" },
-          })
-        )
+        return testAgent(context)
       },
       connection: connectionContext,
     }),
@@ -71,10 +93,11 @@ function peer() {
     frames,
     closed,
     peer: {
-      send(raw: string) {
+      send(raw: string): number {
         frames.push(raw)
         resolveFrame?.()
         resolveFrame = undefined
+        return raw.length
       },
       close(code: number, reason: string) {
         closed.push({ code, reason })
@@ -132,9 +155,11 @@ describe("ACP WebSocket service", () => {
         info: { name: "spec", version: "0" },
       },
     })
-    expect(contexts).toEqual([
-      connectionContext(upgrade!.connectionId, "operator"),
-    ])
+    // The service sets clock and handshakeComplete on the context; check
+    // identity fields without asserting on those injected properties.
+    expect(contexts[0]).toMatchObject(
+      connectionContext(upgrade!.connectionId, "operator")
+    )
     expect(transport.closed).toEqual([])
 
     socket.close()
@@ -150,10 +175,7 @@ describe("ACP WebSocket service", () => {
       principalId: "invite-42",
       agent(context) {
         contexts.push(context)
-        return agent({ name: "spec" }).onRequest(
-          AGENT_METHODS.initialize,
-          () => ({ protocolVersion: 2, info: { name: "spec", version: "0" } })
-        )
+        return testAgent(context)
       },
       connection: connectionContext,
     })
@@ -167,9 +189,69 @@ describe("ACP WebSocket service", () => {
     socket.receive(initializeFrame(1))
     await initialized
 
-    expect(contexts).toEqual([
-      connectionContext(upgrade!.connectionId, "invite-42"),
-    ])
+    expect(contexts[0]).toMatchObject(
+      connectionContext(upgrade!.connectionId, "invite-42")
+    )
+    socket.close()
+  })
+
+  it("closes the peer with 4408 when initialize is not received within 15 s", async () => {
+    const clock = useFakeClock()
+    const acp = createAcpService({
+      publicOrigin: ORIGIN,
+      role: "operator",
+      principalId: OPERATOR_PRINCIPAL,
+      agent: testAgent,
+      connection: connectionContext,
+    })
+    const upgrade = await acp.authorizeUpgrade(
+      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    )
+    const transport = peer()
+    acp.open(upgrade!, transport.peer)
+
+    // No initialize sent — advance past the 15 s deadline.
+    await clock.advance(15_000)
+
+    expect(transport.closed).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 4408 })])
+    )
+  })
+
+  it("keeps the connection when initialize arrives before the 15 s deadline", async () => {
+    const clock = useFakeClock()
+    const acp = createAcpService({
+      publicOrigin: ORIGIN,
+      role: "operator",
+      principalId: OPERATOR_PRINCIPAL,
+      agent: testAgent,
+      connection: connectionContext,
+    })
+    const upgrade = await acp.authorizeUpgrade(
+      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    )
+    const transport = peer()
+    const socket = acp.open(upgrade!, transport.peer)
+
+    // Advance to just before the deadline, then send initialize.
+    await clock.advance(14_000)
+    expect(transport.closed).toEqual([])
+    const initialized = transport.nextFrame()
+    socket.receive(initializeFrame(1))
+    await initialized
+    // Let the agent's onConnect continuation clear the handshake deadline.
+    // The SDK calls afterResponse → state.complete → initialized resolves →
+    // onConnect continuation → context.handshakeComplete?.().
+    // Each arrow is one microtask step; four flushes cover the chain.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Advance past the 15 s mark — the deadline was already cleared.
+    await clock.advance(2_000)
+
+    expect(transport.closed).toEqual([])
     socket.close()
   })
 })
