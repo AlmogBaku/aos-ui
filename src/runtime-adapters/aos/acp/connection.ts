@@ -131,10 +131,25 @@ export type AcpConnectionOptions = {
   clock?: Clock
   /** Where the connection's owner logs its transitions; silent by default. */
   logger?: Logger
+  /**
+   * The browser's compiled build id, sent as `info.version` in `initialize`.
+   * Defaults to `__AOS_BUILD_ID__` (null on the dev server). When both the
+   * browser and the proxy carry an id and they differ, the tab is reloaded
+   * once, guarded by `storage`.
+   */
+  buildId?: string | null
+  /** Called when a build id mismatch triggers a reload; tests inject a spy. */
+  reload?: () => void
+  /** Persists the reload guard across the reload; tests inject a fake. */
+  storage?: { getItem(key: string): string | null; setItem(key: string, value: string): void }
 }
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+/** ACP's code for a request cancelled by the transport. */
+const REQUEST_CANCELLED = RequestError.requestCancelled().code
+/** sessionStorage key that prevents a reload loop on build id mismatch. */
+const BUILD_ID_RELOADED_KEY = "aos-build-id-reloaded"
 
 /** Whether the proxy refused an invitation it cannot redeem. */
 export function isAuthenticationRequired(error: unknown) {
@@ -143,6 +158,16 @@ export function isAuthenticationRequired(error: unknown) {
     error !== null &&
     "code" in error &&
     error.code === AUTHENTICATION_REQUIRED
+  )
+}
+
+/** Whether a request failed because the transport was cancelled (disconnected). */
+export function isRequestCancelled(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === REQUEST_CANCELLED
   )
 }
 
@@ -219,7 +244,17 @@ export function createAcpConnection(
     connectAgent,
     clock = defaultClock,
     logger = SILENT_LOGGER,
+    reload,
+    storage,
   } = options
+  // __AOS_BUILD_ID__ is injected by Vite's define plugin at build time.
+  // It is not available in the test environment, so guard with typeof.
+  const buildId =
+    "buildId" in options
+      ? options.buildId
+      : typeof __AOS_BUILD_ID__ !== "undefined"
+        ? (__AOS_BUILD_ID__ ?? null)
+        : null
   const updateListeners = new Map<string, Set<AcpSessionUpdateListener>>()
   const replayListeners = new Map<string, Set<AcpSessionReplayListener>>()
   const notificationListeners = new Map<
@@ -406,12 +441,29 @@ export function createAcpConnection(
   async function handshake(connection: ClientConnection) {
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: { name: clientInfo.name, version: clientInfo.version },
+      info: {
+        name: clientInfo.name,
+        // Send the compiled build id so the proxy can detect a stale tab.
+        // On the dev server and in the service worker, buildId is null and
+        // the proxy's version acts as the AOS extension version instead.
+        version: buildId ?? clientInfo.version,
+      },
       // This client pages older history itself, so a from-start resume may
       // replay only the newest page.
       capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
+    // Both sides carry a build id: a mismatch means the proxy is serving a
+    // newer bundle. Reload once; the storage guard stops a loop.
+    if (buildId !== null && buildId !== undefined && reload && storage) {
+      const proxyVersion = response.info?.version
+      if (proxyVersion !== undefined && proxyVersion !== buildId) {
+        if (!storage.getItem(BUILD_ID_RELOADED_KEY)) {
+          storage.setItem(BUILD_ID_RELOADED_KEY, "1")
+          reload()
+        }
+      }
+    }
     settleInitialized?.(meta)
     settleInitialized = undefined
     failInitialized = undefined

@@ -64,6 +64,19 @@ it("names the build by its entry chunk's content hash", () => {
   expect(entry?.fileName).toBe(`assets/${entry?.name}-${buildId}.js`)
 })
 
+// The vite-plugin-pwa copies the define block but not the buildIdPlugin's
+// generateBundle hook, so the service worker build leaves the placeholder
+// untouched. No browser chunk should carry the placeholder after the build.
+it("replaces the build-id placeholder in every browser chunk", () => {
+  const placeholder = "__AOS_BUILD_ID_PLACEHOLDER__"
+  expect(buildId).toBeDefined()
+  for (const chunk of chunks) {
+    expect(chunk.code, `${chunk.fileName} still has the placeholder`).not.toContain(
+      placeholder
+    )
+  }
+})
+
 /**
  * The worker's listener registration has no jsdom equivalent, so this asserts
  * the one thing that matters about it: the shipped bundle.

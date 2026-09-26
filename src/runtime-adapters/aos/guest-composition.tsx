@@ -561,6 +561,8 @@ export function GuestAosSurface({
     const connection = createAcpConnection({
       url: acpSocketUrl(AOS_ACP_GUEST_PATH),
       clientInfo: CLIENT_INFO,
+      reload: () => globalThis.location.reload(),
+      storage: globalThis.sessionStorage,
     })
     connection.start()
     // The verified presentation context and the redeemed invitation together

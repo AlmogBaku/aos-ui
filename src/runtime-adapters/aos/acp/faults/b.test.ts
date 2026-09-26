@@ -127,3 +127,69 @@ describe("browser connection faults", () => {
     expect(pipe.sockets).toHaveLength(1)
   })
 })
+
+describe("build id handshake", () => {
+  it("reloads once on a build id mismatch and not again once the guard is set", async () => {
+    const reload = vi.fn()
+    const storageMap = new Map<string, string>()
+    const storage = {
+      getItem: (k: string) => storageMap.get(k) ?? null,
+      setItem: (k: string, v: string) => {
+        storageMap.set(k, v)
+      },
+    }
+
+    // First tab: browser build id differs from proxy's version — triggers reload.
+    // The harness proxy answers info.version = "1" (AOS_EXTENSION_VERSION).
+    const test1 = await harness()
+    const pipe1 = pipedSockets(test1.agentApp)
+    const first = createAcpConnection({
+      clientInfo: { name: "test", version: "1" },
+      buildId: "browser-build-1", // differs from proxy's "1"
+      reload,
+      storage,
+      socketConstructor: pipe1.WebSocket,
+    })
+    onTestFinished(() => { first.close(); test1.close() })
+    first.start()
+    await first.initialized
+    expect(reload).toHaveBeenCalledTimes(1)
+
+    // Second connection using the same storage: guard already set, no second reload.
+    const reload2 = vi.fn()
+    const test2 = await harness()
+    const pipe2 = pipedSockets(test2.agentApp)
+    const second = createAcpConnection({
+      clientInfo: { name: "test", version: "1" },
+      buildId: "browser-build-1",
+      reload: reload2,
+      storage, // same storage: guard key is set
+      socketConstructor: pipe2.WebSocket,
+    })
+    onTestFinished(() => { second.close(); test2.close() })
+    second.start()
+    await second.initialized
+    expect(reload2).not.toHaveBeenCalled()
+  })
+
+  it("skips the check when the browser has no build id", async () => {
+    const reload = vi.fn()
+    const storage = {
+      getItem: () => null,
+      setItem: vi.fn(),
+    }
+    const test = await harness()
+    const pipe = pipedSockets(test.agentApp)
+    const connection = createAcpConnection({
+      clientInfo: { name: "test", version: "1" },
+      buildId: null, // no browser build id → no check
+      reload,
+      storage,
+      socketConstructor: pipe.WebSocket,
+    })
+    onTestFinished(() => { connection.close(); test.close() })
+    connection.start()
+    await connection.initialized
+    expect(reload).not.toHaveBeenCalled()
+  })
+})

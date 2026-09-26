@@ -88,7 +88,12 @@ function ReadyAosRuntimeProvider({
   )
   useEffect(() => () => push.stop(), [push])
   const connection = useMemo(
-    () => createAcpConnection({ clientInfo: CLIENT_INFO }),
+    () =>
+      createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        reload: () => globalThis.location.reload(),
+        storage: globalThis.sessionStorage,
+      }),
     []
   )
   const connectionMounted = useRef(false)
