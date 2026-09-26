@@ -17,6 +17,7 @@ import { createConfiguredProxy } from "./composition"
 import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
+import { READY_LINK } from "./core/link"
 import { CredentialValues } from "./redaction"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 
@@ -454,6 +455,7 @@ describe("configured proxy composition", () => {
       const runtime = {
         runtimeInfo: async () => ({ status: "ready" }),
         publicError: () => undefined,
+        link: READY_LINK,
         workspaceCapabilities: async () => CAPABILITIES,
         speak,
         turns: {},

@@ -22,6 +22,7 @@ import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
 import { createCatalog } from "../../../packages/proxy/core/catalog"
+import { READY_LINK } from "../../../packages/proxy/core/link"
 import {
   PendingRequestKind,
   PromptTurnInputSchema,
@@ -304,9 +305,8 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       ids.providerSessionId(publicSessionId),
     publicError: (cause) =>
       cause === UNAVAILABLE
-        ? { code: "temporarily_unavailable", status: 503 }
+        ? { kind: "unavailable", code: "temporarily_unavailable", cause }
         : undefined,
-    authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({
       revision: "revision-1",
@@ -364,12 +364,12 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       maxTokens: 20_000,
       source: "provider-usage" as const,
     }),
-    subscribeSessionInvalidation: async () => () => undefined,
     subscribeCatalogChanges: async () => () => undefined,
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
     speak: unsupported,
+    link: READY_LINK,
   }
   const { logger } = captureLogs()
   const coordinator = new SessionCoordinator({
@@ -393,6 +393,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     runtime,
     coordinator,
     rows: createSessionRows(),
+    logger,
   })
   const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {

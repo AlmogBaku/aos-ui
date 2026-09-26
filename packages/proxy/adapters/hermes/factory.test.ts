@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../../test/support/log-capture"
 import { createProxyLogger } from "../../cli/logger"
+import { sessionId } from "../../core/ids"
 import { CredentialValues } from "../../redaction"
 import type { RuntimeServices } from "../create-runtime"
 import { createHermesRuntime } from "./factory"
@@ -70,12 +71,21 @@ describe("Hermes runtime shutdown", () => {
         return transport
       },
     })
-    const unsubscribe = await runtime.runtime.subscribeSessionInvalidation(
+    // Trigger a session.resume so close() later sends the courtesy session.close.
+    const providerSessionId = runtime.runtime.resolveProviderSessionId(
       "researcher",
-      "stored",
-      () => undefined
+      "stored"
+    )!
+    const stop = runtime.runtime.turns.subscribeTurns!(
+      {
+        agentId: "researcher",
+        providerSessionId,
+        sessionId: sessionId("stored"),
+      },
+      { onTurn: () => undefined, onError: () => undefined }
     )
-    unsubscribe()
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+    stop()
     return { runtime, transport, config, gateway: gateway! }
   }
 

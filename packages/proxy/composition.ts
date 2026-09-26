@@ -260,6 +260,7 @@ export async function createConfiguredProxy(
     runtime: runtimeInstance.runtime,
     coordinator: sessions,
     rows: sessionRows,
+    logger: dependencies.logger,
   })
   const channels = createChannels({
     coordinator: sessions,

@@ -538,10 +538,7 @@ describe("Hermes server adapter", () => {
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(unreadable).toBeInstanceOf(HermesContentUnreadableError)
-    expect(adapter.publicError(unreadable)).toEqual({
-      code: "not_found",
-      status: 404,
-    })
+    expect(adapter.publicError(unreadable)?.kind).toBe("gone")
     expect(String(unreadable)).not.toContain(audioPath)
 
     // The same endpoint still serves the artifact the tool published.
@@ -566,10 +563,7 @@ describe("Hermes server adapter", () => {
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(refused).toBeInstanceOf(HermesContentUnreadableError)
-    expect(adapter.publicError(refused)).toEqual({
-      code: "not_found",
-      status: 404,
-    })
+    expect(adapter.publicError(refused)?.kind).toBe("gone")
 
     // An output grown past the read bound is gone the same way.
     audioFailure = new HermesHttpError(413)
@@ -585,10 +579,7 @@ describe("Hermes server adapter", () => {
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(outage).toBeInstanceOf(HermesContentUnavailableError)
-    expect(adapter.publicError(outage)).toEqual({
-      code: "temporarily_unavailable",
-      status: 503,
-    })
+    expect(adapter.publicError(outage)?.kind).toBe("unavailable")
   })
 
   it("restores pending interactions from owned Session state and reconciles them through a fresh resume that re-delivers what is still open", async () => {
@@ -2665,12 +2656,16 @@ describe("Hermes server adapter", () => {
     )
   })
 
-  it("publishes each native failure class under its own public error code", async () => {
+  it("publishes each native failure class under its own public kind", async () => {
     const adapter = new HermesServerAdapter({ request: vi.fn() })
+    const kindOf = (cause: unknown) => adapter.publicError(cause)?.kind
 
-    expect(adapter.publicError(new HermesAuthenticationError())).toEqual({
+    const refused = new HermesAuthenticationError()
+    // The native error travels along, so a log still reads what failed.
+    expect(adapter.publicError(refused)).toEqual({
+      kind: "runtime_authentication_required",
       code: "runtime_authentication_required",
-      status: 401,
+      cause: refused,
     })
     for (const cause of [
       new HermesAgentNotFoundError(),
@@ -2680,27 +2675,21 @@ describe("Hermes server adapter", () => {
       new HermesContentUnreadableError(),
       new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND"),
     ])
-      expect(adapter.publicError(cause)).toEqual({
-        code: "not_found",
-        status: 404,
-      })
+      expect(kindOf(cause)).toBe("gone")
     for (const cause of [
       new HermesRevisionConflictError(),
       new HermesSessionConflictError(),
     ])
-      expect(adapter.publicError(cause)).toEqual({
-        code: "revision_conflict",
-        status: 409,
-      })
+      expect(kindOf(cause)).toBe("revision_conflict")
     // An unconfirmed Stop may have been accepted: the browser reconciles.
     expect(
-      adapter.publicError(
+      kindOf(
         new HermesTurnPublicError(
           "AOS_STOP_UNCERTAIN",
           "Stop was not confirmed."
         )
       )
-    ).toEqual({ code: "uncertain_mutation", status: 409 })
+    ).toBe("uncertain")
     for (const cause of [
       new HermesUnavailableError(),
       new HermesWorkspaceUnavailableError(),
@@ -2711,15 +2700,10 @@ describe("Hermes server adapter", () => {
       ),
       new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE"),
     ])
-      expect(adapter.publicError(cause)).toEqual({
-        code: "temporarily_unavailable",
-        status: 503,
-      })
+      expect(kindOf(cause)).toBe("unavailable")
     expect(
-      adapter.publicError(
-        new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
-      )
-    ).toEqual({ code: "invalid_request", status: 400 })
+      kindOf(new HermesInteractionPublicError("AOS_INVALID_INTERACTION"))
+    ).toBe("invalid_request")
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
 

@@ -11,6 +11,7 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
+import { HermesTurnPublicError } from "./adapters/hermes/run-failures"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { RuntimeInstance, ServerMcpApps } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
@@ -236,8 +237,9 @@ describe("AOS V1 proxy", () => {
       }),
     }
 
+    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
     const response = await app(new HermesServerAdapter(transport)).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+      path,
       stageRequest
     )
 
@@ -247,6 +249,18 @@ describe("AOS V1 proxy", () => {
         code: "temporarily_unavailable",
         description: expect.any(String),
       },
+    })
+
+    // A write that may have landed is no caller error: the route answers it
+    // unavailable, under the code that says to reconcile first.
+    const uncertain = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(uncertain, "getSession").mockRejectedValue(
+      new HermesTurnPublicError("AOS_STOP_UNCERTAIN", "Stop was not confirmed.")
+    )
+    const reconcile = await app(uncertain).request(path, stageRequest)
+    expect(reconcile.status).toBe(503)
+    expect(await reconcile.json()).toMatchObject({
+      error: { code: "uncertain_mutation" },
     })
   })
 

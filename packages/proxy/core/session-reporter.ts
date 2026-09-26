@@ -8,7 +8,9 @@ import {
   type Owner,
   type OwnerContext,
 } from "../../lifecycle"
+import type { PublicFailure } from "./failures"
 import { READING_BACKOFF, READING_RETRIES } from "./limits"
+import type { RetryBudget, ServerLink } from "./link"
 import type { SessionScope } from "./runtime"
 
 /** Takes one reading. It never rejects: it reports its own delivery failure. */
@@ -25,12 +27,20 @@ export type SessionReporterOptions<T, C, S extends ReadingScope> = {
    * latest report carried; a read a subscriber owes carries none.
    */
   read(scope: S, cause: C | undefined): Promise<T>
+  /** The runtime's native link: a failed read is taken again once it is up. */
+  link: ServerLink
+  /** Bounds those at-once reads across every reporter that shares it. */
+  budget: RetryBudget
+  /** Sorts a failed read for its log line. */
+  publicError(cause: unknown): PublicFailure | undefined
   logger: Logger
   clock: Clock
 }
 
 type ReadingSignal<C> =
   | { type: "read"; cause?: C }
+  /** The link is up again: a failed read is taken again, with its cause. */
+  | { type: "retry" }
   /** Nobody is owed the reading any more. */
   | { type: "stop" }
 
@@ -85,11 +95,13 @@ function defer<T>(cell: AnyCell<T>) {
 /**
  * One cell's reads: at most one in flight, a failed one re-read on backoff
  * while someone is owed it and its budget lasts, and a report while one is
- * in flight read again once it lands. A report restarts the budget.
+ * in flight read again once it lands. A report restarts the budget, and so
+ * does a retry, which the shared budget lets through at once or sends to a
+ * fresh backoff.
  */
 function readingMachine<T, C, S extends ReadingScope>(
   cell: CellState<T, C, S>,
-  { read, logger, clock }: SessionReporterOptions<T, C, S>
+  { read, budget, publicError, logger, clock }: SessionReporterOptions<T, C, S>
 ) {
   const actors = { read: fromAbortable(() => read(cell.scope, cell.cause)) }
   const reading = ownerSetup<OwnerContext, ReadingSignal<C>, typeof actors>(
@@ -104,6 +116,12 @@ function readingMachine<T, C, S extends ReadingScope>(
     cell.failures = 0
     cell.cause = cause
   }
+  /** One line per failed read, with its kind and never its message. */
+  const failed = (err: unknown) =>
+    cell.log.warn(
+      { kind: publicError(err)?.kind ?? "unclassified" },
+      "reading.failed"
+    )
   return reading.createMachine({
     context: { generation: 0 },
     initial: "idle",
@@ -114,6 +132,20 @@ function readingMachine<T, C, S extends ReadingScope>(
             target: "reading",
             actions: ({ event }) => restart(event.cause),
           },
+          retry: [
+            {
+              guard: () => budget.take(),
+              target: "reading",
+              actions: () => restart(cell.cause),
+            },
+            {
+              target: "backing-off",
+              actions: () => {
+                restart(cell.cause)
+                defer(cell)
+              },
+            },
+          ],
         },
       },
       reading: {
@@ -137,12 +169,16 @@ function readingMachine<T, C, S extends ReadingScope>(
                 cell.failures < READING_RETRIES &&
                 cell.owed.size + cell.next.size > 0,
               target: "backing-off",
-              actions: () => defer(cell),
+              actions: ({ event }) => {
+                failed(event.error)
+                defer(cell)
+              },
             },
             {
               // An unknown value is not an empty one: the last stays standing.
               target: "idle",
-              actions: () => {
+              actions: ({ event }) => {
+                failed(event.error)
                 cell.owed.clear()
                 cell.next.clear()
               },
@@ -164,6 +200,11 @@ function readingMachine<T, C, S extends ReadingScope>(
             target: "reading",
             actions: ({ event }) => restart(event.cause),
           },
+          retry: {
+            guard: () => budget.take(),
+            target: "reading",
+            actions: () => restart(cell.cause),
+          },
           stop: "idle",
         },
       },
@@ -184,7 +225,8 @@ type Cell<T, C, S extends ReadingScope> = CellState<T, C, S> & {
  * twice.
  *
  * An unreadable Session is re-read on backoff and, past its budget, leaves
- * the last value standing: an unknown value is not an empty one.
+ * the last value standing: an unknown value is not an empty one. Once the
+ * runtime's link is up again, every read that failed is taken again at once.
  */
 export class SessionReporter<
   T,
@@ -192,8 +234,13 @@ export class SessionReporter<
   S extends ReadingScope = SessionScope,
 > {
   readonly #cells = new Map<string, Cell<T, C, S>>()
+  readonly #unlink: () => void
 
-  constructor(private readonly options: SessionReporterOptions<T, C, S>) {}
+  constructor(private readonly options: SessionReporterOptions<T, C, S>) {
+    this.#unlink = options.link.subscribe((state) => {
+      if (state === "ready") this.#retry()
+    })
+  }
 
   /**
    * Adds one subscriber, which gets the last value at once and a fresh read
@@ -243,6 +290,7 @@ export class SessionReporter<
   }
 
   close() {
+    this.#unlink()
     for (const cell of this.#cells.values()) cell.owner.dispose()
     this.#cells.clear()
   }
@@ -253,6 +301,19 @@ export class SessionReporter<
     if (!cell || cell.listeners.size > 0) return
     cell.owner.dispose()
     this.#cells.delete(key)
+  }
+
+  /**
+   * Takes every failed read again. One that ran out of re-reads is owed to
+   * every subscriber, as it no longer knows whom it was owed to.
+   */
+  #retry() {
+    for (const cell of this.#cells.values()) {
+      if (cell.failures === 0 || cell.listeners.size === 0) continue
+      if (cell.owner.actor.getSnapshot().value === "idle")
+        for (const id of cell.listeners.keys()) cell.owed.add(id)
+      cell.owner.actor.send({ type: "retry" })
+    }
   }
 
   #cell(key: string, scope: S) {

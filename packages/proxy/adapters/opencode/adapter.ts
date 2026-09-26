@@ -21,6 +21,8 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
+import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
@@ -243,6 +245,7 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly mcpApps?: ServerMcpApps
@@ -294,23 +297,20 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   publicError(cause: unknown) {
     if (cause instanceof OpenCodeMutationUncertainError)
-      return { code: "uncertain_mutation", status: 503 } as const
-    if (
-      cause instanceof OpenCodeClientAbortError ||
-      (cause instanceof OpenCodeClientError &&
-        cause.code === "connection_interrupted")
-    )
-      return { code: "connection_interrupted", status: 503 } as const
+      return failureOf("uncertain", cause)
+    // A lost stream is a read: a write that may have landed is already a
+    // mutation-uncertain error.
+    if (cause instanceof OpenCodeClientAbortError)
+      return failureOf("unavailable", cause)
     if (cause instanceof OpenCodeClientError) {
       if (cause.code === "authentication")
-        return { code: "runtime_authentication_required", status: 401 } as const
+        return failureOf("runtime_authentication_required", cause)
       if (cause.code === "invalid_request")
-        return { code: "invalid_request", status: 400 } as const
-      if (cause.code === "not_found")
-        return { code: "not_found", status: 404 } as const
+        return failureOf("invalid_request", cause)
+      if (cause.code === "not_found") return failureOf("gone", cause)
       if (cause.code === "conflict")
-        return { code: "revision_conflict", status: 409 } as const
-      return { code: "temporarily_unavailable", status: 503 } as const
+        return failureOf("revision_conflict", cause)
+      return failureOf("unavailable", cause)
     }
     if (
       cause instanceof OpenCodeWorkspaceScopeError ||
@@ -318,22 +318,22 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       // unlike a 503, "not found" never invites a retry that cannot succeed.
       cause instanceof OpenCodeContentUnreadableError
     )
-      return { code: "not_found", status: 404 } as const
+      return failureOf("gone", cause)
     if (cause instanceof OpenCodeWorkspaceUnavailableError)
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     if (cause instanceof OpenCodeContentUnavailableError)
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     if (cause instanceof OpenCodeInteractionPublicError) {
       if (cause.code === "AOS_INTERACTION_NOT_FOUND")
-        return { code: "not_found", status: 404 } as const
+        return failureOf("gone", cause)
       if (cause.code === "AOS_MUTATION_UNCERTAIN")
-        return { code: "uncertain_mutation", status: 503 } as const
+        return failureOf("uncertain", cause)
       if (
         cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
         cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
       )
-        return { code: "temporarily_unavailable", status: 503 } as const
-      return { code: "invalid_request", status: 400 } as const
+        return failureOf("unavailable", cause)
+      return failureOf("invalid_request", cause)
     }
     return undefined
   }

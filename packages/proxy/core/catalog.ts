@@ -4,8 +4,11 @@ import {
   type RuntimeInfo,
   type VisibilityUpdateResponse,
 } from "../../protocol"
+import { defaultClock, type Clock, type Logger } from "../../lifecycle"
+import { coreFailure } from "./failures"
 import * as ids from "./ids"
 import type { ProviderSessionId } from "./ids"
+import { createLink, type Link } from "./link"
 import { hasSession, type CommandResults, type MemberScope } from "./member"
 import type { ServerRuntime, SessionPatch, SessionScope } from "./runtime"
 import {
@@ -80,19 +83,26 @@ export type CatalogOptions = {
   runtime: ServerRuntime
   coordinator: Pick<SessionCoordinator, "state">
   rows: SessionRows
+  /** Where the runtime's change feed writes why it failed. */
+  logger: Logger
+  clock?: Clock
 }
 
 export function createCatalog({
   runtime,
   coordinator,
   rows,
+  logger,
+  clock = defaultClock,
 }: CatalogOptions): Catalog {
   const invalidated = new Set<() => void>()
+  const subscribeChanges = runtime.subscribeCatalogChanges?.bind(runtime)
   /**
    * The runtime's own change feed, started by the first listener and kept
-   * for the process's life; one that failed to start is tried again.
+   * for the process's life: one that fails is started again on backoff, and
+   * at once when the runtime's link turns ready.
    */
-  let changes: Promise<unknown> | undefined
+  let changes: Link | undefined
 
   const invalidate = () => {
     for (const listener of [...invalidated]) listener()
@@ -198,12 +208,19 @@ export function createCatalog({
     },
 
     invalidation: {
-      signaled: runtime.subscribeCatalogChanges !== undefined,
+      signaled: subscribeChanges !== undefined,
       subscribe(listener) {
         invalidated.add(listener)
-        changes ??= runtime.subscribeCatalogChanges?.(invalidate).catch(() => {
-          changes = undefined
-        })
+        if (subscribeChanges)
+          changes ??= createLink({
+            dial: () => subscribeChanges(invalidate),
+            publicError: (cause) =>
+              coreFailure(cause) ?? runtime.publicError(cause),
+            upstream: runtime.link,
+            logger,
+            clock,
+            bindings: { link: "catalog-changes" },
+          })
         return () => {
           invalidated.delete(listener)
         }

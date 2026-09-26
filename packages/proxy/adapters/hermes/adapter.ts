@@ -75,6 +75,8 @@ import type {
   ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
+import { failureOf } from "../../core/failures"
+import { READY_LINK } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
@@ -336,6 +338,7 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
+  readonly link = READY_LINK
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
@@ -694,7 +697,7 @@ export class HermesServerAdapter implements ServerRuntime {
 
   publicError(cause: unknown) {
     if (cause instanceof HermesAuthenticationError)
-      return { code: "runtime_authentication_required", status: 401 } as const
+      return failureOf("runtime_authentication_required", cause)
     if (
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
@@ -705,19 +708,19 @@ export class HermesServerAdapter implements ServerRuntime {
       // never invites a retry that cannot succeed.
       cause instanceof HermesContentUnreadableError
     )
-      return { code: "not_found", status: 404 } as const
+      return failureOf("gone", cause)
     if (
       cause instanceof HermesRevisionConflictError ||
       cause instanceof HermesSessionConflictError
     )
-      return { code: "revision_conflict", status: 409 } as const
+      return failureOf("revision_conflict", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (
       cause instanceof HermesTurnPublicError &&
       cause.code === "AOS_STOP_UNCERTAIN"
     )
-      return { code: "uncertain_mutation", status: 409 } as const
+      return failureOf("uncertain", cause)
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
@@ -726,11 +729,12 @@ export class HermesServerAdapter implements ServerRuntime {
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
     )
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     if (cause instanceof HermesInteractionPublicError)
-      return cause.code === "AOS_INTERACTION_NOT_FOUND"
-        ? ({ code: "not_found", status: 404 } as const)
-        : ({ code: "invalid_request", status: 400 } as const)
+      return failureOf(
+        cause.code === "AOS_INTERACTION_NOT_FOUND" ? "gone" : "invalid_request",
+        cause
+      )
     return undefined
   }
 

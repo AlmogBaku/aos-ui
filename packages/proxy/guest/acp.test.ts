@@ -56,6 +56,7 @@ import type {
   ServerRuntime,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
@@ -480,7 +481,7 @@ function harness(options: HarnessOptions = {}) {
     resolveProviderSessionId:
       options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
-    authState: unsupported,
+    link: READY_LINK,
     runtimeInfo,
     listAgents: unsupported,
     updateAgentVisibility: unsupported,
@@ -504,7 +505,6 @@ function harness(options: HarnessOptions = {}) {
     models: options.readings ? async () => MODELS : unsupported,
     updateModel: unsupported,
     context: options.readings ? async () => USAGE : unsupported,
-    subscribeSessionInvalidation: unsupported,
     async subscribeCatalogChanges(listener) {
       catalogChanged = listener
       return () => undefined
@@ -544,6 +544,7 @@ function harness(options: HarnessOptions = {}) {
       runtime,
       coordinator,
       rows: createSessionRows({ now: () => NOW }),
+      logger: logs.logger,
     }),
     guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,

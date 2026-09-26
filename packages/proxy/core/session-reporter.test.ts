@@ -5,6 +5,7 @@ import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import { providerSessionId, sessionId } from "./ids"
 import { READING_BACKOFF } from "./limits"
+import { READY_LINK, type LinkState, type ServerLink } from "./link"
 import { SessionReporter } from "./session-reporter"
 
 const scope = {
@@ -13,11 +14,17 @@ const scope = {
   sessionId: sessionId("session-1"),
 }
 
-function cells(read: () => Promise<string>) {
+function cells(
+  read: () => Promise<string>,
+  { link = READY_LINK, logs = captureLogs() } = {}
+) {
   return new SessionReporter<string>({
     name: "usage",
     read,
-    logger: captureLogs().logger,
+    link,
+    budget: { take: () => true },
+    publicError: () => undefined,
+    logger: logs.logger,
     clock: defaultClock,
   })
 }
@@ -72,6 +79,48 @@ describe("SessionReporter", () => {
     expect(subscriber).not.toHaveBeenCalled()
     await clock.advance(1)
     expect(subscriber).toHaveBeenCalledWith("reading")
+  })
+
+  it("re-reads a failed read at once when the link is up again", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const read = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("unreadable"))
+      .mockResolvedValue("reading")
+    const listeners = new Set<(state: LinkState) => void>()
+    const link: ServerLink = {
+      state: () => "lost",
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    }
+    const logs = captureLogs()
+    const subscriber = listener()
+    cells(read, { link, logs }).subscribe(
+      "session-1",
+      scope,
+      "subscriber",
+      subscriber
+    )
+    await clock.advance(0)
+
+    for (const ready of listeners) ready("ready")
+    await clock.advance(0)
+
+    expect(subscriber).toHaveBeenCalledWith("reading")
+    // The failed read is logged by its cell and kind, never its message.
+    expect(logs.records()).toContainEqual({
+      level: "warn",
+      message: "reading.failed",
+      fields: {
+        reading: "usage",
+        agentId: "researcher",
+        sessionId: "session-1",
+        kind: "unclassified",
+      },
+    })
   })
 
   it("gives a subscriber back after a reconnect the last value while a fresh read runs", async () => {

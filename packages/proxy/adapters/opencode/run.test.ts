@@ -16,6 +16,7 @@ import type {
 } from "./client"
 import { ServerTurnConflictError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
+import { READY_LINK } from "../../core/link"
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeContent } from "./content"
 import { OpenCodeTurnEngine, openCodeRecoveryToken } from "./run"
@@ -1127,7 +1128,7 @@ describe("OpenCodeRunEngine", () => {
     const sessions = new SessionCoordinator({
       engine,
       // No test here subscribes anything to a reading.
-      readings: { context: vi.fn(), models: vi.fn() },
+      readings: { context: vi.fn(), models: vi.fn(), link: READY_LINK },
       maxActiveExecutions: 8,
       maxSubscriberEvents: 8,
       maxSubscriberBytes: 64 * 1024,

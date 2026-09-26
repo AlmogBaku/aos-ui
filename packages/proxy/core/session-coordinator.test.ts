@@ -12,6 +12,7 @@ import {
 
 import {
   ServerRequestStaleError,
+  ServerSessionNotFoundError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
@@ -33,6 +34,7 @@ import {
   type CoordinatedTurnSubscription,
   type SessionCoordinatorOptions,
 } from "./session-coordinator"
+import { READY_LINK } from "./link"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 class EventSource implements ServerTurnHandle {
@@ -139,7 +141,12 @@ function coordinator(
   return new SessionCoordinator({
     engine,
     // No test here subscribes anything to a reading.
-    readings: { context: vi.fn(), models: vi.fn() },
+    readings: {
+      context: vi.fn(),
+      models: vi.fn(),
+      publicError: () => undefined,
+      link: READY_LINK,
+    },
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
@@ -1621,7 +1628,12 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce({ session: { id: "created-1" } })
         .mockResolvedValue({ session: { id: "created-2" } })
       const sessions = coordinator(engine(), {
-        readings: { context: vi.fn(), models: vi.fn(), createSession },
+        readings: {
+          context: vi.fn(),
+          models: vi.fn(),
+          createSession,
+          link: READY_LINK,
+        },
       })
       const create = { title: "Plans", clientId: "client-1" }
 
@@ -1650,7 +1662,12 @@ describe("SessionCoordinator", () => {
       const clock = useFakeClock()
       const createSession = vi.fn(async () => ({}))
       const sessions = coordinator(engine(), {
-        readings: { context: vi.fn(), models: vi.fn(), createSession },
+        readings: {
+          context: vi.fn(),
+          models: vi.fn(),
+          createSession,
+          link: READY_LINK,
+        },
       })
       const create = (clientId: string) =>
         sessions.createSession("researcher", { clientId }, "operator")
@@ -2268,24 +2285,29 @@ describe("SessionCoordinator", () => {
     ).resolves.toBeDefined()
   })
 
-  it("stops a start that lands after close, but leaves a recovered turn running", async () => {
+  it("gives up every admission at close, stops a start that lands after it, but leaves a recovered turn running", async () => {
     const { advance } = useFakeClock()
     const started = new EventSource()
     const recovered = new EventSource()
+    const signals: AbortSignal[] = []
     let answerStart!: (handle: ServerTurnHandle) => void
     let answerRecover!: (handle: ServerTurnHandle) => void
     const engine: ServerTurnEngine = {
-      start: vi.fn(
-        () =>
-          new Promise<ServerTurnHandle>((resolve) => {
+      start: vi.fn<ServerTurnEngine["start"]>(
+        (_target, _input, _stage, signal) => {
+          signals.push(signal!)
+          return new Promise((resolve) => {
             answerStart = resolve
           })
+        }
       ),
-      recover: vi.fn(
-        () =>
-          new Promise<ServerTurnHandle>((resolve) => {
+      recover: vi.fn<ServerTurnEngine["recover"]>(
+        (_target, _request, signal) => {
+          signals.push(signal!)
+          return new Promise((resolve) => {
             answerRecover = resolve
           })
+        }
       ),
     }
     const sessions = coordinator(engine)
@@ -2298,11 +2320,14 @@ describe("SessionCoordinator", () => {
     await advance(0)
 
     sessions.close()
-    answerStart(started)
-    answerRecover(recovered)
-
+    // Neither waits out its deadline for a provider that may never answer.
+    expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
     await expect(start).rejects.toThrow("Session coordinator is closed")
     await expect(recover).rejects.toThrow("Session coordinator is closed")
+    answerStart(started)
+    answerRecover(recovered)
+    await advance(0)
+
     // Nothing owns the start any more; the recovered turn is the user's.
     expect(started.stop).toHaveBeenCalledOnce()
     expect(recovered.stop).not.toHaveBeenCalled()
@@ -2987,6 +3012,43 @@ describe("SessionCoordinator", () => {
     await expect(
       sessions.start(otherScope, input("run-3"), access("one"))
     ).resolves.toBeDefined()
+
+    // A Session its provider lost ends its uncertain turn at once: no later
+    // recover can confirm a turn in a Session that is gone.
+    const lost = new EventSource()
+    const recover = vi
+      .fn<ServerTurnEngine["recover"]>()
+      .mockRejectedValue(new ServerSessionNotFoundError())
+    const gone = coordinator(
+      {
+        start: vi.fn<ServerTurnEngine["start"]>().mockResolvedValue(lost),
+        recover,
+      },
+      { maxActiveExecutions: 1 }
+    )
+    const ended: ExecutionEvent[] = []
+    gone.subscribeExecutions((event) => ended.push(event))
+    const onTerminal = vi.fn(async () => undefined)
+    await gone.start(scope, input("run-4"), { ...access("one"), onTerminal })
+    lost.emit(interruptedError)
+    lost.finish()
+    await advance(0)
+
+    expect(gone.state(scope)).toBe("idle")
+    expect(ended.map(({ kind }) => kind)).toEqual([
+      "turn-started",
+      "turn-failed",
+    ])
+    const goneFailure = { kind: TurnEventKind.TurnFailed, code: "not_found" }
+    expect(onTerminal).toHaveBeenLastCalledWith(goneFailure)
+    await expect(reloadedHead(gone, scope, "run-4")).resolves.toMatchObject({
+      event: goneFailure,
+    })
+    await advance(UNCERTAINTY_DEADLINE_MS)
+    expect(recover).toHaveBeenCalledTimes(1)
+    await expect(
+      gone.start(otherScope, input("run-5"), access("one"))
+    ).resolves.toBeDefined()
   })
 
   it("leaves a start its provider never answers uncertain at the admission deadline", async () => {
@@ -3003,6 +3065,8 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce(recovered),
     }
     const sessions = coordinator(engine)
+    const observed: ExecutionEvent[] = []
+    sessions.subscribeExecutions((event) => observed.push(event))
     const hung = expect(
       sessions.start(scope, input("run-1"), access("one"))
     ).rejects.toBeInstanceOf(ServerTurnUncertainError)
@@ -3023,6 +3087,12 @@ describe("SessionCoordinator", () => {
       { sessionId: scope.sessionId, turnId: "run-1" },
       expect.any(AbortSignal)
     )
+    // The start nobody answered and the reconcile that confirmed it are one
+    // turn, announced once.
+    expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
+      ["turn-finished", "run-1"],
+    ])
     await expect(
       sessions.start(scope, input("run-2"), access("one"))
     ).resolves.toMatchObject({ turnId: "run-2" })

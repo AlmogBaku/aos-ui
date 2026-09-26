@@ -4,13 +4,9 @@ import type { z } from "zod"
 import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
   ServerRequestStaleError,
-  ServerTurnCapacityError,
   ServerTurnConflictError,
-  ServerTurnSteerUnavailableError,
-  ServerTurnSteerUncertainError,
-  ServerSessionNotFoundError,
-  type ServerRuntimePublicError,
 } from "../core/runtime"
+import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
 import { MembershipDetachedError } from "../core/channel"
 import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
@@ -97,19 +93,16 @@ function uncertainMutation() {
   )
 }
 
-/** The error each public runtime failure travels as. */
-const RUNTIME_ERRORS: Readonly<
-  Record<ServerRuntimePublicError["code"], () => RequestError>
-> = {
-  runtime_authentication_required: authenticationRequired,
-  invalid_request: invalidParams,
-  not_found: notFound,
-  revision_conflict: revisionConflict,
-  temporarily_unavailable: temporarilyUnavailable,
-  // A dropped connection is a failure the next attempt may not meet.
-  connection_interrupted: temporarilyUnavailable,
-  uncertain_mutation: uncertainMutation,
-}
+/** The error each kind of public failure travels as. */
+const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
+  {
+    gone: notFound,
+    unavailable: temporarilyUnavailable,
+    uncertain: uncertainMutation,
+    invalid_request: invalidParams,
+    revision_conflict: revisionConflict,
+    runtime_authentication_required: authenticationRequired,
+  }
 
 /**
  * Every error code a public reply carries, with the machine name it travels
@@ -159,34 +152,28 @@ export const PUBLIC_ERRORS: PublicErrors = {
       : "internal_error",
 }
 
-/** Coordinator control failures, mirroring the normalized HTTP error map. */
-function coordinatorError(cause: unknown) {
-  if (cause instanceof ServerTurnConflictError) return turnInProgress()
-  if (cause instanceof ServerRequestStaleError) return staleRequest()
-  if (
-    cause instanceof ServerTurnCapacityError ||
-    cause instanceof ServerTurnSteerUnavailableError ||
-    cause instanceof MembershipDetachedError
-  )
-    return temporarilyUnavailable()
-  if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
-  if (cause instanceof ServerSessionNotFoundError) return notFound()
-  if (cause instanceof ServerClientIdReusedError) return invalidParams()
-  return undefined
+/** The failure a membership or send error is; the rest are core's own. */
+function channelFailure(cause: unknown) {
+  if (cause instanceof MembershipDetachedError)
+    return failureOf("unavailable", cause)
+  if (cause instanceof ServerClientIdReusedError)
+    return failureOf("invalid_request", cause)
+  return coreFailure(cause)
 }
 
 /**
  * The JSON-RPC error a proxy failure travels as, or the failure itself;
- * `publicError` is the runtime's classifier.
+ * `publicError` is the runtime's classifier. A turn's own control answers
+ * are ACP's; every other failure travels as its kind.
  */
 export function publicRequestError(
   publicError: AcpConnectionContext["publicError"],
   cause: unknown
 ) {
-  const mapped = coordinatorError(cause)
-  if (mapped) return mapped
-  const classified = publicError(cause)
-  return classified ? RUNTIME_ERRORS[classified.code]() : cause
+  if (cause instanceof ServerTurnConflictError) return turnInProgress()
+  if (cause instanceof ServerRequestStaleError) return staleRequest()
+  const failure = channelFailure(cause) ?? publicError(cause)
+  return failure ? KIND_ERRORS[failure.kind]() : cause
 }
 
 /** The machine name a public reply carries `error` as, or `internal_error`. */

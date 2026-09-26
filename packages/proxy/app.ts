@@ -5,6 +5,7 @@ import type { Logger } from "../lifecycle"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
+import { coreFailure, type PublicFailure } from "./core/failures"
 import {
   ServerSessionNotFoundError,
   type RuntimeInstance,
@@ -18,6 +19,18 @@ import { registerMcpAppRoutes } from "./routes/mcp-apps"
 import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerPushRoutes } from "./routes/push"
 import { registerRuntimeRoute } from "./routes/runtime"
+
+/** The HTTP answer each kind of public failure travels as. */
+const FAILURE_RESPONSES: Readonly<
+  Record<PublicFailure["kind"], readonly [ErrorCode, number]>
+> = {
+  gone: ["not_found", 404],
+  unavailable: ["temporarily_unavailable", 503],
+  uncertain: ["uncertain_mutation", 503],
+  invalid_request: ["invalid_request", 400],
+  revision_conflict: ["revision_conflict", 409],
+  runtime_authentication_required: ["runtime_authentication_required", 401],
+}
 
 export type ProxyAppOptions = {
   publicOrigin: string
@@ -156,13 +169,10 @@ export function createProxyApp(options: ProxyAppOptions) {
     })
 
   app.onError((cause, context) => {
-    const runtimeError = runtime.publicError(cause)
-    const [code, status]: [ErrorCode, number] =
-      cause instanceof ServerSessionNotFoundError
-        ? ["not_found", 404]
-        : runtimeError
-          ? [runtimeError.code, runtimeError.status]
-          : ["internal_error", 500]
+    const failure = coreFailure(cause) ?? runtime.publicError(cause)
+    const [code, status] = failure
+      ? FAILURE_RESPONSES[failure.kind]
+      : (["internal_error", 500] as const)
     options.logger.error(
       {
         requestId: context.get("requestId"),

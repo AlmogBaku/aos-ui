@@ -56,8 +56,11 @@ import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
   RECONCILE_BACKOFF,
+  RETRY_BUDGET,
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
+import { coreFailure } from "./failures"
+import { retryBudget } from "./link"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -176,11 +179,17 @@ export type SessionCoordinatorOptions = {
   /**
    * Reads a Session's context window and model catalog for its reporters,
    * writes the model choices a client makes, and creates the Sessions a
-   * client asks for.
+   * client asks for; `publicError` tells a recover that met a Session gone,
+   * and `link` turning ready takes every failed reading again.
    */
   readings: Pick<
     ServerRuntime,
-    "context" | "models" | "updateModel" | "createSession"
+    | "context"
+    | "models"
+    | "updateModel"
+    | "createSession"
+    | "publicError"
+    | "link"
   >
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
@@ -441,6 +450,12 @@ type Turn = {
   startedBy?: string
   /** The capability key for this session, used when evicting its cells. */
   capabilityKey: string
+  /**
+   * What a start its provider never answered staged, held while its turn is
+   * uncertain, since the provider may be reading it; released if no reconcile
+   * confirms the turn, and its adapter's once one does.
+   */
+  stage?: ServerAttachmentStage
 }
 
 /**
@@ -861,6 +876,8 @@ export class SessionCoordinator {
   readonly #logger: Logger
   readonly #clock: Clock
   readonly #recoveries = new Map<string, Promise<Execution>>()
+  /** Aborts at close, and with it every admission still waiting on a provider. */
+  readonly #closing = new AbortController()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
   readonly #listeners = new Set<{
     key?: string
@@ -896,7 +913,13 @@ export class SessionCoordinator {
     this.#clock = options.clock ?? defaultClock
     this.#sends = new ClientAdmissions(this.#clock)
     this.#creates = new ClientAdmissions(this.#clock)
-    const cell = { logger: this.#logger, clock: this.#clock }
+    const cell = {
+      link: readings.link,
+      budget: retryBudget(RETRY_BUDGET, this.#clock),
+      publicError: (err: unknown) => this.#failure(err),
+      logger: this.#logger,
+      clock: this.#clock,
+    }
     this.#usage = new SessionReporter({
       name: "usage",
       read: async (scope) =>
@@ -1152,10 +1175,9 @@ export class SessionCoordinator {
       // Adopting a turn the runtime started after one this proxy ran is a
       // turn start; a turn lost to a restart, or a wait refreshed, is not.
       if (!existing && this.#executions.has(key)) this.#assertCapacity(key)
-      const discovered = await new Deadline(
-        ADMISSION_DEADLINE_MS,
-        this.#clock
-      ).run((signal) => this.options.engine.discover!(scope, turnId, signal))
+      const discovered = await this.#deadline().run((signal) =>
+        this.options.engine.discover!(scope, turnId, signal)
+      )
       if (!discovered) {
         if (existing && this.#move(turn, generation, { type: "cleared" })) {
           this.#resolveAttention(existing)
@@ -1237,7 +1259,7 @@ export class SessionCoordinator {
     const repeated = this.#sends.repeated(ids.turnId, fingerprint)
     if (!repeated) {
       const started = prepare().then(({ stage, ...prompt }) =>
-        this.#startTurn(scope, { ...ids, ...prompt }, access, options, stage)
+        this.#startStaged(scope, { ...ids, ...prompt }, access, options, stage)
       )
       this.#sends.remember(
         ids.turnId,
@@ -1253,6 +1275,27 @@ export class SessionCoordinator {
     // The Session no longer holds the turn, so nothing of it is left to replay;
     // the repeat's reader follows the Session from its history.
     return { turnId: ids.turnId, events: ENDED, close: () => undefined }
+  }
+
+  /**
+   * Starts a first admission with the stage its `prepare` took. A start that
+   * fails releases the stage, so its client stages its attachments anew; one
+   * its provider may have taken holds it on its turn.
+   */
+  async #startStaged(
+    scope: SessionScope,
+    input: PromptTurnInput,
+    access: CoordinatorAccess,
+    options: StartOptions,
+    stage: ServerAttachmentStage | undefined
+  ) {
+    try {
+      return await this.#startTurn(scope, input, access, options, stage)
+    } catch (error) {
+      if (!(error instanceof ServerTurnUncertainError))
+        await stage?.cleanup().catch(() => undefined)
+      throw error
+    }
   }
 
   async #startTurn(
@@ -1279,12 +1322,10 @@ export class SessionCoordinator {
       input.turnId,
       access.principalId
     )
-    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock, signal)
+    const deadline = this.#deadline(signal)
     try {
       const at = Date.now()
-      const handle = await deadline.run(() =>
-        this.options.engine.start(scope, input, stage, deadline.signal)
-      )
+      const handle = await this.#startNative(scope, input, stage, deadline)
       const execution: Execution = this.#createExecution({
         scope,
         turn,
@@ -1311,7 +1352,7 @@ export class SessionCoordinator {
       return this.#subscribe(execution.segment, 0, access)
     } catch (error) {
       if (!deadline.signal.aborted) throw error
-      throw this.#unanswered(key, turn, generation, input.turnId)
+      throw this.#unanswered(key, turn, generation, input.turnId, stage)
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1425,31 +1466,50 @@ export class SessionCoordinator {
     return recovery
   }
 
+  /** What a failure is, whether the core or the runtime raised it. */
+  #failure(err: unknown) {
+    return coreFailure(err) ?? this.options.readings.publicError(err)
+  }
+
   /**
    * Asks the provider how an uncertain turn stands. A recovery that lands
    * confirms the turn running, and its stream reports how the turn ends; one
-   * that fails leaves the turn uncertain for the next reconcile.
+   * that meets its Session gone ends the turn, since no later recover can
+   * confirm it; any other failure leaves it uncertain for the next reconcile.
    */
   async #reconcile(scope: SessionScope, turn: Turn, generation: number) {
     const { value, context } = turn.owner.actor.getSnapshot()
+    const { turnId } = context
     if (
       this.#closed ||
       turn.owner.stale(generation) ||
       value !== "uncertain" ||
-      context.turnId === undefined
+      turnId === undefined
     )
       return
-    await this.#recovery(
-      scope,
-      { sessionId: scope.sessionId, turnId: context.turnId },
-      this.#executions.get(scopeKey(scope))
-    )
+    try {
+      await this.#recovery(
+        scope,
+        { sessionId: scope.sessionId, turnId },
+        this.#executions.get(scopeKey(scope))
+      )
+    } catch (err) {
+      const failure = this.#failure(err)
+      if (
+        failure?.kind !== "gone" ||
+        !this.#move(turn, generation, { type: "ended" })
+      )
+        throw err
+      const { agentId, sessionId } = scope
+      this.#logger.warn({ err, agentId, sessionId, turnId }, "turn.gone")
+      await this.#failUncertain(scope, turn, turnId, {
+        kind: TurnEventKind.TurnFailed,
+        code: failure.code,
+      })
+    }
   }
 
-  /**
-   * Ends a turn no recover confirmed running by its deadline. Its readers and
-   * observers learn it failed, and its journal keeps why for a redial.
-   */
+  /** Ends a turn no recover confirmed running by its deadline. */
   async #outcomeUnknown(scope: SessionScope, turn: Turn, generation: number) {
     const { turnId } = turnExecution(turn)
     if (this.#closed || turn.owner.stale(generation) || turnId === undefined)
@@ -1458,18 +1518,35 @@ export class SessionCoordinator {
       { agentId: scope.agentId, sessionId: scope.sessionId, turnId },
       "turn.outcome-unknown"
     )
+    await this.#failUncertain(scope, turn, turnId, OUTCOME_UNKNOWN)
+  }
+
+  /**
+   * Ends an uncertain turn with `failure`, once its owner rests idle. Its
+   * readers and observers learn it failed, its journal keeps why for a
+   * redial, and what a start it never confirmed staged is released.
+   */
+  async #failUncertain(
+    scope: SessionScope,
+    turn: Turn,
+    turnId: string,
+    failure: TurnEventOf<typeof TurnEventKind.TurnFailed>
+  ) {
+    const { stage } = turn
+    turn.stage = undefined
     const segment = this.#executions.get(scopeKey(scope))?.segment
     const owned = segment?.turnId === turnId ? segment : undefined
     if (owned) {
       owned.terminal = true
-      this.#publish(owned, OUTCOME_UNKNOWN)
+      this.#publish(owned, failure)
       owned.fanout.close()
     }
     this.#announce(scope, {
       ...this.#origin(scope, turnId),
       kind: "turn-failed",
     })
-    await owned?.onTerminal?.(OUTCOME_UNKNOWN)
+    await owned?.onTerminal?.(failure)
+    await stage?.cleanup().catch(() => undefined)
   }
 
   async #recoverExecution(
@@ -1488,8 +1565,8 @@ export class SessionCoordinator {
         turnId: request.turnId,
         ...(position ? { position } : {}),
       }
-      const handle = await new Deadline(ADMISSION_DEADLINE_MS, this.#clock).run(
-        (signal) => this.options.engine.recover(scope, providerRequest, signal)
+      const handle = await this.#deadline().run((signal) =>
+        this.options.engine.recover(scope, providerRequest, signal)
       )
       const replaced = existing?.segment
       const segment = this.#createSegment({
@@ -1503,6 +1580,8 @@ export class SessionCoordinator {
         history: { journal: "continue", previous: replaced },
         onTerminal: replaced?.onTerminal,
       })
+      // A turn confirmed running is its adapter's, and so is what it staged.
+      turn.stage = undefined
       if (replaced) this.#forgetJournal(replaced)
       const execution: Execution =
         existing ??
@@ -1613,6 +1692,7 @@ export class SessionCoordinator {
   close() {
     if (this.#closed) return
     this.#closed = true
+    this.#closing.abort(new Error("Session coordinator is closed"))
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()
     for (const { owner } of this.#turns.values()) owner.dispose()
@@ -1800,17 +1880,55 @@ export class SessionCoordinator {
     try {
       return this.#landed(turn, generation, "running", turnId)
     } catch (error) {
-      const { agentId, sessionId } = scope
-      void handle
-        .stop()
-        .catch((err: unknown) =>
-          this.#logger.warn(
-            { err, agentId, sessionId, turnId },
-            "turn.late-start.stop.failed"
-          )
-        )
+      this.#stopUnowned(scope, handle, turnId)
       throw error
     }
+  }
+
+  /**
+   * An admission's deadline, given up early when its caller gives up or the
+   * coordinator closes. The close signal is joined, never listened to, so no
+   * number of admissions in flight piles listeners on it.
+   */
+  #deadline(signal?: AbortSignal) {
+    const parent = AbortSignal.any(
+      signal ? [signal, this.#closing.signal] : [this.#closing.signal]
+    )
+    return new Deadline(ADMISSION_DEADLINE_MS, this.#clock, parent)
+  }
+
+  /**
+   * Starts a turn on its provider within `deadline`. A start that answers only
+   * after close has nobody to stop it later, so its handle is stopped here.
+   */
+  #startNative(
+    scope: SessionScope,
+    input: PromptTurnInput | RepliesTurnInput,
+    stage: ServerAttachmentStage | undefined,
+    deadline: Deadline
+  ) {
+    return deadline.run(async (signal) => {
+      const handle = await this.options.engine.start(
+        scope,
+        input,
+        stage,
+        signal
+      )
+      if (this.#closed) this.#stopUnowned(scope, handle, input.turnId)
+      return handle
+    })
+  }
+
+  #stopUnowned(scope: SessionScope, handle: ServerTurnHandle, turnId: string) {
+    const { agentId, sessionId } = scope
+    void handle
+      .stop()
+      .catch((err: unknown) =>
+        this.#logger.warn(
+          { err, agentId, sessionId, turnId },
+          "turn.late-start.stop.failed"
+        )
+      )
   }
 
   /** An admission that did not land returns the turn to where it rested. */
@@ -1821,11 +1939,18 @@ export class SessionCoordinator {
 
   /**
    * A start its provider never answered may have admitted its turn, so that
-   * turn takes the Session from the one before it, uncertain until a
-   * reconcile settles it.
+   * turn takes the Session from the one before it, and holds what the start
+   * staged, uncertain until a reconcile settles it.
    */
-  #unanswered(key: string, turn: Turn, generation: number, turnId: string) {
+  #unanswered(
+    key: string,
+    turn: Turn,
+    generation: number,
+    turnId: string,
+    stage?: ServerAttachmentStage
+  ) {
     this.#landed(turn, generation, "uncertain", turnId)
+    turn.stage = stage
     const previous = this.#executions.get(key)
     if (previous) {
       this.#forgetJournal(previous.segment)
@@ -1837,11 +1962,14 @@ export class SessionCoordinator {
   async #startSegment(execution: Execution, input: RepliesTurnInput) {
     const key = scopeKey(execution.scope)
     const { turn, generation } = this.#admit(execution.scope, input.turnId)
-    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock)
+    const deadline = this.#deadline()
     try {
       const at = Date.now()
-      const handle = await deadline.run((signal) =>
-        this.options.engine.start(execution.scope, input, undefined, signal)
+      const handle = await this.#startNative(
+        execution.scope,
+        input,
+        undefined,
+        deadline
       )
       const segment = this.#createSegment({
         cacheKey: key,

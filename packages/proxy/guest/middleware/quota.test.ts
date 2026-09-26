@@ -6,6 +6,7 @@ import { providerSessionId, sessionId } from "../../core/ids"
 import { runCommand } from "../../core/member"
 import { ServerTurnCapacityError, type SessionScope } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
+import { READY_LINK } from "../../core/link"
 import { createQuotaMiddleware } from "./quota"
 
 /** Every guest together may hold this many turns, as a deployment defaults. */
@@ -18,7 +19,12 @@ function coordinator() {
       recover: vi.fn(async () => new EventSource()),
     },
     // No test here subscribes anything to a reading.
-    readings: { context: vi.fn(), models: vi.fn(), createSession: vi.fn() },
+    readings: {
+      context: vi.fn(),
+      models: vi.fn(),
+      createSession: vi.fn(),
+      link: READY_LINK,
+    },
     maxActiveExecutions: 64,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
