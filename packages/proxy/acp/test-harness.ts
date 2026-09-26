@@ -841,23 +841,12 @@ export async function harness(options: HarnessOptions = {}) {
   })
 
   /**
-   * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and channels, as one deployment's listeners do.
+   * One browser connection's side of the proxy. Every connection shares the
+   * one coordinator, engine, and channels, as one deployment's listeners do.
    */
-  async function connect(
-    connectionId: string,
-    answers: {
-      /** This browser's answer to a permission request, if not the harness's. */
-      permission?: HarnessOptions["permission"]
-      /** This browser's answer to a question, if not the harness's. */
-      question?: HarnessOptions["question"]
-    } = {}
-  ) {
-    const attachmentStages = new AttachmentStageRegistry()
+  function contextFor(connectionId: string): AcpConnectionContext {
     const base = options.translators ?? translators
-    const permission = answers.permission ?? options.permission
-    const question = answers.question ?? options.question
-    const context: AcpConnectionContext = {
+    return {
       connectionId,
       principalId: PRINCIPAL,
       runtimeInstance,
@@ -870,7 +859,7 @@ export async function harness(options: HarnessOptions = {}) {
           return (options.translateHistory ?? base.translateHistory)(history)
         },
       },
-      attachmentStages,
+      attachmentStages: new AttachmentStageRegistry(),
       channels,
       presence,
       logger,
@@ -878,11 +867,23 @@ export async function harness(options: HarnessOptions = {}) {
       feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
+  }
 
+  /** One in-process browser connection to the proxy. */
+  async function connect(
+    connectionId: string,
+    answers: {
+      /** This browser's answer to a permission request, if not the harness's. */
+      permission?: HarnessOptions["permission"]
+      /** This browser's answer to a question, if not the harness's. */
+      question?: HarnessOptions["question"]
+    } = {}
+  ) {
+    const context = contextFor(connectionId)
     const { connection, recorder } = connectClient(context, {
       name: "aos-browser",
-      permission,
-      question,
+      permission: answers.permission ?? options.permission,
+      question: answers.question ?? options.question,
     })
     const initialize = await connection.agent.request(
       methods.agent.initialize,
@@ -901,7 +902,7 @@ export async function harness(options: HarnessOptions = {}) {
       close: () => connection.close(),
       initialize,
       recorder,
-      attachmentStages,
+      attachmentStages: context.attachmentStages,
       /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
       list: () => connection.agent.request(methods.agent.session.list, {}),
       create: () =>
@@ -915,6 +916,7 @@ export async function harness(options: HarnessOptions = {}) {
   }
 
   const primary = await connect(CONNECTION)
+  let browsers = 0
 
   const scope: SessionScope = {
     agentId: AGENT,
@@ -925,6 +927,11 @@ export async function harness(options: HarnessOptions = {}) {
   return {
     ...primary,
     connect,
+    /**
+     * A fresh agent app on a connection of its own, for each socket a real
+     * browser connection opens, so every reconnection is a new connection.
+     */
+    agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
     coordinator,
     runtimeInstance,
     faults,
