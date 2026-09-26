@@ -17,3 +17,12 @@ export const READING_RETRIES = 5
  * admitted afresh.
  */
 export const CLIENT_ADMISSIONS = { entries: 1_000, ttlMs: 10 * 60_000 }
+
+/**
+ * How long a join may take to land before its membership detaches; the same
+ * as the admission deadline.
+ */
+export const JOIN_DEADLINE_MS = 30_000
+
+/** How long a member that fell behind keeps its place for its view to rejoin. */
+export const PAUSED_DEADLINE_MS = 30_000

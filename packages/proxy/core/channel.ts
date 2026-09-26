@@ -8,6 +8,7 @@ import {
   type OwnerContext,
 } from "../../lifecycle"
 import type { Session, SessionHistoryResponse } from "../../protocol"
+import { JOIN_DEADLINE_MS, PAUSED_DEADLINE_MS } from "./limits"
 import {
   beforeLiveTurn,
   lastPromptIndex,
@@ -509,11 +510,6 @@ export type MembershipOptions = {
     listener: (row: SessionRow, status: Session["status"]) => void
   ) => () => void
 }
-
-/** How long a join may take to land before its membership detaches. */
-const JOIN_DEADLINE_MS = 30_000
-/** How long a member that fell behind keeps its place for its view to rejoin. */
-const PAUSED_DEADLINE_MS = 30_000
 
 const SILENT: Logger = {
   debug: () => {},
