@@ -89,6 +89,7 @@ the load.
 | `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
 | `mcpApps`         | Optional per-server URL override and headers for the MCP Apps fallback (see [MCP Apps fallback](#mcp-apps-fallback) below).                   |
+| `log`             | Proxy log. `level` is `debug`, `info`, `warn`, or `error`; `debug` adds every owner state change and is never a production setting.           |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
@@ -155,6 +156,7 @@ default; a minimal local file contains only those three fields.
 | `limits.operatorEventPeers`          | `256`       |
 | `limits.subscriberEvents`            | `512`       |
 | `limits.subscriberBytes`             | `2097152`   |
+| `log.level`                          | `info`      |
 | `shutdownGraceMs`                    | `5000`      |
 | `runtime.sessionIdleMs` (Hermes)     | `300000`    |
 | `guest.invitations.ttlSeconds`       | `259200`    |
@@ -230,6 +232,7 @@ schema validation.
 | `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int    | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string | may create `voice` block         |
+| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string | always                           |
 | `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int    | always                           |
 
 ### Errors {#config-errors}

@@ -37,6 +37,7 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
       subscriberEvents: 512,
       subscriberBytes: 2_097_152,
     },
+    log: { level: "info" as const },
     shutdownGraceMs: 5_000,
   }
 }

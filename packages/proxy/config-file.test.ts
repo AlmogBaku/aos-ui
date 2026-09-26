@@ -224,6 +224,7 @@ const MINIMAL_CONFIG = {
     subscriberEvents: 512,
     subscriberBytes: 2_097_152,
   },
+  log: { level: "info" },
   shutdownGraceMs: 5_000,
 }
 
@@ -581,6 +582,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
   VOICE_SPEECH_TIMEOUT_MS: "60000",
   VOICE_SPEECH_VOICE: "synthetic-voice",
   VOICE_SPEECH_FORMAT: "mp3",
+  LOG_LEVEL: "debug",
   SHUTDOWN_GRACE_MS: "5000",
 }
 
@@ -890,6 +892,7 @@ runtime:
           format: "mp3",
         },
       },
+      log: { level: "debug" },
       shutdownGraceMs: 5_000,
     })
 

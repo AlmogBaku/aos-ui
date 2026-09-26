@@ -1,6 +1,9 @@
 import { isAbsolute } from "node:path"
 import { z } from "zod"
 
+/** The proxy log's levels, quietest last; `info` is the default. */
+export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
+
 const AbsoluteSecretFileSchema = z
   .string()
   .min(1)
@@ -305,6 +308,9 @@ export const ProxyConfigSchema = z
     push: PushSchema.optional(),
     voice: VoiceSchema.optional(),
     mcpApps: McpAppsSchema.optional(),
+    log: z
+      .strictObject({ level: z.enum(PROXY_LOG_LEVELS) })
+      .default({ level: "info" }),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {

@@ -476,6 +476,7 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
     suffix: "VOICE_SPEECH_FORMAT",
     type: "string",
   },
+  { path: ["log", "level"], suffix: "LOG_LEVEL", type: "string" },
   { path: ["shutdownGraceMs"], suffix: "SHUTDOWN_GRACE_MS", type: "int" },
 ]
 
