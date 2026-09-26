@@ -19,15 +19,17 @@ The ACP layer translates that vocabulary to the browser.
   and its companions from upstream `apps/shared` at the pinned commit. It owns
   correlation, per-call timeouts, heartbeat, socket generations, and
   server-to-client request routing. See `vendor/hermes-shared/UPSTREAM.md`.
-- `gateway.ts` wraps the vendored client with the token dial, eager dial and
-  jittered redial, 20 s heal grace, auth-close stop, bounded wire decoding, and
+- `gateway.ts` wraps the vendored client with the token dial (the token
+  re-read on every dial), eager dial and jittered redial, 20 s heal grace, a
+  4401 latch that holds until the token changes, bounded wire decoding, and
   three-way error classification.
 - `gateway-socket.ts` enforces the 8 MiB frame guard and supplies the
   socket factory used by `gateway.ts`.
 - `http.ts` provides bounded REST helpers for all non-WebSocket Hermes calls.
 - `attachment-registry.ts` maps durable Sessions to live Hermes Sessions,
-  rebinds after a heal, invalidates on 4001/4007 rejection, clears on restart,
-  and applies running-aware warm-idle release.
+  rebinds after a heal and retries a failed rebind on backoff, invalidates on
+  4001/4007 rejection, clears on restart, and applies running-aware warm-idle
+  release.
 - `run-native.ts` defines typed native outcomes and the Hermes rejection-code
   table used to classify turn errors.
 - `run.ts` converts native execution frames into ordered proxy-owned turn

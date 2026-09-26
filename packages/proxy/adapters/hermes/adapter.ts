@@ -341,8 +341,6 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
-  /** Live Session id to retained-record key, for events that carry only the id. */
-  readonly #liveInfoKeys = new Map<string, string>()
   readonly #invitedSessionCreates = new Map<
     string,
     Promise<{ providerSessionId: ids.ProviderSessionId; created: boolean }>
@@ -484,6 +482,10 @@ export class HermesServerAdapter implements ServerRuntime {
       {
         resume: (scope) => this.#resumeNative(scope),
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
+        forget: (scope) =>
+          this.#attachmentInfo.delete(
+            attachmentInfoKey(scope.agentId, scope.providerSessionId)
+          ),
       },
       // The registry requires event subscriptions, so a transport that cannot
       // subscribe is adapted here rather than silently skipped there: such a
@@ -766,9 +768,10 @@ export class HermesServerAdapter implements ServerRuntime {
   #retainObservedInfo(event: unknown) {
     if (!isRecord(event) || event.type !== "session.info") return
     if (!validLiveSessionId(event.session_id)) return
-    const key = this.#liveInfoKeys.get(event.session_id)
+    const bound = this.#attachments.scopeFor(event.session_id)
     const payload = isRecord(event.payload) ? event.payload : undefined
-    if (!key || !payload) return
+    if (!bound || !payload) return
+    const key = attachmentInfoKey(bound.agentId, bound.providerSessionId)
     const retained = this.#attachmentInfo.get(key)
     this.#attachmentInfo.set(key, {
       ...retained,
@@ -1196,14 +1199,10 @@ export class HermesServerAdapter implements ServerRuntime {
         ? payload.session_id
         : undefined
     if (!liveSessionId || !isRecord(payload)) throw new HermesUnavailableError()
-    const key = attachmentInfoKey(scope.agentId, scope.providerSessionId)
-    this.#attachmentInfo.set(key, payload)
-    // A re-resumed Session answers under a new live id; the previous one can
-    // never name this Session again.
-    for (const [observed, mapped] of this.#liveInfoKeys)
-      if (mapped === key && observed !== liveSessionId)
-        this.#liveInfoKeys.delete(observed)
-    this.#liveInfoKeys.set(liveSessionId, key)
+    this.#attachmentInfo.set(
+      attachmentInfoKey(scope.agentId, scope.providerSessionId),
+      payload
+    )
     return {
       liveSessionId,
       saved: !isUnpersistedDraft(

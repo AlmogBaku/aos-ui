@@ -133,9 +133,11 @@ export interface HermesTurnNative {
   ): Promise<() => void>
   cursor(liveSessionId: string): Promise<{ epoch: string; latestSeq: number }>
   replay(liveSessionId: string, after: number): Promise<HermesRecovery>
+  /** `signal` stops the native writes that have not gone out yet. */
   submit(
     liveSessionId: string,
-    prompt: HermesSubmitPrompt
+    prompt: HermesSubmitPrompt,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome>
   interrupt(liveSessionId: string): Promise<"interrupted" | "gone">
   redirect(
@@ -374,14 +376,15 @@ export class HermesNativeRuntime implements HermesTurnNative {
 
   async submit(
     liveSessionId: string,
-    prompt: HermesSubmitPrompt
+    prompt: HermesSubmitPrompt,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome> {
     // A re-send repeats the refused write and nothing else: the command that
     // produced this text, if any, already ran, and its params — including a
     // rewind the history read validated moments earlier — are re-sent unchanged
     // rather than derived again against the rebound Session.
     if (prompt.refused)
-      return this.#submitPrompt(liveSessionId, prompt.refused.params)
+      return this.#submitPrompt(liveSessionId, prompt.refused.params, signal)
     let invocation: Awaited<ReturnType<typeof nativeSlashInvocation>>
     if (prompt.text.startsWith("/")) {
       try {
@@ -433,7 +436,8 @@ export class HermesNativeRuntime implements HermesTurnNative {
           this.#transport,
           liveSessionId,
           invocation.name,
-          invocation.args
+          invocation.args,
+          signal
         )
       } catch (error) {
         // One label for the command itself: `slash.exec` and its
@@ -441,17 +445,18 @@ export class HermesNativeRuntime implements HermesTurnNative {
         return this.#writeOutcome("slash.command", liveSessionId, error)
       }
       return execution.kind === "expanded"
-        ? this.#submitPrompt(liveSessionId, { text: execution.text })
+        ? this.#submitPrompt(liveSessionId, { text: execution.text }, signal)
         : completionOutcome(execution)
     }
 
     // A rewind that stages attachments of its own replaces the source row's.
     const reattached = prompt.hasAttachments ? [] : images
     await this.#attachImages(liveSessionId, reattached)
-    const outcome = await this.#submitPrompt(liveSessionId, {
-      text: prompt.text,
-      ...rewind,
-    })
+    const outcome = await this.#submitPrompt(
+      liveSessionId,
+      { text: prompt.text, ...rewind },
+      signal
+    )
     // A refused write consumed nothing, so the images it would have carried
     // must not ride along with the Session's next prompt.
     if (outcome.acknowledgement === "rejected")
@@ -497,16 +502,18 @@ export class HermesNativeRuntime implements HermesTurnNative {
    */
   async #submitPrompt(
     liveSessionId: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome> {
     let result: unknown
     try {
       result = await retryTransient(
         () =>
-          this.#transport.request("prompt.submit", {
-            session_id: liveSessionId,
-            ...params,
-          }),
+          this.#transport.request(
+            "prompt.submit",
+            { session_id: liveSessionId, ...params },
+            { signal }
+          ),
         this.#retry
       )
     } catch (error) {

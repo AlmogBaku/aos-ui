@@ -702,7 +702,11 @@ describe("Hermes server adapter", () => {
         { session_id: "live-secret", last_seen: 2 },
         { maxResponseBytes: 6_291_456 },
       ],
-      ["prompt.submit", { session_id: "live-secret", text: "Hello" }],
+      [
+        "prompt.submit",
+        { session_id: "live-secret", text: "Hello" },
+        { signal: undefined },
+      ],
       [
         "session.redirect",
         { session_id: "live-secret", text: "Use the newer API" },
@@ -762,6 +766,7 @@ describe("Hermes server adapter", () => {
     expect(request.mock.calls.at(-1)).toEqual([
       "prompt.submit",
       { session_id: "live-secret", text: "Correction", queued: true },
+      { signal: undefined },
     ])
   })
 
@@ -821,12 +826,16 @@ describe("Hermes server adapter", () => {
       })
     ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
 
-    expect(request).toHaveBeenCalledWith("prompt.submit", {
-      session_id: "live-secret",
-      text: "Edited",
-      confirm_truncate: true,
-      truncate_before_row_id: 12,
-    })
+    expect(request).toHaveBeenCalledWith(
+      "prompt.submit",
+      {
+        session_id: "live-secret",
+        text: "Edited",
+        confirm_truncate: true,
+        truncate_before_row_id: 12,
+      },
+      { signal: undefined }
+    )
   })
 
   it("guards a first-turn rewind and never appends when the source is stale", async () => {
@@ -855,13 +864,17 @@ describe("Hermes server adapter", () => {
       turnId: "retry-run",
       rewindSourceId: "hermes-row-10",
     })
-    expect(request).toHaveBeenLastCalledWith("prompt.submit", {
-      session_id: "live-secret",
-      text: "Retry",
-      confirm_truncate: true,
-      confirm_empty_truncate: true,
-      truncate_before_row_id: 10,
-    })
+    expect(request).toHaveBeenLastCalledWith(
+      "prompt.submit",
+      {
+        session_id: "live-secret",
+        text: "Retry",
+        confirm_truncate: true,
+        confirm_empty_truncate: true,
+        truncate_before_row_id: 10,
+      },
+      { signal: undefined }
+    )
 
     request.mockClear()
     messages = [{ row_id: 12, role: "assistant", text: "Changed" }]
@@ -2646,6 +2659,7 @@ describe("Hermes server adapter", () => {
     expect(warn).toHaveBeenCalledWith(
       {
         reason: expect.any(String),
+        attempt: 0,
       },
       "hermes.attachment.rebind_failed"
     )
