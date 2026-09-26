@@ -624,6 +624,7 @@ function replayPlan(segment: Segment, after: number | undefined): ReplayPlan {
   return "reset"
 }
 
+/** A digest of an admission, so remembering it keeps no prompt text. */
 function admissionFingerprint(value: unknown): string {
   const canonical = (candidate: unknown): unknown => {
     if (Array.isArray(candidate)) return candidate.map(canonical)
@@ -634,7 +635,9 @@ function admissionFingerprint(value: unknown): string {
         .map(([key, entry]) => [key, canonical(entry)])
     )
   }
-  return JSON.stringify(canonical(value))
+  return createHash("sha256")
+    .update(JSON.stringify(canonical(value)))
+    .digest("hex")
 }
 
 /** The hex key a client id derives within its principal and its target. */
