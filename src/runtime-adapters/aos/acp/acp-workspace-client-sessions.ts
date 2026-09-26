@@ -32,7 +32,7 @@ import type { AcpConnection } from "./types"
 
 type MetadataListener = (metadata: SessionMetadata[]) => void
 type MetadataSubscription = {
-  threadIds: ReadonlySet<string>
+  sessionIds: ReadonlySet<string>
   listener: MetadataListener
 }
 
@@ -113,8 +113,8 @@ export function createAcpSessionStore({
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
   const invalidationListeners = new Map<string, Set<() => void>>()
 
-  function rowsFor(threadIds: Iterable<string>) {
-    return [...threadIds].flatMap((sessionId) => {
+  function rowsFor(sessionIds: Iterable<string>) {
+    return [...sessionIds].flatMap((sessionId) => {
       const row = rows.get(sessionId)
       return row ? [{ ...row }] : []
     })
@@ -127,14 +127,14 @@ export function createAcpSessionStore({
    * have, so the read that resolves it publishes instead.
    */
   function notify(subscription: MetadataSubscription) {
-    for (const sessionId of subscription.threadIds)
+    for (const sessionId of subscription.sessionIds)
       if (!rows.has(sessionId)) return
-    subscription.listener(rowsFor(subscription.threadIds))
+    subscription.listener(rowsFor(subscription.sessionIds))
   }
 
   function publish(sessionId: string) {
     for (const subscription of subscriptions)
-      if (subscription.threadIds.has(sessionId)) notify(subscription)
+      if (subscription.sessionIds.has(sessionId)) notify(subscription)
   }
 
   function write(sessionId: string, next: SessionMetadata) {
@@ -292,10 +292,10 @@ export function createAcpSessionStore({
       rows.get(sessionId)?.status ?? "unknown",
 
     subscribeMetadata(
-      threadIds: readonly string[],
+      sessionIds: readonly string[],
       listener: MetadataListener
     ) {
-      const subscription = { threadIds: new Set(threadIds), listener }
+      const subscription = { sessionIds: new Set(sessionIds), listener }
       subscriptions.add(subscription)
       queueMicrotask(() => {
         if (subscriptions.has(subscription)) notify(subscription)
@@ -305,7 +305,7 @@ export function createAcpSessionStore({
 
     subscribeStatus(sessionId: string, listener: () => void) {
       const subscription = {
-        threadIds: new Set([sessionId]),
+        sessionIds: new Set([sessionId]),
         listener: () => listener(),
       }
       subscriptions.add(subscription)

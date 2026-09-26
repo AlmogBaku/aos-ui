@@ -161,7 +161,9 @@ export type OpenClawWorkspace = Readonly<{
   resolveInvitedSession(
     agentId: string,
     ref: string
-  ): Promise<{ sessionId: string; created: false } | undefined>
+  ): Promise<
+    { providerSessionId: ids.ProviderSessionId; created: false } | undefined
+  >
 }>
 
 export function createOpenClawWorkspace(input: {
@@ -351,7 +353,10 @@ export function createOpenClawWorkspace(input: {
       if (!matches.length) return undefined
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
       verifyOwnership(agentId, matches[0]!)
-      return { sessionId: sessionKey, created: false }
+      return {
+        providerSessionId: ids.providerSessionId(sessionKey),
+        created: false,
+      }
     },
   }
 }

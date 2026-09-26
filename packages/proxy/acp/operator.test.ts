@@ -41,7 +41,7 @@ import {
 import * as translators from "./translate"
 
 /**
- * The operator lane end to end in process: the real translators, the real ACP
+ * The operator listener end to end in process: the real translators, the real ACP
  * agent, and the real Session coordinator, read state, Session rows, and
  * activity feed, composed exactly as `createOperatorAcpService` composes one
  * accepted connection, against a fake provider engine and an SDK client.
@@ -141,7 +141,7 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
     translators,
     now: clock.now,
     pagesHistory: false,
-    // An operator who never answers declines, which the lane cancels.
+    // An operator who never answers declines, which the listener cancels.
     question: options.question ?? (async () => ({ action: "decline" })),
     compose: ({ runtimeInstance, sessionRows }) => ({
       readState: createReadState({
@@ -367,7 +367,7 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
   }
 }
 
-describe("operator ACP lane", () => {
+describe("operator ACP listener", () => {
   it("restates the model options when the provider switches the model mid-turn", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Summarize")

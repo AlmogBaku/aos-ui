@@ -6,7 +6,7 @@ The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`
 
 - A reachable, already configured OpenClaw Gateway
 - Private, owner-only files containing the Gateway device identity and device token
-- A private guest-invitation signing-key file when the guest lane is enabled
+- A private guest-invitation signing-key file when the guest listener is enabled
 
 Start from [`deploy/proxy.openclaw.example.yaml`](../../deploy/proxy.openclaw.example.yaml). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
 

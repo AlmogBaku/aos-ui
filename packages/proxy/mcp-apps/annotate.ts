@@ -242,13 +242,13 @@ export function withMcpApps<Runtime extends ServerRuntime>(
     "turns" | "history" | "workspaceCapabilities"
   > = {
     turns,
-    async history(agentId, runtimeSessionId, limit, offset) {
+    async history(agentId, providerSessionId, limit, offset) {
       const history = SessionHistoryResponseSchema.parse(
-        await native.history(agentId, runtimeSessionId, limit, offset)
+        await native.history(agentId, providerSessionId, limit, offset)
       )
       return annotatedHistory(history, apps, {
         agentId,
-        providerSessionId: ids.providerSessionId(runtimeSessionId),
+        providerSessionId,
         sessionId: ids.sessionId(history.sessionId),
       })
     },

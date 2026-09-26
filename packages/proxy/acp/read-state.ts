@@ -72,10 +72,13 @@ export function createReadState({
   const markRead = async (agentId: string, sessionId: string) => {
     sessionRows.markRead(agentId, sessionId)
     onUnreadChanged(agentId, sessionId, false)
-    const providerId = runtime.resolveProviderSessionId(agentId, sessionId)
-    if (!providerId) return
+    const providerSessionId = runtime.resolveProviderSessionId(
+      agentId,
+      sessionId
+    )
+    if (!providerSessionId) return
     try {
-      await runtime.updateSession(agentId, providerId, { unread: false })
+      await runtime.updateSession(agentId, providerSessionId, { unread: false })
     } catch {
       // A Session the provider has not created yet rejects the write. Read
       // state is advisory: the optimistic row stands and a later list corrects.

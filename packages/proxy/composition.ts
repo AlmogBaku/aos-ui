@@ -124,7 +124,7 @@ async function readMcpServerOverrides(
  * the proxy cannot write fails startup here rather than at the first
  * notification.
  */
-async function createPushLane(
+async function createPushDelivery(
   push: NonNullable<ProxyConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
@@ -233,7 +233,10 @@ export async function createConfiguredProxy(
       : {}),
   })
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
-  const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
+  const guestListener = (
+    publicOrigin: string,
+    service: GuestInvitationService
+  ) => {
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
@@ -258,7 +261,7 @@ export async function createConfiguredProxy(
   }
   const guest =
     config.guest && invitations
-      ? guestLane(config.guest.publicOrigin, invitations)
+      ? guestListener(config.guest.publicOrigin, invitations)
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
   /**
@@ -267,7 +270,7 @@ export async function createConfiguredProxy(
    */
   const sessionRows = createSessionRows(clock)
   const push = config.push
-    ? await createPushLane(
+    ? await createPushDelivery(
         config.push,
         runtimeInstance,
         sessionRows,

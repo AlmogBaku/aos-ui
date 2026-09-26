@@ -105,8 +105,8 @@ export function DraftPromotionRaceWorkspace({
     },
   })
   const filteredWorkspace = useMemo(() => {
-    const getSessionMetadata = async (threadIds: string[]) =>
-      (await workspace.getSessionMetadata(threadIds)).filter(
+    const getSessionMetadata = async (sessionIds: string[]) =>
+      (await workspace.getSessionMetadata(sessionIds)).filter(
         ({ sessionId }) => sessionId !== threadList.promotedThreadId
       )
     return {
@@ -118,14 +118,14 @@ export function DraftPromotionRaceWorkspace({
       ) => workspace.createSession(agentId, options),
       getSessionMetadata,
       subscribeSessionMetadata(
-        threadIds: readonly string[],
+        sessionIds: readonly string[],
         listener: Parameters<
           NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
         >[1]
       ) {
         let active = true
         queueMicrotask(() => {
-          void getSessionMetadata([...threadIds]).then((metadata) => {
+          void getSessionMetadata([...sessionIds]).then((metadata) => {
             if (active) listener(metadata)
           })
         })
@@ -465,7 +465,8 @@ function workspaceFacade(
   return {
     listAgents: () => workspace.listAgents(),
     refreshAgents: () => workspace.refreshAgents(),
-    getSessionMetadata: (threadIds) => workspace.getSessionMetadata(threadIds),
+    getSessionMetadata: (sessionIds) =>
+      workspace.getSessionMetadata(sessionIds),
     createSession: (agentId, options) =>
       workspace.createSession(agentId, options),
     ...(workspace.subscribeTodos
@@ -496,7 +497,7 @@ function workspaceFacade(
     ...(workspace.subscribeSessionMetadata
       ? {
           subscribeSessionMetadata: (
-            threadIds: readonly string[],
+            sessionIds: readonly string[],
             listener: Parameters<
               NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
             >[1],
@@ -504,7 +505,7 @@ function workspaceFacade(
               NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
             >[2]
           ) =>
-            workspace.subscribeSessionMetadata!(threadIds, listener, onError),
+            workspace.subscribeSessionMetadata!(sessionIds, listener, onError),
         }
       : {}),
     ...overrides,
@@ -532,9 +533,9 @@ export function GatedMetadataCreatorFixture({
     () => ({
       assistantRuntime: fixture.assistantRuntime,
       workspace: workspaceFacade(fixture.workspace, {
-        getSessionMetadata: async (threadIds) => {
+        getSessionMetadata: async (sessionIds) => {
           await hold()
-          return fixture.workspace.getSessionMetadata(threadIds)
+          return fixture.workspace.getSessionMetadata(sessionIds)
         },
       }),
     }),
@@ -863,7 +864,7 @@ export function SessionMetadataSignalFixture({
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       ...(initialMetadata ? { getSessionMetadata: () => initialMetadata } : {}),
-      subscribeSessionMetadata: (_threadIds, listener, onError) => {
+      subscribeSessionMetadata: (_sessionIds, listener, onError) => {
         captureSignal({
           publish: listener,
           fail: (error) => onError?.(error),

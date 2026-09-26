@@ -795,7 +795,7 @@ runtime:
     expect(message).toContain("guest")
   })
 
-  it("cannot complete a guest lane from the environment, because its keys are file-only", async () => {
+  it("cannot complete a guest listener from the environment, because its keys are file-only", async () => {
     const values: Record<string, string> = {}
     for (const row of PROXY_ENV_OVERRIDES) {
       if (row.appliesWhen !== undefined && row.appliesWhen === "opencode")

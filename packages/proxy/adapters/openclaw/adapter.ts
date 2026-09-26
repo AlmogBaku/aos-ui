@@ -250,17 +250,17 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async history(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: string,
     limit: number,
     offset: number
   ) {
     await this.#start()
-    return this.#history.history(agentId, runtimeSessionId, limit, offset)
+    return this.#history.history(agentId, providerSessionId, limit, offset)
   }
 
-  async getSession(agentId: string, runtimeSessionId: string) {
+  async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#workspace.getSession(agentId, runtimeSessionId)
+    return this.#workspace.getSession(agentId, providerSessionId)
   }
 
   async createSession(agentId: string, _title?: string): Promise<unknown> {
@@ -271,17 +271,17 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async updateSession(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: string,
     patch: SessionPatch
   ): Promise<void> {
     await this.#start()
     // The native patch owns each flag's side effects; AOS sends one at a time.
-    await this.#workspace.updateSession(agentId, runtimeSessionId, patch)
+    await this.#workspace.updateSession(agentId, providerSessionId, patch)
   }
 
-  async deleteSession(agentId: string, runtimeSessionId: string) {
+  async deleteSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    await this.#workspace.deleteSession(agentId, runtimeSessionId)
+    await this.#workspace.deleteSession(agentId, providerSessionId)
   }
 
   async workspaceCapabilities(

@@ -117,7 +117,7 @@ When `guest` is configured, its `invitations` block accepts:
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private
 network, or put it behind an authenticated ingress. If `guest` is configured,
-its listener and public origin must differ from the operator lane; guest access
+its listener and public origin must differ from the operator's; guest access
 requires a scoped, expiring JWT.
 
 Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
@@ -256,7 +256,7 @@ regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
 
 Runtime slash-command suggestions are enabled on the operator surface only.
-The guest lane advertises none and refuses any guest message or steer whose
+The guest listener advertises none and refuses any guest message or steer whose
 text starts with `/`.
 
 ### Voice providers {#voice-providers}

@@ -129,7 +129,7 @@ export type WorkspaceAdapter = {
     agentId: string,
     visibility: AgentVisibility
   ) => Promise<void>
-  getSessionMetadata(threadIds: string[]): Promise<SessionMetadata[]>
+  getSessionMetadata(sessionIds: string[]): Promise<SessionMetadata[]>
   createSession(
     agentId: string,
     options?: SessionCreationOptions
@@ -145,7 +145,7 @@ export type WorkspaceAdapter = {
     onError?: (error: Error) => void
   ) => () => void
   subscribeSessionMetadata?: (
-    threadIds: readonly string[],
+    sessionIds: readonly string[],
     listener: (metadata: SessionMetadata[]) => void,
     onError?: (error: Error) => void
   ) => () => void

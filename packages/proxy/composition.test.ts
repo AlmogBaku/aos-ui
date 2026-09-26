@@ -189,7 +189,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("loads one server token and shares one runtime and transport across both lanes", async () => {
+  it("loads one server token and shares one runtime and transport across both listeners", async () => {
     const transportClose = vi.fn(async () => undefined)
     const transportFactory = vi.fn(
       (options: HermesGatewayOptions) =>
@@ -365,7 +365,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("wires push delivery to the runtime and the operator lane's own rows", async () => {
+  it("wires push delivery to the runtime and the operator listener's own rows", async () => {
     const { subscribeExecutions, runtimeInstance } = observableRuntime()
     const input = {
       ...(await configuration()),
@@ -377,7 +377,7 @@ describe("configured proxy composition", () => {
       logger: { info: vi.fn(), error: vi.fn() },
     })
 
-    // One cache: the ACP lane keeps it current and the read-state gate reads it.
+    // One cache: the ACP listener keeps it current and the read-state gate reads it.
     expect(configured.acpService.sessionRows).toBe(configured.sessionRows)
     expect(subscribeExecutions).toHaveBeenCalledOnce()
     expect(configured.push?.registrations.list("operator")).toEqual([])
@@ -509,7 +509,7 @@ describe("configured proxy composition", () => {
       expect(new Headers(init.headers).get("authorization")).toBe(
         "Bearer tts-secret"
       )
-      // Both lanes and readiness still see one runtime instance.
+      // Both listeners and readiness still see one runtime instance.
       expect(configured.guest).toBeUndefined()
       expect(
         (

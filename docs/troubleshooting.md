@@ -100,7 +100,7 @@ same-origin `/api/aos/v1` path.
 - Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
   A missing rename/archive/delete, Todo, Activity, edit/regenerate, steering,
   voice, or read-state control is an explicit capability limit.
-- Confirm Session records include matching `threadId` and `agentId` values.
+- Confirm Session records include matching `sessionId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Ensure history responses contain valid message data and resumable state when advertised.
 

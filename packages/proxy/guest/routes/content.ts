@@ -75,7 +75,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
             materialized =
               await routes.options.runtime.runtime.stageAttachments(
                 agentId,
-                resolved.sessionId,
+                resolved.providerSessionId,
                 body.data.attachments
               )
             return materialized.appendTo(text)
@@ -249,7 +249,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
       try {
         const artifact = await routes.options.runtime.runtime.artifact(
           agentId,
-          resolved.sessionId,
+          resolved.providerSessionId,
           context.req.param("artifactId")
         )
         const projected = projectGuestOutbound(

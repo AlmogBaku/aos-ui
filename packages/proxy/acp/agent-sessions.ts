@@ -196,14 +196,14 @@ export function createWorkspace(
   }
   return {
     scope(agentId: string, publicSessionId: string): SessionScope {
-      const sessionId = runtime.resolveProviderSessionId(
+      const providerSessionId = runtime.resolveProviderSessionId(
         agentId,
         publicSessionId
       )
-      if (!sessionId) throw notFound()
+      if (!providerSessionId) throw notFound()
       return {
         agentId,
-        providerSessionId: sessionId,
+        providerSessionId,
         sessionId: ids.sessionId(publicSessionId),
       }
     },
@@ -328,12 +328,15 @@ export function createSessions(
 
     /** The live status of a row, whether or not this connection resumed it. */
     status(row: Session) {
-      const sessionId = runtime.resolveProviderSessionId(row.agentId, row.id)
-      return sessionId
+      const providerSessionId = runtime.resolveProviderSessionId(
+        row.agentId,
+        row.id
+      )
+      return providerSessionId
         ? overlaidStatus(
             coordinator.state({
               agentId: row.agentId,
-              providerSessionId: sessionId,
+              providerSessionId,
             }),
             row.status
           )

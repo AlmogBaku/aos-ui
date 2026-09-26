@@ -156,7 +156,7 @@ describe("proxy configuration and secret boundary", () => {
       )
   })
 
-  it("accepts a guest lane without a second runtime or token", () => {
+  it("accepts a guest listener without a second runtime or token", () => {
     const configured = parseProxyConfig({
       ...validConfig(),
       guest: {

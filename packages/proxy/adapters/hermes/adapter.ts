@@ -344,7 +344,7 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #liveInfoKeys = new Map<string, string>()
   readonly #invitedSessionCreates = new Map<
     string,
-    Promise<{ sessionId: string; created: boolean }>
+    Promise<{ providerSessionId: ids.ProviderSessionId; created: boolean }>
   >()
   readonly interactions: HermesInteractions
   /** The typed native turn boundary; `run-native.ts` owns every native outcome. */
@@ -560,7 +560,9 @@ export class HermesServerAdapter implements ServerRuntime {
     agentId: string,
     ref: string,
     create?: { readonly firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string; created: boolean } | undefined> {
+  ): Promise<
+    { providerSessionId: ids.ProviderSessionId; created: boolean } | undefined
+  > {
     if (
       Buffer.byteLength(agentId, "utf8") > 256 ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(agentId) ||
@@ -569,8 +571,10 @@ export class HermesServerAdapter implements ServerRuntime {
       throw new HermesSessionNotFoundError()
     const title = inviteSessionKey(ref)
     if (!create) {
-      const sessionId = await this.#findInvitedSession(agentId, title)
-      return sessionId ? { sessionId, created: false } : undefined
+      const providerSessionId = await this.#findInvitedSession(agentId, title)
+      return providerSessionId
+        ? { providerSessionId, created: false }
+        : undefined
     }
 
     const key = `${agentId}\u0000${ref}`
@@ -612,7 +616,9 @@ export class HermesServerAdapter implements ServerRuntime {
         !validLiveSessionId(row.resolved_id))
     )
       throw new HermesUnavailableError()
-    return validLiveSessionId(row.resolved_id) ? row.resolved_id : row.id
+    return ids.providerSessionId(
+      validLiveSessionId(row.resolved_id) ? row.resolved_id : row.id
+    )
   }
 
   async #reuseOrCreateInvitedSession(
@@ -621,7 +627,7 @@ export class HermesServerAdapter implements ServerRuntime {
     create: { readonly firstTurnInstruction?: string }
   ) {
     const existing = await this.#findInvitedSession(agentId, title)
-    if (existing) return { sessionId: existing, created: false }
+    if (existing) return { providerSessionId: existing, created: false }
 
     let payload: unknown
     try {
@@ -677,7 +683,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const authoritative = await this.#findInvitedSession(agentId, title)
     if (!authoritative || authoritative !== payload.stored_session_id)
       throw new HermesSessionConflictError()
-    return { sessionId: authoritative, created: true }
+    return { providerSessionId: authoritative, created: true }
   }
 
   publicError(cause: unknown) {

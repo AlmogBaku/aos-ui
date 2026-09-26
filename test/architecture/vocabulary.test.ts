@@ -28,7 +28,8 @@ async function productionFiles(
 
 describe("vocabulary", () => {
   const sessionId = {
-    retired: /\bthreadId\b/u,
+    // Assistant UI's own `threads.threadIds` state is read, never named.
+    retired: /\bthreadId\b|(?<!\.)\bthreadIds\b/u,
     reason:
       "the public Session id is `sessionId`, from the wire to the adapters",
   }

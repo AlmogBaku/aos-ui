@@ -140,7 +140,7 @@ describe("OpenClaw workspace reads", () => {
     await expect(
       workspace.resolveInvitedSession("interviewer", "guest_1")
     ).resolves.toEqual({
-      sessionId: "agent:interviewer:aos-invite:guest_1",
+      providerSessionId: "agent:interviewer:aos-invite:guest_1",
       created: false,
     })
     expect(native.requests.at(-1)).toEqual({
@@ -278,7 +278,7 @@ describe("OpenClaw workspace reads", () => {
     await expect(
       workspace.resolveInvitedSession("team:alpha", "guest_1")
     ).resolves.toEqual({
-      sessionId: "agent:team:alpha:aos-invite:guest_1",
+      providerSessionId: "agent:team:alpha:aos-invite:guest_1",
       created: false,
     })
   })

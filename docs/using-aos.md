@@ -64,7 +64,7 @@ Use the conversation search control to find messages in the current Session. Res
 
 ## Use slash-command suggestions
 
-Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. Guests get no slash commands: the guest composer shows none, and the guest lane refuses a guest message that starts with `/`.
+Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. Guests get no slash commands: the guest composer shows none, and the guest listener refuses a guest message that starts with `/`.
 
 ## Answer a question or free-text "Other"
 

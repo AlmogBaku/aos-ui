@@ -44,7 +44,7 @@ import { createSessionRows } from "../core/session-rows"
 import { createGuestConnection } from "./acp"
 
 /**
- * The guest lane in a channel with operator browsers: a redeemed invitation
+ * The guest listener in a channel with operator browsers: a redeemed invitation
  * to the operator harness's seeded Session, on the same runtime and channels.
  */
 
@@ -128,7 +128,7 @@ describe("guest in a Session channel", () => {
     await guest.agent.notify(AOS_METHODS.session.focus, {
       sessionId: GUEST_REF,
     })
-    // One round trip after the notification proves the lane has handled it.
+    // One round trip after the notification proves the listener has handled it.
     await expect(
       guest.agent.request(methods.agent.session.list, {})
     ).rejects.toThrow()

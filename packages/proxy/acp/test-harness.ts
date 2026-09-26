@@ -726,7 +726,7 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.translation ? { translation: options.translation } : {}),
     // Every invitation in this harness addresses the seeded Session.
     resolveInvitedSession: async () => ({
-      sessionId: providerId(SESSION),
+      providerSessionId: providerId(SESSION),
       created: false,
     }),
     resolveProviderSessionId: (_agentId, publicSessionId) =>

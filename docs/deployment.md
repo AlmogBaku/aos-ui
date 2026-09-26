@@ -240,7 +240,7 @@ settings UI reflects this. The proxy must also be able to reach the browser
 vendors' push services outbound (Firebase FCM, Apple APNs, Mozilla Autopush,
 and equivalents); block that egress only if you intend to disable push.
 
-**Security posture.** The operator lane is unauthenticated by design on a
+**Security posture.** The operator listener is unauthenticated by design on a
 trusted private network. Push adds device registration routes and the proxy's
 first outbound requests to caller-supplied endpoints. Mitigations: mutating
 routes require the AOS origin; endpoints are validated (HTTPS, default port,

@@ -18,7 +18,7 @@ import {
 import {
   createGuestRequestAuthorizer,
   guestAuthorizationActive,
-  guestControllerId,
+  guestPrincipalId,
 } from "../auth/guest-request"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
@@ -35,7 +35,7 @@ const VOICE_CAPABILITIES: ReadonlySet<GuestCapability> = new Set([
  * What an invitation must allow for this listener to serve it at all: every
  * capability but voice, so a new one is required until it is exempted here.
  */
-const ACP_LANE_CAPABILITIES = guestCapabilities.filter(
+const ACP_LISTENER_CAPABILITIES = guestCapabilities.filter(
   (capability) => !VOICE_CAPABILITIES.has(capability)
 )
 
@@ -135,7 +135,7 @@ function createGuestAuthentication(
       // The listener shows the conversation's text, App cards, artifacts, the
       // guest's own attachments and public errors without asking again.
       if (
-        !ACP_LANE_CAPABILITIES.every((capability) =>
+        !ACP_LISTENER_CAPABILITIES.every((capability) =>
           identity.capabilities.includes(capability)
         )
       )
@@ -153,7 +153,7 @@ function createGuestAuthentication(
       const grant: GuestGrant = {
         agentId: identity.agentId,
         ref: identity.ref,
-        principalId: guestControllerId(read),
+        principalId: guestPrincipalId(read),
         expiresAt: identity.authorizationExpiresAt * 1_000,
         ...(identity.firstTurn?.instruction
           ? { firstTurnInstruction: identity.firstTurn.instruction }

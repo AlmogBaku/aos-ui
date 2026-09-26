@@ -1211,8 +1211,8 @@ describe("Hermes server adapter", () => {
     release()
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { sessionId: "stored-1", created: true },
-      { sessionId: "stored-1", created: true },
+      { providerSessionId: "stored-1", created: true },
+      { providerSessionId: "stored-1", created: true },
     ])
     expect(request.mock.calls).toEqual([
       [
@@ -1284,7 +1284,7 @@ describe("Hermes server adapter", () => {
     const exact = new HermesServerAdapter({ request: exactRequest })
     await expect(
       exact.resolveInvitedSession("researcher", "guest_ref", {})
-    ).resolves.toEqual({ sessionId: "resolved-1", created: false })
+    ).resolves.toEqual({ providerSessionId: "resolved-1", created: false })
     expect(exactRequest).toHaveBeenCalledOnce()
 
     const nativeListShape = new HermesServerAdapter({
@@ -1303,7 +1303,7 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       nativeListShape.resolveInvitedSession("researcher", "guest_ref")
-    ).resolves.toEqual({ sessionId: "stored-2", created: false })
+    ).resolves.toEqual({ providerSessionId: "stored-2", created: false })
 
     const ambiguous = new HermesServerAdapter({
       request: vi.fn(async () => ({

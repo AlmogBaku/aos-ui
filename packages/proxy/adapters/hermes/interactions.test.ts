@@ -800,7 +800,7 @@ describe("HermesInteractions server requests", () => {
 
   it("redacts credentials and keeps the operator's URLs and paths", async () => {
     // A credential is nobody's to read. A location is the operator's own
-    // machine: what a guest may see of it is the ACP lane projection's call.
+    // machine: what a guest may see of it is the guest listener's projection to decide.
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {

@@ -156,8 +156,8 @@ function createWorkspace(
   return {
     listAgents: async () => [agent],
     refreshAgents: async () => [agent],
-    getSessionMetadata: async (threadIds) =>
-      sessions.filter(({ sessionId }) => threadIds.includes(sessionId)),
+    getSessionMetadata: async (sessionIds) =>
+      sessions.filter(({ sessionId }) => sessionIds.includes(sessionId)),
     createSession: async () => ({ sessionId: "unused" }),
     sessionActionCapabilities: async () => ({
       rename: true,
@@ -296,7 +296,7 @@ it("returns a closed pinned tab once its Session is active again", async () => {
     ["s-recent", "s-pinned"],
     [recent, pinned],
     {
-      subscribeSessionMetadata: (_threadIds, listener) => {
+      subscribeSessionMetadata: (_sessionIds, listener) => {
         publishSessions = listener
         return () => {}
       },

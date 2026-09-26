@@ -187,6 +187,12 @@ describe("vocabulary", () => {
         "the public Session id is `sessionId`, from the wire to the adapters",
     },
     {
+      retired: /\bruntimeSessionId\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the provider's own Session id is `providerSessionId`, and it never leaves the proxy",
+    },
+    {
       // Any identifier holding either word, in any case and position. A match
       // after a comment opener on its line, or inside a dotted string, is
       // skipped: English prose and log event names are not identifiers.
@@ -197,19 +203,21 @@ describe("vocabulary", () => {
         "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
     },
     {
-      retired: /\blane\b|\bLane\b/u,
+      // The word alone and inside any identifier: `lane`, `guestLane`,
+      // `ACP_LANE_CAPABILITIES`.
+      retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
       scope: "packages/proxy/**",
       reason:
         "which kind of member it is is its `role` (`Principal.role`); where its socket arrives is a listener",
     },
     {
-      retired: /\blane\b|\bLane\b/u,
+      retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
       scope: "packages/protocol/**",
       reason:
         "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
     },
     {
-      retired: /\bcontrollerId\b|\bsubscriberId\b/u,
+      retired: /[cC]ontrollerIds?\b|[sS]ubscriberIds?\b/u,
       scope: "packages/proxy/**",
       reason:
         "the member's id on a turn is its `principalId`; one membership's key is its `membershipId`",

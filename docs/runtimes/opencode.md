@@ -60,7 +60,7 @@ lets an agent perform the steps below; its [OpenCode reference](../../shared/ins
 holds the exact commands. The manual steps follow.
 
 OpenCode owns provider/model configuration and credentials. AOS reads the
-native model catalog and can select a model for an attached Session, but does
+native model catalog and can select a model for a resumed Session, but does
 not choose a default model. Reasoning-effort selection is unavailable because
 OpenCode reports no reasoning ladder.
 

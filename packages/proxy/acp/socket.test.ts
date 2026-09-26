@@ -97,7 +97,7 @@ describe("ACP WebSocket shim", () => {
     expect(socket.drain()).toEqual([])
   })
 
-  it("writes a lane's error notice as its Session and a public code alone", () => {
+  it("writes a listener's error notice as its Session and a public code alone", () => {
     const { socket } = harness({ publicErrors: PUBLIC_ERRORS })
     const notice = (params: Record<string, unknown>) =>
       socket.socket.send(

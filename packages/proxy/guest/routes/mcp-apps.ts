@@ -47,7 +47,7 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         runtime,
         scope: {
           agentId,
-          providerSessionId: ids.providerSessionId(resolved.sessionId),
+          providerSessionId: resolved.providerSessionId,
           sessionId: ids.sessionId(ref),
         },
         toolCallId,

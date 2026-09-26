@@ -208,7 +208,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   readonly #activityListeners = new Set<ActivitySubscription>()
   readonly #sessionMetadataListeners = new Set<{
-    threadIds: ReadonlySet<string>
+    sessionIds: ReadonlySet<string>
     listener: (metadata: SessionMetadata[]) => void
   }>()
   readonly #sessionTitles: Map<string, string>
@@ -318,15 +318,15 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     return this.listAgents()
   }
 
-  async getSessionMetadata(threadIds: string[]) {
-    return this.#projectSessions(new Set(threadIds))
+  async getSessionMetadata(sessionIds: string[]) {
+    return this.#projectSessions(new Set(sessionIds))
   }
 
   subscribeSessionMetadata(
-    threadIds: readonly string[],
+    sessionIds: readonly string[],
     listener: (metadata: SessionMetadata[]) => void
   ) {
-    const entry = { threadIds: new Set(threadIds), listener }
+    const entry = { sessionIds: new Set(sessionIds), listener }
     this.#sessionMetadataListeners.add(entry)
     return () => this.#sessionMetadataListeners.delete(entry)
   }
@@ -580,7 +580,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   #publishSessions() {
     for (const entry of this.#sessionMetadataListeners)
-      entry.listener(this.#projectSessions(entry.threadIds))
+      entry.listener(this.#projectSessions(entry.sessionIds))
   }
 
   #publishCatalog() {

@@ -439,9 +439,9 @@ export function useActivityCoordinator(
 
   const unreadCount = workspaceUnreadCount(options.sessions)
   /** Reading a Session is a provider write; the browser never stores it. */
-  const markSessionsRead = (threadIds: readonly string[]) => {
+  const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
-      threadIds.map((sessionId) =>
+      sessionIds.map((sessionId) =>
         current.current.workspace.markSessionRead?.(sessionId)
       )
     ).catch(() => setError(true))

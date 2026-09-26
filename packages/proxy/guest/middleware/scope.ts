@@ -20,7 +20,7 @@ export type GuestScopeOptions = {
     agentId: string,
     ref: string,
     create?: { firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string } | undefined>
+  ): Promise<{ providerSessionId: ids.ProviderSessionId } | undefined>
   capabilities(
     scope: Pick<SessionScope, "agentId" | "sessionId">
   ): Promise<WorkspaceCapabilities>
@@ -43,7 +43,7 @@ export function createScopeMiddleware({
     return resolved
       ? {
           agentId: grant.agentId,
-          providerSessionId: ids.providerSessionId(resolved.sessionId),
+          providerSessionId: resolved.providerSessionId,
           sessionId: ids.sessionId(grant.ref),
         }
       : undefined

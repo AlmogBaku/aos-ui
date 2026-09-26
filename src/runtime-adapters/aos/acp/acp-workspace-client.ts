@@ -189,8 +189,8 @@ export function createAcpWorkspaceClient({
    * reloaded deep link included, so a Session still missing costs one read of
    * page one, never a walk of every Agent's catalog.
    */
-  async function readRows(threadIds: readonly string[]) {
-    if (threadIds.some((sessionId) => !store.knows(sessionId)))
+  async function readRows(sessionIds: readonly string[]) {
+    if (sessionIds.some((sessionId) => !store.knows(sessionId)))
       await listSessions()
   }
 
@@ -256,9 +256,9 @@ export function createAcpWorkspaceClient({
     },
     /** The Agent the thread list pages History for, once one is selected. */
     sessionCatalogScope: () => catalogScope,
-    async getSessionMetadata(threadIds: string[]) {
-      await readRows(threadIds)
-      return store.rowsFor(threadIds)
+    async getSessionMetadata(sessionIds: string[]) {
+      await readRows(sessionIds)
+      return store.rowsFor(sessionIds)
     },
     subscribeSessionMetadata: store.subscribeMetadata,
     async createSession(agentId: string, options?: SessionCreationOptions) {

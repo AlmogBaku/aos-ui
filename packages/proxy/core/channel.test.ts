@@ -566,7 +566,7 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(runtime.discovered).toEqual([{ scope: SCOPE, role: "operator" }])
   })
 
-  it("adopts under the guest lane when only a guest is in the channel", async () => {
+  it("adopts under the guest role when only a guest is in the channel", async () => {
     const runtime = adoptingHarness()
     runtime.channels.add(GUEST_SCOPE, member().fake, {
       hasPrompt: false,

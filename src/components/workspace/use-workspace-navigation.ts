@@ -385,9 +385,9 @@ export function useWorkspaceNavigation({
       sessions.map((session) => [session.sessionId, session] as const)
     )
     return Object.fromEntries(
-      Object.entries(dismissedTabs).map(([agentId, threadIds]) => [
+      Object.entries(dismissedTabs).map(([agentId, sessionIds]) => [
         agentId,
-        threadIds.filter((sessionId) => {
+        sessionIds.filter((sessionId) => {
           const session = byThread.get(sessionId)
           if (session?.pinned !== true) return true
           const dismissedAt = pinnedDismissedAt.current.get(sessionId) ?? ""

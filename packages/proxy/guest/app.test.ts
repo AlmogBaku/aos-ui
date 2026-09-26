@@ -109,7 +109,7 @@ function harness(options: { existing?: boolean } = {}) {
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
       options.existing || create
-        ? { sessionId: STORED, created: !options.existing }
+        ? { providerSessionId: STORED, created: !options.existing }
         : undefined
   )
   const artifact = vi.fn(async () => ({

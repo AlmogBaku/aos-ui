@@ -256,7 +256,9 @@ export interface ServerRuntime {
     agentId: string,
     ref: string,
     create?: { firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string; created: boolean } | undefined>
+  ): Promise<
+    { providerSessionId: ProviderSessionId; created: boolean } | undefined
+  >
   resolveProviderSessionId(
     agentId: string,
     publicSessionId: string
@@ -289,18 +291,24 @@ export interface ServerRuntime {
    */
   history(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: ProviderSessionId,
     limit: number,
     offset: number
   ): Promise<SessionHistoryResponse>
-  getSession(agentId: string, runtimeSessionId: string): Promise<Session>
+  getSession(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<Session>
   createSession(agentId: string, title?: string): Promise<unknown>
   updateSession(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: ProviderSessionId,
     patch: SessionPatch
   ): Promise<void>
-  deleteSession(agentId: string, runtimeSessionId: string): Promise<void>
+  deleteSession(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<void>
   workspaceCapabilities(
     agentId: string,
     publicSessionId: string

@@ -27,7 +27,7 @@ export function guestAuthorizationActive(
   }
 }
 
-export function guestControllerId(authorization: GuestAuthorization) {
+export function guestPrincipalId(authorization: GuestAuthorization) {
   return `guest:${authorization.tokenId}`
 }
 
