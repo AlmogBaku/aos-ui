@@ -442,6 +442,12 @@ type Turn = {
   startedBy?: string
   /** The capability key for this session, used when evicting its cells. */
   capabilityKey: string
+  /**
+   * What a start its provider never answered staged, held while its turn is
+   * uncertain, since the provider may be reading it; released if no reconcile
+   * confirms the turn, and its adapter's once one does.
+   */
+  stage?: ServerAttachmentStage
 }
 
 /**
@@ -1239,7 +1245,7 @@ export class SessionCoordinator {
     const repeated = this.#sends.repeated(ids.turnId, fingerprint)
     if (!repeated) {
       const started = prepare().then(({ stage, ...prompt }) =>
-        this.#startTurn(scope, { ...ids, ...prompt }, access, options, stage)
+        this.#startStaged(scope, { ...ids, ...prompt }, access, options, stage)
       )
       this.#sends.remember(
         ids.turnId,
@@ -1255,6 +1261,27 @@ export class SessionCoordinator {
     // The Session no longer holds the turn, so nothing of it is left to replay;
     // the repeat's reader follows the Session from its history.
     return { turnId: ids.turnId, events: ENDED, close: () => undefined }
+  }
+
+  /**
+   * Starts a first admission with the stage its `prepare` took. A start that
+   * fails releases the stage, so its client stages its attachments anew; one
+   * its provider may have taken holds it on its turn.
+   */
+  async #startStaged(
+    scope: SessionScope,
+    input: PromptTurnInput,
+    access: CoordinatorAccess,
+    options: StartOptions,
+    stage: ServerAttachmentStage | undefined
+  ) {
+    try {
+      return await this.#startTurn(scope, input, access, options, stage)
+    } catch (error) {
+      if (!(error instanceof ServerTurnUncertainError))
+        await stage?.cleanup().catch(() => undefined)
+      throw error
+    }
   }
 
   async #startTurn(
@@ -1311,7 +1338,7 @@ export class SessionCoordinator {
       return this.#subscribe(execution.segment, 0, access)
     } catch (error) {
       if (!deadline.signal.aborted) throw error
-      throw this.#unanswered(key, turn, generation, input.turnId)
+      throw this.#unanswered(key, turn, generation, input.turnId, stage)
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1456,7 +1483,7 @@ export class SessionCoordinator {
         throw err
       const { agentId, sessionId } = scope
       this.#logger.warn({ err, agentId, sessionId, turnId }, "turn.gone")
-      await this.#failUncertain(scope, turnId, {
+      await this.#failUncertain(scope, turn, turnId, {
         kind: TurnEventKind.TurnFailed,
         code: failure.code,
       })
@@ -1472,19 +1499,22 @@ export class SessionCoordinator {
       { agentId: scope.agentId, sessionId: scope.sessionId, turnId },
       "turn.outcome-unknown"
     )
-    await this.#failUncertain(scope, turnId, OUTCOME_UNKNOWN)
+    await this.#failUncertain(scope, turn, turnId, OUTCOME_UNKNOWN)
   }
 
   /**
    * Ends an uncertain turn with `failure`, once its owner rests idle. Its
-   * readers and observers learn it failed, and its journal keeps why for a
-   * redial.
+   * readers and observers learn it failed, its journal keeps why for a
+   * redial, and what a start it never confirmed staged is released.
    */
   async #failUncertain(
     scope: SessionScope,
+    turn: Turn,
     turnId: string,
     failure: TurnEventOf<typeof TurnEventKind.TurnFailed>
   ) {
+    const { stage } = turn
+    turn.stage = undefined
     const segment = this.#executions.get(scopeKey(scope))?.segment
     const owned = segment?.turnId === turnId ? segment : undefined
     if (owned) {
@@ -1497,6 +1527,7 @@ export class SessionCoordinator {
       kind: "turn-failed",
     })
     await owned?.onTerminal?.(failure)
+    await stage?.cleanup().catch(() => undefined)
   }
 
   async #recoverExecution(
@@ -1530,6 +1561,8 @@ export class SessionCoordinator {
         history: { journal: "continue", previous: replaced },
         onTerminal: replaced?.onTerminal,
       })
+      // A turn confirmed running is its adapter's, and so is what it staged.
+      turn.stage = undefined
       if (replaced) this.#forgetJournal(replaced)
       const execution: Execution =
         existing ??
@@ -1887,11 +1920,18 @@ export class SessionCoordinator {
 
   /**
    * A start its provider never answered may have admitted its turn, so that
-   * turn takes the Session from the one before it, uncertain until a
-   * reconcile settles it.
+   * turn takes the Session from the one before it, and holds what the start
+   * staged, uncertain until a reconcile settles it.
    */
-  #unanswered(key: string, turn: Turn, generation: number, turnId: string) {
+  #unanswered(
+    key: string,
+    turn: Turn,
+    generation: number,
+    turnId: string,
+    stage?: ServerAttachmentStage
+  ) {
     this.#landed(turn, generation, "uncertain", turnId)
+    turn.stage = stage
     const previous = this.#executions.get(key)
     if (previous) {
       this.#forgetJournal(previous.segment)

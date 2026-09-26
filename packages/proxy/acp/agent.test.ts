@@ -30,7 +30,11 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { ADMISSION_DEADLINE_MS, READING_BACKOFF } from "../core/limits"
+import {
+  ADMISSION_DEADLINE_MS,
+  READING_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
+} from "../core/limits"
 import {
   ServerSessionNotFoundError,
   type ServerTurnListener,
@@ -1504,7 +1508,7 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered", async () => {
+  it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered, which keeps its stage until its turn settles", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
@@ -1533,13 +1537,25 @@ describe("Session rooms", () => {
       test.logs.records().filter(({ message }) => message === "channel.failed")
     ).toMatchObject([{ fields: { errorCode: "temporarily_unavailable" } }])
 
-    // A start past its deadline may have landed: reconcile, never resend.
+    // A start past its deadline may have landed: reconcile, never resend, and
+    // keep what it staged while the provider may be reading it.
     test.faults.hangUntilAborted("start")
-    const unanswered = expect(prompt(test, "Again")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.uncertainMutation,
+    test.recover.mockRejectedValue(new Error("provider unavailable"))
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup,
     })
+    const unanswered = expect(
+      prompt(test, "Again", SESSION, { attachmentStageId })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.uncertainMutation })
     await clock.advance(ADMISSION_DEADLINE_MS)
     await unanswered
+    expect(cleanup).not.toHaveBeenCalled()
+    // No reconcile confirmed the turn by its deadline, so it never started.
+    await clock.advance(UNCERTAINTY_DEADLINE_MS)
+    expect(cleanup).toHaveBeenCalledOnce()
     test.close()
   })
 

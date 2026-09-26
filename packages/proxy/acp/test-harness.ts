@@ -972,6 +972,7 @@ export async function harness(options: HarnessOptions = {}) {
     scope,
     sources,
     start,
+    recover,
     discover,
     createSession,
     updateSession,
