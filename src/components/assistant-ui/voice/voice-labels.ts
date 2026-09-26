@@ -59,7 +59,7 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
     browser:
       "Recording requires microphone access on HTTPS or localhost and a supported browser.",
     idleRequired:
-      "Voice turns require an attached, idle Session with no pending approval.",
+      "Voice turns require a resumed, idle Session with no pending approval.",
     emptyRequired:
       "Send or clear the draft, attachments, and queued messages before a voice turn.",
     voiceNeedsBoth: "Voice turns require both transcription and read-aloud.",
@@ -111,7 +111,7 @@ export const voiceLabels: Record<Locale, VoiceLabels> = {
       "שירות הקול אינו זמין. יש לבדוק את החיבור ואת הגדרות הקול של סביבת ההרצה.",
     browser:
       "הקלטה דורשת הרשאת מיקרופון, דפדפן תומך וחיבור HTTPS או localhost.",
-    idleRequired: "תור קולי דורש שיחה מחוברת ופנויה, ללא בקשת הרשאה ממתינה.",
+    idleRequired: "תור קולי דורש שיחה שחודשה ופנויה, ללא בקשת הרשאה ממתינה.",
     emptyRequired:
       "יש לשלוח או לנקות את הטיוטה, הקבצים וההודעות שבתור לפני תור קולי.",
     voiceNeedsBoth: "תור קולי דורש גם תמלול וגם הקראה.",

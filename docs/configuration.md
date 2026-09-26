@@ -256,6 +256,8 @@ name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
 
+Fields removed in recent releases that are now stale keys in an upgraded deployment: `guest.lane`, `artifactHtmlAssetOrigins`, and any separate replay-limit fields under `limits`. Replay bounds use `limits.subscriberEvents` and `limits.subscriberBytes` with no separate keys. Remove them from your configuration file before starting the upgraded proxy.
+
 Every logged error carries its name, message, native `code` or `reason`, and
 cause chain, never its stack. Before a line is written, the log masks every
 credential-named field, strips each URL's userinfo, query, and fragment, and
