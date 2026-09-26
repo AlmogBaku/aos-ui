@@ -695,6 +695,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           text: params.text,
         },
         async (command) => {
+          // A connection steers only a Session it joined, as it stops one.
+          if (!sessions.membership(command.sessionId)) throw notFound()
           const scope = command.scope ?? sessions.scope(command.sessionId)
           const { turnId } = coordinator.snapshot(scope)
           if (turnId === undefined) throw turnInProgress()

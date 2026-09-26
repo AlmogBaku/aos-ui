@@ -1959,8 +1959,10 @@ export class SessionCoordinator {
   /**
    * Checked as a turn starts, an adopted one included, and never on recovery,
    * in the same step as its admission: every turn another Session holds counts,
-   * one still admitting included, so two starts never take one last place.
-   * `quota` counts, besides, the held turns whose starter it picks.
+   * one still admitting included, so two starts never take one last place; a
+   * recovery or discovery still asking the runtime holds a place meanwhile.
+   * `quota` counts, besides, the held turns whose starter it picks, so no quota
+   * counts a turn this proxy recovered or adopted: it has no starter.
    */
   #assertCapacity(key: string, quota?: TurnQuota) {
     const held = [...this.#turns]

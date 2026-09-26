@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest"
 import { EventSource } from "../../acp/test-harness"
 import { providerSessionId, sessionId } from "../../core/ids"
 import { runCommand } from "../../core/member"
-import { OPERATOR_PRINCIPAL } from "../../core/principal"
 import { ServerTurnCapacityError, type SessionScope } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { createQuotaMiddleware } from "./quota"
@@ -61,21 +60,6 @@ function send(
 }
 
 describe("guest quota middleware", () => {
-  it("counts every guest's turns against one cap, whichever invitation started them, and no operator's", async () => {
-    const sessions = coordinator()
-    await sessions.start(
-      scopeOf(0),
-      { turnId: "turn-0", messageId: "message-0", prompt: "Hello" },
-      { membershipId: OPERATOR_PRINCIPAL, principalId: OPERATOR_PRINCIPAL }
-    )
-    for (let index = 1; index <= LIMIT; index += 1)
-      await send(sessions, `guest:token-${(index % 2) + 1}`, index)
-
-    await expect(
-      send(sessions, "guest:token-1", LIMIT + 1)
-    ).rejects.toBeInstanceOf(ServerTurnCapacityError)
-  })
-
   it("admits one of the concurrent guest sends that reach the last free turn", async () => {
     const sessions = coordinator()
     for (let index = 1; index < LIMIT; index += 1)

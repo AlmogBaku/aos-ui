@@ -566,7 +566,7 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(runtime.discovered).toEqual([SCOPE])
   })
 
-  it("adopts as the guest when only a guest is in the channel", async () => {
+  it("adopts in the guest's scope when only a guest is in the channel", async () => {
     const runtime = adoptingHarness()
     runtime.channels.add(GUEST_SCOPE, member().fake, {
       hasPrompt: false,

@@ -430,6 +430,8 @@ type HarnessOptions = {
   ) => string | undefined
   /** What the invited lookup, the capabilities read or a run's start throws instead. */
   fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
+  /** How many turns every guest together may hold; four by default. */
+  guestActiveExecutions?: number
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -537,7 +539,7 @@ function harness(options: HarnessOptions = {}) {
     channels: createChannels({
       snapshot: (scope) => coordinator.snapshot(scope),
     }),
-    guestActiveExecutions: 4,
+    guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,
     schedule: (delayMs, task) => {
       scheduled.push({ delayMs, task })
@@ -673,12 +675,16 @@ async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
   return socket
 }
 
-/** Opens a raw guest connection that redeemed `token` and resumed the ref. */
-async function redeemedWire(listener: GuestAcpServiceOptions, token: string) {
+/** Opens a raw guest connection that redeemed `token` and resumed `ref`. */
+async function redeemedWire(
+  listener: GuestAcpServiceOptions,
+  token: string,
+  ref = REF
+) {
   const socket = await loggedInWire(listener, token)
   expect(
     await socket.request(methods.agent.session.resume, {
-      sessionId: REF,
+      sessionId: ref,
       cwd: "/",
     })
   ).toMatchObject({ result: {} })
@@ -1796,6 +1802,17 @@ const PUBLIC_CODES: readonly number[] = [
   RequestError.requestCancelled().code,
 ]
 
+/** The `state_update` a turn that failed in view ends on. */
+function failedState(socket: { frames: readonly Frame[] }) {
+  return vi.waitFor(() => {
+    const frame = socket.frames.find(({ params }) =>
+      JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
+    )
+    if (!frame) throw new Error("No failed state_update")
+    return frame
+  })
+}
+
 /** A reply's error carries a public code and nothing that describes the host. */
 function expectPublicError(reply: Frame) {
   expect(reply.error).toBeDefined()
@@ -1943,8 +1960,9 @@ describe("guest scope and commands", () => {
 
   it("steers a turn it started", async () => {
     const test = harness({ existing: true, handle: steerableHandle })
+    const token = await invite(test.invitations)
     await test.initialize()
-    await test.login(await invite(test.invitations))
+    await test.login(token)
     await test.resume(REF)
     await test.prompt("Start the interview")
     await test.recorder.wait(
@@ -1974,6 +1992,18 @@ describe("guest scope and commands", () => {
     expect(
       AosSteerAcceptedNotificationSchema.safeParse(accepted.params).data
     ).toMatchObject({ sessionId: REF, requestId: "steer-1" })
+
+    // Another connection on the same invitation steers only once it joins.
+    const other = await loggedInWire(test.listener, token)
+    expect(
+      await other.request(AOS_METHODS.session.steer, {
+        sessionId: REF,
+        requestId: "steer-2",
+        text: "Longer",
+      })
+    ).toMatchObject({ error: { code: NOT_FOUND } })
+    expect(test.handles.at(0)?.steer).toHaveBeenCalledOnce()
+    other.close()
     test.close()
   })
 
@@ -2287,13 +2317,7 @@ describe("guest scope and commands", () => {
       sessionId: REF,
       prompt: [{ type: "text", text: "Hello" }],
     })
-    const failure = await vi.waitFor(() => {
-      const frame = socket.frames.find(({ params }) =>
-        JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
-      )
-      if (!frame) throw new Error("No failed state_update")
-      return frame
-    })
+    const failure = await failedState(socket)
 
     expect(failure.params).toEqual({
       sessionId: REF,
@@ -2311,6 +2335,57 @@ describe("guest scope and commands", () => {
       },
     })
     socket.close()
+  })
+
+  it("counts every guest's turns against one cap, whichever invitation started them, and no operator's", async () => {
+    const test = harness({
+      existing: true,
+      guestActiveExecutions: 1,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    // Each invitation's conversation is its own native Session.
+    test.resolveInvitedSession.mockImplementation(async (_agentId, ref) => ({
+      providerSessionId: `stored-${ref}`,
+      created: false,
+    }))
+    await test.coordinator.start(
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      { membershipId: "operator", principalId: "operator" }
+    )
+    const hello = [{ type: "text", text: "Hello" }]
+    const first = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    await first.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: hello,
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+
+    const second = await redeemedWire(
+      test.listener,
+      await invite(test.invitations, "second_ref"),
+      "second_ref"
+    )
+    await second.request(methods.agent.session.prompt, {
+      sessionId: "second_ref",
+      prompt: hello,
+    })
+
+    expect((await failedState(second)).params).toMatchObject({
+      update: {
+        _meta: { [AOS_META_KEY]: { code: "temporarily_unavailable" } },
+      },
+    })
+    expect(test.start).toHaveBeenCalledTimes(2)
+    first.close()
+    second.close()
   })
 
   it("answers a frame it cannot decode with a public code alone", async () => {

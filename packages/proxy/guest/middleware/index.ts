@@ -9,8 +9,7 @@ import { createTurnsMiddleware } from "./turns"
 /**
  * One redeemed invitation, shaped after the claims `GuestInvitationService`
  * verifies: the single Agent and conversation reference it grants, the
- * controller identity the coordinator already knows this guest by, and the
- * moment the connection must close.
+ * principal this guest acts as, and the moment the connection must close.
  */
 export type GuestGrant = {
   agentId: string

@@ -93,8 +93,8 @@ const INVITE_AUTH_METHOD = {
 
 /**
  * One connection's invitation. Nothing is reachable before `auth/login`
- * redeems a token, and the redeemed member acts as the controller identity the
- * coordinator already knows guests by, through the guest middleware.
+ * redeems a token, and the redeemed member acts as the guest principal its
+ * invitation names, through the guest middleware.
  */
 function createGuestAuthentication(
   options: GuestAcpServiceOptions,
