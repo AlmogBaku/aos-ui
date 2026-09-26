@@ -39,7 +39,7 @@ type MetadataSubscription = {
 export type AcpSessionStoreOptions = {
   connection: AcpConnection
   now?: () => number
-  /** A live turn of a resumed Session just stopped, however it ended. */
+  /** A live turn of a subscribed Session just stopped, however it ended. */
   onTurnFinished?: (sessionId: string) => void
 }
 
@@ -105,7 +105,6 @@ export function createAcpSessionStore({
   const rows = new Map<string, SessionMetadata>()
   const titles = new Map<string, string>()
   const todos = new Map<string, TodoItem[]>()
-  const observed = new Map<string, () => void>()
   /** Sessions mid-replay, with the newest status that replay has sent. */
   const replaying = new Map<string, SessionStatus | undefined>()
   const subscriptions = new Set<MetadataSubscription>()
@@ -247,20 +246,24 @@ export function createAcpSessionStore({
     }
   }
 
-  /** Resumed Sessions stream their own status, Todos, and row changes. */
-  function observe(sessionId: string, agentId?: string) {
-    if (observed.has(sessionId)) return
-    observed.set(
-      sessionId,
-      connection.subscribe(sessionId, {
-        ...(agentId === undefined ? {} : { agentId }),
-        update: (update, meta) => acceptUpdate(sessionId, update, meta),
-        replay: () => holdReplayedStatus(sessionId),
-      })
-    )
+  /**
+   * A subscribed Session streams its own status, Todos, and row changes until
+   * the returned release; its Todos go with it, its row stays in the catalog.
+   */
+  function subscribe(sessionId: string, agentId?: string) {
+    const leave = connection.subscribe(sessionId, {
+      ...(agentId === undefined ? {} : { agentId }),
+      update: (update, meta) => acceptUpdate(sessionId, update, meta),
+      replay: () => holdReplayedStatus(sessionId),
+    })
+    return () => {
+      leave()
+      todos.delete(sessionId)
+      replaying.delete(sessionId)
+    }
   }
 
-  subscribeAosNotification(
+  const leaveActivity = subscribeAosNotification(
     connection,
     AOS_METHODS.notify.activity,
     AosActivityNotificationSchema,
@@ -272,7 +275,7 @@ export function createAcpSessionStore({
     }
   )
 
-  subscribeAosNotification(
+  const leaveInvalidations = subscribeAosNotification(
     connection,
     AOS_METHODS.notify.sessionInvalidated,
     AosSessionInvalidatedNotificationSchema,
@@ -280,10 +283,14 @@ export function createAcpSessionStore({
   )
 
   return {
-    observe,
+    subscribe,
+    dispose() {
+      leaveActivity()
+      leaveInvalidations()
+    },
     put,
     rowsFor,
-    /** The provider's title, as a list page or a resumed Session reports it. */
+    /** The provider's title, as a list page or a subscribed Session reports it. */
     setTitle: (sessionId: string, title: string) =>
       titles.set(sessionId, title),
     /** The proxy's read state, or the operator's own optimistic ack. */

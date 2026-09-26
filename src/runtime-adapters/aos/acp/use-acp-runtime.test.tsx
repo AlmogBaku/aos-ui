@@ -259,7 +259,7 @@ async function mount(
   options?: Pick<
     UseAcpRuntimeOptions,
     | "approvals"
-    | "resume"
+    | "subscribeSession"
     | "enableMessageQueue"
     | "onComposerPrefill"
     | "stageAttachments"
@@ -422,18 +422,16 @@ describe("useAcpRuntime", () => {
     expect(fake.replay).toHaveBeenCalledTimes(2)
   })
 
-  it("resumes through the injected resume instead of by itself", async () => {
+  it("holds the caller's projection of the Session for as long as the thread binds it", async () => {
     const fake = createFakeConnection()
-    const resume = vi.fn(async () => undefined)
-    const { result } = await mount(fake, { resume })
-    expect(resume).toHaveBeenCalledWith(SESSION_ID)
-    expect(fake.replay).not.toHaveBeenCalled()
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "Attached"))
-    })
-    expect(visible(result.current)).toEqual([
-      { id: "a1", role: "assistant", text: "Attached" },
-    ])
+    const release = vi.fn()
+    const subscribeSession = vi.fn(() => release)
+    const { unmount } = await mount(fake, { subscribeSession })
+    expect(subscribeSession).toHaveBeenCalledWith(SESSION_ID)
+    expect(release).not.toHaveBeenCalled()
+
+    unmount()
+    expect(release).toHaveBeenCalledOnce()
   })
 
   it("stops waiting for a Session its provider has gone from", async () => {
@@ -777,18 +775,18 @@ describe("useAcpRuntime", () => {
 
   it("creates the Session a draft's first turn needs, then prompts it", async () => {
     const fake = createFakeConnection()
-    const resume = vi.fn(async () => undefined)
+    const subscribeSession = vi.fn(() => () => undefined)
     const resolveSessionId = vi.fn(async () => SESSION_ID)
     const { result } = renderHook(() =>
       useAcpRuntime({
         connection: fake.connection,
         sessionId: undefined,
         agentId: "agent-1",
-        resume,
+        subscribeSession,
         resolveSessionId,
       })
     )
-    expect(resume).not.toHaveBeenCalled()
+    expect(subscribeSession).not.toHaveBeenCalled()
     await act(async () => {
       result.current.thread.append({
         role: "user",
@@ -803,8 +801,11 @@ describe("useAcpRuntime", () => {
       )
     })
     expect(resolveSessionId).toHaveBeenCalledTimes(1)
-    // Binding the resolved Session is what resumes and subscribes to it.
-    expect(resume).toHaveBeenCalledWith(SESSION_ID)
+    // Binding the resolved Session is what holds, subscribes to, and replays it.
+    expect(subscribeSession).toHaveBeenCalledWith(SESSION_ID)
+    await act(async () => {
+      await fake.settleResume()
+    })
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "Shipping it"))
     })

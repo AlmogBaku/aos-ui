@@ -118,10 +118,10 @@ export type UseAcpRuntimeOptions = {
     feedback?: FeedbackAdapter
   }
   /**
-   * Resumes the Session in place of the direct `session/resume`, so a caller
-   * that already records what a resume reports stays the one that performs it.
+   * Holds whatever else projects the Session for as long as the thread binds
+   * it, joined before the replay so the projection sees all of it.
    */
-  resume?: (sessionId: string) => Promise<unknown>
+  subscribeSession?: (sessionId: string) => () => void
   /**
    * Resolves the Session a local draft's turn belongs to, creating it when the
    * thread has none yet. The controller binds what it resolves before prompting.
@@ -235,7 +235,7 @@ type ControllerOptions = {
  */
 type ControllerCallbacks = Pick<
   UseAcpRuntimeOptions,
-  | "resume"
+  | "subscribeSession"
   | "resolveSessionId"
   | "stageAttachments"
   | "messageRewind"
@@ -250,8 +250,6 @@ function createAcpController({
   approvals,
 }: ControllerOptions) {
   let callbacks: ControllerCallbacks = {}
-  const resume = (id: string) =>
-    callbacks.resume ? callbacks.resume(id) : connection.replay(id)
   let state = initialProjectorState
   /** unbound → bound: the Session this controller subscribes to and prompts. */
   let bound: string | undefined
@@ -363,7 +361,7 @@ function createAcpController({
   ): Promise<ResumeOutcome> => {
     let outcome: ResumeOutcome = "replayed"
     try {
-      await whileReplaying(() => resume(session))
+      await whileReplaying(() => connection.replay(session))
     } catch {
       outcome = isBound(session, generation) ? "refused" : "abandoned"
     }
@@ -415,6 +413,7 @@ function createAcpController({
     }
     takeApprovals()
     const subscriptions = [
+      callbacks.subscribeSession?.(next) ?? (() => {}),
       approvals?.subscribe(next, takeApprovals) ?? (() => {}),
       connection.subscribe(next, {
         update: (update, meta) => {
@@ -775,11 +774,12 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     () => createAcpController({ connection, approvals, sessionId: openedWith }),
     [approvals, connection, openedWith]
   )
-  // Ordered before the binding so the first resume already reaches the caller's
-  // `resume`, and before the subscription so a replayed update already reports.
+  // Ordered before the binding so the first binding already holds the
+  // caller's projection, and before the subscription so a replayed update
+  // already reports.
   useEffect(() => {
     controller.setCallbacks({
-      resume: options.resume,
+      subscribeSession: options.subscribeSession,
       resolveSessionId: options.resolveSessionId,
       stageAttachments: options.stageAttachments,
       messageRewind: options.messageRewind,

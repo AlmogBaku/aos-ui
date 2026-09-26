@@ -67,13 +67,17 @@ export type AcpTurnUsage = {
 }
 
 type SessionEntry = {
-  capabilities?: AcpCapabilities
+  /** What the Session reports it supports, with its commands folded in. */
+  capabilities?: AosWorkspaceCapabilities
+  reported?: AcpCapabilities
+  commands?: SlashCommand[]
   projection: AcpModelProjection
   /** The model the projection names, the same reference until it changes. */
   current?: ComposerModelCurrent
   context?: AosContext
   turns?: AcpTurnUsage
-  commands?: SlashCommand[]
+  /** Rises with every config option write, so only the newest one projects. */
+  writes: number
 }
 
 function firstSelect(
@@ -253,15 +257,18 @@ function capabilitiesOf(
   }
 }
 
+/**
+ * Folds what each subscribed Session reports into the composer's projection.
+ * A Session's entry starts with the first update it sends and goes when the
+ * last hold on it is released; the reads are synchronous, so a surface shows
+ * whatever the Session has reported so far.
+ */
 export function createAcpComposerStore(connection: AcpConnection) {
   const sessions = new Map<string, SessionEntry>()
-  const observed = new Set<string>()
-  /** Updates that land between subscribing and the resume they belong to. */
-  const early = new Map<string, [SessionUpdate, unknown][]>()
-  const contextListeners = new Map<string, Set<() => void>>()
+  /** Told of every change to a Session's capabilities, models, or usage. */
+  const listeners = new Map<string, Set<() => void>>()
+  /** Told only when the model the Session runs changes. */
   const modelListeners = new Map<string, Set<() => void>>()
-  /** Told whenever a Session reports its capabilities or its config options. */
-  const reportListeners = new Map<string, Set<() => void>>()
   const feeds = new Map<string, ComposerModelFeed>()
 
   function listen(
@@ -269,12 +276,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
     sessionId: string,
     listener: () => void
   ) {
-    const listeners = registry.get(sessionId) ?? new Set()
-    listeners.add(listener)
-    registry.set(sessionId, listeners)
+    const registered = registry.get(sessionId) ?? new Set()
+    registered.add(listener)
+    registry.set(sessionId, registered)
     return () => {
-      listeners.delete(listener)
-      if (!listeners.size) registry.delete(sessionId)
+      registered.delete(listener)
+      if (!registered.size) registry.delete(sessionId)
     }
   }
 
@@ -289,40 +296,32 @@ export function createAcpComposerStore(connection: AcpConnection) {
     next: AcpModelProjection
   ) {
     known.projection = next
+    notify(listeners, sessionId)
     const current = currentOf(next, known.current)
     if (current === known.current) return
     known.current = current
     notify(modelListeners, sessionId)
   }
 
-  function entry(sessionId: string) {
-    const known = sessions.get(sessionId)
-    if (!known)
-      throw new Error("The Session's workspace projection is unavailable")
-    return known
-  }
-
   function accept(sessionId: string, update: SessionUpdate, meta: unknown) {
-    const known = sessions.get(sessionId)
-    if (!known) {
-      early.get(sessionId)?.push([update, meta])
-      return
-    }
+    const known = sessions.get(sessionId) ?? { projection: {}, writes: 0 }
+    sessions.set(sessionId, known)
     if (SessionUpdate.isConfigOptionUpdate(update)) {
       project(known, sessionId, projectModels(update.configOptions))
-      notify(reportListeners, sessionId)
     } else if (SessionUpdate.isAvailableCommandsUpdate(update)) {
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
       )
       const aos = AosAvailableCommandsMetaSchema.safeParse(meta)
-      if (aos.success) known.capabilities = aos.data.capabilities
-      notify(reportListeners, sessionId)
+      if (aos.success) known.reported = aos.data.capabilities
+      if (known.reported)
+        known.capabilities = capabilitiesOf(known.reported, known.commands)
+      notify(listeners, sessionId)
     } else if (SessionUpdate.isUsageUpdate(update)) {
       const context = projectContext(update, meta)
       if (!context) return
       known.context = context
-      notify(contextListeners, sessionId)
+      notify(listeners, sessionId)
     } else if (SessionUpdate.isStateUpdate(update) && update.state === "idle") {
       const aos = AosStateMetaSchema.safeParse(meta)
       const turns = foldTurnUsage(
@@ -332,32 +331,13 @@ export function createAcpComposerStore(connection: AcpConnection) {
       )
       if (turns === known.turns) return
       known.turns = turns
-      notify(contextListeners, sessionId)
+      notify(listeners, sessionId)
     }
   }
 
-  /**
-   * Opens the Session's projection once `session/new` or `session/resume`
-   * answered. What the Session reports follows the answer as updates.
-   */
-  function resume(sessionId: string) {
-    if (!sessions.has(sessionId)) sessions.set(sessionId, { projection: {} })
-    observe(sessionId)
-    const held = early.get(sessionId) ?? []
-    early.delete(sessionId)
-    for (const [update, meta] of held) accept(sessionId, update, meta)
-  }
-
-  /**
-   * Subscribes before the resume that reports the Session, so an update the
-   * proxy sends right behind its `session/resume` answer is held, not lost.
-   */
-  function observe(sessionId: string) {
-    if (!sessions.has(sessionId) && !early.has(sessionId))
-      early.set(sessionId, [])
-    if (observed.has(sessionId)) return
-    observed.add(sessionId)
-    connection.subscribe(sessionId, {
+  /** Folds the Session's updates until the returned release. */
+  function subscribe(sessionId: string) {
+    const leave = connection.subscribe(sessionId, {
       update: (update, meta) => accept(sessionId, update, meta),
       // A from-start replay restates every settled turn, so the spend it
       // folds starts over rather than counting each turn twice.
@@ -366,6 +346,11 @@ export function createAcpComposerStore(connection: AcpConnection) {
         if (replayed) delete replayed.turns
       },
     })
+    return () => {
+      leave()
+      sessions.delete(sessionId)
+      feeds.delete(sessionId)
+    }
   }
 
   /** One feed per Session, so the composer subscribes to a stable value. */
@@ -380,31 +365,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
     return feed
   }
 
-  /** Resolves once the Session has reported what `read` finds. */
-  function until<T>(
-    sessionId: string,
-    read: (known: SessionEntry) => T | undefined
-  ) {
-    const found = () => {
-      const known = sessions.get(sessionId)
-      return known && read(known)
-    }
-    return new Promise<T>((resolve) => {
-      const now = found()
-      if (now !== undefined) return resolve(now)
-      const leave = listen(reportListeners, sessionId, () => {
-        const reported = found()
-        if (reported === undefined) return
-        leave()
-        resolve(reported)
-      })
-    })
-  }
-
-  function projectedModels(sessionId: string) {
-    const projected = entry(sessionId).projection.models
-    if (!projected) throw new Error("The Session reports no models")
-    return projected
+  /**
+   * A write's answer is stale once a newer write to the Session started or the
+   * Session was released: projecting it would undo what came after it.
+   */
+  function stale(sessionId: string, known: SessionEntry, generation: number) {
+    return sessions.get(sessionId) !== known || known.writes !== generation
   }
 
   async function select(
@@ -412,38 +378,32 @@ export function createAcpComposerStore(connection: AcpConnection) {
     category: typeof MODEL_CATEGORY | typeof EFFORT_CATEGORY,
     valueId: string
   ) {
-    const known = entry(sessionId)
+    const known = sessions.get(sessionId)
+    if (!known?.projection.models)
+      throw new Error("The Session reports no models")
+    const generation = ++known.writes
     const configId =
       (category === MODEL_CATEGORY
         ? known.projection.modelConfigId
         : known.projection.effortConfigId) ?? category
-    project(
-      known,
-      sessionId,
-      projectModels(
-        await connection.setConfigOption(sessionId, configId, valueId)
-      )
+    const next = projectModels(
+      await connection.setConfigOption(sessionId, configId, valueId)
     )
-    return projectedModels(sessionId)
+    if (!stale(sessionId, known, generation)) project(known, sessionId, next)
+    if (!next.models) throw new Error("The Session reports no models")
+    return next.models
   }
 
   return {
-    observe,
-    resume,
-    capabilities: (sessionId: string) =>
-      until(
-        sessionId,
-        ({ capabilities, commands }) =>
-          capabilities && capabilitiesOf(capabilities, commands)
-      ),
-    models: (sessionId: string) =>
-      until(sessionId, ({ projection }) => projection.models),
+    subscribe,
+    capabilities: (sessionId: string) => sessions.get(sessionId)?.capabilities,
+    models: (sessionId: string) => sessions.get(sessionId)?.projection.models,
     /** The newest reading, or none while the provider has reported none. */
     context: (sessionId: string) => sessions.get(sessionId)?.context,
-    /** The settled turns' spend, notified with the context. */
+    /** The settled turns' spend. */
     turnUsage: (sessionId: string) => sessions.get(sessionId)?.turns,
-    subscribeContext: (sessionId: string, listener: () => void) =>
-      listen(contextListeners, sessionId, listener),
+    listen: (sessionId: string, listener: () => void) =>
+      listen(listeners, sessionId, listener),
     modelFeed,
     selectModel: (sessionId: string, selectedId: string) =>
       select(sessionId, MODEL_CATEGORY, selectedId),

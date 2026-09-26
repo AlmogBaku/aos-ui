@@ -5,7 +5,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from "react"
 import {
@@ -123,6 +122,18 @@ function ReadyAosRuntimeProvider({
     () => createAcpWorkspaceClient({ connection, rest }),
     [connection, rest]
   )
+  const mountedClient = useRef<typeof client>(undefined)
+  // As with the connection, disposal waits out Strict Mode's effect replay, and
+  // a client the memo replaced is disposed once the new one has mounted.
+  useEffect(() => {
+    mountedClient.current = client
+    return () => {
+      mountedClient.current = undefined
+      queueMicrotask(() => {
+        if (mountedClient.current !== client) client.dispose()
+      })
+    }
+  }, [client])
   const drafts = useMemo(() => new AosDraftRegistry(), [])
   const threadList = useMemo(
     () =>
@@ -158,21 +169,6 @@ function ReadyAosRuntimeProvider({
     (code: string | undefined, fallback: string) =>
       runErrorMessage(runtimeDictionaries[locale], code, fallback),
     [locale]
-  )
-  // A Session's capabilities, config options, and usage exist only once it is
-  // resumed, so the composition reads them from the Session it has resumed.
-  const [resumedSessions, setResumedSessions] = useState<ReadonlySet<string>>(
-    new Set()
-  )
-  // The workspace client records what a resume reports, so it performs it.
-  const resume = useCallback(
-    async (sessionId: string) => {
-      await client.resumeSession(sessionId)
-      setResumedSessions((previous) =>
-        previous.has(sessionId) ? previous : new Set(previous).add(sessionId)
-      )
-    },
-    [client]
   )
   // The Session owns the batch, so staging waits for the Session a draft's
   // first turn creates; the prompt then links what the proxy accepted.
@@ -242,7 +238,8 @@ function ReadyAosRuntimeProvider({
         isDisabled: !agentId,
         enableMessageQueue: Boolean(remoteId),
         adapters: { attachments, ...mediaAdapters },
-        resume,
+        // The workspace client folds what the bound Session reports.
+        subscribeSession: client.subscribeSession,
         resolveSessionId,
         stageAttachments,
         messageRewind: rewindSource,
@@ -256,7 +253,6 @@ function ReadyAosRuntimeProvider({
     },
     [
       approvals,
-      resume,
       attachments,
       client,
       connection,
@@ -385,11 +381,9 @@ function ReadyAosRuntimeProvider({
     : undefined
   const selectedDraftId = selectedDraft?.[0]
   const mediaScopeId = selectedSessionId ?? selectedDraftId
-  const resumedSessionId =
-    selectedSessionId && resumedSessions.has(selectedSessionId)
-      ? selectedSessionId
-      : undefined
-  const capabilities = useAosSessionCapabilities(client, resumedSessionId)
+  // Capabilities, config options, and usage are absent until the bound Session
+  // reports them, so the composer reads the selected Session's projection.
+  const capabilities = useAosSessionCapabilities(client, selectedSessionId)
   const selectedSessionStatus = useSyncExternalStore(
     useCallback(
       (listener) =>
@@ -422,7 +416,7 @@ function ReadyAosRuntimeProvider({
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    resumedSessionId,
+    selectedSessionId,
     capabilities
   )
   const capabilitiesReady = capabilities !== undefined
