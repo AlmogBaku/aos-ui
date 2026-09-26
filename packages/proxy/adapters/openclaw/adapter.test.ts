@@ -1,6 +1,7 @@
 import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
+import { READY_LINK } from "../../core/link"
 import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
@@ -79,11 +80,15 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   return {
+    link: READY_LINK,
     start: vi.fn(async () => undefined),
     stopAndWait: vi.fn(async () => undefined),
     request,
     ...overrides,
-  } as OpenClawGatewayClient & { request: typeof request }
+  } as OpenClawGatewayClient & {
+    request: typeof request
+    link: typeof READY_LINK
+  }
 }
 
 describe("OpenClaw ServerRuntime assembly", () => {
@@ -102,13 +107,9 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: subscribe,
     })
 
-    await expect(adapter.authState()).resolves.toEqual({
-      status: "unavailable",
-      reason: "temporarily-unavailable",
-    })
-    await expect(adapter.authState()).resolves.toEqual({
-      status: "authenticated",
-    })
+    await expect(adapter.listAgents()).rejects.toSatisfy(
+      (error) => adapter.publicError(error)?.kind === "unavailable"
+    )
     await expect(adapter.listAgents()).resolves.toMatchObject({
       agents: [
         { summary: { id: "research", name: "Research" }, editable: false },
@@ -447,7 +448,7 @@ describe("OpenClaw artifact reads", () => {
       adapter.artifact("research", sessionKey, id)
     ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     answer = () => {
-      throw new OpenClawClientRequestError("rejected", true, false)
+      throw new OpenClawClientRequestError("rejected")
     }
     await expect(
       adapter.artifact("research", sessionKey, id)
@@ -458,7 +459,7 @@ describe("OpenClaw artifact reads", () => {
     const { adapter, request } = artifactAdapter({
       "chat.history": () => ({ messages: [] }),
       "artifacts.download": () => {
-        throw new OpenClawClientRequestError("rejected", true, false)
+        throw new OpenClawClientRequestError("rejected")
       },
     })
 

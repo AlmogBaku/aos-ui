@@ -572,7 +572,7 @@ describe("OpenClaw interactions", () => {
     const { OpenClawClientRequestError } = await import("./client")
     const request = vi.fn(async (method: string) => {
       if (method === "question.get") return { question }
-      throw new OpenClawClientRequestError("timeout", true, false)
+      throw new OpenClawClientRequestError("timeout", true)
     })
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)
