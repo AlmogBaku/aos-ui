@@ -1153,6 +1153,10 @@ describe("AOS ACP agent", () => {
     await prompt(test, "Long job")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const lost = test.sources[0]
+    // Recovered, the provider reports the lost turn ended.
+    const recovered = new EventSource()
+    recovered.emit({ kind: TurnEventKind.TurnEnded })
+    test.sources.push(recovered)
     lost?.emit(turnStarted())
     lost?.emit({
       kind: TurnEventKind.TurnFailed,
@@ -1160,11 +1164,7 @@ describe("AOS ACP agent", () => {
       code: "AOS_CONNECTION_INTERRUPTED",
     })
     lost?.finish()
-    await waitFor(() =>
-      expect(test.coordinator.state(test.scope)).toBe("uncertain")
-    )
-    // Recovered, the provider reports the lost turn ended.
-    lost?.emit({ kind: TurnEventKind.TurnEnded })
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
 
     await prompt(test, "Again")
 
