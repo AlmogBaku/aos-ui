@@ -4,7 +4,7 @@ import { defaultClock } from "../../lifecycle"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import { failureOf } from "./failures"
-import { createLink } from "./link"
+import { createLink, type LinkOptions } from "./link"
 
 describe("createLink", () => {
   it("stops dialing after five failed dials and tries one more ten seconds on", async () => {
@@ -28,6 +28,37 @@ describe("createLink", () => {
     // The first redial past the half-open wait is dialed, within the cap.
     await clock.advance(5_001)
     expect(dial).toHaveBeenCalledTimes(6)
+    link.dispose()
+  })
+
+  it("redials a link that drops before it is up, taking that dial down", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const stop = vi.fn()
+    const dial = vi
+      .fn<LinkOptions["dial"]>()
+      .mockImplementationOnce(async (_signal, lost) => {
+        // Its hello has landed; the socket closes before the dial returns.
+        await Promise.resolve()
+        lost(new Error("socket closed"))
+        return stop
+      })
+      .mockResolvedValue(undefined)
+    const link = createLink({
+      dial,
+      publicError: () => undefined,
+      logger: captureLogs().logger,
+      clock: defaultClock,
+      bindings: { link: "native" },
+    })
+
+    await clock.advance(0)
+    expect(link.state()).toBe("lost")
+    expect(stop).toHaveBeenCalledOnce()
+    // At half jitter the redial waits 125 ms.
+    await clock.advance(125)
+    expect(dial).toHaveBeenCalledTimes(2)
+    expect(link.state()).toBe("ready")
     link.dispose()
   })
 

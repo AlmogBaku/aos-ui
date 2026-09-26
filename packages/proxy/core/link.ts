@@ -136,9 +136,10 @@ export function createLink({
           }),
         signal
       )
-      // A dial that lands after its state exited is taken down at once.
+      // A dial that lands after its state exited is taken down at once; one
+      // that lands in it is taken down when the link next settles.
       if (signal.aborted) stop?.()
-      return stop
+      else release = stop ?? undefined
     }),
   }
   const link = ownerSetup<OwnerContext, LinkSignal, typeof actors>(
@@ -149,18 +150,25 @@ export function createLink({
   ).extend({
     delays: { redial: () => backoffDelay(failures - 1, LINK_BACKOFF) },
   })
-  /** Where a failed dial or a drop leaves the link. */
-  const settle = <E>(causeOf: (event: E) => unknown) => [
-    {
-      guard: ({ event }: { event: E }) => ends(causeOf(event)),
-      target: "lost" as const,
-      actions: ({ event }: { event: E }) => failed(causeOf(event)),
-    },
-    {
-      target: "backing-off" as const,
-      actions: ({ event }: { event: E }) => failed(causeOf(event)),
-    },
-  ]
+  /**
+   * Where a failed dial or a drop leaves the link, whether it was up or still
+   * dialing, taking down whatever the dial brought up.
+   */
+  const settle = <E>(causeOf: (event: E) => unknown) => {
+    const actions = ({ event }: { event: E }) => {
+      down()
+      failed(causeOf(event))
+    }
+    return [
+      {
+        guard: ({ event }: { event: E }) => ends(causeOf(event)),
+        target: "lost" as const,
+        actions,
+      },
+      { target: "backing-off" as const, actions },
+    ]
+  }
+  const dropped = settle(({ cause }: { cause: unknown }) => cause)
   const machine = link.createMachine({
     context: { generation: 0 },
     initial: "connecting",
@@ -172,19 +180,20 @@ export function createLink({
           input: ({ context }) => context.generation,
           onDone: {
             target: "ready",
-            actions: ({ event }) => {
-              release = event.output ?? undefined
+            actions: () => {
               failures = 0
               reported = undefined
             },
           },
           onError: settle(({ error }: { error: unknown }) => error),
         },
+        // A drop heard before the link is up, during the dial or once it
+        // landed, is a failed dial.
+        on: { lost: dropped },
       },
       ready: {
         meta: { log: "info" },
-        exit: down,
-        on: { lost: settle(({ cause }: { cause: unknown }) => cause) },
+        on: { lost: dropped },
       },
       "backing-off": {
         after: { redial: "connecting" },
