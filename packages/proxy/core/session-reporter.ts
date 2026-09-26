@@ -14,7 +14,7 @@ import type { SessionScope } from "./runtime"
 /** Takes one reading. It never rejects: it reports its own delivery failure. */
 export type ReadingListener<T> = (reading: T) => Promise<void>
 
-/** What one cell reads: a Session, or its Agent before it has one. */
+/** What one cell reads. */
 export type ReadingScope = { agentId: string; sessionId?: string }
 
 export type SessionReporterOptions<T, C, S extends ReadingScope> = {
