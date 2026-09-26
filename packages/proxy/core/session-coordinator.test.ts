@@ -3000,6 +3000,8 @@ describe("SessionCoordinator", () => {
     await hung
     expect(sessions.state(scope)).toBe("uncertain")
     expect(vi.mocked(engine.start).mock.calls[0]?.[3]?.aborted).toBe(true)
+    // A Stop has no handle to reach, but the turn is not over.
+    await expect(sessions.stop(scope)).resolves.toBe("stopping")
 
     // The provider settles the turn once a reconcile reaches it.
     recovered.emit(turnEnded)

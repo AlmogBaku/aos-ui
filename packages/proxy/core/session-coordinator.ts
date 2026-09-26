@@ -1520,7 +1520,12 @@ export class SessionCoordinator {
    */
   async stop(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const execution = this.#executions.get(scopeKey(scope))
-    if (!execution || execution.state === "idle") return "idle" as const
+    // A start no answer reached holds no execution, yet its turn is not over.
+    if (!execution)
+      return this.state(scope) === "idle"
+        ? ("idle" as const)
+        : ("stopping" as const)
+    if (execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
       const { turn } = execution
       const { generation } = execution.segment
