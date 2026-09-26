@@ -17,11 +17,10 @@ import type {
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf } from "../../core/failures"
-import { READY_LINK } from "../../core/link"
+import type { ServerLink } from "../../core/link"
 import {
-  OpenClawClientConnectionError,
+  openClawConnectionFailure,
   OpenClawClientRequestError,
-  OpenClawClientUnavailableError,
   type OpenClawGatewayClient,
 } from "./client"
 import {
@@ -86,8 +85,44 @@ async function readable(read: () => Promise<unknown>) {
   }
 }
 
+/** Sorts every failure an OpenClaw leaf or its Gateway link raises. */
+export function openClawPublicError(cause: unknown) {
+  const connection = openClawConnectionFailure(cause)
+  if (connection) return connection
+  if (cause instanceof OpenClawClientRequestError && cause.uncertain)
+    return failureOf("uncertain", cause)
+  if (
+    cause instanceof OpenClawWorkspaceOwnershipError ||
+    // The artifact is still authoritative, but OpenClaw cannot read it:
+    // unlike a 503, "not found" never invites a retry that cannot succeed.
+    cause instanceof OpenClawArtifactUnreadableError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_INTERACTION_NOT_FOUND")
+  )
+    return failureOf("gone", cause)
+  if (
+    cause instanceof OpenClawContentPublicError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_INVALID_INTERACTION")
+  )
+    return failureOf("invalid_request", cause)
+  if (
+    cause instanceof OpenClawClientRequestError ||
+    cause instanceof OpenClawWorkspaceUnavailableError ||
+    cause instanceof OpenClawHistoryUnavailableError ||
+    cause instanceof OpenClawNativePayloadError ||
+    cause instanceof OpenClawAdapterUnavailableError ||
+    cause instanceof OpenClawArtifactUnavailableError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
+  )
+    return failureOf("unavailable", cause)
+  return undefined
+}
+
 type OpenClawServerAdapterOptions = Readonly<{
-  client: OpenClawGatewayClient
+  /** The Gateway's calls, and the link they ride on. */
+  client: OpenClawGatewayClient & { readonly link: ServerLink }
   turns: ServerTurnEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
@@ -103,7 +138,7 @@ type OpenClawServerAdapterOptions = Readonly<{
  * remain in the OpenClaw leaves; the coordinator retains admission and turns.
  */
 export class OpenClawServerAdapter implements ServerRuntime {
-  readonly link = READY_LINK
+  readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
   readonly #workspace
@@ -115,6 +150,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
+    this.link = options.client.link
     this.turns = options.turns
     this.#client = options.client
     this.#subscribeSession = options.subscribeSession
@@ -159,43 +195,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   publicError(cause: unknown) {
-    if (
-      cause instanceof OpenClawClientConnectionError &&
-      cause.kind !== "unavailable" &&
-      cause.kind !== "rate-limited"
-    )
-      return failureOf("runtime_authentication_required", cause)
-    if (cause instanceof OpenClawClientRequestError && cause.uncertain)
-      return failureOf("uncertain", cause)
-    if (
-      cause instanceof OpenClawWorkspaceOwnershipError ||
-      // The artifact is still authoritative, but OpenClaw cannot read it:
-      // unlike a 503, "not found" never invites a retry that cannot succeed.
-      cause instanceof OpenClawArtifactUnreadableError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_INTERACTION_NOT_FOUND")
-    )
-      return failureOf("gone", cause)
-    if (
-      cause instanceof OpenClawContentPublicError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_INVALID_INTERACTION")
-    )
-      return failureOf("invalid_request", cause)
-    if (
-      cause instanceof OpenClawClientConnectionError ||
-      cause instanceof OpenClawClientRequestError ||
-      cause instanceof OpenClawClientUnavailableError ||
-      cause instanceof OpenClawWorkspaceUnavailableError ||
-      cause instanceof OpenClawHistoryUnavailableError ||
-      cause instanceof OpenClawNativePayloadError ||
-      cause instanceof OpenClawAdapterUnavailableError ||
-      cause instanceof OpenClawArtifactUnavailableError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
-    )
-      return failureOf("unavailable", cause)
-    return undefined
+    return openClawPublicError(cause)
   }
 
   async authState(): Promise<RuntimeAuthState> {
@@ -204,9 +204,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
       return { status: "authenticated" }
     } catch (error) {
       if (
-        error instanceof OpenClawClientConnectionError &&
-        error.kind !== "unavailable" &&
-        error.kind !== "rate-limited"
+        openClawConnectionFailure(error)?.kind ===
+        "runtime_authentication_required"
       )
         return { status: "authentication-required" }
       return { status: "unavailable", reason: "temporarily-unavailable" }

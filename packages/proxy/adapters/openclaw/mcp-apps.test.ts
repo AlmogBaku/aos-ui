@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { TurnEvent } from "../../core/events"
+import { READY_LINK } from "../../core/link"
 import type { ServerTurnHandle } from "../../core/runtime"
 import { OpenClawServerAdapter } from "./adapter"
 import {
@@ -84,10 +85,11 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   const client = {
+    link: READY_LINK,
     start: vi.fn(),
     stopAndWait: vi.fn(async () => undefined),
     request,
-  } as unknown as OpenClawGatewayClient
+  } as unknown as OpenClawGatewayClient & { link: typeof READY_LINK }
   const idle: ServerTurnHandle = {
     events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),

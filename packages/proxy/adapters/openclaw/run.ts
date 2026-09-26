@@ -36,6 +36,8 @@ import {
   type SessionScope,
 } from "../../core/runtime"
 import * as ids from "../../core/ids"
+import { createLink, type LinkOptions } from "../../core/link"
+import { defaultClock } from "../../../lifecycle"
 import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
@@ -67,7 +69,6 @@ const MAX_QUEUE_BYTES = 8_000_000
 const MAX_SESSION_LOOKUP_ROWS = 100
 /** Native runs remembered as AOS's own, so a settling one is never adopted. */
 const MAX_ADMITTED_RUNS = 1_024
-const WATCH_RETRY_MS = 5_000
 const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
@@ -725,12 +726,22 @@ const openClawRecoveryToken = {
       : OpenClawPositionSchema.parse(JSON.parse(token)),
 }
 
+/**
+ * How a foreign-turn watch stays up: what its failures mean, the Gateway link
+ * it redials with, and where it logs.
+ */
+export type OpenClawTurnWatch = Pick<
+  LinkOptions,
+  "publicError" | "upstream" | "logger"
+>
+
 export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #client: OpenClawRunRequestClient
   readonly #subscriptions: OpenClawSessionSubscriptions
   readonly #toolEvents: boolean
   readonly #replies?: OpenClawBoundReplies
   readonly #mcpToolNames?: OpenClawMcpToolNames
+  readonly #watch: OpenClawTurnWatch
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
   /** Every native run a segment was bound to, oldest first. */
@@ -743,12 +754,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     replies?: OpenClawBoundReplies
     /** Resolves OpenClaw's `<server>__<tool>` names to canonical MCP names. */
     mcpToolNames?: OpenClawMcpToolNames
+    watch: OpenClawTurnWatch
   }) {
     this.#client = options.client
     this.#subscriptions = options.subscriptions
     this.#toolEvents = options.toolEvents === true
     this.#replies = options.replies
     this.#mcpToolNames = options.mcpToolNames
+    this.#watch = options.watch
   }
 
   async start(
@@ -1270,12 +1283,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   /**
    * Announces the Session's native runs AOS did not bind: each once as its
    * events arrive, and any found running when the subscription is set up or
-   * reconciled after a reconnect.
+   * reconciled after a reconnect. The watch is a link: a failed subscription
+   * redials on backoff, and one that is gone or refused stays down until the
+   * Gateway link is up again.
    */
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     let stopped = false
-    let lease: OpenClawSessionLease | undefined
-    let retry: ReturnType<typeof setTimeout> | undefined
     let announced: string | undefined
     const announce = (runId: string | undefined, again: boolean) => {
       if (
@@ -1288,41 +1301,52 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       announced = runId
       listener.onTurn()
     }
-    const check = async (current: OpenClawSessionLease, again: boolean) => {
-      try {
-        announce(uniqueActiveRunId(await this.#history(scope, current)), again)
-      } catch (error) {
-        if (!stopped) listener.onError(error)
-      }
-    }
-    const subscribe = () => {
-      this.#subscriptions
-        .acquire(
+    const check = async (lease: OpenClawSessionLease, again: boolean) =>
+      announce(uniqueActiveRunId(await this.#history(scope, lease)), again)
+    const watch = createLink({
+      ...this.#watch,
+      dial: async (signal, lost) => {
+        // Each subscription announces a run it finds running once more.
+        announced = undefined
+        /** Whether the first check ran: until then there is no recheck. */
+        let checked = false
+        const acquired = await this.#subscriptions.acquire(
           { agentId: scope.agentId, sessionKey: scope.providerSessionId },
           (event) => announce(progressRunId(event), false),
+          // The subscription outlives a Gateway reconnect; a recheck that
+          // fails after one takes the watch down to subscribe again.
           async () => {
-            if (lease) await check(lease, true)
+            if (checked) await check(acquired, true).catch(lost)
           }
         )
-        .then(
-          async (acquired) => {
-            if (stopped) return void acquired.release().catch(() => {})
-            lease = acquired
-            await check(acquired, false)
-          },
-          (error: unknown) => {
-            if (stopped) return
-            listener.onError(error)
-            retry = setTimeout(subscribe, WATCH_RETRY_MS)
-          }
-        )
-    }
-    subscribe()
+        const release = () =>
+          void acquired
+            .release()
+            .catch((err: unknown) =>
+              this.#watch.logger.warn({ err }, "openclaw.watch.release_failed")
+            )
+        try {
+          signal.throwIfAborted()
+          await check(acquired, false)
+        } catch (error) {
+          release()
+          throw error
+        }
+        checked = true
+        return release
+      },
+      onError: (cause) => listener.onError(cause),
+      clock: defaultClock,
+      bindings: {
+        link: "openclaw-turn-watch",
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+      },
+    })
     return () => {
       if (stopped) return
       stopped = true
-      clearTimeout(retry)
-      void lease?.release().catch(() => {})
+      watch.dispose()
     }
   }
 

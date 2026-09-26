@@ -1,6 +1,7 @@
 import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
+import { READY_LINK } from "../../core/link"
 import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
@@ -79,11 +80,15 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   return {
+    link: READY_LINK,
     start: vi.fn(async () => undefined),
     stopAndWait: vi.fn(async () => undefined),
     request,
     ...overrides,
-  } as OpenClawGatewayClient & { request: typeof request }
+  } as OpenClawGatewayClient & {
+    request: typeof request
+    link: typeof READY_LINK
+  }
 }
 
 describe("OpenClaw ServerRuntime assembly", () => {

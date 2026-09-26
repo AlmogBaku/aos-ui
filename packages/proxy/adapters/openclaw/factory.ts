@@ -11,11 +11,12 @@ import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 import type { RuntimeLimits } from "../../config"
 import { createCoordinator } from "../create-coordinator"
 import type { RuntimeServices } from "../create-runtime"
+import type { ServerLink } from "../../core/link"
 import type { RuntimeInstance } from "../../core/runtime"
 import { withMcpApps } from "../../mcp-apps/annotate"
 import type { CredentialValues } from "../../redaction"
 import { readSecretFile } from "../../secrets"
-import { OpenClawServerAdapter } from "./adapter"
+import { OpenClawServerAdapter, openClawPublicError } from "./adapter"
 import {
   OpenClawClient,
   type OpenClawClientOptions,
@@ -35,6 +36,7 @@ export type OpenClawRuntimeConfig = Readonly<{
 }>
 
 type OpenClawRuntimeClient = OpenClawGatewayClient & {
+  readonly link: ServerLink
   negotiatedPolicy?(): ReturnType<OpenClawClient["negotiatedPolicy"]>
 }
 
@@ -152,7 +154,9 @@ export async function createOpenClawRuntime(
   limits: RuntimeLimits,
   dependencies: OpenClawRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const credentials = await readCredentials(config, dependencies.credentials)
+  const credentials = () => readCredentials(config, dependencies.credentials)
+  // Read once here so a bad identity fails startup; every dial reads again.
+  await credentials()
   const { logger } = dependencies
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
   const resubscribe = (reason: "gap" | "reconnect") =>
@@ -187,17 +191,16 @@ export async function createOpenClawRuntime(
     onGap() {
       resubscribe("gap")
     },
-    // Every hello, the first included, re-subscribes on a fresh generation.
-    onReady() {
-      resubscribe("reconnect")
-    },
-    onClose(close) {
-      if (close.phase === "post-hello" && close.recoverable)
-        state.subscriptions?.pause()
-    },
+    logger,
   })
   const subscriptions = new OpenClawSessionSubscriptions(client, logger)
   state.subscriptions = subscriptions
+  // Each time the link is up, the first included, re-subscribes on a fresh
+  // generation; a drop holds delivery until then.
+  client.link.subscribe((link) => {
+    if (link === "ready") resubscribe("reconnect")
+    else subscriptions.pause()
+  })
   const interactions = new OpenClawInteractions(client)
   const mcpToolNames = createOpenClawMcpToolNames(client)
   const turns = new OpenClawTurnEngine({
@@ -206,6 +209,7 @@ export async function createOpenClawRuntime(
     toolEvents: true,
     replies: interactions,
     mcpToolNames,
+    watch: { publicError: openClawPublicError, upstream: client.link, logger },
   })
   // Wrapped before the coordinator, which runs turns through `runtime.turns`.
   const runtime = withMcpApps(
@@ -224,11 +228,6 @@ export async function createOpenClawRuntime(
     })
   )
   const sessions = createCoordinator(runtime, limits, logger)
-  // Startup never waits on the Gateway: the first hello resubscribes, and a
-  // caller waits on its own bounded start.
-  void Promise.resolve(client.start()).catch((err: unknown) =>
-    logger.warn({ err }, "openclaw.gateway.start_failed")
-  )
   let closePromise: Promise<void> | undefined
   return {
     id: config.id,

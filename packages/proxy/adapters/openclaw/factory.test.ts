@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
+import { READY_LINK } from "../../core/link"
 import { CredentialValues } from "../../redaction"
 import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
@@ -59,10 +60,11 @@ async function credentials(deviceIdOverride?: string) {
 }
 
 describe("OpenClaw runtime factory", () => {
-  it("loads server credentials and owns one configured official client", async () => {
+  it("loads server credentials on every read and owns one configured official client", async () => {
     const files = await credentials()
     let options: OpenClawClientOptions | undefined
     const client = {
+      link: READY_LINK,
       start: vi.fn(async () => undefined),
       stopAndWait: vi.fn(async () => undefined),
       request: vi.fn(),
@@ -97,12 +99,14 @@ describe("OpenClaw runtime factory", () => {
         "operator.questions",
         "operator.admin",
       ],
-      credentials: {
-        deviceIdentity: {
-          deviceId: expect.stringMatching(/^[a-f0-9]{64}$/u),
-        },
-        deviceToken: "device-token",
-      },
+    })
+    await expect(options!.credentials()).resolves.toMatchObject({
+      deviceIdentity: { deviceId: expect.stringMatching(/^[a-f0-9]{64}$/u) },
+      deviceToken: "device-token",
+    })
+    await writeFile(files.tokenFile, "tok-test-2\n")
+    await expect(options!.credentials()).resolves.toMatchObject({
+      deviceToken: "tok-test-2",
     })
     expect(options?.caps).toEqual(
       expect.arrayContaining([
@@ -113,8 +117,6 @@ describe("OpenClaw runtime factory", () => {
     )
     expect(options?.onEvent).toEqual(expect.any(Function))
     expect(options?.onGap).toEqual(expect.any(Function))
-    expect(options?.onReady).toEqual(expect.any(Function))
-    expect(options?.onClose).toEqual(expect.any(Function))
 
     await Promise.all([instance.close(), instance.close()])
     expect(client.stopAndWait).toHaveBeenCalledTimes(1)
@@ -221,6 +223,7 @@ describe("OpenClaw runtime factory", () => {
       {
         ...services(),
         clientFactory: () => ({
+          link: READY_LINK,
           start: vi.fn(async () => undefined),
           stopAndWait: vi.fn(async () => undefined),
           request,
