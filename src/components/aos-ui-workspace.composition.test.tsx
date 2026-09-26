@@ -121,34 +121,46 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it.each([
-    ["en", "The AOS server is full. Reconnecting shortly."],
-    ["he", "שרת AOS מלא כרגע. מתחברים מחדש בקרוב."],
+    [
+      "en",
+      { connectionStatus: "capacity" },
+      "The AOS server is full. Reconnecting shortly.",
+    ],
+    [
+      "he",
+      { connectionStatus: "capacity" },
+      "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
+    ],
+    [
+      "en",
+      { sessionStatus: "unavailable" },
+      "This Session is no longer available.",
+    ],
+    ["he", { sessionStatus: "unavailable" }, "השיחה הזו כבר אינה זמינה."],
   ] as const)(
-    "tells the %s reader the server is full until the connection returns",
-    async (locale, capacityText) => {
-      function CapacityFixture({
-        connectionStatus,
-      }: Pick<HarnessRuntime, "connectionStatus">) {
+    "tells the %s reader %o until it clears",
+    async (locale, status, statusText) => {
+      function StatusFixture(
+        props: Pick<HarnessRuntime, "connectionStatus" | "sessionStatus">
+      ) {
         const bundle = useFixtureRuntimeBundle()
         return (
           <AosUiWorkspace
-            runtime={{ ...asHarnessRuntime(bundle), connectionStatus }}
+            runtime={{ ...asHarnessRuntime(bundle), ...props }}
             locale={locale}
             dictionary={locale === "he" ? he : en}
             now={FIXTURE_NOW}
           />
         )
       }
-      const { rerender } = render(
-        <CapacityFixture connectionStatus="capacity" />
-      )
+      const { rerender } = render(<StatusFixture {...status} />)
 
-      expect(await screen.findByText(capacityText)).toHaveAttribute(
+      expect(await screen.findByText(statusText)).toHaveAttribute(
         "role",
         "status"
       )
-      rerender(<CapacityFixture />)
-      expect(screen.queryByText(capacityText)).toBeNull()
+      rerender(<StatusFixture />)
+      expect(screen.queryByText(statusText)).toBeNull()
     }
   )
 

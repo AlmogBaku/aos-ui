@@ -22,11 +22,8 @@ describe("fault harness", () => {
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
-    connection.subscribeSessionUpdates(SESSION, () => {})
-    await connection.resumeSession(SESSION, {
-      replayFromStart: false,
-      agentId: AGENT,
-    })
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
 
     pipe.sockets[0]?.drop()
     await clock.advance(250)

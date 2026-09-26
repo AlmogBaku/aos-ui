@@ -13,6 +13,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SendRequestOptions,
+  type WireStream,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   createWebSocketStream,
@@ -59,6 +60,8 @@ import {
 import {
   CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
+  LIVENESS_SILENCE_MS,
+  PART_GRACE_MS,
   RECONNECT_BACKOFF,
   REQUEST_DEADLINE_MS,
   STABLE_AFTER_MS,
@@ -70,9 +73,8 @@ import type {
   AcpConnectionStatus,
   AcpHistoryPage,
   AcpPendingRequest,
-  AcpResumeOptions,
-  AcpSessionReplayListener,
-  AcpSessionUpdateListener,
+  AcpSessionListener,
+  AcpSessionState,
 } from "./types"
 
 /**
@@ -152,17 +154,57 @@ export type AcpConnectionOptions = {
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+/** ACP's code for a Session the provider no longer has. */
+const RESOURCE_NOT_FOUND = RequestError.resourceNotFound().code
+/** The code an `_aos/error` names a Session the provider no longer has with. */
+const NOT_FOUND_NOTICE = "not_found"
 /** sessionStorage key naming the proxy build the tab last reloaded for. */
 const RELOADED_FOR_BUILD_KEY = "aos-reloaded-for-build"
 
+function codeOf(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error
+    ? error.code
+    : undefined
+}
+
 /** Whether the proxy refused an invitation it cannot redeem. */
 export function isAuthenticationRequired(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === AUTHENTICATION_REQUIRED
-  )
+  return codeOf(error) === AUTHENTICATION_REQUIRED
+}
+
+/** Whether the proxy answered that the Session no longer exists. */
+function isGone(error: unknown) {
+  return codeOf(error) === RESOURCE_NOT_FOUND
+}
+
+/**
+ * The codes of a join refusal that resending on the same transport cannot
+ * change: a request the proxy rejects as malformed or not permitted, or a
+ * member or runtime that needs authenticating again.
+ */
+const REFUSED_ON_TRANSPORT = new Set<unknown>([
+  RequestError.invalidRequest().code,
+  RequestError.methodNotFound("").code,
+  RequestError.invalidParams().code,
+  AUTHENTICATION_REQUIRED,
+])
+
+/** Whether a join failed for good on this transport, its answer included. */
+function isRefused(error: unknown) {
+  return error instanceof z.ZodError || REFUSED_ON_TRANSPORT.has(codeOf(error))
+}
+
+/** What a Session owner's state shows as; any other one is still joining. */
+const SESSION_STATES = new Map<unknown, AcpSessionState>([
+  ["joined", "joined"],
+  ["unavailable", "unavailable"],
+  ["refused", "unavailable"],
+  ["gone", "gone"],
+])
+
+/** A request's own deadline fired, as opposed to its transport closing. */
+function isTimeout(error: unknown) {
+  return error instanceof DOMException && error.name === "TimeoutError"
 }
 
 /** `_meta.aos` of an ACP payload, when it carries one. */
@@ -199,6 +241,27 @@ function subscribeKeyed<Listener>(
   }
 }
 
+/**
+ * Adds an `onReceived` callback on every inbound frame, used to drive the
+ * inbound-silence timer without coupling logging to liveness tracking.
+ */
+function trackedInbound(
+  stream: WireStream,
+  onReceived: () => void
+): WireStream {
+  return {
+    readable: stream.readable.pipeThrough(
+      new TransformStream<AnyWireMessage, AnyWireMessage>({
+        transform(frame, controller) {
+          onReceived()
+          controller.enqueue(frame)
+        },
+      })
+    ),
+    writable: stream.writable,
+  }
+}
+
 /** One opened transport; a reconnect replaces it with another. */
 type Transport = {
   connection: ClientConnection
@@ -208,6 +271,16 @@ type Transport = {
 
 type ConnectionEvent =
   { type: "closed"; code: number | undefined } | { type: "close" }
+
+/**
+ * What a Session owner hears: its connection's transport becoming usable or
+ * lost, a from-start replay asked for, and the provider reporting it gone.
+ */
+type SessionEvent =
+  { type: "ready" } | { type: "lost" } | { type: "replay" } | { type: "gone" }
+
+/** The updates of one older page, in arrival order. */
+type PageUpdates = AcpHistoryPage["updates"][number][]
 
 /**
  * The constructor a transport opens its socket with. It reports the open and
@@ -249,18 +322,41 @@ export function createAcpConnection(
       : typeof __AOS_BUILD_ID__ !== "undefined"
         ? (__AOS_BUILD_ID__ ?? null)
         : null
-  const updateListeners = new Map<string, Set<AcpSessionUpdateListener>>()
-  const replayListeners = new Map<string, Set<AcpSessionReplayListener>>()
   const notificationListeners = new Map<
     string,
     Set<(params: unknown) => void>
   >()
   const pendingListeners = new Set<(request: AcpPendingRequest) => void>()
   const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
-  const positions = new Map<string, { turnId: string; after: number }>()
-  const histories = new Map<string, AosHistoryCursor>()
-  /** The updates of the page read in flight for each Session. */
-  const pages = new Map<string, AcpHistoryPage["updates"][number][]>()
+  /**
+   * One opened Session: whoever listens, the owner that joins it, and what a
+   * rejoin and a page read need, all dropped once it parts.
+   */
+  type OpenSession = {
+    readonly listeners: Set<AcpSessionListener>
+    owner?: Owner<ReturnType<typeof sessionMachine>>
+    state: AcpSessionState
+    /** Where the live turn was last seen, which a rejoin resumes from. */
+    position?: { turnId: string; after: number }
+    /** What the latest from-start replay reported of older history. */
+    history?: AosHistoryCursor
+    /** The updates of the page read in flight. */
+    page?: PageUpdates
+    /** Whether a join has replayed it from the start yet. */
+    replayed: boolean
+    /** A from-start replay is owed: asked for, or a rejoin's resync. */
+    replayOwed: boolean
+    /** The from-start replay in flight and the settle callbacks it owes. */
+    replaying?: {
+      settles: ((replayed: boolean) => void)[]
+      delivered: boolean
+    }
+    waiters?: PromiseWithResolvers<void>
+    /** Why the transport refused the join, while the Session stays refused. */
+    refusal?: unknown
+    grace?: unknown
+  }
+  const sessions = new Map<string, OpenSession>()
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
@@ -275,13 +371,15 @@ export function createAcpConnection(
   let live: Transport | undefined
   /** Set once a transport is lost, until a replacement recovers. */
   let recovering = false
-  /** Settles once a recovered transport has rejoined every Session. */
-  let rejoined: PromiseWithResolvers<void> | undefined
+  /** Whether a Session opened now may join at once, the transport recovered. */
+  let joinable = false
   // The guest listener's principal, replayed when a new transport redeems it.
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
   let lastFocus:
     { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
+  /** The handle for the running inbound-silence timer; replaced on every inbound frame. */
+  let silenceTimer: unknown = undefined
   let settleInitialized: ((meta: AosInitializeMeta) => void) | undefined
   let failInitialized: ((error: Error) => void) | undefined
   const initialized = new Promise<AosInitializeMeta>((resolve, reject) => {
@@ -307,6 +405,46 @@ export function createAcpConnection(
         // others: an unanswered request stays pending for the proxy to
         // re-issue, which never answers the runtime on the operator's behalf.
       }
+  }
+
+  /** Whether the browser tab is currently visible. */
+  function isVisible() {
+    return globalThis.document?.visibilityState !== "hidden"
+  }
+
+  /**
+   * (Re)arms the inbound-silence timer after each received frame. When the
+   * page is not visible the timer is cleared; the `visibilitychange` handler
+   * probes at once when the page becomes visible again.
+   */
+  function armSilenceTimer() {
+    clock.clearTimeout(silenceTimer)
+    silenceTimer = undefined
+    if (!isVisible() || ended) return
+    silenceTimer = clock.setTimeout(() => {
+      silenceTimer = undefined
+      sendLivenessProbeAsync()
+    }, LIVENESS_SILENCE_MS)
+  }
+
+  /** Called on every inbound frame; resets the silence window. */
+  function onInbound() {
+    armSilenceTimer()
+  }
+
+  /**
+   * Sends `_aos/session/focus` as a request. A reply within the probe
+   * deadline is the liveness acknowledgement; no reply closes the transport
+   * and the connection reconnects. Re-reports the last known focused Session
+   * if any, or `{}` when no focus has been reported yet.
+   */
+  function sendLivenessProbeAsync() {
+    const params = lastFocus ?? {}
+    request("probe", (agent, options) =>
+      agent.request(AOS_METHODS.session.focus, params, options)
+    ).catch((err: unknown) => {
+      logger.debug({ err }, "acp.liveness.failed")
+    })
   }
 
   /**
@@ -362,23 +500,26 @@ export function createAcpConnection(
       // Every `_meta.aos` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
       const meta = aosMetaOf(params.update._meta)
+      const open = sessions.get(params.sessionId)
+      if (!open) return
       // An older page's updates belong to the page read alone: its turns are
-      // long over, so a live listener or the resume position would take its
+      // long over, so a live listener or the rejoin position would take its
       // state markers for the running turn's.
       if (AosHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
-        pages.get(params.sessionId)?.push({ update: params.update, meta })
+        open.page?.push({ update: params.update, meta })
         return
       }
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
       // so the chunk schema positions any of them.
       const position = AosChunkMetaSchema.safeParse(meta)
       if (position.success)
-        positions.set(params.sessionId, {
+        open.position = {
           turnId: position.data.turnId,
           after: position.data.sequence,
-        })
-      for (const listener of updateListeners.get(params.sessionId) ?? [])
-        listener(params.update, meta)
+        }
+      if (open.replaying) open.replaying.delivered = true
+      for (const listener of open.listeners)
+        listener.update?.(params.update, meta)
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
       permissionRequest(params, signal)
@@ -388,9 +529,18 @@ export function createAcpConnection(
     )
   for (const [method, parser] of Object.entries(NOTIFICATION_PARSERS))
     app.onNotification(method, parser, ({ params }) => {
+      if (method === AOS_METHODS.notify.error) noticeGone(params)
       for (const listener of notificationListeners.get(method) ?? [])
         listener(params)
     })
+
+  /** An opened Session the proxy reports as not found is gone for good. */
+  function noticeGone(params: unknown) {
+    const notice = AosErrorNotificationSchema.safeParse(params).data
+    if (notice?.code !== NOT_FOUND_NOTICE || notice.sessionId === undefined)
+      return
+    sessions.get(notice.sessionId)?.owner?.actor.send({ type: "gone" })
+  }
 
   async function readyTransport(): Promise<Transport> {
     // React commits children before their parent, so a consumer's effect can
@@ -405,35 +555,81 @@ export function createAcpConnection(
     return current
   }
 
+  type Send<Response> = (
+    agent: ClientContext,
+    options: SendRequestOptions
+  ) => Promise<Response>
+
   /**
    * Sends one request under its tier's deadline. A reply that never comes
    * means the transport has stalled, so it is closed and the connection
-   * reconnects.
+   * reconnects; a request `parent` aborts leaves the transport as it is.
    */
-  async function request<Response>(
+  async function request<Response>(tier: RequestTier, send: Send<Response>) {
+    return requestOn(await readyTransport(), tier, send)
+  }
+
+  async function requestOn<Response>(
+    { connection }: Transport,
     tier: RequestTier,
-    send: (
-      agent: ClientContext,
-      options: SendRequestOptions
-    ) => Promise<Response>
+    send: Send<Response>,
+    parent?: AbortSignal
   ) {
-    const { connection } = await readyTransport()
-    const deadline = new Deadline(REQUEST_DEADLINE_MS[tier], clock)
+    const deadline = new Deadline(REQUEST_DEADLINE_MS[tier], clock, parent)
     try {
       return await deadline.run((cancellationSignal) =>
         send(connection.agent, { cancellationSignal })
       )
     } catch (error) {
-      if (deadline.signal.aborted) connection.close(error)
+      if (deadline.signal.aborted && !parent?.aborted) connection.close(error)
       throw error
     }
   }
 
-  /** Notifications have no reply; the proxy reports failures as `_aos/error`. */
-  function notifyAgent(send: (agent: ClientContext) => Promise<void>) {
-    void readyTransport()
-      .then(({ connection }) => send(connection.agent))
-      .catch(() => {})
+  /**
+   * Sends one write for a Session, once it is joined if it is open. A
+   * transport that closes under the write sends it again, with the same
+   * params and so the same client id, once the Session has rejoined on the
+   * next one; a write that stalled its transport fails instead.
+   */
+  async function write<Response>(
+    sessionId: string,
+    tier: RequestTier,
+    send: Send<Response>
+  ): Promise<Response> {
+    for (;;) {
+      if (sessions.has(sessionId)) await joined(sessionId)
+      const transport = await readyTransport()
+      try {
+        return await requestOn(transport, tier, send)
+      } catch (error) {
+        const closedUnder =
+          transport.connection.signal.aborted &&
+          !isTimeout(error) &&
+          sessions.has(sessionId)
+        if (!closedUnder) throw error
+        // Once its close is handled, the Session has left `joined`.
+        await transport.connection.closed.catch(() => {})
+      }
+    }
+  }
+
+  /**
+   * Notifications have no reply; the proxy reports failures as `_aos/error`.
+   * One for an open Session waits until it is joined.
+   */
+  function notifyAgent(
+    send: (agent: ClientContext) => Promise<void>,
+    sessionId?: string
+  ) {
+    void (async () => {
+      if (sessionId !== undefined && sessions.has(sessionId))
+        await joined(sessionId)
+      const { connection } = await readyTransport()
+      await send(connection.agent)
+    })().catch((err: unknown) => {
+      logger.debug({ err, sessionId }, "acp.notify.failed")
+    })
   }
 
   async function handshake(connection: ClientConnection) {
@@ -500,67 +696,215 @@ export function createAcpConnection(
     }
   }
 
-  async function resumeSession(sessionId: string, resume: AcpResumeOptions) {
-    // Only a transport that can carry the replay drops what it replaces.
-    await readyTransport()
-    const agentId = resume.agentId ?? owners.get(sessionId)
+  /**
+   * One `session/resume` of an opened Session: from the start when none has
+   * replayed it yet or one is owed, else from its position. `signal` aborts
+   * once its owner leaves `joining`, and then nothing is recorded.
+   */
+  async function joinOnce(sessionId: string, signal: AbortSignal) {
+    const transport = await readyTransport()
+    // Read once the transport is ready, so every listener that subscribed in
+    // the same turn as the first one names the Agent and takes the replay.
+    const open = sessions.get(sessionId)
+    if (!open) throw notOpen()
+    if (signal.aborted) return
+    const fromStart = !open.replayed || open.replayOwed
+    open.replayOwed = false
+    const agentId =
+      [...open.listeners].find((listener) => listener.agentId)?.agentId ??
+      owners.get(sessionId)
     // A from-start replay resends the whole Session, and its turns arrive as
-    // chunks: whoever projects this one drops what the replay replaces first, or
-    // every part it already holds is appended to a second time.
-    const settled = resume.replayFromStart
-      ? [...(replayListeners.get(sessionId) ?? [])].map((listener) =>
-          listener()
-        )
-      : []
+    // chunks: whoever projects this one drops what the replay replaces first,
+    // or every part it already holds is appended to a second time.
+    const replaying = fromStart
+      ? { settles: [...open.listeners].flatMap(settleOf), delivered: false }
+      : undefined
+    open.replaying = replaying
+    let replayed = false
     try {
-      const response = await request(
-        resume.replayFromStart ? "long" : "medium",
+      const response = await requestOn(
+        transport,
+        fromStart ? "long" : "medium",
         (agent, options) =>
           agent.request(
             methods.agent.session.resume,
             {
               sessionId,
               cwd: SERVER_OWNED_CWD,
-              ...(resume.replayFromStart
-                ? { replayFrom: { type: "start" } }
-                : {}),
+              ...(fromStart ? { replayFrom: { type: "start" } } : {}),
               _meta: {
                 [AOS_META_KEY]: {
                   ...(agentId === undefined ? {} : { agentId }),
-                  ...(resume.after === undefined
-                    ? {}
-                    : { after: resume.after }),
-                  ...(resume.turnId === undefined
-                    ? {}
-                    : { turnId: resume.turnId }),
+                  ...(fromStart ? {} : open.position),
                 },
               },
             },
             options
-          )
+          ),
+        signal
       )
       const meta = AosSessionResumeResponseMetaSchema.parse(
         aosMetaOf(response._meta)
       )
+      if (signal.aborted) return
       if (agentId !== undefined) owners.set(sessionId, agentId)
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
-      if (meta.history) histories.set(sessionId, meta.history)
-      return { meta }
+      if (meta.history) open.history = meta.history
+      if (fromStart) {
+        open.replayed = true
+        replayed = true
+      }
+      if (meta.resync) open.replayOwed = true
     } finally {
-      for (const settle of settled) settle?.()
+      // A from-start replay that did not complete is still owed: its
+      // listeners may already hold part of it.
+      if (fromStart && !replayed) open.replayOwed = true
+      if (open.replaying === replaying) open.replaying = undefined
+      for (const settle of replaying?.settles ?? []) settle(replayed)
     }
+  }
+
+  /** A listener's part in a from-start replay: its settle callback, if any. */
+  function settleOf(listener: AcpSessionListener) {
+    const settle = listener.replay?.()
+    return settle ? [settle] : []
+  }
+
+  function notOpen() {
+    return new Error("The Session is not open on this ACP connection")
+  }
+
+  /** Holds a Session its transport refused until the next transport. */
+  function refuse(sessionId: string, error: unknown) {
+    logger.warn({ err: error, sessionId }, "acp.session.refused")
+    const open = sessions.get(sessionId)
+    if (open) open.refusal = error
+  }
+
+  function joined(sessionId: string) {
+    const open = sessions.get(sessionId)
+    if (!open) return Promise.reject(notOpen())
+    if (open.state === "joined") return Promise.resolve()
+    if (open.state === "gone")
+      return Promise.reject(RequestError.resourceNotFound())
+    if (open.refusal !== undefined) return Promise.reject(open.refusal)
+    if (!open.waiters) {
+      open.waiters = Promise.withResolvers()
+      // A part or close with nobody waiting is no unhandled rejection.
+      void open.waiters.promise.catch(() => {})
+    }
+    return open.waiters.promise
+  }
+
+  function replay(sessionId: string) {
+    const open = sessions.get(sessionId)
+    if (!open) return Promise.reject(notOpen())
+    const served = open.replaying
+      ? !open.replaying.delivered
+      : !open.replayed || open.replayOwed
+    if (!served) open.owner?.actor.send({ type: "replay" })
+    return joined(sessionId)
+  }
+
+  /** Mirrors the owner's state onto the record and its listeners. */
+  function mirror(open: OpenSession, value: unknown) {
+    if (value !== "refused") open.refusal = undefined
+    const next = SESSION_STATES.get(value) ?? "joining"
+    if (next === open.state) return
+    open.state = next
+    const failure =
+      next === "gone" ? RequestError.resourceNotFound() : open.refusal
+    if (next === "joined") open.waiters?.resolve()
+    if (failure !== undefined) open.waiters?.reject(failure)
+    if (next === "joined" || failure !== undefined) open.waiters = undefined
+    for (const listener of open.listeners) listener.state?.(next)
+  }
+
+  function subscribe(sessionId: string, listener: AcpSessionListener) {
+    if (ended) return () => {}
+    // A Session opened before the transport joins once it is ready.
+    start()
+    const known = sessions.get(sessionId)
+    if (known) {
+      clock.clearTimeout(known.grace)
+      known.grace = undefined
+      known.listeners.add(listener)
+      // Nothing of the replay under way has arrived, so it carries the
+      // Session whole to this listener too.
+      if (known.replaying && !known.replaying.delivered)
+        known.replaying.settles.push(...settleOf(listener))
+      return () => leave(sessionId, known, listener)
+    }
+    const open = openSession(sessionId, [listener], false)
+    return () => leave(sessionId, open, listener)
+  }
+
+  /**
+   * Records an opened Session and starts its owner: one `session/new` just
+   * joined is joined already and has nothing to replay; any other joins once
+   * the transport is ready.
+   */
+  function openSession(
+    sessionId: string,
+    listeners: AcpSessionListener[],
+    created: boolean
+  ) {
+    const open: OpenSession = {
+      listeners: new Set(listeners),
+      state: "joining",
+      replayed: created,
+      replayOwed: false,
+    }
+    sessions.set(sessionId, open)
+    const initial = !joinable ? "detached" : created ? "joined" : "joining"
+    const owner = createOwner(sessionMachine(sessionId, initial), {
+      logger,
+      clock,
+      bindings: { sessionId },
+    })
+    open.owner = owner
+    owner.actor.subscribe((snapshot) => mirror(open, snapshot.value))
+    mirror(open, owner.actor.getSnapshot().value)
+    return open
+  }
+
+  function leave(
+    sessionId: string,
+    open: OpenSession,
+    listener: AcpSessionListener
+  ) {
+    if (!open.listeners.delete(listener) || open.listeners.size > 0) return
+    if (sessions.get(sessionId) !== open) return
+    open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
+  }
+
+  /** Drops a Session no listener came back to, and tells the proxy so. */
+  function part(sessionId: string, open: OpenSession) {
+    sessions.delete(sessionId)
+    owners.delete(sessionId)
+    open.owner?.dispose()
+    open.waiters?.reject(notOpen())
+    open.waiters = undefined
+    if (open.state === "gone") return
+    request("short", (agent, options) =>
+      agent.request(methods.agent.session.close, { sessionId }, options)
+    ).catch((err: unknown) => {
+      logger.debug({ err, sessionId }, "acp.session.close.failed")
+    })
   }
 
   async function resumePage(
     sessionId: string,
     cursor: string
   ): Promise<AcpHistoryPage> {
-    // The proxy reads a page only for a Session this connection has resumed,
+    // The proxy reads a page only for a Session this connection has joined,
     // which a recovered transport has not done until it rejoins.
-    await rejoined?.promise
-    const updates: AcpHistoryPage["updates"][number][] = []
-    pages.set(sessionId, updates)
+    await joined(sessionId)
+    const open = sessions.get(sessionId)
+    if (!open) throw notOpen()
+    const updates: PageUpdates = []
+    open.page = updates
     try {
       const response = await request("medium", (agent, options) =>
         agent.request(
@@ -578,41 +922,32 @@ export function createAcpConnection(
       )
       return { updates, history }
     } finally {
-      if (pages.get(sessionId) === updates) pages.delete(sessionId)
-    }
-  }
-
-  /** The proxy replays every resumed Session from the sequence last seen. */
-  async function rejoin() {
-    // A closed connection loses its presence, so the new one carries the last
-    // report again before any replay can make this tab look attended.
-    if (lastFocus) {
-      const { connection } = await readyTransport()
-      await connection.agent.notify(AOS_METHODS.session.focus, lastFocus)
-    }
-    for (const sessionId of [...updateListeners.keys()]) {
-      const resumed = await resumeSession(sessionId, {
-        replayFromStart: false,
-        ...positions.get(sessionId),
-      })
-      if (resumed.meta.resync)
-        await resumeSession(sessionId, { replayFromStart: true })
+      if (open.page === updates) open.page = undefined
     }
   }
 
   /**
-   * What a transport owes once it is ready. Consumers resume Sessions on the
-   * first transport themselves; only a recovered one owes them a replay.
+   * What a transport owes once it is ready: a recovered one redeems the
+   * invitation and restates presence first. Then every opened Session joins
+   * on its own, and the transport is done once each has joined, gone, or
+   * parted.
    */
   async function recover() {
-    if (!recovering) return
-    recovering = false
-    // The new transport is unauthenticated, so a guest connection redeems
-    // its invitation again before anything that login authorizes.
-    if (invitation !== undefined && !(await reloginOrClose(invitation))) return
-    await rejoin()
-    rejoined?.resolve()
-    rejoined = undefined
+    if (recovering) {
+      recovering = false
+      // The new transport is unauthenticated, so a guest connection redeems
+      // its invitation again before anything that login authorizes.
+      if (invitation !== undefined && !(await reloginOrClose(invitation)))
+        return
+      // A closed connection loses its presence; the liveness probe re-reports
+      // it, and the Sessions join without waiting for its answer.
+      sendLivenessProbeAsync()
+    }
+    joinable = true
+    const opened = [...sessions.keys()]
+    for (const open of sessions.values())
+      open.owner?.actor.send({ type: "ready" })
+    await Promise.allSettled(opened.map(joined))
   }
 
   /** Hands the owner an event; an ended connection has none left to take. */
@@ -628,17 +963,20 @@ export function createAcpConnection(
       ? app.connect(connectAgent)
       : app.connect(
           loggedStream(
-            createWebSocketStream<AnyWireMessage>(
-              options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
-              {
-                WebSocket: observedSocket(
-                  options.socketConstructor ?? globalThis.WebSocket,
-                  () => opened.resolve(),
-                  (code) => {
-                    closeCode = code
-                  }
-                ),
-              }
+            trackedInbound(
+              createWebSocketStream<AnyWireMessage>(
+                options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
+                {
+                  WebSocket: observedSocket(
+                    options.socketConstructor ?? globalThis.WebSocket,
+                    () => opened.resolve(),
+                    (code) => {
+                      closeCode = code
+                    }
+                  ),
+                }
+              ),
+              onInbound
             ),
             logger
           )
@@ -707,13 +1045,10 @@ export function createAcpConnection(
           { status: next }: { status: "reconnecting" | "capacity" }
         ) => {
           recovering = true
-          if (!rejoined) {
-            rejoined = Promise.withResolvers()
-            // Closing mid-recovery must not raise an unhandled rejection when
-            // no page read is waiting.
-            void rejoined.promise.catch(() => {})
-          }
+          joinable = false
           setStatus(next)
+          for (const open of sessions.values())
+            open.owner?.actor.send({ type: "lost" })
         },
         countAttempt: connectionSetup.assign({
           attempt: ({ context }) => context.attempt + 1,
@@ -770,6 +1105,93 @@ export function createAcpConnection(
       },
     })
 
+  const sessionActors = {
+    join: fromAbortable((signal, sessionId: string) =>
+      joinOnce(sessionId, signal)
+    ),
+  }
+  const sessionOwnerSetup = ownerSetup<
+    { generation: number; attempt: number; sessionId: string },
+    SessionEvent,
+    typeof sessionActors
+  >("session-owner", logger, clock, sessionActors)
+  const sessionSetup = sessionOwnerSetup.extend({
+    delays: {
+      retry: ({ context }) => backoffDelay(context.attempt, RECONNECT_BACKOFF),
+    },
+    guards: {
+      replayOwed: ({ context }) =>
+        sessions.get(context.sessionId)?.replayOwed === true,
+      transportLost: () => status !== "ready",
+    },
+    actions: {
+      oweReplay: ({ context }) => {
+        const open = sessions.get(context.sessionId)
+        if (open) open.replayOwed = true
+      },
+      countAttempt: sessionOwnerSetup.assign({
+        attempt: ({ context }) => context.attempt + 1,
+      }),
+      resetAttempts: sessionOwnerSetup.assign({ attempt: 0 }),
+    },
+  })
+
+  /**
+   * One opened Session's owner. It joins while the transport is ready, waits
+   * out a failed join on its own backoff, holds one the transport refuses
+   * until the next transport, rejoins after a reconnect, and ends for good
+   * once the provider reports the Session gone.
+   */
+  function sessionMachine(
+    sessionId: string,
+    initial: "joining" | "joined" | "detached"
+  ) {
+    return sessionSetup.createMachine({
+      context: { generation: 0, attempt: 0, sessionId },
+      initial,
+      on: { replay: { actions: "oweReplay" }, gone: ".gone" },
+      states: {
+        joining: {
+          entry: "bumpGeneration",
+          invoke: {
+            src: "join",
+            input: ({ context }) => context.sessionId,
+            onDone: [
+              { guard: "replayOwed", target: "joining", reenter: true },
+              { target: "joined", actions: "resetAttempts" },
+            ],
+            onError: [
+              { guard: ({ event }) => isGone(event.error), target: "gone" },
+              { guard: "transportLost", target: "detached" },
+              {
+                guard: ({ event }) => isRefused(event.error),
+                target: "refused",
+                actions: ({ context, event }) =>
+                  refuse(context.sessionId, event.error),
+              },
+              { target: "unavailable" },
+            ],
+          },
+          on: { lost: "detached" },
+        },
+        joined: {
+          on: {
+            lost: "detached",
+            replay: { target: "joining", actions: "oweReplay" },
+          },
+        },
+        unavailable: {
+          meta: { log: "info" },
+          after: { retry: { target: "joining", actions: "countAttempt" } },
+          on: { lost: "detached" },
+        },
+        refused: { meta: { log: "info" }, on: { lost: "detached" } },
+        detached: { on: { ready: "joining" } },
+        gone: { type: "final", meta: { log: "info" } },
+      },
+    })
+  }
+
   /**
    * Opens the transport, once. Creating a connection performs no I/O, so a
    * render React discards leaves no socket behind, and a closed connection
@@ -798,6 +1220,32 @@ export function createAcpConnection(
     if (ended) return
     owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
     owner.stack.defer(shutdown)
+    const handleVisibilityChange = () => {
+      if (globalThis.document?.visibilityState === "hidden") {
+        // Disarm while hidden; the page becoming visible probes at once.
+        clock.clearTimeout(silenceTimer)
+        silenceTimer = undefined
+      } else if (status === "ready") {
+        sendLivenessProbeAsync()
+      }
+    }
+    const handleOnline = () => {
+      if (status === "ready") sendLivenessProbeAsync()
+    }
+    globalThis.document?.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    )
+    globalThis.addEventListener?.("online", handleOnline)
+    owner.stack.defer(() => {
+      clock.clearTimeout(silenceTimer)
+      silenceTimer = undefined
+      globalThis.document?.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      )
+      globalThis.removeEventListener?.("online", handleOnline)
+    })
   }
 
   /** Ends the connection for good: nothing reconnects, and every waiter fails. */
@@ -808,8 +1256,12 @@ export function createAcpConnection(
     failInitialized?.(new Error("The ACP connection closed"))
     failInitialized = undefined
     settleInitialized = undefined
-    rejoined?.reject(new Error("The ACP connection closed"))
-    rejoined = undefined
+    for (const open of sessions.values()) {
+      clock.clearTimeout(open.grace)
+      open.owner?.dispose()
+      open.waiters?.reject(new Error("The ACP connection closed"))
+    }
+    sessions.clear()
     live?.connection.close()
     live = undefined
   }
@@ -838,6 +1290,14 @@ export function createAcpConnection(
         )
       )
       owners.set(sessionId, meta.agentId)
+      // It parts in its grace unless a listener comes to it.
+      if (!sessions.has(sessionId)) {
+        const open = openSession(sessionId, [], true)
+        open.grace = clock.setTimeout(
+          () => part(sessionId, open),
+          PART_GRACE_MS
+        )
+      }
       return { sessionId }
     },
 
@@ -858,12 +1318,15 @@ export function createAcpConnection(
       }
     },
 
-    resumeSession,
+    subscribe,
+    joined,
+    replay,
+    sessionState: (sessionId) => sessions.get(sessionId)?.state,
     resumePage,
-    history: (sessionId) => histories.get(sessionId),
+    history: (sessionId) => sessions.get(sessionId)?.history,
 
     async prompt(sessionId, blocks: ContentBlock[], meta) {
-      const response = await request("long", (agent, options) =>
+      const response = await write(sessionId, "long", (agent, options) =>
         agent.request(
           methods.agent.session.prompt,
           { sessionId, prompt: blocks, _meta: { [AOS_META_KEY]: meta } },
@@ -874,13 +1337,14 @@ export function createAcpConnection(
     },
 
     cancel(sessionId) {
-      notifyAgent((agent) =>
-        agent.notify(methods.agent.session.cancel, { sessionId })
+      notifyAgent(
+        (agent) => agent.notify(methods.agent.session.cancel, { sessionId }),
+        sessionId
       )
     },
 
     async setConfigOption(sessionId, configId, value) {
-      const response = await request("medium", (agent, options) =>
+      const response = await write(sessionId, "medium", (agent, options) =>
         agent.request(
           methods.agent.session.setConfigOption,
           { sessionId, configId, type: "id", value },
@@ -888,12 +1352,6 @@ export function createAcpConnection(
         )
       )
       return response.configOptions
-    },
-
-    async closeSession(sessionId) {
-      await request("short", (agent, options) =>
-        agent.request(methods.agent.session.close, { sessionId }, options)
-      )
     },
 
     async deleteSession(sessionId) {
@@ -910,7 +1368,7 @@ export function createAcpConnection(
 
     async steer(steer) {
       return AosSteerResponseSchema.parse(
-        await request("medium", (agent, options) =>
+        await write(steer.sessionId, "medium", (agent, options) =>
           agent.request(AOS_METHODS.session.steer, steer, options)
         )
       )
@@ -923,7 +1381,13 @@ export function createAcpConnection(
         idle: presence.idle,
       }
       lastFocus = report
-      notifyAgent((agent) => agent.notify(AOS_METHODS.session.focus, report))
+      // The focus request is also the liveness probe: no reply in 10 s closes
+      // the transport, and the reconnect re-reports it via sendLivenessProbeAsync.
+      request("probe", (agent, options) =>
+        agent.request(AOS_METHODS.session.focus, report, options)
+      ).catch((err: unknown) => {
+        logger.debug({ err }, "acp.focus.failed")
+      })
     },
 
     async listAgents() {
@@ -942,15 +1406,10 @@ export function createAcpConnection(
       )
     },
 
-    subscribeSessionUpdates: (sessionId, listener) =>
-      subscribeKeyed(updateListeners, sessionId, listener),
-    subscribeSessionReplay: (sessionId, listener) =>
-      subscribeKeyed(replayListeners, sessionId, listener),
     subscribeNotification: (method, listener) =>
       subscribeKeyed(notificationListeners, method, listener),
     subscribePendingRequests: (listener) =>
       subscribeTo(pendingListeners, listener),
-    lastSequence: (sessionId) => positions.get(sessionId),
 
     close: closeConnection,
   }

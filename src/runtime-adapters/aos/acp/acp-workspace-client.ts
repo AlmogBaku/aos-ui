@@ -1,4 +1,4 @@
-import { backoffDelay } from "@aos/lifecycle"
+import { backoffDelay, defaultClock, type Clock } from "@aos/lifecycle"
 import { AOS_METHODS, type AosSessionInfoMeta } from "@aos/protocol/acp"
 import type {
   RuntimeInfo,
@@ -24,7 +24,7 @@ import type { AcpConnection } from "./types"
 
 /**
  * A burst of native catalog changes costs one `session/list` page. Rows the
- * browser has not resumed learn their `unread`, `status`, and title only from
+ * browser does not hold learn their `unread`, `status`, and title only from
  * a list, so an invalidation has to re-read one rather than patch a guess in.
  */
 const CATALOG_RELIST_DEBOUNCE_MS = 300
@@ -55,6 +55,8 @@ export type AcpWorkspaceClientOptions = {
   /** Ownership for a Session the row cache has not seen yet. */
   agentIdFor?: (sessionId: string) => string | undefined
   now?: () => number
+  /** Runs the relist debounce and its retry backoff. */
+  clock?: Clock
 }
 
 export function createAcpWorkspaceClient({
@@ -62,6 +64,7 @@ export function createAcpWorkspaceClient({
   rest,
   agentIdFor,
   now,
+  clock = defaultClock,
 }: AcpWorkspaceClientOptions) {
   const store = createAcpSessionStore({
     connection,
@@ -191,22 +194,47 @@ export function createAcpWorkspaceClient({
     }
   }
 
+  let relistTimer: unknown
+  /** The newest relist's backoff; a newer relist or `dispose` ends it early. */
+  let retry: { timer: unknown; wake: () => void } | undefined
+  /** Rises with every relist, so an older one stops retrying. */
+  let relists = 0
+  let disposed = false
+  const stale = (generation: number) => disposed || generation !== relists
+
+  function stopRetry() {
+    if (!retry) return
+    clock.clearTimeout(retry.timer)
+    retry.wake()
+    retry = undefined
+  }
+
+  function backOff(ms: number) {
+    return new Promise<void>((wake) => {
+      const timer = clock.setTimeout(() => {
+        retry = undefined
+        wake()
+      }, ms)
+      retry = { timer, wake }
+    })
+  }
+
   /**
    * Lists page one, retrying on backoff until it succeeds or is superseded by
    * a newer relist request. Used for the first load and for reconnect relists.
    */
   async function reliableListSessions() {
-    const nonce = ++relistNonce
+    stopRetry()
+    const generation = ++relists
     let attempt = 0
-    while (nonce === relistNonce) {
+    while (!stale(generation)) {
       try {
         await listSessions()
         return
       } catch {
-        if (nonce !== relistNonce) return
+        if (stale(generation)) return
         attempt += 1
-        const delay = backoffDelay(attempt, RELIST_BACKOFF)
-        await new Promise<void>((resolve) => setTimeout(resolve, delay))
+        await backOff(backoffDelay(attempt, RELIST_BACKOFF))
       }
     }
   }
@@ -221,35 +249,28 @@ export function createAcpWorkspaceClient({
       await reliableListSessions()
   }
 
-  let relistTimer: ReturnType<typeof setTimeout> | undefined
-  /**
-   * Incremented whenever a new relist is triggered: a pending retry from an
-   * older relist is cancelled when a newer one starts.
-   */
-  let relistNonce = 0
-
   /**
    * Re-reads page one once a burst of invalidations settles. A read still in
    * flight answers for the burst, so nothing here overlaps or retries.
    */
   function scheduleSessionRelist() {
-    if (relistTimer !== undefined) clearTimeout(relistTimer)
-    relistTimer = setTimeout(() => {
+    if (relistTimer !== undefined) clock.clearTimeout(relistTimer)
+    relistTimer = clock.setTimeout(() => {
       relistTimer = undefined
       void reliableListSessions()
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 
-  connection.subscribeNotification(
+  const leaveCatalog = connection.subscribeNotification(
     AOS_METHODS.notify.catalogInvalidated,
     scheduleSessionRelist
   )
 
   // After a reconnect the session list may have changed while the socket was
   // down: re-read page one as soon as the connection is ready again.
-  let connectionEverReady = false
-  let connectionCurrentlyReady = false
-  connection.subscribeStatus((status) => {
+  let connectionEverReady = connection.status === "ready"
+  let connectionCurrentlyReady = connectionEverReady
+  const leaveStatus = connection.subscribeStatus((status) => {
     if (status === "ready") {
       // A reconnect: was ever ready and had an interruption.
       if (connectionEverReady && !connectionCurrentlyReady)
@@ -260,6 +281,45 @@ export function createAcpWorkspaceClient({
       connectionCurrentlyReady = false
     }
   })
+
+  /** Each held Session's hold count and what the last release lets go. */
+  const holds = new Map<string, { count: number; release: () => void }>()
+
+  /**
+   * Holds a Session's status, Todos, row changes, and composer projection for
+   * as long as something shows it. The stores fold what the Session streams,
+   * so whatever replays it — the thread that binds it — fills them. Naming the
+   * owning Agent lets a deep link resume before any list.
+   */
+  function subscribeSession(sessionId: string) {
+    const held = holds.get(sessionId)
+    if (held) held.count += 1
+    else {
+      const agentId = knownAgentOf(sessionId)
+      const leaveRow = store.subscribe(sessionId, agentId)
+      const leaveComposer = composer.subscribe(sessionId)
+      holds.set(sessionId, {
+        count: 1,
+        release: () => {
+          leaveRow()
+          leaveComposer()
+        },
+      })
+      if (agentId) {
+        adopt(sessionId, agentId)
+        watchCreator(sessionId, agentId)
+      }
+    }
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const hold = holds.get(sessionId)
+      if (!hold || --hold.count > 0) return
+      holds.delete(sessionId)
+      hold.release()
+    }
+  }
 
   const client = {
     // Agents
@@ -315,36 +375,11 @@ export function createAcpWorkspaceClient({
         clientId: crypto.randomUUID(),
         ...(options?.title ? { title: options.title } : {}),
       })
-      store.observe(created.sessionId)
       adopt(created.sessionId, agentId)
       watchCreator(created.sessionId, agentId)
-      composer.resume(created.sessionId)
       return { sessionId: created.sessionId }
     },
-    /**
-     * Resumes a Session: the proxy replays it, and its row, execution state,
-     * capabilities, and config options follow as updates. Naming the owning
-     * Agent lets a deep link resume before any list.
-     */
-    async resumeSession(
-      sessionId: string,
-      resume?: { replayFromStart?: boolean }
-    ) {
-      store.observe(sessionId)
-      composer.observe(sessionId)
-      const agentId = knownAgentOf(sessionId)
-      const resumed = await connection.resumeSession(sessionId, {
-        replayFromStart: resume?.replayFromStart ?? false,
-        ...(agentId ? { agentId } : {}),
-        ...connection.lastSequence(sessionId),
-      })
-      if (agentId) {
-        adopt(sessionId, agentId)
-        watchCreator(sessionId, agentId)
-      }
-      composer.resume(sessionId)
-      return resumed
-    },
+    subscribeSession,
     async markSessionRead(sessionId: string) {
       store.setUnread(sessionId, false)
       await connection.updateSession({ sessionId, unread: false })
@@ -389,17 +424,14 @@ export function createAcpWorkspaceClient({
     subscribeTodos: store.subscribeTodos,
     subscribeActivity: store.subscribeActivity,
 
-    // Composer
-    async workspaceCapabilities(sessionId: string) {
-      return composer.capabilities(sessionId)
-    },
-    async models(sessionId: string) {
-      return composer.models(sessionId)
-    },
-    /** The newest usage the provider pushed, read synchronously. */
+    // Composer: synchronous reads of what a held Session has reported so far.
+    workspaceCapabilities: composer.capabilities,
+    models: composer.models,
+    /** The newest usage the provider pushed. */
     context: composer.context,
     turnUsage: composer.turnUsage,
-    subscribeContext: composer.subscribeContext,
+    /** Told of every change to what the composer reads for the Session. */
+    subscribeComposer: composer.listen,
     /** The model the provider reports the Session on, as it changes. */
     modelFeed: composer.modelFeed,
     selectModel: composer.selectModel,
@@ -411,10 +443,11 @@ export function createAcpWorkspaceClient({
     ): Promise<SessionModelUpdateResponse> {
       let models =
         patch.selectedId === undefined
-          ? await composer.models(sessionId)
+          ? composer.models(sessionId)
           : await composer.selectModel(sessionId, patch.selectedId)
       if (patch.effortId !== undefined)
         models = await composer.selectEffort(sessionId, patch.effortId)
+      if (!models) throw new Error("The Session reports no models")
       return {
         selectedId: models.selectedId,
         ...(models.effortId === undefined ? {} : { effortId: models.effortId }),
@@ -437,8 +470,21 @@ export function createAcpWorkspaceClient({
     agentIdOf: agentOf,
     /** Ownership for callers that can proceed without knowing it yet. */
     knownAgentIdOf: knownAgentOf,
-    /** The provider's newest Session title, once a Session is resumed. */
+    /** The provider's newest Session title, as a list or a held Session reports it. */
     sessionTitle: store.title,
+
+    /** Stops the relist timers and releases every subscription and hold. */
+    dispose() {
+      disposed = true
+      if (relistTimer !== undefined) clock.clearTimeout(relistTimer)
+      relistTimer = undefined
+      stopRetry()
+      leaveCatalog()
+      leaveStatus()
+      store.dispose()
+      for (const hold of holds.values()) hold.release()
+      holds.clear()
+    },
   }
 
   return client
