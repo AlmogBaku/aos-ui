@@ -1163,10 +1163,11 @@ describe("SessionCoordinator", () => {
       access("reload")
     )
 
-    await expect(reader(reload)()).resolves.toMatchObject({
-      value: {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
-      },
+    // A reset names only its code: no message the browser would show.
+    const head = await reader(reload)()
+    expect(head.value?.event).toEqual({
+      kind: TurnEventKind.TurnFailed,
+      code: "AOS_RESET_REQUIRED",
     })
     expect(sessions.state(scope)).toBe("running")
     own.close()
@@ -3098,45 +3099,6 @@ describe("SessionCoordinator", () => {
       sessions.start(scope, input("run-2"), access("one"))
     ).resolves.toBeDefined()
     expect(engine.recover).not.toHaveBeenCalled()
-  })
-
-  it("emits AOS_RESET_REQUIRED with only the code and no message", async () => {
-    const first = new EventSource()
-    const second = new EventSource()
-    // A coordinator whose journal limit evicts the oldest journal once a
-    // second session is tracked, so a reload recovery for the first resets.
-    const sessions = coordinator(
-      {
-        start: vi
-          .fn<ServerTurnEngine["start"]>()
-          .mockResolvedValueOnce(first)
-          .mockResolvedValueOnce(second),
-        recover: vi.fn(async () => second),
-      },
-      { maxActiveExecutions: 1 }
-    )
-    await sessions.start(scope, input("run-1"), access("one"))
-    first.emit(turnStarted)
-    await vi.waitFor(() => expect(sessions.state(scope)).not.toBe("idle"))
-    first.emit(turnEnded)
-    first.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-
-    // Starting a second session evicts session-1's journal (journal limit = 1).
-    await sessions.start(otherScope, input("run-2"), access("two"))
-
-    const reset = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1" },
-      access("reset-reader")
-    )
-    const head = await reader(reset)()
-    reset.close()
-
-    expect(head.value?.event).toEqual({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
-    })
   })
 
   it("threads cache key, journal, sequence and terminal hook into started, recovered, discovered, and resumed segments", async () => {
