@@ -12,30 +12,6 @@ import { openCodeFailure } from "./failures"
 type WatchOptions = Pick<LinkOptions, "dial" | "onError" | "bindings">
 
 /**
- * A core link that keeps a drop it hears before it takes the dial, which core
- * would miss, and hears it once up, after `onReady`.
- */
-function holdingLink(options: LinkOptions, onReady?: () => void): Link {
-  let held: (() => void) | undefined
-  const link = createLink({
-    ...options,
-    dial: (signal, lost) =>
-      options.dial(signal, (cause) => {
-        if (link.state() === "ready") lost(cause)
-        else held = () => lost(cause)
-      }),
-  })
-  link.subscribe((state) => {
-    if (state !== "ready") return
-    onReady?.()
-    const drop = held
-    held = undefined
-    drop?.()
-  })
-  return link
-}
-
-/**
  * OpenCode's link, as its Sessions' event-stream watches meet it. Each watch
  * is one core link: redialed on backoff behind a breaker, and stopped once its
  * Session is gone or OpenCode refuses the password. A refused watch rides on
@@ -60,7 +36,7 @@ export class OpenCodeLink implements ServerLink {
       credentialRefused: () => Promise<boolean>
     }>
   ) {
-    this.#credential = holdingLink({
+    this.#credential = createLink({
       dial: async (_signal, lost) => {
         // Before the check, so a refusal heard during it is not missed.
         this.#refuse = lost
@@ -93,31 +69,31 @@ export class OpenCodeLink implements ServerLink {
   watch({ dial, onError, bindings }: WatchOptions) {
     if (this.#closed) return () => {}
     const watch = {}
-    const link = holdingLink(
-      {
-        dial: async (signal, lost) => {
-          try {
-            return await dial(signal, (cause) => {
-              this.#heard(cause)
-              lost(cause)
-            })
-          } catch (error) {
-            this.#heard(error)
-            throw error
-          }
-        },
-        publicError: openCodeFailure,
-        onError: (cause) => {
-          this.#mark(watch, openCodeFailure(cause)?.kind !== "gone")
-          onError?.(cause)
-        },
-        upstream: this.#credential,
-        logger: this.options.logger,
-        clock: this.options.clock,
-        bindings,
+    const link = createLink({
+      dial: async (signal, lost) => {
+        try {
+          return await dial(signal, (cause) => {
+            this.#heard(cause)
+            lost(cause)
+          })
+        } catch (error) {
+          this.#heard(error)
+          throw error
+        }
       },
-      () => this.#mark(watch, false)
-    )
+      publicError: openCodeFailure,
+      onError: (cause) => {
+        this.#mark(watch, openCodeFailure(cause)?.kind !== "gone")
+        onError?.(cause)
+      },
+      upstream: this.#credential,
+      logger: this.options.logger,
+      clock: this.options.clock,
+      bindings,
+    })
+    link.subscribe((state) => {
+      if (state === "ready") this.#mark(watch, false)
+    })
     const stop = () => {
       if (!this.#stops.delete(stop)) return
       link.dispose()

@@ -437,8 +437,6 @@ export class HermesTurnEngine {
       sessionId: scope.sessionId,
     }
     let open = false
-    /** A drop the link heard before it took the dial, which it hears once up. */
-    let held: (() => void) | undefined
     const announce = (own: boolean) => {
       if (open) return
       open = true
@@ -476,9 +474,7 @@ export class HermesTurnEngine {
           return
         }
         if (attachment.kind === "lost") {
-          const cause = new HermesUnavailableError()
-          if (link.state() === "ready") lost(cause)
-          else held = () => lost(cause)
+          lost(new HermesUnavailableError())
           return
         }
         const event = nativeEvent(attachment.event)
@@ -508,16 +504,7 @@ export class HermesTurnEngine {
       clock: defaultClock,
       bindings,
     })
-    const unsubscribe = link.subscribe((state) => {
-      if (state !== "ready") return
-      const drop = held
-      held = undefined
-      drop?.()
-    })
-    return () => {
-      unsubscribe()
-      link.dispose()
-    }
+    return () => link.dispose()
   }
 
   /** Whether this engine runs, or still settles, the Session's current turn. */
