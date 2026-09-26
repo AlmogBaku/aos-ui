@@ -209,6 +209,8 @@ export type SessionReadingListeners = {
   /** The model options, and each switch the subscriber reads or a config makes. */
   model?: ReadingListener<SessionModelsResponse>
   execution?: ReadingListener<SessionExecution>
+  /** The Session is gone: nothing more is read or streamed for it. */
+  gone?: (cause: unknown) => void
 }
 
 /** One journaled event and the memory its raw form occupies. */
@@ -888,6 +890,11 @@ export class SessionCoordinator {
   readonly #subscribers = new Map<string, number>()
   /** Sessions their last subscriber left, evicted once their turn rests. */
   readonly #pendingEvictions = new Set<string>()
+  /** Who hears a Session go, by its session key. */
+  readonly #gone = new Set<{
+    key: string
+    listener: (cause: unknown) => void
+  }>()
   /** How many turns the uncertainty deadline ended with their outcome unknown. */
   #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
@@ -920,12 +927,16 @@ export class SessionCoordinator {
       logger: this.#logger,
       clock: this.#clock,
     }
+    const gone = (scope: SessionScope, cause: unknown) => {
+      this.gone(scope, cause)
+    }
     this.#usage = new SessionReporter({
       name: "usage",
       read: async (scope) =>
         SessionContextResponseSchema.parse(
           await readings.context(scope.agentId, scope.sessionId)
         ),
+      gone,
       ...cell,
     })
     // A switch reported mid-turn may name a model the catalog does not yet.
@@ -937,6 +948,7 @@ export class SessionCoordinator {
         ),
         ...(selectedId === undefined ? {} : { selectedId }),
       }),
+      gone,
       ...cell,
     })
     this.#execution = new SessionReporter({
@@ -979,7 +991,10 @@ export class SessionCoordinator {
   ) {
     const key = scopeKey(scope)
     this.#addSubscriber(key)
+    const gone = listeners.gone && { key, listener: listeners.gone }
+    if (gone) this.#gone.add(gone)
     const leaves = [
+      gone && (() => this.#gone.delete(gone)),
       listeners.usage &&
         this.#usage.subscribe(key, scope, membershipId, listeners.usage),
       listeners.model &&
@@ -1047,6 +1062,32 @@ export class SessionCoordinator {
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#turnExecution(scopeKey(scope)).state
+  }
+
+  /**
+   * Ends a Session a provider read or report found gone, when `cause` says it
+   * is: every subscriber to its readings hears it once, then its execution,
+   * journal and readings are dropped, so no later resume is served from them
+   * and nothing reads it again. Returns whether it was gone.
+   */
+  gone(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    cause: unknown
+  ) {
+    if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
+    const key = scopeKey(scope)
+    for (const heard of [...this.#gone])
+      if (heard.key === key) {
+        this.#gone.delete(heard)
+        heard.listener(cause)
+      }
+    const segment = this.#executions.get(key)?.segment
+    if (segment) {
+      segment.terminal = true
+      segment.fanout.close()
+    }
+    this.#evict(key)
+    return true
   }
 
   /** Diagnostic counters for this coordinator's live resources. */

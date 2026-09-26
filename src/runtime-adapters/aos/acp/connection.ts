@@ -264,6 +264,8 @@ export function createAcpConnection(
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
+  /** Sessions the proxy reported gone, which no transport rejoins again. */
+  const gone = new Set<string>()
 
   let status: AcpConnectionStatus = "connecting"
   let started = false
@@ -391,6 +393,12 @@ export function createAcpConnection(
       for (const listener of notificationListeners.get(method) ?? [])
         listener(params)
     })
+  // The provider no longer holds a Session reported `not_found`: the proxy
+  // ended its membership, and resuming it again could only fail.
+  subscribeKeyed(notificationListeners, AOS_METHODS.notify.error, (params) => {
+    const { sessionId, code } = AosErrorNotificationSchema.parse(params)
+    if (sessionId !== undefined && code === "not_found") gone.add(sessionId)
+  })
 
   async function readyTransport(): Promise<Transport> {
     // React commits children before their parent, so a consumer's effect can
@@ -582,7 +590,10 @@ export function createAcpConnection(
     }
   }
 
-  /** The proxy replays every resumed Session from the sequence last seen. */
+  /**
+   * The proxy replays every resumed Session from the sequence last seen, but
+   * one it reported gone.
+   */
   async function rejoin() {
     // A closed connection loses its presence, so the new one carries the last
     // report again before any replay can make this tab look attended.
@@ -591,6 +602,7 @@ export function createAcpConnection(
       await connection.agent.notify(AOS_METHODS.session.focus, lastFocus)
     }
     for (const sessionId of [...updateListeners.keys()]) {
+      if (gone.has(sessionId)) continue
       const resumed = await resumeSession(sessionId, {
         replayFromStart: false,
         ...positions.get(sessionId),

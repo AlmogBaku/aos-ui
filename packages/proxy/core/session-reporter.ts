@@ -31,8 +31,10 @@ export type SessionReporterOptions<T, C, S extends ReadingScope> = {
   link: ServerLink
   /** Bounds those at-once reads across every reporter that shares it. */
   budget: RetryBudget
-  /** Sorts a failed read for its log line. */
+  /** Sorts a failed read for its log line, and a gone one from the rest. */
   publicError(cause: unknown): PublicFailure | undefined
+  /** Hears a read that found its Session gone, which is never read again. */
+  gone?(scope: S, cause: unknown): void
   logger: Logger
   clock: Clock
 }
@@ -97,11 +99,19 @@ function defer<T>(cell: AnyCell<T>) {
  * while someone is owed it and its budget lasts, and a report while one is
  * in flight read again once it lands. A report restarts the budget, and so
  * does a retry, which the shared budget lets through at once or sends to a
- * fresh backoff.
+ * fresh backoff. A read that finds its Session gone is owed to nobody, and no
+ * retry takes it again.
  */
 function readingMachine<T, C, S extends ReadingScope>(
   cell: CellState<T, C, S>,
-  { read, budget, publicError, logger, clock }: SessionReporterOptions<T, C, S>
+  {
+    read,
+    budget,
+    publicError,
+    gone,
+    logger,
+    clock,
+  }: SessionReporterOptions<T, C, S>
 ) {
   const actors = { read: fromAbortable(() => read(cell.scope, cell.cause)) }
   const reading = ownerSetup<OwnerContext, ReadingSignal<C>, typeof actors>(
@@ -165,6 +175,17 @@ function readingMachine<T, C, S extends ReadingScope>(
           ],
           onError: [
             {
+              guard: ({ event }) => publicError(event.error)?.kind === "gone",
+              target: "idle",
+              actions: ({ event }) => {
+                failed(event.error)
+                cell.owed.clear()
+                cell.next.clear()
+                cell.failures = 0
+                gone?.(cell.scope, event.error)
+              },
+            },
+            {
               guard: () =>
                 cell.failures < READING_RETRIES &&
                 cell.owed.size + cell.next.size > 0,
@@ -227,6 +248,7 @@ type Cell<T, C, S extends ReadingScope> = CellState<T, C, S> & {
  * An unreadable Session is re-read on backoff and, past its budget, leaves
  * the last value standing: an unknown value is not an empty one. Once the
  * runtime's link is up again, every read that failed is taken again at once.
+ * A gone Session is read no more.
  */
 export class SessionReporter<
   T,

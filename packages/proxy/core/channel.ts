@@ -685,7 +685,10 @@ export function createChannels(options: CreateChannelsOptions) {
      * `paged` older history itself. The join lands once the answer is
      * written, and the Session's execution, readings and row reach the member
      * as events after it. A Session waiting on input asks its runtime whether
-     * the wait still stands, which the answer does not wait for.
+     * the wait still stands, which the answer does not wait for. A resume the
+     * journal serves asks the provider nothing first: the reads its join
+     * starts, and the turn subscription, find a Session gone meanwhile and end
+     * it, which spares every rejoin a round trip.
      */
     async resume(
       membership: Membership,
@@ -838,8 +841,10 @@ class Membership {
           : "idle",
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
+      // A Session the provider reports gone ends each of its memberships.
       report: (cause) => {
-        if (this.detached) return
+        if (this.detached || options.coordinator.gone(this.#scope, cause))
+          return
         const failure = options.describe(cause)
         options.logger.error(
           { errorCode: failure.code, message: failure.message },
@@ -1330,6 +1335,10 @@ class Membership {
       },
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
+      gone: (cause) => {
+        void this.report(cause)
+        this.part()
+      },
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow(
