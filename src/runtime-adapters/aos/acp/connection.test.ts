@@ -217,8 +217,9 @@ function createProxyAgent(
       record(AOS_METHODS.agents.setVisibility, params)
       return { revision: "revision-2", agent: catalogEntry() }
     })
-    .onNotification(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
+    .onRequest(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(AOS_METHODS.session.focus, params)
+      return {}
     })
     .onConnect((connection) => {
       peer = connection.client
@@ -513,7 +514,7 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("sends cancel and focus as notifications", async () => {
+  it("sends cancel as a notification and focus as a request", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized

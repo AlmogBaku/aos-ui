@@ -11,14 +11,22 @@ export const HANDSHAKE_DEADLINE_MS = 10_000
  * How long a request waits for its reply before its transport counts as
  * stalled: short for reads and the other small requests, medium for a resume,
  * a config write and a steer, long for a prompt and a from-start resume.
+ * The `probe` tier is the liveness probe deadline; focus uses it.
  */
 export const REQUEST_DEADLINE_MS = {
   short: 30_000,
   medium: 45_000,
   long: 90_000,
+  probe: 10_000,
 } as const
 
 export type RequestTier = keyof typeof REQUEST_DEADLINE_MS
+
+/** How long an inbound stream may be silent while visible before a liveness probe is sent. */
+export const LIVENESS_SILENCE_MS = 20_000
+
+/** How long the liveness probe waits for a reply before the transport is closed. */
+export const LIVENESS_PROBE_DEADLINE_MS = REQUEST_DEADLINE_MS.probe
 
 /** Full-jitter backoff before reopening a closed transport. */
 export const RECONNECT_BACKOFF = { baseMs: 250, capMs: 5_000 }

@@ -13,8 +13,10 @@ import {
 } from "../../../../../packages/proxy/core/ids"
 import { useFakeClock } from "../../../../../test/support/fake-clock"
 
+import { AOS_METHODS } from "@aos/protocol/acp"
+
 import { createAcpConnection } from "../connection"
-import { PART_GRACE_MS } from "../limits"
+import { LIVENESS_SILENCE_MS, PART_GRACE_MS } from "../limits"
 import { PipedSocket, pipedSockets } from "../test-socket"
 
 const SIBLING = "session-2"
@@ -256,5 +258,75 @@ describe("browser connection faults", () => {
 
     expect(connection.status).toBe("closed")
     expect(pipe.sockets).toHaveLength(1)
+  })
+
+  it("sends a liveness probe after 20 s of silence and closes after 10 s without an answer", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { pipe, connection } = await connectBrowser()
+    const frames = sentFrames()
+    connection.start()
+    await connection.initialized
+
+    // Block all inbound so the silence timer can expire.
+    pipe.sockets[0]!.halfOpen()
+    await clock.advance(LIVENESS_SILENCE_MS)
+
+    expect(
+      frames.filter((f) => f.method === AOS_METHODS.session.focus)
+    ).toHaveLength(1)
+    expect(connection.status).toBe("ready") // probe sent, not yet timed out
+
+    // Probe deadline fires → transport closes → reconnect
+    await clock.advance(10_000)
+    await clock.advance(125) // reconnect backoff at 0.5 random
+    expect(pipe.sockets).toHaveLength(2)
+    expect(connection.status).toBe("ready")
+  })
+
+  it("delays the liveness probe 20 s from the last inbound frame", async () => {
+    const clock = useFakeClock()
+    const { pipe, connection } = await connectBrowser()
+    const frames = sentFrames()
+    // A joined Session produces inbound frames that reset the silence timer.
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+
+    // Seal inbound so only the join counts.
+    pipe.sockets[0]!.halfOpen()
+    await clock.advance(LIVENESS_SILENCE_MS - 1)
+    expect(
+      frames.filter((f) => f.method === AOS_METHODS.session.focus)
+    ).toHaveLength(0)
+
+    await clock.advance(1)
+    expect(
+      frames.filter((f) => f.method === AOS_METHODS.session.focus)
+    ).toHaveLength(1)
+  })
+
+  it("re-reports the focused Session in the liveness probe after reconnect", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { pipe, connection } = await connectBrowser()
+    const frames = sentFrames()
+    connection.start()
+    await connection.initialized
+
+    // Report focus: stores lastFocus and sends an explicit probe.
+    connection.focus(SESSION, { foreground: true, idle: false })
+
+    // Block the probe so it times out and forces a reconnect.
+    pipe.sockets[0]!.halfOpen()
+    await clock.advance(10_000) // explicit focus probe deadline
+    await clock.advance(125)   // reconnect backoff
+
+    expect(pipe.sockets).toHaveLength(2)
+    // The first focus frame was the explicit call; the one from recover() follows.
+    const focusFrames = frames.filter(
+      (f) => f.method === AOS_METHODS.session.focus
+    )
+    expect(focusFrames.length).toBeGreaterThanOrEqual(2)
+    expect(focusFrames.at(-1)?.params).toMatchObject({ sessionId: SESSION })
   })
 })

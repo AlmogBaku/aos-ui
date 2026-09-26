@@ -13,6 +13,7 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SendRequestOptions,
+  type WireStream,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   createWebSocketStream,
@@ -59,6 +60,7 @@ import {
 import {
   CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
+  LIVENESS_SILENCE_MS,
   PART_GRACE_MS,
   RECONNECT_BACKOFF,
   REQUEST_DEADLINE_MS,
@@ -214,6 +216,24 @@ function subscribeKeyed<Listener>(
   }
 }
 
+/**
+ * Adds an `onReceived` callback on every inbound frame, used to drive the
+ * inbound-silence timer without coupling logging to liveness tracking.
+ */
+function trackedInbound(stream: WireStream, onReceived: () => void): WireStream {
+  return {
+    readable: stream.readable.pipeThrough(
+      new TransformStream<AnyWireMessage, AnyWireMessage>({
+        transform(frame, controller) {
+          onReceived()
+          controller.enqueue(frame)
+        },
+      })
+    ),
+    writable: stream.writable,
+  }
+}
+
 /** One opened transport; a reconnect replaces it with another. */
 type Transport = {
   connection: ClientConnection
@@ -325,6 +345,8 @@ export function createAcpConnection(
   // The last presence report, replayed whenever a new transport recovers.
   let lastFocus:
     { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
+  /** The handle for the running inbound-silence timer; replaced on every inbound frame. */
+  let silenceTimer: unknown = undefined
   let settleInitialized: ((meta: AosInitializeMeta) => void) | undefined
   let failInitialized: ((error: Error) => void) | undefined
   const initialized = new Promise<AosInitializeMeta>((resolve, reject) => {
@@ -350,6 +372,46 @@ export function createAcpConnection(
         // others: an unanswered request stays pending for the proxy to
         // re-issue, which never answers the runtime on the operator's behalf.
       }
+  }
+
+  /** Whether the browser tab is currently visible. */
+  function isVisible() {
+    return globalThis.document?.visibilityState !== "hidden"
+  }
+
+  /**
+   * (Re)arms the inbound-silence timer after each received frame. When the
+   * page is not visible the timer is cleared; the `visibilitychange` handler
+   * probes at once when the page becomes visible again.
+   */
+  function armSilenceTimer() {
+    clock.clearTimeout(silenceTimer)
+    silenceTimer = undefined
+    if (!isVisible() || ended) return
+    silenceTimer = clock.setTimeout(() => {
+      silenceTimer = undefined
+      sendLivenessProbeAsync()
+    }, LIVENESS_SILENCE_MS)
+  }
+
+  /** Called on every inbound frame; resets the silence window. */
+  function onInbound() {
+    armSilenceTimer()
+  }
+
+  /**
+   * Sends `_aos/session/focus` as a request. A reply within the probe
+   * deadline is the liveness acknowledgement; no reply closes the transport
+   * and the connection reconnects. Re-reports the last known focused Session
+   * if any, or `{}` when no focus has been reported yet.
+   */
+  function sendLivenessProbeAsync() {
+    const params = lastFocus ?? {}
+    request("probe", (agent, options) =>
+      agent.request(AOS_METHODS.session.focus, params, options)
+    ).catch((err: unknown) => {
+      logger.debug({ err }, "acp.liveness.failed")
+    })
   }
 
   /**
@@ -829,12 +891,9 @@ export function createAcpConnection(
       // its invitation again before anything that login authorizes.
       if (invitation !== undefined && !(await reloginOrClose(invitation)))
         return
-      // A closed connection loses its presence, so the new one carries the
-      // last report again before any replay can make this tab look attended.
-      if (lastFocus) {
-        const { connection } = await readyTransport()
-        await connection.agent.notify(AOS_METHODS.session.focus, lastFocus)
-      }
+      // A closed connection loses its presence; the liveness probe re-reports
+      // it and confirms the transport is alive before any Session join.
+      sendLivenessProbeAsync()
     }
     joinable = true
     const opened = [...sessions.keys()]
@@ -856,17 +915,20 @@ export function createAcpConnection(
       ? app.connect(connectAgent)
       : app.connect(
           loggedStream(
-            createWebSocketStream<AnyWireMessage>(
-              options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
-              {
-                WebSocket: observedSocket(
-                  options.socketConstructor ?? globalThis.WebSocket,
-                  () => opened.resolve(),
-                  (code) => {
-                    closeCode = code
-                  }
-                ),
-              }
+            trackedInbound(
+              createWebSocketStream<AnyWireMessage>(
+                options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
+                {
+                  WebSocket: observedSocket(
+                    options.socketConstructor ?? globalThis.WebSocket,
+                    () => opened.resolve(),
+                    (code) => {
+                      closeCode = code
+                    }
+                  ),
+                }
+              ),
+              onInbound
             ),
             logger
           )
@@ -1102,6 +1164,32 @@ export function createAcpConnection(
     if (ended) return
     owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
     owner.stack.defer(shutdown)
+    const handleVisibilityChange = () => {
+      if (globalThis.document?.visibilityState === "hidden") {
+        // Disarm while hidden; the page becoming visible probes at once.
+        clock.clearTimeout(silenceTimer)
+        silenceTimer = undefined
+      } else if (status === "ready") {
+        sendLivenessProbeAsync()
+      }
+    }
+    const handleOnline = () => {
+      if (status === "ready") sendLivenessProbeAsync()
+    }
+    globalThis.document?.addEventListener("visibilitychange", handleVisibilityChange)
+    ;(globalThis as unknown as EventTarget).addEventListener("online", handleOnline)
+    owner.stack.defer(() => {
+      clock.clearTimeout(silenceTimer)
+      silenceTimer = undefined
+      globalThis.document?.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange
+      )
+      ;(globalThis as unknown as EventTarget).removeEventListener(
+        "online",
+        handleOnline
+      )
+    })
   }
 
   /** Ends the connection for good: nothing reconnects, and every waiter fails. */
@@ -1237,7 +1325,13 @@ export function createAcpConnection(
         idle: presence.idle,
       }
       lastFocus = report
-      notifyAgent((agent) => agent.notify(AOS_METHODS.session.focus, report))
+      // The focus request is also the liveness probe: no reply in 10 s closes
+      // the transport, and the reconnect re-reports it via sendLivenessProbeAsync.
+      request("probe", (agent, options) =>
+        agent.request(AOS_METHODS.session.focus, report, options)
+      ).catch((err: unknown) => {
+        logger.debug({ err }, "acp.focus.failed")
+      })
     },
 
     async listAgents() {
