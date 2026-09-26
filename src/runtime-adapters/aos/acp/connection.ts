@@ -940,7 +940,7 @@ export function createAcpConnection(
       if (invitation !== undefined && !(await reloginOrClose(invitation)))
         return
       // A closed connection loses its presence; the liveness probe re-reports
-      // it and confirms the transport is alive before any Session join.
+      // it, and the Sessions join without waiting for its answer.
       sendLivenessProbeAsync()
     }
     joinable = true
@@ -1236,10 +1236,7 @@ export function createAcpConnection(
       "visibilitychange",
       handleVisibilityChange
     )
-    ;(globalThis as unknown as EventTarget).addEventListener(
-      "online",
-      handleOnline
-    )
+    globalThis.addEventListener?.("online", handleOnline)
     owner.stack.defer(() => {
       clock.clearTimeout(silenceTimer)
       silenceTimer = undefined
@@ -1247,10 +1244,7 @@ export function createAcpConnection(
         "visibilitychange",
         handleVisibilityChange
       )
-      ;(globalThis as unknown as EventTarget).removeEventListener(
-        "online",
-        handleOnline
-      )
+      globalThis.removeEventListener?.("online", handleOnline)
     })
   }
 

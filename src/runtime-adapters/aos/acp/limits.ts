@@ -25,9 +25,6 @@ export type RequestTier = keyof typeof REQUEST_DEADLINE_MS
 /** How long an inbound stream may be silent while visible before a liveness probe is sent. */
 export const LIVENESS_SILENCE_MS = 20_000
 
-/** How long the liveness probe waits for a reply before the transport is closed. */
-export const LIVENESS_PROBE_DEADLINE_MS = REQUEST_DEADLINE_MS.probe
-
 /** Full-jitter backoff before reopening a closed transport. */
 export const RECONNECT_BACKOFF = { baseMs: 250, capMs: 5_000 }
 

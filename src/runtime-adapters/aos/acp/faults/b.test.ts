@@ -364,7 +364,7 @@ describe("browser connection faults", () => {
     const focusFrames = frames.filter(
       (f) => f.method === AOS_METHODS.session.focus
     )
-    expect(focusFrames.length).toBeGreaterThanOrEqual(2)
+    expect(focusFrames).toHaveLength(2)
     expect(focusFrames.at(-1)?.params).toMatchObject({ sessionId: SESSION })
   })
 })
