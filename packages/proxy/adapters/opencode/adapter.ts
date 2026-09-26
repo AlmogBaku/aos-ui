@@ -1,10 +1,8 @@
 import {
-  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   SessionHistoryResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type AgentCatalogResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionAttachmentStageRequest,
@@ -34,7 +32,6 @@ import {
   type OpenCodeClient,
   type OpenCodeFileContent,
   type OpenCodePageOptions,
-  type OpenCodeSessionEvents,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
 import {
@@ -63,10 +60,6 @@ import {
   parseOpenCodeModelCatalog,
   parseOpenCodeSession,
 } from "./native-schemas"
-import {
-  OpenCodeEventValidationError,
-  validateOpenCodeLiveEvent,
-} from "./events"
 import {
   createOpenCodeWorkspaceOperations,
   OpenCodeWorkspaceScopeError,
@@ -251,7 +244,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   readonly mcpApps?: ServerMcpApps
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
-  readonly #invalidations = new Set<() => void>()
   #closePromise: Promise<void> | undefined
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
@@ -336,22 +328,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       return failureOf("invalid_request", cause)
     }
     return undefined
-  }
-
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.listAgents()
-      return RuntimeAuthStateSchema.parse({ status: "authenticated" })
-    } catch (error) {
-      if (this.publicError(error)?.code === "runtime_authentication_required")
-        return RuntimeAuthStateSchema.parse({
-          status: "authentication-required",
-        })
-      return RuntimeAuthStateSchema.parse({
-        status: "unavailable",
-        reason: "temporarily-unavailable",
-      })
-    }
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {
@@ -527,56 +503,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     throw new OpenCodeWorkspaceUnavailableError()
   }
 
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ): Promise<() => void> {
-    await this.getSession(agentId, publicSessionId)
-    const controller = new AbortController()
-    let source: OpenCodeSessionEvents | undefined
-    let released = false
-    let lastSeen: number | undefined
-    const release = () => {
-      if (released) return
-      released = true
-      this.#invalidations.delete(release)
-      controller.abort()
-      source?.abort()
-    }
-    const fail = () => {
-      if (released) return
-      release()
-      reset?.()
-    }
-    try {
-      source = await this.options.client.sessions.events(publicSessionId, {
-        signal: controller.signal,
-      })
-    } catch (error) {
-      release()
-      throw error
-    }
-    this.#invalidations.add(release)
-    void (async () => {
-      try {
-        for await (const envelope of source!) {
-          if (released) return
-          const event = validateOpenCodeLiveEvent(envelope, publicSessionId)
-          if (lastSeen !== undefined && event.seq !== lastSeen + 1)
-            throw new OpenCodeEventValidationError()
-          lastSeen = event.seq
-          listener()
-        }
-        fail()
-      } catch {
-        fail()
-      }
-    })()
-    return release
-  }
-
   async stageAttachments(
     agentId: string,
     publicSessionId: string,
@@ -639,7 +565,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   close() {
     this.#closePromise ??= Promise.resolve().then(async () => {
-      for (const release of [...this.#invalidations]) release()
       await this.options.client.close()
     })
     return this.#closePromise
