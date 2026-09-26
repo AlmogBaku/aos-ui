@@ -26,7 +26,6 @@ import {
 import {
   promptText,
   runEvents,
-  type Feed,
   type Member,
   type PromptPart,
   type SessionEvent,
@@ -500,8 +499,6 @@ export type MembershipOptions = {
   ) => void
   /** The public code and message a failure is logged under. */
   describe: (cause: unknown) => { code: string; message: string }
-  /** The readings this member is given, as authentication chose them. */
-  feeds: ReadonlySet<Feed>
   /**
    * The Session's row as a replaying cell, with the status its execution
    * overlays on it: the known row at once, then each change.
@@ -1077,16 +1074,16 @@ class Membership {
   }
 
   /**
-   * Subscribes this member to its Session's readings, the ones its feeds give
-   * it. The coordinator's reporter re-reads a value that is unreadable right
-   * after joining, usually the provider's agent still being built, and leaves
-   * the last reading standing if it never becomes readable. The execution is
-   * restated once, for the resume that `answered` with it: each later move
-   * reaches the member on its turn's stream, which a reading would run ahead
-   * of.
+   * Subscribes this member to its Session's readings, which its stack shows it
+   * or hides. The coordinator's reporter re-reads a value that is unreadable
+   * right after joining, usually the provider's agent still being built, and
+   * leaves the last reading standing if it never becomes readable. The
+   * execution is restated once, for the resume that `answered` with it: each
+   * later move reaches the member on its turn's stream, which a reading would
+   * run ahead of.
    */
   #subscribeCells(answered?: { turnId: string | undefined }) {
-    const { coordinator, feeds, membershipId } = this.#options
+    const { coordinator, membershipId } = this.#options
     const { agentId, sessionId } = this.#scope
     let restating = answered
     const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
@@ -1098,28 +1095,21 @@ class Membership {
             this.report(cause)
           )
       },
-      ...(feeds.has("usage")
-        ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
-        : {}),
-      ...(feeds.has("model")
-        ? { model: (models) => this.#deliver({ kind: "model", models }) }
-        : {}),
+      usage: (usage) => this.#deliver({ kind: "usage", usage }),
+      model: (models) => this.#deliver({ kind: "model", models }),
     })
     const capabilities = coordinator.subscribeCapabilities(
       { agentId, sessionId },
       membershipId,
       (capabilities) => this.#deliver({ kind: "commands", capabilities })
     )
-    const row = feeds.has("session-rows")
-      ? this.#options.subscribeRow(
-          (row, status) =>
-            void this.#deliver({ kind: "session-info", row, status })
-        )
-      : undefined
+    const row = this.#options.subscribeRow(
+      (row, status) => void this.#deliver({ kind: "session-info", row, status })
+    )
     return () => {
       readings()
       capabilities()
-      row?.()
+      row()
     }
   }
 

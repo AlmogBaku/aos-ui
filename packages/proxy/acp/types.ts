@@ -30,7 +30,7 @@ import type {
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channels } from "../core/channel"
-import type { Feed, Member } from "../core/member"
+import type { Member } from "../core/member"
 /**
  * Where the ACP listeners write their structured lines, in the shape the proxy
  * composition already receives. Every value passes through `redactForLog`
@@ -67,8 +67,6 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
-  /** The feeds this connection's member is given, chosen at join. */
-  feeds: ReadonlySet<Feed>
 }
 
 /**

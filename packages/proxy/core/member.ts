@@ -52,24 +52,6 @@ export type Principal = {
 }
 
 /**
- * A proxy-owned feed a connection subscribes to only when its member is given
- * it: a Session's usage and model readings, the Agent's activity, read state,
- * the Session rows, and the catalog's changes.
- */
-export type Feed =
-  "usage" | "model" | "activity" | "read-state" | "session-rows" | "catalog"
-
-/** What an operator is given: every feed. */
-export const EVERY_FEED: ReadonlySet<Feed> = new Set<Feed>([
-  "usage",
-  "model",
-  "activity",
-  "read-state",
-  "session-rows",
-  "catalog",
-])
-
-/**
  * One coordinator subscription as a member reads it. An encoder keys the
  * state it carries between the stream's events by this object, so a stream
  * still draining never mixes into the one after it. `dropped` turns true once

@@ -193,8 +193,8 @@ export function createTurnsMiddleware(): Middleware {
             shown.has(event.request.toolCallId)
             ? event
             : undefined
-        // A Session row arrives only through the Session-rows feed, which a
-        // guest is not given.
+        // What is not a turn's passes: the feeds layer chose the readings and
+        // the commands layer projects the command list.
         case "request-asked":
         case "history":
         case "request-withdrawn":
@@ -204,10 +204,8 @@ export function createTurnsMiddleware(): Middleware {
         case "invalidated":
         case "error":
         case "session-info":
-          return event
-        // A command list comes from Session creation, which is never a guest's.
         case "commands":
-          return undefined
+          return event
       }
       return unhandledKind(event)
     },

@@ -488,8 +488,10 @@ function harness(options: HarnessOptions = {}) {
     listAllSessions,
     listSessions: unsupported,
     history,
+    // The operator's row of the invited Session, under the id the guest's
+    // row cell is keyed by.
     getSession: async () => ({
-      id: STORED,
+      id: REF,
       agentId: AGENT,
       title: "Operator-owned title",
       archived: false,
@@ -1645,37 +1647,6 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("sends a guest no usage or model reading", async () => {
-    const test = harness({
-      readings: true,
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          { kind: TurnEventKind.ModelChanged, modelId: "opus" },
-          ...RUN_EVENTS.slice(1),
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview")
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes('"idle"'),
-      'an update carrying "idle"'
-    )
-    await settled()
-
-    const kinds = updates(test.recorder).map(
-      (params) =>
-        (params as { update: { sessionUpdate: string } }).update.sessionUpdate
-    )
-    expect(kinds).toContain("agent_message_chunk")
-    expect(kinds).not.toContain("usage_update")
-    expect(kinds).not.toContain("config_option_update")
-    test.close()
-  })
-
   it.each(ACTING_FRAMES)(
     "refuses %s once the invitation lapsed, before its timer fires",
     async (_name, frame) => {
@@ -2412,8 +2383,8 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest no Session row, command list, catalog signal or read state", async () => {
-    const test = harness({ existing: true })
+  it("sends a guest its command list and no Session row, usage, model, catalog signal or read state", async () => {
+    const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
@@ -2429,8 +2400,10 @@ describe("guest scope and commands", () => {
       (params) =>
         (params as { update: { sessionUpdate: string } }).update.sessionUpdate
     )
+    expect(kinds).toContain("available_commands_update")
     expect(kinds).not.toContain("session_info_update")
-    expect(kinds).not.toContain("available_commands_update")
+    expect(kinds).not.toContain("usage_update")
+    expect(kinds).not.toContain("config_option_update")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
     test.close()

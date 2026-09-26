@@ -1,5 +1,6 @@
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
+import { createFeedsMiddleware } from "./feeds"
 import { createHistoryMiddleware } from "./history"
 import { createPermissionsMiddleware } from "./permissions"
 import { createQuotaMiddleware } from "./quota"
@@ -41,6 +42,7 @@ export function createGuestMiddleware(
     createHistoryMiddleware(options),
     createTurnsMiddleware(),
     createPermissionsMiddleware({ principalId: options.grant.principalId }),
+    createFeedsMiddleware(),
     createQuotaMiddleware({ limit: options.guestActiveExecutions }),
   ]
 }

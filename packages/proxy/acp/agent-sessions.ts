@@ -375,7 +375,6 @@ export function createSessions(
             })
           ),
         describe: (cause) => errorNotificationOf(runtime, cause),
-        feeds: context.feeds,
         subscribeRow: (listener) =>
           context.sessionRows.subscribeRow(
             scope.agentId,

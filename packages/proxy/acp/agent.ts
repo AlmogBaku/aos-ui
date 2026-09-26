@@ -143,10 +143,14 @@ function sameExposure(
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { role, translators, feeds } = context
-  const readState = feeds.has("read-state") ? context.readState : undefined
-  const activityFeed = feeds.has("activity") ? context.activityFeed : undefined
+  const { role, translators, readState, activityFeed } = context
   const { runtime, sessions: coordinator } = context.runtimeInstance
+  /**
+   * The extensions this connection is served: it signals catalog changes only
+   * when they include invalidation.
+   */
+  const extensions =
+    context.authentication?.extensions ?? operatorExtensions(runtime)
   const sessions = createSessions(context, (client) =>
     createMemberEncoder({
       context,
@@ -413,9 +417,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
           role,
-          extensions: authentication
-            ? authentication.extensions
-            : operatorExtensions(runtime),
+          extensions,
         },
       },
     }
@@ -793,7 +795,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       activityFeed?.subscribe((event) =>
         notify(AOS_METHODS.notify.activity, event)
       ),
-      feeds.has("catalog")
+      extensions.invalidation
         ? await runtime.subscribeCatalogChanges?.(() =>
             notify(AOS_METHODS.notify.catalogInvalidated)
           )
@@ -806,8 +808,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     for (const stop of stops) stop?.()
     sessions.close()
     context.presence?.clear(context.principalId, context.connectionId)
-    context.readState?.close()
-    context.activityFeed?.close()
+    readState?.close()
+    activityFeed?.close()
   })
 
   return app

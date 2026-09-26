@@ -48,7 +48,6 @@ import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
-import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
@@ -869,7 +868,6 @@ export async function harness(options: HarnessOptions = {}) {
       presence,
       logger,
       role: "operator",
-      feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
   }

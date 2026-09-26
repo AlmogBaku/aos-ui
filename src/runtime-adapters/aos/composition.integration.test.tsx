@@ -37,7 +37,6 @@ import type {
 } from "../../../packages/proxy/core/runtime"
 import * as ids from "../../../packages/proxy/core/ids"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
-import { EVERY_FEED } from "../../../packages/proxy/core/member"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
 
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
@@ -392,7 +391,6 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     connectionId: "connection-1",
     principalId: "operator",
     role,
-    feeds: EVERY_FEED,
     runtimeInstance,
     sessionRows,
     translators,

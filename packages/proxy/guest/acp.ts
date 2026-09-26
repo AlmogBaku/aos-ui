@@ -224,9 +224,6 @@ export function createGuestConnection(
     attachmentStages: options.attachmentStages,
     channels: options.channels,
     logger: options.logger,
-    // A guest is given no feed: no reading, activity, read state, Session row
-    // or catalog signal.
-    feeds: new Set(),
     authentication,
   }
 }
