@@ -32,7 +32,7 @@ import {
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
   AosExtensionsSchema,
-  AosFocusNotificationSchema,
+  AosFocusRequestSchema,
   AosHistoryPageTagSchema,
   AosPromptMetaSchema,
   AosReplayBeforeSchema,
@@ -789,10 +789,10 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it("reads a focus report with or without the presence flags", () => {
-    expect(
-      AosFocusNotificationSchema.parse({ sessionId: "session-1" })
-    ).toEqual({ sessionId: "session-1" })
-    expect(AosFocusNotificationSchema.parse({ sessionId: null })).toEqual({
+    expect(AosFocusRequestSchema.parse({ sessionId: "session-1" })).toEqual({
+      sessionId: "session-1",
+    })
+    expect(AosFocusRequestSchema.parse({ sessionId: null })).toEqual({
       sessionId: null,
     })
     const reported = {
@@ -800,9 +800,9 @@ describe("AOS v1 normalized protocol", () => {
       foreground: false,
       idle: true,
     }
-    expect(AosFocusNotificationSchema.parse(reported)).toEqual(reported)
+    expect(AosFocusRequestSchema.parse(reported)).toEqual(reported)
     expect(() =>
-      AosFocusNotificationSchema.parse({ sessionId: null, visible: true })
+      AosFocusRequestSchema.parse({ sessionId: null, visible: true })
     ).toThrow()
   })
 

@@ -20,7 +20,7 @@ import {
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
-  AosFocusNotificationSchema,
+  AosFocusRequestSchema,
   AosLoginMetaSchema,
   AosPromptMetaSchema,
   AosClientCapabilitiesMetaSchema,
@@ -35,7 +35,6 @@ import {
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { SILENT, unlessAborted } from "../core/channel"
-import type { ServerAttachmentStage, SessionPatch } from "../core/runtime"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
@@ -77,8 +76,7 @@ import {
 } from "./validation"
 
 /**
- * The per-connection ACP v2 agent that fronts the catalog, the channels and
- * the coordinator.
+ * The per-connection ACP v2 agent that fronts the catalog and the channels.
  * One handler per method: it validates `_meta.aos`, runs its command through
  * the member stack, and leaves what reaches a Session's members to its
  * channel.
@@ -164,7 +162,6 @@ function connectionMachine(logger: Logger) {
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { role, translators, readState, activityFeed, catalog } = context
-  const { runtime, sessions: coordinator } = context.runtimeInstance
   /** The extensions this connection is served, which `initialize` reports. */
   const extensions =
     context.authentication?.extensions ?? operatorExtensions(catalog)
@@ -172,8 +169,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     createMemberEncoder({
       context,
       client,
-      steerAck: runtime.translation?.steerAck,
-      describe: (cause) => errorNotificationOf(runtime, cause),
+      steerAck: context.steerAck,
+      describe: (cause) => errorNotificationOf(context.publicError, cause),
       replied,
       report: (sessionId, cause) =>
         sessions.membership(sessionId)?.report(cause),
@@ -231,7 +228,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     } catch (cause) {
       throw cause instanceof CommandRefusedError
         ? refusalError(cause.refusal)
-        : publicRequestError(runtime, cause)
+        : publicRequestError(context.publicError, cause)
     }
   }
 
@@ -322,7 +319,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   ): Promise<CommandResults["send"]> {
     const scope = command.scope ?? sessions.scope(command.sessionId)
     const { text, attachmentStageId, rewindSourceId } = command
-    let stage: ServerAttachmentStage | undefined
+    let stage: ReturnType<typeof context.attachmentStages.take>
     const membership = sessions.join(client, scope)
     try {
       return await membership.startTurn(
@@ -370,15 +367,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const info = authentication
       ? undefined
       : await catalog.info().catch((cause: unknown) => {
-          throw publicRequestError(runtime, cause)
+          throw publicRequestError(context.publicError, cause)
         })
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
         name: "aos-proxy",
         ...(info ? { title: info.runtime.name } : {}),
-        // The proxy versions the AOS extension contract, not a build.
-        version: `${AOS_EXTENSION_VERSION}`,
+        // The build the proxy serves, so a tab running another one reloads; a
+        // proxy serving none versions the AOS extension contract instead.
+        version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
         session: {
@@ -427,7 +425,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async ({ agentId, ...input }) => {
         // A repeat of a client id answers the Session its first create made.
         const created = SessionCreateResponseSchema.parse(
-          await coordinator.createSession(agentId, input, context.principalId)
+          await context.channels.createSession(
+            agentId,
+            input,
+            context.principalId
+          )
         )
         const sessionId = created.session.id
         sessions.remember([{ id: sessionId, agentId }])
@@ -582,9 +584,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       "delete",
       { sessionId: params.sessionId },
       async (command) => {
-        const scope = sessions.scope(command.sessionId)
-        await catalog.delete(scope)
-        sessions.forget(scope)
+        await catalog.delete(sessions.scope(command.sessionId))
+        sessions.forget(command.sessionId)
       }
     )
     return {}
@@ -596,7 +597,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params: raw }) => {
       admit(AOS_METHODS.session.update, "update")
       const params = AosSessionUpdateRequestSchema.parse(raw)
-      const patch: SessionPatch =
+      const patch: MemberCommands["update"]["patch"] =
         params.unread === false
           ? { unread: false }
           : params.title !== undefined
@@ -641,19 +642,21 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   )
 
-  app.onNotification(
+  app.onRequest(
     AOS_METHODS.session.focus,
     undecoded,
     async ({ params: raw }) => {
-      if (!sessions.identity()) return
       admit(AOS_METHODS.session.focus, "focus")
-      const params = AosFocusNotificationSchema.parse(raw)
+      const { sessionId, foreground, idle } = AosFocusRequestSchema.parse(raw)
+      // A report naming no Session changes nothing; its answer is what the
+      // browser probes its link for.
+      if (sessionId === undefined) return {}
       await perform(
         "focus",
         {
-          sessionId: params.sessionId,
-          foreground: params.foreground ?? params.sessionId !== null,
-          idle: params.idle ?? false,
+          sessionId,
+          foreground: foreground ?? sessionId !== null,
+          idle: idle ?? false,
         },
         async (report: PresenceReport) => {
           context.presence?.set(
@@ -674,6 +677,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           readState?.focus(agentId, report.sessionId)
         }
       )
+      return {}
     }
   )
 

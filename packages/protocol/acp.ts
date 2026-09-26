@@ -291,13 +291,15 @@ export const AosSteerRequestSchema = z.strictObject({
 export const AosSteerResponseSchema = TurnSteerResponseSchema
 
 /**
- * `_aos/session/focus` notification: the exposed Session, or none, plus the
- * workspace presence the browser re-sends every `PRESENCE_HEARTBEAT_MS`. An
- * absent `foreground` means an exposed Session is in the foreground, and an
- * absent `idle` means the operator is still interacting.
+ * `_aos/session/focus` request, answered `{}`: the exposed Session, or none,
+ * plus the workspace presence the browser re-sends every
+ * `PRESENCE_HEARTBEAT_MS`. A report without a `sessionId` changes nothing, so
+ * the browser can probe its link with `{}`. An absent `foreground` means an
+ * exposed Session is in the foreground, and an absent `idle` means the operator
+ * is still interacting.
  */
-export const AosFocusNotificationSchema = z.strictObject({
-  sessionId: IdentifierSchema.nullable(),
+export const AosFocusRequestSchema = z.strictObject({
+  sessionId: IdentifierSchema.nullable().optional(),
   foreground: z.boolean().optional(),
   idle: z.boolean().optional(),
 })

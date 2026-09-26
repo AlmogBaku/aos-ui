@@ -634,6 +634,8 @@ export type HarnessOptions = {
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
   /** Where lifecycle owners log; a fresh capture by default. */
   logs?: LogCapture
+  /** The browser build the static root carries; absent stands for none. */
+  buildId?: string
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -878,7 +880,8 @@ export async function harness(options: HarnessOptions = {}) {
     return {
       connectionId,
       principalId: PRINCIPAL,
-      runtimeInstance,
+      publicError: (cause) => faults.runtime.publicError(cause),
+      steerAck: faults.runtime.translation?.steerAck,
       catalog,
       readState: composed?.readState ?? readState,
       translators: {
@@ -893,6 +896,7 @@ export async function harness(options: HarnessOptions = {}) {
       presence,
       logger,
       ownerLogger: logs.logger,
+      buildId: options.buildId,
       role: "operator",
       activityFeed: composed?.activityFeed ?? activityFeed,
     }

@@ -25,8 +25,8 @@ import type {
   TurnEvent,
 } from "../core/events"
 import type {
-  RuntimeInstance,
   ServerAttachmentStages,
+  ServerRuntimePublicError,
   ServerRuntimeTranslation,
 } from "../core/runtime"
 import type { PresenceRegistry } from "../push/presence"
@@ -51,7 +51,14 @@ export type WorkspaceCapabilities = z.infer<
 type AcpConnectionBase = {
   connectionId: string
   principalId: string
-  runtimeInstance: RuntimeInstance
+  /**
+   * The runtime's classifier of a failure's public code, a function of the
+   * failure alone. The connection reaches a provider only through the catalog
+   * and the channels.
+   */
+  publicError(cause: unknown): ServerRuntimePublicError | undefined
+  /** The runtime's `ServerRuntimeTranslation.steerAck`, a static hint. */
+  steerAck?: ServerRuntimeTranslation["steerAck"]
   /** The one workspace catalog per proxy process, which both listeners share. */
   catalog: Catalog
   translators: Translators
@@ -69,6 +76,11 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
+  /**
+   * The browser build the static root carries, which `initialize` answers as
+   * its version so a tab running another build reloads; absent without one.
+   */
+  buildId?: string
   /** Where the connection's lifecycle owner logs; silent without one. */
   ownerLogger?: Logger
 }

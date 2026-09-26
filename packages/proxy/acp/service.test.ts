@@ -20,6 +20,9 @@ function initializeFrame(id: number) {
   })
 }
 
+/** One classifier for every context, so two contexts compare equal. */
+const unclassified = () => undefined
+
 function connectionContext(
   connectionId: string,
   principalId: string
@@ -28,7 +31,7 @@ function connectionContext(
     connectionId,
     principalId,
     role: "operator",
-    runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
+    publicError: unclassified,
     catalog: {} as AcpConnectionContext["catalog"],
     readState: {} as AcpConnectionContext["readState"],
     activityFeed: {} as AcpConnectionContext["activityFeed"],
