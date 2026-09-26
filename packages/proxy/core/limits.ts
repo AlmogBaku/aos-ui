@@ -27,7 +27,9 @@ export const ADMISSION_DEADLINE_MS = 30_000
 
 /**
  * How long a turn stays uncertain without a recover confirming it running,
- * before it ends with its outcome unknown.
+ * before it ends with its outcome unknown. A reconcile in flight at the
+ * deadline runs out its admission deadline first, so the bound is up to one
+ * ADMISSION_DEADLINE_MS longer.
  */
 export const UNCERTAINTY_DEADLINE_MS = 5 * 60_000
 

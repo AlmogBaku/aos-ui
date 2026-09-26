@@ -839,7 +839,6 @@ function settledNow(settled: Promise<void>) {
 const OUTCOME_UNKNOWN = {
   kind: TurnEventKind.TurnFailed,
   code: "AOS_OUTCOME_UNKNOWN",
-  message: "AOS could not confirm how this turn ended.",
 } as const
 
 export class SessionCoordinator {
@@ -859,7 +858,7 @@ export class SessionCoordinator {
   readonly #subscribers = new Map<string, number>()
   /** Sessions their last subscriber left, evicted once their turn rests. */
   readonly #pendingEvictions = new Set<string>()
-  /** How many turns ended with their outcome unknown. */
+  /** How many turns the uncertainty deadline ended with their outcome unknown. */
   #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
   readonly #usage: SessionReporter<SessionContextResponse>
