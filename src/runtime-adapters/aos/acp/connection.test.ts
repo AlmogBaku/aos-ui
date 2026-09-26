@@ -22,6 +22,7 @@ import {
 } from "@aos/protocol/acp"
 
 import { useFakeClock } from "../../../../test/support/fake-clock"
+import { captureLogs } from "../../../../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
 import { pipedSockets } from "./test-socket"
@@ -420,10 +421,16 @@ describe("ACP connection", () => {
     expect(connection.status).toBe("closed")
   })
 
-  it("redeems an invitation with the AOS login metadata", async () => {
+  it("redeems an invitation with the AOS login metadata, never logging it", async () => {
     const proxy = createProxyAgent()
-    const connection = connectInProcess(proxy)
-    await connection.initialized
+    const logs = captureLogs()
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://guest.test/api/guest/v1/acp",
+      socketConstructor: pipedSockets(() => proxy.app).WebSocket,
+      logger: logs.logger,
+    })
+    connection.start()
 
     await connection.login("invitation-token")
 
@@ -431,6 +438,16 @@ describe("ACP connection", () => {
       methodId: AOS_AUTH_METHOD_INVITE,
       _meta: { [AOS_META_KEY]: { token: "invitation-token" } },
     })
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        message: "acp.frame",
+        fields: expect.objectContaining({
+          method: methods.agent.auth.login,
+          requestId: expect.anything(),
+        }),
+      })
+    )
+    expect(JSON.stringify(logs.records())).not.toContain("invitation-token")
     connection.close()
   })
 

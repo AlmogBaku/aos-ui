@@ -65,6 +65,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
+import { loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionStatus,
@@ -129,7 +130,10 @@ export type AcpConnectionOptions = {
   connectAgent?: AgentApp
   /** Times every deadline and backoff; tests fake it. */
   clock?: Clock
-  /** Where the connection's owner logs its transitions; silent by default. */
+  /**
+   * Where the connection logs its owner's transitions and every wire frame;
+   * silent by default.
+   */
   logger?: Logger
   /**
    * The browser's compiled build id, sent as `info.version` in `initialize`.
@@ -141,7 +145,10 @@ export type AcpConnectionOptions = {
   /** Called when a build id mismatch triggers a reload; tests inject a spy. */
   reload?: () => void
   /** Persists the reload guard across the reload; tests inject a fake. */
-  storage?: { getItem(key: string): string | null; setItem(key: string, value: string): void }
+  storage?: {
+    getItem(key: string): string | null
+    setItem(key: string, value: string): void
+  }
 }
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
@@ -625,17 +632,20 @@ export function createAcpConnection(
     const connection = connectAgent
       ? app.connect(connectAgent)
       : app.connect(
-          createWebSocketStream<AnyWireMessage>(
-            options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
-            {
-              WebSocket: observedSocket(
-                options.socketConstructor ?? globalThis.WebSocket,
-                () => opened.resolve(),
-                (code) => {
-                  closeCode = code
-                }
-              ),
-            }
+          loggedStream(
+            createWebSocketStream<AnyWireMessage>(
+              options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
+              {
+                WebSocket: observedSocket(
+                  options.socketConstructor ?? globalThis.WebSocket,
+                  () => opened.resolve(),
+                  (code) => {
+                    closeCode = code
+                  }
+                ),
+              }
+            ),
+            logger
           )
         )
     // In-process pairing has no socket to wait for.

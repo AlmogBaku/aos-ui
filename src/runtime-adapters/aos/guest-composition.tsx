@@ -57,6 +57,7 @@ import {
   createAcpConnection,
   isAuthenticationRequired,
 } from "./acp/connection"
+import { tabAcpLogger } from "./acp/log"
 import type { AcpConnection } from "./acp/types"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
@@ -561,6 +562,7 @@ export function GuestAosSurface({
     const connection = createAcpConnection({
       url: acpSocketUrl(AOS_ACP_GUEST_PATH),
       clientInfo: CLIENT_INFO,
+      logger: tabAcpLogger(),
       reload: () => globalThis.location.reload(),
       storage: globalThis.sessionStorage,
     })

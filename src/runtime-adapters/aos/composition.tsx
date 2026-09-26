@@ -30,6 +30,7 @@ import { createAcpInteractions } from "./acp/acp-interactions"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
 import { createAcpConnection } from "./acp/connection"
+import { tabAcpLogger } from "./acp/log"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -91,6 +92,7 @@ function ReadyAosRuntimeProvider({
     () =>
       createAcpConnection({
         clientInfo: CLIENT_INFO,
+        logger: tabAcpLogger(),
         reload: () => globalThis.location.reload(),
         storage: globalThis.sessionStorage,
       }),
