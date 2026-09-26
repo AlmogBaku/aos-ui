@@ -280,6 +280,22 @@ describe("MCP Apps fallback host", () => {
     })
   })
 
+  it("clears the Session's live calls when reportSessionGone is called", async () => {
+    const { apps } = fallback()
+    // A live call without a stored counterpart is found via the live cache.
+    apps.observe?.(scope, {
+      toolCallId: "live-only",
+      toolName: "mcp__weather__show-forecast",
+      result: { content: [{ type: "text", text: "Sunny" }] },
+    })
+    apps.reportSessionGone?.(scope.agentId, scope.providerSessionId)
+    // After the Session is gone, owned() can find neither a stored call nor a
+    // live one, so every operation on it throws McpAppNotFoundError.
+    await expect(apps.open(scope, "live-only")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+  })
+
   describe("with an operator-configured URL", () => {
     it("connects there instead of the URL the runtime reports", async () => {
       const { apps, seen } = fallback({

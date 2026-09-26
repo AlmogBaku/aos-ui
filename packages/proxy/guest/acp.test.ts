@@ -482,7 +482,6 @@ function harness(options: HarnessOptions = {}) {
       options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
     link: READY_LINK,
-    authState: unsupported,
     runtimeInfo,
     listAgents: unsupported,
     updateAgentVisibility: unsupported,
@@ -506,7 +505,6 @@ function harness(options: HarnessOptions = {}) {
     models: options.readings ? async () => MODELS : unsupported,
     updateModel: unsupported,
     context: options.readings ? async () => USAGE : unsupported,
-    subscribeSessionInvalidation: unsupported,
     async subscribeCatalogChanges(listener) {
       catalogChanged = listener
       return () => undefined

@@ -759,7 +759,6 @@ export async function harness(options: HarnessOptions = {}) {
       providerId(publicSessionId),
     publicError: () => undefined,
     link: READY_LINK,
-    authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
     updateAgentVisibility: unsupported,
@@ -778,7 +777,6 @@ export async function harness(options: HarnessOptions = {}) {
     },
     updateModel,
     context: options.context ?? (async () => USAGE),
-    subscribeSessionInvalidation: unsupported,
     ...(options.withoutCatalogChanges
       ? {}
       : { subscribeCatalogChanges: async () => () => undefined }),

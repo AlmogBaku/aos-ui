@@ -6,7 +6,6 @@ import type {
 } from "./events"
 import type {
   AgentCatalogResponse,
-  RuntimeAuthState,
   RuntimeInfo,
   Session,
   SessionCatalogResponse,
@@ -264,7 +263,6 @@ export interface ServerRuntime {
   publicError(cause: unknown): PublicFailure | undefined
   /** Whether the native link is up; readings retry once it turns ready. */
   readonly link: ServerLink
-  authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>
   updateAgentVisibility(
@@ -325,12 +323,6 @@ export interface ServerRuntime {
     patch: SessionModelUpdateRequest
   ): Promise<unknown>
   context(agentId: string, publicSessionId: string): Promise<unknown>
-  subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ): Promise<() => void>
   /**
    * Payload-less wake when the provider's Session catalog changed (Hermes
    * `sessions.changed`). Absent when the provider has no such signal.
@@ -404,4 +396,9 @@ export type ServerMcpApps = {
     toolCallId: string,
     uri: string
   ): Promise<ReadResourceResult>
+  /**
+   * Clears cached live calls for this Session. Called when the Session is
+   * reported gone, so stale entries do not outlive the Session.
+   */
+  reportSessionGone?(agentId: string, providerSessionId: ProviderSessionId): void
 }
