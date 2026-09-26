@@ -299,7 +299,7 @@ function correctedHistory(text: string): SessionHistoryResponse {
         role: "user",
         content: [{ type: "text", text }],
         createdAt: NOW,
-        metadata: { custom: { correction: true } },
+        correction: true as const,
       },
     ],
   }

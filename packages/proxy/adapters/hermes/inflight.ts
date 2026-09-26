@@ -154,6 +154,6 @@ export function restoredHermesFailedTurn(
     ],
     createdAt: turn.createdAt,
     status: { type: "incomplete", reason: "error", error: message },
-    metadata: { custom: { aos: { turnErrorCode: code } } },
+    turnErrorCode: code,
   }
 }

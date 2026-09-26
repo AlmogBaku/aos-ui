@@ -2862,9 +2862,7 @@ describe("Hermes server adapter", () => {
           error:
             "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
         },
-        metadata: {
-          custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
-        },
+        turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
       })
       // This retained cause names a credential and an internal host, so the
       // detail is dropped whole and the headline stands alone.
@@ -2891,9 +2889,7 @@ describe("Hermes server adapter", () => {
           error:
             "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
         },
-        metadata: {
-          custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
-        },
+        turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
       })
     })
 
