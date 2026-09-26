@@ -51,6 +51,7 @@ import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
+import { withFaults } from "./test-faults"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
@@ -637,7 +638,14 @@ export async function harness(options: HarnessOptions = {}) {
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
   const discover = vi.fn(options.discover ?? (async () => undefined))
-  const engine: ServerTurnEngine = { start, recover, discover }
+  const engine: ServerTurnEngine = {
+    start,
+    recover,
+    discover,
+    ...(options.subscribeTurns
+      ? { subscribeTurns: options.subscribeTurns }
+      : {}),
+  }
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
@@ -767,9 +775,12 @@ export async function harness(options: HarnessOptions = {}) {
     speak: unsupported,
   }
 
+  // Everything reads the runtime through its faults, which forward every
+  // call until a test arms one.
+  const faults = withFaults(runtime)
   const coordinator = new SessionCoordinator({
-    engine,
-    readings: runtime,
+    engine: faults.runtime.turns,
+    readings: faults.runtime,
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
@@ -777,7 +788,7 @@ export async function harness(options: HarnessOptions = {}) {
   })
   const runtimeInstance: RuntimeInstance = {
     id: "test",
-    runtime,
+    runtime: faults.runtime,
     sessions: coordinator,
     close: async () => undefined,
   }
@@ -813,7 +824,7 @@ export async function harness(options: HarnessOptions = {}) {
     options.now ? { now: options.now } : undefined
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
-  const { subscribeTurns } = options
+  const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
     snapshot: (channelScope) => coordinator.snapshot(channelScope),
     ...(subscribeTurns
@@ -916,6 +927,7 @@ export async function harness(options: HarnessOptions = {}) {
     connect,
     coordinator,
     runtimeInstance,
+    faults,
     channels,
     scope,
     sources,

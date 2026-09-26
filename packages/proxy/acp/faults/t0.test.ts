@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { useFakeClock } from "../../../../test/support/fake-clock"
 import { providerSessionId, sessionId } from "../../core/ids"
 import { SessionReporter } from "../../core/session-reporter"
+import { AGENT, harness, MODELS, SESSION } from "../test-harness"
 
 const scope = {
   agentId: "researcher",
@@ -30,5 +31,15 @@ describe("fault harness", () => {
     expect(listener).not.toHaveBeenCalled()
     await clock.advance(1)
     expect(listener).toHaveBeenCalledWith("reading")
+  })
+
+  it("fails an armed operation's next call once", async () => {
+    const test = await harness()
+    const { runtime } = test.runtimeInstance
+
+    test.faults.failOnce("models")
+    await expect(runtime.models(AGENT, SESSION)).rejects.toThrow()
+    await expect(runtime.models(AGENT, SESSION)).resolves.toEqual(MODELS)
+    test.close()
   })
 })
