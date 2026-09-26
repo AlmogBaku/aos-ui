@@ -941,8 +941,30 @@ describe("AOS v1 normalized protocol", () => {
     ).toBe(true)
   })
 
-  it("announces artifacts in the message stream, not as a notification", () => {
-    expect(Object.values(AOS_METHODS.notify)).not.toContain("_aos/artifact")
+  it("keeps the AOS extension to its method and error-code footprint", () => {
+    expect(AOS_METHODS).toEqual({
+      session: {
+        update: "_aos/session/update",
+        steer: "_aos/session/steer",
+        focus: "_aos/session/focus",
+      },
+      agents: {
+        list: "_aos/agents/list",
+        setVisibility: "_aos/agents/set_visibility",
+      },
+      notify: {
+        activity: "_aos/activity",
+        steerAccepted: "_aos/steer_accepted",
+        composerPrefill: "_aos/composer_prefill",
+        catalogInvalidated: "_aos/catalog_invalidated",
+        sessionInvalidated: "_aos/session_invalidated",
+        error: "_aos/error",
+      },
+    })
+    for (const code of Object.values(AOS_JSONRPC_ERRORS)) {
+      expect(code).toBeGreaterThanOrEqual(-32014)
+      expect(code).toBeLessThanOrEqual(-32010)
+    }
   })
 
   it("keeps every AOS error code clear of the codes ACP defines", () => {
