@@ -1,7 +1,6 @@
 import {
   GatewayClient,
   GatewayClientRequestError,
-  GatewayClientRequestTimeoutError,
   isGatewayProtocolResponseError,
   type DeviceIdentity,
   type GatewayClientOptions,
@@ -19,9 +18,15 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-protocol"
 
+import { backoffDelay, Deadline, defaultClock } from "../../../lifecycle"
+
+/** The bound on one native call, and on a caller waiting for the link. */
+const CALL_MS = 15_000
+/** How this client redials once the Gateway pauses its own reconnect. */
+const REDIAL_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
+
 export type OpenClawRequestOptions = Readonly<{
   signal?: AbortSignal
-  timeoutMs?: number | null
   expectFinal?: boolean
   onSent?: () => void
   onAccepted?: (payload: unknown) => void
@@ -51,7 +56,6 @@ export type OpenClawGatewayClientOptions = Pick<
   | "onGap"
   | "onHelloOk"
   | "onReconnectPaused"
-  | "requestTimeoutMs"
   | "role"
   | "scopes"
   | "url"
@@ -101,7 +105,8 @@ export type OpenClawClientOptions = Readonly<{
   role: string
   scopes: readonly string[]
   caps: readonly string[]
-  requestTimeoutMs?: number
+  /** Runs on every accepted hello: the first and each one after a redial. */
+  onReady?: () => void
   onConnectionIssue?: (issue: OpenClawConnectionIssue) => void
   onReconnectPaused?: (issue: OpenClawConnectionIssue) => void
   onClose?: (close: OpenClawConnectionClose) => void
@@ -270,17 +275,26 @@ function connectionIssue(error: unknown): OpenClawConnectionIssue {
   return { kind, terminal: kind !== "unavailable" && !pairingRetryable }
 }
 
-type ClientState =
-  "new" | "starting" | "ready" | "terminal" | "stopping" | "stopped"
+/**
+ * `idle` has no dial in flight: before the first start, or once the Gateway
+ * paused its reconnect. `dialing` waits for a hello, the Gateway's own
+ * reconnect included.
+ */
+type LinkState = "idle" | "dialing" | "ready" | "stopped"
+
+type Waiter = Readonly<{
+  resolve: () => void
+  reject: (error: Error) => void
+}>
 
 export class OpenClawClient {
-  private state: ClientState = "new"
+  private state: LinkState = "idle"
   private readonly gateway: OpenClawGatewayClient
-  private readonly requestTimeout?: number
-  private ready?: Promise<void>
+  private readonly onReady?: () => void
+  private readonly waiters = new Set<Waiter>()
   private policy?: OpenClawNegotiatedPolicy
-  private resolveReady?: () => void
-  private rejectReady?: (error: Error) => void
+  private redial?: ReturnType<typeof setTimeout>
+  private redials = 0
   private stop?: Promise<void>
 
   constructor(options: OpenClawClientOptions) {
@@ -291,13 +305,7 @@ export class OpenClawClient {
       !validStringList(options.caps)
     )
       throw new Error("Invalid OpenClaw connection policy")
-    if (
-      options.requestTimeoutMs !== undefined &&
-      (!Number.isSafeInteger(options.requestTimeoutMs) ||
-        options.requestTimeoutMs < 1)
-    )
-      throw new Error("Invalid OpenClaw request timeout")
-    this.requestTimeout = options.requestTimeoutMs
+    this.onReady = options.onReady
 
     const gatewayOptions: OpenClawGatewayClientOptions = {
       url: options.url,
@@ -314,18 +322,20 @@ export class OpenClawClient {
       mode: "backend",
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      requestTimeoutMs: options.requestTimeoutMs,
       onHelloOk: (hello) => this.acceptHello(hello),
       onConnectError: (error) => this.handleConnectError(error, options),
       onReconnectPaused: (info) => {
         const issue = connectionIssue({ details: { code: info.detailCode } })
         options.onReconnectPaused?.({ ...issue, terminal: true })
+        this.pause(new OpenClawClientConnectionError(issue.kind))
       },
-      onClose: (_code, _reason, info) =>
+      onClose: (_code, _reason, info) => {
+        if (this.state === "ready") this.state = "dialing"
         options.onClose?.({
           phase: info?.phase ?? "pre-hello",
-          recoverable: this.state === "starting" || this.state === "ready",
-        }),
+          recoverable: this.state !== "stopped",
+        })
+      },
       onEvent: (event) => options.onEvent?.(event),
       onGap: (gap) => options.onGap?.(gap),
     }
@@ -334,23 +344,30 @@ export class OpenClawClient {
       new GatewayClient(gatewayOptions)
   }
 
+  /**
+   * Resolves once the link is ready, dialing now when no dial is in flight.
+   * Each call waits on its own deadline, so a failed start is never reused.
+   */
   start(): Promise<void> {
     if (this.state === "ready") return Promise.resolve()
-    if (this.state === "starting") return this.ready!
-    if (this.state !== "new")
+    if (this.state === "stopped")
       return Promise.reject(new OpenClawClientUnavailableError())
-
-    this.state = "starting"
-    this.ready = new Promise<void>((resolve, reject) => {
-      this.resolveReady = resolve
-      this.rejectReady = reject
+    const deadline = new Deadline(CALL_MS)
+    const ready = new Promise<void>((resolve, reject) => {
+      const waiter = { resolve, reject }
+      this.waiters.add(waiter)
+      deadline.signal.addEventListener("abort", () =>
+        this.waiters.delete(waiter)
+      )
     })
-    try {
-      this.gateway.start()
-    } catch {
-      this.rejectTerminal(new OpenClawClientConnectionError("unavailable"))
-    }
-    return this.ready
+    if (this.state === "idle") this.dial()
+    return deadline
+      .run(() => ready)
+      .catch((error: unknown) => {
+        throw deadline.signal.aborted
+          ? new OpenClawClientUnavailableError()
+          : error
+      })
   }
 
   async request<T>(
@@ -362,11 +379,11 @@ export class OpenClawClient {
     if (options.signal?.aborted)
       throw new OpenClawClientRequestError("cancelled")
     const dispatch = { accepted: false, requestSent: false }
+    const deadline = new Deadline(CALL_MS, defaultClock, options.signal)
     try {
       /** Each provider leaf validates its exact method params and result before conversion. */
       return await this.gateway.request<T>(method, params, {
-        signal: options.signal,
-        timeoutMs: options.timeoutMs ?? this.requestTimeout,
+        signal: deadline.signal,
         expectFinal: options.expectFinal,
         onSent: () => {
           dispatch.requestSent = true
@@ -374,17 +391,26 @@ export class OpenClawClient {
         },
         onAccepted: (payload) => {
           dispatch.accepted = true
+          // The deadline and the caller's cancellation bound admission only;
+          // an accepted run's final answer is unbounded.
+          deadline.clear()
           options.onAccepted?.(payload)
         },
       })
     } catch (error) {
-      throw this.sanitizeRequestError(error, options.signal, dispatch)
+      throw this.sanitizeRequestError(
+        error,
+        deadline.signal.aborted,
+        options.signal,
+        dispatch
+      )
+    } finally {
+      deadline.clear()
     }
   }
 
   stopAndWait(): Promise<void> {
-    if (this.stop) return this.stop
-    this.stop = this.stopClient()
+    this.stop ??= this.stopClient()
     return this.stop
   }
 
@@ -392,86 +418,90 @@ export class OpenClawClient {
     return this.policy
   }
 
+  private dial() {
+    clearTimeout(this.redial)
+    this.state = "dialing"
+    try {
+      this.gateway.start()
+    } catch {
+      this.state = "idle"
+      this.settle(new OpenClawClientConnectionError("unavailable"))
+    }
+  }
+
+  /** Every hello is accepted, and its limits replace the last ones. */
   private acceptHello(hello: HelloOk) {
-    if (this.state !== "starting") return
+    if (this.state === "stopped") return
     if (hello.protocol !== PROTOCOL_VERSION) {
-      this.rejectTerminal(new OpenClawClientConnectionError("authentication"))
+      this.settle(new OpenClawClientConnectionError("authentication"))
       return
     }
     this.policy = negotiatedPolicy(hello)
     this.state = "ready"
-    this.resolveReady?.()
+    this.redials = 0
+    clearTimeout(this.redial)
+    this.onReady?.()
+    this.settle()
   }
 
   private handleConnectError(error: unknown, options: OpenClawClientOptions) {
     const issue = connectionIssue(error)
     options.onConnectionIssue?.(issue)
     if (issue.terminal)
-      this.rejectTerminal(new OpenClawClientConnectionError(issue.kind))
+      this.settle(new OpenClawClientConnectionError(issue.kind))
   }
 
-  private rejectTerminal(error: OpenClawClientConnectionError) {
-    if (this.state !== "starting" && this.state !== "ready") return
-    const wasStarting = this.state === "starting"
-    this.state = "terminal"
-    if (wasStarting) this.rejectReady?.(error)
-    this.stop ??= this.disposeTerminal()
+  /** The Gateway stopped redialing on its own; this client redials on a capped backoff. */
+  private pause(error: OpenClawClientConnectionError) {
+    if (this.state === "stopped") return
+    this.state = "idle"
+    this.settle(error)
+    clearTimeout(this.redial)
+    this.redial = setTimeout(
+      () => {
+        if (this.state === "idle") this.dial()
+      },
+      backoffDelay(this.redials++, REDIAL_BACKOFF)
+    )
+  }
+
+  /** Resolves every waiting start, or rejects each with `error`. */
+  private settle(error?: Error) {
+    const waiters = [...this.waiters]
+    this.waiters.clear()
+    for (const waiter of waiters)
+      if (error) waiter.reject(error)
+      else waiter.resolve()
   }
 
   private sanitizeRequestError(
     error: unknown,
+    aborted: boolean,
     signal: AbortSignal | undefined,
     dispatch: Readonly<{ accepted: boolean; requestSent: boolean }>
   ) {
-    const timeoutSent =
-      error instanceof GatewayClientRequestTimeoutError && error.requestSent
-    const requestSent = dispatch.requestSent || timeoutSent
-    if (signal?.aborted)
-      return new OpenClawClientRequestError(
-        "cancelled",
-        requestSent,
-        dispatch.accepted
-      )
-    if (error instanceof GatewayClientRequestTimeoutError)
-      return new OpenClawClientRequestError(
-        "timeout",
-        requestSent,
-        dispatch.accepted
-      )
-    if (isGatewayProtocolResponseError(error))
-      return new OpenClawClientRequestError(
-        "rejected",
-        requestSent,
-        dispatch.accepted
-      )
+    const kind = aborted
+      ? signal?.aborted
+        ? "cancelled"
+        : "timeout"
+      : isGatewayProtocolResponseError(error)
+        ? "rejected"
+        : "unavailable"
     return new OpenClawClientRequestError(
-      "unavailable",
-      requestSent,
+      kind,
+      dispatch.requestSent,
       dispatch.accepted
     )
   }
 
-  private async disposeTerminal() {
-    try {
-      await this.gateway.stopAndWait()
-    } catch {
-      // A terminal connection rejection is already reported without native detail.
-    } finally {
-      this.state = "stopped"
-    }
-  }
-
   private async stopClient() {
-    if (this.state === "starting") {
-      this.state = "stopping"
-      this.rejectReady?.(new OpenClawClientUnavailableError())
-    } else if (this.state !== "stopped") this.state = "stopping"
+    this.state = "stopped"
+    clearTimeout(this.redial)
+    this.settle(new OpenClawClientUnavailableError())
     try {
       await this.gateway.stopAndWait()
     } catch {
       // Gateway close failures do not expose native detail and cannot revive the client.
-    } finally {
-      this.state = "stopped"
     }
   }
 }
