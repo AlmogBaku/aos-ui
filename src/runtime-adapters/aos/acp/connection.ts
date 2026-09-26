@@ -543,11 +543,11 @@ export function createAcpConnection(
       const meta = AosSessionResumeResponseMetaSchema.parse(
         aosMetaOf(response._meta)
       )
-      owners.set(sessionId, meta.session.agentId)
+      if (agentId !== undefined) owners.set(sessionId, agentId)
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
       if (meta.history) histories.set(sessionId, meta.history)
-      return { configOptions: response.configOptions ?? [], meta }
+      return { meta }
     } finally {
       for (const settle of settled) settle?.()
     }

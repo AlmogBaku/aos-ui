@@ -178,11 +178,6 @@ export const AosSessionInfoMetaSchema = readObject({
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 
-export const AosExecutionSchema = readObject({
-  status: SessionStatusSchema,
-  turnId: IdentifierSchema.optional(),
-})
-
 /** `NewSessionResponse._meta.aos` */
 export const AosSessionNewResponseMetaSchema = readObject({
   session: AosSessionInfoMetaSchema,
@@ -254,12 +249,10 @@ export const AosHistoryPageTagSchema = readObject({
  * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
  * `resync: true` means `after` was beyond bounded replay; the client must
- * resume again with `replayFrom: { type: "start" }`.
+ * resume again with `replayFrom: { type: "start" }`. The Session's row,
+ * execution, models and capabilities follow the answer as updates.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  execution: AosExecutionSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
   position: readObject({
     turnId: IdentifierSchema,
     sequence: SequenceSchema,

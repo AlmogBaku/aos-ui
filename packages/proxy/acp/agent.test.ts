@@ -112,6 +112,12 @@ async function usageOf(test: { recorder: Recorder }, count = 1) {
  * how a cold Session answers while its agent is still being built. `Infinity`
  * stands for one that never becomes readable.
  */
+/** A runtime whose watch of the Session finds a turn it started by itself. */
+function announceRunningTurn(_scope: unknown, watcher: ServerTurnListener) {
+  void Promise.resolve().then(() => watcher.onTurn())
+  return () => undefined
+}
+
 function coldWindow(readableAttempt: number): ServerRuntime["context"] {
   let attempts = 0
   return async () => {
@@ -321,14 +327,10 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    expect(resumed).toMatchObject({
-      configOptions: [{ configId: "model" }],
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "running" },
-          execution: { status: "running", turnId: "run-live" },
-        },
-      },
+    // The answer says only where the replay ended; the row and the model
+    // options follow it as updates.
+    expect(resumed).toEqual({
+      _meta: { [AOS_META_KEY]: { history: expect.any(Object) } },
     })
     expect(updates(test.recorder)[0]).toMatchObject({
       sessionId: SESSION,
@@ -346,6 +348,19 @@ describe("AOS ACP agent", () => {
         _meta: { [AOS_META_KEY]: { turnId: "run-live" } },
       },
     })
+    const row = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("session_info_update"),
+      "the Session's row"
+    )
+    expect(row.params).toMatchObject({
+      update: {
+        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "running" } },
+      },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"configId":"model"'),
+      "the Session's model options"
+    )
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
@@ -1080,6 +1095,7 @@ describe("AOS ACP agent", () => {
         withdrawal.resolve(signal)
         return answer.promise
       },
+      subscribeTurns: () => () => undefined,
     })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1111,7 +1127,7 @@ describe("AOS ACP agent", () => {
       sessionId: CREATED,
       cwd: "/",
     })
-    expect(test.discover).toHaveBeenCalled()
+    await waitFor(() => expect(test.discover).toHaveBeenCalled())
     const signal = await withdrawal.promise
     await waitFor(() => expect(signal.aborted).toBe(true))
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
@@ -1716,7 +1732,7 @@ describe("Session rooms", () => {
   it("keeps the page of a discovered turn nobody here sent", async () => {
     const test = await harness({
       providerIds: true,
-      rows: [sessionRow({ status: "running" })],
+      subscribeTurns: announceRunningTurn,
       discover: async () => ({ handle: new EventSource(), state: "running" }),
       history: storedLiveTurn(),
     })
@@ -1724,7 +1740,9 @@ describe("Session rooms", () => {
 
     await open(test, { replayFrom: { type: "start" } })
 
-    expect(test.coordinator.state(test.scope)).toBe("running")
+    await waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("running")
+    )
     expect(flow(test.recorder)).toContain("history assistant-0")
     test.close()
   })
@@ -2064,11 +2082,14 @@ describe("Session rooms", () => {
     // A follow without a journal reloads history instead of streaming.
     const test = await harness({
       providerIds: true,
-      rows: [sessionRow({ status: "running" })],
+      subscribeTurns: announceRunningTurn,
       discover: async () => ({ handle: new EventSource(), state: "running" }),
     })
     await test.list()
     await open(test)
+    await waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("running")
+    )
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)

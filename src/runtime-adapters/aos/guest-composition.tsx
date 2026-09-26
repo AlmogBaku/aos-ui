@@ -8,6 +8,7 @@ import {
   type AssistantState,
   type CompleteAttachment,
 } from "@assistant-ui/react"
+import { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   useCallback,
   useEffect,
@@ -48,7 +49,7 @@ import { runErrorMessage } from "@/lib/i18n/run-errors"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import {
   AOS_ACP_GUEST_PATH,
-  type AosSessionResumeResponseMetaSchema,
+  AosAvailableCommandsMetaSchema,
 } from "@aos/protocol/acp"
 import { createAcpApprovals } from "./acp/acp-approvals"
 import { createAcpInteractions } from "./acp/acp-interactions"
@@ -84,14 +85,14 @@ const dictionaries = { en, he } as const
 
 const CLIENT_INFO = { name: "aos-ui-guest", version: "1" }
 
-/** What one `session/resume` reports about the invited Session. */
+/** What the invited Session reports it supports, beside its commands. */
 type GuestSessionCapabilities = z.infer<
-  typeof AosSessionResumeResponseMetaSchema
+  typeof AosAvailableCommandsMetaSchema
 >["capabilities"]
 
 /**
  * Only the presentation context the guest surface renders: the invited
- * Session's capabilities arrive on the ACP resume, not on this read.
+ * Session's capabilities arrive over ACP once it is resumed, not on this read.
  */
 const GuestRuntimeContextSchema = z.object({
   agentId: z.string().min(1).max(256),
@@ -369,15 +370,14 @@ function ReadyGuestAosSurface({
   const media = useMemo(() => new VoiceMediaController(), [])
   // The invited Session reports what it supports only once it is resumed.
   const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
-  const resume = useCallback(
-    async (resumedId: string) => {
-      const resumed = await connection.resumeSession(resumedId, {
-        replayFromStart: true,
-      })
-      setCapabilities(resumed.meta.capabilities)
-      return resumed
-    },
-    [connection]
+  useEffect(
+    () =>
+      connection.subscribeSessionUpdates(sessionId, (update, meta) => {
+        if (!SessionUpdate.isAvailableCommandsUpdate(update)) return
+        const reported = AosAvailableCommandsMetaSchema.safeParse(meta)
+        if (reported.success) setCapabilities(reported.data.capabilities)
+      }),
+    [connection, sessionId]
   )
   // The invited Session owns the batch, so its bytes are staged per turn and
   // the prompt links whatever the proxy accepted.
@@ -423,7 +423,6 @@ function ReadyGuestAosSurface({
     approvals,
     sessionId,
     agentId,
-    resume,
     stageAttachments,
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,

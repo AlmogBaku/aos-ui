@@ -30,8 +30,7 @@ export type GuestMiddlewareOptions = GuestScopeOptions & {
 /**
  * A guest member's stack, outermost first. A refused command never reaches
  * scope, so a refused first Send never creates the conversation, and the
- * commands layer projects what a resume answers and the commands event last
- * on the way out.
+ * commands layer projects the commands event last on the way out.
  */
 export function createGuestMiddleware(
   options: GuestMiddlewareOptions

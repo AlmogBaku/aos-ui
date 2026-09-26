@@ -76,17 +76,21 @@ export function createAcpWorkspaceClient({
   const creatorBaselines = new Map<string, Set<string>>()
   let sessionActions: Promise<SessionActionCapabilities> | undefined
 
+  function adopt(sessionId: string, agentId: string) {
+    try {
+      rest.adoptSessionOwnership(sessionId, agentId)
+    } catch {
+      // The proxy's row is authoritative; REST ownership is only a byte route.
+    }
+  }
+
   function remember(
     sessionId: string,
     info: AosSessionInfoMeta,
     updatedAt?: string | null
   ) {
     store.put(sessionId, info, updatedAt)
-    try {
-      rest.adoptSessionOwnership(sessionId, info.agentId)
-    } catch {
-      // The proxy's row is authoritative; REST ownership is only a byte route.
-    }
+    adopt(sessionId, info.agentId)
   }
 
   function knownAgentOf(sessionId: string) {
@@ -316,16 +320,13 @@ export function createAcpWorkspaceClient({
       store.observe(created.sessionId)
       remember(created.sessionId, created.meta.session)
       watchCreator(created.sessionId, agentId)
-      composer.resume(created.sessionId, {
-        configOptions: created.configOptions,
-        capabilities: created.meta.capabilities,
-      })
+      composer.resume(created.sessionId)
       return { sessionId: created.sessionId }
     },
     /**
-     * Resumes a Session: the proxy replays it and the workspace records the
-     * capabilities, config options, and execution state it reports. Naming the
-     * owning Agent lets a deep link resume before any list.
+     * Resumes a Session: the proxy replays it, and its row, execution state,
+     * capabilities, and config options follow as updates. Naming the owning
+     * Agent lets a deep link resume before any list.
      */
     async resumeSession(
       sessionId: string,
@@ -339,13 +340,11 @@ export function createAcpWorkspaceClient({
         ...(agentId ? { agentId } : {}),
         ...connection.lastSequence(sessionId),
       })
-      remember(sessionId, resumed.meta.session)
-      watchCreator(sessionId, resumed.meta.session.agentId)
-      store.setStatus(sessionId, resumed.meta.execution.status)
-      composer.resume(sessionId, {
-        configOptions: resumed.configOptions,
-        capabilities: resumed.meta.capabilities,
-      })
+      if (agentId) {
+        adopt(sessionId, agentId)
+        watchCreator(sessionId, agentId)
+      }
+      composer.resume(sessionId)
       return resumed
     },
     async markSessionRead(sessionId: string) {
@@ -414,7 +413,7 @@ export function createAcpWorkspaceClient({
     ): Promise<SessionModelUpdateResponse> {
       let models =
         patch.selectedId === undefined
-          ? composer.models(sessionId)
+          ? await composer.models(sessionId)
           : await composer.selectModel(sessionId, patch.selectedId)
       if (patch.effortId !== undefined)
         models = await composer.selectEffort(sessionId, patch.effortId)

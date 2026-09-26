@@ -24,9 +24,12 @@ import {
   type RequestReply,
 } from "./events"
 import {
+  hasSession,
   promptText,
   runEvents,
+  type CommandResults,
   type Member,
+  type MemberScope,
   type PromptPart,
   type SessionEvent,
   type TurnStream,
@@ -470,8 +473,9 @@ function createChannelTable({
     },
 
     /**
-     * A member's own start failed without a turn to end, so no turn end asks
-     * the runtime; this asks once instead.
+     * Asks the runtime once for a turn no turn end will report: one a
+     * member's failed start may have lost to, or one behind a wait a resume
+     * found.
      */
     async recheck(scope: ChannelScope) {
       const channel = channels.get(channelKey(scope))
@@ -597,7 +601,7 @@ export function createChannels(options: CreateChannelsOptions) {
   return {
     ...channels,
     /** Joins one member to one Session until the membership detaches. */
-    join(member: Member, scope: SessionScope, membership: MembershipOptions) {
+    join(member: Member, scope: MemberScope, membership: MembershipOptions) {
       const owner = createOwner(machine, {
         logger,
         clock,
@@ -608,6 +612,30 @@ export function createChannels(options: CreateChannelsOptions) {
         },
       })
       return new Membership(channels, member, scope, membership, owner)
+    },
+
+    /**
+     * Resumes one member's view of its Session. The join lands once the
+     * answer is written, and the Session's execution, readings and row reach
+     * the member as events after it. A Session waiting on input asks its
+     * runtime whether the wait still stands, which the answer does not wait
+     * for.
+     */
+    async resume(
+      membership: Membership,
+      position: ResumePosition,
+      read?: () => Promise<SessionHistoryResponse>
+    ): Promise<CommandResults["resume"]> {
+      const resumed = await membership.resume(position, read)
+      if (membership.pending) {
+        membership.joined()
+        return resumed
+      }
+      const { scope } = membership
+      const { state, turnId } = options.snapshot(scope)
+      membership.joined({ turnId })
+      if (state === "waiting-for-input") void channels.recheck(scope)
+      return resumed
     },
   }
 }
@@ -624,7 +652,7 @@ export function createChannels(options: CreateChannelsOptions) {
 class Membership {
   readonly #channels: ChannelTable
   readonly #member: Member
-  readonly #scope: SessionScope
+  readonly #addressed: MemberScope
   readonly #options: MembershipOptions
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
@@ -663,13 +691,13 @@ class Membership {
   constructor(
     channels: ChannelTable,
     member: Member,
-    scope: SessionScope,
+    scope: MemberScope,
     options: MembershipOptions,
     owner: MembershipOwner
   ) {
     this.#channels = channels
     this.#member = member
-    this.#scope = scope
+    this.#addressed = scope
     this.#options = options
     this.#owner = owner
     this.#detaching = owner.stack.adopt(new AbortController(), (controller) =>
@@ -709,6 +737,21 @@ class Membership {
     return this.#scope
   }
 
+  /**
+   * Whether this member addresses an invitation whose Session does not exist
+   * yet. It is shown what it can do until its first Send creates the Session,
+   * which joins it anew.
+   */
+  get pending() {
+    return !hasSession(this.#addressed)
+  }
+
+  get #scope(): SessionScope {
+    if (!hasSession(this.#addressed))
+      throw new Error("The invited Session does not exist yet")
+    return this.#addressed
+  }
+
   /** Whether this membership is over: it parted, or a deadline passed. */
   get detached() {
     return this.#owner.stack.disposed
@@ -727,7 +770,7 @@ class Membership {
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
-      { sessionId: this.#scope.sessionId, ...event },
+      { sessionId: this.#addressed.sessionId, ...event },
       { decline: (requestId) => declines.add(requestId) }
     )
     if (shown?.kind === "request-asked")
@@ -761,6 +804,8 @@ class Membership {
     position: ResumePosition,
     read?: () => Promise<SessionHistoryResponse>
   ): Promise<{ history?: SessionHistoryResponse; resync?: true }> {
+    // A fresh invitation has no history to replay and no turn to follow.
+    if (this.pending) return {}
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
     const replay = read ? await this.#replayHistory(read) : undefined
@@ -1084,7 +1129,15 @@ class Membership {
    */
   #subscribeCells(answered?: { turnId: string | undefined }) {
     const { coordinator, membershipId } = this.#options
-    const { agentId, sessionId } = this.#scope
+    const { agentId, sessionId } = this.#addressed
+    const subscribeCapabilities = () =>
+      coordinator.subscribeCapabilities(
+        { agentId, sessionId },
+        membershipId,
+        (capabilities) => this.#deliver({ kind: "commands", capabilities })
+      )
+    // A fresh invitation has no Session to read, only what it can do there.
+    if (this.pending) return subscribeCapabilities()
     let restating = answered
     const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
       execution: async () => {
@@ -1098,11 +1151,7 @@ class Membership {
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
     })
-    const capabilities = coordinator.subscribeCapabilities(
-      { agentId, sessionId },
-      membershipId,
-      (capabilities) => this.#deliver({ kind: "commands", capabilities })
-    )
+    const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow(
       (row, status) => void this.#deliver({ kind: "session-info", row, status })
     )
@@ -1310,7 +1359,7 @@ class Membership {
     fields: Record<string, unknown>
   ) {
     this.#options.log(level, event, {
-      sessionId: this.#scope.sessionId,
+      sessionId: this.#addressed.sessionId,
       ...fields,
     })
   }

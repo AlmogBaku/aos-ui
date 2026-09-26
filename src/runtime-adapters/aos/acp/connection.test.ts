@@ -246,12 +246,8 @@ function createProxyAgent(
       record(RESUME_REPLIED, params)
       const replayed = replayFrom?.type === "start"
       return {
-        configOptions: [modelOption("opus")],
         _meta: {
           [AOS_META_KEY]: {
-            session: sessionInfoMeta(),
-            execution: { status: "running", turnId: "run-1" },
-            capabilities: capabilities(),
             ...(resumes === options.resyncOnResume ? { resync: true } : {}),
             ...(replayed && options.history
               ? { history: options.history }
@@ -496,13 +492,9 @@ describe("ACP connection", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
 
-    const resumed = await connection.resumeSession(SESSION_ID, {
+    await connection.resumeSession(SESSION_ID, {
       replayFromStart: false,
       after: 12,
-      turnId: "run-1",
-    })
-    expect(resumed.meta.execution).toEqual({
-      status: "running",
       turnId: "run-1",
     })
     // The owner reported by `session/new` travels on every later resume.

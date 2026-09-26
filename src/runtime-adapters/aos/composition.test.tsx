@@ -6,7 +6,6 @@ import {
   type AgentContext,
   type AnyWireMessage,
   type PromptRequest,
-  type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
@@ -95,8 +94,6 @@ const sessionInfo = {
   archived: false,
   unread: false,
 } as const
-
-const configOptions: SessionConfigOption[] = []
 
 /** One task of latency, which every pending replay settles ahead of. */
 const catalogLatency = () =>
@@ -210,16 +207,25 @@ function createProxyAgent() {
             sessionId,
             update,
           })
-      return {
-        configOptions,
-        _meta: {
-          [AOS_META_KEY]: {
-            session: sessionInfo,
-            execution: { status: "idle" },
-            capabilities: capabilities(),
+      // The Session's capabilities and row follow the answer as updates.
+      setTimeout(() => {
+        for (const update of [
+          {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [],
+            _meta: { [AOS_META_KEY]: { capabilities: capabilities() } },
           },
-        },
-      }
+          {
+            sessionUpdate: "session_info_update",
+            _meta: { [AOS_META_KEY]: sessionInfo },
+          },
+        ] satisfies SessionUpdate[])
+          void peer?.notify(methods.client.session.update, {
+            sessionId,
+            update,
+          })
+      }, 0)
+      return { _meta: { [AOS_META_KEY]: {} } }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       // Exactly what the proxy refuses a prompt with while a Session is not idle.

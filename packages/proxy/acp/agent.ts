@@ -40,8 +40,6 @@ import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
   createSessions,
-  executionMeta,
-  overlaidStatus,
   sessionInfoMeta,
   sessionInfoOf,
   decodeCursor,
@@ -216,7 +214,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     } catch (cause) {
       throw cause instanceof CommandRefusedError
         ? refusalError(cause.refusal)
-        : cause
+        : publicRequestError(runtime, cause)
     }
   }
 
@@ -285,50 +283,24 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Resumes one Session on this connection and follows it. A command that
-   * names its `scope` addresses a Session outside this connection's catalog:
-   * it adopts nothing and reads no row, models or usage, and only a wait can
-   * hide a recoverable execution there.
+   * names its `scope` addresses a Session outside this connection's catalog,
+   * and adopts nothing.
    */
   async function resume(
     command: MemberCommands["resume"],
     client: AgentContext
   ): Promise<CommandResults["resume"]> {
-    const addressed = command.scope
-    if (!addressed && command.agentId !== undefined)
+    if (!command.scope && command.agentId !== undefined)
       sessions.adopt(command.sessionId, command.agentId)
-    const scope = addressed ?? sessions.scope(command.sessionId)
-    const row = addressed ? undefined : await workspace.session(scope)
-    // The same preamble the history route runs: only a wait or a Session the
-    // provider still calls running can hide a recoverable execution.
-    const state = coordinator.state(scope)
-    if (
-      state === "waiting-for-input" ||
-      (state === "idle" && row?.status === "running")
+    const membership = sessions.join(
+      client,
+      command.scope ?? sessions.scope(command.sessionId)
     )
-      await workspace.discover(scope)
-    const membership = sessions.join(client, scope)
-    const resumed = await membership
-      .resume(command, command.fromStart ? () => readReplay(scope) : undefined)
-      .catch((cause: unknown) => {
-        // A join its deadline ended is worth another try.
-        throw publicRequestError(runtime, cause)
-      })
-    const execution = coordinator.snapshot(scope)
-    // Every provider read the response needs settles before the follow-up is
-    // scheduled: it fires on the next task, so a read awaited after it lets
-    // the notifications overtake the very response that tells the browser to
-    // start listening for them.
-    const models = addressed ? undefined : await workspace.models(scope)
-    const capabilities = await workspace.capabilities(scope)
-    membership.joined({ turnId: execution.turnId })
-    return {
-      agentId: scope.agentId,
-      ...(row ? { row } : {}),
-      execution,
-      capabilities,
-      ...(models ? { models } : {}),
-      ...resumed,
-    }
+    return context.channels.resume(
+      membership,
+      command,
+      command.fromStart ? () => readReplay(membership.scope) : undefined
+    )
   }
 
   /** Admits one user turn in a Session this connection reaches. */
@@ -532,21 +504,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       },
       (command) => resume(command, client)
     )
-    const { row, execution, models, history } = resumed
+    const { history } = resumed
     return {
-      ...(models ? { configOptions: translators.configOptionsOf(models) } : {}),
       _meta: {
         [AOS_META_KEY]: {
-          // A Session outside the catalog shows its live state, not a row.
-          session: row
-            ? sessionInfoMeta(row, sessions.status(row))
-            : {
-                agentId: resumed.agentId,
-                status: overlaidStatus(execution.state, "idle"),
-                archived: false,
-              },
-          execution: executionMeta(execution),
-          capabilities: resumed.capabilities,
           ...(resumed.resync ? { resync: true } : {}),
           ...(history === undefined ? {} : { history: historyCursor(history) }),
         },

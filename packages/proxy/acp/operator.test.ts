@@ -14,7 +14,6 @@ import {
   AosElicitationMetaSchema,
   AosPlanMetaSchema,
   AosPromptResponseMetaSchema,
-  AosSessionResumeResponseMetaSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -626,10 +625,10 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
-  it("replays history before answering a resume that reports an idle execution", async () => {
+  it("replays history before answering the resume of an idle Session", async () => {
     const test = await harness()
 
-    const resumed = await test.agent.request(methods.agent.session.resume, {
+    await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
@@ -668,10 +667,6 @@ describe("operator ACP listener", () => {
         },
       },
     ])
-    expect(
-      AosSessionResumeResponseMetaSchema.parse(aosMetaOf(resumed)).execution
-        .status
-    ).toBe("idle")
     test.close()
   })
 

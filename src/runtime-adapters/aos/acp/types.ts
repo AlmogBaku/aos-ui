@@ -114,10 +114,7 @@ export interface AcpConnection {
   resumeSession(
     sessionId: string,
     options: AcpResumeOptions
-  ): Promise<{
-    configOptions: SessionConfigOption[]
-    meta: z.infer<typeof AosSessionResumeResponseMetaSchema>
-  }>
+  ): Promise<{ meta: z.infer<typeof AosSessionResumeResponseMetaSchema> }>
   /**
    * Reads the page before `cursor` of a Session this connection has resumed.
    * Its updates come back here and never reach `subscribeSessionUpdates` or the

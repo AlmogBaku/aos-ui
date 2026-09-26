@@ -12,6 +12,7 @@ import type {
   VisibilityUpdateResponse,
 } from "../../protocol"
 import type { PendingRequest, RequestReply, TurnEvent } from "./events"
+import type { ProviderSessionId } from "./ids"
 import type { SessionPatch, SessionScope } from "./runtime"
 import type { SessionExecutionState, TurnQuota } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
@@ -143,6 +144,18 @@ export type MemberAct = {
 }
 
 /**
+ * The Session a member addresses. A fresh invitation names its Session before
+ * the runtime holds one, so it has no provider Session until its first Send.
+ */
+export type MemberScope = Omit<SessionScope, "providerSessionId"> & {
+  providerSessionId?: ProviderSessionId
+}
+
+export function hasSession(scope: MemberScope): scope is SessionScope {
+  return scope.providerSessionId !== undefined
+}
+
+/**
  * Everything a member may ask of its Sessions, by kind. A `scope` names the
  * Session outside this connection's own catalog, as a middleware resolved it.
  */
@@ -150,7 +163,7 @@ export type MemberCommands = {
   resume: {
     sessionId: string
     agentId?: string
-    scope?: SessionScope
+    scope?: MemberScope
     /** Replay the Session's history before following it. */
     fromStart: boolean
     /** Where the member's view already reaches in the live turn. */
@@ -205,12 +218,6 @@ export type CommandKind = keyof MemberCommands
 /** What each command answers, before a transport encodes it. */
 export type CommandResults = {
   resume: {
-    agentId: string
-    /** The Session's row, read only for a Session in this connection's catalog. */
-    row?: SessionRow
-    execution: { state: SessionExecutionState; turnId?: string }
-    capabilities: WorkspaceCapabilities
-    models?: SessionModelsResponse
     /** The view must rebuild itself from history. */
     resync?: true
     /** The page a from-start resume replayed. */

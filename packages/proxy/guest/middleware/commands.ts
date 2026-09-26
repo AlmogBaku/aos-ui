@@ -87,13 +87,6 @@ export function createCommandsMiddleware(): Middleware {
   return {
     admits: (kind) => GUEST_COMMANDS[kind],
     commands: {
-      resume: async (command, next) => {
-        const resumed = await next(command)
-        const capabilities = projectCapabilities(resumed.capabilities)
-        if (!capabilities)
-          throw new Error("The invited Session reported unusable capabilities")
-        return { ...resumed, capabilities }
-      },
       // Rebuilt from the fields a guest may set; the history layer decides
       // which message an Edit or Retry may name.
       send: async (command, next) => {

@@ -37,6 +37,23 @@ describe("membership faults", () => {
     other.close()
   })
 
+  it("answers a resume whose model read fails and sends the model options once a re-read lands", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const clock = useFakeClock()
+    test.faults.failOnce("models")
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+    await clock.advance(1_000)
+
+    await test.recorder.wait(modelOptions, "the re-read model options")
+    expect(modelReads(test)).toBe(2)
+    test.close()
+  })
+
   it("ends a join whose replay never settles at its deadline and frees its place for the next join", async () => {
     const test = await harness()
     await test.list()

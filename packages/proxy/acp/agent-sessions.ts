@@ -23,7 +23,12 @@ import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { Membership } from "../core/channel"
-import type { Member, MemberConnection } from "../core/member"
+import {
+  hasSession,
+  type Member,
+  type MemberConnection,
+  type MemberScope,
+} from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import {
@@ -109,19 +114,7 @@ export function commandsUpdate(
       name,
       description: description ?? "",
     })),
-  }
-}
-
-/** `ResumeSessionResponse._meta.aos.execution`, as the history route reports it. */
-export function executionMeta(execution: {
-  state: SessionExecutionState
-  turnId?: string
-}) {
-  return {
-    status: overlaidStatus(execution.state, "idle"),
-    ...(execution.state === "idle" || execution.turnId === undefined
-      ? {}
-      : { turnId: execution.turnId }),
+    _meta: { [AOS_META_KEY]: { capabilities } },
   }
 }
 
@@ -228,12 +221,6 @@ export function createWorkspace(
         )
         return created.session.id
       }),
-    /** The invited Session a guest addresses by its conversation reference. */
-    invited: (
-      agentId: string,
-      ref: string,
-      create?: { firstTurnInstruction?: string }
-    ) => call(() => runtime.resolveInvitedSession(agentId, ref, create)),
     session: (scope: SessionScope) =>
       call(async () =>
         context.sessionRows.rememberDetail(
@@ -265,8 +252,6 @@ export function createWorkspace(
       ),
     updateModel: (scope: SessionScope, patch: SessionModelUpdateRequest) =>
       call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
-    /** Reconstructs provider-authoritative execution state before a resume. */
-    discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
     /** Steers the Session's live turn. */
     steer: (scope: SessionScope, request: TurnSteerRequest) =>
       call(() => coordinator.steer(scope, request)),
@@ -357,39 +342,59 @@ export function createSessions(
     },
 
     /**
-     * The Session's membership on this connection, joined on first use and
-     * again once the last one detached.
+     * The Session's membership on this connection, joined on first use, again
+     * once the last one detached, and anew once a fresh invitation's Session
+     * exists.
      */
-    join(client: AgentContext, scope: SessionScope) {
+    join(client: AgentContext, scope: MemberScope) {
       const existing = memberships.get(scope.sessionId)
-      if (existing && !existing.detached) return existing
+      const created = existing?.pending === true && hasSession(scope)
+      if (existing && !existing.detached && !created) return existing
+      if (created) existing.part()
+      const log = (
+        level: "info" | "error",
+        event: string,
+        fields: Record<string, unknown>
+      ) =>
+        context.logger?.[level](
+          redactForLog({ event, connectionId: context.connectionId, ...fields })
+        )
       const membership = context.channels.join(memberOf(client), scope, {
         coordinator,
         membershipId: `${context.connectionId}:${scope.sessionId}`,
-        log: (level, event, fields) =>
-          context.logger?.[level](
-            redactForLog({
-              event,
-              connectionId: context.connectionId,
-              ...fields,
-            })
-          ),
+        log,
         describe: (cause) => errorNotificationOf(runtime, cause),
-        subscribeRow: (listener) =>
-          context.sessionRows.subscribeRow(
-            scope.agentId,
-            scope.sessionId,
+        subscribeRow: (listener) => {
+          const { agentId, sessionId } = scope
+          const unsubscribe = context.sessionRows.subscribeRow(
+            agentId,
+            sessionId,
             (row) => listener(row, status(row))
-          ),
+          )
+          // A Session this connection never listed is read once for its row.
+          if (hasSession(scope) && !context.sessionRows.get(agentId, sessionId))
+            void workspace.session(scope).catch((cause: unknown) =>
+              log("error", "session.read.failed", {
+                sessionId,
+                errorCode: errorNotificationOf(runtime, cause).code,
+              })
+            )
+          return unsubscribe
+        },
       })
       memberships.set(scope.sessionId, membership)
       return membership
     },
 
-    /** The Session's membership on this connection, while it lasts. */
+    /**
+     * The Session's membership on this connection, while it lasts and once
+     * its Session exists.
+     */
     membership(publicSessionId: string) {
       const membership = memberships.get(publicSessionId)
-      return membership?.detached ? undefined : membership
+      return membership?.detached || membership?.pending
+        ? undefined
+        : membership
     },
 
     part(publicSessionId: string) {

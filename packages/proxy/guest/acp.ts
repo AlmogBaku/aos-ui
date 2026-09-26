@@ -1,6 +1,6 @@
 import { createAosAcpAgent } from "../acp/agent"
-import { createWorkspace, type Workspace } from "../acp/agent-sessions"
 import { createAcpService } from "../acp/service"
+import { createCatalog, type Catalog } from "../core/catalog"
 import type { Channels } from "../core/channel"
 import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
@@ -98,7 +98,7 @@ const INVITE_AUTH_METHOD = {
  */
 function createGuestAuthentication(
   options: GuestAcpServiceOptions,
-  workspace: Pick<Workspace, "invited" | "capabilities">
+  catalog: Catalog
 ): ConnectionAuthentication {
   const now = options.now ?? Date.now
   const schedule =
@@ -169,8 +169,7 @@ function createGuestAuthentication(
           principal: { id: grant.principalId, role: "guest" },
           middleware: createGuestMiddleware({
             grant,
-            invited: workspace.invited,
-            capabilities: workspace.capabilities,
+            catalog,
             guestActiveExecutions: options.guestActiveExecutions,
           }),
         },
@@ -211,7 +210,7 @@ export function createGuestConnection(
   const { runtimeInstance } = options
   const authentication = createGuestAuthentication(
     options,
-    createWorkspace({ runtimeInstance, sessionRows, principalId: role })
+    createCatalog(runtimeInstance.runtime)
   )
   return {
     connectionId,

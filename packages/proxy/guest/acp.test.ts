@@ -428,8 +428,8 @@ type HarnessOptions = {
     agentId: string,
     sessionId: string
   ) => string | undefined
-  /** What the invited lookup, the capabilities read or a run's start throws instead. */
-  fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
+  /** What the invited lookup or a run's start throws instead. */
+  fails?: { lookup?: unknown; start?: unknown }
   /** How many turns every guest together may hold; four by default. */
   guestActiveExecutions?: number
 }
@@ -460,10 +460,7 @@ function harness(options: HarnessOptions = {}) {
   const updateSession = vi.fn(async () => undefined)
   const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
-  const workspaceCapabilities = vi.fn(async () => {
-    if (options.fails?.capabilities) throw options.fails.capabilities
-    return CAPABILITIES
-  })
+  const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(
     async (_agentId: string, _sessionId: string, _limit: number, offset = 0) =>
       options.history?.(offset) ?? HISTORY
@@ -913,33 +910,36 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "idle", archived: false },
-          execution: { status: "idle" },
-        },
-      },
-    })
-    // The operator's own Session title never travels to a guest.
-    expect(JSON.stringify(resumed)).not.toContain("Operator-owned title")
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          capabilities: {
-            workspace: {
-              slashCommands: { status: "unavailable" },
-              models: { status: "unavailable" },
+    // The answer says only where the replay ended.
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    const commands = await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(commands.params).toMatchObject({
+      sessionId: REF,
+      update: {
+        availableCommands: [],
+        _meta: {
+          [AOS_META_KEY]: {
+            capabilities: {
+              workspace: {
+                slashCommands: { status: "unavailable" },
+                models: { status: "unavailable" },
+              },
+              interactions: { steering: CAPABILITIES.interactions.steering },
             },
-            interactions: { steering: CAPABILITIES.interactions.steering },
           },
         },
       },
     })
-    expect(JSON.stringify(resumed)).not.toContain("Draft a plan")
+    expect(JSON.stringify(commands.params)).not.toContain("Draft a plan")
     expect(test.history).toHaveBeenCalledWith(AGENT, STORED, 500, 0)
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
+    // The operator's own Session title never travels to a guest.
+    expect(replayed).not.toContain("Operator-owned title")
     expect(replayed).not.toContain("private reasoning")
     expect(replayed).not.toContain(OPERATOR_PATH)
     expect(replayed).not.toContain("+new")
@@ -1044,9 +1044,7 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: { [AOS_META_KEY]: { execution: { status: "idle" } } },
-    })
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: {} } })
     expect(test.resolveInvitedSession).toHaveBeenCalledWith(
       AGENT,
       REF,
@@ -1058,7 +1056,28 @@ describe("guest ACP listener", () => {
       expect.anything()
     )
     expect(test.history).not.toHaveBeenCalled()
-    expect(updates(test.recorder)).toEqual([])
+    // What the guest can do there is all it is shown before its first Send.
+    await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(updates(test.recorder)).toMatchObject([
+      {
+        sessionId: REF,
+        update: {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [],
+          _meta: {
+            [AOS_META_KEY]: {
+              capabilities: {
+                workspace: { slashCommands: { status: "unavailable" } },
+              },
+            },
+          },
+        },
+      },
+    ])
     test.close()
   })
 
@@ -2247,28 +2266,6 @@ describe("guest scope and commands", () => {
         await socket.request(methods.agent.session.prompt, {
           sessionId: REF,
           prompt: [{ type: "text", text: "Hello" }],
-        })
-      )
-      socket.close()
-    }
-  )
-
-  it.each(FAILURES)(
-    "answers %s from a provider call with a public code alone",
-    async (_name, failure) => {
-      const test = harness({
-        existing: true,
-        fails: { capabilities: failure() },
-      })
-      const socket = await loggedInWire(
-        test.listener,
-        await invite(test.invitations)
-      )
-
-      expectPublicError(
-        await socket.request(methods.agent.session.resume, {
-          sessionId: REF,
-          cwd: "/",
         })
       )
       socket.close()

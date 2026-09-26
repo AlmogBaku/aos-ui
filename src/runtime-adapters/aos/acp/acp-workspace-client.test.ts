@@ -16,7 +16,7 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
-  type AosSessionNewResponseMetaSchema,
+  type AosAvailableCommandsMetaSchema,
 } from "@aos/protocol/acp"
 
 import type { SessionMetadata } from "../../contracts"
@@ -35,7 +35,7 @@ const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const UNLISTED_SESSION_ID = "session-2"
 
 type AcpCapabilities = z.infer<
-  typeof AosSessionNewResponseMetaSchema
+  typeof AosAvailableCommandsMetaSchema
 >["capabilities"]
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
@@ -221,6 +221,37 @@ function createFakeConnection() {
   let agents: AgentCatalogEntry[] = [catalogEntry()]
   let updateFailure: Error | undefined
   let listSessionsFailure: Error | undefined
+  const emit = (
+    sessionId: string,
+    update: SessionUpdate,
+    meta?: Record<string, unknown>
+  ) => {
+    for (const listener of updates.get(sessionId) ?? []) listener(update, meta)
+  }
+  /** What the proxy sends right behind its `session/new` or `session/resume` answer. */
+  const follow = (
+    sessionId: string,
+    agentId: string,
+    status: "idle" | "running"
+  ) =>
+    queueMicrotask(() => {
+      if (status === "running")
+        emit(sessionId, { sessionUpdate: "state_update", state: "running" })
+      emit(sessionId, {
+        sessionUpdate: "config_option_update",
+        configOptions: configOptions(model, effort),
+      })
+      emit(
+        sessionId,
+        { sessionUpdate: "available_commands_update", availableCommands: [] },
+        { capabilities: capabilities() }
+      )
+      emit(
+        sessionId,
+        { sessionUpdate: "session_info_update" },
+        { ...sessionInfoMeta(), agentId, status }
+      )
+    })
 
   const connection: AcpConnection = {
     status: "ready",
@@ -243,6 +274,7 @@ function createFakeConnection() {
     },
     async newSession(meta) {
       record("newSession", meta)
+      follow(SESSION_ID, meta.agentId, "idle")
       return {
         sessionId: SESSION_ID,
         configOptions: configOptions(model, effort),
@@ -263,14 +295,8 @@ function createFakeConnection() {
     },
     async resumeSession(sessionId, resume) {
       record("resumeSession", sessionId, resume)
-      return {
-        configOptions: configOptions(model, effort),
-        meta: {
-          session: sessionInfoMeta(),
-          execution: { status: "running", turnId: "run-1" },
-          capabilities: capabilities(),
-        },
-      }
+      follow(sessionId, AGENT_ID, "running")
+      return { meta: {} }
     },
     // Older pages belong to the thread's runtime, never the workspace client.
     resumePage: () => Promise.reject(new Error("unused")),
@@ -362,8 +388,7 @@ function createFakeConnection() {
       meta?: Record<string, unknown>,
       sessionId = SESSION_ID
     ) {
-      for (const listener of updates.get(sessionId) ?? [])
-        listener(update, meta)
+      emit(sessionId, update, meta)
     },
     emitNotification(method: string, params: unknown) {
       for (const listener of notifications.get(method) ?? []) listener(params)
@@ -884,21 +909,24 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("reads capabilities, commands, and context from the resumed Session", async () => {
+  it("reads capabilities, commands, and context from the resumed Session's updates", async () => {
     const { client, emitUpdate } = createClient()
     await client.resumeSession(SESSION_ID)
 
     await expect(
       client.workspaceCapabilities(SESSION_ID)
     ).resolves.toMatchObject({
-      workspace: { slashCommands: { status: "unavailable" } },
+      workspace: { models: { status: "available" } },
     })
     expect(client.context(SESSION_ID)).toBeUndefined()
 
-    emitUpdate({
-      sessionUpdate: "available_commands_update",
-      availableCommands: [{ name: "plan", description: "Plan the work" }],
-    })
+    emitUpdate(
+      {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "plan", description: "Plan the work" }],
+      },
+      { capabilities: capabilities() }
+    )
     emitUpdate({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
 
     await expect(
