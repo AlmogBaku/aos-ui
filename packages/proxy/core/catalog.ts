@@ -52,9 +52,9 @@ export type Catalog = {
     limit?: number
   ): Promise<CommandResults["list"]>
   /**
-   * One Session's row as a replaying cell: the known row at once, then each
-   * change. A Session no list has shown is read once for its row, and
-   * `failed` hears why that read failed.
+   * One Session's row as a replaying cell: the known row at once, then the
+   * row the provider holds now, then each change. `failed` hears why that
+   * read failed.
    */
   subscribe(
     scope: MemberScope,
@@ -164,12 +164,13 @@ export function createCatalog({
     },
 
     subscribe(target, listener, failed) {
-      const { agentId, sessionId } = target
-      const unsubscribe = rows.subscribeRow(agentId, sessionId, (row) =>
-        listener(overlaid(row))
+      const unsubscribe = rows.subscribeRow(
+        target.agentId,
+        target.sessionId,
+        (row) => listener(overlaid(row))
       )
-      if (hasSession(target) && !rows.get(agentId, sessionId))
-        void read(target).catch(failed)
+      // The provider may have changed a listed row while nobody followed it.
+      if (hasSession(target)) void read(target).catch(failed)
       return unsubscribe
     },
 

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { Session } from "../../protocol"
 import { createCatalog } from "./catalog"
+import * as ids from "./ids"
 import type { ServerRuntime } from "./runtime"
 import type { SessionExecutionState } from "./session-coordinator"
 import { createSessionRows } from "./session-rows"
@@ -26,6 +27,7 @@ function row(overrides: Partial<Session> = {}): Session {
 function harness(
   options: {
     listed?: Session
+    held?: Session
     state?: SessionExecutionState
     updateSession?: () => Promise<void>
   } = {}
@@ -41,6 +43,7 @@ function harness(
       limit,
       offset,
     }),
+    getSession: async () => options.held ?? options.listed ?? row(),
     updateSession,
   } as unknown as ServerRuntime
   const rows = createSessionRows()
@@ -74,6 +77,25 @@ describe("createCatalog", () => {
       expect(rows.map(({ status }) => status)).toEqual([shown])
     }
   )
+
+  it("shows a member of a listed Session its listed row at once, then the one the provider holds now", async () => {
+    const { catalog } = harness({ held: row({ title: "Renamed elsewhere" }) })
+    await catalog.list(undefined, 0)
+    const titles: string[] = []
+
+    catalog.subscribe(
+      {
+        agentId: AGENT,
+        sessionId: ids.sessionId(SESSION),
+        providerSessionId: ids.providerSessionId(`stored-${SESSION}`),
+      },
+      ({ title }) => titles.push(title),
+      () => undefined
+    )
+    await Promise.resolve()
+
+    expect(titles).toEqual(["Weekly digest", "Renamed elsewhere"])
+  })
 
   it("keeps the optimistic read row when the provider rejects the write", async () => {
     const { catalog, rows, updateSession } = harness({
