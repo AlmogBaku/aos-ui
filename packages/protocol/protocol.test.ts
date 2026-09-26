@@ -34,7 +34,9 @@ import {
   AosExtensionsSchema,
   AosFocusNotificationSchema,
   AosHistoryPageTagSchema,
+  AosPromptMetaSchema,
   AosReplayBeforeSchema,
+  AosSessionNewMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
   AosSessionUpdateRequestSchema,
@@ -906,6 +908,30 @@ describe("AOS v1 normalized protocol", () => {
     expect(history.parse({ nextCursor: "500" })).toEqual({ nextCursor: "500" })
     expect(history.parse({ truncated: true })).toEqual({ truncated: true })
     expect(history.parse(undefined)).toBeUndefined()
+  })
+
+  it("reads the client id a create or send repeats, and the resume position", () => {
+    expect(AosPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
+      clientId: "send-1",
+    })
+    expect(
+      AosSessionNewMetaSchema.parse({
+        agentId: "researcher",
+        clientId: "new-1",
+      })
+    ).toEqual({ agentId: "researcher", clientId: "new-1" })
+    for (const clientId of ["", 7]) {
+      expect(AosPromptMetaSchema.safeParse({ clientId }).success).toBe(false)
+      expect(
+        AosSessionNewMetaSchema.safeParse({ agentId: "researcher", clientId })
+          .success
+      ).toBe(false)
+    }
+    const { position } = AosSessionResumeResponseMetaSchema.shape
+    expect(position.parse({ turnId: "turn-1", sequence: 4 })).toEqual({
+      turnId: "turn-1",
+      sequence: 4,
+    })
   })
 
   it("tells an older page's updates apart from live ones", () => {

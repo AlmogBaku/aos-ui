@@ -145,10 +145,17 @@ export const AosLoginMetaSchema = z.strictObject({
 // sessions
 // ---------------------------------------------------------------------------
 
+/**
+ * The id the browser picks for one create or send, so a retry of it is
+ * recognized as the same request rather than repeated.
+ */
+const ClientIdSchema = IdentifierSchema.optional()
+
 /** `NewSessionRequest._meta.aos` */
 export const AosSessionNewMetaSchema = z.strictObject({
   agentId: IdentifierSchema,
   title: z.string().min(1).max(4096).optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `ListSessionsRequest._meta.aos` */
@@ -244,15 +251,20 @@ export const AosHistoryPageTagSchema = readObject({
 })
 
 /**
- * `ResumeSessionResponse._meta.aos`. `resync: true` means `after` was beyond
- * bounded replay; the client must resume again with `replayFrom: { type:
- * "start" }`.
+ * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
+ * joined Session's stream stands at, which a later resume continues from.
+ * `resync: true` means `after` was beyond bounded replay; the client must
+ * resume again with `replayFrom: { type: "start" }`.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
   session: AosSessionInfoMetaSchema,
   execution: AosExecutionSchema,
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-  resync: z.boolean().optional(),
+  position: readObject({
+    turnId: IdentifierSchema,
+    sequence: SequenceSchema,
+  }).optional(),
+  resync: z.literal(true).optional(),
   /** Present whenever this resume replayed history. */
   history: AosHistoryCursorSchema.optional(),
 })
@@ -263,6 +275,7 @@ export const AosPromptMetaSchema = z.strictObject({
   rewindSourceId: IdentifierSchema.optional(),
   /** Server-staged attachment batch referenced by `resource_link` blocks. */
   attachmentStageId: IdentifierSchema.optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `_aos/session/update` params: exactly one intent per write. */
@@ -456,6 +469,14 @@ export const AosUsageMetaSchema = readObject({
   source: SessionContextResponseSchema.shape.source,
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
+})
+
+/**
+ * `available_commands_update._meta.aos`: the Session's capabilities beyond its
+ * slash commands travel with them, as one update.
+ */
+export const AosAvailableCommandsMetaSchema = readObject({
+  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
 })
 
 // ---------------------------------------------------------------------------
