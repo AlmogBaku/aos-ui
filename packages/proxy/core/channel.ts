@@ -1236,6 +1236,8 @@ class Membership {
       )
     } catch (cause) {
       void entered?.then((release) => release())
+      // A Session the start found gone is over: nothing asks after it again.
+      if (this.endIfGone(cause)) throw cause
       // No turn started, so no turn end asks the runtime for one it started
       // meanwhile, which may be what refused this one.
       void this.#channels.recheck(this.#scope)
