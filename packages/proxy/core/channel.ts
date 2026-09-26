@@ -500,6 +500,13 @@ function createChannelTable({
       const channel = channels.get(channelKey(scope))
       if (channel) await adopt(channel)
     },
+
+    /** How many members every channel holds, for the health gauges. */
+    memberships() {
+      let count = 0
+      for (const channel of channels.values()) count += channel.memberships.size
+      return count
+    },
   }
 }
 
