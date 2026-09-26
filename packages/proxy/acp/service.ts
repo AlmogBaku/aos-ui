@@ -34,10 +34,13 @@ export type AcpUpgrade = {
 
 export type AcpPeer = {
   /**
-   * Returns the number of bytes sent, or -1 when the frame was dropped because
-   * the peer's backpressure limit is exceeded or its socket is already closed.
+   * Bun's answer: the bytes written, -1 for a frame queued behind
+   * backpressure, or 0 for one dropped, past the backpressure limit or on a
+   * socket already closing.
    */
   send(raw: string): number
+  /** Whether the socket is open, rather than closing or closed. */
+  isOpen(): boolean
   close(code: number, reason: string): void
 }
 
@@ -103,12 +106,13 @@ export function createAcpService(options: AcpServiceOptions) {
     const socket = createAcpSocket({
       close: (code, reason) => peer.close(code, reason),
       send: (raw) => {
-        const result = peer.send(raw)
-        if (result < 0)
-          context.logger.warn(
-            { connectionId: context.connectionId },
-            "acp.send.dropped"
-          )
+        const sent = peer.send(raw)
+        if (sent > 0) return
+        if (sent < 0) context.logger.debug({}, "acp.send.backpressure")
+        // A closing socket drops what is still written to it, as a reloading
+        // tab's does; a drop on an open one is a reader past the limit.
+        else if (peer.isOpen()) context.logger.warn({}, "acp.send.dropped")
+        else context.logger.debug({}, "acp.send.dropped")
       },
       // The upgrade's principal holds for the connection's whole life.
       lapsed: () => context.authentication?.lapsed() ?? false,

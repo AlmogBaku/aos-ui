@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
 
@@ -99,6 +100,7 @@ function peer() {
         resolveFrame = undefined
         return raw.length
       },
+      isOpen: () => closed.length === 0,
       close(code: number, reason: string) {
         closed.push({ code, reason })
       },
@@ -167,6 +169,65 @@ describe("ACP WebSocket service", () => {
     socket.receive(initializeFrame(8))
     expect(transport.frames).toHaveLength(1)
     expect(acp.sockets()).toBe(0)
+  })
+
+  it("warns of a dropped send only while its socket is open", async () => {
+    const logs = captureLogs()
+    const acp = createAcpService({
+      publicOrigin: ORIGIN,
+      role: "operator",
+      principalId: OPERATOR_PRINCIPAL,
+      agent: testAgent,
+      connection: (connectionId, principalId) => ({
+        ...connectionContext(connectionId, principalId),
+        logger: logs.logger.child({ connectionId }),
+      }),
+    })
+    const upgrade = await acp.authorizeUpgrade(
+      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    )
+    // Bun answers -1 for a frame it queued and 0 for one it dropped.
+    let sent = 0
+    let open = true
+    let written: (() => void) | undefined
+    const socket = acp.open(upgrade!, {
+      send() {
+        written?.()
+        return sent
+      },
+      isOpen: () => open,
+      close: () => undefined,
+    })
+    const exchange = (id: number, method: string) =>
+      new Promise<void>((resolve) => {
+        written = resolve
+        socket.receive(
+          method === "initialize"
+            ? initializeFrame(id)
+            : JSON.stringify({ jsonrpc: "2.0", id, method })
+        )
+      })
+
+    await exchange(1, "initialize")
+    sent = -1
+    await exchange(2, "spec/unknown")
+    sent = 0
+    open = false
+    await exchange(3, "spec/unknown")
+
+    const connectionId = upgrade!.connectionId
+    expect(
+      logs.records().filter(({ message }) => message.startsWith("acp.send."))
+    ).toEqual([
+      { level: "warn", message: "acp.send.dropped", fields: { connectionId } },
+      {
+        level: "debug",
+        message: "acp.send.backpressure",
+        fields: { connectionId },
+      },
+      { level: "debug", message: "acp.send.dropped", fields: { connectionId } },
+    ])
+    socket.close()
   })
 
   it("carries the configured principal into the connection context", async () => {
