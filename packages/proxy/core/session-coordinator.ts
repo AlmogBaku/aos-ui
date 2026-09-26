@@ -1273,31 +1273,30 @@ export class SessionCoordinator {
       const handle = await deadline.run(() =>
         this.options.engine.start(scope, input, stage, deadline.signal)
       )
-      try {
-        const execution: Execution = this.#createExecution({
-          scope,
-          turn,
+      const execution: Execution = this.#createExecution({
+        scope,
+        turn,
+        turnId: input.turnId,
+        request: input,
+        segment: this.#createSegment({
+          cacheKey: key,
           turnId: input.turnId,
-          request: input,
-          segment: this.#createSegment({
-            cacheKey: key,
-            turnId: input.turnId,
-            generation: this.#landed(turn, generation, "running", input.turnId),
+          generation: this.#landedStart(
+            scope,
+            turn,
+            generation,
             handle,
-            history: { journal: "start", at },
-            onTerminal: access.onTerminal,
-          }),
-        })
-        this.#executions.set(key, execution)
-        this.#trackJournal(execution.segment)
-        this.#consume(execution, execution.segment)
-        return this.#subscribe(execution.segment, 0, access)
-      } catch (innerError) {
-        void handle
-          .stop()
-          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
-        throw innerError
-      }
+            input.turnId
+          ),
+          handle,
+          history: { journal: "start", at },
+          onTerminal: access.onTerminal,
+        }),
+      })
+      this.#executions.set(key, execution)
+      this.#trackJournal(execution.segment)
+      this.#consume(execution, execution.segment)
+      return this.#subscribe(execution.segment, 0, access)
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId)
@@ -1480,40 +1479,34 @@ export class SessionCoordinator {
       const handle = await new Deadline(ADMISSION_DEADLINE_MS, this.#clock).run(
         (signal) => this.options.engine.recover(scope, providerRequest, signal)
       )
-      try {
-        const replaced = existing?.segment
-        const segment = this.#createSegment({
-          cacheKey: key,
+      const replaced = existing?.segment
+      const segment = this.#createSegment({
+        cacheKey: key,
+        turnId: request.turnId,
+        // A recovery that cannot land drops its handle: the turn runs on.
+        generation: this.#landed(turn, generation, "running", request.turnId),
+        handle,
+        // One turn keeps one journal and one monotonic sequence across its
+        // segments: a browser cursor can never skip a recovered event.
+        history: { journal: "continue", previous: replaced },
+        onTerminal: replaced?.onTerminal,
+      })
+      if (replaced) this.#forgetJournal(replaced)
+      const execution: Execution =
+        existing ??
+        this.#createExecution({
+          scope,
+          turn,
           turnId: request.turnId,
-          generation: this.#landed(turn, generation, "running", request.turnId),
-          handle,
-          // One turn keeps one journal and one monotonic sequence across its
-          // segments: a browser cursor can never skip a recovered event.
-          history: { journal: "continue", previous: replaced },
-          onTerminal: replaced?.onTerminal,
+          request: providerRequest,
+          segment,
         })
-        if (replaced) this.#forgetJournal(replaced)
-        const execution: Execution =
-          existing ??
-          this.#createExecution({
-            scope,
-            turn,
-            turnId: request.turnId,
-            request: providerRequest,
-            segment,
-          })
-        if (existing) existing.segment.fanout.close()
-        execution.segment = segment
-        this.#executions.set(key, execution)
-        this.#trackJournal(segment)
-        this.#consume(execution, segment)
-        return execution
-      } catch (innerError) {
-        void handle
-          .stop()
-          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
-        throw innerError
-      }
+      if (existing) existing.segment.fanout.close()
+      execution.segment = segment
+      this.#executions.set(key, execution)
+      this.#trackJournal(segment)
+      this.#consume(execution, segment)
+      return execution
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1776,6 +1769,33 @@ export class SessionCoordinator {
     return turn.owner.generation
   }
 
+  /**
+   * Lands a turn this proxy started. One that can no longer land has nobody to
+   * stop it later, so its handle is stopped here.
+   */
+  #landedStart(
+    scope: SessionScope,
+    turn: Turn,
+    generation: number,
+    handle: ServerTurnHandle,
+    turnId: string
+  ) {
+    try {
+      return this.#landed(turn, generation, "running", turnId)
+    } catch (error) {
+      const { agentId, sessionId } = scope
+      void handle
+        .stop()
+        .catch((err: unknown) =>
+          this.#logger.warn(
+            { err, agentId, sessionId, turnId },
+            "turn.late-start.stop.failed"
+          )
+        )
+      throw error
+    }
+  }
+
   /** An admission that did not land returns the turn to where it rested. */
   #endAdmission(turn: Turn, generation: number) {
     this.#move(turn, generation, { type: "refused" })
@@ -1806,32 +1826,31 @@ export class SessionCoordinator {
       const handle = await deadline.run((signal) =>
         this.options.engine.start(execution.scope, input, undefined, signal)
       )
-      try {
-        const segment = this.#createSegment({
-          cacheKey: key,
-          turnId: input.turnId,
-          generation: this.#landed(turn, generation, "running", input.turnId),
+      const segment = this.#createSegment({
+        cacheKey: key,
+        turnId: input.turnId,
+        generation: this.#landedStart(
+          execution.scope,
+          turn,
+          generation,
           handle,
-          history: { journal: "start", at },
+          input.turnId
+        ),
+        handle,
+        history: { journal: "start", at },
+      })
+      this.#forgetJournal(execution.segment)
+      // A continued turn is a fresh admission on the same execution record.
+      Object.assign(
+        execution,
+        admittedTurn({
+          turnId: input.turnId,
+          request: input,
+          segment,
         })
-        this.#forgetJournal(execution.segment)
-        // A continued turn is a fresh admission on the same execution record.
-        Object.assign(
-          execution,
-          admittedTurn({
-            turnId: input.turnId,
-            request: input,
-            segment,
-          })
-        )
-        this.#trackJournal(segment)
-        this.#consume(execution, segment)
-      } catch (innerError) {
-        void handle
-          .stop()
-          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
-        throw innerError
-      }
+      )
+      this.#trackJournal(segment)
+      this.#consume(execution, segment)
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId)

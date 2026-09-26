@@ -2257,6 +2257,46 @@ describe("SessionCoordinator", () => {
     ).resolves.toBeDefined()
   })
 
+  it("stops a start that lands after close, but leaves a recovered turn running", async () => {
+    const { advance } = useFakeClock()
+    const started = new EventSource()
+    const recovered = new EventSource()
+    let answerStart!: (handle: ServerTurnHandle) => void
+    let answerRecover!: (handle: ServerTurnHandle) => void
+    const engine: ServerTurnEngine = {
+      start: vi.fn(
+        () =>
+          new Promise<ServerTurnHandle>((resolve) => {
+            answerStart = resolve
+          })
+      ),
+      recover: vi.fn(
+        () =>
+          new Promise<ServerTurnHandle>((resolve) => {
+            answerRecover = resolve
+          })
+      ),
+    }
+    const sessions = coordinator(engine)
+    const start = sessions.start(scope, input("run-1"), access("one"))
+    const recover = sessions.recover(
+      otherScope,
+      { sessionId: otherScope.sessionId, turnId: "run-2" },
+      access("two")
+    )
+    await advance(0)
+
+    sessions.close()
+    answerStart(started)
+    answerRecover(recovered)
+
+    await expect(start).rejects.toThrow("Session coordinator is closed")
+    await expect(recover).rejects.toThrow("Session coordinator is closed")
+    // Nothing owns the start any more; the recovered turn is the user's.
+    expect(started.stop).toHaveBeenCalledOnce()
+    expect(recovered.stop).not.toHaveBeenCalled()
+  })
+
   it("coalesces concurrent authoritative recovery", async () => {
     const source = new EventSource()
     let resolveRecovery!: (handle: ServerTurnHandle) => void
