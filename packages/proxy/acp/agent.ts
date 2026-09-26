@@ -32,6 +32,7 @@ import {
 } from "../../protocol/acp"
 import { unlessAborted } from "../core/channel"
 import {
+  type ServerAttachmentStage,
   type ServerRuntime,
   type SessionPatch,
   type SessionScope,
@@ -306,44 +307,44 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Admits one user turn in a Session this connection reaches, answering once
-   * the coordinator admitted or refused it. A turn that never started
-   * releases its stage: the client keeps its attachments and stages them anew.
+   * the coordinator admitted or refused it. Only a first admission takes its
+   * stage, and a turn that never started releases it: the client keeps its
+   * attachments and stages them anew.
    */
   async function send(
     command: MemberCommands["send"],
     client: AgentContext
   ): Promise<CommandResults["send"]> {
     const scope = command.scope ?? sessions.scope(command.sessionId)
-    // Bytes were staged over REST; the prompt references the batch by id and
-    // the stage appends its server-owned content to the user turn.
-    const { attachmentStageId, clientId } = command
-    const stage =
-      attachmentStageId === undefined
-        ? undefined
-        : context.attachmentStages.take(
-            scope.agentId,
-            scope.sessionId,
-            attachmentStageId
-          )
-    if (attachmentStageId !== undefined && !stage) throw invalidParams()
+    const { text, attachmentStageId, rewindSourceId } = command
+    let stage: ServerAttachmentStage | undefined
     const membership = sessions.join(client, scope)
     try {
-      const prompt = {
-        prompt: stage ? await stage.appendTo(command.text) : command.text,
-        ...(command.rewindSourceId === undefined
-          ? {}
-          : { rewindSourceId: command.rewindSourceId }),
-      }
       return await membership.startTurn(
-        clientId === undefined
-          ? {
-              turnId: crypto.randomUUID(),
-              messageId: crypto.randomUUID(),
-              ...prompt,
+        {
+          // A send without a client id is one no repeat names.
+          clientId: command.clientId ?? crypto.randomUUID(),
+          sent: { text, attachmentStageId, rewindSourceId },
+          // Bytes were staged over REST; the prompt references the batch by
+          // id and the stage appends its server-owned content to the turn.
+          prepare: async () => {
+            if (attachmentStageId !== undefined) {
+              stage = context.attachmentStages.take(
+                scope.agentId,
+                scope.sessionId,
+                attachmentStageId
+              )
+              if (!stage) throw invalidParams()
             }
-          : { clientId, ...prompt },
-        echoedParts(command.content, stage?.artifactIds?.() ?? []),
-        { stage, quota: command.quota }
+            return {
+              prompt: stage ? await stage.appendTo(text) : text,
+              ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
+              ...(stage ? { stage } : {}),
+            }
+          },
+        },
+        () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
+        { quota: command.quota }
       )
     } catch (cause) {
       await stage?.cleanup().catch(() => undefined)

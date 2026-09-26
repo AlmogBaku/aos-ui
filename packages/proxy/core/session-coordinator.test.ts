@@ -272,11 +272,19 @@ describe("SessionCoordinator", () => {
       cleanup: vi.fn(async () => undefined),
     }
 
-    await sessions.start(scope, input("run-1"), access("one"), { stage })
+    await sessions.start(
+      scope,
+      {
+        clientId: "client-1",
+        sent: "Hello",
+        prepare: async () => ({ prompt: "Hello", stage }),
+      },
+      access("one")
+    )
 
     expect(start).toHaveBeenCalledWith(
       scope,
-      input("run-1"),
+      expect.objectContaining({ prompt: "Hello" }),
       stage,
       expect.any(AbortSignal)
     )
@@ -1578,7 +1586,12 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce(first)
         .mockResolvedValue(new EventSource())
       const sessions = coordinator({ ...engine(), start })
-      const send = { clientId: "client-1", prompt: "Hello" }
+      const sent = (clientId: string, prompt: string) => ({
+        clientId,
+        sent: prompt,
+        prepare: async () => ({ prompt }),
+      })
+      const send = sent("client-1", "Hello")
 
       const [admitted, repeated] = await Promise.all([
         sessions.start(scope, send, access("one")),
@@ -1586,17 +1599,13 @@ describe("SessionCoordinator", () => {
       ])
       expect(repeated.turnId).toBe(admitted.turnId)
       await expect(
-        sessions.start(scope, { ...send, prompt: "Changed" }, access("one"))
+        sessions.start(scope, sent("client-1", "Changed"), access("one"))
       ).rejects.toThrow(ServerClientIdReusedError)
 
       const read = reader(admitted)
       first.emit(turnEnded)
       await read()
-      await sessions.start(
-        scope,
-        { clientId: "client-2", prompt: "Next" },
-        access("one")
-      )
+      await sessions.start(scope, sent("client-2", "Next"), access("one"))
 
       await expect(
         sessions.start(scope, send, access("one"))

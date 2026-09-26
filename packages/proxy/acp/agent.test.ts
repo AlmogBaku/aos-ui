@@ -422,7 +422,6 @@ describe("AOS ACP agent", () => {
     const messageId = z
       .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
       .parse(accepted)._meta.aos.messageId
-    expect(messageId).toHaveLength(36)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     expect(test.start.mock.calls[0]?.[0]).toMatchObject({ sessionId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
@@ -1175,9 +1174,15 @@ describe("AOS ACP agent", () => {
   it("makes one turn of a prompt its client repeats after reconnecting", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const meta = { clientId: "send-1" }
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup: async () => undefined,
+    })
+    const meta = { clientId: "send-1", attachmentStageId }
     const messageId = await prompt(test, "Summarize", SESSION, meta)
-    // The reconnected browser sends again what it never saw answered.
+    // The reconnected browser sends again what it never saw answered, naming
+    // the stage the first send took.
     const other = await test.connect("connection-2")
     await other.list()
 

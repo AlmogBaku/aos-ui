@@ -44,7 +44,7 @@ import {
   clientTurnIds,
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
-  type SendInput,
+  type ClientSend,
   type SessionCoordinator,
   type StartOptions,
 } from "./session-coordinator"
@@ -1037,7 +1037,6 @@ class Membership {
     await this.#invalidate()
     return true
   }
-
   /**
    * Admits one user turn and subscribes to the segment it starts, settling
    * once the coordinator admitted or refused it and the channel was shown
@@ -1045,45 +1044,58 @@ class Membership {
    * answer is written. A turn another member won is followed instead; a
    * repeat of the turn this member follows shows it nothing again, and one of
    * a turn the channel was shown, which reached it as it joined, only the
-   * turn.
+   * turn. `echo` reads the prompt as members are shown it, once admitted.
    */
   async startTurn(
-    input: SendInput,
-    content: readonly PromptPart[],
+    input: ClientSend,
+    echo: () => readonly PromptPart[],
     options: StartOptions = {}
   ): Promise<CommandResults["send"]> {
     // Joined before admission, so a turn that wins the race still reaches it.
     this.joinChannel()
-    const { messageId } =
-      "clientId" in input
-        ? clientTurnIds(
-            this.#member.principal.id,
-            this.#scope.sessionId,
-            input.clientId
-          )
-        : input
-    const turn = await this.#exclusive(async () => {
-      let subscription
-      try {
-        subscription = await this.#coordinator.start(
-          this.#scope,
-          input,
-          this.#access(),
-          options
-        )
-      } catch (cause) {
-        // No turn started, so no turn end asks the runtime for one it started
-        // meanwhile, which may be what refused this one.
-        void this.#channels.recheck(this.#scope)
-        if (cause instanceof ServerTurnConflictError)
-          this.afterResponse(() => this.catchUp())
-        throw cause
-      }
+    const { messageId } = clientTurnIds(
+      this.#member.principal.id,
+      this.#scope.sessionId,
+      input.clientId
+    )
+    // Entered from the admission to the showing, so no follow subscribes this
+    // member to the turn first. A first admission enters once its prompt is
+    // prepared, so a slow one keeps no other turn from reaching this member.
+    let entered: Promise<() => void> | undefined
+    const enter = () => (entered ??= this.#enter())
+    let subscription
+    try {
+      subscription = await this.#coordinator.start(
+        this.#scope,
+        {
+          ...input,
+          prepare: async () => {
+            const prepared = await input.prepare()
+            await enter()
+            return prepared
+          },
+        },
+        this.#access(),
+        options
+      )
+    } catch (cause) {
+      void entered?.then((release) => release())
+      // No turn started, so no turn end asks the runtime for one it started
+      // meanwhile, which may be what refused this one.
+      void this.#channels.recheck(this.#scope)
+      if (cause instanceof ServerTurnConflictError)
+        this.afterResponse(() => this.catchUp())
+      throw cause
+    }
+    const release = await enter()
+    let turn: ChannelTurn
+    try {
       if (subscription.turnId === this.#followedTurn) {
         subscription.close()
-        return undefined
+        return { messageId }
       }
       const { turnId } = subscription
+      const content = echo()
       const announced = this.#channels.current(this.#scope)?.turnId === turnId
       const answered = new Promise<void>((resolve) => {
         this.afterResponse(async () => resolve())
@@ -1097,13 +1109,13 @@ class Membership {
               this.emit({ kind: "prompt", messageId, content, own: true })
             )
       )
-      return announced
-        ? undefined
-        : { turnId, messageId, content, at: Date.now() }
-    })
+      if (announced) return { messageId }
+      turn = { turnId, messageId, content, at: Date.now() }
+    } finally {
+      release()
+    }
     // A turn that started is answered as started, whatever showing it met.
-    if (turn)
-      await this.announce(turn).catch((cause: unknown) => this.report(cause))
+    await this.announce(turn).catch((cause: unknown) => this.report(cause))
     return { messageId }
   }
 
@@ -1390,6 +1402,15 @@ class Membership {
     } finally {
       if (this.#entering === entering) this.#entering = undefined
     }
+  }
+
+  /** Enters one subscribing task that holds until the returned release. */
+  #enter() {
+    return new Promise<() => void>((entered) => {
+      void this.#exclusive(
+        () => new Promise<void>((release) => entered(() => release()))
+      )
+    })
   }
 
   /** Asks the member to reload the Session from history. */
