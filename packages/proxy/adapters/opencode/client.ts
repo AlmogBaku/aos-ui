@@ -429,11 +429,22 @@ function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
   return guardedFetch as typeof fetch
 }
 
+/** `fetcher`, calling `accepted` once a request it sends is answered with success. */
+function onAccepted(fetcher: typeof fetch, accepted: () => void) {
+  const accepting = async (...request: Parameters<typeof fetch>) => {
+    const response = await fetcher(...request)
+    if (response.ok) accepted()
+    return response
+  }
+  return accepting as typeof fetch
+}
+
 class Facade implements OpenCodeClient {
   readonly #sdk: OpenCodeSdk
   readonly #directory: string
   readonly #username: string
   readonly #password: () => Promise<string>
+  readonly #fetch: typeof fetch
   readonly #controllers = new Set<AbortController>()
   #closed = false
 
@@ -442,12 +453,13 @@ class Facade implements OpenCodeClient {
     this.#directory = options.directory
     this.#username = options.username
     this.#password = options.password
+    this.#fetch = discardNativeErrorBodies(
+      options.fetcher ?? globalThis.fetch.bind(globalThis)
+    )
     this.#sdk = createOpencodeClient({
       baseUrl: options.baseUrl,
       directory: options.directory,
-      fetch: discardNativeErrorBodies(
-        options.fetcher ?? globalThis.fetch.bind(globalThis)
-      ),
+      fetch: this.#fetch,
     })
   }
 
@@ -823,6 +835,11 @@ class Facade implements OpenCodeClient {
     await this.#mutation(operation, () => undefined, callerSignal)
   }
 
+  /**
+   * One Session's durable events, resolving once OpenCode accepts the stream:
+   * a refused stream rejects here, never on its first read. The adapter call
+   * deadline bounds that answer and nothing after it.
+   */
   async #events(
     sessionId: string,
     options?: Readonly<{ after?: string; signal?: AbortSignal }>
@@ -830,27 +847,45 @@ class Facade implements OpenCodeClient {
     identifier(sessionId, "session")
     if (options?.after !== undefined) identifier(options.after, "after")
     const lease = this.#lease(options?.signal, false)
+    const answer = new Deadline(ADAPTER_CALL_DEADLINE_MS)
     let streamError: unknown
+    let answered!: (accepted: boolean) => void
+    const accepted = new Promise<boolean>((resolve) => {
+      answered = resolve
+    })
+    const failure = () =>
+      statusError(statusFrom(streamError), { cause: streamError })
     try {
-      const source = await this.#sdk.v2.session.events(
+      const { stream } = await this.#sdk.v2.session.events(
         {
           sessionID: sessionId,
           ...(options?.after === undefined ? {} : { after: options.after }),
         },
         {
-          ...(await this.#native(lease.signal)),
+          ...(await this.#native(
+            AbortSignal.any([lease.signal, answer.signal])
+          )),
+          fetch: onAccepted(this.#fetch, () => answered(true)),
           // AOS reconnects from the durable aggregate position itself.
           sseMaxRetryAttempts: 1,
           onSseError: (error) => {
             streamError = error
+            answered(false)
           },
         }
       )
+      // The SDK sends the request on the stream's first read.
+      const head = stream.next()
+      const open = await Promise.race([accepted, head.then(() => false)])
+      answer.clear()
+      if (!open) throw failure()
       const iterator = (async function* () {
         try {
-          for await (const event of source.stream) yield parseEvent(event)
-          if (streamError && !lease.controller.signal.aborted)
-            throw statusError(statusFrom(streamError))
+          const first = await head
+          if (!first.done) yield parseEvent(first.value)
+          for await (const event of stream) yield parseEvent(event)
+          if (streamError !== undefined && !lease.controller.signal.aborted)
+            throw failure()
         } catch (error) {
           if (lease.controller.signal.aborted) return
           if (error instanceof OpenCodeClientError) throw error
@@ -864,9 +899,10 @@ class Facade implements OpenCodeClient {
         abort: () => lease.controller.abort(),
       }
     } catch (error) {
+      answer.clear()
       lease.release()
-      if (error instanceof OpenCodeClientError) throw error
       if (lease.controller.signal.aborted) throw new OpenCodeClientAbortError()
+      if (error instanceof OpenCodeClientError) throw error
       throw statusError(undefined, { cause: error })
     }
   }
