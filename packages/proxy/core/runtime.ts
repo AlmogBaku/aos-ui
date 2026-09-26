@@ -62,11 +62,16 @@ export type RecoveryRequest = {
 }
 
 export type ServerTurnEngine = {
+  /**
+   * Admits a turn. `signal` aborts once the coordinator gives up, and the
+   * turn is then uncertain: the provider may have admitted it.
+   */
   start(
     scope: SessionScope,
     input: TurnInput,
     /** One-shot server-owned content staged for this native admission. */
-    attachments?: ServerAttachmentStage
+    attachments?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle>
   /**
    * Reattaches to a turn this process already admitted, or asks how an

@@ -1233,7 +1233,7 @@ export class SessionCoordinator {
     try {
       const at = Date.now()
       const handle = await deadline.run(() =>
-        this.options.engine.start(scope, input, ...(stage ? [stage] : []))
+        this.options.engine.start(scope, input, stage, deadline.signal)
       )
       const execution: Execution = this.#createExecution({
         scope,
@@ -1255,15 +1255,7 @@ export class SessionCoordinator {
       return this.#subscribe(execution.segment, 0, access)
     } catch (error) {
       if (!deadline.signal.aborted) throw error
-      // The provider may have admitted the turn, so it takes the Session from
-      // the turn before it, uncertain until a reconcile settles it.
-      this.#landed(turn, generation, "uncertain", input.turnId)
-      const previous = this.#executions.get(key)
-      if (previous) {
-        this.#forgetJournal(previous.segment)
-        this.#executions.delete(key)
-      }
-      throw new ServerTurnUncertainError()
+      throw this.#unanswered(key, turn, generation, input.turnId)
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1676,12 +1668,30 @@ export class SessionCoordinator {
     turn.admission = undefined
   }
 
+  /**
+   * A start its provider never answered may have admitted its turn, so that
+   * turn takes the Session from the one before it, uncertain until a
+   * reconcile settles it.
+   */
+  #unanswered(key: string, turn: Turn, generation: number, turnId: string) {
+    this.#landed(turn, generation, "uncertain", turnId)
+    const previous = this.#executions.get(key)
+    if (previous) {
+      this.#forgetJournal(previous.segment)
+      this.#executions.delete(key)
+    }
+    return new ServerTurnUncertainError()
+  }
+
   async #startSegment(execution: Execution, input: RepliesTurnInput) {
     const key = scopeKey(execution.scope)
     const { turn, generation } = this.#admit(execution.scope, input.turnId)
+    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock)
     try {
       const at = Date.now()
-      const handle = await this.options.engine.start(execution.scope, input)
+      const handle = await deadline.run((signal) =>
+        this.options.engine.start(execution.scope, input, undefined, signal)
+      )
       const segment = this.#createSegment({
         cacheKey: key,
         turnId: input.turnId,
@@ -1701,6 +1711,9 @@ export class SessionCoordinator {
       )
       this.#trackJournal(segment)
       this.#consume(execution, segment)
+    } catch (error) {
+      if (!deadline.signal.aborted) throw error
+      throw this.#unanswered(key, turn, generation, input.turnId)
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1858,11 +1871,13 @@ export class SessionCoordinator {
             // reset is definite: its journal cannot serve the browser's cursor,
             // so the execution settles and the next turn is admitted, which the
             // adapter still refuses if the native Session is busy.
-            outcome(interrupted ? "lost" : "ended")
-            this.#announce(execution.scope, {
-              ...this.#origin(execution.scope, segment.turnId),
-              kind: "turn-failed",
-            })
+            const moved = outcome(interrupted ? "lost" : "ended")
+            // An uncertain turn is not over: what settles it announces its end.
+            if (!(interrupted && moved))
+              this.#announce(execution.scope, {
+                ...this.#origin(execution.scope, segment.turnId),
+                kind: "turn-failed",
+              })
             break
           }
         }

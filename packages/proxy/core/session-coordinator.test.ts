@@ -274,7 +274,12 @@ describe("SessionCoordinator", () => {
 
     await sessions.start(scope, input("run-1"), access("one"), { stage })
 
-    expect(start).toHaveBeenCalledWith(scope, input("run-1"), stage)
+    expect(start).toHaveBeenCalledWith(
+      scope,
+      input("run-1"),
+      stage,
+      expect.any(AbortSignal)
+    )
   })
 
   it("fans one provider stream out to multiple reconnecting browsers", async () => {
@@ -1776,6 +1781,45 @@ describe("SessionCoordinator", () => {
       expect(engine.start).toHaveBeenCalledOnce()
     })
 
+    it("leaves the continuation uncertain when its provider never answers", async () => {
+      const { advance } = useFakeClock()
+      const asking = new EventSource()
+      const engine: ServerTurnEngine = {
+        start: vi
+          .fn<ServerTurnEngine["start"]>()
+          .mockResolvedValueOnce(asking)
+          .mockReturnValueOnce(new Promise(() => {})),
+        recover: vi.fn(async () => {
+          throw new Error("provider unavailable")
+        }),
+      }
+      const sessions = coordinator(engine)
+      await sessions.start(scope, input("run-1"), access("one"))
+      asking.emit({
+        kind: TurnEventKind.TurnRequiresAction,
+        requests: [questions[0]!],
+      })
+      asking.finish()
+      await advance(0)
+
+      const answered = expect(
+        sessions.answer(scope, replyTo("question-1"))
+      ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+      await advance(ADMISSION_DEADLINE_MS)
+      await answered
+
+      // The provider may have taken the answer, so the continuation holds the
+      // Session, uncertain, and the paused turn's request is not reissued.
+      const [, continuation, , signal] = vi.mocked(engine.start).mock.calls[1]!
+      expect(signal?.aborted).toBe(true)
+      expect(sessions.snapshot(scope)).toEqual({
+        state: "uncertain",
+        turnId: continuation.turnId,
+        requests: [],
+        startedBy: "one",
+      })
+    })
+
     it("keeps the starter across the continued segment", async () => {
       const { sessions, observed, resumed } = await waitingOnTwo("starter")
       expect(sessions.snapshot(scope).startedBy).toBe("starter")
@@ -2856,6 +2900,8 @@ describe("SessionCoordinator", () => {
       ),
     }
     const sessions = coordinator(engine, { maxActiveExecutions: 1 })
+    const observed: ExecutionEvent[] = []
+    sessions.subscribeExecutions((event) => observed.push(event))
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit(interruptedError)
     interrupted.finish()
@@ -2869,13 +2915,13 @@ describe("SessionCoordinator", () => {
       sessions.start(otherScope, input("run-3"), access("one"))
     ).rejects.toBeInstanceOf(ServerTurnCapacityError)
 
-    // The interrupt announced its own failure; the deadline announces the turn's.
-    const observed: ExecutionEvent[] = []
-    sessions.subscribeExecutions((event) => observed.push(event))
     await advance(UNCERTAINTY_DEADLINE_MS)
 
     expect(sessions.state(scope)).toBe("idle")
+    // The interrupt left the turn uncertain, not over: only its deadline
+    // announces how it ended.
     expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
+      ["turn-started", "run-1"],
       ["turn-failed", "run-1"],
     ])
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
@@ -2909,6 +2955,7 @@ describe("SessionCoordinator", () => {
     await advance(ADMISSION_DEADLINE_MS)
     await hung
     expect(sessions.state(scope)).toBe("uncertain")
+    expect(vi.mocked(engine.start).mock.calls[0]?.[3]?.aborted).toBe(true)
 
     // The provider settles the turn once a reconcile reaches it.
     recovered.emit(turnEnded)
