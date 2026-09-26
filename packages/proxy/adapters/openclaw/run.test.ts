@@ -200,8 +200,8 @@ function coordinator(engine: OpenClawTurnEngine) {
 }
 
 const operatorAccess = {
-  subscriberId: "operator",
-  controllerId: "operator",
+  membershipId: "operator",
+  principalId: "operator",
   role: "operator" as const,
   canControl: true,
 }

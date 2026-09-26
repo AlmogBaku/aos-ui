@@ -802,8 +802,8 @@ describe("guest ACP lane", () => {
       invited,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
+        membershipId: "operator",
+        principalId: "operator",
         role: "operator",
         canControl: true,
       }
@@ -1423,8 +1423,8 @@ describe("guest ACP lane", () => {
       operatorScope,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
+        membershipId: "operator",
+        principalId: "operator",
         role: "operator",
         canControl: true,
       }
@@ -1473,8 +1473,8 @@ describe("guest ACP lane", () => {
       },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
+        membershipId: "operator",
+        principalId: "operator",
         role: "operator",
         canControl: true,
       }

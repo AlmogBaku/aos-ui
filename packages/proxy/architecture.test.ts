@@ -208,6 +208,18 @@ describe("vocabulary", () => {
       reason:
         "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
     },
+    {
+      retired: /\bcontrollerId\b|\bsubscriberId\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the member's id on a turn is its `principalId`; one membership's key is its `membershipId`",
+    },
+    {
+      retired: /\btype Principal\b/u,
+      scope: "packages/proxy/push/**",
+      reason:
+        "one principal's connections, for push, are its `Presence`; `Principal` is the member's",
+    },
   ]
 
   it("keeps retired names out of the proxy and the protocol", async () => {

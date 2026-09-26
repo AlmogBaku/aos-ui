@@ -735,7 +735,7 @@ function joined(
     SCOPE,
     {
       coordinator,
-      subscriberId: "subscriber-1",
+      membershipId: "subscriber-1",
       log: () => undefined,
       describe: () => ({ code: "failed", message: "failed" }),
       feeds: new Set(),

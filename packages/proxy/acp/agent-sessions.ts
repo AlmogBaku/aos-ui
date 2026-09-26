@@ -267,12 +267,12 @@ export function createWorkspace(
       call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
-    /** Steers the live turn as `controllerId`, the member the turn knows. */
+    /** Steers the live turn as `principalId`, the member the turn knows. */
     steer: (
       scope: SessionScope,
       request: TurnSteerRequest,
-      controllerId: string
-    ) => call(() => coordinator.steer(scope, request, controllerId)),
+      principalId: string
+    ) => call(() => coordinator.steer(scope, request, principalId)),
   }
 }
 
@@ -361,7 +361,7 @@ export function createSessions(
       if (existing) return existing
       const membership = context.channels.join(memberOf(client), scope, {
         coordinator,
-        subscriberId: `${context.connectionId}:${scope.sessionId}`,
+        membershipId: `${context.connectionId}:${scope.sessionId}`,
         log: (level, event, fields) =>
           context.logger?.[level](
             redactForLog({

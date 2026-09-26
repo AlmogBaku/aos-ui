@@ -521,7 +521,7 @@ stack traces never cross either listener.
 | 5   | No synthetic fallback; fixture is browser-only                                                                                         | runtime-mode validation at startup                                |
 | 6   | Guest lane fails closed; `steer`,`rewind`,`composerPrefill` = `true`; `agents`,`invalidation`,`activity`,`readState`,`focus` = `false` | `guest/acp.test.ts`                                               |
 | 7   | `guestActiveExecutions` ≤ `activeExecutions`                                                                                           | `config.ts:166-172` (`superRefine`)                               |
-| 8   | Turn control requires registered `controllerId`                                                                                        | `session-coordinator.ts:746-748`                                  |
+| 8   | Turn control requires registered `principalId`                                                                                         | `session-coordinator.ts:746-748`                                  |
 | 9   | Steer dedup: same `requestId`+fingerprint → same result; different fingerprint → conflict                                              | `session-coordinator.ts:786-795,821-824`                          |
 
 ---

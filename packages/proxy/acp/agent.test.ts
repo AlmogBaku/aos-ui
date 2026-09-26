@@ -287,8 +287,8 @@ describe("AOS ACP agent", () => {
       test.scope,
       { turnId: "run-live", messageId: "message-0", prompt: "Go" },
       {
-        subscriberId: "rest",
-        controllerId: "operator",
+        membershipId: "rest",
+        principalId: "operator",
         role: "operator",
         canControl: true,
       }

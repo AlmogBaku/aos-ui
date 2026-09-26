@@ -1041,8 +1041,8 @@ describe("OpenCodeRunEngine", () => {
       maxSubscriberBytes: 64 * 1024,
     })
     const access = {
-      subscriberId: "operator",
-      controllerId: "operator",
+      membershipId: "operator",
+      principalId: "operator",
       role: "operator",
       canControl: true,
     } as const

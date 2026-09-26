@@ -57,8 +57,8 @@ export type SequencedTurnEvent = {
 }
 
 export type CoordinatorAccess = {
-  subscriberId: string
-  controllerId: string
+  membershipId: string
+  principalId: string
   role: Role
   canControl: boolean
   onDetach?(): void
@@ -476,15 +476,15 @@ export class SessionCoordinator {
   /** Subscribes one subscriber to its Session's readings, until it closes. */
   subscribeReadings(
     scope: SessionScope,
-    subscriberId: string,
+    membershipId: string,
     listeners: SessionReadingListeners
   ) {
     const key = scopeKey(scope)
     const leaves = [
       listeners.usage &&
-        this.#usage.subscribe(key, scope, subscriberId, listeners.usage),
+        this.#usage.subscribe(key, scope, membershipId, listeners.usage),
       listeners.model &&
-        this.#models.subscribe(key, scope, subscriberId, listeners.model),
+        this.#models.subscribe(key, scope, membershipId, listeners.model),
     ]
     return () => {
       for (const leave of leaves) leave?.()
@@ -498,12 +498,12 @@ export class SessionCoordinator {
    */
   reportUsage(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    subscriberId?: string
+    membershipId?: string
   ) {
     return this.#usage.report(
       scopeKey(scope),
       undefined,
-      subscriberId === undefined ? undefined : [subscriberId]
+      membershipId === undefined ? undefined : [membershipId]
     )
   }
 
@@ -676,7 +676,7 @@ export class SessionCoordinator {
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerTurnConflictError()
-      if (access.canControl) existing.controllers.add(access.controllerId)
+      if (access.canControl) existing.controllers.add(access.principalId)
       // A retried admission reads the turn from its beginning, so a journal that
       // no longer holds that beginning answers it with its live events alone.
       // For an already-terminal segment that plan is `reset`, and this path
@@ -715,8 +715,8 @@ export class SessionCoordinator {
         turnId: input.turnId,
         request: input,
         startedByRole: access.role,
-        startedBy: access.controllerId,
-        controllers: access.canControl ? [access.controllerId] : [],
+        startedBy: access.principalId,
+        controllers: access.canControl ? [access.principalId] : [],
         segment: this.#createSegment({
           cacheKey: key,
           turnId: input.turnId,
@@ -799,7 +799,7 @@ export class SessionCoordinator {
         ? "reset"
         : replayPlan(existing.segment, request.after)
       if (plan === "reset") return this.#resetSubscription(existing.segment)
-      if (access.canControl) existing.controllers.add(access.controllerId)
+      if (access.canControl) existing.controllers.add(access.principalId)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -815,7 +815,7 @@ export class SessionCoordinator {
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
     if (plan === "reset") return this.#resetSubscription(recovered.segment)
-    if (access.canControl) recovered.controllers.add(access.controllerId)
+    if (access.canControl) recovered.controllers.add(access.principalId)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -912,7 +912,7 @@ export class SessionCoordinator {
       if (existing) existing.segment.fanout.close()
       execution.state = "running"
       execution.segment = segment
-      if (access.canControl) execution.controllers.add(access.controllerId)
+      if (access.canControl) execution.controllers.add(access.principalId)
       this.#executions.set(key, execution)
       this.#trackJournal(segment)
       this.#consume(execution, segment)
@@ -940,12 +940,12 @@ export class SessionCoordinator {
 
   async stop(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    controllerId: string
+    principalId: string
   ) {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution || execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
-      if (!execution.controllers.has(controllerId))
+      if (!execution.controllers.has(principalId))
         throw new ServerTurnControlError()
       const stopped = execution.segment
       try {
@@ -972,7 +972,7 @@ export class SessionCoordinator {
   async steer(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     request: TurnSteerRequest,
-    controllerId: string
+    principalId: string
   ): Promise<TurnSteerResponse> {
     const execution = this.#executions.get(scopeKey(scope))
     if (
@@ -981,7 +981,7 @@ export class SessionCoordinator {
       execution.segment.turnId !== request.expectedTurnId
     )
       throw new ServerTurnConflictError()
-    if (!execution.controllers.has(controllerId))
+    if (!execution.controllers.has(principalId))
       throw new ServerTurnControlError()
 
     const fingerprint = admissionFingerprint({
@@ -1363,14 +1363,14 @@ export class SessionCoordinator {
       plan === "history"
         ? compactedReplay(segment.journal?.entries ?? [], after)
         : []
-    const { subscriberId } = access
+    const { membershipId } = access
     const usage = this.#usage
     const models = this.#models
     // A reading follows what the subscriber has read, never overtakes it: the
     // code after a `yield` runs once the reader asks for the next event.
     const read = ({ event }: SequencedTurnEvent) => {
       if (event.kind === TurnEventKind.ModelChanged)
-        void models.report(segment.cacheKey, event.modelId, [subscriberId])
+        void models.report(segment.cacheKey, event.modelId, [membershipId])
     }
     let closed = false
     const events: AsyncIterable<SequencedTurnEvent> = {
@@ -1392,7 +1392,7 @@ export class SessionCoordinator {
           // stream its reader closed, or dropped for falling behind, is owed
           // nothing: the reader follows another or resyncs.
           if (!closed)
-            void usage.report(segment.cacheKey, undefined, [subscriberId])
+            void usage.report(segment.cacheKey, undefined, [membershipId])
         } finally {
           live.close()
         }

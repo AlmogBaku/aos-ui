@@ -269,8 +269,8 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
       prompt: "Summarize the notes",
     },
     {
-      subscriberId: "rest",
-      controllerId: "operator",
+      membershipId: "rest",
+      principalId: "operator",
       role: "operator",
       canControl: true,
     }

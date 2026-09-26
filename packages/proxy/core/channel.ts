@@ -474,8 +474,8 @@ type CreateChannelsOptions = Parameters<typeof createChannelTable>[0]
 /** How a transport joins one member to one Session. */
 export type MembershipOptions = {
   coordinator: SessionCoordinator
-  /** The subscriber the coordinator knows this member's stream by. */
-  subscriberId: string
+  /** The membership the coordinator knows this member's stream by. */
+  membershipId: string
   /** One structured line per Session-level event; the transport redacts it. */
   log: (
     level: "info" | "error",
@@ -557,7 +557,7 @@ class Membership {
     const { feeds } = options
     this.#partReadings = this.#coordinator.subscribeReadings(
       scope,
-      options.subscriberId,
+      options.membershipId,
       {
         ...(feeds.has("usage")
           ? { usage: (usage) => this.#deliver({ kind: "usage", usage }) }
@@ -959,7 +959,7 @@ class Membership {
   reportUsage() {
     return this.#coordinator.reportUsage(
       this.#scope,
-      this.#options.subscriberId
+      this.#options.membershipId
     )
   }
 
@@ -1163,8 +1163,8 @@ class Membership {
    */
   #access(): CoordinatorAccess {
     return {
-      subscriberId: this.#options.subscriberId,
-      controllerId: this.#member.principal.id,
+      membershipId: this.#options.membershipId,
+      principalId: this.#member.principal.id,
       role: this.#member.principal.role,
       canControl: true,
     }
@@ -1237,7 +1237,7 @@ class Membership {
    */
   async #resync(turnId: string, overflow: FanoutOverflowError) {
     this.#log("error", "acp.fanout.detached", {
-      subscriberId: this.#options.subscriberId,
+      membershipId: this.#options.membershipId,
       turnId,
       events: overflow.events,
       bytes: overflow.bytes,

@@ -64,8 +64,8 @@ const scope: SessionScope = {
 }
 
 const access = {
-  subscriberId: "browser",
-  controllerId: "browser",
+  membershipId: "browser",
+  principalId: "browser",
   role: "operator",
   canControl: true,
 } as const

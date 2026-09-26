@@ -118,8 +118,8 @@ async function continueTurn(sessions: SessionCoordinator) {
 
 function access(id: string, role: Role = "operator") {
   return {
-    subscriberId: id,
-    controllerId: id,
+    membershipId: id,
+    principalId: id,
     role,
     canControl: true,
   } as const
