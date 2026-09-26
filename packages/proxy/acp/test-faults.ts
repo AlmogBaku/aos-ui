@@ -124,10 +124,12 @@ export function withFaults(runtime: ServerRuntime) {
   const hangs = new Set<FaultOperation>()
   const late = new Set<TurnOperation>()
   const gone: GoneSession[] = []
+  const called = new Map<string, unknown[][]>()
   const isGone = (args: unknown[]) =>
     gone.some((session) => args.some((arg) => names(arg, session)))
 
   function call(operation: string, args: unknown[], answer: () => unknown) {
+    called.set(operation, [...(called.get(operation) ?? []), args])
     if (Object.hasOwn(SYNC_OPERATIONS, operation)) {
       if (operation !== "subscribeTurns" || !isGone(args)) return answer()
       const listener = args[1] as ServerTurnListener
@@ -181,5 +183,12 @@ export function withFaults(runtime: ServerRuntime) {
     answerAfterEvents(operation: TurnOperation) {
       late.add(operation)
     },
+    /** The arguments of every call of `operation` so far, faulted or not. */
+    calls(operation: FaultOperation): readonly unknown[][] {
+      return called.get(operation) ?? []
+    },
   }
 }
+
+/** The injector over one runtime, as `withFaults` returns it. */
+export type Faults = ReturnType<typeof withFaults>

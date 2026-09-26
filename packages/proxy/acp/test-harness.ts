@@ -53,7 +53,7 @@ import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
-import { withFaults } from "./test-faults"
+import { withFaults, type Faults } from "./test-faults"
 import type {
   AcpConnectionContext,
   AcpOutbound,
@@ -637,6 +637,8 @@ export type HarnessOptions = {
   logs?: LogCapture
   /** The browser build the static root carries; absent stands for none. */
   buildId?: string
+  /** Arms faults before the first browser connects, for one its handshake meets. */
+  arm?: (faults: Faults) => void
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -789,23 +791,8 @@ export async function harness(options: HarnessOptions = {}) {
   // Everything reads the runtime through its faults, which forward every
   // call until a test arms one.
   const faults = withFaults(runtime)
+  options.arm?.(faults)
   const logs = options.logs ?? captureLogs()
-  const coordinator = new SessionCoordinator({
-    engine: faults.runtime.turns,
-    readings: faults.runtime,
-    maxActiveExecutions: 8,
-    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
-    maxSubscriberBytes: 256 * 1024,
-    logger: logs.logger,
-  })
-  coordinator.bindCapabilities(faults.runtime)
-  const runtimeInstance: RuntimeInstance = {
-    id: "test",
-    runtime: faults.runtime,
-    sessions: coordinator,
-    close: async () => undefined,
-  }
-
   const readState = {
     focus: vi.fn(),
     blur: vi.fn(),
@@ -830,125 +817,164 @@ export async function harness(options: HarnessOptions = {}) {
       }
     },
   }
-
-  // Every connection shares the process's one catalog, as both listeners do.
-  const shared = createCatalog({
-    runtime: faults.runtime,
-    coordinator,
-    rows: createSessionRows(options.now ? { now: options.now } : undefined),
-    logger: logs.logger,
-  })
   const invalidationListeners = new Set<() => void>()
-  const catalog: Catalog = {
-    ...shared,
-    invalidation: {
-      signaled: shared.invalidation.signaled,
-      subscribe(listener) {
-        invalidationListeners.add(listener)
-        const stop = shared.invalidation.subscribe(listener)
-        return () => {
-          invalidationListeners.delete(listener)
-          stop()
-        }
-      },
-    },
-  }
-  const composed = options.compose?.({ runtimeInstance, catalog })
-  const { subscribeTurns } = faults.runtime.turns
-  const channels = createChannels({
-    logger: logs.logger,
-    coordinator,
-    runtime: faults.runtime,
-    ...(subscribeTurns
-      ? {
-          adoption: {
-            subscribeTurns,
-            discover: (channelScope) => coordinator.discover(channelScope),
-            subscribeExecutions: (channelScope, listener) =>
-              coordinator.subscribeScope(channelScope, listener),
-          },
-        }
-      : {}),
-  })
+  let browsers = 0
 
   /**
-   * One browser connection's side of the proxy. Every connection shares the
-   * one coordinator, engine, and channels, as one deployment's listeners do.
+   * One proxy process: its own coordinator, catalog, and channels over the
+   * runtime, which a restart builds again while the provider stays up.
    */
-  function contextFor(connectionId: string): AcpConnectionContext {
-    const base = options.translators ?? translators
-    return {
-      connectionId,
-      principalId: PRINCIPAL,
-      publicError: (cause) => faults.runtime.publicError(cause),
-      steerAck: faults.runtime.translation?.steerAck,
-      catalog,
-      readState: composed?.readState ?? readState,
-      translators: {
-        ...base,
-        translateHistory: (history) => {
-          options.onReplay?.()
-          return (options.translateHistory ?? base.translateHistory)(history)
+  function serve() {
+    const coordinator = new SessionCoordinator({
+      engine: faults.runtime.turns,
+      readings: faults.runtime,
+      maxActiveExecutions: 8,
+      maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
+      maxSubscriberBytes: 256 * 1024,
+      logger: logs.logger,
+    })
+    coordinator.bindCapabilities(faults.runtime)
+    const runtimeInstance: RuntimeInstance = {
+      id: "test",
+      runtime: faults.runtime,
+      sessions: coordinator,
+      close: async () => undefined,
+    }
+
+    // Every connection shares the process's one catalog, as both listeners do.
+    const shared = createCatalog({
+      runtime: faults.runtime,
+      coordinator,
+      rows: createSessionRows(options.now ? { now: options.now } : undefined),
+      logger: logs.logger,
+    })
+    const catalog: Catalog = {
+      ...shared,
+      invalidation: {
+        signaled: shared.invalidation.signaled,
+        subscribe(listener) {
+          invalidationListeners.add(listener)
+          const stop = shared.invalidation.subscribe(listener)
+          return () => {
+            invalidationListeners.delete(listener)
+            stop()
+          }
         },
       },
-      attachmentStages: new AttachmentStageRegistry(),
-      channels,
-      presence,
-      logger: logs.logger.child({ connectionId, role: "operator" }),
-      buildId: options.buildId,
-      role: "operator",
-      activityFeed: composed?.activityFeed ?? activityFeed,
     }
-  }
-
-  /** One in-process browser connection to the proxy. */
-  async function connect(
-    connectionId: string,
-    answers: {
-      /** This browser's answer to a permission request, if not the harness's. */
-      permission?: HarnessOptions["permission"]
-      /** This browser's answer to a question, if not the harness's. */
-      question?: HarnessOptions["question"]
-    } = {}
-  ) {
-    const context = contextFor(connectionId)
-    const { connection, recorder } = connectClient(context, {
-      name: "aos-browser",
-      permission: answers.permission ?? options.permission,
-      question: answers.question ?? options.question,
+    const composed = options.compose?.({ runtimeInstance, catalog })
+    const { subscribeTurns } = faults.runtime.turns
+    const channels = createChannels({
+      logger: logs.logger,
+      coordinator,
+      runtime: faults.runtime,
+      ...(subscribeTurns
+        ? {
+            adoption: {
+              subscribeTurns,
+              discover: (channelScope) => coordinator.discover(channelScope),
+              subscribeExecutions: (channelScope, listener) =>
+                coordinator.subscribeScope(channelScope, listener),
+            },
+          }
+        : {}),
     })
-    const initialize = await connection.agent.request(
-      methods.agent.initialize,
-      {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        info: { name: "aos-browser", version: "1" },
-        capabilities: {
-          _meta: {
-            [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+
+    /**
+     * One browser connection's side of the proxy. Every connection shares the
+     * one coordinator, engine, and channels, as one deployment's listeners do.
+     */
+    function contextFor(connectionId: string): AcpConnectionContext {
+      const base = options.translators ?? translators
+      return {
+        connectionId,
+        principalId: PRINCIPAL,
+        publicError: (cause) => faults.runtime.publicError(cause),
+        steerAck: faults.runtime.translation?.steerAck,
+        catalog,
+        readState: composed?.readState ?? readState,
+        translators: {
+          ...base,
+          translateHistory: (history) => {
+            options.onReplay?.()
+            return (options.translateHistory ?? base.translateHistory)(history)
           },
         },
+        attachmentStages: new AttachmentStageRegistry(),
+        channels,
+        presence,
+        logger: logs.logger.child({ connectionId, role: "operator" }),
+        buildId: options.buildId,
+        role: "operator",
+        activityFeed: composed?.activityFeed ?? activityFeed,
       }
-    )
-    return {
-      agent: connection.agent,
-      close: () => connection.close(),
-      initialize,
-      recorder,
-      attachmentStages: context.attachmentStages,
-      /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
-      list: () => connection.agent.request(methods.agent.session.list, {}),
-      create: (meta: { title?: string; clientId?: string } = {}) =>
-        connection.agent.request(methods.agent.session.new, {
-          cwd: "/",
-          _meta: {
-            [AOS_META_KEY]: { agentId: AGENT, ...meta },
+    }
+
+    /** One in-process browser connection to the proxy. */
+    async function connect(
+      connectionId: string,
+      answers: {
+        /** This browser's answer to a permission request, if not the harness's. */
+        permission?: HarnessOptions["permission"]
+        /** This browser's answer to a question, if not the harness's. */
+        question?: HarnessOptions["question"]
+      } = {}
+    ) {
+      const context = contextFor(connectionId)
+      const { connection, recorder } = connectClient(context, {
+        name: "aos-browser",
+        permission: answers.permission ?? options.permission,
+        question: answers.question ?? options.question,
+      })
+      const initialize = await connection.agent.request(
+        methods.agent.initialize,
+        {
+          protocolVersion: ACP_PROTOCOL_VERSION,
+          info: { name: "aos-browser", version: "1" },
+          capabilities: {
+            _meta: {
+              [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+            },
           },
-        }),
+        }
+      )
+      return {
+        agent: connection.agent,
+        close: () => connection.close(),
+        initialize,
+        recorder,
+        attachmentStages: context.attachmentStages,
+        /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
+        list: () => connection.agent.request(methods.agent.session.list, {}),
+        create: (meta: { title?: string; clientId?: string } = {}) =>
+          connection.agent.request(methods.agent.session.new, {
+            cwd: "/",
+            _meta: {
+              [AOS_META_KEY]: { agentId: AGENT, ...meta },
+            },
+          }),
+      }
+    }
+
+    return {
+      connect,
+      /**
+       * A fresh agent app on a connection of its own, for each socket a real
+       * browser connection opens, so every reconnection is a new connection.
+       */
+      agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
+      coordinator,
+      runtimeInstance,
+      channels,
+      catalog,
+      logs,
+      /** The feeds the open connections observe; a closed one leaves none. */
+      observers: () => activityListeners.size + invalidationListeners.size,
     }
   }
 
-  const primary = await connect(CONNECTION)
-  let browsers = 0
+  const proxy = serve()
+  const primary = await proxy.connect(CONNECTION)
 
   const scope: SessionScope = {
     agentId: AGENT,
@@ -958,18 +984,13 @@ export async function harness(options: HarnessOptions = {}) {
 
   return {
     ...primary,
-    connect,
+    ...proxy,
     /**
-     * A fresh agent app on a connection of its own, for each socket a real
-     * browser connection opens, so every reconnection is a new connection.
+     * A new proxy process over the same runtime, as a restart starts one: the
+     * provider and its turns carry on, and nothing of the old process is kept.
      */
-    agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
-    coordinator,
-    runtimeInstance,
+    restart: serve,
     faults,
-    logs,
-    channels,
-    catalog,
     scope,
     sources,
     start,
@@ -992,8 +1013,6 @@ export async function harness(options: HarnessOptions = {}) {
     publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },
-    /** The feeds the open connections observe; a closed one leaves none. */
-    observers: () => activityListeners.size + invalidationListeners.size,
   }
 }
 
