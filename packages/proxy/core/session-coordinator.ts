@@ -48,6 +48,7 @@ import {
   type Session,
   type SessionContextResponse,
   type SessionModelsResponse,
+  type SessionModelUpdateRequest,
   type TurnSteerRequest,
   type TurnSteerResponse,
 } from "../../protocol"
@@ -157,10 +158,14 @@ export class ServerClientIdReusedError extends Error {
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
   /**
-   * Reads a Session's context window and model catalog for its reporters, and
-   * creates the Sessions a client asks for.
+   * Reads a Session's context window and model catalog for its reporters,
+   * writes the model choices a client makes, and creates the Sessions a
+   * client asks for.
    */
-  readings: Pick<ServerRuntime, "context" | "models" | "createSession">
+  readings: Pick<
+    ServerRuntime,
+    "context" | "models" | "updateModel" | "createSession"
+  >
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
@@ -985,15 +990,28 @@ export class SessionCoordinator {
   }
 
   /**
-   * Owes every subscriber the readings a model switch moves: the model
-   * options, and the usage, whose window belongs to the model.
+   * Writes one model choice and answers the model options a read after it
+   * shows. Every subscriber is then owed the readings the switch moves, each
+   * read afresh: the model options, and the usage, whose window belongs to
+   * the model. `deliver` runs that report, so a caller's answer can land
+   * before its own subscription hears it.
    */
-  reportModelSwitch(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">
-  ) {
+  async switchModel(
+    scope: SessionScope,
+    write: SessionModelUpdateRequest,
+    deliver: (report: () => void) => void = (report) => report()
+  ): Promise<SessionModelsResponse> {
+    const { readings } = this.options
+    await readings.updateModel(scope.agentId, scope.sessionId, write)
+    const models = SessionModelsResponseSchema.parse(
+      await readings.models(scope.agentId, scope.sessionId)
+    )
     const key = scopeKey(scope)
-    this.#models.report(key)
-    this.#usage.report(key)
+    deliver(() => {
+      this.#models.report(key)
+      this.#usage.report(key)
+    })
+    return models
   }
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {

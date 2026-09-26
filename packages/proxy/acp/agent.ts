@@ -10,7 +10,6 @@ import {
 import {
   SESSION_CATALOG_MAX_WINDOW,
   SessionCreateResponseSchema,
-  SessionModelsResponseSchema,
   type SessionHistoryResponse,
 } from "../../protocol"
 import {
@@ -565,22 +564,18 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       "set-config",
       { sessionId: params.sessionId, ...(write ? { write } : {}) },
       async (command) => {
-        const scope = sessions.scope(command.sessionId)
         if (!command.write) throw invalidParams()
-        await runtime.updateModel(scope.agentId, scope.sessionId, command.write)
-        const models = SessionModelsResponseSchema.parse(
-          await runtime.models(scope.agentId, scope.sessionId)
-        )
-        // A switch restates the model options and the usage, whose window
-        // belongs to the model, to every member of the Session: to this
-        // connection once the answer is written, if it is one.
+        // Every member hears the switch: this connection, if it is one, once
+        // the answer is written.
         const membership = sessions.membership(command.sessionId)
-        if (membership)
-          membership.afterResponse(async () =>
-            coordinator.reportModelSwitch(scope)
-          )
-        else coordinator.reportModelSwitch(scope)
-        return { models }
+        return {
+          models: await coordinator.switchModel(
+            sessions.scope(command.sessionId),
+            command.write,
+            membership &&
+              ((report) => membership.afterResponse(async () => report()))
+          ),
+        }
       }
     )
     return { configOptions: translators.configOptionsOf(models) }
