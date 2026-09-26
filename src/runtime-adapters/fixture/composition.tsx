@@ -55,16 +55,16 @@ function FixtureRuntimeProvider({
 }: RuntimeAdapterProps<"fixture"> & {
   artifactHtmlAssetOrigins?: readonly string[]
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const bundle = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
     enableAgentCreator: false,
   })
   const composerFeatureViewModel = useFixtureComposerFeatures({
-    threadId,
+    sessionId,
     config: config.composerFeatures,
     runtime: bundle.assistantRuntime,
   })

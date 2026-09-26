@@ -8,13 +8,13 @@ it("creates an ordinary creator Session and never promotes its ownership", async
   expect(workspace.agentCreator?.id).toBe("agent-builder")
   const session = await workspace.createSession("agent-builder")
   const before = workspace.listAllSessionMetadata().length
-  workspace.completeAgentCreation(session.threadId, {
+  workspace.completeAgentCreation(session.sessionId, {
     kind: "ready",
     id: "new-agent",
     name: "New Agent",
   })
   expect(
-    (await workspace.getSessionMetadata([session.threadId]))[0].agentId
+    (await workspace.getSessionMetadata([session.sessionId]))[0].agentId
   ).toBe("agent-builder")
   expect(workspace.listAllSessionMetadata()).toHaveLength(before)
   expect(
@@ -28,25 +28,25 @@ it("reports a created Agent as one activity receipt per outcome", async () => {
   const events: WorkspaceActivityEvent[] = []
   workspace.subscribeActivity((event) => events.push(event))
 
-  workspace.completeAgentCreation(session.threadId, {
+  workspace.completeAgentCreation(session.sessionId, {
     kind: "ready",
     id: "ready-agent",
     name: "Ready",
   })
-  workspace.failAgentSetup(session.threadId, "pending-agent", "Pending")
+  workspace.failAgentSetup(session.sessionId, "pending-agent", "Pending")
 
   expect(
-    events.map(({ type, agentId, threadId }) => ({ type, agentId, threadId }))
+    events.map(({ type, agentId, sessionId }) => ({ type, agentId, sessionId }))
   ).toEqual([
     {
       type: "agent-ready",
       agentId: "ready-agent",
-      threadId: session.threadId,
+      sessionId: session.sessionId,
     },
     {
       type: "agent-activation-failed",
       agentId: "pending-agent",
-      threadId: session.threadId,
+      sessionId: session.sessionId,
     },
   ])
   const agents = await workspace.listAgents()

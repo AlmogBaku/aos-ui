@@ -398,7 +398,7 @@ describe("ACP workspace client", () => {
 
     expect(metadata).toEqual([
       {
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         agentId: AGENT_ID,
         updatedAt: UPDATED_AT,
         status: "idle",
@@ -458,7 +458,7 @@ describe("ACP workspace client", () => {
     await client.readSessionPage({ agentId: AGENT_ID }, "cursor-2")
     const metadata = await client.getSessionMetadata([SESSION_ID])
 
-    expect(metadata.map(({ threadId }) => threadId)).toEqual([SESSION_ID])
+    expect(metadata.map(({ sessionId }) => sessionId)).toEqual([SESSION_ID])
     expect(calls.filter((call) => call.method === "listSessions")).toEqual([
       { method: "listSessions", args: [{ agentId: AGENT_ID }, "cursor-2"] },
     ])
@@ -517,7 +517,7 @@ describe("ACP workspace client", () => {
 
     await client.attachSession(UNLISTED_SESSION_ID)
 
-    expect(published.at(-1)?.map(({ threadId }) => threadId)).toEqual([
+    expect(published.at(-1)?.map(({ sessionId }) => sessionId)).toEqual([
       SESSION_ID,
       UNLISTED_SESSION_ID,
     ])
@@ -739,7 +739,7 @@ describe("ACP workspace client", () => {
       {
         id: `${SESSION_ID}:request-1:attention-requested`,
         agentId: AGENT_ID,
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         occurredAt: UPDATED_AT,
         type: "attention-requested",
         requestId: "request-1",
@@ -754,7 +754,7 @@ describe("ACP workspace client", () => {
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry()])
     await client.listAgents()
-    const { threadId } = await client.createSession(CREATOR_ID)
+    const { sessionId } = await client.createSession(CREATOR_ID)
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     setAgents([creatorEntry(), catalogEntry()])
@@ -767,10 +767,10 @@ describe("ACP workspace client", () => {
 
     expect(events).toEqual([
       {
-        id: `${threadId}:${AGENT_ID}`,
+        id: `${sessionId}:${AGENT_ID}`,
         type: "agent-ready",
         agentId: AGENT_ID,
-        threadId,
+        sessionId,
         occurredAt: UPDATED_AT,
       },
     ])
@@ -955,7 +955,7 @@ describe("ACP workspace client", () => {
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
-    ).resolves.toEqual({ threadId: SESSION_ID })
+    ).resolves.toEqual({ sessionId: SESSION_ID })
     expect(argsOf("newSession")).toEqual([
       { agentId: AGENT_ID, title: "Weekly report" },
     ])
@@ -1027,7 +1027,7 @@ describe("ACP workspace client", () => {
       ).toHaveLength(2)
       expect(published.at(-1)).toEqual([
         {
-          threadId: SESSION_ID,
+          sessionId: SESSION_ID,
           agentId: AGENT_ID,
           updatedAt: UPDATED_AT,
           status: "idle",

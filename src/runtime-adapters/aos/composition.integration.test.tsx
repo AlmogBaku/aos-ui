@@ -522,14 +522,14 @@ function pipedSocket(app: AgentApp) {
 let activeInteractions: RuntimeInteractionAdapter | undefined
 
 function GatedComposer({ fallback }: { fallback: ReactNode }) {
-  const threadId = useAuiState(
+  const sessionId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id
   )
   if (!activeInteractions) return fallback
   return (
     <PendingInteractionComposer
       locale="en"
-      threadId={threadId}
+      sessionId={sessionId}
       interactions={activeInteractions}
       fallback={fallback}
     />

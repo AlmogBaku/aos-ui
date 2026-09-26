@@ -15,13 +15,13 @@ import {
 const event: WorkspaceActivityEvent = {
   id: "event-1",
   agentId: "agent-1",
-  threadId: "thread-1",
+  sessionId: "thread-1",
   occurredAt: "2026-09-05T12:00:00.000Z",
   type: "agent-ready",
 }
 
 describe("selection exposure", () => {
-  const selection = { agentId: "agent-1", threadId: "thread-1" }
+  const selection = { agentId: "agent-1", sessionId: "thread-1" }
 
   it.each<[string, ActivityContext, boolean]>([
     [
@@ -69,7 +69,7 @@ describe("activity visibility and delivery", () => {
       pageVisible,
       pageFocused,
       agentId,
-      threadId,
+      sessionId,
       markRead,
       inAppNotice,
       browserNotification
@@ -80,7 +80,7 @@ describe("activity visibility and delivery", () => {
           {
             pageVisible,
             pageFocused,
-            selection: { agentId, threadId },
+            selection: { agentId, sessionId },
           },
           { ...defaultBrowserPreferences, enabled: true },
           "granted"
@@ -139,7 +139,7 @@ describe("activity visibility and delivery", () => {
         pageVisible: true,
         pageFocused: true,
         conversationExposed: false,
-        selection: { agentId: "agent-1", threadId: "thread-1" },
+        selection: { agentId: "agent-1", sessionId: "thread-1" },
       },
       { ...defaultBrowserPreferences, enabled: true },
       "granted"
@@ -285,7 +285,7 @@ describe("the in-app chime", () => {
   const focused: ActivityContext = {
     pageVisible: true,
     pageFocused: true,
-    selection: { agentId: "agent-1", threadId: "thread-2" },
+    selection: { agentId: "agent-1", sessionId: "thread-2" },
   }
   const attention = {
     ...event,
@@ -326,7 +326,7 @@ describe("the in-app chime", () => {
     [
       "the exposed Session itself",
       attention,
-      { ...focused, selection: { agentId: "agent-1", threadId: "thread-1" } },
+      { ...focused, selection: { agentId: "agent-1", sessionId: "thread-1" } },
       defaultBrowserPreferences,
     ],
   ])("stays silent for %s", (_label, activity, context, preferences) => {

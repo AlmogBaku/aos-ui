@@ -60,7 +60,7 @@ function renderHosted(part: RichToolPart, apps: McpAppAdapter | undefined) {
     <McpAppHostProvider
       adapter={apps}
       agentId="researcher"
-      threadId="session-1"
+      sessionId="session-1"
     >
       <AosToolPresentation {...part} />
     </McpAppHostProvider>
@@ -87,7 +87,7 @@ describe("MCP App routing", () => {
     expect(apps.open).toHaveBeenCalledWith(
       {
         agentId: "researcher",
-        threadId: "session-1",
+        sessionId: "session-1",
         toolCallId: "call-show_board",
       },
       expect.any(AbortSignal)
@@ -147,7 +147,7 @@ describe("MCP App routing", () => {
       <McpAppHostProvider
         adapter={apps}
         agentId="researcher"
-        threadId="session-1"
+        sessionId="session-1"
       >
         <AosToolPresentation {...withInput} />
       </McpAppHostProvider>
@@ -160,7 +160,7 @@ describe("MCP App routing", () => {
       <McpAppHostProvider
         adapter={apps}
         agentId="researcher"
-        threadId="session-1"
+        sessionId="session-1"
       >
         <AosToolPresentation
           {...withInput}

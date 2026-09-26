@@ -128,17 +128,17 @@ export function createAcpInteractions({
       take(request)
     },
 
-    getPending(threadId) {
-      return entries.get(threadId)?.request
+    getPending(sessionId) {
+      return entries.get(sessionId)?.request
     },
 
-    subscribe(threadId, listener) {
-      const existing = listeners.get(threadId) ?? new Set<() => void>()
+    subscribe(sessionId, listener) {
+      const existing = listeners.get(sessionId) ?? new Set<() => void>()
       existing.add(listener)
-      listeners.set(threadId, existing)
+      listeners.set(sessionId, existing)
       return () => {
         existing.delete(listener)
-        if (existing.size === 0) listeners.delete(threadId)
+        if (existing.size === 0) listeners.delete(sessionId)
       }
     },
   }

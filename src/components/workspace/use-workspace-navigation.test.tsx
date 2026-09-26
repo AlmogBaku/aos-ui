@@ -27,13 +27,13 @@ afterEach(cleanup)
 const NOW = new Date("2026-09-08T10:00:00.000Z")
 const agent: AgentSummary = { kind: "ready", id: "agent-a", name: "Aster" }
 const recent: SessionMetadata = {
-  threadId: "s-recent",
+  sessionId: "s-recent",
   agentId: "agent-a",
   updatedAt: "2026-09-08T09:30:00.000Z",
   status: "idle",
 }
 const old: SessionMetadata = {
-  threadId: "s-old",
+  sessionId: "s-old",
   agentId: "agent-a",
   updatedAt: "2026-09-01T09:00:00.000Z",
   status: "idle",
@@ -101,9 +101,9 @@ function createFakeThreadList(threadIds: readonly string[]) {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    switchToThread: async (threadId: string) => {
-      log.push(`switch:${threadId}`)
-      mainThreadId = threadId
+    switchToThread: async (sessionId: string) => {
+      log.push(`switch:${sessionId}`)
+      mainThreadId = sessionId
       notify()
     },
     switchToNewThread: async () => {
@@ -117,24 +117,24 @@ function createFakeThreadList(threadIds: readonly string[]) {
       log.push("reload")
       notify()
     },
-    getItemById: (threadId: string) => ({
+    getItemById: (sessionId: string) => ({
       rename: (title: string) =>
-        gate(`rename:${threadId}`, () => {
-          const item = items.get(threadId)
+        gate(`rename:${sessionId}`, () => {
+          const item = items.get(sessionId)
           if (item) item.title = title
         }),
       archive: () =>
-        gate(`archive:${threadId}`, () => {
-          const item = items.get(threadId)
+        gate(`archive:${sessionId}`, () => {
+          const item = items.get(sessionId)
           if (item) item.status = "archived"
         }),
       unarchive: () =>
-        gate(`unarchive:${threadId}`, () => {
-          const item = items.get(threadId)
+        gate(`unarchive:${sessionId}`, () => {
+          const item = items.get(sessionId)
           if (item) item.status = "regular"
         }),
       // Provider metadata can still list a deleted Session for a moment.
-      delete: () => gate(`delete:${threadId}`, () => {}),
+      delete: () => gate(`delete:${sessionId}`, () => {}),
     }),
   }
 
@@ -157,8 +157,8 @@ function createWorkspace(
     listAgents: async () => [agent],
     refreshAgents: async () => [agent],
     getSessionMetadata: async (threadIds) =>
-      sessions.filter(({ threadId }) => threadIds.includes(threadId)),
-    createSession: async () => ({ threadId: "unused" }),
+      sessions.filter(({ sessionId }) => threadIds.includes(sessionId)),
+    createSession: async () => ({ sessionId: "unused" }),
     sessionActionCapabilities: async () => ({
       rename: true,
       archive: true,
@@ -220,7 +220,7 @@ it("leaves an archived Session behind before the provider confirms", async () =>
   await waitFor(() => expect(settled).toBe(true))
   await waitFor(() =>
     expect(
-      result.current.sessionView.openSessions.map(({ threadId }) => threadId)
+      result.current.sessionView.openSessions.map(({ sessionId }) => sessionId)
     ).toEqual(["s-recent"])
   )
 })
@@ -258,7 +258,7 @@ it("keeps no tab for a deleted Session provider metadata still lists", async () 
     await result.current.openSession("s-old")
   })
   expect(
-    result.current.sessionView.openSessions.map(({ threadId }) => threadId)
+    result.current.sessionView.openSessions.map(({ sessionId }) => sessionId)
   ).toEqual(["s-recent", "s-old"])
 
   let settled = false
@@ -278,14 +278,14 @@ it("keeps no tab for a deleted Session provider metadata still lists", async () 
   await waitFor(() => expect(settled).toBe(true))
   await waitFor(() =>
     expect(
-      result.current.sessionView.openSessions.map(({ threadId }) => threadId)
+      result.current.sessionView.openSessions.map(({ sessionId }) => sessionId)
     ).toEqual(["s-recent"])
   )
 })
 
 it("returns a closed pinned tab once its Session is active again", async () => {
   const pinned: SessionMetadata = {
-    threadId: "s-pinned",
+    sessionId: "s-pinned",
     agentId: "agent-a",
     updatedAt: "2026-09-01T09:00:00.000Z",
     status: "idle",
@@ -303,7 +303,7 @@ it("returns a closed pinned tab once its Session is active again", async () => {
     }
   )
   const openTabs = () =>
-    result.current.shellOpenSessions.map(({ threadId }) => threadId)
+    result.current.shellOpenSessions.map(({ sessionId }) => sessionId)
   // The pin keeps a week-old Session open, and leading.
   await waitFor(() => expect(openTabs()).toEqual(["s-pinned", "s-recent"]))
 
@@ -391,7 +391,7 @@ it("scopes a deep link's own Agent first, never the default one", async () => {
   const willow: AgentSummary = { kind: "ready", id: "agent-b", name: "Willow" }
   const willowSession: SessionMetadata = {
     ...recent,
-    threadId: "s-willow",
+    sessionId: "s-willow",
     agentId: "agent-b",
   }
   window.history.replaceState({}, "", "/agent-b/s-willow")

@@ -14,7 +14,7 @@ const context = { selection: null, pageVisible: false, pageFocused: false }
 const event = {
   id: "e",
   agentId: "a",
-  threadId: "t",
+  sessionId: "t",
   type: "agent-ready" as const,
   occurredAt: new Date(now).toISOString(),
 }
@@ -26,7 +26,7 @@ function setup(
   // The provider reports the Session unread, which is what makes an alert due.
   const sessions: SessionMetadata[] = [
     {
-      threadId: "t",
+      sessionId: "t",
       agentId: "a",
       status: "idle",
       updatedAt: new Date(now).toISOString(),
@@ -57,7 +57,7 @@ function setup(
   )
   const localContext = {
     ...context,
-    selection: null as null | { agentId: string; threadId: string },
+    selection: null as null | { agentId: string; sessionId: string },
   }
   let permissionChanged: (() => void) | undefined
   const copy = {
@@ -205,7 +205,7 @@ describe("live browser Activity", () => {
     const h = setup()
     h.localContext.pageVisible = true
     h.localContext.pageFocused = true
-    h.localContext.selection = { agentId: "a", threadId: "t" }
+    h.localContext.selection = { agentId: "a", sessionId: "t" }
     h.coordinator.start()
     await h.coordinator.setEnabled(true)
     h.coordinator.publish(h.store.ingest(event))
@@ -378,9 +378,9 @@ describe("the one-time ask", () => {
   const watchRun = (h: ReturnType<typeof setup>) => {
     h.localContext.pageVisible = true
     h.localContext.pageFocused = true
-    h.localContext.selection = { agentId: "a", threadId: "t" }
+    h.localContext.selection = { agentId: "a", sessionId: "t" }
     h.coordinator.start()
-    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", sessionId: "t" })
   }
 
   it("waits for a run the operator watched in this tab", () => {
@@ -389,12 +389,12 @@ describe("the one-time ask", () => {
     h.localContext.pageFocused = true
     h.coordinator.start()
     expect(h.coordinator.settings().ask).toBe(false)
-    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", sessionId: "t" })
     expect(h.coordinator.settings().ask).toBe(false)
-    h.localContext.selection = { agentId: "a", threadId: "t" }
-    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "other" })
+    h.localContext.selection = { agentId: "a", sessionId: "t" }
+    h.coordinator.noteTurnStarted({ agentId: "a", sessionId: "other" })
     expect(h.coordinator.settings().ask).toBe(false)
-    h.coordinator.noteTurnStarted({ agentId: "a", threadId: "t" })
+    h.coordinator.noteTurnStarted({ agentId: "a", sessionId: "t" })
     expect(h.coordinator.settings().ask).toBe(true)
   })
 

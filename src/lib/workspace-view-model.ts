@@ -71,12 +71,12 @@ function newestUniqueSessions(sessions: readonly SessionMetadata[]) {
   const byThread = new Map<string, SessionMetadata>()
 
   for (const session of sessions) {
-    const existing = byThread.get(session.threadId)
+    const existing = byThread.get(session.sessionId)
     if (
       !existing ||
       Date.parse(session.updatedAt) > Date.parse(existing.updatedAt)
     ) {
-      byThread.set(session.threadId, session)
+      byThread.set(session.sessionId, session)
     }
   }
 
@@ -106,12 +106,12 @@ export function buildAgentSessionView({
 }: BuildAgentSessionViewOptions) {
   const toView = (session: SessionMetadata): WorkspaceSessionView => ({
     ...session,
-    title: titles.get(session.threadId)?.trim() || untitledLabel,
+    title: titles.get(session.sessionId)?.trim() || untitledLabel,
   })
   // Archived Sessions leave the open and history lists for their own list.
   const listed = sessions.filter(
     (session) =>
-      session.archived !== true || session.threadId === visibleThreadId
+      session.archived !== true || session.sessionId === visibleThreadId
   )
 
   return {

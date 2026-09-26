@@ -41,10 +41,10 @@ export function useOutOfBandQuestions(): boolean {
 /** Whether the runtime is asking the mounted thread a question out of band. */
 export function useHasPendingQuestion(): boolean {
   const interactions = useContext(PendingInteractionContext)
-  const threadId = useAuiState(
+  const sessionId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id
   )
-  return useHasPendingInteraction(interactions, threadId)
+  return useHasPendingInteraction(interactions, sessionId)
 }
 
 /**

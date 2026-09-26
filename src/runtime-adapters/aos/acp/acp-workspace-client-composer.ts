@@ -265,50 +265,50 @@ export function createAcpComposerStore(connection: AcpConnection) {
 
   function listen(
     registry: Map<string, Set<() => void>>,
-    threadId: string,
+    sessionId: string,
     listener: () => void
   ) {
-    const listeners = registry.get(threadId) ?? new Set()
+    const listeners = registry.get(sessionId) ?? new Set()
     listeners.add(listener)
-    registry.set(threadId, listeners)
+    registry.set(sessionId, listeners)
     return () => {
       listeners.delete(listener)
-      if (!listeners.size) registry.delete(threadId)
+      if (!listeners.size) registry.delete(sessionId)
     }
   }
 
-  function notify(registry: Map<string, Set<() => void>>, threadId: string) {
-    for (const listener of registry.get(threadId) ?? []) listener()
+  function notify(registry: Map<string, Set<() => void>>, sessionId: string) {
+    for (const listener of registry.get(sessionId) ?? []) listener()
   }
 
   /** Every projection change goes through here, so the feed follows each one. */
   function project(
     known: SessionEntry,
-    threadId: string,
+    sessionId: string,
     next: AcpModelProjection
   ) {
     known.projection = next
     const current = currentOf(next, known.current)
     if (current === known.current) return
     known.current = current
-    notify(modelListeners, threadId)
+    notify(modelListeners, sessionId)
   }
 
-  function entry(threadId: string) {
-    const known = sessions.get(threadId)
+  function entry(sessionId: string) {
+    const known = sessions.get(sessionId)
     if (!known)
       throw new Error("The Session's workspace projection is unavailable")
     return known
   }
 
-  function accept(threadId: string, update: SessionUpdate, meta: unknown) {
-    const known = sessions.get(threadId)
+  function accept(sessionId: string, update: SessionUpdate, meta: unknown) {
+    const known = sessions.get(sessionId)
     if (!known) {
-      early.get(threadId)?.push([update, meta])
+      early.get(sessionId)?.push([update, meta])
       return
     }
     if (SessionUpdate.isConfigOptionUpdate(update))
-      project(known, threadId, projectModels(update.configOptions))
+      project(known, sessionId, projectModels(update.configOptions))
     else if (SessionUpdate.isAvailableCommandsUpdate(update))
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
@@ -317,7 +317,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
       const context = projectContext(update, meta)
       if (!context) return
       known.context = context
-      notify(contextListeners, threadId)
+      notify(contextListeners, sessionId)
     } else if (SessionUpdate.isStateUpdate(update) && update.state === "idle") {
       const aos = AosStateMetaSchema.safeParse(meta)
       const turns = foldTurnUsage(
@@ -327,19 +327,19 @@ export function createAcpComposerStore(connection: AcpConnection) {
       )
       if (turns === known.turns) return
       known.turns = turns
-      notify(contextListeners, threadId)
+      notify(contextListeners, sessionId)
     }
   }
 
   /** Records what `session/new` and `session/resume` reported for a Session. */
   function attach(
-    threadId: string,
+    sessionId: string,
     attached: {
       configOptions: readonly SessionConfigOption[]
       capabilities: AcpCapabilities
     }
   ) {
-    const previous = sessions.get(threadId)
+    const previous = sessions.get(sessionId)
     const known: SessionEntry = {
       capabilities: attached.capabilities,
       projection: {},
@@ -348,86 +348,87 @@ export function createAcpComposerStore(connection: AcpConnection) {
       ...(previous?.turns ? { turns: previous.turns } : {}),
       ...(previous?.commands ? { commands: previous.commands } : {}),
     }
-    sessions.set(threadId, known)
-    project(known, threadId, projectModels(attached.configOptions))
-    observe(threadId)
-    const held = early.get(threadId) ?? []
-    early.delete(threadId)
-    for (const [update, meta] of held) accept(threadId, update, meta)
+    sessions.set(sessionId, known)
+    project(known, sessionId, projectModels(attached.configOptions))
+    observe(sessionId)
+    const held = early.get(sessionId) ?? []
+    early.delete(sessionId)
+    for (const [update, meta] of held) accept(sessionId, update, meta)
   }
 
   /**
    * Subscribes before the attach that reports the Session, so an update the
    * proxy sends right behind its `session/resume` answer is held, not lost.
    */
-  function observe(threadId: string) {
-    if (!sessions.has(threadId) && !early.has(threadId)) early.set(threadId, [])
-    if (observed.has(threadId)) return
-    observed.add(threadId)
-    connection.onSessionUpdate(threadId, (update, meta) =>
-      accept(threadId, update, meta)
+  function observe(sessionId: string) {
+    if (!sessions.has(sessionId) && !early.has(sessionId))
+      early.set(sessionId, [])
+    if (observed.has(sessionId)) return
+    observed.add(sessionId)
+    connection.onSessionUpdate(sessionId, (update, meta) =>
+      accept(sessionId, update, meta)
     )
     // A from-start replay restates every settled turn, so the spend it folds
     // starts over rather than counting each turn twice.
-    connection.onSessionReplay(threadId, () => {
-      const replayed = sessions.get(threadId)
+    connection.onSessionReplay(sessionId, () => {
+      const replayed = sessions.get(sessionId)
       if (replayed) delete replayed.turns
     })
   }
 
   /** One feed per Session, so the composer subscribes to a stable value. */
-  function modelFeed(threadId: string): ComposerModelFeed {
-    const known = feeds.get(threadId)
+  function modelFeed(sessionId: string): ComposerModelFeed {
+    const known = feeds.get(sessionId)
     if (known) return known
     const feed: ComposerModelFeed = {
-      current: () => sessions.get(threadId)?.current,
-      subscribe: (listener) => listen(modelListeners, threadId, listener),
+      current: () => sessions.get(sessionId)?.current,
+      subscribe: (listener) => listen(modelListeners, sessionId, listener),
     }
-    feeds.set(threadId, feed)
+    feeds.set(sessionId, feed)
     return feed
   }
 
-  function models(threadId: string) {
-    const projected = entry(threadId).projection.models
+  function models(sessionId: string) {
+    const projected = entry(sessionId).projection.models
     if (!projected) throw new Error("The Session reports no models")
     return projected
   }
 
   async function select(
-    threadId: string,
+    sessionId: string,
     category: typeof MODEL_CATEGORY | typeof EFFORT_CATEGORY,
     valueId: string
   ) {
-    const known = entry(threadId)
+    const known = entry(sessionId)
     const configId =
       (category === MODEL_CATEGORY
         ? known.projection.modelConfigId
         : known.projection.effortConfigId) ?? category
     project(
       known,
-      threadId,
+      sessionId,
       projectModels(
-        await connection.setConfigOption(threadId, configId, valueId)
+        await connection.setConfigOption(sessionId, configId, valueId)
       )
     )
-    return models(threadId)
+    return models(sessionId)
   }
 
   return {
     observe,
     attach,
-    capabilities: (threadId: string) => capabilitiesOf(entry(threadId)),
+    capabilities: (sessionId: string) => capabilitiesOf(entry(sessionId)),
     models,
     /** The newest reading, or none while the provider has reported none. */
-    context: (threadId: string) => sessions.get(threadId)?.context,
+    context: (sessionId: string) => sessions.get(sessionId)?.context,
     /** The settled turns' spend, notified with the context. */
-    turnUsage: (threadId: string) => sessions.get(threadId)?.turns,
-    subscribeContext: (threadId: string, listener: () => void) =>
-      listen(contextListeners, threadId, listener),
+    turnUsage: (sessionId: string) => sessions.get(sessionId)?.turns,
+    subscribeContext: (sessionId: string, listener: () => void) =>
+      listen(contextListeners, sessionId, listener),
     modelFeed,
-    selectModel: (threadId: string, selectedId: string) =>
-      select(threadId, MODEL_CATEGORY, selectedId),
-    selectEffort: (threadId: string, effortId: string) =>
-      select(threadId, EFFORT_CATEGORY, effortId),
+    selectModel: (sessionId: string, selectedId: string) =>
+      select(sessionId, MODEL_CATEGORY, selectedId),
+    selectEffort: (sessionId: string, effortId: string) =>
+      select(sessionId, EFFORT_CATEGORY, effortId),
   }
 }

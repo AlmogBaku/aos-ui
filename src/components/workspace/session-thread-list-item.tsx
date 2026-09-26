@@ -82,14 +82,14 @@ function decorateThreadItemRuntime(
 
 export function SessionThreadListItem({
   runtime,
-  threadId,
+  sessionId,
   onSwitch,
   onActionError,
   children,
   ...props
 }: ComponentPropsWithoutRef<"div"> & {
   runtime?: ThreadListRuntime
-  threadId: string
+  sessionId: string
   onSwitch: () => void | Promise<unknown>
   onActionError?: (error: unknown) => void
   children: ReactNode
@@ -103,11 +103,11 @@ export function SessionThreadListItem({
   const itemRuntime = useMemo(() => {
     if (!runtime) return null
     return decorateThreadItemRuntime(
-      runtime.getItemById(threadId),
+      runtime.getItemById(sessionId),
       callbackBridge.activate,
       callbackBridge.reportActionError
     )
-  }, [callbackBridge, runtime, threadId])
+  }, [callbackBridge, runtime, sessionId])
   const contextValue = useMemo<SessionItemContextValue>(
     () => ({
       primitive: Boolean(itemRuntime),

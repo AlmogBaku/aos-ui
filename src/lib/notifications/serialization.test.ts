@@ -12,7 +12,7 @@ const version2 = (enabled: boolean) =>
 const legacyRecord = {
   id: "finish-1",
   agentId: "agent-1",
-  threadId: "thread-1",
+  sessionId: "thread-1",
   type: "turn-finished",
   turnId: "run-1",
   occurredAt: "2026-09-05T12:00:00.000Z",

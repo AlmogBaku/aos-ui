@@ -40,7 +40,7 @@ export type AcpSessionStoreOptions = {
   connection: AcpConnection
   now?: () => number
   /** A live turn of an attached Session just stopped, however it ended. */
-  onTurnFinished?: (threadId: string) => void
+  onTurnFinished?: (sessionId: string) => void
 }
 
 /** The one place a `state_update` becomes a Session status. */
@@ -70,7 +70,7 @@ function activityEventOf(
   const base = {
     id: `${sessionId}:${key}:${type}`,
     agentId,
-    threadId: sessionId,
+    sessionId,
     occurredAt,
   }
   if (type === "attention-requested")
@@ -114,8 +114,8 @@ export function createAcpSessionStore({
   const invalidationListeners = new Map<string, Set<() => void>>()
 
   function rowsFor(threadIds: Iterable<string>) {
-    return [...threadIds].flatMap((threadId) => {
-      const row = rows.get(threadId)
+    return [...threadIds].flatMap((sessionId) => {
+      const row = rows.get(sessionId)
       return row ? [{ ...row }] : []
     })
   }
@@ -127,20 +127,20 @@ export function createAcpSessionStore({
    * have, so the read that resolves it publishes instead.
    */
   function notify(subscription: MetadataSubscription) {
-    for (const threadId of subscription.threadIds)
-      if (!rows.has(threadId)) return
+    for (const sessionId of subscription.threadIds)
+      if (!rows.has(sessionId)) return
     subscription.listener(rowsFor(subscription.threadIds))
   }
 
-  function publish(threadId: string) {
+  function publish(sessionId: string) {
     for (const subscription of subscriptions)
-      if (subscription.threadIds.has(threadId)) notify(subscription)
+      if (subscription.threadIds.has(sessionId)) notify(subscription)
   }
 
-  function write(threadId: string, next: SessionMetadata) {
-    if (sameRow(rows.get(threadId), next)) return
-    rows.set(threadId, next)
-    publish(threadId)
+  function write(sessionId: string, next: SessionMetadata) {
+    if (sameRow(rows.get(sessionId), next)) return
+    rows.set(sessionId, next)
+    publish(sessionId)
   }
 
   /**
@@ -148,15 +148,15 @@ export function createAcpSessionStore({
    * overwrite; `archived` is on every provider read of a Session.
    */
   function put(
-    threadId: string,
+    sessionId: string,
     info: AosSessionInfoMeta,
     updatedAt?: string | null
   ) {
-    const previous = rows.get(threadId)
+    const previous = rows.get(sessionId)
     const unread = info.unread ?? previous?.unread
     const pinned = info.pinned ?? previous?.pinned
-    write(threadId, {
-      threadId,
+    write(sessionId, {
+      sessionId,
       agentId: info.agentId,
       updatedAt:
         updatedAt ?? previous?.updatedAt ?? new Date(now()).toISOString(),
@@ -167,14 +167,14 @@ export function createAcpSessionStore({
     })
   }
 
-  function patch(threadId: string, change: Partial<SessionMetadata>) {
-    const previous = rows.get(threadId)
-    if (previous) write(threadId, { ...previous, ...change })
+  function patch(sessionId: string, change: Partial<SessionMetadata>) {
+    const previous = rows.get(sessionId)
+    if (previous) write(sessionId, { ...previous, ...change })
   }
 
-  function setTodos(threadId: string, next: TodoItem[]) {
-    todos.set(threadId, next)
-    for (const listener of todoListeners.get(threadId) ?? [])
+  function setTodos(sessionId: string, next: TodoItem[]) {
+    todos.set(sessionId, next)
+    for (const listener of todoListeners.get(sessionId) ?? [])
       listener(next.map((todo) => ({ ...todo })))
   }
 
@@ -183,40 +183,41 @@ export function createAcpSessionStore({
   }
 
   /** Tells a Session's observers to re-read what the provider now holds. */
-  function invalidate(threadId: string) {
-    for (const listener of invalidationListeners.get(threadId) ?? []) listener()
+  function invalidate(sessionId: string) {
+    for (const listener of invalidationListeners.get(sessionId) ?? [])
+      listener()
   }
 
   /** An update whose `_meta.aos` does not parse carries nothing to publish. */
   function acceptUpdate(
-    threadId: string,
+    sessionId: string,
     update: SessionUpdate,
     meta: Record<string, unknown> | undefined
   ) {
     if (SessionUpdate.isStateUpdate(update)) {
       const status = statusFromState(update)
-      if (replaying.has(threadId)) return void replaying.set(threadId, status)
-      const previous = rows.get(threadId)?.status
-      patch(threadId, { status })
+      if (replaying.has(sessionId)) return void replaying.set(sessionId, status)
+      const previous = rows.get(sessionId)?.status
+      patch(sessionId, { status })
       if (
         (previous === "running" || previous === "waiting-for-input") &&
         (status === "idle" || status === "failed")
       )
-        onTurnFinished?.(threadId)
+        onTurnFinished?.(sessionId)
       return
     }
     if (SessionUpdate.isSessionInfoUpdate(update)) {
-      if (update.title && update.title !== titles.get(threadId)) {
-        titles.set(threadId, update.title)
-        invalidate(threadId)
+      if (update.title && update.title !== titles.get(sessionId)) {
+        titles.set(sessionId, update.title)
+        invalidate(sessionId)
       }
       const info = AosSessionInfoMetaSchema.safeParse(meta)
-      if (info.success) put(threadId, info.data, update.updatedAt)
+      if (info.success) put(sessionId, info.data, update.updatedAt)
       return
     }
     if (!SessionUpdate.isPlanUpdate(update)) return
     const plan = AosPlanMetaSchema.safeParse(meta)
-    if (plan.success) setTodos(threadId, plan.data.todos)
+    if (plan.success) setTodos(sessionId, plan.data.todos)
   }
 
   /**
@@ -224,25 +225,25 @@ export function createAcpSessionStore({
    * followed each one would repaint every surface showing it per turn. It
    * takes only the status the replay ends on.
    */
-  function holdReplayedStatus(threadId: string) {
-    replaying.set(threadId, undefined)
+  function holdReplayedStatus(sessionId: string) {
+    replaying.set(sessionId, undefined)
     return () => {
-      const status = replaying.get(threadId)
-      replaying.delete(threadId)
-      if (status) patch(threadId, { status })
+      const status = replaying.get(sessionId)
+      replaying.delete(sessionId)
+      if (status) patch(sessionId, { status })
     }
   }
 
   /** Attached Sessions stream their own status, Todos, and row changes. */
-  function observe(threadId: string) {
-    if (observed.has(threadId)) return
-    const offUpdates = connection.onSessionUpdate(threadId, (update, meta) =>
-      acceptUpdate(threadId, update, meta)
+  function observe(sessionId: string) {
+    if (observed.has(sessionId)) return
+    const offUpdates = connection.onSessionUpdate(sessionId, (update, meta) =>
+      acceptUpdate(sessionId, update, meta)
     )
-    const offReplays = connection.onSessionReplay(threadId, () =>
-      holdReplayedStatus(threadId)
+    const offReplays = connection.onSessionReplay(sessionId, () =>
+      holdReplayedStatus(sessionId)
     )
-    observed.set(threadId, () => {
+    observed.set(sessionId, () => {
       offUpdates()
       offReplays()
     })
@@ -272,21 +273,22 @@ export function createAcpSessionStore({
     put,
     rowsFor,
     /** The provider's title, as a list page or an attached Session reports it. */
-    setTitle: (threadId: string, title: string) => titles.set(threadId, title),
+    setTitle: (sessionId: string, title: string) =>
+      titles.set(sessionId, title),
     /** The proxy's read state, or the operator's own optimistic ack. */
-    setUnread: (threadId: string, unread: boolean) =>
-      patch(threadId, { unread }),
+    setUnread: (sessionId: string, unread: boolean) =>
+      patch(sessionId, { unread }),
     /** The operator's own optimistic pin; `undefined` restores a refused one. */
-    setPinned: (threadId: string, pinned: boolean | undefined) =>
-      patch(threadId, { pinned }),
-    setStatus: (threadId: string, status: SessionStatus) =>
-      patch(threadId, { status }),
-    knows: (threadId: string) => rows.has(threadId),
-    agentIdOf: (threadId: string) => rows.get(threadId)?.agentId,
+    setPinned: (sessionId: string, pinned: boolean | undefined) =>
+      patch(sessionId, { pinned }),
+    setStatus: (sessionId: string, status: SessionStatus) =>
+      patch(sessionId, { status }),
+    knows: (sessionId: string) => rows.has(sessionId),
+    agentIdOf: (sessionId: string) => rows.get(sessionId)?.agentId,
     /** The newest title the provider reported, for the thread list to stream. */
-    title: (threadId: string) => titles.get(threadId),
-    status: (threadId: string): SessionStatus =>
-      rows.get(threadId)?.status ?? "unknown",
+    title: (sessionId: string) => titles.get(sessionId),
+    status: (sessionId: string): SessionStatus =>
+      rows.get(sessionId)?.status ?? "unknown",
 
     subscribeMetadata(
       threadIds: readonly string[],
@@ -300,26 +302,26 @@ export function createAcpSessionStore({
       return () => subscriptions.delete(subscription)
     },
 
-    subscribeStatus(threadId: string, listener: () => void) {
+    subscribeStatus(sessionId: string, listener: () => void) {
       const subscription = {
-        threadIds: new Set([threadId]),
+        threadIds: new Set([sessionId]),
         listener: () => listener(),
       }
       subscriptions.add(subscription)
       return () => subscriptions.delete(subscription)
     },
 
-    subscribeTodos(threadId: string, listener: (todos: TodoItem[]) => void) {
-      const listeners = todoListeners.get(threadId) ?? new Set()
+    subscribeTodos(sessionId: string, listener: (todos: TodoItem[]) => void) {
+      const listeners = todoListeners.get(sessionId) ?? new Set()
       listeners.add(listener)
-      todoListeners.set(threadId, listeners)
+      todoListeners.set(sessionId, listeners)
       queueMicrotask(() => {
         if (listeners.has(listener))
-          listener((todos.get(threadId) ?? []).map((todo) => ({ ...todo })))
+          listener((todos.get(sessionId) ?? []).map((todo) => ({ ...todo })))
       })
       return () => {
         listeners.delete(listener)
-        if (!listeners.size) todoListeners.delete(threadId)
+        if (!listeners.size) todoListeners.delete(sessionId)
       }
     },
 
@@ -330,13 +332,13 @@ export function createAcpSessionStore({
       return () => activityListeners.delete(listener)
     },
 
-    subscribeInvalidation(threadId: string, listener: () => void) {
-      const listeners = invalidationListeners.get(threadId) ?? new Set()
+    subscribeInvalidation(sessionId: string, listener: () => void) {
+      const listeners = invalidationListeners.get(sessionId) ?? new Set()
       listeners.add(listener)
-      invalidationListeners.set(threadId, listeners)
+      invalidationListeners.set(sessionId, listeners)
       return () => {
         listeners.delete(listener)
-        if (!listeners.size) invalidationListeners.delete(threadId)
+        if (!listeners.size) invalidationListeners.delete(sessionId)
       }
     },
   }
@@ -345,7 +347,7 @@ export function createAcpSessionStore({
 /** One `session/list` entry as a workspace row. */
 export function rowOf(session: SessionInfo) {
   return {
-    threadId: session.sessionId,
+    sessionId: session.sessionId,
     info: AosSessionInfoMetaSchema.parse(session._meta?.aos),
     updatedAt: session.updatedAt,
     title: session.title,

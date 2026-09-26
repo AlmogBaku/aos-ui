@@ -122,8 +122,8 @@ export function createAcpThreadListAdapter({
     if (metadata) listed.set(remoteId, { ...metadata, ...change })
   }
 
-  async function create(threadId: string, agentId: string) {
-    const existing = initializations.get(threadId)
+  async function create(sessionId: string, agentId: string) {
+    const existing = initializations.get(sessionId)
     if (existing) return existing
     const initialization = connection
       .newSession({ agentId })
@@ -131,8 +131,8 @@ export function createAcpThreadListAdapter({
         agents.set(sessionId, agentId)
         return { remoteId: sessionId }
       })
-      .finally(() => initializations.delete(threadId))
-    initializations.set(threadId, initialization)
+      .finally(() => initializations.delete(sessionId))
+    initializations.set(sessionId, initialization)
     return initialization
   }
 
@@ -189,15 +189,15 @@ export function createAcpThreadListAdapter({
      * the owning Agent's pages, or the selected Agent's, are read until it
      * appears.
      */
-    async fetch(threadId: string) {
-      const metadata = listed.get(threadId)
+    async fetch(sessionId: string) {
+      const metadata = listed.get(sessionId)
       if (metadata) return metadata
-      const agentId = agentIdFor?.(threadId) ?? agentScope?.()
+      const agentId = agentIdFor?.(sessionId) ?? agentScope?.()
       let cursor: string | undefined
       for (;;) {
         const page = await connection.listSessions(listMeta(agentId), cursor)
         for (const info of page.sessions) remember(metadataOf(info))
-        const found = listed.get(threadId)
+        const found = listed.get(sessionId)
         if (found) return found
         // A cursor the provider does not advance cannot reach another page.
         if (page.nextCursor === undefined || page.nextCursor === cursor)
@@ -206,10 +206,10 @@ export function createAcpThreadListAdapter({
       }
     },
 
-    async initialize(threadId: string) {
-      const draftAgentId = drafts.agentFor(threadId)
-      if (draftAgentId) return create(threadId, draftAgentId)
-      if (listed.has(threadId)) return { remoteId: threadId }
+    async initialize(sessionId: string) {
+      const draftAgentId = drafts.agentFor(sessionId)
+      if (draftAgentId) return create(sessionId, draftAgentId)
+      if (listed.has(sessionId)) return { remoteId: sessionId }
       throw new Error("An AOS Session needs an owning Agent")
     },
 

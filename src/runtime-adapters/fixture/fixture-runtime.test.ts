@@ -18,7 +18,7 @@ import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
 
 function runOptions(
   prompt: string,
-  threadId = "thread-aster-market",
+  sessionId = "thread-aster-market",
   abortSignal = new AbortController().signal,
   assistantMessageId = "fixture-assistant-message"
 ) {
@@ -33,7 +33,7 @@ function runOptions(
 
   return {
     messages: repository.messages.map(({ message }) => message),
-    unstable_threadId: threadId,
+    unstable_threadId: sessionId,
     unstable_assistantMessageId: assistantMessageId,
     abortSignal,
     runConfig: {},
@@ -44,7 +44,7 @@ function runOptions(
 
 function resumedApprovalRunOptions(
   requestId: string,
-  threadId = "thread-aster-market",
+  sessionId = "thread-aster-market",
   assistantMessageId = "fixture-permission-response"
 ) {
   const repository = ExportedMessageRepository.fromArray([
@@ -80,7 +80,7 @@ function resumedApprovalRunOptions(
   return {
     ...runOptions(
       "Request permission",
-      threadId,
+      sessionId,
       undefined,
       assistantMessageId
     ),
@@ -91,7 +91,7 @@ function resumedApprovalRunOptions(
 
 function resumedQuestionRunOptions(
   requestId: string,
-  threadId = "thread-lumen-roadmap",
+  sessionId = "thread-lumen-roadmap",
   assistantMessageId = "fixture-question-response"
 ) {
   const repository = ExportedMessageRepository.fromArray([
@@ -119,7 +119,7 @@ function resumedQuestionRunOptions(
   ])
   const messages = repository.messages.map(({ message }) => message)
   return {
-    ...runOptions("Ask a question", threadId, undefined, assistantMessageId),
+    ...runOptions("Ask a question", sessionId, undefined, assistantMessageId),
     messages: messages.slice(0, -1),
     unstable_getMessage: () => messages.at(-1),
   } as unknown as ChatModelRunOptions
@@ -289,10 +289,10 @@ describe("fixture Assistant UI thread adapter", () => {
   it("creates empty creator history; only an explicit user action submits the interview", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const adapter = createFixtureThreadListAdapter(workspace)
-    const { threadId } = await workspace.createSession(
+    const { sessionId } = await workspace.createSession(
       workspace.agentCreator!.id
     )
-    expect((await adapter.historyFor(threadId).load()).messages).toEqual([])
+    expect((await adapter.historyFor(sessionId).load()).messages).toEqual([])
   })
 })
 
@@ -313,7 +313,7 @@ describe("fixture ChatModelAdapter", () => {
       {
         id: "fixture:runtime:thread-mica-quarterly:fixture-assistant-message:started",
         agentId: "agent-mica",
-        threadId: "thread-mica-quarterly",
+        sessionId: "thread-mica-quarterly",
         occurredAt: FIXTURE_NOW.toISOString(),
         type: "turn-started",
         turnId:
@@ -322,7 +322,7 @@ describe("fixture ChatModelAdapter", () => {
       {
         id: "fixture:runtime:thread-mica-quarterly:fixture-assistant-message:finished",
         agentId: "agent-mica",
-        threadId: "thread-mica-quarterly",
+        sessionId: "thread-mica-quarterly",
         occurredAt: FIXTURE_NOW.toISOString(),
         type: "turn-finished",
         turnId:
@@ -332,8 +332,8 @@ describe("fixture ChatModelAdapter", () => {
   })
 
   it("publishes a new lifecycle after workspace recreation", async () => {
-    const owner = (threadId: string) =>
-      threadId === "thread-mica-quarterly" ? "agent-mica" : undefined
+    const owner = (sessionId: string) =>
+      sessionId === "thread-mica-quarterly" ? "agent-mica" : undefined
     const firstWorkspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const firstStore = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
@@ -399,7 +399,7 @@ describe("fixture ChatModelAdapter", () => {
     expect(activity[1]).toEqual({
       id: "fixture:runtime:thread-nori-copy:fixture-assistant-message:failed",
       agentId: "agent-nori",
-      threadId: "thread-nori-copy",
+      sessionId: "thread-nori-copy",
       occurredAt: FIXTURE_NOW.toISOString(),
       type: "turn-failed",
       turnId: "fixture:runtime:thread-nori-copy:fixture-assistant-message",
@@ -412,11 +412,11 @@ describe("fixture ChatModelAdapter", () => {
     const owners = new Map(
       workspace
         .listAllSessionMetadata()
-        .map(({ threadId, agentId }) => [threadId, agentId])
+        .map(({ sessionId, agentId }) => [sessionId, agentId])
     )
     const store = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
-      getThreadOwner: (threadId) => owners.get(threadId),
+      getThreadOwner: (sessionId) => owners.get(sessionId),
       getSessions: () => workspace.listAllSessionMetadata(),
     })
     workspace.subscribeActivity((event) => {

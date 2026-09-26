@@ -17,7 +17,7 @@ it("coalesces discovery signals behind the initial catalog read", async () => {
       }),
     refreshAgents: vi.fn(async () => [discovered]),
     getSessionMetadata: async () => [],
-    createSession: async () => ({ threadId: "unused" }),
+    createSession: async () => ({ sessionId: "unused" }),
     subscribeAgentCatalog: (listener) => {
       notify = listener
       return () => {}
@@ -47,7 +47,7 @@ it("unsubscribes and ignores delayed reads after unmount", async () => {
       }),
     refreshAgents: vi.fn(async () => []),
     getSessionMetadata: async () => [],
-    createSession: async () => ({ threadId: "unused" }),
+    createSession: async () => ({ sessionId: "unused" }),
     subscribeAgentCatalog: () => unsubscribe,
   }
   const { result, unmount } = renderHook(() =>
@@ -77,7 +77,7 @@ it.each([undefined, "idle", "active"] as const)(
         throw new Error("Native unavailable")
       },
       getSessionMetadata: async () => [],
-      createSession: async () => ({ threadId: "unused" }),
+      createSession: async () => ({ sessionId: "unused" }),
       subscribeAgentCatalog: (listener) => {
         notify = listener
         return () => {}
@@ -102,7 +102,7 @@ it("keeps the roster it has when an invalidation re-reads the same one", async (
     listAgents: async () => read(),
     refreshAgents: vi.fn(async () => read()),
     getSessionMetadata: async () => [],
-    createSession: async () => ({ threadId: "unused" }),
+    createSession: async () => ({ sessionId: "unused" }),
     subscribeAgentCatalog: (listener) => {
       notify = listener
       return () => {}

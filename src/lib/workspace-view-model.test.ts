@@ -13,7 +13,7 @@ it("does not call an Agent idle when owned execution status is unknown", () => {
     agentStatusFromSessions({ kind: "ready", id: "a", name: "A" }, [
       {
         agentId: "a",
-        threadId: "t",
+        sessionId: "t",
         updatedAt: "2026-09-07T00:00:00.000Z",
         status: "unknown",
       },
@@ -25,7 +25,7 @@ it("aggregates provider unread state per owning Agent only", () => {
   const agent = { kind: "ready", id: "a", name: "A" } as const
   const owned = {
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     updatedAt: "2026-09-07T00:00:00.000Z",
     status: "idle",
   } as const
@@ -52,12 +52,12 @@ it("counts unread and awaiting Sessions once each for the Activity bell", () => 
   } as const
   expect(
     workspaceUnreadCount([
-      { ...base, threadId: "read" },
-      { ...base, threadId: "unread", unread: true },
-      { ...base, threadId: "waiting", status: "waiting-for-input" },
+      { ...base, sessionId: "read" },
+      { ...base, sessionId: "unread", unread: true },
+      { ...base, sessionId: "waiting", status: "waiting-for-input" },
       {
         ...base,
-        threadId: "both",
+        sessionId: "both",
         status: "waiting-for-input",
         unread: true,
       },
@@ -69,7 +69,7 @@ const now = new Date("2026-09-03T12:00:00.000Z")
 
 it("keeps native activity separate from execution and preserves attention priority", () => {
   const agent = { kind: "ready", id: "a", name: "A", activity: "idle" } as const
-  const session = { agentId: "a", threadId: "t", updatedAt: now.toISOString() }
+  const session = { agentId: "a", sessionId: "t", updatedAt: now.toISOString() }
   expect(
     agentStatusFromSessions(agent, [{ ...session, status: "running" }])
   ).toBe("active")
@@ -90,19 +90,19 @@ it("keeps native activity separate from execution and preserves attention priori
 
 const sessions: SessionMetadata[] = [
   {
-    threadId: "recent",
+    sessionId: "recent",
     agentId: "aster",
     updatedAt: "2026-09-03T11:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "boundary",
+    sessionId: "boundary",
     agentId: "aster",
     updatedAt: "2026-09-03T00:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "other-agent",
+    sessionId: "other-agent",
     agentId: "mica",
     updatedAt: "2026-09-03T11:30:00.000Z",
     status: "running",
@@ -122,11 +122,11 @@ describe("buildAgentSessionView", () => {
       now,
     })
 
-    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.openSessions.map(({ sessionId }) => sessionId)).toEqual([
       "recent",
       "boundary",
     ])
-    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.allSessions.map(({ sessionId }) => sessionId)).toEqual([
       "recent",
       "boundary",
     ])
@@ -136,14 +136,14 @@ describe("buildAgentSessionView", () => {
     const pinned: SessionMetadata[] = [
       ...sessions,
       {
-        threadId: "pinned-stale",
+        sessionId: "pinned-stale",
         agentId: "aster",
         updatedAt: "2026-08-20T09:00:00.000Z",
         status: "idle",
         pinned: true,
       },
       {
-        threadId: "pinned-staler",
+        sessionId: "pinned-staler",
         agentId: "aster",
         updatedAt: "2026-08-10T09:00:00.000Z",
         status: "idle",
@@ -160,13 +160,13 @@ describe("buildAgentSessionView", () => {
     })
 
     // Pinned rows lead; recency still orders within either group.
-    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.openSessions.map(({ sessionId }) => sessionId)).toEqual([
       "pinned-stale",
       "pinned-staler",
       "recent",
       "boundary",
     ])
-    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.allSessions.map(({ sessionId }) => sessionId)).toEqual([
       "recent",
       "boundary",
     ])
@@ -189,14 +189,14 @@ describe("buildAgentSessionView", () => {
   const archived: SessionMetadata[] = [
     ...sessions,
     {
-      threadId: "archived-new",
+      sessionId: "archived-new",
       agentId: "aster",
       updatedAt: "2026-09-03T11:45:00.000Z",
       status: "idle",
       archived: true,
     },
     {
-      threadId: "archived-old",
+      sessionId: "archived-old",
       agentId: "aster",
       updatedAt: "2026-09-01T09:00:00.000Z",
       status: "idle",
@@ -213,14 +213,14 @@ describe("buildAgentSessionView", () => {
       now,
     })
 
-    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.openSessions.map(({ sessionId }) => sessionId)).toEqual([
       "recent",
     ])
-    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.allSessions.map(({ sessionId }) => sessionId)).toEqual([
       "recent",
       "boundary",
     ])
-    expect(result.archivedSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.archivedSessions.map(({ sessionId }) => sessionId)).toEqual([
       "archived-new",
       "archived-old",
     ])
@@ -237,16 +237,16 @@ describe("buildAgentSessionView", () => {
       visibleThreadId: "archived-new",
     })
 
-    expect(result.openSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.openSessions.map(({ sessionId }) => sessionId)).toEqual([
       "archived-new",
       "recent",
     ])
-    expect(result.allSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.allSessions.map(({ sessionId }) => sessionId)).toEqual([
       "archived-new",
       "recent",
       "boundary",
     ])
-    expect(result.archivedSessions.map(({ threadId }) => threadId)).toEqual([
+    expect(result.archivedSessions.map(({ sessionId }) => sessionId)).toEqual([
       "archived-new",
       "archived-old",
     ])

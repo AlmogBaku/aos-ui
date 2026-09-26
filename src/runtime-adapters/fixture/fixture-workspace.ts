@@ -78,64 +78,64 @@ export const fixtureSessionTitles = new Map<string, string>([
 
 export const fixtureSessions: SessionMetadata[] = [
   {
-    threadId: "thread-aster-market",
+    sessionId: "thread-aster-market",
     agentId: "agent-aster",
     updatedAt: "2026-09-03T11:00:00.000Z",
     status: "running",
   },
   {
-    threadId: "thread-aster-launch",
+    sessionId: "thread-aster-launch",
     agentId: "agent-aster",
     updatedAt: "2026-09-03T07:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "thread-aster-scan",
+    sessionId: "thread-aster-scan",
     agentId: "agent-aster",
     updatedAt: "2026-09-03T01:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "thread-aster-pricing",
+    sessionId: "thread-aster-pricing",
     agentId: "agent-aster",
     updatedAt: "2026-09-03T00:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "thread-aster-interviews",
+    sessionId: "thread-aster-interviews",
     agentId: "agent-aster",
     updatedAt: "2026-09-02T10:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "thread-mica-quarterly",
+    sessionId: "thread-mica-quarterly",
     agentId: "agent-mica",
     updatedAt: "2026-09-03T10:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "thread-lumen-roadmap",
+    sessionId: "thread-lumen-roadmap",
     agentId: "agent-lumen",
     updatedAt: "2026-08-30T12:00:00.000Z",
     status: "waiting-for-input",
     unread: true,
   },
   {
-    threadId: "thread-vela-metrics",
+    sessionId: "thread-vela-metrics",
     agentId: "agent-vela",
     updatedAt: "2026-08-28T12:00:00.000Z",
     status: "idle",
     pinned: true,
   },
   {
-    threadId: "thread-nori-copy",
+    sessionId: "thread-nori-copy",
     agentId: "agent-nori",
     updatedAt: "2026-08-27T12:00:00.000Z",
     status: "failed",
     unread: true,
   },
   {
-    threadId: "thread-vela-retrospective",
+    sessionId: "thread-vela-retrospective",
     agentId: "agent-vela",
     updatedAt: "2026-08-20T12:00:00.000Z",
     status: "idle",
@@ -187,7 +187,7 @@ type ActivitySubscription = {
 
 type FixtureTurnActivity = {
   agentId: string
-  threadId: string
+  sessionId: string
   turnId: string
 }
 
@@ -250,7 +250,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     this.#sessions = structuredClone([...(sessions ?? fixtureSessions)])
     this.#todos = new Map(
       Object.entries(todos ?? Object.fromEntries(fixtureTodos)).map(
-        ([threadId, items]) => [threadId, structuredClone([...items])]
+        ([sessionId, items]) => [sessionId, structuredClone([...items])]
       )
     )
     this.#sessionTitles = new Map(
@@ -331,32 +331,32 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     return () => this.#sessionMetadataListeners.delete(entry)
   }
 
-  async markSessionRead(threadId: string) {
-    const session = this.#sessions.find((item) => item.threadId === threadId)
+  async markSessionRead(sessionId: string) {
+    const session = this.#sessions.find((item) => item.sessionId === sessionId)
     if (!session || session.unread === false) return
     session.unread = false
     this.#publishSessions()
   }
 
-  async setSessionPinned(threadId: string, pinned: boolean) {
-    const session = this.#requireSession(threadId)
+  async setSessionPinned(sessionId: string, pinned: boolean) {
+    const session = this.#requireSession(sessionId)
     if (session.pinned === pinned) return
     session.pinned = pinned
     this.#publishSessions()
   }
 
-  setSessionArchived(threadId: string, archived: boolean) {
-    const session = this.#requireSession(threadId)
+  setSessionArchived(sessionId: string, archived: boolean) {
+    const session = this.#requireSession(sessionId)
     if (session.archived === archived) return
     session.archived = archived
     this.#publishSessions()
   }
 
   /** Assistant UI drops the deleted thread itself, so nothing republishes. */
-  deleteSession(threadId: string) {
-    const session = this.#requireSession(threadId)
+  deleteSession(sessionId: string) {
+    const session = this.#requireSession(sessionId)
     this.#sessions.splice(this.#sessions.indexOf(session), 1)
-    this.#sessionTitles.delete(threadId)
+    this.#sessionTitles.delete(sessionId)
   }
 
   /** The preview performs every Session action the workspace offers. */
@@ -380,46 +380,46 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     }
 
     this.#sessionSequence += 1
-    const threadId = `fixture-session-${String(this.#sessionSequence).padStart(3, "0")}`
+    const sessionId = `fixture-session-${String(this.#sessionSequence).padStart(3, "0")}`
     this.#sessions.push({
-      threadId,
+      sessionId,
       agentId,
       status: "idle",
       updatedAt: this.#clock().toISOString(),
       unread: false,
     })
-    this.#sessionTitles.set(threadId, options?.title ?? "New session")
-    return { threadId }
+    this.#sessionTitles.set(sessionId, options?.title ?? "New session")
+    return { sessionId }
   }
 
   listAllSessionMetadata() {
     return structuredClone(this.#sessions)
   }
 
-  getSessionTitle(threadId: string) {
-    return this.#sessionTitles.get(threadId)
+  getSessionTitle(sessionId: string) {
+    return this.#sessionTitles.get(sessionId)
   }
 
-  setSessionTitle(threadId: string, title: string) {
-    this.#requireSession(threadId)
-    this.#sessionTitles.set(threadId, title)
+  setSessionTitle(sessionId: string, title: string) {
+    this.#requireSession(sessionId)
+    this.#sessionTitles.set(sessionId, title)
   }
 
-  subscribeTodos(threadId: string, listener: (todos: TodoItem[]) => void) {
-    const listeners = this.#todoListeners.get(threadId) ?? new Set()
+  subscribeTodos(sessionId: string, listener: (todos: TodoItem[]) => void) {
+    const listeners = this.#todoListeners.get(sessionId) ?? new Set()
     listeners.add(listener)
-    this.#todoListeners.set(threadId, listeners)
-    listener(structuredClone(this.#todos.get(threadId) ?? []))
+    this.#todoListeners.set(sessionId, listeners)
+    listener(structuredClone(this.#todos.get(sessionId) ?? []))
 
     return () => {
       listeners.delete(listener)
-      if (listeners.size === 0) this.#todoListeners.delete(threadId)
+      if (listeners.size === 0) this.#todoListeners.delete(sessionId)
     }
   }
 
-  emitTodos(threadId: string, todos: TodoItem[]) {
-    this.#todos.set(threadId, structuredClone(todos))
-    for (const listener of this.#todoListeners.get(threadId) ?? []) {
+  emitTodos(sessionId: string, todos: TodoItem[]) {
+    this.#todos.set(sessionId, structuredClone(todos))
+    for (const listener of this.#todoListeners.get(sessionId) ?? []) {
       listener(structuredClone(todos))
     }
   }
@@ -440,14 +440,14 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   beginRunActivity(
-    threadId: string,
+    sessionId: string,
     providerTurnId?: string
   ): FixtureTurnActivity | undefined {
-    const session = this.#sessions.find((item) => item.threadId === threadId)
+    const session = this.#sessions.find((item) => item.sessionId === sessionId)
     if (!session) return undefined
     const turnKey = providerTurnId || this.#activityIdFactory()
-    const turnId = `fixture:runtime:${encodeURIComponent(threadId)}:${encodeURIComponent(turnKey)}`
-    const activity = { agentId: session.agentId, threadId, turnId }
+    const turnId = `fixture:runtime:${encodeURIComponent(sessionId)}:${encodeURIComponent(turnKey)}`
+    const activity = { agentId: session.agentId, sessionId, turnId }
     this.#publishActivity({
       id: `${turnId}:started`,
       ...activity,
@@ -458,12 +458,12 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   createAttentionRequestId(
-    threadId: string,
+    sessionId: string,
     kind: "question" | "permission",
     providerTurnId?: string
   ) {
     const requestId = providerTurnId || this.#activityIdFactory()
-    return `fixture:${kind}:${encodeURIComponent(threadId)}:${encodeURIComponent(requestId)}`
+    return `fixture:${kind}:${encodeURIComponent(sessionId)}:${encodeURIComponent(requestId)}`
   }
 
   finishRunActivity(
@@ -480,16 +480,16 @@ export class FixtureWorkspace implements WorkspaceAdapter {
   }
 
   publishAttention(
-    threadId: string,
+    sessionId: string,
     kind: "question" | "permission" | "resolved",
     requestId: string
   ) {
-    const session = this.#sessions.find((item) => item.threadId === threadId)
+    const session = this.#sessions.find((item) => item.sessionId === sessionId)
     if (!session) return
     const eventBase = {
-      id: `fixture:runtime:${encodeURIComponent(threadId)}:attention:${encodeURIComponent(requestId)}:${kind === "resolved" ? "resolved" : "requested"}`,
+      id: `fixture:runtime:${encodeURIComponent(sessionId)}:attention:${encodeURIComponent(requestId)}:${kind === "resolved" ? "resolved" : "requested"}`,
       agentId: session.agentId,
-      threadId,
+      sessionId,
       occurredAt: this.#clock().toISOString(),
     }
     this.#publishActivity(
@@ -538,7 +538,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   #addCreatedAgent(creatorThreadId: string, agent: AgentSummary) {
     const creatorSession = this.#sessions.find(
-      ({ threadId }) => threadId === creatorThreadId
+      ({ sessionId }) => sessionId === creatorThreadId
     )
     if (!this.agentCreator || creatorSession?.agentId !== this.agentCreator.id)
       throw new Error("Only creator Sessions can create Agents")
@@ -559,7 +559,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
     this.#publishActivity({
       id: `fixture:creator:${encodeURIComponent(creatorThreadId)}:${encodeURIComponent(agentId)}:${type}`,
       agentId,
-      threadId: creatorThreadId,
+      sessionId: creatorThreadId,
       occurredAt: this.#clock().toISOString(),
       type,
     })
@@ -567,14 +567,14 @@ export class FixtureWorkspace implements WorkspaceAdapter {
 
   #projectSessions(requested: ReadonlySet<string>) {
     return structuredClone(
-      this.#sessions.filter(({ threadId }) => requested.has(threadId))
+      this.#sessions.filter(({ sessionId }) => requested.has(sessionId))
     )
   }
 
   /** Every Session write names a Session the provider already has. */
-  #requireSession(threadId: string) {
-    const session = this.#sessions.find((item) => item.threadId === threadId)
-    if (!session) throw new Error(`Session not found: ${threadId}`)
+  #requireSession(sessionId: string) {
+    const session = this.#sessions.find((item) => item.sessionId === sessionId)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
     return session
   }
 

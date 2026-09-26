@@ -56,14 +56,14 @@ const now = new Date("2026-09-05T12:00:00Z")
 // "one" is the exposed selection the provider already read; "two" is unread.
 const sessions: SessionMetadata[] = [
   {
-    threadId: "one",
+    sessionId: "one",
     agentId: "a",
     status: "idle",
     updatedAt: now.toISOString(),
     unread: false,
   },
   {
-    threadId: "two",
+    sessionId: "two",
     agentId: "b",
     status: "idle",
     updatedAt: now.toISOString(),
@@ -83,9 +83,9 @@ function source() {
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
-    createSession: async () => ({ threadId: "one" }),
+    createSession: async () => ({ sessionId: "one" }),
     getSessionMetadata: async (ids) =>
-      sessions.filter((session) => ids.includes(session.threadId)),
+      sessions.filter((session) => ids.includes(session.sessionId)),
     subscribeActivity: vi.fn((listener, onError) => {
       receive = listener
       fail = onError!
@@ -96,13 +96,13 @@ function source() {
   }
   const emit = (
     id: string,
-    threadId = "two",
+    sessionId = "two",
     type: "attention-requested" | "agent-ready" = "agent-ready"
   ) =>
     receive({
       id,
-      threadId,
-      agentId: threadId === "one" ? "a" : "b",
+      sessionId,
+      agentId: sessionId === "one" ? "a" : "b",
       occurredAt: now.toISOString(),
       ...(type === "attention-requested"
         ? { type, requestId: id, attentionKind: "question" }
@@ -128,7 +128,7 @@ function options(
       ["one", "First"],
       ["two", "Second"],
     ]),
-    selection: { agentId: "a", threadId: "one" },
+    selection: { agentId: "a", sessionId: "one" },
     locale: "en",
     readNow: () => now,
     onOpenTarget: vi.fn(async () => {}),
@@ -249,7 +249,7 @@ describe("Activity coordinator", () => {
     await waitFor(() => expect(result.current.items).toHaveLength(1))
     expect(result.current.items[0]!.read).toBe(true)
     expect(result.current.notice).toBeNull()
-    rerender({ ...props, selection: { agentId: "b", threadId: "two" } })
+    rerender({ ...props, selection: { agentId: "b", sessionId: "two" } })
     expect(provider.workspace.subscribeActivity).toHaveBeenCalledTimes(1)
     unmount()
     expect(provider.unsubscribe).toHaveBeenCalledTimes(1)
@@ -503,10 +503,10 @@ describe("Activity presentation", () => {
       const workspace = useMemo<WorkspaceAdapter>(
         () => ({
           ...provider.workspace,
-          markSessionRead: async (threadId) =>
+          markSessionRead: async (sessionId) =>
             setSessionState((current) =>
               current.map((session) =>
-                session.threadId === threadId
+                session.sessionId === sessionId
                   ? { ...session, unread: false }
                   : session
               )

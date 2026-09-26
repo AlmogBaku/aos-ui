@@ -5,7 +5,7 @@ import { AosClientError } from "./aos-client"
 
 type ArtifactClient = {
   readArtifact(
-    threadId: string,
+    sessionId: string,
     artifactId: string,
     signal?: AbortSignal
   ): Promise<Blob>
@@ -17,7 +17,7 @@ export class AosArtifactAdapter implements ArtifactAdapter {
 
   async resolve({
     artifact,
-    threadId,
+    sessionId,
     signal,
   }: ArtifactResolveOptions): Promise<Blob> {
     signal.throwIfAborted()
@@ -27,7 +27,7 @@ export class AosArtifactAdapter implements ArtifactAdapter {
     )
       throw new Error("AOS artifact reference is invalid")
     try {
-      return await this.client.readArtifact(threadId, artifact.id, signal)
+      return await this.client.readArtifact(sessionId, artifact.id, signal)
     } catch (error) {
       // Pruned bytes are a permanent, presentable state, not a failed request.
       if (error instanceof AosClientError && error.kind === "artifact-missing")

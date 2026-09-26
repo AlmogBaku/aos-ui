@@ -146,13 +146,13 @@ describe("AOS composer features", () => {
       ),
     }
     const { rerender } = renderHook(
-      ({ threadId }) => useAosSessionCapabilities(client, threadId),
-      { initialProps: { threadId: "session-1" } }
+      ({ sessionId }) => useAosSessionCapabilities(client, sessionId),
+      { initialProps: { sessionId: "session-1" } }
     )
 
     await waitFor(() => expect(workspaceCapabilities).toHaveBeenCalledOnce())
     invalidate?.()
-    rerender({ threadId: "session-1" })
+    rerender({ sessionId: "session-1" })
     await Promise.resolve()
 
     expect(workspaceCapabilities).toHaveBeenCalledOnce()
@@ -560,9 +560,9 @@ describe("AOS composer features", () => {
 
   it("drops an update that settles after the selected Session changed", async () => {
     let settle: ((value: { selectedId: string }) => void) | undefined
-    const models = vi.fn(async (threadId: string) => ({
-      selectedId: threadId === "session-1" ? "a" : "b",
-      effortId: threadId === "session-1" ? "medium" : "low",
+    const models = vi.fn(async (sessionId: string) => ({
+      selectedId: sessionId === "session-1" ? "a" : "b",
+      effortId: sessionId === "session-1" ? "medium" : "low",
       options: [
         {
           id: "a",
@@ -592,21 +592,21 @@ describe("AOS composer features", () => {
       steerRun: vi.fn(),
     }
     const { result, rerender } = renderHook(
-      ({ threadId }: { threadId: string }) => {
-        const sessionCapabilities = useAosSessionCapabilities(client, threadId)
+      ({ sessionId }: { sessionId: string }) => {
+        const sessionCapabilities = useAosSessionCapabilities(client, sessionId)
         return useAosComposerFeatures(
           client,
           { modelSelectorEnabled: true, contextEnabled: false },
-          threadId,
+          sessionId,
           sessionCapabilities
         )
       },
-      { initialProps: { threadId: "session-1" } }
+      { initialProps: { sessionId: "session-1" } }
     )
 
     await waitFor(() => expect(result.current.model?.selectedId).toBe("a"))
     const pending = result.current.model?.update({ effortId: "high" })
-    rerender({ threadId: "session-2" })
+    rerender({ sessionId: "session-2" })
     await waitFor(() => expect(result.current.model?.effortId).toBe("low"))
 
     settle?.({ selectedId: "a" })

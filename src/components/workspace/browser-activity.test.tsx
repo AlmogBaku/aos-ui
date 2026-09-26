@@ -57,7 +57,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
   // The provider reports the Session unread, so a background alert is due.
   const session = {
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     status: "idle" as const,
     updatedAt: "2026-09-05T12:00:00Z",
     unread: true,
@@ -66,7 +66,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
-    createSession: async () => ({ threadId: "t" }),
+    createSession: async () => ({ sessionId: "t" }),
     getSessionMetadata: async () => [session],
     subscribeActivity: (listener) => {
       emit = listener
@@ -79,7 +79,7 @@ it("enables from checkbox gesture, not mount/focus; a selected background comple
     agents: [{ id: "a", name: "Secret agent" }],
     sessions: [session],
     titles: new Map([["t", "Secret session"]]),
-    selection: { agentId: "a", threadId: "t" },
+    selection: { agentId: "a", sessionId: "t" },
     locale: "en" as const,
     readNow: () => new Date(session.updatedAt),
     onOpenTarget: open,
@@ -184,19 +184,19 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
   const sound = { play: vi.fn(), stop: vi.fn() }
   const watched = {
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     status: "idle" as const,
     updatedAt: "2026-09-05T12:00:00Z",
     unread: true,
   }
-  const elsewhere = { ...watched, agentId: "b", threadId: "other" }
+  const elsewhere = { ...watched, agentId: "b", sessionId: "other" }
   const sessions = [watched, elsewhere]
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
-    createSession: async () => ({ threadId: "t" }),
+    createSession: async () => ({ sessionId: "t" }),
     getSessionMetadata: async (ids) =>
-      sessions.filter((session) => ids.includes(session.threadId)),
+      sessions.filter((session) => ids.includes(session.sessionId)),
     subscribeActivity: (listener) => {
       emit = listener
       return () => {}
@@ -212,7 +212,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
       ],
       sessions,
       titles: new Map<string, string>(),
-      selection: { agentId: "a", threadId: "t" },
+      selection: { agentId: "a", sessionId: "t" },
       locale: "en" as const,
       readNow: () => new Date(watched.updatedAt),
       onOpenTarget: async () => {},
@@ -247,7 +247,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
     emit({
       id: "start",
       agentId: "a",
-      threadId: "t",
+      sessionId: "t",
       type: "turn-started",
       turnId: "run-1",
       occurredAt: watched.updatedAt,
@@ -260,7 +260,7 @@ it("earns the ask from a watched run, chimes for input elsewhere, and asks from 
     emit({
       id: "input",
       agentId: "b",
-      threadId: "other",
+      sessionId: "other",
       type: "attention-requested",
       attentionKind: "question",
       requestId: "request-1",
@@ -287,7 +287,7 @@ it("hands this device's push subscription to the policy and the settings", async
   const shown: unknown[] = []
   const session = {
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     status: "idle" as const,
     updatedAt: "2026-09-05T12:00:00Z",
     unread: true,
@@ -295,7 +295,7 @@ it("hands this device's push subscription to the policy and the settings", async
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
-    createSession: async () => ({ threadId: "t" }),
+    createSession: async () => ({ sessionId: "t" }),
     getSessionMetadata: async () => [session],
     subscribeActivity: (listener) => {
       emit = listener
@@ -442,7 +442,7 @@ function subscribedDevice() {
   const push = createPushSubscriptionManager({ client, platform: pushPlatform })
   const session = {
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     status: "idle" as const,
     updatedAt: "2026-09-05T12:00:00Z",
     unread: true,
@@ -450,7 +450,7 @@ function subscribedDevice() {
   const workspace: WorkspaceAdapter = {
     listAgents: async () => [],
     refreshAgents: async () => [],
-    createSession: async () => ({ threadId: "t" }),
+    createSession: async () => ({ sessionId: "t" }),
     getSessionMetadata: async () => [session],
     subscribeActivity: (listener) => {
       emit = listener
@@ -464,7 +464,7 @@ function subscribedDevice() {
       agents: [{ id: "a", name: "Aster" }],
       sessions: [session],
       titles: new Map<string, string>(),
-      selection: { agentId: "a", threadId: "t" },
+      selection: { agentId: "a", sessionId: "t" },
       locale: "en" as const,
       readNow: () => new Date(session.updatedAt),
       onOpenTarget: async () => {},
@@ -513,7 +513,7 @@ function subscribedDevice() {
       emit({
         id: "start",
         agentId: "a",
-        threadId: "t",
+        sessionId: "t",
         type: "turn-started",
         turnId: "run-1",
         occurredAt: session.updatedAt,

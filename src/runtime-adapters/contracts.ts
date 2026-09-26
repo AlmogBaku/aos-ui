@@ -67,7 +67,7 @@ export type SessionStatus =
 export type ActivityBase = {
   id: string
   agentId: string
-  threadId: string
+  sessionId: string
   occurredAt: string
 }
 
@@ -86,7 +86,7 @@ export type WorkspaceActivityEvent =
   | (ActivityBase & { type: "agent-ready" | "agent-activation-failed" })
 
 export type SessionMetadata = {
-  threadId: string
+  sessionId: string
   agentId: string
   updatedAt: string
   status: SessionStatus
@@ -133,10 +133,10 @@ export type WorkspaceAdapter = {
   createSession(
     agentId: string,
     options?: SessionCreationOptions
-  ): Promise<{ threadId: string }>
+  ): Promise<{ sessionId: string }>
   updateAgent?: (agentId: string, patch: AgentPatch) => Promise<void>
   subscribeTodos?: (
-    threadId: string,
+    sessionId: string,
     listener: (todos: TodoItem[]) => void,
     onError?: (error: Error) => void
   ) => () => void
@@ -154,9 +154,9 @@ export type WorkspaceAdapter = {
     onError?: (error: Error) => void
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
-  markSessionRead?: (threadId: string) => Promise<void>
+  markSessionRead?: (sessionId: string) => Promise<void>
   /** Provider-owned pin; rename, archival, and deletion travel with threads. */
-  setSessionPinned?: (threadId: string, pinned: boolean) => Promise<void>
+  setSessionPinned?: (sessionId: string, pinned: boolean) => Promise<void>
   /**
    * Names the Agent whose History the thread list pages. A runtime whose
    * catalog spans every Agent reads further pages for this Agent alone; the
@@ -171,7 +171,7 @@ export type WorkspaceAdapter = {
    * the provider decides from that whether a device still needs a push.
    */
   reportFocus?: (
-    threadId: string | null,
+    sessionId: string | null,
     presence: { foreground: boolean; idle: boolean }
   ) => void
 }
@@ -216,9 +216,9 @@ export type RuntimeInteractionAdapter = {
   ): Promise<void>
   reject(request: RuntimeQuestionRequest): Promise<void>
   dismiss?(request: RuntimeQuestionRequest): void
-  getPending(threadId: string): RuntimeQuestionRequest | undefined
+  getPending(sessionId: string): RuntimeQuestionRequest | undefined
   subscribe(
-    threadId: string,
+    sessionId: string,
     listener: () => void,
     onError?: (error: Error) => void
   ): () => void
@@ -240,7 +240,7 @@ export type ArtifactDescriptor = {
 export type ArtifactResolveOptions = {
   artifact: ArtifactDescriptor
   agentId: string
-  threadId: string
+  sessionId: string
   signal: AbortSignal
 }
 
@@ -251,7 +251,7 @@ export type ArtifactAdapter = {
 /** The tool call whose MCP App view a request addresses. */
 export type McpAppTarget = {
   agentId: string
-  threadId: string
+  sessionId: string
   toolCallId: string
 }
 
@@ -314,7 +314,7 @@ export type WorkspaceCapabilities = {
 
 export type WorkspaceProviderEvent<TPayload = unknown> = {
   agentId: string
-  threadId: string
+  sessionId: string
   sequence: number
   payload: TPayload
 }

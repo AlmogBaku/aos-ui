@@ -13,7 +13,7 @@ afterEach(() => {
 
 const closed = {
   agentId: "aster",
-  threadId: "b",
+  sessionId: "b",
   title: "Brief",
   selectedThreadId: "b",
 }
@@ -58,7 +58,7 @@ describe("Session tab undo", () => {
     const { result } = renderHook(() => useSessionTabUndo())
     act(() => result.current.remember(closed))
     act(() => vi.advanceTimersByTime(7000))
-    const next = { ...closed, threadId: "c", selectedThreadId: "a" }
+    const next = { ...closed, sessionId: "c", selectedThreadId: "a" }
     act(() => result.current.remember(next))
     act(() => vi.advanceTimersByTime(1000))
     expect(result.current.pending).toEqual(next)

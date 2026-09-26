@@ -20,7 +20,7 @@ type RunTerminal = Extract<
 >
 type StoreOptions = {
   now: () => number
-  getThreadOwner: (threadId: string) => string | undefined
+  getThreadOwner: (sessionId: string) => string | undefined
   /** Authoritative Session state; read state is derived from it, never stored. */
   getSessions: () => readonly SessionMetadata[]
 }
@@ -50,7 +50,7 @@ export class ActivityStore {
     const parsed = activityEventSchema.safeParse(input)
     if (!parsed.success) return null
     const event = parsed.data
-    if (this.#options.getThreadOwner(event.threadId) !== event.agentId)
+    if (this.#options.getThreadOwner(event.sessionId) !== event.agentId)
       return null
     if (this.#records.has(event.id)) return null
     if (!this.#remember(event)) return null
@@ -112,7 +112,7 @@ export class ActivityStore {
     const unread = this.#unreadThreads()
     return [...this.#records.values()].map((entry) => ({
       ...entry,
-      read: !unread.has(entry.threadId),
+      read: !unread.has(entry.sessionId),
     }))
   }
 
@@ -159,7 +159,7 @@ export class ActivityStore {
     this.#records.set(entry.id, entry)
     this.#prune()
     return this.#records.has(entry.id)
-      ? { ...entry, read: !this.#unreadThreads().has(entry.threadId) }
+      ? { ...entry, read: !this.#unreadThreads().has(entry.sessionId) }
       : null
   }
 
@@ -169,7 +169,7 @@ export class ActivityStore {
       this.#options
         .getSessions()
         .filter(isSessionUnread)
-        .map(({ threadId }) => threadId)
+        .map(({ sessionId }) => sessionId)
     )
   }
 
@@ -222,7 +222,7 @@ export class ActivityStore {
   }
 
   #hasWrongOwner(event: WorkspaceActivityEvent) {
-    const owner = this.#options.getThreadOwner(event.threadId)
+    const owner = this.#options.getThreadOwner(event.sessionId)
     return owner !== undefined && owner !== event.agentId
   }
 
@@ -241,7 +241,7 @@ export class ActivityStore {
   #identity(event: WorkspaceActivityEvent) {
     return JSON.stringify([
       event.agentId,
-      event.threadId,
+      event.sessionId,
       event.type,
       "turnId" in event ? event.turnId : null,
       "requestId" in event ? event.requestId : null,

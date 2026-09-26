@@ -88,14 +88,14 @@ export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
     () =>
       interactions
         ? function PendingComposer({ fallback }) {
-            const threadId = useAuiState(
+            const sessionId = useAuiState(
               (state) =>
                 state.threadListItem.remoteId ?? state.threadListItem.id
             )
             return (
               <PendingInteractionComposer
                 locale={locale}
-                threadId={threadId}
+                sessionId={sessionId}
                 interactions={interactions}
                 fallback={fallback}
               />
@@ -198,14 +198,14 @@ function ArtifactWorkspaceBridge({
       locale={locale}
       adapter={bundle.artifacts?.resolver}
       agentId={agentId}
-      threadId={artifactThreadId}
+      sessionId={artifactThreadId}
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
       <McpAppHostProvider
         adapter={bundle.mcpApps}
         agentId={agentId}
-        threadId={artifactThreadId}
+        sessionId={artifactThreadId}
       >
         <ArtifactWorkspaceContent {...shell} locale={locale}>
           {children}
@@ -609,20 +609,20 @@ function WorkspaceContent({
     titles,
     selection:
       selectedAgentId && visibleThreadId
-        ? { agentId: selectedAgentId, threadId: visibleThreadId }
+        ? { agentId: selectedAgentId, sessionId: visibleThreadId }
         : null,
     conversationExposed: !managementOpen && !conversationObscured,
     readNow,
-    onOpenTarget: async (agentId, threadId) => {
+    onOpenTarget: async (agentId, sessionId) => {
       setPreferredAgentId(agentId)
-      await openSession(threadId, agentId)
+      await openSession(sessionId, agentId)
     },
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
   const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
     const agentId = sessions.find(
-      (session) => session.threadId === sessionId
+      (session) => session.sessionId === sessionId
     )?.agentId
     if (!agentId) return undefined
     return {

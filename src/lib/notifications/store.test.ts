@@ -9,7 +9,7 @@ import { ActivityStore } from "./store"
 const now = Date.parse("2026-09-05T12:00:00.000Z")
 const base = {
   agentId: "agent-1",
-  threadId: "thread-1",
+  sessionId: "thread-1",
   occurredAt: new Date(now).toISOString(),
 }
 const ready: WorkspaceActivityEvent = {
@@ -45,14 +45,14 @@ const resolution: WorkspaceActivityEvent = {
 }
 const sessions: SessionMetadata[] = [
   {
-    threadId: "thread-1",
+    sessionId: "thread-1",
     agentId: "agent-1",
     updatedAt: new Date(now).toISOString(),
     status: "idle",
     unread: true,
   },
   {
-    threadId: "thread-2",
+    sessionId: "thread-2",
     agentId: "agent-2",
     updatedAt: new Date(now).toISOString(),
     status: "idle",
@@ -62,8 +62,8 @@ const sessions: SessionMetadata[] = [
 const makeStore = (sessionState: readonly SessionMetadata[] = sessions) =>
   new ActivityStore({
     now: () => now,
-    getThreadOwner: (threadId: string) =>
-      ({ "thread-1": "agent-1", "thread-2": "agent-2" })[threadId],
+    getThreadOwner: (sessionId: string) =>
+      ({ "thread-1": "agent-1", "thread-2": "agent-2" })[sessionId],
     getSessions: () => sessionState,
   })
 
@@ -190,13 +190,13 @@ describe("Activity store", () => {
         ...request,
         id: "agent-2-request",
         agentId: "agent-2",
-        threadId: "thread-2",
+        sessionId: "thread-2",
       })
       store.ingest({
         ...resolution,
         id: bookkeeping.id,
         agentId: "agent-2",
-        threadId: "thread-2",
+        sessionId: "thread-2",
       })
       expect(
         store.records().find((record) => record.id === "agent-2-request")
@@ -256,7 +256,7 @@ describe("Activity store", () => {
     null,
     {},
     { ...ready, agentId: "agent-2" },
-    { ...ready, threadId: "unknown" },
+    { ...ready, sessionId: "unknown" },
     { ...ready, occurredAt: "invalid" },
     { ...ready, id: "" },
   ])("rejects malformed or unowned ingestion %j", (event) => {
@@ -296,7 +296,7 @@ describe("Activity store", () => {
       ...finish,
       id: "other-session",
       agentId: "agent-2",
-      threadId: "thread-2",
+      sessionId: "thread-2",
     })
     expect(store.records()).toEqual([])
     expect(store.ingest(finish)?.id).toBe("finish-1")
@@ -386,7 +386,7 @@ describe("Activity store", () => {
     const store = makeStore()
     store.ingest(ready)
     expect(
-      store.ingest({ ...ready, agentId: "agent-2", threadId: "thread-2" })
+      store.ingest({ ...ready, agentId: "agent-2", sessionId: "thread-2" })
     ).toBeNull()
     expect(store.records()[0].agentId).toBe("agent-1")
   })
@@ -406,7 +406,7 @@ describe("Activity store", () => {
       ...ready,
       id: "other",
       agentId: "agent-2",
-      threadId: "thread-2",
+      sessionId: "thread-2",
     })
     expect(store.records().map((record) => [record.id, record.read])).toEqual([
       ["other", true],
@@ -424,7 +424,7 @@ describe("Activity store", () => {
       ...ready,
       id: "other",
       agentId: "agent-2",
-      threadId: "thread-2",
+      sessionId: "thread-2",
     })
     expect(store.records().map((record) => [record.id, record.read])).toEqual([
       ["other", false],
@@ -456,7 +456,7 @@ describe("Activity store", () => {
   it("never resolves a different origin sharing the request ID", () => {
     const store = makeStore()
     store.ingest(request)
-    store.ingest({ ...resolution, agentId: "agent-2", threadId: "thread-2" })
+    store.ingest({ ...resolution, agentId: "agent-2", sessionId: "thread-2" })
     expect(store.records()[0].resolved).toBe(false)
   })
 

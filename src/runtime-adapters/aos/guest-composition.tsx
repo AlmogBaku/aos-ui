@@ -188,13 +188,13 @@ function GuestArtifactShell({
       locale={locale}
       adapter={artifacts}
       agentId={agentId}
-      threadId={sessionId}
+      sessionId={sessionId}
       messages={messages}
     >
       <McpAppHostProvider
         adapter={mcpApps}
         agentId={agentId}
-        threadId={sessionId}
+        sessionId={sessionId}
       >
         <GuestConversationShell
           locale={locale}
@@ -455,7 +455,7 @@ function ReadyGuestAosSurface({
         return (
           <PendingInteractionComposer
             locale={selectedLocale}
-            threadId={sessionId}
+            sessionId={sessionId}
             interactions={interactions}
             fallback={fallback}
           />

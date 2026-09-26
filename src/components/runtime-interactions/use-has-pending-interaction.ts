@@ -11,21 +11,21 @@ const unsubscribed = () => () => {}
  */
 export function useHasPendingInteraction(
   interactions: RuntimeInteractionAdapter | undefined,
-  threadId: string | undefined
+  sessionId: string | undefined
 ): boolean {
   const subscribe = useCallback(
     (listener: () => void) =>
-      interactions && threadId
-        ? interactions.subscribe(threadId, listener)
+      interactions && sessionId
+        ? interactions.subscribe(sessionId, listener)
         : unsubscribed(),
-    [interactions, threadId]
+    [interactions, sessionId]
   )
   const getSnapshot = useCallback(
     () =>
       interactions !== undefined &&
-      threadId !== undefined &&
-      interactions.getPending(threadId) !== undefined,
-    [interactions, threadId]
+      sessionId !== undefined &&
+      interactions.getPending(sessionId) !== undefined,
+    [interactions, sessionId]
   )
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }

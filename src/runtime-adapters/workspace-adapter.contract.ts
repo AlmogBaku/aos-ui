@@ -41,7 +41,7 @@ export function runWorkspaceAdapterContract(
       const { workspace, expectedSession } = createHarness()
 
       await expect(
-        workspace.getSessionMetadata([expectedSession.threadId, "missing"])
+        workspace.getSessionMetadata([expectedSession.sessionId, "missing"])
       ).resolves.toEqual([expectedSession])
     })
 
@@ -49,16 +49,16 @@ export function runWorkspaceAdapterContract(
       const { workspace, createdSession, creationTimeline } = createHarness()
 
       const created = await workspace.createSession(createdSession.agentId)
-      creationTimeline.push(`selected:${created.threadId}`)
+      creationTimeline.push(`selected:${created.sessionId}`)
 
-      expect(created).toEqual({ threadId: createdSession.threadId })
+      expect(created).toEqual({ sessionId: createdSession.sessionId })
       expect(creationTimeline).toEqual([
         `creating:${createdSession.agentId}`,
-        `created:${createdSession.threadId}`,
-        `selected:${createdSession.threadId}`,
+        `created:${createdSession.sessionId}`,
+        `selected:${createdSession.sessionId}`,
       ])
       await expect(
-        workspace.getSessionMetadata([createdSession.threadId])
+        workspace.getSessionMetadata([createdSession.sessionId])
       ).resolves.toEqual([createdSession])
     })
 
@@ -68,11 +68,11 @@ export function runWorkspaceAdapterContract(
         const { workspace, unreadSession } = createHarness()
 
         await expect(
-          workspace.getSessionMetadata([unreadSession!.threadId])
+          workspace.getSessionMetadata([unreadSession!.sessionId])
         ).resolves.toEqual([{ ...unreadSession!, unread: true }])
-        await workspace.markSessionRead!(unreadSession!.threadId)
+        await workspace.markSessionRead!(unreadSession!.sessionId)
         await expect(
-          workspace.getSessionMetadata([unreadSession!.threadId])
+          workspace.getSessionMetadata([unreadSession!.sessionId])
         ).resolves.toEqual([{ ...unreadSession!, unread: false }])
       }
     )

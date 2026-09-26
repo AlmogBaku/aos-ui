@@ -74,14 +74,14 @@ export function RegisteredDraftWorkspace({
 class DraftPromotingThreadListAdapter extends FixtureThreadListAdapter {
   promotedThreadId: string | null = null
 
-  override async initialize(threadId: string) {
-    const [existing] = await this.workspace.getSessionMetadata([threadId])
-    if (existing) return super.initialize(threadId)
+  override async initialize(sessionId: string) {
+    const [existing] = await this.workspace.getSessionMetadata([sessionId])
+    if (existing) return super.initialize(sessionId)
     const created = await this.workspace.createSession("agent-aster", {
       title: "New Session",
     })
-    this.promotedThreadId = created.threadId
-    return { remoteId: created.threadId, externalId: created.threadId }
+    this.promotedThreadId = created.sessionId
+    return { remoteId: created.sessionId, externalId: created.sessionId }
   }
 }
 
@@ -107,7 +107,7 @@ export function DraftPromotionRaceWorkspace({
   const filteredWorkspace = useMemo(() => {
     const getSessionMetadata = async (threadIds: string[]) =>
       (await workspace.getSessionMetadata(threadIds)).filter(
-        ({ threadId }) => threadId !== threadList.promotedThreadId
+        ({ sessionId }) => sessionId !== threadList.promotedThreadId
       )
     return {
       listAgents: () => workspace.listAgents(),
@@ -218,9 +218,9 @@ export function CreatorFixtureAosUiApp({
     assistantRuntime: WorkspaceFixtureRuntime["assistantRuntime"]
   }) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
+  const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
   const bundle = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
     enableAgentCreator: true,
     ...(workspace ? { testOnly: { workspace } } : {}),
@@ -247,13 +247,13 @@ export function interviewWorkspace(interviewAgeMs: number) {
     ],
     sessions: [
       {
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         agentId: "agent-aster",
         updatedAt: FIXTURE_NOW.toISOString(),
         status: "idle",
       },
       {
-        threadId: "interview-thread",
+        sessionId: "interview-thread",
         agentId: "agent-builder",
         updatedAt: new Date(
           FIXTURE_NOW.getTime() - interviewAgeMs
@@ -288,11 +288,11 @@ class PendingInterviewThreadListAdapter extends FixtureThreadListAdapter {
     this.#owners.set(localThreadId, agentId)
   }
 
-  override async initialize(threadId: string) {
-    const owner = this.#owners.get(threadId)
-    if (!owner) return super.initialize(threadId)
+  override async initialize(sessionId: string) {
+    const owner = this.#owners.get(sessionId)
+    if (!owner) return super.initialize(sessionId)
     await this.firstTurn
-    const { threadId: remoteId } = await this.workspace.createSession(owner)
+    const { sessionId: remoteId } = await this.workspace.createSession(owner)
     return { remoteId, externalId: remoteId }
   }
 }
@@ -310,7 +310,7 @@ export function PendingInterviewFixture({
       agents: [{ kind: "ready", id: "agent-aster", name: "Aster" }],
       sessions: [
         {
-          threadId: "thread-aster-market",
+          sessionId: "thread-aster-market",
           agentId: "agent-aster",
           updatedAt: FIXTURE_NOW.toISOString(),
           status: "idle",
@@ -377,11 +377,11 @@ export function CatalogFixture({
   agentGate?: Promise<void>
   locale?: "en" | "he"
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const agentCreator = fixture.workspace.agentCreator!
@@ -471,14 +471,14 @@ function workspaceFacade(
     ...(workspace.subscribeTodos
       ? {
           subscribeTodos: (
-            threadId: string,
+            sessionId: string,
             listener: Parameters<
               NonNullable<WorkspaceAdapter["subscribeTodos"]>
             >[1],
             onError?: Parameters<
               NonNullable<WorkspaceAdapter["subscribeTodos"]>
             >[2]
-          ) => workspace.subscribeTodos!(threadId, listener, onError),
+          ) => workspace.subscribeTodos!(sessionId, listener, onError),
         }
       : {}),
     ...(workspace.subscribeAgentCatalog
@@ -520,11 +520,11 @@ export function GatedMetadataCreatorFixture({
   hold: () => Promise<void>
   capture: (runtime: WorkspaceFixtureRuntime["assistantRuntime"]) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
     testOnly: { workspace: seed },
   })
@@ -565,11 +565,11 @@ export function BuilderSignalFixture({
   }) => void
 }) {
   const [providerState] = useState(() => ({ completed: false }))
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -676,11 +676,11 @@ export function CreatedAgentFixture({
   hideFor?: number
   hiddenAgentId?: string
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const [state] = useState<CreatedAgentState>(() => ({
@@ -731,11 +731,11 @@ export function BuilderLifecycleFixture({
 }: {
   captureWorkspace: (workspace: FixtureWorkspace) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
 
@@ -759,11 +759,11 @@ export function EmptyAgentFixture({
 }: {
   createSession?: WorkspaceAdapter["createSession"]
 } = {}) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -801,11 +801,11 @@ export function StaleTodoFixture({
 }: {
   captureStaleEmission: (emit: () => void) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -853,11 +853,11 @@ export function SessionMetadataSignalFixture({
     Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
   >
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -890,11 +890,11 @@ export function SessionMetadataSignalFixture({
 }
 
 export function ClockBoundaryFixture({ readNow }: { readNow: () => Date }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
 
