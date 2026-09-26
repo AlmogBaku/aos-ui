@@ -161,10 +161,12 @@ describe("ACP WebSocket service", () => {
       connectionContext(upgrade!.connectionId, "operator")
     )
     expect(transport.closed).toEqual([])
+    expect(acp.sockets()).toBe(1)
 
     socket.close()
     socket.receive(initializeFrame(8))
     expect(transport.frames).toHaveLength(1)
+    expect(acp.sockets()).toBe(0)
   })
 
   it("carries the configured principal into the connection context", async () => {

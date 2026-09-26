@@ -6,12 +6,14 @@ import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import { coreFailure, type PublicFailure } from "./core/failures"
+import type { LinkState } from "./core/link"
 import {
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerAttachmentStages,
   type ServerRuntime,
 } from "./core/runtime"
+import type { SessionCoordinator } from "./core/session-coordinator"
 import type { PushRegistrations } from "./push/registrations"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
@@ -32,10 +34,22 @@ const FAILURE_RESPONSES: Readonly<
   runtime_authentication_required: ["runtime_authentication_required", 401],
 }
 
+/**
+ * What liveness reports, read afresh on every request: each native link's
+ * state, and the gauges a leak would show in.
+ */
+export type HealthReading = {
+  links: readonly { name: string; state: LinkState }[]
+  gauges: { sockets: number; memberships: number } & ReturnType<
+    SessionCoordinator["gauges"]
+  >
+}
+
 export type ProxyAppOptions = {
   publicOrigin: string
   runtimeInstance: RuntimeInstance
   readiness?: () => Promise<"ready" | "not-ready">
+  health: () => HealthReading
   logger: Logger
   clock?: () => number
   guestInvitations?: {
@@ -128,9 +142,16 @@ export function createProxyApp(options: ProxyAppOptions) {
     return providerSessionId
   }
 
-  app.get("/api/aos/v1/healthz", (context) =>
-    context.json({ status: "live", timestamp: clock() })
-  )
+  // A native link down degrades the process but answers 200 all the same: the
+  // container is not restarted for an upstream outage.
+  app.get("/api/aos/v1/healthz", (context) => {
+    const { links, gauges } = options.health()
+    return context.json({
+      status: links.every(({ state }) => state === "ready") ? "ok" : "degraded",
+      links,
+      gauges,
+    })
+  })
   app.get("/api/aos/v1/readyz", async (context) => {
     if (options.readiness) {
       const status = await options.readiness()

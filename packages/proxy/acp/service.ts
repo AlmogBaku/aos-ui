@@ -74,6 +74,8 @@ export type AcpServiceOptions = {
 export function createAcpService(options: AcpServiceOptions) {
   const { principalId } = options
   const clock = options.clock ?? defaultClock
+  /** The connections open on this listener, which the health gauges count. */
+  const connections = new Set<string>()
 
   async function authorizeUpgrade(
     request: Request
@@ -125,9 +127,11 @@ export function createAcpService(options: AcpServiceOptions) {
       { once: true }
     )
     prepared.accept(socket.socket)
+    connections.add(upgrade.connectionId)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
+        connections.delete(upgrade.connectionId)
         handshakeDeadline.clear()
         socket.close()
         void withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS)
@@ -135,5 +139,5 @@ export function createAcpService(options: AcpServiceOptions) {
     }
   }
 
-  return { authorizeUpgrade, open }
+  return { authorizeUpgrade, open, sockets: () => connections.size }
 }

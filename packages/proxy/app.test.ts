@@ -19,6 +19,19 @@ import { McpAppNotFoundError } from "./mcp-apps/fallback"
 
 const origin = "http://127.0.0.1:3000"
 
+/** Idle health readings, for an app whose liveness no case reads. */
+const health = () => ({
+  links: [],
+  gauges: {
+    sockets: 0,
+    memberships: 0,
+    executions: 0,
+    uncertain: 0,
+    deadlinesFired: 0,
+    journalBytes: 0,
+  },
+})
+
 function session(agentId = "researcher", id = "stored") {
   return {
     id,
@@ -67,6 +80,7 @@ function app(
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
     logger: captureLogs().logger,
+    health,
     ...options,
   })
 }
@@ -308,6 +322,7 @@ describe("AOS V1 proxy", () => {
       publicOrigin: origin,
       runtimeInstance: runtimeInstance(runtime),
       logger: logs.logger,
+      health,
     })
 
     // An artifact read is a REST route that reaches the provider, so an outage
