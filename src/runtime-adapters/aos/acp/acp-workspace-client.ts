@@ -1,3 +1,4 @@
+import { backoffDelay } from "@aos/lifecycle"
 import { AOS_METHODS, type AosSessionInfoMeta } from "@aos/protocol/acp"
 import type {
   RuntimeInfo,
@@ -27,6 +28,8 @@ import type { AcpConnection } from "./types"
  * a list, so an invalidation has to re-read one rather than patch a guess in.
  */
 const CATALOG_RELIST_DEBOUNCE_MS = 300
+/** Backoff for a failing session list read. */
+const RELIST_BACKOFF = { baseMs: 250, capMs: 5_000 } as const
 
 /** One runtime-declared operation, as the UI asks about it. */
 function offers(capability: RuntimeInfo["capabilities"]["sessionTitle"]) {
@@ -185,16 +188,41 @@ export function createAcpWorkspaceClient({
   }
 
   /**
+   * Lists page one, retrying on backoff until it succeeds or is superseded by
+   * a newer relist request. Used for the first load and for reconnect relists.
+   */
+  async function reliableListSessions() {
+    const nonce = ++relistNonce
+    let attempt = 0
+    while (nonce === relistNonce) {
+      try {
+        await listSessions()
+        return
+      } catch {
+        if (nonce !== relistNonce) return
+        attempt += 1
+        const delay = backoffDelay(attempt, RELIST_BACKOFF)
+        await new Promise<void>((resolve) => setTimeout(resolve, delay))
+      }
+    }
+  }
+
+  /**
    * Every page the thread list reads already lands in the row cache, a
    * reloaded deep link included, so a Session still missing costs one read of
    * page one, never a walk of every Agent's catalog.
    */
   async function readRows(sessionIds: readonly string[]) {
     if (sessionIds.some((sessionId) => !store.knows(sessionId)))
-      await listSessions()
+      await reliableListSessions()
   }
 
   let relistTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Incremented whenever a new relist is triggered: a pending retry from an
+   * older relist is cancelled when a newer one starts.
+   */
+  let relistNonce = 0
 
   /**
    * Re-reads page one once a burst of invalidations settles. A read still in
@@ -204,7 +232,7 @@ export function createAcpWorkspaceClient({
     if (relistTimer !== undefined) clearTimeout(relistTimer)
     relistTimer = setTimeout(() => {
       relistTimer = undefined
-      void listSessions().catch(() => undefined)
+      void reliableListSessions()
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 
@@ -212,6 +240,22 @@ export function createAcpWorkspaceClient({
     AOS_METHODS.notify.catalogInvalidated,
     scheduleSessionRelist
   )
+
+  // After a reconnect the session list may have changed while the socket was
+  // down: re-read page one as soon as the connection is ready again.
+  let connectionEverReady = false
+  let connectionCurrentlyReady = false
+  connection.subscribeStatus((status) => {
+    if (status === "ready") {
+      // A reconnect: was ever ready and had an interruption.
+      if (connectionEverReady && !connectionCurrentlyReady)
+        scheduleSessionRelist()
+      connectionEverReady = true
+      connectionCurrentlyReady = true
+    } else {
+      connectionCurrentlyReady = false
+    }
+  })
 
   const client = {
     // Agents
@@ -264,6 +308,7 @@ export function createAcpWorkspaceClient({
     async createSession(agentId: string, options?: SessionCreationOptions) {
       const created = await connection.newSession({
         agentId,
+        clientId: crypto.randomUUID(),
         ...(options?.title ? { title: options.title } : {}),
       })
       if (created.meta.session.agentId !== agentId)

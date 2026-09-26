@@ -23,6 +23,7 @@ import type { SessionMetadata } from "../../contracts"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,
+  AcpConnectionStatus,
   AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
@@ -210,6 +211,7 @@ function createFakeConnection() {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const replays = new Map<string, Set<AcpSessionReplayListener>>()
+  const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
   const record = (method: string, ...args: unknown[]) => {
     calls.push({ method, args })
   }
@@ -218,6 +220,7 @@ function createFakeConnection() {
   let listed = listEntry()
   let agents: AgentCatalogEntry[] = [catalogEntry()]
   let updateFailure: Error | undefined
+  let listSessionsFailure: Error | undefined
 
   const connection: AcpConnection = {
     status: "ready",
@@ -225,7 +228,10 @@ function createFakeConnection() {
     start: () => {},
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
-    subscribeStatus: () => () => {},
+    subscribeStatus(listener) {
+      statusListeners.add(listener)
+      return () => statusListeners.delete(listener)
+    },
     subscribeSessionReplay(sessionId, listener) {
       const listeners = replays.get(sessionId) ?? new Set()
       listeners.add(listener)
@@ -248,6 +254,11 @@ function createFakeConnection() {
     },
     async listSessions(meta, cursor) {
       record("listSessions", meta, cursor)
+      if (listSessionsFailure) {
+        const err = listSessionsFailure
+        listSessionsFailure = undefined
+        throw err
+      }
       return { sessions: [listed], nextCursor: "cursor-2" }
     },
     async resumeSession(sessionId, resume) {
@@ -335,6 +346,17 @@ function createFakeConnection() {
     },
     argsOf: (method: string) =>
       calls.find((call) => call.method === method)?.args,
+    /** Simulates the connection becoming ready (or re-ready after reconnect). */
+    emitStatus(status: AcpConnectionStatus) {
+      for (const listener of statusListeners) listener(status)
+    },
+    /** Makes the next listSessions call throw, then clear. */
+    failListOnce(reason = new Error("list failed")) {
+      listSessionsFailure = reason
+    },
+    clearListFailure() {
+      listSessionsFailure = undefined
+    },
     emitUpdate(
       update: SessionUpdate,
       meta?: Record<string, unknown>,
@@ -957,7 +979,7 @@ describe("ACP workspace client", () => {
       client.createSession(AGENT_ID, { title: "Weekly report" })
     ).resolves.toEqual({ sessionId: SESSION_ID })
     expect(argsOf("newSession")).toEqual([
-      { agentId: AGENT_ID, title: "Weekly report" },
+      expect.objectContaining({ agentId: AGENT_ID, title: "Weekly report" }),
     ])
 
     client.reportFocus(SESSION_ID, { foreground: true, idle: false })
@@ -1065,5 +1087,76 @@ describe("ACP workspace client", () => {
       runtime: { id: "hermes" },
     })
     expect(rest.readArtifact).toHaveBeenCalledWith(SESSION_ID, "artifact-1")
+  })
+
+  describe("session list refresh (3.47)", () => {
+    it("never overwrites a newer row with a stale list entry", async () => {
+      const newerAt = "2026-09-20T10:00:00.000Z"
+      const { client, setListed } = createClient()
+
+      // First list with the newer updatedAt — the row cache now holds newerAt.
+      setListed({
+        ...listEntry(),
+        updatedAt: newerAt,
+      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      await client.getSessionMetadata([SESSION_ID])
+      const [first] = await client.getSessionMetadata([SESSION_ID])
+      expect(first?.updatedAt).toBe(newerAt)
+
+      // A second list with the older UPDATED_AT must not overwrite.
+      setListed(listEntry()) // UPDATED_AT < newerAt
+      await client.listSessions()
+
+      const [after] = await client.getSessionMetadata([SESSION_ID])
+      expect(after?.updatedAt).toBe(newerAt)
+    })
+
+    it("retries a failed first load until it succeeds", async () => {
+      vi.useFakeTimers()
+      try {
+        const { client, calls, failListOnce } = createClient()
+        failListOnce()
+        const load = client.getSessionMetadata([SESSION_ID])
+        // The failure auto-clears after one use; advance past the backoff.
+        await vi.advanceTimersByTimeAsync(5_000)
+        await load
+        expect(calls.filter((c) => c.method === "listSessions").length).toBe(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("re-reads page one after a reconnect and retries on failure", async () => {
+      vi.useFakeTimers()
+      try {
+        const { client, calls, emitStatus, failListOnce } = createClient()
+        await client.getSessionMetadata([SESSION_ID])
+        const readsBefore = calls.filter(
+          (c) => c.method === "listSessions"
+        ).length
+
+        // Simulate initial connection becoming ready (sets connectionEverReady).
+        emitStatus("ready")
+        // Now simulate disconnect + reconnect.
+        emitStatus("reconnecting")
+        // Mark the next list attempt to fail so we can test retry.
+        failListOnce()
+        emitStatus("ready")
+        // Advance past the debounce; the first (failing) attempt fires.
+        await vi.advanceTimersByTimeAsync(300)
+
+        // Allow the failure to happen; it auto-clears after one use.
+        // Advance past the backoff; the retry attempt fires.
+        await vi.advanceTimersByTimeAsync(5_000)
+
+        const readsAfter = calls.filter(
+          (c) => c.method === "listSessions"
+        ).length
+        // Two new reads: one failed attempt + one retry.
+        expect(readsAfter).toBe(readsBefore + 2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })
