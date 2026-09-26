@@ -8,7 +8,10 @@ import {
   canonicalAosToolName,
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
-import { createMcpServerCache } from "../../core/mcp-server-cache"
+import {
+  createMcpServerCache,
+  type McpServerCache,
+} from "../../core/mcp-server-cache"
 import type { OpenClawGatewayClient } from "./client"
 import { OpenClawNativePayloadError } from "./native-schemas"
 
@@ -74,50 +77,76 @@ export type OpenClawMcpToolNames = Readonly<{
   ): Promise<void>
   /** Resolves against the last names loaded; a miss refetches in the background. */
   resolver(agentId: string, sessionKey: string): McpToolNameResolver
+  /** Frees the Session's names; a fetch still in flight lands on nothing. */
+  forget(agentId: string, sessionKey: string): void
+  /** How many Sessions hold names. */
+  readonly size: number
 }>
+
+/** One Session's names: its own cache, and the resolver its last fetch built. */
+type SessionNames = {
+  cache: McpServerCache<OpenClawMcpName>
+  latest?: McpToolNameResolver
+}
+
+/** The cache is per Session, so its one entry goes with the Session's record. */
+const NAMES = "names"
 
 export function createOpenClawMcpToolNames(
   client: Pick<OpenClawGatewayClient, "request">
 ): OpenClawMcpToolNames {
-  const latest = new Map<string, McpToolNameResolver>()
-  const cache = createMcpServerCache<OpenClawMcpName>(async (key) => {
-    const [agentId, sessionKey] = JSON.parse(key) as [string, string]
-    const params = { agentId, sessionKey }
-    if (!Value.Check(ToolsEffectiveParamsSchema, params))
-      throw new OpenClawNativePayloadError()
-    const names = openClawMcpNames(
-      await client.request("tools.effective", params)
-    )
-    latest.set(key, openClawMcpResolver(names))
-    return names
-  })
+  const sessions = new Map<string, SessionNames>()
+  const keyOf = (agentId: string, sessionKey: string) =>
+    JSON.stringify([agentId, sessionKey])
+  const record = (agentId: string, sessionKey: string) => {
+    const key = keyOf(agentId, sessionKey)
+    const existing = sessions.get(key)
+    if (existing) return existing
+    const created: SessionNames = {
+      cache: createMcpServerCache<OpenClawMcpName>(async () => {
+        const params = { agentId, sessionKey }
+        if (!Value.Check(ToolsEffectiveParamsSchema, params))
+          throw new OpenClawNativePayloadError()
+        const names = openClawMcpNames(
+          await client.request("tools.effective", params)
+        )
+        created.latest = openClawMcpResolver(names)
+        return names
+      }),
+    }
+    sessions.set(key, created)
+    return created
+  }
   const settle = (list: Promise<unknown>) =>
     list.then(
       () => undefined,
       () => undefined
     )
-  const keyOf = (agentId: string, sessionKey: string) =>
-    JSON.stringify([agentId, sessionKey])
-  const resolveLatest = (key: string, rawName: string) =>
-    latest.get(key)?.(rawName)
   return {
     async load(agentId, sessionKey, expected = []) {
-      const key = keyOf(agentId, sessionKey)
-      await settle(cache.get(key))
+      const names = record(agentId, sessionKey)
+      await settle(names.cache.get(NAMES))
       if (
         expected.some(
-          (rawName) => mayBeMcpToolName(rawName) && !resolveLatest(key, rawName)
+          (rawName) => mayBeMcpToolName(rawName) && !names.latest?.(rawName)
         )
       )
-        await settle(cache.refresh(key))
+        await settle(names.cache.refresh(NAMES))
     },
     resolver(agentId, sessionKey) {
-      const key = keyOf(agentId, sessionKey)
+      const names = record(agentId, sessionKey)
       return (rawName) => {
-        const hit = resolveLatest(key, rawName)
-        if (!hit && mayBeMcpToolName(rawName)) void settle(cache.refresh(key))
+        const hit = names.latest?.(rawName)
+        if (!hit && mayBeMcpToolName(rawName))
+          void settle(names.cache.refresh(NAMES))
         return hit
       }
+    },
+    forget(agentId, sessionKey) {
+      sessions.delete(keyOf(agentId, sessionKey))
+    },
+    get size() {
+      return sessions.size
     },
   }
 }

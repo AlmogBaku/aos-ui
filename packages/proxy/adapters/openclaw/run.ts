@@ -1374,9 +1374,15 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return authoritativelyIdle(history)
   }
 
-  /** Makes `active` the Session's run and remembers its native run as AOS's. */
+  /**
+   * Makes `active` the Session's run and remembers its native run as AOS's.
+   * Its settlement frees the Session's MCP names; the next turn loads fresh.
+   */
   #register(key: string, active: ActiveRun) {
     this.#active.set(key, active)
+    void active.settled.then(() =>
+      this.#mcpToolNames?.forget(active.scope.agentId, active.nativeSessionKey)
+    )
     if (!active.nativeRunId) return
     const run = `${key}\u0000${active.nativeRunId}`
     this.#admitted.delete(run)
