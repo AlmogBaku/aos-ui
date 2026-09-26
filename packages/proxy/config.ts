@@ -310,7 +310,7 @@ export const ProxyConfigSchema = z
     voice: VoiceSchema.optional(),
     mcpApps: McpAppsSchema.optional(),
     log: z
-      .strictObject({ level: z.enum(PROXY_LOG_LEVELS) })
+      .strictObject({ level: z.enum(PROXY_LOG_LEVELS).default("info") })
       .default({ level: "info" }),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
