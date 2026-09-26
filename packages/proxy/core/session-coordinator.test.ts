@@ -1632,6 +1632,7 @@ describe("SessionCoordinator", () => {
           context: vi.fn(),
           models: vi.fn(),
           createSession,
+          publicError: () => undefined,
           link: READY_LINK,
         },
       })
@@ -1666,6 +1667,7 @@ describe("SessionCoordinator", () => {
           context: vi.fn(),
           models: vi.fn(),
           createSession,
+          publicError: () => undefined,
           link: READY_LINK,
         },
       })

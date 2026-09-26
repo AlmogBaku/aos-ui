@@ -116,6 +116,7 @@ function harness(describeView: ServerMcpApps["describe"]) {
   const runtime = withMcpApps({
     turns: engine,
     mcpApps: apps,
+    publicError: () => undefined,
     link: READY_LINK,
   } as unknown as ServerRuntime)
   const sessions = new SessionCoordinator({

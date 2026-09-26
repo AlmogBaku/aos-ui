@@ -67,10 +67,16 @@ describe("Hermes runtime shutdown", () => {
       { ...services, transportFactory: () => transport }
     )
     // Trigger a session.resume so close() later sends the courtesy session.close.
-    const providerSessionId =
-      runtime.runtime.resolveProviderSessionId("researcher", "stored")!
+    const providerSessionId = runtime.runtime.resolveProviderSessionId(
+      "researcher",
+      "stored"
+    )!
     const stop = runtime.runtime.turns.subscribeTurns!(
-      { agentId: "researcher", providerSessionId, sessionId: sessionId("stored") },
+      {
+        agentId: "researcher",
+        providerSessionId,
+        sessionId: sessionId("stored"),
+      },
       { onTurn: () => undefined, onError: () => undefined }
     )
     for (let i = 0; i < 10; i++) await Promise.resolve()
