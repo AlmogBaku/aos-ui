@@ -2660,6 +2660,8 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => recovered),
     }
     const sessions = coordinator(engine)
+    const observed: ExecutionEvent["kind"][] = []
+    sessions.subscribeExecutions((event) => observed.push(event.kind))
     const live = await sessions.start(scope, input("run-1"), access("one"))
     const readLive = reader(live)
     const started = turnStarted
@@ -2720,6 +2722,8 @@ describe("SessionCoordinator", () => {
     await expect(readReload()).resolves.toMatchObject({
       value: { event: { kind: TurnEventKind.TurnEnded } },
     })
+    // The interrupt neither ended the turn nor started a second one.
+    expect(observed).toEqual(["turn-started", "turn-finished"])
   })
 
   it("delivers recovered events to two redials sharing one cursor", async () => {

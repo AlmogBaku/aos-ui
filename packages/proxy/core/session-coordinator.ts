@@ -542,6 +542,11 @@ type Execution = {
     string,
     { fingerprint: string; result: Promise<TurnSteerResponse> }
   >
+  /**
+   * Observers were told this turn started. A recovered segment continues the
+   * same turn, so it announces no second start.
+   */
+  startAnnounced: boolean
 }
 
 /** Every field one admitted turn owns, shared by a new and a restarted one. */
@@ -552,6 +557,7 @@ type AdmittedTurn = Pick<
   | "segment"
   | "control"
   | "steeringRequests"
+  | "startAnnounced"
 >
 
 type TurnInit = {
@@ -577,6 +583,7 @@ function admittedTurn(init: TurnInit): AdmittedTurn {
     segment: init.segment,
     control: Promise.resolve(),
     steeringRequests: new Map(),
+    startAnnounced: false,
   }
 }
 
@@ -1798,13 +1805,16 @@ export class SessionCoordinator {
     const { turn } = execution
     const outcome = (type: "ended" | "paused" | "lost") =>
       this.#move(turn, segment.generation, { type })
-    // One start per consumed segment: a new turn, a reply, or a recovered
-    // turn. A rediscovered wait is not a start, so it announces nothing here.
-    if (execution.state === "running")
+    // One start per turn: a new turn, a reply, or a turn this coordinator
+    // first sees running. A rediscovered wait is not a start, and a segment
+    // recovered from uncertainty continues a turn already announced.
+    if (execution.state === "running" && !execution.startAnnounced) {
+      execution.startAnnounced = true
       this.#announce(execution.scope, {
         ...this.#origin(execution.scope, segment.turnId),
         kind: "turn-started",
       })
+    }
     void (async () => {
       try {
         for await (const raw of segment.handle.events) {
