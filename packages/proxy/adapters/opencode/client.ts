@@ -21,7 +21,6 @@ export type OpenCodeClientErrorCode =
   | "not_found"
   | "conflict"
   | "unavailable"
-  | "connection_interrupted"
   | "invalid_response"
   | "closed"
 
@@ -373,9 +372,9 @@ function statusError(status: number | undefined, options?: ErrorOptions) {
   if (status === 400) return new OpenCodeClientError("invalid_request")
   if (status === 404) return new OpenCodeClientError("not_found")
   if (status === 409) return new OpenCodeClientError("conflict")
-  if (status !== undefined && status >= 500)
-    return new OpenCodeClientError("unavailable")
-  return new OpenCodeClientError("connection_interrupted", options)
+  // A server error, or no answer at all: a read the caller may repeat. A
+  // write sent before it is uncertain instead, which its caller decides.
+  return new OpenCodeClientError("unavailable", options)
 }
 
 /**

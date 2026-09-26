@@ -505,9 +505,12 @@ describe("OpenCodeClient", () => {
       Promise.race([...calls, Promise.resolve("pending")])
     ).resolves.toBe("pending")
     await clock.advance(1)
-    // A read past its deadline is unavailable.
-    for (const call of calls)
-      expect(openCodeFailure(await call)?.kind).toBe("unavailable")
+    // A read past its deadline is unavailable, and names that kind itself.
+    for (const call of calls) {
+      const error = await call
+      expect(error).toMatchObject({ code: "unavailable" })
+      expect(openCodeFailure(error)?.kind).toBe("unavailable")
+    }
     await subject.close()
   })
 

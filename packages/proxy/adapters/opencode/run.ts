@@ -587,7 +587,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
             if (reading) dirty = true
           }
           if (!controller.signal.aborted)
-            throw new OpenCodeClientError("connection_interrupted")
+            throw new OpenCodeClientError("unavailable")
         } catch (error) {
           if (controller.signal.aborted) return
           observationFailed = true
