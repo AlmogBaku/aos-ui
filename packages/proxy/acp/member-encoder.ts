@@ -12,7 +12,7 @@ import {
   AOS_STOP_REASONS,
   AosStateMetaSchema,
 } from "../../protocol/acp"
-import type { Seat } from "../core/channel"
+import type { Membership } from "../core/channel"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
 import {
   unhandledKind,
@@ -166,8 +166,8 @@ export type MemberEncoderOptions = {
   context: AcpConnectionContext
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
-  /** The seat a request is open on, while the Session is attached. */
-  seat(sessionId: string): Seat | undefined
+  /** The membership a request is open on, while the Session is attached. */
+  membership(sessionId: string): Membership | undefined
   /** Gives one answer through the member's stack. */
   answer(command: MemberCommands["answer"]): Promise<void>
 }
@@ -175,7 +175,7 @@ export type MemberEncoderOptions = {
 export function createMemberEncoder({
   context,
   client,
-  seat,
+  membership,
   answer,
 }: MemberEncoderOptions): MemberConnection {
   const { translators } = context
@@ -228,7 +228,7 @@ export function createMemberEncoder({
           text: outbound.text,
         })
       // The model reading restates the options, and a request is asked once
-      // the Channel offers it.
+      // the membership offers it.
       case "model-changed":
       case "request-permission":
       case "elicitation":
@@ -238,12 +238,12 @@ export function createMemberEncoder({
   }
 
   function fail(sessionId: string, cause: unknown) {
-    return seat(sessionId)?.report(cause)
+    return membership(sessionId)?.report(cause)
   }
 
   /** The open request one answer belongs to. */
   function answering(sessionId: string, requestId: string) {
-    const attached = seat(sessionId)
+    const attached = membership(sessionId)
     return attached && { request: attached.request(requestId) }
   }
 

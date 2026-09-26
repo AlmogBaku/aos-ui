@@ -14,10 +14,10 @@ import {
   type SessionScope,
 } from "./runtime"
 import {
-  createChannel,
-  type RoomMember,
-  type RoomScope,
-  type RoomTurn,
+  createChannels,
+  type MembershipDelivery,
+  type ChannelScope,
+  type ChannelTurn,
 } from "./channel"
 import type { SessionCoordinator } from "./session-coordinator"
 
@@ -27,7 +27,7 @@ const SCOPE: SessionScope = {
   sessionId: "thread-operator",
 }
 
-function turn(turnId: string, at = 0): RoomTurn {
+function turn(turnId: string, at = 0): ChannelTurn {
   return {
     turnId,
     messageId: `message-${turnId}`,
@@ -47,7 +47,7 @@ function member(
   const reported: unknown[] = []
   let follows = 0
   let invalidations = 0
-  const fake: RoomMember = {
+  const fake: MembershipDelivery = {
     sendTurn(sentTurn) {
       sent.push(sentTurn.turnId)
       return options.sendTurn?.()
@@ -76,18 +76,18 @@ function member(
 function harness() {
   const snapshots = new Map<string, { state: string; turnId?: string }>()
   const clock = { now: 0 }
-  const key = (scope: RoomScope) =>
+  const key = (scope: ChannelScope) =>
     `${scope.agentId}/${scope.providerSessionId}`
-  const rooms = createChannel({
+  const channels = createChannels({
     snapshot: (scope) => snapshots.get(key(scope)) ?? { state: "idle" },
     now: () => clock.now,
     backstopMs: 1_000,
   })
   const setSnapshot = (
     snapshot: { state: string; turnId?: string },
-    scope: RoomScope = SCOPE
+    scope: ChannelScope = SCOPE
   ) => snapshots.set(key(scope), snapshot)
-  return { rooms, clock, setSnapshot }
+  return { channels, clock, setSnapshot }
 }
 
 /** A send that fails the first time, so only a later catch-up delivers it. */
@@ -105,16 +105,16 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe("createChannel", () => {
   it("broadcasts a turn to every member but the sender, once each", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const first = member()
     const second = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(SCOPE, first.fake, { hasPrompt: false })
-    rooms.add(SCOPE, second.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, first.fake, { hasPrompt: false })
+    channels.add(SCOPE, second.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
     expect(sender.sent).toEqual([])
     expect(first.sent).toEqual(["turn-1"])
@@ -122,101 +122,101 @@ describe("createChannel", () => {
   })
 
   it("does not add a sender that is not a member", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const listener = member()
     const outsider = member()
-    rooms.add(SCOPE, listener.fake, { hasPrompt: false })
+    channels.add(SCOPE, listener.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), outsider.fake)
-    await rooms.broadcastTurn(SCOPE, turn("turn-1b"), listener.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), outsider.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1b"), listener.fake)
 
     expect(outsider.sent).toEqual([])
   })
 
-  it("puts one provider Session in one room whatever the sessionId", async () => {
-    const { rooms, setSnapshot } = harness()
+  it("puts one provider Session in one channel whatever the sessionId", async () => {
+    const { channels, setSnapshot } = harness()
     const operator = member()
     const guest = member()
-    rooms.add(SCOPE, operator.fake, { hasPrompt: false })
-    rooms.add({ ...SCOPE, sessionId: "thread-guest" }, guest.fake, {
+    channels.add(SCOPE, operator.fake, { hasPrompt: false })
+    channels.add({ ...SCOPE, sessionId: "thread-guest" }, guest.fake, {
       hasPrompt: false,
     })
     setSnapshot({ state: "running", turnId: "turn-1" })
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), operator.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), operator.fake)
 
     expect(guest.sent).toEqual(["turn-1"])
   })
 
-  it("keeps another sessionId in another room", async () => {
-    const { rooms, setSnapshot } = harness()
+  it("keeps another sessionId in another channel", async () => {
+    const { channels, setSnapshot } = harness()
     const other = { ...SCOPE, providerSessionId: "session-2" }
     const sender = member()
     const elsewhere = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(other, elsewhere.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(other, elsewhere.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
     setSnapshot({ state: "running", turnId: "turn-1" }, other)
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
-    await rooms.sync(other)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.sync(other)
 
     expect(elsewhere.sent).toEqual([])
   })
 
-  it("stops delivering to a removed member and drops an empty room", async () => {
-    const { rooms, setSnapshot } = harness()
+  it("stops delivering to a removed member and drops an empty channel", async () => {
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const leaver = member()
-    const removeSender = rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    const removeLeaver = rooms.add(SCOPE, leaver.fake, { hasPrompt: false })
+    const removeSender = channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    const removeLeaver = channels.add(SCOPE, leaver.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
     removeLeaver()
     removeLeaver()
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
     expect(leaver.sent).toEqual([])
 
     removeSender()
     const newcomer = member()
-    rooms.add(SCOPE, newcomer.fake, { hasPrompt: false })
+    channels.add(SCOPE, newcomer.fake, { hasPrompt: false })
     await settle()
     expect(newcomer.sent).toEqual([])
   })
 
   it("ignores a repeat add of the same member", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const listener = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    const remove = rooms.add(SCOPE, listener.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    const remove = channels.add(SCOPE, listener.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    const again = rooms.add(SCOPE, listener.fake, { hasPrompt: false })
+    const again = channels.add(SCOPE, listener.fake, { hasPrompt: false })
     await settle()
     expect(listener.sent).toEqual(["turn-1"])
 
     again()
     remove()
-    await rooms.broadcastTurn(SCOPE, turn("turn-2"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-2"), sender.fake)
     expect(listener.sent).toEqual(["turn-1"])
   })
 
   it("delivers the current prompt once to a joining member", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
     const joiner = member()
     const holder = member()
-    rooms.add(SCOPE, joiner.fake, { hasPrompt: false })
-    rooms.add(SCOPE, holder.fake, { hasPrompt: true })
+    channels.add(SCOPE, joiner.fake, { hasPrompt: false })
+    channels.add(SCOPE, holder.fake, { hasPrompt: true })
     await settle()
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
 
     expect(joiner.sent).toEqual(["turn-1"])
     expect(holder.sent).toEqual([])
@@ -227,15 +227,15 @@ describe("createChannel", () => {
     ["the Session went idle", { state: "idle", turnId: "turn-1" }],
     ["another turn is live", { state: "running", turnId: "turn-2" }],
   ])("drops a prompt that is no longer current: %s", async (_, later) => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
     setSnapshot(later)
     const joiner = member()
-    rooms.add(SCOPE, joiner.fake, { hasPrompt: false })
+    channels.add(SCOPE, joiner.fake, { hasPrompt: false })
     await settle()
 
     expect(joiner.sent).toEqual([])
@@ -244,15 +244,15 @@ describe("createChannel", () => {
   it.each(["uncertain", "waiting-for-input"])(
     "treats %s as live",
     async (state) => {
-      const { rooms, setSnapshot } = harness()
+      const { channels, setSnapshot } = harness()
       const sender = member()
-      rooms.add(SCOPE, sender.fake, { hasPrompt: false })
+      channels.add(SCOPE, sender.fake, { hasPrompt: false })
       setSnapshot({ state: "running", turnId: "turn-1" })
-      await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+      await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
       setSnapshot({ state, turnId: "turn-1" })
       const joiner = member()
-      rooms.add(SCOPE, joiner.fake, { hasPrompt: false })
+      channels.add(SCOPE, joiner.fake, { hasPrompt: false })
       await settle()
 
       expect(joiner.sent).toEqual(["turn-1"])
@@ -260,40 +260,40 @@ describe("createChannel", () => {
   )
 
   it("drops an old prompt at the backstop, but not while waiting for input", async () => {
-    const { rooms, clock, setSnapshot } = harness()
+    const { channels, clock, setSnapshot } = harness()
     const sender = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
     setSnapshot({ state: "waiting-for-input", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1", 0), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1", 0), sender.fake)
     clock.now = 5_000
 
     const waiting = member()
-    rooms.add(SCOPE, waiting.fake, { hasPrompt: false })
+    channels.add(SCOPE, waiting.fake, { hasPrompt: false })
     await settle()
     expect(waiting.sent).toEqual(["turn-1"])
 
     setSnapshot({ state: "running", turnId: "turn-1" })
     const late = member()
-    rooms.add(SCOPE, late.fake, { hasPrompt: false })
+    channels.add(SCOPE, late.fake, { hasPrompt: false })
     await settle()
     expect(late.sent).toEqual([])
   })
 
   it("keeps a continued prompt deliverable without re-sending it", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const listener = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(SCOPE, listener.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, listener.fake, { hasPrompt: false })
     setSnapshot({ state: "waiting-for-input", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    rooms.continueTurn(SCOPE, "turn-1", "turn-2")
+    channels.continueTurn(SCOPE, "turn-1", "turn-2")
     setSnapshot({ state: "running", turnId: "turn-2" })
     const joiner = member()
-    rooms.add(SCOPE, joiner.fake, { hasPrompt: false })
+    channels.add(SCOPE, joiner.fake, { hasPrompt: false })
     await settle()
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
 
     expect(joiner.sent).toEqual(["turn-2"])
     expect(listener.sent).toEqual(["turn-1"])
@@ -301,17 +301,17 @@ describe("createChannel", () => {
   })
 
   it("syncs by delivering to members that lack the prompt and following all", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const listener = member()
     const missed = member({ sendTurn: failOnce() })
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(SCOPE, listener.fake, { hasPrompt: false })
-    rooms.add(SCOPE, missed.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, listener.fake, { hasPrompt: false })
+    channels.add(SCOPE, missed.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
 
     expect(missed.sent).toEqual(["turn-1", "turn-1"])
     expect(listener.sent).toEqual(["turn-1"])
@@ -321,22 +321,22 @@ describe("createChannel", () => {
     ])
   })
 
-  it("invalidates only a member shown a room prompt whose reply it missed", async () => {
-    const { rooms, setSnapshot } = harness()
+  it("invalidates only a member shown a channel prompt whose reply it missed", async () => {
+    const { channels, setSnapshot } = harness()
     const idle = () => Promise.resolve("idle" as const)
     const sender = member({ follow: idle })
     const missed = member({ follow: idle })
     const streamed = member({ follow: idle, followedTurn: "turn-1" })
     const holder = member({ follow: idle })
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(SCOPE, missed.fake, { hasPrompt: false })
-    rooms.add(SCOPE, streamed.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, missed.fake, { hasPrompt: false })
+    channels.add(SCOPE, streamed.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
-    rooms.add(SCOPE, holder.fake, { hasPrompt: true })
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    channels.add(SCOPE, holder.fake, { hasPrompt: true })
     setSnapshot({ state: "idle", turnId: "turn-1" })
 
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
 
     expect(missed.invalidations()).toBe(1)
     expect(sender.invalidations()).toBe(0)
@@ -345,7 +345,7 @@ describe("createChannel", () => {
   })
 
   it("reports a failing member and still serves the others", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sendFailure = new Error("send failed")
     const followFailure = new Error("follow failed")
     const sender = member()
@@ -357,15 +357,15 @@ describe("createChannel", () => {
     const brokenFollow = member({ follow: () => Promise.reject(followFailure) })
     const healthy = member()
     for (const each of [sender, brokenSend, brokenFollow, healthy]) {
-      rooms.add(SCOPE, each.fake, { hasPrompt: false })
+      channels.add(SCOPE, each.fake, { hasPrompt: false })
     }
     setSnapshot({ state: "running", turnId: "turn-1" })
 
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
     expect(brokenSend.reported).toEqual([sendFailure])
     expect(healthy.sent).toEqual(["turn-1"])
 
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
     expect(brokenFollow.reported).toEqual([followFailure])
     expect(healthy.sent).toEqual(["turn-1"])
     expect(healthy.follows()).toBe(1)
@@ -373,17 +373,17 @@ describe("createChannel", () => {
   })
 
   it("catches up one member alone", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const late = member({ sendTurn: failOnce() })
     const other = member({ sendTurn: failOnce() })
     for (const each of [sender, late, other]) {
-      rooms.add(SCOPE, each.fake, { hasPrompt: false })
+      channels.add(SCOPE, each.fake, { hasPrompt: false })
     }
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    await rooms.catchUp(SCOPE, late.fake)
+    await channels.catchUp(SCOPE, late.fake)
 
     expect(late.sent).toEqual(["turn-1", "turn-1"])
     expect(late.follows()).toBe(1)
@@ -391,22 +391,22 @@ describe("createChannel", () => {
     expect(other.follows()).toBe(0)
   })
 
-  it("re-seats a member so a reopened view gets the prompt its history lacks", async () => {
-    const { rooms, setSnapshot } = harness()
+  it("rejoins a member so a reopened view gets the prompt its history lacks", async () => {
+    const { channels, setSnapshot } = harness()
     const sender = member()
     const listener = member()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
-    rooms.add(SCOPE, listener.fake, { hasPrompt: false })
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
+    channels.add(SCOPE, listener.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    rooms.reseat(SCOPE, listener.fake, { hasPrompt: false })
-    rooms.reseat(SCOPE, sender.fake, { hasPrompt: false })
+    channels.rejoin(SCOPE, listener.fake, { hasPrompt: false })
+    channels.rejoin(SCOPE, sender.fake, { hasPrompt: false })
     const holder = member()
-    rooms.add(SCOPE, holder.fake, { hasPrompt: false })
-    rooms.reseat(SCOPE, holder.fake, { hasPrompt: true })
+    channels.add(SCOPE, holder.fake, { hasPrompt: false })
+    channels.rejoin(SCOPE, holder.fake, { hasPrompt: true })
     await settle()
-    await rooms.sync(SCOPE)
+    await channels.sync(SCOPE)
 
     expect(listener.sent).toEqual(["turn-1", "turn-1"])
     expect(sender.sent).toEqual(["turn-1"])
@@ -414,22 +414,22 @@ describe("createChannel", () => {
   })
 
   it("reads the current prompt only while its turn is live", async () => {
-    const { rooms, setSnapshot } = harness()
+    const { channels, setSnapshot } = harness()
     const sender = member()
-    expect(rooms.current(SCOPE)).toBeUndefined()
-    rooms.add(SCOPE, sender.fake, { hasPrompt: false })
+    expect(channels.current(SCOPE)).toBeUndefined()
+    channels.add(SCOPE, sender.fake, { hasPrompt: false })
     setSnapshot({ state: "running", turnId: "turn-1" })
-    await rooms.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
+    await channels.broadcastTurn(SCOPE, turn("turn-1"), sender.fake)
 
-    expect(rooms.current(SCOPE)).toEqual(turn("turn-1"))
+    expect(channels.current(SCOPE)).toEqual(turn("turn-1"))
     expect(sender.sent).toEqual([])
 
     setSnapshot({ state: "idle", turnId: "turn-1" })
-    expect(rooms.current(SCOPE)).toBeUndefined()
+    expect(channels.current(SCOPE)).toBeUndefined()
   })
 })
 
-/** A runtime whose Session the rooms watch, driven by hand. */
+/** A runtime whose Session the channels watch, driven by hand. */
 function adoptingHarness() {
   let state: { state: string; turnId?: string } = { state: "idle" }
   const watchers: ServerTurnWatcher[] = []
@@ -437,7 +437,7 @@ function adoptingHarness() {
   const discovered: Array<{ scope: SessionScope; lane: string }> = []
   let stopped = 0
   let discover: () => Promise<unknown> = async () => undefined
-  const rooms = createChannel({
+  const channels = createChannels({
     snapshot: () => state,
     adoption: {
       watch(_scope, watcher) {
@@ -457,7 +457,7 @@ function adoptingHarness() {
     },
   })
   return {
-    rooms,
+    channels,
     watchers,
     discovered,
     stopped: () => stopped,
@@ -490,12 +490,12 @@ function adoptingHarness() {
 const GUEST_SCOPE: SessionScope = { ...SCOPE, sessionId: "thread-guest" }
 
 describe("createChannel adopting runtime-started turns", () => {
-  it("watches while the room has members and stops when the last leaves", () => {
+  it("watches while the channel has members and stops when the last parts", () => {
     const runtime = adoptingHarness()
-    const removeFirst = runtime.rooms.add(SCOPE, member().fake, {
+    const removeFirst = runtime.channels.add(SCOPE, member().fake, {
       hasPrompt: false,
     })
-    const removeSecond = runtime.rooms.add(SCOPE, member().fake, {
+    const removeSecond = runtime.channels.add(SCOPE, member().fake, {
       hasPrompt: false,
     })
 
@@ -511,8 +511,8 @@ describe("createChannel adopting runtime-started turns", () => {
     const runtime = adoptingHarness()
     const first = member()
     const second = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
-    runtime.rooms.add(SCOPE, second.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, second.fake, { hasPrompt: false })
     runtime.runtimeStarts("aos-recovered-1")
 
     runtime.watchers[0]!.onTurn()
@@ -527,8 +527,8 @@ describe("createChannel adopting runtime-started turns", () => {
     const runtime = adoptingHarness()
     const first = member()
     const second = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
-    runtime.rooms.add(SCOPE, second.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, second.fake, { hasPrompt: false })
     runtime.runtimeStarts("aos-recovered-1")
     runtime.watchers[0]!.onTurn()
     await settle()
@@ -540,10 +540,10 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(second.invalidations()).toBe(1)
   })
 
-  it("asks the runtime again when the room's own turn ends, without a reload", async () => {
+  it("asks the runtime again when the channel's own turn ends, without a reload", async () => {
     const runtime = adoptingHarness()
     const first = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
 
     runtime.end("turn-1")
     await settle()
@@ -554,11 +554,11 @@ describe("createChannel adopting runtime-started turns", () => {
 
   it("adopts as an operator even when a guest joined first", async () => {
     const runtime = adoptingHarness()
-    runtime.rooms.add(GUEST_SCOPE, member().fake, {
+    runtime.channels.add(GUEST_SCOPE, member().fake, {
       hasPrompt: false,
       lane: "guest",
     })
-    runtime.rooms.add(SCOPE, member().fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, member().fake, { hasPrompt: false })
 
     runtime.watchers[0]!.onTurn()
     await settle()
@@ -566,9 +566,9 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(runtime.discovered).toEqual([{ scope: SCOPE, lane: "operator" }])
   })
 
-  it("adopts under the guest lane when only a guest is in the room", async () => {
+  it("adopts under the guest lane when only a guest is in the channel", async () => {
     const runtime = adoptingHarness()
-    runtime.rooms.add(GUEST_SCOPE, member().fake, {
+    runtime.channels.add(GUEST_SCOPE, member().fake, {
       hasPrompt: false,
       lane: "guest",
     })
@@ -582,7 +582,7 @@ describe("createChannel adopting runtime-started turns", () => {
   it("skips a conflict silently and adopts at the proxy turn's end", async () => {
     const runtime = adoptingHarness()
     const first = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
     runtime.failDiscover(new ServerTurnConflictError())
     runtime.watchers[0]!.onTurn()
     await settle()
@@ -599,7 +599,7 @@ describe("createChannel adopting runtime-started turns", () => {
   it("reports any other failure and stays usable", async () => {
     const runtime = adoptingHarness()
     const first = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
     const failure = new Error("discover failed")
     runtime.failDiscover(failure)
     runtime.watchers[0]!.onTurn()
@@ -616,7 +616,7 @@ describe("createChannel adopting runtime-started turns", () => {
 
   it("asks once more when a trigger arrives while adopting", async () => {
     const runtime = adoptingHarness()
-    runtime.rooms.add(SCOPE, member().fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, member().fake, { hasPrompt: false })
 
     runtime.watchers[0]!.onTurn()
     runtime.watchers[0]!.onTurn()
@@ -629,10 +629,10 @@ describe("createChannel adopting runtime-started turns", () => {
   it("rechecks after a member's own start fails", async () => {
     const runtime = adoptingHarness()
     const first = member()
-    runtime.rooms.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
     runtime.runtimeStarts("aos-recovered-1")
 
-    await runtime.rooms.recheck(SCOPE)
+    await runtime.channels.recheck(SCOPE)
 
     expect(first.follows()).toBe(1)
   })
@@ -653,11 +653,11 @@ const QUESTION: PendingRequest = {
 }
 
 /**
- * One member seated on a Session waiting on `requests`, over a coordinator
+ * One member joined to a Session waiting on `requests`, over a coordinator
  * that records the answers it is given. `decline` is what the member's stack
  * does with each request it is asked, and `hide` hides every request.
  */
-function seated(
+function joined(
   options: {
     requests?: PendingRequest[]
     startedBy?: string
@@ -724,7 +724,9 @@ function seated(
     },
     live: () => state.live,
   }
-  const seat = createChannel({ snapshot: () => ({ state: "idle" }) }).join(
+  const membership = createChannels({
+    snapshot: () => ({ state: "idle" }),
+  }).join(
     {
       principal: { id: GUEST, role: "guest" },
       middleware: [middleware],
@@ -739,17 +741,17 @@ function seated(
       feeds: new Set(),
     }
   )
-  seat.enterRoom()
-  return { seat, log, state, coordinator }
+  membership.joinChannel()
+  return { membership, log, state, coordinator }
 }
 
 const declining = (requestId: string, act: MemberAct) => act.decline(requestId)
 
-describe("a seat's declines", () => {
+describe("a membership's declines", () => {
   it("denies a permission in the member's own turn once the member was offered it", async () => {
-    const test = seated({ startedBy: GUEST, decline: declining })
+    const test = joined({ startedBy: GUEST, decline: declining })
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     await settle()
 
     expect(test.log).toEqual([
@@ -759,14 +761,14 @@ describe("a seat's declines", () => {
   })
 
   it("cancels a permission that offers no deny", async () => {
-    const test = seated({
+    const test = joined({
       startedBy: GUEST,
       decline: declining,
       hide: true,
       requests: [{ ...APPROVAL, responseSchema: { enum: ["once"] } }],
     })
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-1:cancelled:undefined"])
@@ -774,13 +776,13 @@ describe("a seat's declines", () => {
 
   it("leaves a request alone in a turn the member did not start", async () => {
     for (const startedBy of ["operator:owner", undefined]) {
-      const test = seated({
+      const test = joined({
         decline: declining,
         hide: true,
         ...(startedBy ? { startedBy } : {}),
       })
 
-      test.seat.reissuePending()
+      test.membership.reissuePending()
       await settle()
 
       expect(test.log).toEqual([])
@@ -788,7 +790,7 @@ describe("a seat's declines", () => {
   })
 
   it("never declines a question, or a request it did not ask this member", async () => {
-    const test = seated({
+    const test = joined({
       startedBy: GUEST,
       hide: true,
       requests: [QUESTION, { ...APPROVAL, requestId: "approval-2" }],
@@ -798,16 +800,16 @@ describe("a seat's declines", () => {
       },
     })
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-2:resolved:deny"])
   })
 
   it("skips a decline whose connection stopped being live before it ran", async () => {
-    const test = seated({ startedBy: GUEST, decline: declining, hide: true })
+    const test = joined({ startedBy: GUEST, decline: declining, hide: true })
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     test.state.live = false
     await settle()
 
@@ -815,7 +817,7 @@ describe("a seat's declines", () => {
   })
 
   it("drops a second decline of the same request silently", async () => {
-    const test = seated({
+    const test = joined({
       startedBy: GUEST,
       hide: true,
       decline: (requestId, act) => {
@@ -824,17 +826,17 @@ describe("a seat's declines", () => {
       },
     })
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     await settle()
 
     expect(test.log).toEqual(["answered:approval-1:resolved:deny"])
   })
 
   it("gives a member no answer and no withdrawal of a request its stack hid", async () => {
-    const test = seated({ hide: true })
+    const test = joined({ hide: true })
 
-    test.seat.reissuePending()
-    expect(() => test.seat.request("approval-1")).toThrow(
+    test.membership.reissuePending()
+    expect(() => test.membership.request("approval-1")).toThrow(
       ServerRequestStaleError
     )
     await test.coordinator.answer(SCOPE, {
@@ -847,11 +849,11 @@ describe("a seat's declines", () => {
   })
 
   it("withdraws a request it delivered once another member answers it", async () => {
-    const test = seated()
+    const test = joined()
 
-    test.seat.reissuePending()
+    test.membership.reissuePending()
     await settle()
-    expect(test.seat.request("approval-1")).toEqual(APPROVAL)
+    expect(test.membership.request("approval-1")).toEqual(APPROVAL)
     await test.coordinator.answer(SCOPE, {
       requestId: "approval-1",
       status: "cancelled",

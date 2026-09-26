@@ -29,7 +29,7 @@ import type {
 } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
-import type { Channel } from "../core/channel"
+import type { Channels } from "../core/channel"
 import type { Feed, Member } from "../core/member"
 
 export type Lane = "operator" | "guest"
@@ -59,10 +59,10 @@ type AcpConnectionBase = {
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
   /**
-   * The one room registry per proxy process, shared by both lanes so an
-   * operator and a guest on the same provider Session land in one room.
+   * The one set of channels per proxy process, shared by both lanes so an
+   * operator and a guest on the same provider Session land in one channel.
    */
-  rooms: Channel
+  channels: Channels
   /**
    * Where this connection reports the workspace it shows, shared across the
    * principal's connections. Absent means nothing observes presence, which is

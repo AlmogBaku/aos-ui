@@ -1,5 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
-import { createChannel } from "./core/channel"
+import { createChannels } from "./core/channel"
 import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
@@ -209,20 +209,23 @@ export async function createConfiguredProxy(
         })
       : undefined
   /**
-   * One room registry per process, like the runtime both lanes share: a room is
-   * one provider Session, whichever lane each of its members arrived on.
+   * One set of channels per process, like the runtime both lanes share: a
+   * channel is one provider Session, whichever lane each of its members arrived
+   * on.
    */
   const { sessions } = runtimeInstance
   const { turns } = runtimeInstance.runtime
-  const rooms = createChannel({
+  const channels = createChannels({
     snapshot: (scope) => sessions.snapshot(scope),
-    // A room adopts what the runtime starts only where the runtime reports it.
+    // A channel adopts what the runtime starts only where the runtime
+    // reports it.
     ...(turns.watch
       ? {
           adoption: {
             watch: (scope, watcher) => turns.watch!(scope, watcher),
             discover: (scope, lane) => sessions.discover(scope, lane),
-            observe: (scope, listener) => sessions.observeScope(scope, listener),
+            observe: (scope, listener) =>
+              sessions.observeScope(scope, listener),
           },
         }
       : {}),
@@ -245,7 +248,7 @@ export async function createConfiguredProxy(
         runtimeInstance,
         invitations: service,
         attachmentStages,
-        rooms,
+        channels,
         logger: dependencies.logger,
         ...clock,
       }),
@@ -274,7 +277,7 @@ export async function createConfiguredProxy(
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
-    rooms,
+    channels,
     sessionRows,
     logger: dependencies.logger,
     ...(push ? { presence: push.presence } : {}),

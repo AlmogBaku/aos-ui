@@ -22,7 +22,7 @@ import * as ids from "../core/ids"
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import type { Seat } from "../core/channel"
+import type { Membership } from "../core/channel"
 import type { Member, MemberConnection } from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
@@ -292,8 +292,8 @@ export function createSessions(
   const coordinator = context.runtimeInstance.sessions
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
-  const members = new Map<string, Seat>()
-  /** This connection as the Channel seats it, once it first joins. */
+  const memberships = new Map<string, Membership>()
+  /** This connection as a channel's member, once it first joins one. */
   let member: Member | undefined
 
   /**
@@ -355,11 +355,11 @@ export function createSessions(
       return workspace.scope(agentId, publicSessionId)
     },
 
-    /** The Session's seat on this connection, taken on first use. */
+    /** The Session's membership on this connection, joined on first use. */
     join(client: AgentContext, scope: SessionScope) {
-      const existing = members.get(scope.sessionId)
+      const existing = memberships.get(scope.sessionId)
       if (existing) return existing
-      const seat = context.rooms.join(memberOf(client), scope, {
+      const membership = context.channels.join(memberOf(client), scope, {
         coordinator,
         subscriberId: `${context.connectionId}:${scope.sessionId}`,
         log: (level, event, fields) =>
@@ -373,29 +373,29 @@ export function createSessions(
         describe: (cause) => errorNotificationOf(runtime, cause),
         feeds: context.feeds,
       })
-      members.set(scope.sessionId, seat)
-      return seat
+      memberships.set(scope.sessionId, membership)
+      return membership
     },
 
-    member(publicSessionId: string) {
-      return members.get(publicSessionId)
+    membership(publicSessionId: string) {
+      return memberships.get(publicSessionId)
     },
 
-    leave(publicSessionId: string) {
-      members.get(publicSessionId)?.leave()
-      members.delete(publicSessionId)
+    part(publicSessionId: string) {
+      memberships.get(publicSessionId)?.part()
+      memberships.delete(publicSessionId)
     },
 
     forget(scope: SessionScope) {
-      members.get(scope.sessionId)?.leave()
-      members.delete(scope.sessionId)
+      memberships.get(scope.sessionId)?.part()
+      memberships.delete(scope.sessionId)
       owners.delete(scope.sessionId)
       context.sessionRows.forget(scope.agentId, scope.sessionId)
     },
 
     close() {
-      for (const member of members.values()) member.leave()
-      members.clear()
+      for (const membership of memberships.values()) membership.part()
+      memberships.clear()
       owners.clear()
     },
   }

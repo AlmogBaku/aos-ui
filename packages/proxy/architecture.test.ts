@@ -186,6 +186,16 @@ describe("vocabulary", () => {
       reason:
         "the public Session id is `sessionId`, from the wire to the adapters",
     },
+    {
+      // Any identifier holding either word, in any case and position. A match
+      // after a comment opener on its line, or inside a dotted string, is
+      // skipped: English prose and log event names are not identifiers.
+      retired:
+        /(?<!(?:\/\/|\/\*|^[ \t]*\*).*|["'`][\w.]*)\b\w*(?:[Rr]oom|[Ss]eat)\w*/mu,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
+    },
   ]
 
   it("keeps retired names out of the proxy", async () => {
@@ -250,7 +260,7 @@ describe("member boundary", () => {
 
   /**
    * A2: the core and the ACP transport are lane-blind. Nothing reads a
-   * guest's grant, and a principal's role is read only where the Channel
+   * guest's grant, and a principal's role is read only where a membership
    * reports a lane: the coordinator's capacity cap and an adoption's
    * preference for an operator.
    */

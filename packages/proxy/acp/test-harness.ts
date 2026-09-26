@@ -50,7 +50,7 @@ import { SessionCoordinator } from "../core/session-coordinator"
 import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import { createChannel } from "../core/channel"
+import { createChannels } from "../core/channel"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
@@ -814,16 +814,16 @@ export async function harness(options: HarnessOptions = {}) {
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
   const { watch } = options
-  const rooms = createChannel({
-    snapshot: (roomScope) => coordinator.snapshot(roomScope),
+  const channels = createChannels({
+    snapshot: (channelScope) => coordinator.snapshot(channelScope),
     ...(watch
       ? {
           adoption: {
             watch,
-            discover: (roomScope, lane) =>
-              coordinator.discover(roomScope, lane),
-            observe: (roomScope, listener) =>
-              coordinator.observeScope(roomScope, listener),
+            discover: (channelScope, lane) =>
+              coordinator.discover(channelScope, lane),
+            observe: (channelScope, listener) =>
+              coordinator.observeScope(channelScope, listener),
           },
         }
       : {}),
@@ -831,7 +831,7 @@ export async function harness(options: HarnessOptions = {}) {
 
   /**
    * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and room registry, as one deployment's lanes do.
+   * coordinator, engine, and channels, as one deployment's lanes do.
    */
   async function connect(
     connectionId: string,
@@ -860,7 +860,7 @@ export async function harness(options: HarnessOptions = {}) {
         },
       },
       attachmentStages,
-      rooms,
+      channels,
       presence,
       logger,
       lane: "operator",
@@ -916,7 +916,7 @@ export async function harness(options: HarnessOptions = {}) {
     connect,
     coordinator,
     runtimeInstance,
-    rooms,
+    channels,
     scope,
     sources,
     start,
@@ -1047,7 +1047,7 @@ export const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 /**
  * Streams one reply, ending its turn only once every watcher saw it live: a
- * browser the room brings in late must still find the turn running.
+ * browser the channel brings in late must still find the turn running.
  */
 export async function replyWhileWatched(
   source: EventSource | undefined,

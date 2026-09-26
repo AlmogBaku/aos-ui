@@ -1,7 +1,7 @@
 import { createAosAcpAgent } from "../acp/agent"
 import { createWorkspace, type Workspace } from "../acp/agent-sessions"
 import { createAcpService } from "../acp/service"
-import type { Channel } from "../core/channel"
+import type { Channels } from "../core/channel"
 import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
 import type {
@@ -52,8 +52,8 @@ export type GuestAcpServiceOptions = {
   invitations: GuestInvitationService
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
   attachmentStages: ServerAttachmentStages
-  /** The one room registry the operator lane shares, so both see one room. */
-  rooms: Channel
+  /** The channels the operator lane shares, so both see one per Session. */
+  channels: Channels
   /** Where this lane's connections write their structured lines. */
   logger?: AcpLogger
   now?: () => number
@@ -218,7 +218,7 @@ export function createGuestConnection(
     sessionRows,
     translators,
     attachmentStages: options.attachmentStages,
-    rooms: options.rooms,
+    channels: options.channels,
     logger: options.logger,
     // A guest is given no feed: no reading, activity, read state, Session row
     // or catalog signal.
@@ -244,6 +244,6 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
     connection: (connectionId) =>
       createGuestConnection(options, sessionRows, connectionId),
   })
-  // Exposed so the composition can show both lanes hold the same registry.
-  return { ...service, rooms: options.rooms }
+  // Exposed so the composition can show both lanes hold the same channels.
+  return { ...service, channels: options.channels }
 }

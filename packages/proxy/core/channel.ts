@@ -37,17 +37,18 @@ import type {
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 /**
- * A room is one provider Session; its members are the connections that have
- * it open. The coordinator already fans a turn's stream out to many followers,
- * so a room only carries what the stream cannot: the prompt that started the
- * turn, and a nudge to reload when a member saw a prompt but missed its reply.
- * A room with members also watches its Session, so a turn the runtime starts
- * by itself is adopted and streamed to every member like one of their own.
+ * A channel is one provider Session; its members are the connections that
+ * have joined it. The coordinator already fans a turn's stream out to many
+ * followers, so a channel only carries what the stream cannot: the prompt that
+ * started the turn, and a nudge to reload when a member saw a prompt but missed
+ * its reply. A channel with members also watches its Session, so a turn the
+ * runtime starts by itself is adopted and streamed to every member like one of
+ * their own.
  */
 
-export type RoomScope = Pick<SessionScope, "agentId" | "providerSessionId">
+export type ChannelScope = Pick<SessionScope, "agentId" | "providerSessionId">
 
-export type RoomTurn = {
+export type ChannelTurn = {
   turnId: string
   messageId: string
   content: readonly PromptPart[]
@@ -55,9 +56,9 @@ export type RoomTurn = {
   at: number
 }
 
-export type RoomMember = {
+export type MembershipDelivery = {
   /** Send this turn's prompt to the member as its user_message. */
-  sendTurn(turn: RoomTurn): void | Promise<void>
+  sendTurn(turn: ChannelTurn): void | Promise<void>
   /** Subscribe the member to the current turn's stream. */
   follow(): Promise<"following" | "idle">
   /** The turnId the member's own subscription last carried, if any. */
@@ -68,19 +69,19 @@ export type RoomMember = {
   report(cause: unknown): void
 }
 
-export type Channel = ReturnType<typeof createChannel>
-type Rooms = ReturnType<typeof createRooms>
+export type Channels = ReturnType<typeof createChannels>
+type ChannelTable = ReturnType<typeof createChannelTable>
 
 type Lane = "operator" | "guest"
 
-/** What lets a room adopt a turn the runtime started by itself. */
-export type RoomAdoption = {
+/** What lets a channel adopt a turn the runtime started by itself. */
+export type ChannelAdoption = {
   watch(scope: SessionScope, watcher: ServerTurnWatcher): () => void
   /** Adopts the runtime's running turn, if any, counted under `lane`. */
   discover(scope: SessionScope, lane: Lane): Promise<unknown>
   /** The Session's execution feed. */
   observe(
-    scope: RoomScope,
+    scope: ChannelScope,
     listener: (event: ExecutionEvent) => void
   ): () => void
 }
@@ -91,19 +92,19 @@ type Delivery = {
   lane: Lane
   /** The turnId whose prompt this member already holds. */
   delivered?: string
-  /** Whether the room sent that prompt, rather than the member owning it. */
-  fromRoom: boolean
+  /** Whether the channel sent that prompt, rather than the member owning it. */
+  fromChannel: boolean
 }
 
-type Room = {
-  turn?: RoomTurn
-  members: Map<RoomMember, Delivery>
-  /** Ends the room's watch and its execution feed. */
+type Channel = {
+  turn?: ChannelTurn
+  memberships: Map<MembershipDelivery, Delivery>
+  /** Ends the channel's watch and its execution feed. */
   unwatch?: () => void
   /** One adoption runs at a time; a trigger meanwhile asks for one more. */
   adopting?: boolean
   again?: boolean
-  /** The turn this room adopted, whose prompt no member has seen. */
+  /** The turn this channel adopted, whose prompt no member has seen. */
   adopted?: string
 }
 
@@ -132,7 +133,7 @@ export type ResumePosition = { turnId?: string; after?: number }
  * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
  * inside the turn, so the prompt is the last user message before them.
  */
-function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
+function promptIndex(turn: ChannelTurn, history: SessionHistoryResponse) {
   const index = lastPromptIndex(history)
   const prompt = history.messages[index]
   if (!prompt || !Array.isArray(prompt.content)) return -1
@@ -149,7 +150,7 @@ function promptIndex(turn: RoomTurn, history: SessionHistoryResponse) {
  * that turn, or the page it replayed ends on that prompt.
  */
 function showsPrompt(
-  turn: RoomTurn | undefined,
+  turn: ChannelTurn | undefined,
   position: ResumePosition,
   history?: SessionHistoryResponse
 ) {
@@ -162,13 +163,13 @@ function showsPrompt(
  * Keyed like the coordinator's `scopeKey`, never by the public `sessionId`: a
  * guest's public id differs from the operator's for the same provider Session.
  */
-function roomKey(scope: RoomScope) {
+function channelKey(scope: ChannelScope) {
   return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 /** Runs one member's call so its failure reaches only that member. */
 async function attempt<T>(
-  member: RoomMember,
+  member: MembershipDelivery,
   call: () => T | Promise<T>
 ): Promise<T | undefined> {
   try {
@@ -183,32 +184,34 @@ async function attempt<T>(
  * The member an adoption runs as. An operator comes first: the coordinator
  * reports the turn under this member's thread, and activity and push read it.
  */
-function adopter(room: Room) {
-  const members = [...room.members]
-  return members.find(([, { lane }]) => lane === "operator") ?? members[0]
+function adopter(channel: Channel) {
+  const memberships = [...channel.memberships]
+  return (
+    memberships.find(([, { lane }]) => lane === "operator") ?? memberships[0]
+  )
 }
 
-function createRooms({
+function createChannelTable({
   snapshot,
   adoption,
   now = Date.now,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
-  snapshot: (scope: RoomScope) => { state: string; turnId?: string }
+  snapshot: (scope: ChannelScope) => { state: string; turnId?: string }
   /** Absent when the runtime cannot report the turns it starts. */
-  adoption?: RoomAdoption
+  adoption?: ChannelAdoption
   now?: () => number
   backstopMs?: number
 }) {
-  const rooms = new Map<string, Room>()
+  const channels = new Map<string, Channel>()
 
   /**
    * The cached prompt while its turn is still live. A finished execution keeps
    * its old turnId in the coordinator, so only the state check ends it.
    */
-  function currentTurn(scope: RoomScope, room: Room) {
-    const { turn } = room
+  function currentTurn(scope: ChannelScope, channel: Channel) {
+    const { turn } = channel
     if (!turn) return undefined
     const { state, turnId } = snapshot(scope)
     const live = state !== "idle" && turnId === turn.turnId
@@ -217,64 +220,68 @@ function createRooms({
     const expired =
       state !== "waiting-for-input" && now() - turn.at > backstopMs
     if (live && !expired) return turn
-    room.turn = undefined
+    channel.turn = undefined
     return undefined
   }
 
-  async function send(member: RoomMember, delivery: Delivery, turn: RoomTurn) {
+  async function send(
+    member: MembershipDelivery,
+    delivery: Delivery,
+    turn: ChannelTurn
+  ) {
     // Marked while in flight so a concurrent sync cannot repeat it, and
     // unmarked on failure so the next sync retries it.
-    const { delivered, fromRoom } = delivery
+    const { delivered, fromChannel } = delivery
     delivery.delivered = turn.turnId
-    delivery.fromRoom = true
+    delivery.fromChannel = true
     try {
       await member.sendTurn(turn)
     } catch (cause) {
       member.report(cause)
       if (delivery.delivered !== turn.turnId) return
       delivery.delivered = delivered
-      delivery.fromRoom = fromRoom
+      delivery.fromChannel = fromChannel
     }
   }
 
   async function catchUpMember(
-    scope: RoomScope,
-    room: Room,
-    member: RoomMember,
+    scope: ChannelScope,
+    channel: Channel,
+    member: MembershipDelivery,
     delivery: Delivery
   ) {
-    const turn = currentTurn(scope, room)
+    const turn = currentTurn(scope, channel)
     if (turn && delivery.delivered !== turn.turnId) {
       await send(member, delivery, turn)
     }
     // Read before following: the prompt may be dropped meanwhile.
-    const shown = delivery.fromRoom ? delivery.delivered : undefined
+    const shown = delivery.fromChannel ? delivery.delivered : undefined
     const following = await attempt(member, () => member.follow())
     if (following !== "idle" || !shown || member.followedTurn() === shown) {
       return
     }
     // Shown a prompt whose reply it never streamed; history has the reply.
-    delivery.fromRoom = false
+    delivery.fromChannel = false
     await attempt(member, () => member.invalidate())
   }
 
-  async function syncRoom(scope: RoomScope, room: Room) {
+  async function syncChannel(scope: ChannelScope, channel: Channel) {
     await Promise.all(
-      [...room.members].map(([member, delivery]) =>
-        catchUpMember(scope, room, member, delivery)
+      [...channel.memberships].map(([member, delivery]) =>
+        catchUpMember(scope, channel, member, delivery)
       )
     )
   }
 
   /** Records what a member holds of the live turn, sending it the prompt if not. */
-  function seat(
-    room: Room,
-    member: RoomMember,
+  function join(
+    channel: Channel,
+    member: MembershipDelivery,
     delivery: Delivery,
     hasPrompt: boolean
   ) {
-    room.members.set(member, delivery)
-    const turn = currentTurn(delivery.scope, room)
+    channel.memberships.set(member, delivery)
+    const turn = currentTurn(delivery.scope, channel)
     if (!turn) return
     if (hasPrompt) delivery.delivered = turn.turnId
     else void send(member, delivery, turn)
@@ -282,29 +289,29 @@ function createRooms({
 
   /**
    * Asks the runtime for a turn it started by itself and, when it adopts one,
-   * brings every member into it. Runs one at a time per room, and once more
+   * brings every member into it. Runs one at a time per channel, and once more
    * when asked again meanwhile.
    */
-  async function adopt(room: Room) {
-    if (room.adopting) {
-      room.again = true
+  async function adopt(channel: Channel) {
+    if (channel.adopting) {
+      channel.again = true
       return
     }
-    room.adopting = true
+    channel.adopting = true
     try {
       do {
-        room.again = false
-        await adoptOnce(room)
-      } while (room.again)
+        channel.again = false
+        await adoptOnce(channel)
+      } while (channel.again)
     } finally {
-      room.adopting = false
+      channel.adopting = false
     }
   }
 
-  async function adoptOnce(room: Room) {
-    const seated = adopter(room)
-    if (!adoption || !seated) return
-    const [member, { scope, lane }] = seated
+  async function adoptOnce(channel: Channel) {
+    const joined = adopter(channel)
+    if (!adoption || !joined) return
+    const [member, { scope, lane }] = joined
     const before = snapshot(scope).turnId
     try {
       await adoption.discover(scope, lane)
@@ -315,8 +322,8 @@ function createRooms({
     }
     const { state, turnId } = snapshot(scope)
     if (state === "idle" || turnId === undefined || turnId === before) return
-    room.adopted = turnId
-    await syncRoom(scope, room)
+    channel.adopted = turnId
+    await syncChannel(scope, channel)
   }
 
   /**
@@ -324,26 +331,26 @@ function createRooms({
    * while the proxy's own ran. An adopted turn's end reloads every member,
    * since none of them was shown its prompt.
    */
-  function onExecution(room: Room, event: ExecutionEvent) {
+  function onExecution(channel: Channel, event: ExecutionEvent) {
     if (event.kind !== "turn-finished" && event.kind !== "turn-failed") return
-    if (event.turnId === room.adopted) {
-      room.adopted = undefined
-      for (const member of room.members.keys())
+    if (event.turnId === channel.adopted) {
+      channel.adopted = undefined
+      for (const member of channel.memberships.keys())
         void attempt(member, () => member.invalidate())
     }
-    void adopt(room)
+    void adopt(channel)
   }
 
-  function watch(scope: SessionScope, room: Room) {
+  function watch(scope: SessionScope, channel: Channel) {
     if (!adoption) return
     const unobserve = adoption.observe(scope, (event) =>
-      onExecution(room, event)
+      onExecution(channel, event)
     )
     const unwatch = adoption.watch(scope, {
-      onTurn: () => void adopt(room),
-      onError: (cause) => adopter(room)?.[0].report(cause),
+      onTurn: () => void adopt(channel),
+      onError: (cause) => adopter(channel)?.[0].report(cause),
     })
-    room.unwatch = () => {
+    channel.unwatch = () => {
       unwatch()
       unobserve()
     }
@@ -352,117 +359,122 @@ function createRooms({
   return {
     add(
       scope: SessionScope,
-      member: RoomMember,
+      member: MembershipDelivery,
       options: { hasPrompt: boolean; lane?: Lane }
     ) {
-      const key = roomKey(scope)
-      let room = rooms.get(key)
-      const created = !room
-      if (!room) {
-        room = { members: new Map() }
-        rooms.set(key, room)
+      const key = channelKey(scope)
+      let channel = channels.get(key)
+      const created = !channel
+      if (!channel) {
+        channel = { memberships: new Map() }
+        channels.set(key, channel)
       }
-      const joined = room
+      const joined = channel
       const remove = () => {
-        joined.members.delete(member)
-        if (joined.members.size === 0 && rooms.get(key) === joined) {
-          rooms.delete(key)
+        joined.memberships.delete(member)
+        if (joined.memberships.size === 0 && channels.get(key) === joined) {
+          channels.delete(key)
           joined.unwatch?.()
         }
       }
-      if (joined.members.has(member)) return remove
+      if (joined.memberships.has(member)) return remove
       const delivery: Delivery = {
         scope,
         lane: options.lane ?? "operator",
-        fromRoom: false,
+        fromChannel: false,
       }
-      seat(joined, member, delivery, options.hasPrompt)
-      // Watched once the first member is seated, so a turn already running
+      join(joined, member, delivery, options.hasPrompt)
+      // Watched once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) watch(scope, joined)
       return remove
     },
 
     /**
-     * Seats a member afresh after its view was rebuilt from history, which
+     * Rejoins a member after its view was rebuilt from history, which
      * holds the live prompt only when `hasPrompt` says so.
      */
-    reseat(
-      scope: RoomScope,
-      member: RoomMember,
+    rejoin(
+      scope: ChannelScope,
+      member: MembershipDelivery,
       options: { hasPrompt: boolean }
     ) {
-      const room = rooms.get(roomKey(scope))
-      const delivery = room?.members.get(member)
-      if (room && delivery)
-        seat(
-          room,
+      const channel = channels.get(channelKey(scope))
+      const delivery = channel?.memberships.get(member)
+      if (channel && delivery)
+        join(
+          channel,
           member,
-          { scope: delivery.scope, lane: delivery.lane, fromRoom: false },
+          { scope: delivery.scope, lane: delivery.lane, fromChannel: false },
           options.hasPrompt
         )
     },
 
     /** Called only after the coordinator admitted `turn`. */
-    async broadcastTurn(scope: RoomScope, turn: RoomTurn, sender: RoomMember) {
-      const room = rooms.get(roomKey(scope))
-      // No member means nobody to tell, and a memberless room would leak.
-      if (!room) return
-      room.turn = turn
-      const own = room.members.get(sender)
+    async broadcastTurn(
+      scope: ChannelScope,
+      turn: ChannelTurn,
+      sender: MembershipDelivery
+    ) {
+      const channel = channels.get(channelKey(scope))
+      // No member means nobody to tell, and a memberless channel would leak.
+      if (!channel) return
+      channel.turn = turn
+      const own = channel.memberships.get(sender)
       if (own) {
         own.delivered = turn.turnId
-        own.fromRoom = false
+        own.fromChannel = false
       }
       await Promise.all(
-        [...room.members]
+        [...channel.memberships]
           .filter(([member]) => member !== sender)
           .map(([member, delivery]) => send(member, delivery, turn))
       )
     },
 
     /** An answered question resumes the same prompt under a fresh turnId. */
-    continueTurn(scope: RoomScope, fromTurnId: string, toTurnId: string) {
-      const room = rooms.get(roomKey(scope))
-      if (!room?.turn || room.turn.turnId !== fromTurnId) return
-      room.turn = { ...room.turn, turnId: toTurnId }
-      for (const delivery of room.members.values()) {
+    continueTurn(scope: ChannelScope, fromTurnId: string, toTurnId: string) {
+      const channel = channels.get(channelKey(scope))
+      if (!channel?.turn || channel.turn.turnId !== fromTurnId) return
+      channel.turn = { ...channel.turn, turnId: toTurnId }
+      for (const delivery of channel.memberships.values()) {
         if (delivery.delivered === fromTurnId) delivery.delivered = toTurnId
       }
     },
 
     /** The live turn's prompt, which a resume checks its own replay against. */
-    current(scope: RoomScope) {
-      const room = rooms.get(roomKey(scope))
-      return room ? currentTurn(scope, room) : undefined
+    current(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      return channel ? currentTurn(scope, channel) : undefined
     },
 
-    async catchUp(scope: RoomScope, member: RoomMember) {
-      const room = rooms.get(roomKey(scope))
-      const delivery = room?.members.get(member)
-      if (room && delivery) await catchUpMember(scope, room, member, delivery)
+    async catchUp(scope: ChannelScope, member: MembershipDelivery) {
+      const channel = channels.get(channelKey(scope))
+      const delivery = channel?.memberships.get(member)
+      if (channel && delivery)
+        await catchUpMember(scope, channel, member, delivery)
     },
 
-    async sync(scope: RoomScope) {
-      const room = rooms.get(roomKey(scope))
-      if (room) await syncRoom(scope, room)
+    async sync(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      if (channel) await syncChannel(scope, channel)
     },
 
     /**
      * A member's own start failed without a turn to end, so no turn end asks
      * the runtime; this asks once instead.
      */
-    async recheck(scope: RoomScope) {
-      const room = rooms.get(roomKey(scope))
-      if (room) await adopt(room)
+    async recheck(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      if (channel) await adopt(channel)
     },
   }
 }
 
-type CreateChannelOptions = Parameters<typeof createRooms>[0]
+type CreateChannelsOptions = Parameters<typeof createChannelTable>[0]
 
-/** How a transport seats one member in one Session. */
-export type SeatOptions = {
+/** How a transport joins one member to one Session. */
+export type MembershipOptions = {
   coordinator: SessionCoordinator
   /** The subscriber the coordinator knows this member's stream by. */
   subscriberId: string
@@ -478,13 +490,13 @@ export type SeatOptions = {
   feeds: ReadonlySet<Feed>
 }
 
-export function createChannel(options: CreateChannelOptions) {
-  const rooms = createRooms(options)
+export function createChannels(options: CreateChannelsOptions) {
+  const channels = createChannelTable(options)
   return {
-    ...rooms,
-    /** Seats one member in one Session; the seat lasts until it leaves. */
-    join(member: Member, scope: SessionScope, seat: SeatOptions) {
-      return new Seat(rooms, member, scope, seat)
+    ...channels,
+    /** Joins one member to one Session until the membership parts. */
+    join(member: Member, scope: SessionScope, membership: MembershipOptions) {
+      return new Membership(channels, member, scope, membership)
     },
   }
 }
@@ -493,16 +505,16 @@ export function createChannel(options: CreateChannelOptions) {
  * One Session as one member observes it: at most one coordinator
  * subscription, the cursor it has reached, and the requests it was asked.
  *
- * A seat owns only the member's subscriber lifetime. Leaving releases the
- * subscription and its place in the Session's room, and nothing else: the
- * native Session, the coordinator's logical execution, and a pending request
- * all outlive it.
+ * A membership owns only the member's subscriber lifetime. Parting releases
+ * the subscription and its place in the Session's channel, and nothing else:
+ * the native Session, the coordinator's logical execution, and a pending
+ * request all outlive it.
  */
-class Seat {
-  readonly #rooms: Rooms
+class Membership {
+  readonly #channels: ChannelTable
   readonly #member: Member
   readonly #scope: SessionScope
-  readonly #options: SeatOptions
+  readonly #options: MembershipOptions
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
@@ -515,35 +527,37 @@ class Seat {
   readonly #delivered = new Set<string>()
   #sequence = 0
   #stopRequested = false
-  #left = false
+  #parted = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
   /** The turn this member last asked its client to rebuild the view for. */
   #reloadedTurn: string | undefined
-  /** Set while a from-start replay rebuilds the view: the room waits for it. */
+  /**
+   * Set while a from-start replay rebuilds the view: the channel waits for it.
+   */
   #rebuilding = false
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
    */
   #entering: Promise<unknown> | undefined
-  /** This member as the Session's room addresses it. */
-  readonly #seat: RoomMember
-  #leaveRoom: (() => void) | undefined
-  readonly #leaveReadings: () => void
+  /** This member as the Session's channel addresses it. */
+  readonly #delivery: MembershipDelivery
+  #partChannel: (() => void) | undefined
+  readonly #partReadings: () => void
 
   constructor(
-    rooms: Rooms,
+    channels: ChannelTable,
     member: Member,
     scope: SessionScope,
-    options: SeatOptions
+    options: MembershipOptions
   ) {
-    this.#rooms = rooms
+    this.#channels = channels
     this.#member = member
     this.#scope = scope
     this.#options = options
     const { feeds } = options
-    this.#leaveReadings = this.#coordinator.subscribeReadings(
+    this.#partReadings = this.#coordinator.subscribeReadings(
       scope,
       options.subscriberId,
       {
@@ -555,12 +569,12 @@ class Seat {
           : {}),
       }
     )
-    this.#seat = {
+    this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
           ? undefined
           : this.emit({ kind: "prompt", messageId, content, own: false }),
-      // A view being rebuilt is seated afresh and follows once its page lands.
+      // A view being rebuilt rejoins and follows once its page lands.
       follow: async () =>
         this.#rebuilding || (await this.#follow(false)) !== undefined
           ? "following"
@@ -568,7 +582,7 @@ class Seat {
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
       report: (cause) => {
-        if (this.#left) return
+        if (this.#parted) return
         const failure = options.describe(cause)
         this.#log("error", "acp.room.failed", {
           errorCode: failure.code,
@@ -585,14 +599,14 @@ class Seat {
 
   /**
    * Shows this member one event of its Session, through its stack. A member
-   * that left is shown nothing, and neither is one whose stack hides it: a
+   * that parted is shown nothing, and neither is one whose stack hides it: a
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
    * rides on the send starting now. What the stack declines runs once the
    * event is delivered.
    */
   emit(event: SessionEvent): Promise<void> {
-    if (this.#left) return Promise.resolve()
+    if (this.#parted) return Promise.resolve()
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
@@ -612,8 +626,8 @@ class Seat {
   /**
    * Attaches this member's view on resume. `read` gives the page a from-start
    * resume replays, which rebuilds the view first; without it the view keeps
-   * what it holds up to `position`. Either way the member is then seated in
-   * the room and follows the live turn. Returns the page it replayed, and
+   * what it holds up to `position`. Either way the member then joins the
+   * channel and follows the live turn. Returns the page it replayed, and
    * `resync` when the view must rebuild itself.
    */
   async resume(
@@ -624,10 +638,10 @@ class Seat {
     // already in this page, so the journal's acknowledgement of it is dropped.
     const replay = read ? await this.#replayHistory(read) : undefined
     const history = replay?.history
-    // Seated after its history and before any other provider read, so a turn
+    // Joined after its history and before any other provider read, so a turn
     // another browser starts meanwhile reaches it, prompt first.
-    this.enterRoom(
-      showsPrompt(this.#rooms.current(this.#scope), position, history),
+    this.joinChannel(
+      showsPrompt(this.#channels.current(this.#scope), position, history),
       history !== undefined
     )
     // A cursor for another turn cannot position this one, and a cursor beyond
@@ -675,7 +689,7 @@ class Seat {
 
   /**
    * Shows this member one older page of its Session. A page re-attaches
-   * nothing: the view keeps its room, its follow, and its reports, and learns
+   * nothing: the view keeps its channel, follow, and reports, and learns
    * only where the next page starts. Beside a live turn the view streams from
    * its start, a turn longer than the newest page leaves its first rows on
    * older pages too, so a page holding a row stored after the turn began is
@@ -735,8 +749,8 @@ class Seat {
       return after !== undefined && after !== before
     }
     const restarted = this.#coordinator.replayStart(scope)
-    // The room's prompts and streams wait while the view is rebuilt, so none
-    // lands above the page; `enterRoom` or a recovery ends the hold.
+    // The channel's prompts and streams wait while the view is rebuilt, so
+    // none lands above the page; `joinChannel` or a recovery ends the hold.
     this.#rebuilding = true
     if (restarted) await this.#restartStream()
     let history: SessionHistoryResponse
@@ -771,15 +785,15 @@ class Seat {
   async #recoverReplay(restarted: string | undefined, held: boolean) {
     this.#rebuilding = false
     if (restarted ? !(await this.#reloadOnce(restarted)) : held) {
-      this.enterRoom(false, true)
+      this.joinChannel(false, true)
       await this.#follow(true).catch(() => undefined)
     }
   }
 
   /**
    * Rebuilds the view from the page a from-start resume replays. A page that
-   * cannot reach the view recovers as a failed read does, so the room's turns
-   * still reach it.
+   * cannot reach the view recovers as a failed read does, so the channel's
+   * turns still reach it.
    */
   async #replayHistory(read: () => Promise<SessionHistoryResponse>) {
     const replay = await this.#replayPage(read)
@@ -828,7 +842,7 @@ class Seat {
   /**
    * Drops the stream this member is reading, so its next follow replays the
    * turn from the start to a view about to be rebuilt from history. The turn
-   * stays followed, so the room does not subscribe this member meanwhile.
+   * stays followed, so the channel does not subscribe this member meanwhile.
    */
   async #restartStream() {
     await this.#exclusive(async () => {
@@ -866,7 +880,7 @@ class Seat {
       } catch (cause) {
         // No turn started, so no turn end asks the runtime for one it started
         // meanwhile, which may be what refused this one.
-        void this.#rooms.recheck(this.#scope)
+        void this.#channels.recheck(this.#scope)
         throw cause
       }
       this.#consume(subscription, 0)
@@ -874,15 +888,15 @@ class Seat {
   }
 
   /**
-   * Takes this member's seat in the Session's room. `hasPrompt` says the view
+   * Joins this member to the Session's channel. `hasPrompt` says the view
    * holds the live turn's prompt; a `replayed` view was just rebuilt from
-   * history, so a member already seated is seated afresh from what it holds.
+   * history, so a member already joined rejoins from what it holds.
    */
-  enterRoom(hasPrompt = false, replayed = false) {
+  joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
-    if (this.#left) return
-    if (!this.#leaveRoom) {
-      const leave = this.#rooms.add(this.#scope, this.#seat, {
+    if (this.#parted) return
+    if (!this.#partChannel) {
+      const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
         lane: this.#member.principal.role,
       })
@@ -891,23 +905,25 @@ class Seat {
       const unobserve = this.#coordinator.observeScope(this.#scope, (event) => {
         if (event.kind === "attention-resolved") this.#withdraw(event.requestId)
       })
-      this.#leaveRoom = () => {
-        leave()
+      this.#partChannel = () => {
+        part()
         unobserve()
       }
     } else if (replayed)
-      this.#rooms.reseat(this.#scope, this.#seat, { hasPrompt })
+      this.#channels.rejoin(this.#scope, this.#delivery, { hasPrompt })
   }
 
-  /** Shows the room a turn this member admitted, then brings every member in. */
-  async announce(turn: RoomTurn) {
-    await this.#rooms.broadcastTurn(this.#scope, turn, this.#seat)
-    await this.#rooms.sync(this.#scope)
+  /**
+   * Shows the channel a turn this member admitted, then brings every member in.
+   */
+  async announce(turn: ChannelTurn) {
+    await this.#channels.broadcastTurn(this.#scope, turn, this.#delivery)
+    await this.#channels.sync(this.#scope)
   }
 
-  /** Brings this member alone into whatever turn the room is running. */
+  /** Brings this member alone into whatever turn the channel is running. */
   catchUp() {
-    return this.#rooms.catchUp(this.#scope, this.#seat)
+    return this.#channels.catchUp(this.#scope, this.#delivery)
   }
 
   /** Requests Stop, reporting an unsettled provider as `stopping`. */
@@ -998,11 +1014,11 @@ class Seat {
     await this.#settle(reply)
   }
 
-  leave() {
+  part() {
     for (const requestId of [...this.#offered]) this.#withdraw(requestId)
-    this.#left = true
-    this.#leaveRoom?.()
-    this.#leaveReadings()
+    this.#parted = true
+    this.#partChannel?.()
+    this.#partReadings()
     this.#subscription?.close()
     this.#subscription = undefined
   }
@@ -1019,8 +1035,8 @@ class Seat {
     this.#delivered.delete(reply.requestId)
     const continued = await this.#coordinator.answer(this.#scope, reply)
     if (!continued) return
-    this.#rooms.continueTurn(this.#scope, continued.from, continued.turnId)
-    await this.#rooms.sync(this.#scope)
+    this.#channels.continueTurn(this.#scope, continued.from, continued.turnId)
+    await this.#channels.sync(this.#scope)
   }
 
   /**
@@ -1031,7 +1047,7 @@ class Seat {
    */
   async #decline(requestId: string) {
     if (
-      this.#left ||
+      this.#parted ||
       !this.#offered.has(requestId) ||
       !this.#member.connection.live()
     )
@@ -1055,9 +1071,9 @@ class Seat {
   /**
    * Subscribes to the live turn unless this member already carries it. A
    * resume asks whether its current subscription does, so it can re-follow a
-   * turn whose stream it lost; the room asks whether any subscription ever
-   * did, so a member is never streamed one turn twice. Returns the turnId it
-   * streams, or `undefined` when no turn is live.
+   * turn whose stream it lost; the channel asks whether any subscription
+   * ever did, so a member is never streamed one turn twice. Returns the
+   * turnId it streams, or `undefined` when no turn is live.
    */
   #follow(
     refollow: boolean,
@@ -1065,7 +1081,7 @@ class Seat {
     replayedCorrections = 0
   ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
-      if (this.#left) return undefined
+      if (this.#parted) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
       if (state === "idle" || turnId === undefined) return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
@@ -1160,8 +1176,8 @@ class Seat {
     subscription: CoordinatedTurnSubscription,
     replayedCorrections: number
   ) {
-    // A member that left while its subscription was being admitted keeps none.
-    if (this.#left) {
+    // A member that parted while its subscription was admitted keeps none.
+    if (this.#parted) {
       subscription.close()
       return
     }
@@ -1266,4 +1282,4 @@ class Seat {
   }
 }
 
-export type { Seat }
+export type { Membership }

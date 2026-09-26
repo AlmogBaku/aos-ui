@@ -34,7 +34,7 @@ function connectionContext(
     readState: {} as ReadState,
     activityFeed: {} as ActivityFeed,
     translators: {} as AcpConnectionContext["translators"],
-    rooms: {} as AcpConnectionContext["rooms"],
+    channels: {} as AcpConnectionContext["channels"],
     attachmentStages: {} as AcpConnectionContext["attachmentStages"],
   }
 }

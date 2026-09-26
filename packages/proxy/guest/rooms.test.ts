@@ -44,8 +44,8 @@ import { createSessionRows } from "../core/session-rows"
 import { createGuestConnection } from "./acp"
 
 /**
- * The guest lane in a room with operator browsers: a redeemed invitation to
- * the operator harness's seeded Session, on the same runtime and registry.
+ * The guest lane in a channel with operator browsers: a redeemed invitation
+ * to the operator harness's seeded Session, on the same runtime and channels.
  */
 
 const GUEST_REF = "guest-ref"
@@ -94,7 +94,7 @@ async function connectGuest(
       runtimeInstance: test.runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
-      rooms: test.rooms,
+      channels: test.channels,
     },
     createSessionRows(),
     "guest-connection"
@@ -119,7 +119,7 @@ async function connectGuest(
   }
 }
 
-describe("guest in a Session room", () => {
+describe("guest in a Session channel", () => {
   it("keeps a guest's exposure out of presence and read state", async () => {
     const test = await harness({ providerIds: true })
     const guest = await connectGuest(test)

@@ -26,7 +26,7 @@ import {
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "../../protocol/acp"
-import { createChannel } from "../core/channel"
+import { createChannels } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
 import type { ConnectionAuthentication } from "../acp/types"
 import {
@@ -531,7 +531,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    rooms: createChannel({
+    channels: createChannels({
       snapshot: (scope) => coordinator.snapshot(scope),
     }),
     now: () => clock.now,
