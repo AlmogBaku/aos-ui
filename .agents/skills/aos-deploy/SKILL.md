@@ -82,7 +82,58 @@ Register the server with OpenClaw disabled and let the proxy enable it per
 Session, as the OpenClaw runtime guide describes; charts, maps, and stats also
 need `mcp.apps.enabled: true` on the Gateway.
 
+## Upgrade live proxy configuration
+
+Use this procedure when an operator needs to change a key in the live proxy YAML without rebuilding or redeploying the image. Require a direct confirmation before writing any file or reloading the service.
+
+### 1. Back up the live configuration
+
+The YAML holds paths to secrets, not secret values. A backup is safe:
+
+```bash
+cp /etc/aos-ui/proxy.yaml /tmp/proxy-backup-$(date +%Y%m%d).yaml
+```
+
+### 2. Prepare and validate the new configuration
+
+Copy the live YAML to a temporary path, apply the changes there, then start the proxy with the test file to confirm the configuration parses cleanly and the proxy reaches its ready state:
+
+```bash
+cp /etc/aos-ui/proxy.yaml /tmp/proxy-test.yaml
+# Apply changes to /tmp/proxy-test.yaml
+bun run proxy:serve -- --config /tmp/proxy-test.yaml
+```
+
+Watch the startup log. A `proxy.start_failed` event means the configuration is invalid; fix `/tmp/proxy-test.yaml` and retry. When the proxy logs its ready state without errors, the configuration is valid. Interrupt it with SIGTERM.
+
+The proxy reads secret files from their original paths, so `/run/secrets` and `/etc/aos-ui/secrets` must be reachable from wherever the test command runs.
+
+### 3. Install and reload
+
+Overwrite the live file and reload the service:
+
+```bash
+cp /tmp/proxy-test.yaml /etc/aos-ui/proxy.yaml
+systemctl reload aos-ui
+```
+
+`ExecReload` rebuilds and restarts the container stack; the proxy picks up the new configuration on the next start.
+
+### 4. Probe health and readiness
+
+```bash
+curl --fail --silent http://127.0.0.1:4100/api/aos/v1/healthz
+curl --fail --silent http://127.0.0.1:4100/api/aos/v1/readyz
+```
+
+`healthz` always returns 200. `readyz` returns 200 only when the runtime is reachable; 503 means the proxy started but cannot reach the configured runtime — check the runtime address and token.
+
+### 5. Watch one old tab reload in the aos-test Agent only
+
+Open a browser window at the aos-test Agent only (never at an Agent that holds real work). An existing tab should either continue its Session normally or reload once if the image build id changed. Do not proceed until the tab is stable.
+
 ## Verify before handoff
+
 
 Run the relevant repository checks and service-manager validation. Check the
 private operator endpoint from its intended private network and the guest root
