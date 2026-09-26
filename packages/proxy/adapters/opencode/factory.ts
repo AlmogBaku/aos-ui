@@ -40,10 +40,14 @@ export async function createOpenCodeRuntime(
   const { logger, credentials } = dependencies
   // Basic auth sends the password inside `user:password` in base64, a spelling
   // of it that could leak on its own.
-  const password = await credentials.register(readSecretFile, (value) => [
+  const readPassword = credentials.register(readSecretFile, (value) => [
     value,
     Buffer.from(`${config.username}:${value}`, "utf8").toString("base64"),
-  ])(config.passwordFile)
+  ])
+  // Read for every request, so a rotated file applies without a restart; read
+  // once here so a missing or malformed file still fails the start.
+  const password = () => readPassword(config.passwordFile)
+  await password()
   const client = (dependencies.clientFactory ?? createOpenCodeClient)({
     baseUrl: config.baseUrl,
     directory: config.directory,
@@ -64,6 +68,7 @@ export async function createOpenCodeRuntime(
   const turns =
     dependencies.turns ??
     new OpenCodeTurnEngine(client, {
+      logger,
       replies: interactions,
       ...(mcp ? { mcpToolNames: mcp.names } : {}),
     })
@@ -86,6 +91,7 @@ export async function createOpenCodeRuntime(
     close() {
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
+        if (turns instanceof OpenCodeTurnEngine) turns.close()
         await runtime.close()
         await mcpAppClient?.close()
       })

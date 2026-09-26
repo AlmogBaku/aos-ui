@@ -2,6 +2,16 @@ import { createHash } from "node:crypto"
 import { z } from "zod"
 
 import {
+  backoffDelay,
+  createOwner,
+  defaultClock,
+  fromAbortable,
+  ownerSetup,
+  type Clock,
+  type Logger,
+  type Owner,
+} from "../../../lifecycle"
+import {
   TurnEventKind,
   TurnInputSchema,
   isRepliesTurn,
@@ -60,6 +70,8 @@ type OpenCodeTurnClient = Readonly<{
 }>
 
 export type OpenCodeTurnEngineOptions = Readonly<{
+  logger: Logger
+  clock?: Clock
   replies?: OpenCodeBoundReplies
   maxQueueEvents?: number
   maxBufferedEvents?: number
@@ -83,8 +95,6 @@ type ActiveTurn = {
   abandoned: boolean
   reconciling: boolean
   reconcileAgain: boolean
-  waiting: boolean
-  waitFailures: number
   expectedAdmission?: string
   admissionObserved: boolean
   settle(): void
@@ -101,10 +111,81 @@ type Settlement = Readonly<{
 type ScopedNativeSettlement = Settlement & {
   key: string
   scope: SessionScope
-  monitoring: boolean
-  waitFailures: number
+  /** Polls until the native Session idles, once a Stop left it running. */
+  monitor?: RetryOwner
   stopRequested: boolean
 }
+
+/** One retry loop's steps. */
+type RetryLoop = Readonly<{
+  /** One try; `recovered` restarts the backoff once it has made progress. */
+  attempt(signal: AbortSignal, recovered: () => void): Promise<void>
+  /** Runs when each backoff ends, before the next attempt; never rejects. */
+  poll?(): Promise<void>
+  failed?(error: unknown): void
+}>
+
+/**
+ * Runs `loop` until disposed, backing off after every attempt: `baseMs` once
+ * it recovered, doubling with each failure since up to 16 times that, with
+ * full jitter.
+ */
+function retryMachine(
+  id: string,
+  loop: RetryLoop,
+  logger: Logger,
+  clock: Clock,
+  baseMs: number
+) {
+  let failures = 0
+  const actors = {
+    attempt: fromAbortable((signal) =>
+      loop.attempt(signal, () => {
+        failures = 0
+      })
+    ),
+    poll: fromAbortable(async () => loop.poll?.()),
+  }
+  return ownerSetup("turn", logger, clock, actors)
+    .extend({
+      delays: {
+        retry: () => backoffDelay(failures, { baseMs, capMs: baseMs * 16 }),
+      },
+    })
+    .createMachine({
+      id,
+      context: { generation: 0 },
+      initial: "attempting",
+      states: {
+        attempting: {
+          invoke: {
+            src: "attempt",
+            onDone: "backing-off",
+            onError: {
+              target: "backing-off",
+              actions: ({ event }) => {
+                failures += 1
+                loop.failed?.(event.error)
+              },
+            },
+          },
+        },
+        "backing-off": {
+          after: {
+            retry: [
+              { guard: () => loop.poll !== undefined, target: "polling" },
+              { target: "attempting" },
+            ],
+          },
+        },
+        polling: {
+          invoke: { src: "poll", onDone: "attempting", onError: "attempting" },
+        },
+      },
+    })
+}
+
+type RetryOwner = Owner<ReturnType<typeof retryMachine>>
 
 class EventQueue implements AsyncIterable<TurnEvent> {
   readonly #values: TurnEvent[] = []
@@ -318,13 +399,17 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   readonly #maxQueueEvents: number
   readonly #maxBufferedEvents: number
   readonly #waitRetryMs: number
+  readonly #logger: Logger
+  readonly #clock: Clock
+  /** Every retry loop still running, which close disposes. */
+  readonly #owners = new Set<RetryOwner>()
+  #closed = false
 
-  constructor(
-    client: OpenCodeTurnClient,
-    options: OpenCodeTurnEngineOptions = {}
-  ) {
+  constructor(client: OpenCodeTurnClient, options: OpenCodeTurnEngineOptions) {
     this.#client = client
     this.#options = options
+    this.#logger = options.logger
+    this.#clock = options.clock ?? defaultClock
     this.#maxQueueEvents = positiveInteger(
       options.maxQueueEvents,
       DEFAULT_MAX_QUEUE_EVENTS
@@ -337,6 +422,28 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       options.waitRetryMs,
       DEFAULT_WAIT_RETRY_MS
     )
+  }
+
+  /** Disposes every retry loop, so no timer of this engine fires again. */
+  close() {
+    this.#closed = true
+    for (const owner of [...this.#owners]) owner.dispose()
+  }
+
+  /** Starts one retry loop owned by this engine; none once it is closed. */
+  #retry(scope: SessionScope, id: string, loop: RetryLoop) {
+    if (this.#closed) return undefined
+    const owner = createOwner(
+      retryMachine(id, loop, this.#logger, this.#clock, this.#waitRetryMs),
+      {
+        logger: this.#logger,
+        clock: this.#clock,
+        bindings: { agentId: scope.agentId, sessionId: scope.sessionId },
+      }
+    )
+    this.#owners.add(owner)
+    owner.stack.defer(() => this.#owners.delete(owner))
+    return owner
   }
 
   async discover(scope: SessionScope, turnId: string) {
@@ -377,10 +484,6 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
    */
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     const key = turnKey(scope)
-    const controller = new AbortController()
-    let source: OpenCodeSessionEvents | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let failures = 0
     // Admissions only grow, so the last one considered dedupes repeats.
     let considered = -1
     const consider = (admission: ValidatedOpenCodeEvent | undefined) => {
@@ -390,10 +493,11 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (admission.data.messageID !== this.#ownAdmissions.get(key))
         listener.onTurn()
     }
-    const subscribe = async () => {
-      source = undefined
+    const subscribe = async (signal: AbortSignal, recovered: () => void) => {
+      let source: OpenCodeSessionEvents | undefined
+      const onAbort = () => source?.abort()
+      signal.addEventListener("abort", onAbort, { once: true })
       try {
-        const signal = controller.signal
         const history = await this.#readHistory(
           scope.providerSessionId,
           undefined,
@@ -413,32 +517,22 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
           )
           consider(latestAdmission([...history, ...caughtUp]))
         }
-        failures = 0
+        recovered()
         for await (const value of source) {
           if (signal.aborted) return
           consider(validateOpenCodeLiveEvent(value, scope.providerSessionId))
         }
         throw new OpenCodeClientError("connection_interrupted")
-      } catch (error) {
-        if (controller.signal.aborted) return
-        listener.onError(error)
-        failures += 1
-        timer = setTimeout(
-          () => void subscribe(),
-          this.#waitRetryMs * Math.min(2 ** failures, 16)
-        )
-        timer.unref?.()
       } finally {
+        signal.removeEventListener("abort", onAbort)
         source?.abort()
       }
     }
-    void subscribe()
-    return () => {
-      if (controller.signal.aborted) return
-      controller.abort()
-      clearTimeout(timer)
-      source?.abort()
-    }
+    const owner = this.#retry(scope, "turn-subscription", {
+      attempt: subscribe,
+      failed: (error) => listener.onError(error),
+    })
+    return () => owner?.dispose()
   }
 
   async #discoverWait(scope: SessionScope) {
@@ -513,12 +607,20 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   async start(
     scope: SessionScope,
     candidate: TurnInput,
-    stage?: ServerAttachmentStage
+    stage?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle> {
     const { input, replies, text } = validateInput(scope, candidate)
     // Warm the MCP tool names while the turn is admitted, so its first tool
     // call already reads under its canonical name.
-    void this.#options.mcpToolNames?.load(scope.agentId).catch(() => undefined)
+    void this.#options.mcpToolNames
+      ?.load(scope.agentId)
+      .catch((err: unknown) =>
+        this.#logger.warn(
+          { err, agentId: scope.agentId },
+          "opencode.mcp-tool-names.load_failed"
+        )
+      )
     let files: readonly { uri: string; name?: string }[] | undefined
     if (stage) {
       try {
@@ -527,19 +629,23 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         throw new Error("OpenCode attachment stage is invalid")
       }
     }
-    await this.#verifyOwnership(scope)
+    await this.#verifyOwnership(scope, signal)
 
     if (replies) {
       if (!this.#options.replies)
         throw new Error("OpenCode interaction replies are unavailable")
       await this.#options.replies.validate(scope, replies)
-    } else if (await this.#active(scope.providerSessionId)) {
+    } else if (await this.#active(scope.providerSessionId, signal)) {
       // The native Session owns a turn AOS did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
       throw new ServerTurnConflictError()
     }
 
-    const before = await this.#readHistory(scope.providerSessionId)
+    const before = await this.#readHistory(
+      scope.providerSessionId,
+      undefined,
+      signal
+    )
     const baseline = before.at(-1)?.seq ?? -1
     const expectedAdmission = replies
       ? undefined
@@ -558,7 +664,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       // closes the history-to-subscription window.
       const caughtUp = await this.#readHistory(
         scope.providerSessionId,
-        baseline
+        baseline,
+        signal
       )
       if (caughtUp.length) {
         if (!replies)
@@ -581,7 +688,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
             id: expectedAdmission!,
             prompt: { text: text!, ...(files ? { files: [...files] } : {}) },
             resume: true,
-          }
+          },
+          signal
         )
         validateAdmission(acknowledgement, {
           id: expectedAdmission!,
@@ -714,8 +822,6 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         },
         key,
         scope,
-        monitoring: false,
-        waitFailures: 0,
         stopRequested: false,
       }
       this.#nativeSettlements.set(key, nativeSettlement)
@@ -745,8 +851,6 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       abandoned: false,
       reconciling: false,
       reconcileAgain: false,
-      waiting: false,
-      waitFailures: 0,
       expectedAdmission,
       admissionObserved: expectedAdmission === undefined,
       settled: segmentSettlement.settled,
@@ -823,7 +927,12 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
             : "The OpenCode connection was interrupted; reconnect to reconcile this turn."
         )
       }
-    })()
+    })().catch((err: unknown) =>
+      this.#logger.error(
+        { err, agentId: run.scope.agentId, sessionId: run.scope.sessionId },
+        "opencode.turn.pump_failed"
+      )
+    )
   }
 
   #scheduleReconcile(run: ActiveTurn) {
@@ -917,39 +1026,28 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     throw new OpenCodeClientError("invalid_response")
   }
 
+  /**
+   * Waits natively for the Session to idle, then reconciles, until the run
+   * ends; a wait that fails is not trusted, so each backoff ends in another
+   * reconcile before the next wait.
+   */
   #watchWait(run: ActiveTurn) {
-    if (run.waiting || run.nativeTerminal || run.abandoned) return
-    run.waiting = true
-    void this.#client.sessions
-      .wait(run.scope.providerSessionId, run.controller.signal)
-      .then(async () => {
-        run.waiting = false
-        run.waitFailures = 0
-        if (run.abandoned || run.nativeTerminal) return
+    if (run.nativeTerminal || run.abandoned) return
+    const watch = this.#retry(run.scope, "turn-wait", {
+      attempt: async (signal, recovered) => {
+        await this.#client.sessions.wait(run.scope.providerSessionId, signal)
+        recovered()
         await this.#reconcile(run)
-        if (!run.nativeTerminal) this.#scheduleWaitRetry(run)
-      })
-      .catch(() => {
-        run.waiting = false
-        if (
-          run.controller.signal.aborted ||
-          run.abandoned ||
-          run.nativeTerminal
-        )
-          return
-        run.waitFailures += 1
-        this.#scheduleWaitRetry(run)
-      })
-  }
-
-  #scheduleWaitRetry(run: ActiveTurn) {
-    const multiplier = Math.min(2 ** run.waitFailures, 16)
-    const timer = setTimeout(() => {
-      void this.#reconcile(run)
-        .catch((error) => this.#reconciliationFailed(run, error))
-        .finally(() => this.#watchWait(run))
-    }, this.#waitRetryMs * multiplier)
-    timer.unref?.()
+      },
+      poll: () =>
+        this.#reconcile(run).catch((error) =>
+          this.#reconciliationFailed(run, error)
+        ),
+    })
+    // A run ends by aborting its controller, which ends its watch too.
+    run.controller.signal.addEventListener("abort", () => watch?.dispose(), {
+      once: true,
+    })
   }
 
   #reconciliationFailed(run: ActiveTurn, error: unknown) {
@@ -1114,9 +1212,9 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     return "stopping"
   }
 
-  async #verifyOwnership(scope: SessionScope) {
+  async #verifyOwnership(scope: SessionScope, signal?: AbortSignal) {
     validateSessionOwner(
-      await this.#client.sessions.get(scope.providerSessionId),
+      await this.#client.sessions.get(scope.providerSessionId, signal),
       scope
     )
   }
@@ -1130,32 +1228,23 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
 
   #settleNative(settlement: ScopedNativeSettlement) {
     settlement.settle()
+    settlement.monitor?.dispose()
     if (this.#nativeSettlements.get(settlement.key) === settlement)
       this.#nativeSettlements.delete(settlement.key)
   }
 
   #monitorNativeSettlement(settlement: ScopedNativeSettlement) {
-    if (settlement.done || settlement.monitoring) return
-    settlement.monitoring = true
-    const reconcile = async () => {
-      if (settlement.done) return
-      try {
+    if (settlement.done || settlement.monitor) return
+    settlement.monitor = this.#retry(settlement.scope, "turn-settlement", {
+      attempt: async (signal, recovered) => {
         const current = this.#turns.get(settlement.key)
-        if (current && !current.abandoned) {
-          await this.#reconcile(current)
-        } else if (!(await this.#active(settlement.scope.providerSessionId))) {
+        if (current && !current.abandoned) await this.#reconcile(current)
+        else if (
+          !(await this.#active(settlement.scope.providerSessionId, signal))
+        )
           this.#settleNative(settlement)
-          return
-        }
-        settlement.waitFailures = 0
-      } catch {
-        settlement.waitFailures += 1
-      }
-      if (settlement.done) return
-      const multiplier = Math.min(2 ** settlement.waitFailures, 16)
-      const timer = setTimeout(reconcile, this.#waitRetryMs * multiplier)
-      timer.unref?.()
-    }
-    void reconcile()
+        recovered()
+      },
+    })
   }
 }
