@@ -223,7 +223,10 @@ type TurnSignal =
 /**
  * One Session's turn lifecycle. Only a landed admission bumps the generation,
  * so an outcome reported for an earlier segment is stale by construction.
- * Idle ignores the stream: a turn that Stop settled stays settled.
+ * Idle ignores the stream: a turn that Stop settled stays settled. An outcome
+ * the stream reports while an admission is in flight moves where the turn
+ * rests, as that resting state would take it, so a refused admission returns
+ * to where the stream left the turn.
  */
 function turnMachine(logger: Logger, clock: Clock) {
   const turn = ownerSetup<TurnContext, TurnSignal>("turn", logger, clock)
@@ -234,6 +237,11 @@ function turnMachine(logger: Logger, clock: Clock) {
   const land = turn.assign({
     turnId: ({ event }) =>
       event.type === "admitted" ? event.turnId : undefined,
+  })
+  const rest = (from: RestingState[], resting: RestingState) => ({
+    guard: ({ context }: { context: TurnContext }) =>
+      from.includes(context.resting),
+    actions: turn.assign({ resting }),
   })
   return turn.createMachine({
     context: { generation: 0, resting: "idle" },
@@ -262,6 +270,9 @@ function turnMachine(logger: Logger, clock: Clock) {
             { target: "idle" },
           ],
           cleared: "idle",
+          ended: rest(["waiting-for-input", "uncertain"], "idle"),
+          paused: rest(["uncertain"], "waiting-for-input"),
+          lost: rest(["waiting-for-input"], "uncertain"),
         },
       },
       running: {

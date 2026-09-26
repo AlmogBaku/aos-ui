@@ -1930,9 +1930,10 @@ describe("SessionCoordinator", () => {
   it("keeps an ambiguous Stop failure uncertain", async () => {
     const source = new EventSource()
     source.stop.mockRejectedValueOnce(new Error("Connection lost"))
+    const recover = vi.fn(async (): Promise<ServerTurnHandle> => source)
     const sessions = coordinator({
       start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
+      recover,
     })
     await sessions.start(scope, input("run-1"), access("operator"))
 
@@ -1940,6 +1941,26 @@ describe("SessionCoordinator", () => {
       "Connection lost"
     )
     expect(sessions.state(scope)).toBe("uncertain")
+
+    // The stream reports the outcome while the next start is recovering the
+    // turn, and that recovery fails: the turn rests where the stream left it.
+    recover.mockImplementationOnce(async () => {
+      const finished = new Promise<void>((resolve) => {
+        const unsubscribe = sessions.subscribeExecutions((event) => {
+          if (event.kind !== "turn-finished") return
+          unsubscribe()
+          resolve()
+        })
+      })
+      source.emit(turnEnded)
+      source.finish()
+      await finished
+      throw new Error("Provider unavailable")
+    })
+    await expect(
+      sessions.start(scope, input("run-2"), access("operator"))
+    ).rejects.toThrow("already active")
+    expect(sessions.state(scope)).toBe("idle")
   })
 
   it("reports a Session idle when its run terminates after every browser detached", async () => {
