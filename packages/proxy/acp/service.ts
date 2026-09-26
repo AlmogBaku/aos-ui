@@ -5,7 +5,7 @@ import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 import { Deadline, defaultClock, type Clock } from "../../lifecycle"
 import { withinGrace } from "../grace"
 import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
-import { createAcpSocket, type AcpSocket, type PublicErrors } from "./socket"
+import { createAcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import type { Role } from "../core/member"
 

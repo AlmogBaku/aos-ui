@@ -42,7 +42,7 @@ export default defineConfig({
   test: {
     // Agent worktrees nest a full checkout under `.claude`; sweeping them
     // reports every test twice and the stale copy's failures as ours.
-    exclude: [...configDefaults.exclude, ".worktrees/**", "**/.claude/**"],
+    exclude: [...configDefaults.exclude, ".worktrees/**", "**/.claude/**", "**/*.bun.test.ts", "**/faults/o2.test.ts"],
     restoreMocks: true,
     // The workspace composition tests each drive a full jsdom app through
     // several async Session switches and take 2-6s alone; with one worker per

@@ -10,7 +10,7 @@ import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "bun:test"
 
 import { createAcpService } from "../service"
-import { startProxyServer, type ProxySocketPeer } from "../../server"
+import { startProxyServer } from "../../server"
 import type { AcpConnectionContext } from "../types"
 import { OPERATOR_PRINCIPAL } from "../../core/principal"
 
