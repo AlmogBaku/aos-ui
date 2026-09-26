@@ -23,6 +23,7 @@ function coordinator() {
       context: vi.fn(),
       models: vi.fn(),
       createSession: vi.fn(),
+      publicError: () => undefined,
       link: READY_LINK,
     },
     maxActiveExecutions: 64,

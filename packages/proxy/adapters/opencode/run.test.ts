@@ -1128,7 +1128,12 @@ describe("OpenCodeRunEngine", () => {
     const sessions = new SessionCoordinator({
       engine,
       // No test here subscribes anything to a reading.
-      readings: { context: vi.fn(), models: vi.fn(), link: READY_LINK },
+      readings: {
+        context: vi.fn(),
+        models: vi.fn(),
+        publicError: () => undefined,
+        link: READY_LINK,
+      },
       maxActiveExecutions: 8,
       maxSubscriberEvents: 8,
       maxSubscriberBytes: 64 * 1024,

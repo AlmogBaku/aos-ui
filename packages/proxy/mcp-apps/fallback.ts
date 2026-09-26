@@ -67,8 +67,17 @@ export class McpAppRefusedError extends Error {
 
 type Resolved = { endpoint: McpAppEndpoint; server: string; tool: string }
 
-/** Running calls the fallback remembers per Session. */
+/**
+ * The running calls the fallback remembers: the newest 32 of each of the 8
+ * Sessions it heard from most recently, 256 at most.
+ */
+const MAX_LIVE_SESSIONS = 8
 const MAX_LIVE_CALLS_PER_SESSION = 32
+
+/** Drops the entry inserted first once `map` holds more than `limit`. */
+function trim(map: Map<string, unknown>, limit: number) {
+  if (map.size > limit) map.delete(map.keys().next().value!)
+}
 
 /**
  * The server and tool a canonical name refers to. A bare `aos-ui` tool belongs
@@ -93,12 +102,6 @@ export function createMcpAppsFallback(
   const live = new Map<string, Map<string, StoredMcpToolCall>>()
   const sessionKey = (agentId: string, providerSessionId: string) =>
     JSON.stringify([agentId, providerSessionId])
-  const sessionLive = (scope: SessionScope) => {
-    const key = sessionKey(scope.agentId, scope.providerSessionId)
-    let m = live.get(key)
-    if (!m) live.set(key, (m = new Map()))
-    return m
-  }
 
   async function resolveServer(
     scope: SessionScope,
@@ -145,7 +148,9 @@ export function createMcpAppsFallback(
   async function owned(scope: SessionScope, toolCallId: string) {
     const call =
       (await source.storedCall(scope, toolCallId)) ??
-      sessionLive(scope).get(toolCallId)
+      live
+        .get(sessionKey(scope.agentId, scope.providerSessionId))
+        ?.get(toolCallId)
     const resolved = call && (await resolveServer(scope, call.toolName))
     if (!call || !resolved) throw new McpAppNotFoundError()
     return { call, resolved }
@@ -176,19 +181,23 @@ export function createMcpAppsFallback(
 
   return {
     observe(scope, { toolCallId, ...call }: LiveMcpToolCall) {
-      const session = sessionLive(scope)
+      const key = sessionKey(scope.agentId, scope.providerSessionId)
+      const session = live.get(key) ?? new Map<string, StoredMcpToolCall>()
       const known = session.get(toolCallId)
       const input = call.input ?? known?.input
       const result = call.result ?? known?.result
-      // Re-inserted so the oldest call per Session is the one dropped.
+      // Re-inserted, so the oldest call and the Session heard from least
+      // recently are the ones dropped.
       session.delete(toolCallId)
       session.set(toolCallId, {
         toolName: call.toolName,
         ...(input ? { input } : {}),
         ...(result ? { result } : {}),
       })
-      if (session.size > MAX_LIVE_CALLS_PER_SESSION)
-        session.delete(session.keys().next().value!)
+      trim(session, MAX_LIVE_CALLS_PER_SESSION)
+      live.delete(key)
+      live.set(key, session)
+      trim(live, MAX_LIVE_SESSIONS)
     },
     async describe(scope, call) {
       try {

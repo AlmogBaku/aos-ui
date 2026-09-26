@@ -397,8 +397,11 @@ export type ServerMcpApps = {
     uri: string
   ): Promise<ReadResourceResult>
   /**
-   * Clears cached live calls for this Session. Called when the Session is
-   * reported gone, so stale entries do not outlive the Session.
+   * Frees the running calls `observe` kept for this Session, once the proxy
+   * deleted it or a recover found it gone.
    */
-  reportSessionGone?(agentId: string, providerSessionId: ProviderSessionId): void
+  reportSessionGone?(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): void
 }

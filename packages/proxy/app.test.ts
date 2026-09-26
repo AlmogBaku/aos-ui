@@ -252,7 +252,7 @@ describe("AOS V1 proxy", () => {
     })
 
     // A write that may have landed is no caller error: the route answers it
-    // unavailable, under the code that says to reconcile first.
+    // 503, under the code that says to reconcile first.
     const uncertain = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(uncertain, "getSession").mockRejectedValue(
       new HermesTurnPublicError("AOS_STOP_UNCERTAIN", "Stop was not confirmed.")
