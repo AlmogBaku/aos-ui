@@ -174,6 +174,17 @@ export class ServerClientIdReusedError extends Error {
   }
 }
 
+/**
+ * A resume cursor the journal no longer holds the events after, because it
+ * pruned them or outgrew its bounds: only history can rebuild that reader.
+ */
+export class ReplayCursorLostError extends Error {
+  constructor() {
+    super("The replay journal no longer holds this cursor")
+    this.name = "ReplayCursorLostError"
+  }
+}
+
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
   /**
@@ -209,6 +220,8 @@ export type SessionReadingListeners = {
   /** The model options, and each switch the subscriber reads or a config makes. */
   model?: ReadingListener<SessionModelsResponse>
   execution?: ReadingListener<SessionExecution>
+  /** The Session is gone: nothing more is read or streamed for it. */
+  gone?: (cause: unknown) => void
 }
 
 /** One journaled event and the memory its raw form occupies. */
@@ -888,6 +901,11 @@ export class SessionCoordinator {
   readonly #subscribers = new Map<string, number>()
   /** Sessions their last subscriber left, evicted once their turn rests. */
   readonly #pendingEvictions = new Set<string>()
+  /** Who hears a Session go, by its session key. */
+  readonly #gone = new Set<{
+    key: string
+    listener: (cause: unknown) => void
+  }>()
   /** How many turns the uncertainty deadline ended with their outcome unknown. */
   #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
@@ -920,12 +938,16 @@ export class SessionCoordinator {
       logger: this.#logger,
       clock: this.#clock,
     }
+    // Past the reading's own move, which ending the Session releases.
+    const gone = (scope: SessionScope, cause: unknown) =>
+      queueMicrotask(() => this.endIfGone(scope, cause))
     this.#usage = new SessionReporter({
       name: "usage",
       read: async (scope) =>
         SessionContextResponseSchema.parse(
           await readings.context(scope.agentId, scope.sessionId)
         ),
+      gone,
       ...cell,
     })
     // A switch reported mid-turn may name a model the catalog does not yet.
@@ -937,6 +959,7 @@ export class SessionCoordinator {
         ),
         ...(selectedId === undefined ? {} : { selectedId }),
       }),
+      gone,
       ...cell,
     })
     this.#execution = new SessionReporter({
@@ -979,7 +1002,10 @@ export class SessionCoordinator {
   ) {
     const key = scopeKey(scope)
     this.#addSubscriber(key)
+    const gone = listeners.gone && { key, listener: listeners.gone }
+    if (gone) this.#gone.add(gone)
     const leaves = [
+      gone && (() => this.#gone.delete(gone)),
       listeners.usage &&
         this.#usage.subscribe(key, scope, membershipId, listeners.usage),
       listeners.model &&
@@ -1049,6 +1075,31 @@ export class SessionCoordinator {
     return this.#turnExecution(scopeKey(scope)).state
   }
 
+  /**
+   * Ends a Session a provider read or report found gone, when `cause` says it
+   * is: every subscriber to its readings hears it once, then its execution,
+   * journal and readings are dropped, so no later resume is served from them
+   * and nothing reads it again. Returns whether it was gone.
+   */
+  endIfGone(scope: SessionScope, cause: unknown) {
+    if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
+    const key = scopeKey(scope)
+    const { agentId, sessionId } = scope
+    this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
+    // All taken first, so a listener that finds the Session gone again tells
+    // nobody twice.
+    const heard = [...this.#gone].filter((each) => each.key === key)
+    for (const each of heard) this.#gone.delete(each)
+    for (const { listener } of heard) listener(cause)
+    const segment = this.#executions.get(key)?.segment
+    if (segment) {
+      segment.terminal = true
+      segment.fanout.close()
+    }
+    this.#evict(key)
+    return true
+  }
+
   /** Diagnostic counters for this coordinator's live resources. */
   gauges(): {
     executions: number
@@ -1098,6 +1149,16 @@ export class SessionCoordinator {
     if (!segment || replayPlan(segment, undefined) !== "history")
       return undefined
     return { turnId: segment.turnId, at: segment.startedAt }
+  }
+
+  /**
+   * How far the live turn has streamed, as the cursor of a view that holds it
+   * that far; absent unless its journal still holds what streams on.
+   */
+  streamed(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.terminal) return undefined
+    return { turnId: segment.turnId, after: segment.nextSequence }
   }
 
   /**
@@ -1422,7 +1483,7 @@ export class SessionCoordinator {
       const plan = request.reset
         ? "reset"
         : replayPlan(existing.segment, request.after)
-      if (plan === "reset") return this.#resetSubscription(existing.segment)
+      if (plan === "reset") return this.#unreplayable(existing.segment, request)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -1439,7 +1500,7 @@ export class SessionCoordinator {
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
-    if (plan === "reset") return this.#resetSubscription(recovered.segment)
+    if (plan === "reset") return this.#unreplayable(recovered.segment, request)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -2182,8 +2243,8 @@ export class SessionCoordinator {
 
   /**
    * A turn that outgrows either replay bound loses its journal. A subscriber the
-   * rest of the segment cannot answer is then sent one reset instead of a
-   * partial history.
+   * rest of the segment cannot answer then rebuilds from history instead of
+   * reading a partial one.
    */
   #remember(segment: Segment, value: SequencedTurnEvent) {
     const journal = segment.journal
@@ -2361,6 +2422,18 @@ export class SessionCoordinator {
         live.close()
       },
     }
+  }
+
+  /**
+   * Answers a reader the journal cannot. One with a cursor is refused, and its
+   * resume answers `resync`: that is its one signal to rebuild from history.
+   * A cursorless reader, or one that holds part of the turn it cannot position,
+   * is sent one reset instead, since nothing else tells it.
+   */
+  #unreplayable(segment: Segment, request: CoordinatorRecoveryRequest) {
+    if (request.after !== undefined && !request.reset)
+      throw new ReplayCursorLostError()
+    return this.#resetSubscription(segment)
   }
 
   #resetSubscription(segment: Segment) {

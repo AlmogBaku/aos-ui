@@ -47,6 +47,7 @@ import {
 } from "./runtime"
 import {
   clientTurnIds,
+  ReplayCursorLostError,
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
   type ClientSend,
@@ -692,7 +693,10 @@ export function createChannels(options: CreateChannelsOptions) {
      * `paged` older history itself. The join lands once the answer is
      * written, and the Session's execution, readings and row reach the member
      * as events after it. A Session waiting on input asks its runtime whether
-     * the wait still stands, which the answer does not wait for.
+     * the wait still stands, which the answer does not wait for. A resume the
+     * journal serves asks the provider nothing first: the reads its join
+     * starts, and the turn subscription, find a Session gone meanwhile and end
+     * it, which spares every rejoin a round trip.
      */
     async resume(
       membership: Membership,
@@ -732,6 +736,9 @@ export function createChannels(options: CreateChannelsOptions) {
         if (older.offset > page.total) throw new CommandRefusedError("invalid")
         await membership.showOlderPage(page, older)
         return { page }
+      } catch (cause) {
+        membership.endIfGone(cause)
+        throw cause
       } finally {
         paging.delete(membership)
       }
@@ -845,8 +852,9 @@ class Membership {
           : "idle",
       followedTurn: () => this.#followedTurn,
       invalidate: () => this.#invalidate(),
+      // A Session the provider reports gone ends each of its memberships.
       report: (cause) => {
-        if (this.detached) return
+        if (this.detached || this.endIfGone(cause)) return
         const failure = options.describe(cause)
         options.logger.error(
           { errorCode: failure.code, message: failure.message },
@@ -913,7 +921,8 @@ class Membership {
    * what it holds up to `position`. Either way the member then joins the
    * channel and follows the live turn. Returns the page it replayed, and
    * `resync` when the view must rebuild itself. A join that has not landed
-   * by its deadline detaches the membership, and the resume rejects then.
+   * by its deadline detaches the membership, and the resume rejects then; one
+   * that finds its Session gone ends it.
    */
   resume(
     position: ResumePosition,
@@ -921,7 +930,12 @@ class Membership {
   ) {
     this.#releaseCells()
     this.#send({ type: "join" })
-    return unlessAborted(this.#resume(position, read), this.#detaching)
+    return unlessAborted(this.#resume(position, read), this.#detaching).catch(
+      (cause: unknown) => {
+        this.endIfGone(cause)
+        throw cause
+      }
+    )
   }
 
   async #resume(
@@ -940,13 +954,17 @@ class Membership {
       showsPrompt(this.#channels.current(this.#scope), position, history),
       history !== undefined
     )
-    // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload. A view rebuilt
-    // from history owns nothing of the turn, so it follows without a cursor.
-    const resync = await this.#followPositioned(
-      history === undefined ? position : {},
-      replay
-    )
+    // A view rebuilt from the whole page holds the turn as far as it had
+    // streamed when the page was read, so its stream continues from there on.
+    if (replay && replay.restarted === undefined) {
+      await this.#followPage(replay)
+      return { history: replay.history }
+    }
+    // A cursor for another turn cannot position this one, and a cursor the
+    // journal no longer holds cannot be served: both need a full reload. A view
+    // rebuilt from a page cut where the turn began owns nothing of it, so it
+    // follows without a cursor.
+    const resync = await this.#followPositioned(replay ? {} : position, replay)
     return { ...(history === undefined ? {} : { history }), ...resync }
   }
 
@@ -1023,9 +1041,9 @@ class Membership {
    * turn began, so `restarted` names the turn the view then shows only while
    * its follow streams it. A page that cannot be cut there, or a turn adopted
    * without its native start, is kept whole and its follow `reset`. Any other
-   * turn keeps the page: its start is gone and a cursorless follow could only
-   * reset it. A turn that starts during the read waits for the page and is
-   * replayed the same way.
+   * turn keeps the page, whose history stands for the start the journal no
+   * longer holds, and its live events follow it. A turn that starts during the
+   * read waits for the page and is replayed the same way.
    */
   async #replayPage(read: () => Promise<SessionHistoryResponse>) {
     const scope = this.#scope
@@ -1055,7 +1073,8 @@ class Membership {
     const held = started()
     const shown =
       restarted ?? (held ? this.#coordinator.replayStart(scope) : undefined)
-    if (!shown) return { history, held }
+    if (!shown)
+      return { history, held, streamed: this.#coordinator.streamed(scope) }
     const cut =
       shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
     return {
@@ -1097,6 +1116,25 @@ class Membership {
       await this.#recoverReplay(replay.restarted, replay.held)
       throw cause
     }
+  }
+
+  /**
+   * Follows the live turn beside a whole page from as far as it had `streamed`
+   * when the page was read. A journal that pruned that point since streams its
+   * live events alone, and a turn that ended with it adds nothing to the page.
+   */
+  async #followPage(replay: {
+    corrections: number
+    streamed?: { turnId: string; after: number }
+  }) {
+    const { corrections, streamed } = replay
+    const follow = (after: number): Promise<unknown> =>
+      this.#follow(true, after, corrections).catch((cause: unknown) => {
+        if (!(cause instanceof ReplayCursorLostError)) throw cause
+        return after === 0 ? undefined : follow(0)
+      })
+    const { turnId } = this.#coordinator.snapshot(this.#scope)
+    await follow(streamed && streamed.turnId === turnId ? streamed.after : 0)
   }
 
   /**
@@ -1337,6 +1375,7 @@ class Membership {
       },
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
+      gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow(
@@ -1381,7 +1420,26 @@ class Membership {
 
   /** Reports a failure that has no request to answer. */
   async report(cause: unknown) {
-    await this.emit({ kind: "error", cause })
+    if (!this.endIfGone(cause)) await this.emit({ kind: "error", cause })
+  }
+
+  /**
+   * Ends this membership when `cause` finds its Session gone. The coordinator
+   * tells each member whose readings it holds and drops the Session; this
+   * member, whose readings a join may not hold yet, is told as well. Returns
+   * whether the Session was gone.
+   */
+  endIfGone(cause: unknown) {
+    if (this.pending || !this.#coordinator.endIfGone(this.#scope, cause))
+      return false
+    if (!this.detached) this.#end(cause)
+    return true
+  }
+
+  /** Tells this member its Session is gone, and parts. */
+  #end(cause: unknown) {
+    void this.emit({ kind: "error", cause }).catch(() => undefined)
+    this.part()
   }
 
   /** Steers the turn this member follows, which a later turn has not replaced. */

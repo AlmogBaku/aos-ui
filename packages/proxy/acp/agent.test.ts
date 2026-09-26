@@ -1941,21 +1941,42 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("keeps the page of a discovered turn nobody here sent", async () => {
+  it("keeps the page of a discovered turn nobody here sent, streaming on from where it was read", async () => {
+    const background = new EventSource()
+    let reading = false
     const test = await harness({
       providerIds: true,
       subscribeTurns: announceRunningTurn,
-      discover: async () => ({ handle: new EventSource(), state: "running" }),
+      discover: async () => ({ handle: background, state: "running" }),
       history: storedLiveTurn(),
+      // The turn streams on between the page read and its follow.
+      onReplay: () => {
+        if (reading) chunk(background, "Between")
+      },
     })
     await test.list()
 
     await open(test, { replayFrom: { type: "start" } })
-
-    await waitFor(() =>
-      expect(test.coordinator.state(test.scope)).toBe("running")
+    await test.recorder.wait(
+      said("AOS_RESET_REQUIRED"),
+      "an update carrying AOS_RESET_REQUIRED"
     )
     expect(flow(test.recorder)).toContain("history assistant-0")
+    // Streamed once the turn was adopted, so the page it reloads holds it too.
+    chunk(background, "Live")
+    reading = true
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    chunk(background, "After")
+    background.emit({ kind: TurnEventKind.TurnEnded })
+    await test.recorder.wait(endedTurn, "the turn to end")
+
+    expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
+      "history user-1",
+      "history assistant-0",
+      "chunk Between",
+      "chunk After",
+    ])
     test.close()
   })
 

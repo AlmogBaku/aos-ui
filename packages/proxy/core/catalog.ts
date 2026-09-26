@@ -81,7 +81,7 @@ export type Catalog = {
 
 export type CatalogOptions = {
   runtime: ServerRuntime
-  coordinator: Pick<SessionCoordinator, "state">
+  coordinator: Pick<SessionCoordinator, "state" | "endIfGone">
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -180,7 +180,11 @@ export function createCatalog({
         (row) => listener(overlaid(row))
       )
       // The provider may have changed a listed row while nobody followed it.
-      if (hasSession(target)) void read(target).catch(failed)
+      if (hasSession(target))
+        void read(target).catch((cause: unknown) => {
+          failed(cause)
+          coordinator.endIfGone(target, cause)
+        })
       return unsubscribe
     },
 
