@@ -7,6 +7,13 @@ import {
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
+import {
+  createOwner,
+  defaultClock,
+  ownerSetup,
+  type Logger,
+  type OwnerContext,
+} from "../../lifecycle"
 import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
@@ -27,7 +34,7 @@ import {
   type AosExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
-import { unlessAborted } from "../core/channel"
+import { SILENT, unlessAborted } from "../core/channel"
 import type { ServerAttachmentStage, SessionPatch } from "../core/runtime"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
@@ -128,6 +135,31 @@ function sameExposure(
     previous.foreground === next.foreground &&
     previous.idle === next.idle
   )
+}
+
+/** What moves a connection: its handshake landing, and its socket closing. */
+type ConnectionSignal = { type: "initialized" } | { type: "closed" }
+
+/**
+ * One connection's lifetime: handshaking until `initialize` is answered, ready
+ * while it serves its browser, and closed once its socket closes or its
+ * handshake fails. What it holds is on its stack, so every exit releases it.
+ */
+function connectionMachine(logger: Logger) {
+  return ownerSetup<OwnerContext, ConnectionSignal>(
+    "connection",
+    logger,
+    defaultClock
+  ).createMachine({
+    context: { generation: 0 },
+    initial: "handshaking",
+    on: { closed: ".closed" },
+    states: {
+      handshaking: { on: { initialized: "ready" } },
+      ready: {},
+      closed: { type: "final" },
+    },
+  })
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
@@ -674,36 +706,47 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onConnect(async (connection) => {
-    const { client } = connection
+    const logger = context.ownerLogger ?? SILENT
+    const owner = createOwner(connectionMachine(logger), {
+      logger,
+      clock: defaultClock,
+      bindings: { connectionId: context.connectionId, role },
+    })
+    const { stack } = owner
+    stack.defer(() => {
+      sessions.close()
+      context.presence?.clear(context.principalId, context.connectionId)
+      readState?.close()
+    })
     try {
       await connection.initialized
     } catch {
+      // A handshake that failed, or a socket closed before it, opened nothing.
+      owner.actor.send({ type: "closed" })
       return
     }
+    owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
     log("acp.connection.opened")
     // The workspace's events reach this connection as its stack shows them.
-    const show = (event: WorkspaceEvent) => sessions.show(client, event)
-    for (const activity of activityFeed?.snapshot() ?? [])
-      show({ kind: "activity", activity })
-    const stops = [
-      activityFeed?.subscribe((activity) =>
-        show({ kind: "activity", activity })
-      ),
+    const show = (event: WorkspaceEvent) =>
+      sessions.show(connection.client, event)
+    if (activityFeed)
+      stack.defer(
+        activityFeed.open((activity) => show({ kind: "activity", activity }))
+      )
+    stack.defer(
       catalog.invalidation.subscribe(() =>
         show({ kind: "catalog-invalidated" })
-      ),
-      // A connection that authenticated over ACP ends with its credential.
-      context.authentication?.expire(() => connection.close()),
-    ]
+      )
+    )
+    // A connection that authenticated over ACP ends with its credential.
+    const expiry = context.authentication?.expire(() => connection.close())
+    if (expiry) stack.defer(expiry)
     await connection.closed
     log("acp.connection.closed")
-    for (const stop of stops) stop?.()
-    sessions.close()
-    context.presence?.clear(context.principalId, context.connectionId)
-    readState?.close()
-    activityFeed?.close()
+    owner.actor.send({ type: "closed" })
   })
 
   return app

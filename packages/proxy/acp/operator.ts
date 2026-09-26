@@ -27,8 +27,9 @@ export type OperatorAcpServiceOptions = {
 }
 
 /**
- * The operator listener's ACP service: the deployment's one catalog and, per
- * accepted connection, its own read-state service and activity feed.
+ * The operator listener's ACP service: the deployment's one catalog and
+ * activity feed, which each connection opens once initialized, and per
+ * accepted connection its own read-state service.
  */
 export function createOperatorAcpService({
   publicOrigin,
@@ -41,6 +42,11 @@ export function createOperatorAcpService({
   now = Date.now,
 }: OperatorAcpServiceOptions) {
   const role = "operator" as const
+  const activityFeed = createActivityFeed({
+    catalog,
+    coordinator: runtimeInstance.sessions,
+    now,
+  })
   const service = createAcpService({
     publicOrigin,
     role,
@@ -64,11 +70,7 @@ export function createOperatorAcpService({
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,
       }),
-      activityFeed: createActivityFeed({
-        catalog,
-        coordinator: runtimeInstance.sessions,
-        now,
-      }),
+      activityFeed,
     }),
   })
   // The cache is part of the listener's surface: push delivery gates on the

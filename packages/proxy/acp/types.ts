@@ -10,6 +10,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
+import type { Logger } from "../../lifecycle"
 import type {
   SessionHistoryResponse,
   SessionModelsResponse,
@@ -68,6 +69,8 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
+  /** Where the connection's lifecycle owner logs; silent without one. */
+  ownerLogger?: Logger
 }
 
 /**
@@ -207,13 +210,13 @@ export interface ReadState {
 }
 
 /**
- * Per-connection, bounded, in-memory activity feed hydrated from coordinator
- * snapshots and the session list. Implemented in `activity-feed.ts`.
+ * The workspace's activity, hydrated from coordinator snapshots and the
+ * session list for each connection that opens it. Implemented in
+ * `activity-feed.ts`.
  */
 export interface ActivityFeed {
-  snapshot(): readonly Activity[]
-  subscribe(listener: (event: Activity) => void): () => void
-  close(): void
+  /** Shows `listener` what needs a badge now, then each change, until the stop. */
+  open(listener: (activity: Activity) => void): () => void
 }
 
 // ---------------------------------------------------------------------------

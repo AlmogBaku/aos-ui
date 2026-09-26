@@ -536,7 +536,8 @@ type MembershipContext = MembershipOptions & {
   clock: Clock
 }
 
-const SILENT: Logger = {
+/** A logger that writes nothing, for an owner no deployment observes. */
+export const SILENT: Logger = {
   debug: () => {},
   info: () => {},
   warn: () => {},

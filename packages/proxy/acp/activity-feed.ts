@@ -9,8 +9,6 @@ import type { SessionCoordinator } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { ActivityFeed } from "./types"
 
-const DEFAULT_LIMIT = 200
-const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000
 /** One catalog page is the provider maximum and all a badge needs. */
 const HYDRATION_PAGE_SIZE = 100
 
@@ -18,8 +16,6 @@ export type ActivityFeedOptions = {
   catalog: Pick<Catalog, "list" | "rows" | "scope">
   coordinator: Pick<SessionCoordinator, "snapshot" | "subscribeExecutions">
   now?: () => number
-  limit?: number
-  maxAgeMs?: number
 }
 
 /** The one place the attention kind is decided; every non-permission is a question. */
@@ -54,114 +50,91 @@ function activityOf(event: ExecutionEvent): Activity {
   }
 }
 
+const rowKey = (row: SessionRow) => `${row.agentId}\u0000${row.id}`
+
 export function createActivityFeed({
   catalog,
   coordinator,
   now = Date.now,
-  limit = DEFAULT_LIMIT,
-  maxAgeMs = DEFAULT_MAX_AGE_MS,
 }: ActivityFeedOptions): ActivityFeed {
-  const buffer: Activity[] = []
-  const listeners = new Set<(event: Activity) => void>()
-  const lastUnread = new Map<string, boolean>()
-  let unsubscribeRows: (() => void) | undefined
-  let closed = false
-
   const stamp = () => new Date(now()).toISOString()
 
-  const trim = () => {
-    const cutoff = now() - maxAgeMs
-    while (buffer.length > 0 && Date.parse(buffer[0]!.occurredAt) < cutoff)
-      buffer.shift()
-    if (buffer.length > limit) buffer.splice(0, buffer.length - limit)
-  }
+  /** One connection's feed, which observes nothing once stopped. */
+  function open(listener: (activity: Activity) => void) {
+    const lastUnread = new Map<string, boolean>()
+    let unsubscribeRows: (() => void) | undefined
+    let closed = false
 
-  const push = (event: Activity) => {
-    if (closed) return
-    buffer.push(event)
-    trim()
-    for (const listener of [...listeners]) listener(event)
-  }
-
-  const rowKey = (row: SessionRow) => `${row.agentId}\u0000${row.id}`
-
-  const noteUnread = (row: SessionRow) => {
-    const unread = row.unread === true
-    if (lastUnread.get(rowKey(row)) === unread) return
-    lastUnread.set(rowKey(row), unread)
-    push({
-      agentId: row.agentId,
-      sessionId: row.id,
-      occurredAt: stamp(),
-      type: "unread-changed",
-      unread,
-    })
-  }
-
-  /** Republishes what the provider already reports about a Session. */
-  const noteExecution = (row: SessionRow) => {
-    if (row.status !== "waiting-for-input" && row.status !== "failed") return
-    const scope = catalog.scope(row.agentId, row.id)
-    const execution = scope ? coordinator.snapshot(scope) : undefined
-    const base = {
-      agentId: row.agentId,
-      sessionId: row.id,
-      occurredAt: stamp(),
+    const push = (activity: Activity) => {
+      if (!closed) listener(activity)
     }
-    if (row.status === "failed") {
-      const turnId =
-        execution && "turnId" in execution ? execution.turnId : undefined
-      push({ ...base, type: "turn-failed", turnId: turnId ?? row.id })
-      return
-    }
-    for (const request of execution?.requests ?? [])
+
+    const noteUnread = (row: SessionRow) => {
+      const unread = row.unread === true
+      if (lastUnread.get(rowKey(row)) === unread) return
+      lastUnread.set(rowKey(row), unread)
       push({
-        ...base,
-        type: "attention-requested",
-        requestId: request.requestId,
-        attentionKind: attentionKindOf(request),
+        agentId: row.agentId,
+        sessionId: row.id,
+        occurredAt: stamp(),
+        type: "unread-changed",
+        unread,
       })
-  }
-
-  const hydrate = async () => {
-    try {
-      const { rows } = await catalog.list(undefined, 0, HYDRATION_PAGE_SIZE)
-      if (closed) return
-      for (const row of rows) {
-        // Seeding read first keeps hydration to the Sessions that need a badge.
-        lastUnread.set(rowKey(row), false)
-        noteUnread(row)
-        noteExecution(row)
-      }
-    } catch {
-      // A catalog the provider cannot serve leaves the feed to live events.
-    } finally {
-      if (!closed) unsubscribeRows = catalog.rows.subscribe(noteUnread)
     }
-  }
 
-  const unsubscribe = coordinator.subscribeExecutions((event) =>
-    push(activityOf(event))
-  )
-  void hydrate()
-
-  return {
-    snapshot() {
-      return [...buffer]
-    },
-
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
+    /** Republishes what the provider already reports about a Session. */
+    const noteExecution = (row: SessionRow) => {
+      if (row.status !== "waiting-for-input" && row.status !== "failed") return
+      const scope = catalog.scope(row.agentId, row.id)
+      const execution = scope ? coordinator.snapshot(scope) : undefined
+      const base = {
+        agentId: row.agentId,
+        sessionId: row.id,
+        occurredAt: stamp(),
       }
-    },
+      if (row.status === "failed") {
+        const turnId =
+          execution && "turnId" in execution ? execution.turnId : undefined
+        push({ ...base, type: "turn-failed", turnId: turnId ?? row.id })
+        return
+      }
+      for (const request of execution?.requests ?? [])
+        push({
+          ...base,
+          type: "attention-requested",
+          requestId: request.requestId,
+          attentionKind: attentionKindOf(request),
+        })
+    }
 
-    close() {
+    const hydrate = async () => {
+      try {
+        const { rows } = await catalog.list(undefined, 0, HYDRATION_PAGE_SIZE)
+        if (closed) return
+        for (const row of rows) {
+          // Seeding read first keeps hydration to the Sessions that need a badge.
+          lastUnread.set(rowKey(row), false)
+          noteUnread(row)
+          noteExecution(row)
+        }
+      } catch {
+        // A catalog the provider cannot serve leaves the feed to live events.
+      } finally {
+        if (!closed) unsubscribeRows = catalog.rows.subscribe(noteUnread)
+      }
+    }
+
+    const unsubscribe = coordinator.subscribeExecutions((event) =>
+      push(activityOf(event))
+    )
+    void hydrate()
+
+    return () => {
       closed = true
       unsubscribe()
       unsubscribeRows?.()
-      listeners.clear()
-    },
+    }
   }
+
+  return { open }
 }

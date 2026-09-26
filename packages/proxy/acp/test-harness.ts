@@ -53,7 +53,12 @@ import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
 import { withFaults } from "./test-faults"
-import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
+import type {
+  AcpConnectionContext,
+  AcpOutbound,
+  ActivityFeed,
+  Translators,
+} from "./types"
 
 export const AGENT = "researcher"
 export const PRINCIPAL = "operator"
@@ -814,22 +819,38 @@ export async function harness(options: HarnessOptions = {}) {
     connected: vi.fn(() => false),
   }
   const activityListeners = new Set<(event: Activity) => void>()
-  const activityFeed = {
-    snapshot: () => options.activity ?? [],
-    subscribe: (listener: (event: Activity) => void) => {
+  const activityFeed: ActivityFeed = {
+    open(listener) {
+      for (const activity of options.activity ?? []) listener(activity)
       activityListeners.add(listener)
-      return () => activityListeners.delete(listener)
+      return () => {
+        activityListeners.delete(listener)
+      }
     },
-    close: vi.fn(),
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
   // Every connection shares the process's one catalog, as both listeners do.
-  const catalog = createCatalog({
+  const shared = createCatalog({
     runtime: faults.runtime,
     coordinator,
     rows: createSessionRows(options.now ? { now: options.now } : undefined),
   })
+  const invalidationListeners = new Set<() => void>()
+  const catalog: Catalog = {
+    ...shared,
+    invalidation: {
+      signaled: shared.invalidation.signaled,
+      subscribe(listener) {
+        invalidationListeners.add(listener)
+        const stop = shared.invalidation.subscribe(listener)
+        return () => {
+          invalidationListeners.delete(listener)
+          stop()
+        }
+      },
+    },
+  }
   const composed = options.compose?.({ runtimeInstance, catalog })
   const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
@@ -871,6 +892,7 @@ export async function harness(options: HarnessOptions = {}) {
       channels,
       presence,
       logger,
+      ownerLogger: logs.logger,
       role: "operator",
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
@@ -967,6 +989,8 @@ export async function harness(options: HarnessOptions = {}) {
     publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },
+    /** The feeds the open connections observe; a closed one leaves none. */
+    observers: () => activityListeners.size + invalidationListeners.size,
   }
 }
 

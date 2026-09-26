@@ -1,9 +1,9 @@
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { client, methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import { AOS_JSONRPC_ERRORS } from "../../../protocol/acp"
 import { useFakeClock } from "../../../../test/support/fake-clock"
-import { harness, open, SESSION, type Recorded } from "../test-harness"
+import { harness, open, SESSION, settled, type Recorded } from "../test-harness"
 
 const modelOptions = (entry: Recorded) =>
   JSON.stringify(entry.params).includes("config_option_update")
@@ -19,6 +19,25 @@ function modelReads(test: Awaited<ReturnType<typeof harness>>) {
         fields.to === "reading"
     ).length
 }
+
+describe("connection faults", () => {
+  it("releases every feed a connection observes, whether its socket closes before its handshake or after", async () => {
+    const test = await harness()
+    const early = client({ name: "aos-browser" }).connect(test.agentApp())
+
+    early.close()
+    test.close()
+    await settled()
+
+    expect(test.logs.transitions({ owner: "connection" })).toEqual(
+      expect.arrayContaining([
+        ["handshaking", "closed"],
+        ["ready", "closed"],
+      ])
+    )
+    expect(test.observers()).toBe(0)
+  })
+})
 
 describe("membership faults", () => {
   it("gives a late joiner the model options its Session last read, without reading them again", async () => {
