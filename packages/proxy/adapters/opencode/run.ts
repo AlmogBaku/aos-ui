@@ -424,6 +424,16 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     )
   }
 
+  /** The per-Session records held; none once every turn has settled. */
+  get retainedRecords() {
+    return (
+      this.#turns.size +
+      this.#nativeSettlements.size +
+      this.#ownAdmissions.size +
+      this.#adoptedAdmissions.size
+    )
+  }
+
   /** Disposes every retry loop, so no timer of this engine fires again. */
   close() {
     this.#closed = true
@@ -1106,6 +1116,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       run.queue.close()
       run.segmentClosed = true
       run.settle()
+      this.#forgetAdoption(run)
     }
   }
 
@@ -1113,6 +1124,11 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     if (run.nativeTerminal) return
     run.nativeTerminal = true
     if (authoritativeNativeIdle) this.#settleNative(run.nativeSettlement)
+    // Once idle or superseded, its admission cannot pass for a foreign turn.
+    if (this.#ownAdmissions.get(run.key) === run.expectedAdmission)
+      this.#ownAdmissions.delete(run.key)
+    // An open segment ends here, so no redial asks for its adoption again.
+    if (!run.segmentClosed) this.#forgetAdoption(run)
     run.controller.abort()
     this.#abortSource(run)
     if (!run.admissionObserved) {
@@ -1131,6 +1147,18 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     }
     run.settle()
     if (this.#turns.get(run.key) === run) this.#turns.delete(run.key)
+  }
+
+  /**
+   * Frees the adoption `run` recovers once its end is delivered. A turn whose
+   * stream failed keeps it, since the redial that recovers it still needs it.
+   */
+  #forgetAdoption(run: ActiveTurn) {
+    if (
+      this.#adoptedAdmissions.get(run.key)?.admissionId ===
+      run.expectedAdmission
+    )
+      this.#adoptedAdmissions.delete(run.key)
   }
 
   #segmentFail(run: ActiveTurn, code: string, message: string, reset = false) {

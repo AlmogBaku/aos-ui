@@ -1675,7 +1675,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     await discovered!.handle.stop()
   })
 
-  it("adopts a running foreign turn from its first event, and recovers the same admission later", async () => {
+  it("adopts a running foreign turn from its first event, and recovers the same admission on a redial", async () => {
     const admittedAt = Date.parse("2026-09-24T08:00:00.000Z")
     const log = nativeLog([
       admitted(0, "msg-tui", admittedAt),
@@ -1695,15 +1695,19 @@ describe("OpenCodeRunEngine foreign turns", () => {
     })
 
     const discovered = await engine.discover(scope, "aos-recovered-1")
-    running = false
 
     expect(discovered).toMatchObject({
       state: "running",
       fromStart: true,
       startedAt: admittedAt,
     })
-    const events = await collect(discovered!.handle)
-    expect(events).toEqual([
+    // A redial while the turn runs recovers the same adopted admission.
+    const recovered = await engine.recover(scope, {
+      sessionId: scope.sessionId,
+      turnId: "aos-recovered-1",
+    })
+    running = false
+    expect(await collect(recovered)).toEqual([
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
@@ -1712,13 +1716,43 @@ describe("OpenCodeRunEngine foreign turns", () => {
       },
       { kind: TurnEventKind.TurnEnded },
     ])
-
-    const recovered = await engine.recover(scope, {
-      sessionId: scope.sessionId,
-      turnId: "aos-recovered-1",
-    })
-    expect(JSON.stringify(await collect(recovered))).toContain("From the TUI")
     expect(state.sessions.prompt).not.toHaveBeenCalled()
+  })
+
+  it("frees every per-Session record once each turn settles", async () => {
+    const log = nativeLog()
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => controlledStream().source),
+      prompt: vi.fn(
+        async (_id: string, request: { id: string; prompt: unknown }) => {
+          const seq = log.events.length
+          log.events.push(admitted(seq, request.id), textEnded(seq + 1, "Done"))
+          return {
+            data: {
+              admittedSeq: seq,
+              id: request.id,
+              sessionID: scope.providerSessionId,
+              prompt: request.prompt,
+              delivery: "queue",
+              timeCreated: 1,
+            },
+          }
+        }
+      ),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, { logger })
+
+    await collect(await engine.start(scope, input()))
+    // A turn the TUI started, adopted while it runs.
+    log.events.push(admitted(2, "msg-tui"), textEnded(3, "From the TUI"))
+    state.sessions.active.mockResolvedValueOnce({
+      data: { [scope.providerSessionId]: { type: "running" } },
+    })
+    await collect((await engine.discover(scope, "aos-recovered-1"))!.handle)
+    await collect(await engine.start(scope, input({ turnId: "run-2" })))
+
+    expect(engine.retainedRecords).toBe(0)
   })
 
   it("never discovers its own running turn", async () => {
