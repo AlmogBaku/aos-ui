@@ -434,7 +434,7 @@ function adoptingHarness() {
   let state: { state: string; turnId?: string } = { state: "idle" }
   const watchers: ServerTurnListener[] = []
   const listeners = new Set<(event: ExecutionEvent) => void>()
-  const discovered: Array<{ scope: SessionScope; role: string }> = []
+  const discovered: SessionScope[] = []
   let stopped = 0
   let discover: () => Promise<unknown> = async () => undefined
   const channels = createChannels({
@@ -446,8 +446,8 @@ function adoptingHarness() {
           stopped += 1
         }
       },
-      async discover(scope, role) {
-        discovered.push({ scope, role })
+      async discover(scope) {
+        discovered.push(scope)
         return discover()
       },
       subscribeExecutions(_scope, listener) {
@@ -563,10 +563,10 @@ describe("createChannel adopting runtime-started turns", () => {
     runtime.watchers[0]!.onTurn()
     await settle()
 
-    expect(runtime.discovered).toEqual([{ scope: SCOPE, role: "operator" }])
+    expect(runtime.discovered).toEqual([SCOPE])
   })
 
-  it("adopts under the guest role when only a guest is in the channel", async () => {
+  it("adopts as the guest when only a guest is in the channel", async () => {
     const runtime = adoptingHarness()
     runtime.channels.add(GUEST_SCOPE, member().fake, {
       hasPrompt: false,
@@ -576,7 +576,7 @@ describe("createChannel adopting runtime-started turns", () => {
     runtime.watchers[0]!.onTurn()
     await settle()
 
-    expect(runtime.discovered).toEqual([{ scope: GUEST_SCOPE, role: "guest" }])
+    expect(runtime.discovered).toEqual([GUEST_SCOPE])
   })
 
   it("skips a conflict silently and adopts at the proxy turn's end", async () => {

@@ -295,8 +295,6 @@ describe("AOS ACP agent", () => {
       {
         membershipId: "rest",
         principalId: "operator",
-        role: "operator",
-        canControl: true,
       }
     )
     test.sources[0]?.emit(turnStarted())

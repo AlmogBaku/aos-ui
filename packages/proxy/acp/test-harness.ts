@@ -785,7 +785,6 @@ export async function harness(options: HarnessOptions = {}) {
     engine: faults.runtime.turns,
     readings: faults.runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
     maxSubscriberBytes: 256 * 1024,
   })
@@ -834,8 +833,7 @@ export async function harness(options: HarnessOptions = {}) {
       ? {
           adoption: {
             subscribeTurns,
-            discover: (channelScope, role) =>
-              coordinator.discover(channelScope, role),
+            discover: (channelScope) => coordinator.discover(channelScope),
             subscribeExecutions: (channelScope, listener) =>
               coordinator.subscribeScope(channelScope, listener),
           },

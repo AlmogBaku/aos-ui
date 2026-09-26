@@ -271,8 +271,6 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
     {
       membershipId: "rest",
       principalId: "operator",
-      role: "operator",
-      canControl: true,
     }
   )
   const source = test.sources[0]
@@ -280,11 +278,11 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
   source.emit(turnStarted())
   await vi.waitFor(() => expect(test.coordinator.state(SCOPE)).toBe("running"))
   for (const [index, text] of corrections.entries())
-    await test.coordinator.steer(
-      SCOPE,
-      { requestId: `steer-${index + 1}`, expectedTurnId: "run-live", text },
-      "operator"
-    )
+    await test.coordinator.steer(SCOPE, {
+      requestId: `steer-${index + 1}`,
+      expectedTurnId: "run-live",
+      text,
+    })
   return source
 }
 

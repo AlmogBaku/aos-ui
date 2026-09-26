@@ -5,3 +5,6 @@
  * inferred from a role.
  */
 export const OPERATOR_PRINCIPAL = "operator"
+
+/** Every guest principal is this prefix and the invitation's token id. */
+export const GUEST_PRINCIPAL_PREFIX = "guest:"

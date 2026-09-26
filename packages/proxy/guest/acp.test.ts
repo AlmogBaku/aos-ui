@@ -512,7 +512,6 @@ function harness(options: HarnessOptions = {}) {
     engine,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 4,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
   })
@@ -538,6 +537,7 @@ function harness(options: HarnessOptions = {}) {
     channels: createChannels({
       snapshot: (scope) => coordinator.snapshot(scope),
     }),
+    guestActiveExecutions: 4,
     now: () => clock.now,
     schedule: (delayMs, task) => {
       scheduled.push({ delayMs, task })
@@ -808,8 +808,6 @@ describe("guest ACP listener", () => {
       {
         membershipId: "operator",
         principalId: "operator",
-        role: "operator",
-        canControl: true,
       }
     )
     const socket = await wire(test.listener)
@@ -1390,7 +1388,7 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("stops its own run through the controller the projection grants", async () => {
+  it("stops its own run", async () => {
     const test = harness({
       existing: true,
       handle: () =>
@@ -1432,8 +1430,6 @@ describe("guest ACP listener", () => {
       {
         membershipId: "operator",
         principalId: "operator",
-        role: "operator",
-        canControl: true,
       }
     )
     const socket = await redeemedWire(
@@ -1485,8 +1481,6 @@ describe("guest ACP listener", () => {
       {
         membershipId: "operator",
         principalId: "operator",
-        role: "operator",
-        canControl: true,
       }
     )
     for await (const _ of other.events) void _
@@ -1947,7 +1941,7 @@ describe("guest scope and commands", () => {
     }
   )
 
-  it("steers a turn it started, as the invitation's controller", async () => {
+  it("steers a turn it started", async () => {
     const test = harness({ existing: true, handle: steerableHandle })
     await test.initialize()
     await test.login(await invite(test.invitations))

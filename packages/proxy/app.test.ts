@@ -42,7 +42,6 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
     engine: runtime.turns,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 32,
     maxSubscriberBytes: 256 * 1024,
   })

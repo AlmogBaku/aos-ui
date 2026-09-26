@@ -228,7 +228,7 @@ export async function createConfiguredProxy(
           adoption: {
             subscribeTurns: (scope, listener) =>
               turns.subscribeTurns!(scope, listener),
-            discover: (scope, role) => sessions.discover(scope, role),
+            discover: (scope) => sessions.discover(scope),
             subscribeExecutions: (scope, listener) =>
               sessions.subscribeScope(scope, listener),
           },
@@ -257,6 +257,7 @@ export async function createConfiguredProxy(
         invitations: service,
         attachmentStages,
         channels,
+        guestActiveExecutions: config.limits.guestActiveExecutions,
         logger: dependencies.logger,
         ...clock,
       }),

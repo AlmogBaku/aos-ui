@@ -193,7 +193,6 @@ function coordinator(engine: OpenClawTurnEngine) {
     // No test here subscribes anything to a reading.
     readings: { context: vi.fn(), models: vi.fn() },
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
   })
@@ -202,8 +201,6 @@ function coordinator(engine: OpenClawTurnEngine) {
 const operatorAccess = {
   membershipId: "operator",
   principalId: "operator",
-  role: "operator" as const,
-  canControl: true,
 }
 
 describe("OpenClaw run engine", () => {

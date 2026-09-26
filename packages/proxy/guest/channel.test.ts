@@ -95,6 +95,7 @@ async function connectGuest(
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
       channels: test.channels,
+      guestActiveExecutions: 2,
     },
     createSessionRows(),
     "guest-connection"
@@ -449,7 +450,7 @@ describe("guest in a Session channel", () => {
     })
     await test.list()
     // A restart lost the operator's turn; the runtime still waits on it.
-    await test.coordinator.discover(test.scope, "guest")
+    await test.coordinator.discover(test.scope)
     const guest = await connectGuest(test)
 
     await open(guest, { sessionId: GUEST_REF })

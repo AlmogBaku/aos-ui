@@ -66,8 +66,6 @@ const scope: SessionScope = {
 const access = {
   membershipId: "browser",
   principalId: "browser",
-  role: "operator",
-  canControl: true,
 } as const
 
 /** A `render_chart` turn exactly as far as the provider streams it. */
@@ -121,7 +119,6 @@ function harness(describeView: ServerMcpApps["describe"]) {
     engine: runtime.turns,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
   })

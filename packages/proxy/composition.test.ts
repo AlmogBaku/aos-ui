@@ -451,7 +451,6 @@ describe("configured proxy composition", () => {
           engine: runtime.turns,
           readings: runtime,
           maxActiveExecutions: 1,
-          maxGuestActiveExecutions: 1,
           maxSubscriberEvents: 1,
           maxSubscriberBytes: 1,
         }),

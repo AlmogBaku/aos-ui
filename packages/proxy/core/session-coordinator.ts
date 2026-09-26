@@ -28,7 +28,6 @@ import {
   ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnCapacityError,
-  ServerTurnControlError,
   ServerTurnStopNotDispatchedError,
   ServerTurnSteerUnavailableError,
   type RecoveryRequest,
@@ -38,7 +37,7 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
-import type { Role, WorkspaceCapabilities } from "./member"
+import type { WorkspaceCapabilities } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
@@ -78,7 +77,7 @@ export type SessionSnapshot = {
   turnId?: string
   /** The requests the turn still waits on: those nobody has answered. */
   requests: PendingRequest[]
-  /** The controller that admitted the turn, when this proxy admitted it. */
+  /** The principal that admitted the turn, when this proxy admitted it. */
   startedBy?: string
 }
 
@@ -90,8 +89,6 @@ export type SequencedTurnEvent = {
 export type CoordinatorAccess = {
   membershipId: string
   principalId: string
-  role: Role
-  canControl: boolean
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
   onTerminal?(event: TurnEvent): void | Promise<void>
@@ -120,6 +117,22 @@ export type SendInput =
   | PromptTurnInput
   | (Omit<PromptTurnInput, "turnId" | "messageId"> & { clientId: string })
 
+/**
+ * A cap on the turns some principals hold at once: `predicate` picks, by its
+ * starter, each held turn the cap counts.
+ */
+export type TurnQuota = {
+  predicate(principalId: string): boolean
+  limit: number
+}
+
+/** What a start carries beside its prompt. */
+export type StartOptions = {
+  stage?: ServerAttachmentStage
+  /** Refuses the start while the turns it counts reach its limit. */
+  quota?: TurnQuota
+}
+
 /** A Session to create; a client id names a create its client may repeat. */
 export type CreateInput = { title?: string; clientId?: string }
 
@@ -139,7 +152,6 @@ export type SessionCoordinatorOptions = {
    */
   readings: Pick<ServerRuntime, "context" | "models" | "createSession">
   maxActiveExecutions: number
-  maxGuestActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
   maxSubscriberBytes: number
@@ -321,6 +333,11 @@ type Turn = {
   owner: Owner<ReturnType<typeof turnMachine>>
   /** The turnId an admission in flight admits. */
   admission?: string
+  /**
+   * The principal whose admission started the turn, kept across every segment
+   * whoever answers. A turn this proxy recovered or adopted has no starter.
+   */
+  startedBy?: string
 }
 
 /**
@@ -446,14 +463,6 @@ type Execution = {
   readonly state: SessionExecutionState
   admissionId: string
   admissionFingerprint: string
-  startedByRole: Role
-  /**
-   * The controller whose admission started this turn, kept across every
-   * segment whoever answers. A turn this proxy recovered or adopted without
-   * holding it has no starter.
-   */
-  startedBy?: string
-  controllers: Set<string>
   segment: Segment
   control: Promise<void>
   steeringRequests: Map<
@@ -482,9 +491,6 @@ type TurnInit = {
 type ExecutionInit = TurnInit & {
   scope: SessionScope
   turn: Turn
-  startedByRole: Role
-  startedBy?: string
-  controllers?: readonly string[]
 }
 
 /**
@@ -833,7 +839,6 @@ export class SessionCoordinator {
     })
     for (const value of [
       options.maxActiveExecutions,
-      options.maxGuestActiveExecutions,
       options.maxSubscriberEvents,
       options.maxSubscriberBytes,
     ])
@@ -921,9 +926,9 @@ export class SessionCoordinator {
       state: execution.state,
       turnId: execution.segment.turnId,
       requests: structuredClone(openRequests(execution.segment)),
-      ...(execution.startedBy === undefined
+      ...(execution.turn.startedBy === undefined
         ? {}
-        : { startedBy: execution.startedBy }),
+        : { startedBy: execution.turn.startedBy }),
     }
   }
 
@@ -972,13 +977,9 @@ export class SessionCoordinator {
   /**
    * Asks the provider for a turn this coordinator is not already streaming: one
    * it lost to a restart, a wait to refresh, or a turn the runtime started by
-   * itself after an earlier one finished. `role` is the role that turn is
-   * counted under.
+   * itself after an earlier one finished.
    */
-  async discover(
-    scope: SessionScope,
-    role: Execution["startedByRole"] = "operator"
-  ) {
+  async discover(scope: SessionScope) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (
@@ -993,7 +994,6 @@ export class SessionCoordinator {
     const discovery = this.#discover(
       scope,
       key,
-      role,
       existing?.state === "waiting-for-input" ? existing : undefined
     )
     this.#discoveries.set(key, discovery)
@@ -1010,7 +1010,6 @@ export class SessionCoordinator {
   async #discover(
     scope: SessionScope,
     key: string,
-    role: Execution["startedByRole"],
     existing: Execution | undefined
   ) {
     const turnId =
@@ -1019,7 +1018,7 @@ export class SessionCoordinator {
     try {
       // Adopting a turn the runtime started after one this proxy ran is a
       // turn start; a turn lost to a restart, or a wait refreshed, is not.
-      if (!existing && this.#executions.has(key)) this.#assertCapacity(role)
+      if (!existing && this.#executions.has(key)) this.#assertCapacity(key)
       const discovered = await this.options.engine.discover!(scope, turnId)
       if (!discovered) {
         if (existing && this.#move(turn, generation, { type: "cleared" })) {
@@ -1050,7 +1049,6 @@ export class SessionCoordinator {
           turn,
           turnId,
           request: { turnId },
-          startedByRole: role,
           segment,
         })
       if (existing) {
@@ -1092,16 +1090,16 @@ export class SessionCoordinator {
     scope: SessionScope,
     input: SendInput,
     access: CoordinatorAccess,
-    attachments?: ServerAttachmentStage
+    options: StartOptions = {}
   ): Promise<CoordinatedTurnSubscription> {
     if (this.#closed) throw new Error("Session coordinator is closed")
     if (!("clientId" in input))
-      return this.#startTurn(scope, input, access, attachments)
+      return this.#startTurn(scope, input, access, options)
     const { clientId, ...prompt } = input
     const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
     const fingerprint = admissionFingerprint({
       ...prompt,
-      attachments: attachments?.artifactIds?.() ?? [],
+      attachments: options.stage?.artifactIds?.() ?? [],
     })
     const repeated = this.#sends.repeated(ids.turnId, fingerprint)
     if (!repeated) {
@@ -1109,7 +1107,7 @@ export class SessionCoordinator {
         scope,
         { ...ids, ...prompt },
         access,
-        attachments
+        options
       )
       this.#sends.remember(
         ids.turnId,
@@ -1131,7 +1129,7 @@ export class SessionCoordinator {
     scope: SessionScope,
     input: PromptTurnInput,
     access: CoordinatorAccess,
-    attachments?: ServerAttachmentStage
+    { stage, quota }: StartOptions
   ): Promise<CoordinatedTurnSubscription> {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
@@ -1148,23 +1146,24 @@ export class SessionCoordinator {
       )
         throw new ServerTurnConflictError()
     }
-    this.#assertCapacity(access.role)
-    const { turn, generation } = this.#admit(scope, input.turnId)
+    this.#assertCapacity(key, quota)
+    const { turn, generation } = this.#admit(
+      scope,
+      input.turnId,
+      access.principalId
+    )
     try {
       const at = Date.now()
       const handle = await this.options.engine.start(
         scope,
         input,
-        ...(attachments ? [attachments] : [])
+        ...(stage ? [stage] : [])
       )
       const execution: Execution = this.#createExecution({
         scope,
         turn,
         turnId: input.turnId,
         request: input,
-        startedByRole: access.role,
-        startedBy: access.principalId,
-        controllers: access.canControl ? [access.principalId] : [],
         segment: this.#createSegment({
           cacheKey: key,
           turnId: input.turnId,
@@ -1248,7 +1247,6 @@ export class SessionCoordinator {
         ? "reset"
         : replayPlan(existing.segment, request.after)
       if (plan === "reset") return this.#resetSubscription(existing.segment)
-      if (access.canControl) existing.controllers.add(access.principalId)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -1264,7 +1262,6 @@ export class SessionCoordinator {
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
     if (plan === "reset") return this.#resetSubscription(recovered.segment)
-    if (access.canControl) recovered.controllers.add(access.principalId)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -1360,12 +1357,10 @@ export class SessionCoordinator {
           turn,
           turnId: request.turnId,
           request: providerRequest,
-          startedByRole: access.role,
           segment,
         })
       if (existing) existing.segment.fanout.close()
       execution.segment = segment
-      if (access.canControl) execution.controllers.add(access.principalId)
       this.#executions.set(key, execution)
       this.#trackJournal(segment)
       this.#consume(execution, segment)
@@ -1381,15 +1376,10 @@ export class SessionCoordinator {
    * segment, is reported to its caller without reopening a Session that is
    * already over: the turn owner no longer takes it.
    */
-  async stop(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    principalId: string
-  ) {
+  async stop(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution || execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
-      if (!execution.controllers.has(principalId))
-        throw new ServerTurnControlError()
       const { turn } = execution
       const { generation } = execution.segment
       try {
@@ -1412,8 +1402,7 @@ export class SessionCoordinator {
 
   async steer(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    request: TurnSteerRequest,
-    principalId: string
+    request: TurnSteerRequest
   ): Promise<TurnSteerResponse> {
     const execution = this.#executions.get(scopeKey(scope))
     if (
@@ -1422,8 +1411,6 @@ export class SessionCoordinator {
       execution.segment.turnId !== request.expectedTurnId
     )
       throw new ServerTurnConflictError()
-    if (!execution.controllers.has(principalId))
-      throw new ServerTurnControlError()
 
     const fingerprint = admissionFingerprint({
       expectedTurnId: request.expectedTurnId,
@@ -1521,16 +1508,22 @@ export class SessionCoordinator {
     return true
   }
 
-  /** One admission at a time per Session: a second one conflicts. */
-  #admit(scope: SessionScope, turnId: string): Admission {
+  /**
+   * One admission at a time per Session: a second one conflicts. An admission
+   * from rest begins a new turn, which `startedBy` started; any other continues
+   * the turn it admits and keeps its starter.
+   */
+  #admit(scope: SessionScope, turnId: string, startedBy?: string): Admission {
     if (this.#closed) throw new Error("Session coordinator is closed")
     const turn = this.#turn(scope)
     const { generation } = turn.owner
+    const fresh = turn.owner.actor.getSnapshot().value === "idle"
     turn.admission = turnId
     if (!this.#move(turn, generation, { type: "admit" })) {
       turn.admission = undefined
       throw new ServerTurnConflictError()
     }
+    if (fresh) turn.startedBy = startedBy
     return { turn, generation }
   }
 
@@ -1589,9 +1582,6 @@ export class SessionCoordinator {
       get state() {
         return turnExecution(this.turn).state
       },
-      startedByRole: init.startedByRole,
-      ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
-      controllers: new Set(init.controllers ?? []),
       ...admittedTurn(init),
     }
   }
@@ -1725,9 +1715,9 @@ export class SessionCoordinator {
                   ...origin,
                   kind: "attention-requested",
                   request: structuredClone(request),
-                  ...(execution.startedBy === undefined
+                  ...(execution.turn.startedBy === undefined
                     ? {}
-                    : { startedBy: execution.startedBy }),
+                    : { startedBy: execution.turn.startedBy }),
                 })
             else
               this.#announce(execution.scope, {
@@ -1880,7 +1870,6 @@ export class SessionCoordinator {
    * where a reset is authoritative and acted upon.
    */
   #repeat(execution: Execution, access: CoordinatorAccess) {
-    if (access.canControl) execution.controllers.add(access.principalId)
     const plan = replayPlan(execution.segment, 0)
     return this.#subscribe(
       execution.segment,
@@ -1967,18 +1956,27 @@ export class SessionCoordinator {
     return { turnId: segment.turnId, events, close: () => undefined }
   }
 
-  /** Checked as a turn starts, an adopted one included, and never on recovery. */
-  #assertCapacity(role: Role) {
-    const active = [...this.#executions.values()].filter(
-      ({ state }) => state !== "idle"
-    )
-    if (active.length >= this.options.maxActiveExecutions)
-      throw new ServerTurnCapacityError("global")
+  /**
+   * Checked as a turn starts, an adopted one included, and never on recovery,
+   * in the same step as its admission: every turn another Session holds counts,
+   * one still admitting included, so two starts never take one last place.
+   * `quota` counts, besides, the held turns whose starter it picks.
+   */
+  #assertCapacity(key: string, quota?: TurnQuota) {
+    const held = [...this.#turns]
+      .filter(
+        ([other, { owner }]) =>
+          other !== key && owner.actor.getSnapshot().value !== "idle"
+      )
+      .map(([, turn]) => turn)
+    if (held.length >= this.options.maxActiveExecutions)
+      throw new ServerTurnCapacityError()
     if (
-      role === "guest" &&
-      active.filter(({ startedByRole }) => startedByRole === "guest").length >=
-        this.options.maxGuestActiveExecutions
+      quota &&
+      held.filter(
+        ({ startedBy }) => startedBy !== undefined && quota.predicate(startedBy)
+      ).length >= quota.limit
     )
-      throw new ServerTurnCapacityError("guest")
+      throw new ServerTurnCapacityError()
   }
 }

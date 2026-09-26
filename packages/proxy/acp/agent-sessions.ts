@@ -267,12 +267,9 @@ export function createWorkspace(
       call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
-    /** Steers the live turn as `principalId`, the member the turn knows. */
-    steer: (
-      scope: SessionScope,
-      request: TurnSteerRequest,
-      principalId: string
-    ) => call(() => coordinator.steer(scope, request, principalId)),
+    /** Steers the Session's live turn. */
+    steer: (scope: SessionScope, request: TurnSteerRequest) =>
+      call(() => coordinator.steer(scope, request)),
   }
 }
 

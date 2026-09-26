@@ -204,7 +204,6 @@ function harness(options: { existing?: boolean } = {}) {
       engine,
       readings: runtime,
       maxActiveExecutions: 8,
-      maxGuestActiveExecutions: 4,
       maxSubscriberEvents: 32,
       maxSubscriberBytes: 256 * 1024,
     }),

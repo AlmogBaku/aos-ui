@@ -55,6 +55,8 @@ export type GuestAcpServiceOptions = {
   attachmentStages: ServerAttachmentStages
   /** The channels the operator listener shares, so both see one per Session. */
   channels: Channels
+  /** How many turns every guest together may hold at once. */
+  guestActiveExecutions: number
   /** Where this listener's connections write their structured lines. */
   logger?: AcpLogger
   now?: () => number
@@ -169,6 +171,7 @@ function createGuestAuthentication(
             grant,
             invited: workspace.invited,
             capabilities: workspace.capabilities,
+            guestActiveExecutions: options.guestActiveExecutions,
           }),
         },
       }
