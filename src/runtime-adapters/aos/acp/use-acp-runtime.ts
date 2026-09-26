@@ -47,7 +47,6 @@ import {
 } from "@/runtime-adapters/thread-history"
 
 import type { AcpApprovals } from "./acp-approvals"
-import { isRequestCancelled } from "./connection"
 import type { AcpConnection } from "./types"
 import {
   applyApprovals,
@@ -564,7 +563,8 @@ function createAcpController({
         undefined
       )
     )
-    const settle = (messageId: string) => {
+    try {
+      const { messageId } = await connection.prompt(sessionId, content, meta)
       // Only an accepted turn replaces anything: the provider has dropped the
       // turns this one replaces, so the projection follows it here and the
       // rewound tail stops lingering beside the resent one. A refused prompt
@@ -579,27 +579,12 @@ function createAcpController({
         cursorStale = true
         transcripts += 1
       }
-    }
-    const fail = (error: unknown) => {
+    } catch (error) {
       const kept = state.messages
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
       commit(retainMessages(state, kept))
       throw refuse(error)
-    }
-    try {
-      const { messageId } = await connection.prompt(sessionId, content, meta)
-      settle(messageId)
-    } catch (firstError) {
-      // Retry once on transport cancellation with the same clientId so the
-      // proxy can deduplicate the redelivered turn.
-      if (!isRequestCancelled(firstError)) return fail(firstError)
-      try {
-        const { messageId } = await connection.prompt(sessionId, content, meta)
-        settle(messageId)
-      } catch (retryError) {
-        fail(retryError)
-      }
     }
   }
 
@@ -716,8 +701,8 @@ function createAcpController({
       } catch (error) {
         throw refuse(error)
       }
-      // A clientId is generated once per send and kept stable across a retry
-      // so the proxy can deduplicate the turn on reconnect.
+      // Every send carries a fresh clientId, so the proxy can recognize the
+      // same turn delivered twice.
       const clientId = crypto.randomUUID()
       const rewound = rewindFor(message.sourceId)
       await prompt(

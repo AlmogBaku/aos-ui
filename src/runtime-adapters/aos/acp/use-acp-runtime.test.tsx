@@ -1695,18 +1695,14 @@ describe("useAcpRuntime extras", () => {
   })
 })
 
-describe("useAcpRuntime clientId (3.49)", () => {
+describe("useAcpRuntime clientId", () => {
   it("includes a clientId in the prompt meta and uses different ids per send", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
     const capturedIds: Array<string | undefined> = []
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(fake.prompt as any).mockImplementation(
-      async (
-        _sid: string,
-        _blocks: unknown,
-        meta: Record<string, unknown>
-      ) => {
+      async (_sid: string, _blocks: unknown, meta: Record<string, unknown>) => {
         capturedIds.push(meta.clientId as string | undefined)
         return { messageId: `u${capturedIds.length}` }
       }
@@ -1729,37 +1725,5 @@ describe("useAcpRuntime clientId (3.49)", () => {
     expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)
     expect(capturedIds[1]).toMatch(/^[0-9a-f-]{36}$/)
     expect(capturedIds[0]).not.toBe(capturedIds[1])
-  })
-
-  it("keeps the clientId stable when the prompt is retried after transport cancellation", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    const capturedIds: Array<string | undefined> = []
-    let attempt = 0
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(fake.prompt as any).mockImplementation(
-      async (
-        _sid: string,
-        _blocks: unknown,
-        meta: Record<string, unknown>
-      ) => {
-        attempt += 1
-        capturedIds.push(meta.clientId as string | undefined)
-        if (attempt === 1) throw RequestError.requestCancelled()
-        return { messageId: "u1" }
-      }
-    )
-
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Ship it" }],
-      })
-    })
-
-    await waitFor(() => expect(capturedIds).toHaveLength(2))
-    expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)
-    // Same clientId used on the retry so the proxy can deduplicate.
-    expect(capturedIds[0]).toBe(capturedIds[1])
   })
 })

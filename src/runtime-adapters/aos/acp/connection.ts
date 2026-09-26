@@ -153,8 +153,6 @@ export type AcpConnectionOptions = {
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
-/** ACP's code for a request cancelled by the transport. */
-const REQUEST_CANCELLED = RequestError.requestCancelled().code
 /** sessionStorage key that prevents a reload loop on build id mismatch. */
 const BUILD_ID_RELOADED_KEY = "aos-build-id-reloaded"
 
@@ -165,16 +163,6 @@ export function isAuthenticationRequired(error: unknown) {
     error !== null &&
     "code" in error &&
     error.code === AUTHENTICATION_REQUIRED
-  )
-}
-
-/** Whether a request failed because the transport was cancelled (disconnected). */
-export function isRequestCancelled(error: unknown) {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === REQUEST_CANCELLED
   )
 }
 
@@ -786,7 +774,12 @@ export function createAcpConnection(
     let inspect: Parameters<typeof createOwner>[1]["inspect"]
     if (import.meta.env.DEV) {
       // Only imported in dev builds; Rollup drops this block in production.
-      if (acpDebugEnabled(globalThis.location?.search ?? "", globalThis.sessionStorage)) {
+      if (
+        acpDebugEnabled(
+          globalThis.location?.search ?? "",
+          globalThis.sessionStorage
+        )
+      ) {
         const { createBrowserInspector } = await import("@statelyai/inspect")
         inspect = createBrowserInspector().inspect
       }
