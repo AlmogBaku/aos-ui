@@ -147,9 +147,6 @@ export type UseAcpRuntimeOptions = {
 }
 
 export const acpExtras = createRuntimeExtras<AcpRuntimeExtras>("useAcpRuntime")
-export const useAcpExecution = () => acpExtras.use((extras) => extras.execution)
-export const useAcpTodos = () => acpExtras.use((extras) => extras.todos)
-
 const EMPTY_QUEUE_ITEMS: ExternalThreadQueueAdapter["items"] = Object.freeze([])
 const subscribeNoop = () => () => {}
 

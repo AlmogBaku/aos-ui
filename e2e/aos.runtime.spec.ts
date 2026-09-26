@@ -852,8 +852,31 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("_aos/session/update", (_params, id) =>
         this.respond(id, {})
       )
-      // Focus is a notification; recording it is all the proxy owes the browser.
-      this.handlers.set("_aos/session/focus", () => {})
+      // Focus is a request; the browser waits for an acknowledgement.
+      this.handlers.set("_aos/session/focus", (_params, id) =>
+        this.respond(id, {})
+      )
+      // A new Session's answer carries only its id; the row arrives as
+      // session_info_update so the workspace sees it without a resume.
+      this.handlers.set("session/new", (params, id) => {
+        const newSessionId = crypto.randomUUID()
+        const aosMeta =
+          typeof params._meta === "object" && params._meta !== null
+            ? (params._meta as Record<string, unknown>).aos
+            : undefined
+        const agentId =
+          typeof aosMeta === "object" && aosMeta !== null
+            ? String((aosMeta as Record<string, unknown>).agentId ?? AGENT_ID)
+            : AGENT_ID
+        this.respond(id, { sessionId: newSessionId })
+        this.notify("session/update", {
+          sessionId: newSessionId,
+          update: {
+            sessionUpdate: "session_info_update",
+            _meta: { aos: { agentId, status: "idle", archived: false, unread: false } },
+          },
+        })
+      })
     }
   }
 

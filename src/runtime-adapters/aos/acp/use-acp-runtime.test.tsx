@@ -37,9 +37,8 @@ import type {
   AcpSessionUpdateListener,
 } from "./types"
 import {
-  useAcpExecution,
+  acpExtras,
   useAcpRuntime,
-  useAcpTodos,
   type UseAcpRuntimeOptions,
 } from "./use-acp-runtime"
 
@@ -446,6 +445,9 @@ describe("useAcpRuntime", () => {
     )
     await act(async () => {})
     expect(result.current.thread.getState().isLoading).toBe(false)
+    // The thread does not retry a refused resume: the connection's per-Session
+    // owner retries unavailable; gone is terminal.
+    expect(fake.replay).toHaveBeenCalledTimes(1)
   })
 
   it("replays the Session again when the proxy invalidates it", async () => {
@@ -1485,8 +1487,8 @@ describe("useAcpRuntime older history", () => {
 })
 
 function Probe() {
-  const execution = useAcpExecution()
-  const todos = useAcpTodos()
+  const execution = acpExtras.use((extras) => extras.execution)
+  const todos = acpExtras.use((extras) => extras.todos)
   return (
     <div>
       <p>{`Run: ${execution.status}`}</p>
