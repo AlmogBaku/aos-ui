@@ -39,6 +39,7 @@ import type {
 import * as ids from "../../../packages/proxy/core/ids"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
+import { captureLogs } from "../../../test/support/log-capture"
 
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { en } from "../../lib/i18n/dictionaries/en"
@@ -370,12 +371,14 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     transcribe: unsupported,
     speak: unsupported,
   }
+  const { logger } = captureLogs()
   const coordinator = new SessionCoordinator({
     engine,
     readings: runtime,
     maxActiveExecutions: 8,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
+    logger,
   })
   const runtimeInstance: RuntimeInstance = {
     id: "hermes-main",
@@ -396,12 +399,13 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     connectionId: "connection-1",
     principalId: "operator",
     role,
+    logger: logger.child({ connectionId: "connection-1", role }),
     publicError: (cause) => runtime.publicError(cause),
     steerAck: runtime.translation?.steerAck,
     catalog,
     translators,
     attachmentStages,
-    channels: createChannels({ coordinator, runtime }),
+    channels: createChannels({ coordinator, runtime, logger }),
     readState: createReadState({
       catalog,
       relighting: runtime.translation?.relighting,
