@@ -99,9 +99,13 @@ external reverse proxy is optional.
 - The three `AOS_UI_OPENAI_COMPATIBLE_*` values (`AOS_UI_OPENAI_COMPATIBLE_BASE_URL`,
   `AOS_UI_OPENAI_COMPATIBLE_API_KEY`, `AOS_UI_OPENAI_COMPATIBLE_MODEL_ID`) are
   all-or-none; setting any one without the others is an error.
-- Provider-owned read state: the browser reports the focused Session via
-  `_aos/session/focus`; the runtime decides when that Session becomes read and
-  delivers an `unread` update. One ACP WebSocket is opened per browser tab.
+- Provider-owned read state: the browser reports the focused Session via a
+  `_aos/session/focus` request (the proxy's acknowledgment is the liveness
+  check); the runtime decides when that Session becomes read and delivers an
+  `unread` update. One ACP WebSocket is opened per browser tab; the browser
+  sends its compiled build id in `initialize` and reloads once when the proxy's
+  id differs (a `sessionStorage` entry prevents a loop); the proxy closes a
+  connection that does not complete `initialize` within 15 s.
   Usage is reported via ACP `usage_update`; model and effort are set via
   `session/set_config_option`.
 - A pinned Session is always open. It sits in Open sessions and in the tab
@@ -156,6 +160,11 @@ external reverse proxy is optional.
   OpenAI-compatible client and the `ServerRuntime` voice wrapper);
   `packages/proxy/guest` owns the guest audio budget;
   `packages/protocol/audio.ts` holds the shared audio limits.
+- `packages/lifecycle` is the shared owner state machine library for
+  connections, memberships, turns, native links, and readings; it composes
+  XState v5, cockatiel, and `DisposableStack`. The proxy imports it as
+  `../../lifecycle`; browser code and tests use `@aos/lifecycle`. Do not
+  duplicate owner machines in adapter or browser code.
 - MCP Apps: `packages/protocol/mcp-apps.ts` holds the view and request
   schemas; `packages/proxy/routes/mcp-apps.ts` and
   `packages/proxy/guest/routes/mcp-apps.ts` serve them; each adapter's

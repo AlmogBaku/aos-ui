@@ -181,6 +181,23 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 
 AOS validates Agent and Session ownership before selecting a route. Refresh the provider catalog. If the native record was deleted, hidden, renamed, or archived, choose a current Session instead; AOS does not create a browser-owned replacement.
 
+## Debug an ACP connection
+
+To trace a live ACP connection in any build, add `?debug=acp` to the page URL once for the tab. The tab then logs one line per owner state change and one per wire frame to the browser console. The flag is stored in `sessionStorage` for the rest of the tab session; opening a new tab clears it.
+
+Match browser log lines to proxy log lines by the `sessionId`, `turnId`, and `requestId` fields that appear in both. Raise the proxy log level to `debug` with `AOS_UI_PROXY_LOG_LEVEL=debug` or `log.level: debug` in the private proxy configuration to see owner state changes on the server side. `debug` is never the production default.
+
+## Renamed proxy log fields
+
+If you have log queries that filter on these field values, update them:
+
+| Old value | New value | Where |
+|---|---|---|
+| `lane` | `role` | membership role field |
+| `subscriberId` | `membershipId` | membership id on turn and subscription events |
+| `acp.room.failed` | `channel.failed` | channel setup failure |
+| `acp.fanout.detached` | `membership.detached` | subscriber fell behind its queue bounds |
+
 ## Collect useful diagnostics
 
 Record the runtime mode, browser, native runtime version, failing Agent/Session identifiers, and the first relevant browser-console or native-server error. Exclude credentials, invitation tokens, conversation content, tool payloads, and speech data.
