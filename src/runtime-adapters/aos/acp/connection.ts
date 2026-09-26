@@ -21,6 +21,7 @@ import {
 import { z } from "zod"
 
 import {
+  backoffDelay,
   createOwner,
   Deadline,
   defaultClock,
@@ -57,9 +58,11 @@ import {
 } from "@aos/protocol/acp"
 
 import {
+  CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
   RECONNECT_BACKOFF,
   REQUEST_DEADLINE_MS,
+  STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
 import type {
@@ -77,6 +80,10 @@ import type {
  * handlers, the handshake, the agent-side calls, and transport recovery.
  * Everything above this module consumes `AcpConnection`, never the SDK.
  */
+
+/** The close codes the proxy ends a connection with on purpose. */
+const TRY_AGAIN_LATER = 1013
+const POLICY_VIOLATION = 1008
 
 /** Where a connection logs when its caller passes no logger. */
 const SILENT_LOGGER: Logger = {
@@ -180,17 +187,26 @@ type Transport = {
   ready: Promise<void>
 }
 
-type ConnectionEvent = { type: "closed" } | { type: "close" }
+type ConnectionEvent =
+  { type: "closed"; code: number | undefined } | { type: "close" }
 
-/** The constructor a transport opens its socket with; it reports the open. */
+/**
+ * The constructor a transport opens its socket with. It reports the open and
+ * the close code, which the SDK drops, and its listeners run before the ones
+ * the SDK attaches once the socket is constructed.
+ */
 function observedSocket(
   Socket: WebSocketConstructor,
-  onOpen: () => void
+  onOpen: () => void,
+  onClose: (code: number | undefined) => void
 ): WebSocketConstructor {
   return class extends Socket {
     constructor(...args: ConstructorParameters<WebSocketConstructor>) {
       super(...args)
       this.addEventListener?.("open", onOpen)
+      this.addEventListener?.("close", (event) =>
+        onClose(event instanceof CloseEvent ? event.code : undefined)
+      )
     }
   }
 }
@@ -553,6 +569,7 @@ export function createAcpConnection(
   /** Opens a transport as the live one; settles once its socket is open. */
   function openTransport() {
     const opened = Promise.withResolvers<void>()
+    let closeCode: number | undefined
     const connection = connectAgent
       ? app.connect(connectAgent)
       : app.connect(
@@ -561,7 +578,10 @@ export function createAcpConnection(
             {
               WebSocket: observedSocket(
                 options.socketConstructor ?? globalThis.WebSocket,
-                () => opened.resolve()
+                () => opened.resolve(),
+                (code) => {
+                  closeCode = code
+                }
               ),
             }
           )
@@ -576,7 +596,7 @@ export function createAcpConnection(
     const onClosed = () => {
       if (live !== transport) return
       live = undefined
-      deliver({ type: "closed" })
+      deliver({ type: "closed", code: closeCode })
     }
     void connection.closed.then(onClosed, onClosed)
     return opened.promise
@@ -592,31 +612,43 @@ export function createAcpConnection(
     ConnectionEvent,
     typeof actors
   >("connection", logger, clock, actors)
-  /** Where a closed transport leaves the connection. */
+  /** Where a closed transport leaves the connection, by its close code. */
   const onTransportClosed = [
     { guard: "inProcess", target: "closed" },
+    { guard: "policyViolation", target: "closed" },
+    { guard: "tryAgainLater", target: "capacity" },
     { target: "reconnecting" },
   ] as const
   const machine = connectionSetup
     .extend({
       delays: {
         handshake: HANDSHAKE_DEADLINE_MS,
+        stable: STABLE_AFTER_MS,
         reconnect: ({ context }) =>
-          Math.min(
-            RECONNECT_BACKOFF.baseMs * 2 ** context.attempt,
-            RECONNECT_BACKOFF.capMs
+          backoffDelay(context.attempt, RECONNECT_BACKOFF),
+        capacity: () =>
+          CAPACITY_BACKOFF.minMs +
+          Math.floor(
+            Math.random() * (CAPACITY_BACKOFF.maxMs - CAPACITY_BACKOFF.minMs)
           ),
       },
       guards: {
         // In-process pairing has no transport to reopen.
         inProcess: () => connectAgent !== undefined,
+        policyViolation: ({ event }) =>
+          event.type === "closed" && event.code === POLICY_VIOLATION,
+        tryAgainLater: ({ event }) =>
+          event.type === "closed" && event.code === TRY_AGAIN_LATER,
       },
       actions: {
         // A handshake or replay that cannot complete leaves an unusable
         // transport; closing it recovers as a dropped one does.
         closeTransport: () => live?.connection.close(),
         markReady: () => setStatus("ready"),
-        lose: () => {
+        lose: (
+          _,
+          { status: next }: { status: "reconnecting" | "capacity" }
+        ) => {
           recovering = true
           if (!rejoined) {
             rejoined = Promise.withResolvers()
@@ -624,7 +656,7 @@ export function createAcpConnection(
             // no page read is waiting.
             void rejoined.promise.catch(() => {})
           }
-          setStatus("reconnecting")
+          setStatus(next)
         },
         countAttempt: connectionSetup.assign({
           attempt: ({ context }) => context.attempt + 1,
@@ -653,16 +685,29 @@ export function createAcpConnection(
           after: { handshake: { actions: "closeTransport" } },
         },
         ready: {
-          entry: ["markReady", "resetAttempts"],
-          invoke: { src: "recover", onError: { actions: "closeTransport" } },
+          entry: "markReady",
+          // Every Session rejoined, or a transport up long enough, starts the
+          // backoff over.
+          invoke: {
+            src: "recover",
+            onDone: { actions: "resetAttempts" },
+            onError: { actions: "closeTransport" },
+          },
           on: { closed: onTransportClosed },
+          after: { stable: { actions: "resetAttempts" } },
         },
         reconnecting: {
           meta: { log: "info" },
-          entry: "lose",
+          entry: { type: "lose", params: { status: "reconnecting" } },
           after: {
             reconnect: { target: "connecting", actions: "countAttempt" },
           },
+        },
+        // The proxy is full: the wait is long, and the status says why.
+        capacity: {
+          meta: { log: "info" },
+          entry: { type: "lose", params: { status: "capacity" } },
+          after: { capacity: "connecting" },
         },
         closed: { type: "final", meta: { log: "info" } },
       },

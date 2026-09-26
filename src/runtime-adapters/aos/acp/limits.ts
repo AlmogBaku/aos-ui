@@ -20,5 +20,11 @@ export const REQUEST_DEADLINE_MS = {
 
 export type RequestTier = keyof typeof REQUEST_DEADLINE_MS
 
-/** Doubling backoff before reopening a closed transport. */
+/** Full-jitter backoff before reopening a closed transport. */
 export const RECONNECT_BACKOFF = { baseMs: 250, capMs: 5_000 }
+
+/** A transport up this long starts the backoff over, rejoined or not. */
+export const STABLE_AFTER_MS = 60_000
+
+/** The window a reopen waits in after the proxy closes at capacity. */
+export const CAPACITY_BACKOFF = { minMs: 30_000, maxMs: 60_000 }
