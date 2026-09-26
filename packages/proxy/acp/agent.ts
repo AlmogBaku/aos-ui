@@ -65,7 +65,7 @@ import { createMemberEncoder } from "./member-encoder"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
-  invalidRequest,
+  invalidParams,
   notFound,
   parseMeta,
   publicRequestError,
@@ -120,7 +120,7 @@ function operatorExtensions(runtime: ServerRuntime): AosExtensions {
 function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
   if (!replayFrom || replayFrom.type === "start") return undefined
   const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
-  if (!parsed.success) throw invalidRequest()
+  if (!parsed.success) throw invalidParams()
   return parsed.data.cursor
 }
 
@@ -263,14 +263,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const membership = sessions.membership(sessionId)
     if (!membership) throw notFound()
     const offset = decodeHistoryCursor(cursor)
-    if (paging.has(sessionId)) throw invalidRequest()
+    if (paging.has(sessionId)) throw invalidParams()
     paging.add(sessionId)
     try {
       const page = await readHistory(membership.scope, offset)
       // A cursor past this Session's history was never issued for it. One at
       // its end was: a runtime that estimates `total` learns the start only
       // by reading an empty page there.
-      if (offset > page.total) throw invalidRequest()
+      if (offset > page.total) throw invalidParams()
       await membership.showOlderPage(page, { cursor, offset })
       return { page }
     } finally {
@@ -321,7 +321,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             scope.sessionId,
             attachmentStageId
           )
-    if (attachmentStageId !== undefined && !stage) throw invalidRequest()
+    if (attachmentStageId !== undefined && !stage) throw invalidParams()
     const membership = sessions.join(client, scope)
     try {
       const prompt = {
@@ -498,7 +498,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, signal }) => {
       admit(methods.agent.session.prompt, "send")
       const meta = parseMeta(AosPromptMetaSchema, params._meta)
-      if (!params.prompt.every(isPromptBlock)) throw invalidRequest()
+      if (!params.prompt.every(isPromptBlock)) throw invalidParams()
       const text = promptText(params.prompt)
       // A turn of attachments alone carries no text: its stage supplies the turn,
       // or, for a rewind, the turn it replaces.
@@ -507,7 +507,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         meta.attachmentStageId === undefined &&
         meta.rewindSourceId === undefined
       )
-        throw invalidRequest()
+        throw invalidParams()
       // A prompt its client cancelled is answered as cancelled. Its admission
       // runs on: a turn admitted meanwhile streams, and a repeat of its client
       // id finds it.
@@ -551,7 +551,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId, ...(write ? { write } : {}) },
       async (command) => {
         const scope = sessions.scope(command.sessionId)
-        if (!command.write) throw invalidRequest()
+        if (!command.write) throw invalidParams()
         await workspace.updateModel(scope, command.write)
         const models = await workspace.models(scope)
         // A switch restates the model options and the usage, whose window

@@ -36,11 +36,11 @@ export function parseMeta<Schema extends z.ZodType>(
   meta: AcpMeta
 ): z.output<Schema> {
   const parsed = schema.safeParse(meta?.[AOS_META_KEY] ?? {})
-  if (!parsed.success) throw invalidRequest()
+  if (!parsed.success) throw invalidParams()
   return parsed.data
 }
 
-export function invalidRequest() {
+export function invalidParams() {
   return RequestError.invalidParams()
 }
 
@@ -60,7 +60,7 @@ export function notFound() {
 export function refusalError(refusal: CommandRefusal) {
   switch (refusal) {
     case "invalid":
-      return invalidRequest()
+      return invalidParams()
     case "not-found":
       return notFound()
     case "authentication-required":
@@ -102,7 +102,7 @@ const RUNTIME_ERRORS: Readonly<
   Record<ServerRuntimePublicError["code"], () => RequestError>
 > = {
   runtime_authentication_required: authenticationRequired,
-  invalid_request: invalidRequest,
+  invalid_request: invalidParams,
   not_found: notFound,
   revision_conflict: revisionConflict,
   temporarily_unavailable: temporarilyUnavailable,
@@ -118,7 +118,7 @@ const RUNTIME_ERRORS: Readonly<
 const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   (
     [
-      [invalidRequest(), "invalid_request"],
+      [invalidParams(), "invalid_request"],
       [authenticationRequired(), "authentication_required"],
       [notFound(), "not_found"],
       [RequestError.methodNotFound(""), "method_not_found"],
@@ -171,7 +171,7 @@ function coordinatorError(cause: unknown) {
     return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
   if (cause instanceof ServerSessionNotFoundError) return notFound()
-  if (cause instanceof ServerClientIdReusedError) return invalidRequest()
+  if (cause instanceof ServerClientIdReusedError) return invalidParams()
   return undefined
 }
 

@@ -36,7 +36,7 @@ import {
   type ServerRuntime,
 } from "../core/runtime"
 import { translateHistory } from "./translate/history"
-import { invalidRequest, notFound } from "./validation"
+import { invalidParams, notFound } from "./validation"
 import {
   AGENT,
   CONNECTION,
@@ -244,7 +244,7 @@ describe("AOS ACP agent", () => {
     expect(test.createSession).toHaveBeenCalledTimes(1)
     await expect(
       test.create({ clientId: "create-1", title: "Another" })
-    ).rejects.toMatchObject({ code: invalidRequest().code })
+    ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -307,7 +307,7 @@ describe("AOS ACP agent", () => {
     ])
       await expect(
         test.agent.request(methods.agent.session.list, { cursor })
-      ).rejects.toMatchObject({ code: invalidRequest().code })
+      ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -2270,7 +2270,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
 
-    await expect(prompt(test, [])).rejects.toMatchObject(invalidParams)
+    await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
@@ -3085,7 +3085,7 @@ const pageTag = (update: SentUpdate) =>
   (update._meta?.[AOS_META_KEY] as { historyPage?: unknown } | undefined)
     ?.historyPage
 
-const invalidParams = { code: invalidRequest().code }
+const INVALID_PARAMS = { code: invalidParams().code }
 
 describe("History pages", () => {
   it("gives a replaying resume the cursor of the next older page", async () => {
@@ -3338,7 +3338,7 @@ describe("History pages", () => {
     ])
       await expect(
         older(test, cursor, SESSION, replayFrom)
-      ).rejects.toMatchObject(invalidParams)
+      ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -3351,7 +3351,7 @@ describe("History pages", () => {
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     await expect(older(test, cursorOf(100_000))).rejects.toMatchObject(
-      invalidParams
+      INVALID_PARAMS
     )
     test.close()
 
@@ -3442,7 +3442,7 @@ describe("History pages", () => {
       encoded("0"),
       cursorOf(5_000),
     ])
-      await expect(older(test, cursor)).rejects.toMatchObject(invalidParams)
+      await expect(older(test, cursor)).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -3460,7 +3460,7 @@ describe("History pages", () => {
     const first = older(test, cursorOf(500))
     await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
     await expect(older(test, cursorOf(500))).rejects.toMatchObject(
-      invalidParams
+      INVALID_PARAMS
     )
     pending.release()
 

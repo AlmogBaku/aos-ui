@@ -36,7 +36,7 @@ import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
 import {
   authenticationRequired,
   errorNotificationOf,
-  invalidRequest,
+  invalidParams,
   notFound,
   publicRequestError,
 } from "./validation"
@@ -137,7 +137,7 @@ export function decodeCursor(cursor: string | null | undefined) {
     offset < 0 ||
     encodeCursor(offset) !== cursor
   )
-    throw invalidRequest()
+    throw invalidParams()
   return offset
 }
 
@@ -147,7 +147,7 @@ export const HISTORY_MAX_OFFSET = 100_000
 /** An older page's offset: past the start replay, short of the reach. */
 export function decodeHistoryCursor(cursor: string) {
   const offset = decodeCursor(cursor)
-  if (offset < 1 || offset >= HISTORY_MAX_OFFSET) throw invalidRequest()
+  if (offset < 1 || offset >= HISTORY_MAX_OFFSET) throw invalidParams()
   return offset
 }
 
