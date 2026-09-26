@@ -24,7 +24,9 @@ const user = (id: string): SessionHistoryResponse["messages"][number] => ({
   createdAt: "2026-09-26T00:00:00.000Z",
 })
 
-const correction = (id: string): SessionHistoryResponse["messages"][number] => ({
+const correction = (
+  id: string
+): SessionHistoryResponse["messages"][number] => ({
   id,
   role: "user",
   content: [{ type: "text", text: "Fix this" }],
@@ -46,9 +48,7 @@ describe("lastPromptIndex", () => {
 
   it("returns the index of the last plain user turn ignoring trailing corrections", () => {
     expect(
-      lastPromptIndex(
-        history([user("u1"), correction("c1"), correction("c2")])
-      )
+      lastPromptIndex(history([user("u1"), correction("c1"), correction("c2")]))
     ).toBe(0)
   })
 })
