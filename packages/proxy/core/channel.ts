@@ -47,6 +47,7 @@ import {
 } from "./runtime"
 import {
   clientTurnIds,
+  ReplayCursorLostError,
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
   type ClientSend,
@@ -946,19 +947,17 @@ class Membership {
       showsPrompt(this.#channels.current(this.#scope), position, history),
       history !== undefined
     )
+    // A view rebuilt from the whole page holds the turn as far as it had
+    // streamed when the page was read, so its stream continues from there on.
+    if (replay && replay.restarted === undefined) {
+      await this.#followPage(replay)
+      return { history: replay.history }
+    }
     // A cursor for another turn cannot position this one, and a cursor the
     // journal no longer holds cannot be served: both need a full reload. A view
     // rebuilt from a page cut where the turn began owns nothing of it, so it
-    // follows without a cursor. One rebuilt from the whole page holds what
-    // history holds of the turn, so its stream continues from there on.
-    const resync = await this.#followPositioned(
-      history === undefined
-        ? position
-        : replay?.restarted === undefined
-          ? { after: 0 }
-          : {},
-      replay
-    )
+    // follows without a cursor.
+    const resync = await this.#followPositioned(replay ? {} : position, replay)
     return { ...(history === undefined ? {} : { history }), ...resync }
   }
 
@@ -1067,7 +1066,8 @@ class Membership {
     const held = started()
     const shown =
       restarted ?? (held ? this.#coordinator.replayStart(scope) : undefined)
-    if (!shown) return { history, held }
+    if (!shown)
+      return { history, held, streamed: this.#coordinator.streamed(scope) }
     const cut =
       shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
     return {
@@ -1109,6 +1109,25 @@ class Membership {
       await this.#recoverReplay(replay.restarted, replay.held)
       throw cause
     }
+  }
+
+  /**
+   * Follows the live turn beside a whole page from as far as it had `streamed`
+   * when the page was read. A journal that pruned that point since streams its
+   * live events alone, and a turn that ended with it adds nothing to the page.
+   */
+  async #followPage(replay: {
+    corrections: number
+    streamed?: { turnId: string; after: number }
+  }) {
+    const { corrections, streamed } = replay
+    const follow = (after: number): Promise<unknown> =>
+      this.#follow(true, after, corrections).catch((cause: unknown) => {
+        if (!(cause instanceof ReplayCursorLostError)) throw cause
+        return after === 0 ? undefined : follow(0)
+      })
+    const { turnId } = this.#coordinator.snapshot(this.#scope)
+    await follow(streamed && streamed.turnId === turnId ? streamed.after : 0)
   }
 
   /**

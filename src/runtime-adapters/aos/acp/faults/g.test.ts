@@ -99,9 +99,10 @@ describe("browser replay faults", () => {
   it("replays a Session whose cursor left the journal once from the start, and streams the rest of its turn", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     // The provider stores the turn as it streams, which the replay reads.
+    const history = storedLiveTurn()
     const { test, pipe, connection } = await connectBrowser({
       maxSubscriberEvents: 2,
-      history: storedLiveTurn(),
+      history,
     })
     // What the tab holds of the Session: a replay drops what it resends.
     let updates: object[] = []
@@ -128,6 +129,12 @@ describe("browser replay faults", () => {
     replays = 0
     pipe.sockets[0]!.halfOpen()
     chunk(test.sources[0], "Aside", "assistant-2")
+    history.push({
+      id: "assistant-2",
+      role: "assistant",
+      content: [{ type: "text", text: "Aside" }],
+      createdAt: new Date().toISOString(),
+    })
     pipe.sockets[0]!.drop()
     await clock.advance(1_000)
     chunk(test.sources[0], "More", "assistant-2")
@@ -137,6 +144,7 @@ describe("browser replay faults", () => {
     expect(withoutStates(updates.flatMap(shown))).toEqual([
       "history user-1",
       "history assistant-0",
+      "history assistant-2",
       "chunk More",
     ])
     expect(JSON.stringify(updates)).toContain("end_turn")

@@ -1152,6 +1152,16 @@ export class SessionCoordinator {
   }
 
   /**
+   * How far the live turn has streamed, as the cursor of a view that holds it
+   * that far; absent unless its journal still holds what streams on.
+   */
+  streamed(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.terminal) return undefined
+    return { turnId: segment.turnId, after: segment.nextSequence }
+  }
+
+  /**
    * Workspace-wide execution feed: one listener sees the lifecycle of every
    * Session this coordinator drives, independent of the per-segment turn
    * subscriptions and their replay.
