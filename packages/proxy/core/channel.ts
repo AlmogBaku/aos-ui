@@ -728,6 +728,9 @@ export function createChannels(options: CreateChannelsOptions) {
         if (older.offset > page.total) throw new CommandRefusedError("invalid")
         await membership.showOlderPage(page, older)
         return { page }
+      } catch (cause) {
+        membership.endIfGone(cause)
+        throw cause
       } finally {
         paging.delete(membership)
       }
@@ -843,8 +846,7 @@ class Membership {
       invalidate: () => this.#invalidate(),
       // A Session the provider reports gone ends each of its memberships.
       report: (cause) => {
-        if (this.detached || options.coordinator.gone(this.#scope, cause))
-          return
+        if (this.detached || this.endIfGone(cause)) return
         const failure = options.describe(cause)
         options.logger.error(
           { errorCode: failure.code, message: failure.message },
@@ -911,7 +913,8 @@ class Membership {
    * what it holds up to `position`. Either way the member then joins the
    * channel and follows the live turn. Returns the page it replayed, and
    * `resync` when the view must rebuild itself. A join that has not landed
-   * by its deadline detaches the membership, and the resume rejects then.
+   * by its deadline detaches the membership, and the resume rejects then; one
+   * that finds its Session gone ends it.
    */
   resume(
     position: ResumePosition,
@@ -919,7 +922,12 @@ class Membership {
   ) {
     this.#releaseCells()
     this.#send({ type: "join" })
-    return unlessAborted(this.#resume(position, read), this.#detaching)
+    return unlessAborted(this.#resume(position, read), this.#detaching).catch(
+      (cause: unknown) => {
+        this.endIfGone(cause)
+        throw cause
+      }
+    )
   }
 
   async #resume(
@@ -1341,10 +1349,7 @@ class Membership {
       },
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
-      gone: (cause) => {
-        void this.report(cause)
-        this.part()
-      },
+      gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow(
@@ -1389,7 +1394,26 @@ class Membership {
 
   /** Reports a failure that has no request to answer. */
   async report(cause: unknown) {
-    await this.emit({ kind: "error", cause })
+    if (!this.endIfGone(cause)) await this.emit({ kind: "error", cause })
+  }
+
+  /**
+   * Ends this membership when `cause` finds its Session gone. The coordinator
+   * tells each member whose readings it holds and drops the Session; this
+   * member, whose readings a join may not hold yet, is told as well. Returns
+   * whether the Session was gone.
+   */
+  endIfGone(cause: unknown) {
+    if (this.pending || !this.#coordinator.endIfGone(this.#scope, cause))
+      return false
+    if (!this.detached) this.#end(cause)
+    return true
+  }
+
+  /** Tells this member its Session is gone, and parts. */
+  #end(cause: unknown) {
+    void this.emit({ kind: "error", cause }).catch(() => undefined)
+    this.part()
   }
 
   /** Steers the turn this member follows, which a later turn has not replaced. */

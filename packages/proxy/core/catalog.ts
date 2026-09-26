@@ -81,7 +81,7 @@ export type Catalog = {
 
 export type CatalogOptions = {
   runtime: ServerRuntime
-  coordinator: Pick<SessionCoordinator, "state" | "gone">
+  coordinator: Pick<SessionCoordinator, "state" | "endIfGone">
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -183,7 +183,7 @@ export function createCatalog({
       if (hasSession(target))
         void read(target).catch((cause: unknown) => {
           failed(cause)
-          coordinator.gone(target, cause)
+          coordinator.endIfGone(target, cause)
         })
       return unsubscribe
     },

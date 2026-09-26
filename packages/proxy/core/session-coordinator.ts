@@ -938,9 +938,9 @@ export class SessionCoordinator {
       logger: this.#logger,
       clock: this.#clock,
     }
-    const gone = (scope: SessionScope, cause: unknown) => {
-      this.gone(scope, cause)
-    }
+    // Past the reading's own move, which ending the Session releases.
+    const gone = (scope: SessionScope, cause: unknown) =>
+      queueMicrotask(() => this.endIfGone(scope, cause))
     this.#usage = new SessionReporter({
       name: "usage",
       read: async (scope) =>
@@ -1081,17 +1081,16 @@ export class SessionCoordinator {
    * journal and readings are dropped, so no later resume is served from them
    * and nothing reads it again. Returns whether it was gone.
    */
-  gone(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    cause: unknown
-  ) {
+  endIfGone(scope: SessionScope, cause: unknown) {
     if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
     const key = scopeKey(scope)
-    for (const heard of [...this.#gone])
-      if (heard.key === key) {
-        this.#gone.delete(heard)
-        heard.listener(cause)
-      }
+    const { agentId, sessionId } = scope
+    this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
+    // All taken first, so a listener that finds the Session gone again tells
+    // nobody twice.
+    const heard = [...this.#gone].filter((each) => each.key === key)
+    for (const each of heard) this.#gone.delete(each)
+    for (const { listener } of heard) listener(cause)
     const segment = this.#executions.get(key)?.segment
     if (segment) {
       segment.terminal = true

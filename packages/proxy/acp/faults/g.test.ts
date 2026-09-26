@@ -80,4 +80,35 @@ describe("gone Session faults", () => {
     ).rejects.toMatchObject({ code: -32002 })
     for (const each of browsers) each.close()
   })
+
+  it("ends every member and the execution of a Session a from-start resume finds gone", async () => {
+    const test = await harness({ providerIds: true })
+    const other = await test.connect("connection-2")
+    await test.list()
+    await other.list()
+    await open(test)
+    await open(other)
+    await prompt(test, "Summarize")
+    test.sources[0]?.emit(turnStarted())
+    chunk(test.sources[0], "Live")
+    await other.recorder.wait(said("Live"), "an update carrying Live")
+    test.faults.gone(test.scope)
+
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        replayFrom: { type: "start" },
+      })
+    ).rejects.toMatchObject({ code: -32002 })
+
+    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([
+      {
+        method: AOS_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    expect(test.coordinator.gauges().executions).toBe(0)
+    other.close()
+  })
 })
