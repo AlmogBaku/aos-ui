@@ -8,6 +8,7 @@ import { createProxyLogger } from "../../cli/logger"
 import { CredentialValues } from "../../redaction"
 import type { RuntimeServices } from "../create-runtime"
 import { createHermesRuntime } from "./factory"
+import type { HermesGatewayOptions } from "./gateway"
 
 describe("Hermes runtime shutdown", () => {
   const temporaryDirectories: string[] = []
@@ -60,18 +61,22 @@ describe("Hermes runtime shutdown", () => {
       subscribeConnection: () => () => undefined,
       close: vi.fn(async () => undefined),
     }
-    const runtime = await createHermesRuntime(
-      await hermesRuntimeConfig(),
-      limits,
-      { ...services, transportFactory: () => transport }
-    )
+    const config = await hermesRuntimeConfig()
+    let gateway: HermesGatewayOptions | undefined
+    const runtime = await createHermesRuntime(config, limits, {
+      ...services,
+      transportFactory: (options) => {
+        gateway = options
+        return transport
+      },
+    })
     const unsubscribe = await runtime.runtime.subscribeSessionInvalidation(
       "researcher",
       "stored",
       () => undefined
     )
     unsubscribe()
-    return { runtime, transport }
+    return { runtime, transport, config, gateway: gateway! }
   }
 
   it("closes an attached runtime without waiting on a native call that cannot answer", async () => {
@@ -97,7 +102,7 @@ describe("Hermes runtime shutdown", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("hands the proxy a turn engine that watches for turns Hermes starts by itself, and masks the token it read", async () => {
+  it("hands the proxy a turn engine that watches for turns Hermes starts by itself, and re-reads and masks the token on every dial", async () => {
     const lines: string[] = []
     const credentials = new CredentialValues()
     const logger = createProxyLogger({
@@ -105,18 +110,28 @@ describe("Hermes runtime shutdown", () => {
       credentials,
       destination: { write: (line) => void lines.push(line) },
     })
-    const { runtime } = await resumedRuntime(
+    const { runtime, config, gateway } = await resumedRuntime(
       async (method) =>
         method === "session.resume" ? { session_id: "live-stored" } : {},
       { logger, credentials }
     )
 
     expect(runtime.runtime.turns.subscribeTurns).toBeTypeOf("function")
-    // A native error that echoes the token it was sent.
-    logger.warn({ detail: "bad token tok-test-1" }, "hermes.rpc.failed")
-    expect(lines.join("")).not.toContain("tok-test-1")
+    // The operator rotates the token file under a running proxy.
+    await writeFile(config.tokenFile, "tok-test-2")
+    await expect(gateway.credentials()).resolves.toEqual({
+      "X-Hermes-Session-Token": "tok-test-2",
+    })
+    // A native error that echoes both tokens it was sent.
+    logger.warn(
+      { detail: "bad token tok-test-1, then tok-test-2" },
+      "hermes.rpc.failed"
+    )
+    expect(lines.join("")).not.toMatch(/tok-test-[12]/u)
     expect(lines.map((line) => JSON.parse(line) as unknown)).toContainEqual(
-      expect.objectContaining({ detail: "bad token [REDACTED]" })
+      expect.objectContaining({
+        detail: "bad token [REDACTED], then [REDACTED]",
+      })
     )
     await runtime.close()
   })

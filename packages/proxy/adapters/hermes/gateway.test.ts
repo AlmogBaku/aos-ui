@@ -10,6 +10,7 @@ import {
   HermesUnavailableError,
   type HermesGatewayOptions,
 } from "./gateway"
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import { MAX_EVENT_FRAME_BYTES } from "./gateway-socket"
 import { FakeSocket } from "./test-utils/fake-socket"
 import { nativeTurn } from "./test-utils/native-events"
@@ -205,23 +206,51 @@ describe("Hermes gateway dial and authentication", () => {
     await gateway.close()
   })
 
-  it.each([4401, 4403])(
-    "stops redialling after authentication close %d and reports it",
-    async (code) => {
-      vi.useFakeTimers()
-      const { gateway, sockets, factory } = harness()
-      await gateway.connect()
+  it("never redials a refused token, and dials again once the token changes", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    let token = "tok-test-1"
+    const { gateway, sockets, factory } = harness({
+      credentials: async () => ({ "X-Hermes-Session-Token": token }),
+    })
+    await gateway.connect()
 
-      sockets[0]!.close(code)
-      await vi.advanceTimersByTimeAsync(60_000)
+    sockets[0]!.close(4401)
+    await clock.advance(60_000)
 
-      expect(factory).toHaveBeenCalledTimes(1)
-      await expect(gateway.request("profiles.list", {})).rejects.toBeInstanceOf(
-        HermesAuthenticationError
-      )
-      await gateway.close()
-    }
-  )
+    expect(factory).toHaveBeenCalledTimes(1)
+    await expect(gateway.request("profiles.list", {})).rejects.toBeInstanceOf(
+      HermesAuthenticationError
+    )
+
+    token = "tok-test-2"
+    await clock.advance(15_000)
+
+    expect(factory).toHaveBeenCalledTimes(2)
+    expect(factory).toHaveBeenLastCalledWith(
+      "ws://127.0.0.1:9119/api/ws?token=tok-test-2"
+    )
+    await gateway.close()
+  })
+
+  it("reports a 4403 handshake refusal as an outage with its close code, and keeps redialling", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const { gateway, sockets, factory, log } = harness({ autoOpen: false })
+
+    const dial = gateway.connect()
+    await clock.advance(0)
+    sockets[0]!.close(4403)
+
+    await expect(dial).rejects.toBeInstanceOf(HermesUnavailableError)
+    expect(log.warn).toHaveBeenCalledWith(
+      { reason: "refused", close_code: 4403 },
+      "hermes.gateway.dial_failed"
+    )
+    await clock.advance(150)
+    expect(factory).toHaveBeenCalledTimes(2)
+    await gateway.close()
+  })
 })
 
 describe("Hermes gateway request classification", () => {

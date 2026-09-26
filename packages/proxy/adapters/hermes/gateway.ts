@@ -163,8 +163,10 @@ const DEFAULT_HEAL_GRACE_MS = 20_000
 const READY_EPOCH_WAIT_MS = 2_000
 const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 const MAX_IN_FLIGHT_REQUESTS = 256
-/** Close codes Hermes refuses a token with; unverified against a live server. */
-const AUTH_CLOSE_CODES = new Set([4401, 4403])
+/** Hermes' close for a refused credential (`hermes_cli/web_routers/chat_ws.py`). */
+const AUTH_CLOSE_CODE = 4401
+/** Hermes' close for a host or origin denial, or chat not allowed: an outage. */
+const REFUSED_CLOSE_CODE = 4403
 
 // Private sentinels the vendored client rejects with, so classification can
 // compare by message. Mapped to a typed AOS error before any caller sees them.
@@ -249,15 +251,20 @@ export class HermesGateway implements HermesRpcTransport {
   /** The request being dispatched, awaiting the id `#mintRequestId` gives it. */
   #dispatching: PendingResponse | undefined
   #inFlight = 0
-  /** Identity of the socket generation currently dialled or open. */
-  #generation: object | undefined
+  /** The socket generation currently dialled or open, and its dial token. */
+  #generation: { token: string | null } | undefined
   #dialFailureLogged = false
   #dial: Promise<void> | undefined
   #redialTimer: ReturnType<typeof setTimeout> | undefined
   #healTimer: ReturnType<typeof setTimeout> | undefined
   #attempt = 0
   #lostAnnounced = false
-  #authFailed = false
+  /**
+   * The token Hermes refused, or an unusable one. Callers fail fast and nothing
+   * dials with it again; the redial ladder keeps re-reading the token, and a
+   * read that returns a different one clears this.
+   */
+  #refusal: { token: unknown } | undefined
   #closed = false
   #epoch: string | undefined
   /** The bounded wait for this generation's first `gateway.ready` frame. */
@@ -298,20 +305,19 @@ export class HermesGateway implements HermesRpcTransport {
     this.#client.onAny((event) => this.#onGatewayEvent(event))
   }
 
-  /** Joins an in-flight dial; an explicit call clears an authentication stop. */
+  /** Joins an in-flight dial. */
   async connect(): Promise<void> {
     if (this.#closed) throw new HermesUnavailableError()
     if (this.#dial) return this.#dial
-    this.#authFailed = false
     const dial = this.#dialOnce()
     this.#dial = dial
     try {
       await dial
     } catch (error) {
-      // Definitive: parked callers learn it now, and nothing is redialled.
+      // Parked callers learn a refused token now; the ladder still re-reads it.
       if (error instanceof HermesAuthenticationError)
         this.#failOpenWaiters(error)
-      else this.#scheduleRedial()
+      this.#scheduleRedial()
       throw error
     } finally {
       if (this.#dial === dial) this.#dial = undefined
@@ -320,6 +326,11 @@ export class HermesGateway implements HermesRpcTransport {
 
   async #dialOnce(): Promise<void> {
     const token = await this.#serverToken()
+    if (!isServerToken(token) || token === this.#refusal?.token) {
+      this.#refusal = { token }
+      throw new HermesAuthenticationError()
+    }
+    this.#refusal = undefined
     const url = webSocketUrl(this.#baseUrl, token)
     // Pre-checked here so the vendored `invalidUrl()` message, which embeds
     // the URL and therefore the token, is unreachable.
@@ -328,8 +339,8 @@ export class HermesGateway implements HermesRpcTransport {
     try {
       await this.#client.connect(url)
     } catch (error) {
-      if (this.#authFailed) throw new HermesAuthenticationError()
-      this.#logDialFailure("handshake_failed", error)
+      if (this.#refusal) throw new HermesAuthenticationError()
+      this.#logDialFailure("handshake_failed", { error })
       throw new HermesUnavailableError()
     }
     if (this.#closed) {
@@ -365,8 +376,11 @@ export class HermesGateway implements HermesRpcTransport {
     }
   }
 
-  /** Read the private server token under the connect deadline; validate it. */
-  async #serverToken() {
+  /**
+   * Read the private server token under the connect deadline, afresh on every
+   * dial, so a rotated token is picked up without a restart.
+   */
+  async #serverToken(): Promise<unknown> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.#connectTimeoutMs)
     try {
@@ -374,11 +388,8 @@ export class HermesGateway implements HermesRpcTransport {
         () => this.#credentials(controller.signal),
         controller.signal
       )
-      const token = headers["X-Hermes-Session-Token"]
-      if (!isServerToken(token)) throw new HermesAuthenticationError()
-      return token
-    } catch (error) {
-      if (error instanceof HermesAuthenticationError) throw error
+      return headers["X-Hermes-Session-Token"]
+    } catch {
       throw new HermesUnavailableError()
     } finally {
       clearTimeout(timer)
@@ -391,7 +402,7 @@ export class HermesGateway implements HermesRpcTransport {
    * still being the current generation.
    */
   #createSocket(url: string) {
-    const generation = {}
+    const generation = { token: new URL(url).searchParams.get("token") }
     this.#generation = generation
     const current = () => this.#generation === generation
     let raw: HermesSocket
@@ -399,7 +410,7 @@ export class HermesGateway implements HermesRpcTransport {
       raw = this.#socketFactory(url)
     } catch (error) {
       // Its own outage, apart from a handshake Hermes never completed.
-      this.#logDialFailure("socket_factory_threw", error)
+      this.#logDialFailure("socket_factory_threw", { error })
       return refusedSocket() as unknown as WebSocket
     }
     return guardedHermesSocket(raw, {
@@ -417,24 +428,29 @@ export class HermesGateway implements HermesRpcTransport {
 
   /**
    * The redial ladder runs forever at the cap: log the outage once, not every
-   * rung; the next open re-arms this. The error is recorded whole: a native
+   * rung; the next open re-arms this. An error is recorded whole: a native
    * message may carry the dial URL, and the log strips its token.
    */
-  #logDialFailure(reason: string, error: unknown) {
+  #logDialFailure(
+    reason: string,
+    detail: { error: unknown } | { close_code: number }
+  ) {
     if (this.#dialFailureLogged) return
     this.#dialFailureLogged = true
-    this.#log?.warn({ reason, error }, "hermes.gateway.dial_failed")
+    this.#log?.warn({ reason, ...detail }, "hermes.gateway.dial_failed")
   }
 
   #onSocketClose(event: { code: number }): boolean {
-    if (AUTH_CLOSE_CODES.has(event.code)) {
-      this.#authFailed = true
+    if (event.code === AUTH_CLOSE_CODE) {
+      this.#refusal = { token: this.#generation?.token }
       this.#log?.warn(
         {
           close_code: event.code,
         },
         "hermes.gateway.authentication_rejected"
       )
+    } else if (event.code === REFUSED_CLOSE_CODE) {
+      this.#logDialFailure("refused", { close_code: event.code })
     }
     // Never intercept: the vendored `closed` transition arms heal and redial.
     return false
@@ -474,13 +490,12 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   #scheduleRedial() {
-    if (this.#closed || this.#authFailed || this.#redialTimer !== undefined)
-      return
+    if (this.#closed || this.#redialTimer !== undefined) return
     const delay = reconnectBackoffDelayMs(this.#attempt, this.#backoff)
     this.#attempt += 1
     this.#redialTimer = setTimeout(() => {
       this.#redialTimer = undefined
-      if (this.#closed || this.#authFailed || this.#dial) return
+      if (this.#closed || this.#dial) return
       if (this.#client.connectionState === "open") return
       void this.connect().catch(() => undefined)
     }, delay)
@@ -584,7 +599,7 @@ export class HermesGateway implements HermesRpcTransport {
     if (signal?.aborted) return Promise.reject(new HermesRequestAbortedError())
     if (this.#closed) return Promise.reject(new HermesUnavailableError())
     if (this.#client.connectionState === "open") return Promise.resolve()
-    if (this.#authFailed) return Promise.reject(new HermesAuthenticationError())
+    if (this.#refusal) return Promise.reject(new HermesAuthenticationError())
     if (!this.#dial && this.#redialTimer === undefined)
       void this.connect().catch(() => undefined)
     return new Promise<void>((resolve, reject) => {
@@ -624,7 +639,7 @@ export class HermesGateway implements HermesRpcTransport {
     options: HermesRpcOptions = {}
   ): Promise<unknown> {
     if (this.#closed) throw new HermesUnavailableError()
-    if (this.#authFailed) throw new HermesAuthenticationError()
+    if (this.#refusal) throw new HermesAuthenticationError()
     if (this.#inFlight >= MAX_IN_FLIGHT_REQUESTS)
       throw new HermesUnavailableError()
     let limit: number
@@ -734,9 +749,7 @@ export class HermesGateway implements HermesRpcTransport {
    */
   connected(): boolean {
     return (
-      !this.#closed &&
-      !this.#authFailed &&
-      this.#client.connectionState === "open"
+      !this.#closed && !this.#refusal && this.#client.connectionState === "open"
     )
   }
 
