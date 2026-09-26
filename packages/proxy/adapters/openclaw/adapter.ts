@@ -1,5 +1,4 @@
 import type {
-  RuntimeAuthState,
   RuntimeInfo,
   SessionAttachmentStageRequest,
   SessionModelUpdateRequest,
@@ -85,6 +84,21 @@ async function readable(read: () => Promise<unknown>) {
   }
 }
 
+/**
+ * Wraps a read operation so an uncertain transport failure becomes unavailable.
+ * A read is never uncertain: whether the request landed is irrelevant because
+ * the coordinator does not need to reconcile a read.
+ */
+async function readOp<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (error) {
+    if (error instanceof OpenClawClientRequestError && error.uncertain)
+      throw new OpenClawWorkspaceUnavailableError()
+    throw error
+  }
+}
+
 /** Sorts every failure an OpenClaw leaf or its Gateway link raises. */
 export function openClawPublicError(cause: unknown) {
   const connection = openClawConnectionFailure(cause)
@@ -144,7 +158,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
-  readonly #subscribeSession: OpenClawHistorySubscription
   readonly #gatewayOrigin?: string
   readonly #fetch: typeof fetch
   #close?: Promise<void>
@@ -153,7 +166,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
     this.link = options.client.link
     this.turns = options.turns
     this.#client = options.client
-    this.#subscribeSession = options.subscribeSession
     this.#gatewayOrigin = options.gatewayOrigin
     this.#fetch = options.fetch ?? fetch
     this.#workspace = createOpenClawWorkspace({
@@ -198,20 +210,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return openClawPublicError(cause)
   }
 
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.#start()
-      return { status: "authenticated" }
-    } catch (error) {
-      if (
-        openClawConnectionFailure(error)?.kind ===
-        "runtime_authentication_required"
-      )
-        return { status: "authentication-required" }
-      return { status: "unavailable", reason: "temporarily-unavailable" }
-    }
-  }
-
   async runtimeInfo(): Promise<RuntimeInfo> {
     try {
       await this.listAgents()
@@ -225,7 +223,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async listAgents() {
     await this.#start()
-    return this.#workspace.listAgents()
+    return readOp(() => this.#workspace.listAgents())
   }
 
   async updateAgentVisibility(
@@ -241,12 +239,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     await this.#start()
     if (offset + limit > SESSION_CATALOG_MAX_WINDOW)
       throw new OpenClawWorkspaceUnavailableError()
-    return this.#workspace.listAllSessions(limit, offset)
+    return readOp(() => this.#workspace.listAllSessions(limit, offset))
   }
 
   async listSessions(agentId: string, limit: number, offset: number) {
     await this.#start()
-    return this.#workspace.listSessions(agentId, limit, offset)
+    return readOp(() => this.#workspace.listSessions(agentId, limit, offset))
   }
 
   async history(
@@ -256,12 +254,14 @@ export class OpenClawServerAdapter implements ServerRuntime {
     offset: number
   ) {
     await this.#start()
-    return this.#history.history(agentId, providerSessionId, limit, offset)
+    return readOp(() =>
+      this.#history.history(agentId, providerSessionId, limit, offset)
+    )
   }
 
   async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#workspace.getSession(agentId, providerSessionId)
+    return readOp(() => this.#workspace.getSession(agentId, providerSessionId))
   }
 
   async createSession(agentId: string, _title?: string): Promise<unknown> {
@@ -339,23 +339,6 @@ export class OpenClawServerAdapter implements ServerRuntime {
   async context(agentId: string, publicSessionId: string) {
     await this.#start()
     return this.#history.context(agentId, publicSessionId)
-  }
-
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    _reset?: () => void
-  ) {
-    void _reset
-    await this.#start()
-    const providerSessionId = this.resolveProviderSessionId(
-      agentId,
-      publicSessionId
-    )
-    if (!providerSessionId) throw new OpenClawWorkspaceOwnershipError()
-    await this.#workspace.getSession(agentId, providerSessionId)
-    return this.#subscribeSession(agentId, providerSessionId, listener)
   }
 
   async stageAttachments(

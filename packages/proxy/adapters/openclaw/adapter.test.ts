@@ -107,13 +107,9 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: subscribe,
     })
 
-    await expect(adapter.authState()).resolves.toEqual({
-      status: "unavailable",
-      reason: "temporarily-unavailable",
-    })
-    await expect(adapter.authState()).resolves.toEqual({
-      status: "authenticated",
-    })
+    await expect(adapter.listAgents()).rejects.toSatisfy(
+      (error) => adapter.publicError(error)?.kind === "unavailable"
+    )
     await expect(adapter.listAgents()).resolves.toMatchObject({
       agents: [
         { summary: { id: "research", name: "Research" }, editable: false },
@@ -254,6 +250,26 @@ describe("OpenClaw ServerRuntime assembly", () => {
     expect(
       adapter.publicError(new Error("token=private-value"))
     ).toBeUndefined()
+  })
+
+  it("maps a failed agents-list or history read to unavailable, never uncertain", async () => {
+    // requestSent=true, accepted=false → uncertain without readOp
+    const uncertainRequest = new OpenClawClientRequestError("timeout", true)
+    const gateway = client({
+      request: vi.fn(async (method: string) => {
+        if (method === "agents.list") throw uncertainRequest
+        throw new Error(`Unexpected method ${method}`)
+      }),
+    })
+    const adapter = new OpenClawServerAdapter({
+      client: gateway,
+      turns: engine(),
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(adapter.listAgents()).rejects.toSatisfy(
+      (error) => adapter.publicError(error)?.kind === "unavailable"
+    )
   })
 
   it("advertises and stages attachments only from negotiated HelloOk policy", async () => {
