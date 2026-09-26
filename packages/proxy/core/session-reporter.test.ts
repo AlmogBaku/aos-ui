@@ -39,6 +39,24 @@ describe("SessionReporter", () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps delivering a released cell's readings to a listener it still has", async () => {
+    const clock = useFakeClock()
+    const read = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("before")
+      .mockResolvedValue("after")
+    const reporter = cells(read)
+    const subscriber = listener()
+    reporter.subscribe("session-1", scope, "browser", subscriber)
+    await clock.advance(0)
+
+    reporter.release("session-1")
+    reporter.report("session-1")
+    await clock.advance(0)
+
+    expect(subscriber.mock.calls).toEqual([["before"], ["after"]])
+  })
+
   it("re-reads a failed read once its backoff elapses", async () => {
     const clock = useFakeClock()
     vi.spyOn(Math, "random").mockReturnValue(0.5)

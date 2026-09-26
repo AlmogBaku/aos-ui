@@ -301,7 +301,7 @@ function failedOutbound(
 ): AcpOutbound[] {
   const failure = {
     ...(event.code ? { code: event.code } : {}),
-    message: event.message.slice(0, 4_096),
+    ...(event.message !== undefined ? { message: event.message.slice(0, 4_096) } : {}),
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.model ? { model: event.model } : {}),
   }

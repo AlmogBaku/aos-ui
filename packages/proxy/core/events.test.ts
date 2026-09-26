@@ -216,7 +216,7 @@ const requiredFields: Record<TurnEventKind, readonly string[]> = {
   [TurnEventKind.TurnStarted]: [],
   [TurnEventKind.TurnEnded]: [],
   [TurnEventKind.TurnRequiresAction]: ["requests"],
-  [TurnEventKind.TurnFailed]: ["message"],
+  [TurnEventKind.TurnFailed]: [],
   [TurnEventKind.MessageChunk]: ["messageId", "text"],
   [TurnEventKind.ThoughtChunk]: ["messageId", "text"],
   [TurnEventKind.ToolCallStarted]: ["toolCallId", "title"],

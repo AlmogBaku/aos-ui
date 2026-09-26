@@ -171,18 +171,22 @@ function annotatedTurns(
   apps: ServerMcpApps
 ): ServerTurnEngine {
   return {
-    start: async (scope, input, attachments) =>
+    start: async (scope, input, attachments, signal) =>
       annotatedHandle(
-        await turns.start(scope, input, attachments),
+        await turns.start(scope, input, attachments, signal),
         apps,
         scope
       ),
-    recover: async (scope, request) =>
-      annotatedHandle(await turns.recover(scope, request), apps, scope),
+    recover: async (scope, request, signal) =>
+      annotatedHandle(await turns.recover(scope, request, signal), apps, scope),
     ...(turns.discover
       ? {
-          discover: async (scope: SessionScope, turnId: string) => {
-            const found = await turns.discover!(scope, turnId)
+          discover: async (
+            scope: SessionScope,
+            turnId: string,
+            signal?: AbortSignal
+          ) => {
+            const found = await turns.discover!(scope, turnId, signal)
             return (
               found && {
                 ...found,

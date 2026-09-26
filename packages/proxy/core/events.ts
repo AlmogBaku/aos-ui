@@ -307,7 +307,7 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
   }),
   turnEvent(TurnEventKind.TurnFailed, {
     code: z.string().optional(),
-    message: z.string(),
+    message: z.string().optional(),
     /**
      * The failure is final, but the provider's turn outlives it and ends only
      * when stopped: the turn stays active and stoppable, and its settlement,

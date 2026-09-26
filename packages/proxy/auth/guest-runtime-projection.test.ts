@@ -5,6 +5,7 @@ import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   projectGuestCapabilities,
   projectGuestError,
+  publicTurnError,
 } from "./guest-runtime-projection"
 
 const authorization: VerifiedGuestAuthorization = {
@@ -49,6 +50,13 @@ describe("guest runtime projection", () => {
         description:
           "The service is temporarily unavailable. Please try again.",
       },
+    })
+  })
+
+  it("keeps a turn whose outcome is unknown distinct from a failed one, and final", () => {
+    expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
+      code: "AOS_OUTCOME_UNKNOWN",
+      retryable: false,
     })
   })
 
