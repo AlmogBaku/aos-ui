@@ -63,10 +63,12 @@ import {
   type Middleware,
   type MemberCommands,
 } from "../core/member"
-import { createMemberEncoder } from "./member-encoder"
+import { createMemberEncoder, type ClientReply } from "./member-encoder"
+import { shownAnswers } from "./translate/requests"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
+  errorNotificationOf,
   invalidParams,
   notFound,
   parseMeta,
@@ -152,13 +154,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     createMemberEncoder({
       context,
       client,
-      membership: (sessionId) => sessions.membership(sessionId),
-      answer: (command) =>
-        perform("answer", command, async ({ sessionId, ...answer }) => {
-          await sessions
-            .membership(sessionId)
-            ?.answer(answer.request, answer.reply, answer.answers)
-        }),
+      steerAck: runtime.translation?.steerAck,
+      describe: (cause) => errorNotificationOf(runtime, cause),
+      replied,
+      report: (sessionId, cause) =>
+        sessions.membership(sessionId)?.report(cause),
+      // The upgrade's principal holds for the connection's whole life.
+      live: () => context.authentication?.live() ?? true,
     })
   )
   const app = agent({ name: "aos-proxy" })
@@ -213,6 +215,39 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? refusalError(cause.refusal)
         : publicRequestError(runtime, cause)
     }
+  }
+
+  /**
+   * Decodes the client's reply to one request this connection was asked and
+   * gives it through the stack. A request settled since, or never handed to
+   * this member, is stale.
+   */
+  async function replied(
+    sessionId: string,
+    requestId: string,
+    { kind, response }: ClientReply
+  ) {
+    const membership = sessions.membership(sessionId)
+    if (!membership) return
+    const request = membership.request(requestId)
+    await perform(
+      "answer",
+      {
+        sessionId,
+        request,
+        ...(kind === "permission"
+          ? { reply: translators.replyFromPermission(request, response) }
+          : {
+              reply: translators.replyFromElicitation(request, response),
+              answers: shownAnswers(request, response),
+            }),
+      },
+      async ({ sessionId, ...answer }) => {
+        await sessions
+          .membership(sessionId)
+          ?.answer(answer.request, answer.reply, answer.answers)
+      }
+    )
   }
 
   /** One history page, `offset` rows back from the newest. */

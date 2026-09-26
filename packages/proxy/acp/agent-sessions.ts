@@ -1,7 +1,6 @@
 import type {
   AgentContext,
   SessionInfo,
-  SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import { type Session, type SessionHistoryResponse } from "../../protocol"
@@ -22,7 +21,7 @@ import {
   type MemberScope,
 } from "../core/member"
 import { redactForLog } from "../redaction"
-import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
+import type { AcpConnectionContext } from "./types"
 import {
   authenticationRequired,
   errorNotificationOf,
@@ -53,7 +52,8 @@ export function overlaidStatus(
         : settled
 }
 
-function sessionInfoMeta(
+/** A Session row's `_meta.aos`, on a listed row and on its update alike. */
+export function sessionInfoMeta(
   row: SessionRow,
   status: Session["status"]
 ): AosSessionInfoMeta {
@@ -76,35 +76,6 @@ export function sessionInfoOf(
     title: row.title,
     updatedAt: row.updatedAt,
     _meta: { [AOS_META_KEY]: sessionInfoMeta(row, status) },
-  }
-}
-
-export function sessionInfoUpdate(
-  row: SessionRow,
-  status: Session["status"]
-): SessionUpdate {
-  return {
-    sessionUpdate: "session_info_update",
-    title: row.title,
-    updatedAt: row.updatedAt,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(row, status) },
-  }
-}
-
-export function commandsUpdate(
-  capabilities: WorkspaceCapabilities
-): SessionUpdate {
-  const { slashCommands } = capabilities.workspace
-  return {
-    sessionUpdate: "available_commands_update",
-    availableCommands: (slashCommands.status === "available"
-      ? slashCommands.commands
-      : []
-    ).map(({ name, description }) => ({
-      name,
-      description: description ?? "",
-    })),
-    _meta: { [AOS_META_KEY]: { capabilities } },
   }
 }
 

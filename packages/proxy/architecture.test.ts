@@ -345,6 +345,30 @@ describe("member boundary", () => {
     expect(roleReaders).toEqual([join(proxyRoot, "core/channel.ts")])
   })
   /**
+   * The member encoder alone turns member events into ACP updates, from the
+   * event it is given: it reaches neither a membership nor the runtime. The
+   * translators it writes with are its own pure helpers, and the test harness
+   * stands in for a provider.
+   */
+  it("builds every ACP update in the member encoder alone", async () => {
+    const encoder = stripComments(
+      await readFile(join(proxyRoot, "acp/member-encoder.ts"), "utf8")
+    )
+    expect(encoder).not.toMatch(importsFrom("core\\/(?:channel|runtime)"))
+    expect(encoder).not.toMatch(/\bServerRuntime\b|\bruntimeInstance\b/u)
+
+    const builders: string[] = []
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (file.startsWith("acp/translate/") || /\/test-[\w-]+\.ts$/u.test(file))
+        continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/\bsessionUpdate\s*:/u.test(source)) builders.push(file)
+    }
+    expect(builders).toEqual(["acp/member-encoder.ts"])
+  })
+
+  /**
    * A2: the ACP transport never branches on the role. The translators and
    * the member encoder never name it, and the files that carry it as the
    * connection's identity never compare it.
