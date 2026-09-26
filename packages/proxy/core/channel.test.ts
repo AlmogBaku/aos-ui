@@ -21,6 +21,18 @@ import {
 } from "./channel"
 import type { SessionCoordinator } from "./session-coordinator"
 
+/** No test here reads history; a channel that did would fail loudly. */
+const NO_HISTORY = {
+  history: () => Promise.reject(new Error("no history")),
+}
+
+/** A coordinator that only reports each Session's execution. */
+function reporting(
+  snapshot: (scope: ChannelScope) => { state: string; turnId?: string }
+) {
+  return { snapshot } as unknown as SessionCoordinator
+}
+
 const SCOPE: SessionScope = {
   agentId: "researcher",
   providerSessionId: "session-1",
@@ -79,7 +91,10 @@ function harness() {
   const key = (scope: ChannelScope) =>
     `${scope.agentId}/${scope.providerSessionId}`
   const channels = createChannels({
-    snapshot: (scope) => snapshots.get(key(scope)) ?? { state: "idle" },
+    coordinator: reporting(
+      (scope) => snapshots.get(key(scope)) ?? { state: "idle" }
+    ),
+    runtime: NO_HISTORY,
     now: () => clock.now,
     backstopMs: 1_000,
   })
@@ -438,7 +453,8 @@ function adoptingHarness() {
   let stopped = 0
   let discover: () => Promise<unknown> = async () => undefined
   const channels = createChannels({
-    snapshot: () => state,
+    coordinator: reporting(() => state),
+    runtime: NO_HISTORY,
     adoption: {
       subscribeTurns(_scope, watcher) {
         watchers.push(watcher)
@@ -726,9 +742,7 @@ function joined(
     },
     live: () => state.live,
   }
-  const membership = createChannels({
-    snapshot: () => ({ state: "idle" }),
-  }).join(
+  const membership = createChannels({ coordinator, runtime: NO_HISTORY }).join(
     {
       principal: { id: GUEST, role: "guest" },
       middleware: [middleware],
@@ -736,7 +750,6 @@ function joined(
     },
     SCOPE,
     {
-      coordinator,
       membershipId: "subscriber-1",
       log: () => undefined,
       describe: () => ({ code: "failed", message: "failed" }),

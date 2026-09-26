@@ -2,7 +2,6 @@ import type { z } from "zod"
 
 import type {
   AgentCatalogResponse,
-  Session,
   SessionContextResponse,
   SessionHistoryResponse,
   SessionModelsResponse,
@@ -108,15 +107,48 @@ export type SessionEvent =
     }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }
-  | { kind: "session-info"; row: SessionRow; status: Session["status"] }
+  /** The Session's row, whose status is the one its live execution overlays. */
+  | { kind: "session-info"; row: SessionRow }
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
   /** The member's view is incomplete and must be rebuilt from history. */
   | { kind: "invalidated" }
   /** A failure that has no request to answer. */
   | { kind: "error"; cause: unknown }
 
-/** One Session event, addressed by the Session's public id. */
-export type MemberEvent = { sessionId: string } & SessionEvent
+/**
+ * One content-free workspace event about a Session the member may observe:
+ * a turn's start and end, a request for attention and its resolution, and a
+ * change of read state.
+ */
+export type Activity = {
+  agentId: string
+  sessionId: string
+  occurredAt: string
+} & (
+  | {
+      type: "turn-started" | "turn-finished" | "turn-failed"
+      turnId: string
+    }
+  | {
+      type: "attention-requested"
+      requestId: string
+      attentionKind: "question" | "permission"
+    }
+  | { type: "attention-resolved"; requestId: string }
+  | { type: "unread-changed"; unread: boolean }
+)
+
+/** What a member is shown of the workspace, outside any one Session. */
+export type WorkspaceEvent =
+  /** The Session list changed and must be read again. */
+  { kind: "catalog-invalidated" } | { kind: "activity"; activity: Activity }
+
+/**
+ * One member event: a Session's, addressed by the Session's public id, or the
+ * workspace's.
+ */
+export type MemberEvent =
+  ({ sessionId: string } & SessionEvent) | WorkspaceEvent
 
 /** Where a member's events leave the Channel, implemented by the transport. */
 export type MemberConnection = {
@@ -225,7 +257,7 @@ export type CommandResults = {
   close: void
   answer: void
   focus: void
-  list: { rows: readonly Session[]; nextOffset?: number }
+  list: { rows: readonly SessionRow[]; nextOffset?: number }
   new: { sessionId: string }
   delete: void
   update: void
@@ -323,4 +355,15 @@ export type Member = {
   /** The member's stack, outermost first; the operator's is empty. */
   middleware: readonly Middleware[]
   connection: MemberConnection
+}
+
+/**
+ * Shows a member one workspace event through its stack. A workspace event
+ * names no Session, so it carries no request a layer could decline.
+ */
+export function showWorkspace(member: Member, event: WorkspaceEvent) {
+  const shown = runEvents(member.middleware, event, {
+    decline: () => undefined,
+  })
+  return shown ? member.connection.send(shown) : Promise.resolve()
 }

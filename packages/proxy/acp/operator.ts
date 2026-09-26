@@ -1,6 +1,6 @@
+import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
@@ -21,18 +21,14 @@ export type OperatorAcpServiceOptions = {
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
-  /**
-   * The row cache this listener maintains. Push delivery reads the same one to
-   * gate a notification on read state; absent means this listener owns the only
-   * cache.
-   */
-  sessionRows?: SessionRows
+  /** The workspace catalog the guest listener shares, with its row cache. */
+  catalog: Catalog
   now?: () => number
 }
 
 /**
- * The operator listener's ACP service: one Session row cache per deployment and,
- * per accepted connection, its own read-state service and activity feed.
+ * The operator listener's ACP service: the deployment's one catalog and, per
+ * accepted connection, its own read-state service and activity feed.
  */
 export function createOperatorAcpService({
   publicOrigin,
@@ -41,8 +37,8 @@ export function createOperatorAcpService({
   channels,
   logger,
   presence,
+  catalog,
   now = Date.now,
-  sessionRows = createSessionRows({ now }),
 }: OperatorAcpServiceOptions) {
   const role = "operator" as const
   const service = createAcpService({
@@ -55,25 +51,29 @@ export function createOperatorAcpService({
       principalId,
       role,
       runtimeInstance,
-      sessionRows,
+      catalog,
       translators,
       attachmentStages,
       channels,
       logger,
       presence,
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now,
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,
       }),
-      activityFeed: createActivityFeed({ runtimeInstance, sessionRows, now }),
+      activityFeed: createActivityFeed({
+        catalog,
+        coordinator: runtimeInstance.sessions,
+        now,
+      }),
     }),
   })
   // The cache is part of the listener's surface: push delivery gates on the
   // rows this listener keeps current, and there is only ever one of them. The
   // channels are exposed alike, so the composition can show both listeners
   // share them.
-  return { ...service, sessionRows, channels }
+  return { ...service, sessionRows: catalog.rows, channels }
 }

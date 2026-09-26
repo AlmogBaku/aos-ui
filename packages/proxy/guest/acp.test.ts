@@ -42,6 +42,7 @@ import {
   type GuestInvitationService,
 } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog } from "../core/catalog"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -470,6 +471,7 @@ function harness(options: HarnessOptions = {}) {
     limit,
     offset,
   }))
+  let catalogChanged: (() => void) | undefined
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
@@ -502,7 +504,10 @@ function harness(options: HarnessOptions = {}) {
     updateModel: unsupported,
     context: options.readings ? async () => USAGE : unsupported,
     subscribeSessionInvalidation: unsupported,
-    subscribeCatalogChanges: unsupported,
+    async subscribeCatalogChanges(listener) {
+      catalogChanged = listener
+      return () => undefined
+    },
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
@@ -535,8 +540,11 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    channels: createChannels({
-      snapshot: (scope) => coordinator.snapshot(scope),
+    channels: createChannels({ coordinator, runtime }),
+    catalog: createCatalog({
+      runtime,
+      coordinator,
+      rows: createSessionRows({ now: () => NOW }),
     }),
     guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,
@@ -546,11 +554,7 @@ function harness(options: HarnessOptions = {}) {
     },
     cancel: () => undefined,
   }
-  const context = createGuestConnection(
-    listener,
-    createSessionRows({ now: () => NOW }),
-    "connection-1"
-  )
+  const context = createGuestConnection(listener, "connection-1")
 
   const { connection, recorder } = connectClient(context, {
     name: "aos-guest-browser",
@@ -577,6 +581,11 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     listAllSessions,
+    /** The runtime reports that its Session list changed. */
+    changeCatalog() {
+      if (!catalogChanged) throw new Error("Nothing watches the catalog")
+      catalogChanged()
+    },
     /** Advertises paging older history, as the AOS browser does, by default. */
     initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
@@ -2385,6 +2394,7 @@ describe("guest scope and commands", () => {
       (entry) => JSON.stringify(entry.params).includes('"idle"'),
       'an update carrying "idle"'
     )
+    test.changeCatalog()
     await settled()
 
     const kinds = updates(test.recorder).map(

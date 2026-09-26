@@ -27,7 +27,6 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
-  type AosActivityNotification,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -47,8 +46,10 @@ import type {
 import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog, type Catalog } from "../core/catalog"
+import type { Activity } from "../core/member"
 import { SessionCoordinator } from "../core/session-coordinator"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
+import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
 import { withFaults } from "./test-faults"
@@ -562,7 +563,7 @@ export function connectClient(
 export type HarnessOptions = {
   rows?: Session[]
   total?: number
-  activity?: AosActivityNotification[]
+  activity?: Activity[]
   /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
   permission?: (
     params: unknown,
@@ -624,7 +625,7 @@ export type HarnessOptions = {
    */
   compose?: (parts: {
     runtimeInstance: RuntimeInstance
-    sessionRows: SessionRows
+    catalog: Catalog
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
   /** Where lifecycle owners log; a fresh capture by default. */
   logs?: LogCapture
@@ -802,7 +803,6 @@ export async function harness(options: HarnessOptions = {}) {
     focus: vi.fn(),
     blur: vi.fn(),
     onExecution: vi.fn(),
-    markRead: vi.fn(async () => undefined),
     close: vi.fn(),
   }
   const presence = {
@@ -813,10 +813,10 @@ export async function harness(options: HarnessOptions = {}) {
     lastPresentAt: vi.fn(() => undefined),
     connected: vi.fn(() => false),
   }
-  const activityListeners = new Set<(event: AosActivityNotification) => void>()
+  const activityListeners = new Set<(event: Activity) => void>()
   const activityFeed = {
     snapshot: () => options.activity ?? [],
-    subscribe: (listener: (event: AosActivityNotification) => void) => {
+    subscribe: (listener: (event: Activity) => void) => {
       activityListeners.add(listener)
       return () => activityListeners.delete(listener)
     },
@@ -824,15 +824,18 @@ export async function harness(options: HarnessOptions = {}) {
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
-  // A listener's connections share its row cache, as the operator's do.
-  const sessionRows = createSessionRows(
-    options.now ? { now: options.now } : undefined
-  )
-  const composed = options.compose?.({ runtimeInstance, sessionRows })
+  // Every connection shares the process's one catalog, as both listeners do.
+  const catalog = createCatalog({
+    runtime: faults.runtime,
+    coordinator,
+    rows: createSessionRows(options.now ? { now: options.now } : undefined),
+  })
+  const composed = options.compose?.({ runtimeInstance, catalog })
   const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
     logger: logs.logger,
-    snapshot: (channelScope) => coordinator.snapshot(channelScope),
+    coordinator,
+    runtime: faults.runtime,
     ...(subscribeTurns
       ? {
           adoption: {
@@ -855,7 +858,7 @@ export async function harness(options: HarnessOptions = {}) {
       connectionId,
       principalId: PRINCIPAL,
       runtimeInstance,
-      sessionRows,
+      catalog,
       readState: composed?.readState ?? readState,
       translators: {
         ...base,
@@ -941,6 +944,7 @@ export async function harness(options: HarnessOptions = {}) {
     faults,
     logs,
     channels,
+    catalog,
     scope,
     sources,
     start,
@@ -960,7 +964,7 @@ export async function harness(options: HarnessOptions = {}) {
       [...logger.info.mock.calls, ...logger.error.mock.calls].map(
         ([value]) => value
       ),
-    publishActivity(event: AosActivityNotification) {
+    publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },
   }

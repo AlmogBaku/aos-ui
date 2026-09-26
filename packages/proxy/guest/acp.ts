@@ -1,6 +1,6 @@
 import { createAosAcpAgent } from "../acp/agent"
 import { createAcpService } from "../acp/service"
-import { createCatalog, type Catalog } from "../core/catalog"
+import type { Catalog } from "../core/catalog"
 import type { Channels } from "../core/channel"
 import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
@@ -21,7 +21,6 @@ import {
   guestPrincipalId,
 } from "../auth/guest-request"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { AOS_AUTH_METHOD_INVITE, type AosExtensions } from "../../protocol/acp"
 import { createGuestMiddleware, type GuestGrant } from "./middleware"
 
@@ -55,6 +54,8 @@ export type GuestAcpServiceOptions = {
   attachmentStages: ServerAttachmentStages
   /** The channels the operator listener shares, so both see one per Session. */
   channels: Channels
+  /** The workspace catalog the operator listener shares. */
+  catalog: Catalog
   /** How many turns every guest together may hold at once. */
   guestActiveExecutions: number
   /** Where this listener's connections write their structured lines. */
@@ -97,8 +98,7 @@ const INVITE_AUTH_METHOD = {
  * invitation names, through the guest middleware.
  */
 function createGuestAuthentication(
-  options: GuestAcpServiceOptions,
-  catalog: Catalog
+  options: GuestAcpServiceOptions
 ): ConnectionAuthentication {
   const now = options.now ?? Date.now
   const schedule =
@@ -169,7 +169,7 @@ function createGuestAuthentication(
           principal: { id: grant.principalId, role: "guest" },
           middleware: createGuestMiddleware({
             grant,
-            catalog,
+            catalog: options.catalog,
             guestActiveExecutions: options.guestActiveExecutions,
           }),
         },
@@ -203,37 +203,30 @@ function createGuestAuthentication(
  */
 export function createGuestConnection(
   options: GuestAcpServiceOptions,
-  sessionRows: SessionRows,
   connectionId: string
 ): AcpConnectionContext {
   const role = "guest" as const
-  const { runtimeInstance } = options
-  const authentication = createGuestAuthentication(
-    options,
-    createCatalog(runtimeInstance.runtime)
-  )
   return {
     connectionId,
     // The connection's real principal arrives with its redeemed invitation.
     principalId: role,
     role,
-    runtimeInstance,
-    sessionRows,
+    runtimeInstance: options.runtimeInstance,
+    catalog: options.catalog,
     translators,
     attachmentStages: options.attachmentStages,
     channels: options.channels,
     logger: options.logger,
-    authentication,
+    authentication: createGuestAuthentication(options),
   }
 }
 
 /**
- * Hosts the guest listener on its own path, with one Session row cache per
- * deployment behind the per-connection invitations.
+ * Hosts the guest listener on its own path, behind the per-connection
+ * invitations.
  */
 export function createGuestAcpService(options: GuestAcpServiceOptions) {
   const role = "guest" as const
-  const sessionRows = createSessionRows({ now: options.now ?? Date.now })
   const service = createAcpService({
     publicOrigin: options.publicOrigin,
     role,
@@ -241,8 +234,7 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
     agent: createAosAcpAgent,
     // A guest reads a failure's public code, never what the host knows of it.
     publicErrors: PUBLIC_ERRORS,
-    connection: (connectionId) =>
-      createGuestConnection(options, sessionRows, connectionId),
+    connection: (connectionId) => createGuestConnection(options, connectionId),
   })
   // Exposed so the composition can show both listeners hold the same channels.
   return { ...service, channels: options.channels }

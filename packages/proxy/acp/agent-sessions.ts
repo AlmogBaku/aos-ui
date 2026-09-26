@@ -9,16 +9,20 @@ import {
   type AosHistoryCursor,
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
-import * as ids from "../core/ids"
 import type { SessionScope } from "../core/runtime"
-import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import type { Membership } from "../core/channel"
+import {
+  HISTORY_MAX_OFFSET,
+  hasOlderPage,
+  type Membership,
+} from "../core/channel"
 import {
   hasSession,
+  showWorkspace,
   type Member,
   type MemberConnection,
   type MemberScope,
+  type WorkspaceEvent,
 } from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext } from "./types"
@@ -38,44 +42,24 @@ import {
 /** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
 const SESSION_CWD = "/"
 
-/** Mirrors the normalized status overlay: live execution outranks the row. */
-export function overlaidStatus(
-  state: SessionExecutionState,
-  settled: Session["status"]
-): Session["status"] {
-  return state === "waiting-for-input"
-    ? "waiting-for-input"
-    : state === "running" || state === "stopping"
-      ? "running"
-      : state === "uncertain"
-        ? "failed"
-        : settled
-}
-
 /** A Session row's `_meta.aos`, on a listed row and on its update alike. */
-export function sessionInfoMeta(
-  row: SessionRow,
-  status: Session["status"]
-): AosSessionInfoMeta {
+export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
   return {
     agentId: row.agentId,
-    status,
+    status: row.status,
     archived: row.archived,
     ...(row.unread === undefined ? {} : { unread: row.unread }),
     ...(row.pinned === undefined ? {} : { pinned: row.pinned }),
   }
 }
 
-export function sessionInfoOf(
-  row: SessionRow,
-  status: Session["status"]
-): SessionInfo {
+export function sessionInfoOf(row: SessionRow): SessionInfo {
   return {
     sessionId: row.id,
     cwd: SESSION_CWD,
     title: row.title,
     updatedAt: row.updatedAt,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(row, status) },
+    _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },
   }
 }
 
@@ -100,9 +84,6 @@ export function decodeCursor(cursor: string | null | undefined) {
   return offset
 }
 
-/** How far back history pages reach; older history reads as truncated. */
-export const HISTORY_MAX_OFFSET = 100_000
-
 /** An older page's offset: past the start replay, short of the reach. */
 export function decodeHistoryCursor(cursor: string) {
   const offset = decodeCursor(cursor)
@@ -118,14 +99,8 @@ export function decodeHistoryCursor(cursor: string) {
 export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
   // A runtime that cannot read further back has no page to offer beyond this.
   if (page.truncated) return { truncated: true }
-  const older = page.nextOffset < page.total
-  if (
-    older &&
-    page.nextOffset > page.offset &&
-    page.nextOffset < HISTORY_MAX_OFFSET
-  )
-    return { nextCursor: encodeCursor(page.nextOffset) }
-  return older ? { truncated: true } : {}
+  if (hasOlderPage(page)) return { nextCursor: encodeCursor(page.nextOffset) }
+  return page.nextOffset < page.total ? { truncated: true } : {}
 }
 
 /**
@@ -138,7 +113,7 @@ export function createSessions(
   context: AcpConnectionContext,
   connect: (client: AgentContext) => MemberConnection
 ) {
-  const coordinator = context.runtimeInstance.sessions
+  const { catalog } = context
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
   const memberships = new Map<string, Membership>()
@@ -170,35 +145,9 @@ export function createSessions(
     for (const row of rows) owners.set(row.id, row.agentId)
   }
 
-  /** The live status of a row, whether or not this connection resumed it. */
-  function status(row: Session) {
-    const providerSessionId = runtime.resolveProviderSessionId(
-      row.agentId,
-      row.id
-    )
-    return providerSessionId
-      ? overlaidStatus(
-          coordinator.state({
-            agentId: row.agentId,
-            providerSessionId,
-          }),
-          row.status
-        )
-      : row.status
-  }
-
-  /** Reads the Session's row, which reaches each of its members as it changes. */
-  async function readRow(scope: SessionScope) {
-    context.sessionRows.rememberDetail(
-      await runtime.getSession(scope.agentId, scope.providerSessionId)
-    )
-  }
-
   return {
     remember,
     identity,
-    status,
-    readRow,
 
     owner(publicSessionId: string) {
       return owners.get(publicSessionId)
@@ -211,16 +160,12 @@ export function createSessions(
 
     scope(publicSessionId: string): SessionScope {
       const agentId = owners.get(publicSessionId)
-      const providerSessionId =
+      const scope =
         agentId === undefined
           ? undefined
-          : runtime.resolveProviderSessionId(agentId, publicSessionId)
-      if (agentId === undefined || !providerSessionId) throw notFound()
-      return {
-        agentId,
-        providerSessionId,
-        sessionId: ids.sessionId(publicSessionId),
-      }
+          : catalog.scope(agentId, publicSessionId)
+      if (!scope) throw notFound()
+      return scope
     },
 
     /**
@@ -242,27 +187,16 @@ export function createSessions(
           redactForLog({ event, connectionId: context.connectionId, ...fields })
         )
       const membership = context.channels.join(memberOf(client), scope, {
-        coordinator,
         membershipId: `${context.connectionId}:${scope.sessionId}`,
         log,
         describe: (cause) => errorNotificationOf(runtime, cause),
-        subscribeRow: (listener) => {
-          const { agentId, sessionId } = scope
-          const unsubscribe = context.sessionRows.subscribeRow(
-            agentId,
-            sessionId,
-            (row) => listener(row, status(row))
-          )
-          // A Session this connection never listed is read once for its row.
-          if (hasSession(scope) && !context.sessionRows.get(agentId, sessionId))
-            void readRow(scope).catch((cause: unknown) =>
-              log("error", "session.read.failed", {
-                sessionId,
-                errorCode: errorNotificationOf(runtime, cause).code,
-              })
-            )
-          return unsubscribe
-        },
+        subscribeRow: (listener) =>
+          catalog.subscribe(scope, listener, (cause) =>
+            log("error", "session.read.failed", {
+              sessionId: scope.sessionId,
+              errorCode: errorNotificationOf(runtime, cause).code,
+            })
+          ),
       })
       memberships.set(scope.sessionId, membership)
       return membership
@@ -288,7 +222,15 @@ export function createSessions(
       memberships.get(scope.sessionId)?.part()
       memberships.delete(scope.sessionId)
       owners.delete(scope.sessionId)
-      context.sessionRows.forget(scope.agentId, scope.sessionId)
+    },
+
+    /**
+     * Shows this connection one workspace event through its stack, once it
+     * acts as someone. A connection that cannot be written to has closed.
+     */
+    show(client: AgentContext, event: WorkspaceEvent) {
+      if (!identity()) return
+      void showWorkspace(memberOf(client), event).catch(() => undefined)
     },
 
     close() {

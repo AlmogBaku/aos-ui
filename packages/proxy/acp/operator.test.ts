@@ -142,19 +142,18 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
     pagesHistory: false,
     // An operator who never answers declines, which the listener cancels.
     question: options.question ?? (async () => ({ action: "decline" })),
-    compose: ({ runtimeInstance, sessionRows }) => ({
+    compose: ({ runtimeInstance, catalog }) => ({
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
-        role: "operator",
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now: clock.now,
         schedule: clock.schedule,
         cancel: clock.cancel,
         onUnreadChanged: () => undefined,
       }),
       activityFeed: createActivityFeed({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        coordinator: runtimeInstance.sessions,
         now: clock.now,
       }),
     }),

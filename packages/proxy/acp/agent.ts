@@ -7,11 +7,7 @@ import {
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import {
-  SESSION_CATALOG_MAX_WINDOW,
-  SessionCreateResponseSchema,
-  type SessionHistoryResponse,
-} from "../../protocol"
+import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   AOS_EXTENSION_VERSION,
@@ -30,13 +26,9 @@ import {
   AosSteerRequestSchema,
   type AosExtensions,
 } from "../../protocol/acp"
+import type { Catalog } from "../core/catalog"
 import { unlessAborted } from "../core/channel"
-import {
-  type ServerAttachmentStage,
-  type ServerRuntime,
-  type SessionPatch,
-  type SessionScope,
-} from "../core/runtime"
+import type { ServerAttachmentStage, SessionPatch } from "../core/runtime"
 import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
@@ -62,6 +54,7 @@ import {
   type CommandResults,
   type Middleware,
   type MemberCommands,
+  type WorkspaceEvent,
 } from "../core/member"
 import { createMemberEncoder, type ClientReply } from "./member-encoder"
 import { shownAnswers } from "./translate/requests"
@@ -77,16 +70,12 @@ import {
 } from "./validation"
 
 /**
- * The per-connection ACP v2 agent that fronts the coordinator and the runtime.
+ * The per-connection ACP v2 agent that fronts the catalog, the channels and
+ * the coordinator.
  * One handler per method: it validates `_meta.aos`, runs its command through
  * the member stack, and leaves what reaches a Session's members to its
  * channel.
  */
-
-/** The bounded history one `replayFrom: { type: "start" }` resume replays. */
-const HISTORY_REPLAY_LIMIT = 500
-/** One `session/list` page; the cursor carries the next offset. */
-const SESSION_LIST_LIMIT = 50
 
 /** Extension methods with no params still need a parser for the SDK. */
 const withoutParams = () => undefined
@@ -101,13 +90,13 @@ const undecoded = (params: unknown) => params
  * The operator listener's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
-function operatorExtensions(runtime: ServerRuntime): AosExtensions {
+function operatorExtensions(catalog: Catalog): AosExtensions {
   return {
     steer: true,
     rewind: true,
     composerPrefill: true,
     agents: true,
-    invalidation: runtime.subscribeCatalogChanges !== undefined,
+    invalidation: catalog.invalidation.signaled,
     activity: true,
     readState: true,
     focus: true,
@@ -142,14 +131,11 @@ function sameExposure(
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { role, translators, readState, activityFeed } = context
+  const { role, translators, readState, activityFeed, catalog } = context
   const { runtime, sessions: coordinator } = context.runtimeInstance
-  /**
-   * The extensions this connection is served: it signals catalog changes only
-   * when they include invalidation.
-   */
+  /** The extensions this connection is served, which `initialize` reports. */
   const extensions =
-    context.authentication?.extensions ?? operatorExtensions(runtime)
+    context.authentication?.extensions ?? operatorExtensions(catalog)
   const sessions = createSessions(context, (client) =>
     createMemberEncoder({
       context,
@@ -250,47 +236,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
   }
 
-  /** One history page, `offset` rows back from the newest. */
-  function readHistory(scope: SessionScope, offset = 0) {
-    return runtime.history(
-      scope.agentId,
-      scope.providerSessionId,
-      HISTORY_REPLAY_LIMIT,
-      offset
-    )
-  }
-
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
-
-  /**
-   * The history a from-start resume replays. ACP replays all retained
-   * history; a client that pages older history itself gets the newest page
-   * and the cursor before it. Either way the reach bounds the reading.
-   */
-  async function readReplay(scope: SessionScope) {
-    const newest = await readHistory(scope)
-    if (clientPagesHistory) return newest
-    const older: SessionHistoryResponse["messages"][] = []
-    // A turn stored between two reads shifts the offsets, so the same message
-    // can come back on the next older page.
-    const seen = new Set(newest.messages.map(({ id }) => id))
-    let page = newest
-    while (historyCursor(page).nextCursor !== undefined) {
-      page = await readHistory(scope, page.nextOffset)
-      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
-      for (const { id } of page.messages) seen.add(id)
-    }
-    return {
-      ...newest,
-      messages: [...older.flat(), ...newest.messages],
-      nextOffset: page.nextOffset,
-      truncated: page.truncated,
-    }
-  }
-
-  /** The Sessions this connection is reading an older page of. */
-  const paging = new Set<string>()
 
   /**
    * One older page of a Session this connection resumed, however it did, as
@@ -302,20 +249,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
     const membership = sessions.membership(sessionId)
     if (!membership) throw notFound()
-    const offset = decodeHistoryCursor(cursor)
-    if (paging.has(sessionId)) throw invalidParams()
-    paging.add(sessionId)
-    try {
-      const page = await readHistory(membership.scope, offset)
-      // A cursor past this Session's history was never issued for it. One at
-      // its end was: a runtime that estimates `total` learns the start only
-      // by reading an empty page there.
-      if (offset > page.total) throw invalidParams()
-      await membership.showOlderPage(page, { cursor, offset })
-      return { page }
-    } finally {
-      paging.delete(sessionId)
-    }
+    return context.channels.olderPage(membership, {
+      cursor,
+      offset: decodeHistoryCursor(cursor),
+    })
   }
 
   /**
@@ -336,7 +273,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return context.channels.resume(
       membership,
       command,
-      command.fromStart ? () => readReplay(membership.scope) : undefined
+      command.fromStart ? { paged: clientPagesHistory } : undefined
     )
   }
 
@@ -400,7 +337,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const { authentication } = context
     const info = authentication
       ? undefined
-      : await runtime.runtimeInfo().catch((cause: unknown) => {
+      : await catalog.info().catch((cause: unknown) => {
           throw publicRequestError(runtime, cause)
         })
     return {
@@ -481,28 +418,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         offset: decodeCursor(params.cursor),
       },
       async ({ agentId, offset }) => {
-        const page = await (agentId === undefined
-          ? runtime.listAllSessions(SESSION_LIST_LIMIT, offset)
-          : runtime.listSessions(agentId, SESSION_LIST_LIMIT, offset))
-        sessions.remember(page.sessions)
-        context.sessionRows.rememberList(page.sessions)
-        const next = offset + page.sessions.length
-        return {
-          rows: page.sessions.map(
-            (session) =>
-              context.sessionRows.get(session.agentId, session.id) ?? session
-          ),
-          // No cursor points past the catalog window, which no runtime serves.
-          ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
-            ? { nextOffset: next }
-            : {}),
-        }
+        const page = await catalog.list(agentId, offset)
+        sessions.remember(page.rows)
+        return page
       }
     )
     return {
-      sessions: listed.rows.map((row) =>
-        sessionInfoOf(row, sessions.status(row))
-      ),
+      sessions: listed.rows.map(sessionInfoOf),
       ...(listed.nextOffset === undefined
         ? {}
         : { nextCursor: encodeCursor(listed.nextOffset) }),
@@ -602,15 +524,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId, ...(write ? { write } : {}) },
       async (command) => {
         if (!command.write) throw invalidParams()
-        // Every member hears the switch: this connection, if it is one, once
-        // the answer is written.
-        const membership = sessions.membership(command.sessionId)
         return {
-          models: await coordinator.switchModel(
+          models: await context.channels.switchModel(
             sessions.scope(command.sessionId),
             command.write,
-            membership &&
-              ((report) => membership.afterResponse(async () => report()))
+            sessions.membership(command.sessionId)
           ),
         }
       }
@@ -626,16 +544,15 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return {}
   })
 
-  app.onRequest(methods.agent.session.delete, async ({ params, client }) => {
+  app.onRequest(methods.agent.session.delete, async ({ params }) => {
     admit(methods.agent.session.delete, "delete")
     await perform(
       "delete",
       { sessionId: params.sessionId },
       async (command) => {
         const scope = sessions.scope(command.sessionId)
-        await runtime.deleteSession(scope.agentId, scope.providerSessionId)
+        await catalog.delete(scope)
         sessions.forget(scope)
-        await client.notify(AOS_METHODS.notify.catalogInvalidated)
       }
     )
     return {}
@@ -644,7 +561,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     AOS_METHODS.session.update,
     undecoded,
-    async ({ params: raw, client }) => {
+    async ({ params: raw }) => {
       admit(AOS_METHODS.session.update, "update")
       const params = AosSessionUpdateRequestSchema.parse(raw)
       const patch: SessionPatch =
@@ -660,27 +577,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       await perform(
         "update",
         { sessionId: params.sessionId, patch },
-        async (command) => {
-          const scope = sessions.scope(command.sessionId)
-          if ("unread" in command.patch && !command.patch.unread) {
-            await readState?.markRead(scope.agentId, scope.sessionId)
-            return
-          }
-          await runtime.updateSession(
-            scope.agentId,
-            scope.providerSessionId,
-            command.patch
-          )
-          // The new row reaches each member of the Session; a connection that
-          // is not one is not made one.
-          await sessions.readRow(scope)
-          // Archiving and pinning move the Session's membership and order in
-          // the catalog, which only a relist settles; a provider's catalog
-          // watcher may be debounced or absent. A rename or a read marker
-          // moves neither.
-          if ("archived" in command.patch || "pinned" in command.patch)
-            await client.notify(AOS_METHODS.notify.catalogInvalidated)
-        }
+        // The new row reaches each member of the Session; a connection that
+        // is not one is not made one.
+        (command) =>
+          catalog.update(sessions.scope(command.sessionId), command.patch)
       )
       return {}
     }
@@ -747,7 +647,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(AOS_METHODS.agents.list, withoutParams, async () => {
     admit(AOS_METHODS.agents.list, "agents")
-    return await perform("agents", {}, () => runtime.listAgents())
+    return await perform("agents", {}, () => catalog.agents())
   })
 
   app.onRequest(
@@ -764,7 +664,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           revision: params.revision,
         },
         (command) =>
-          runtime.updateAgentVisibility(
+          catalog.setVisibility(
             command.agentId,
             command.visibility,
             command.revision
@@ -783,20 +683,17 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
     log("acp.connection.opened")
-    const notify = (method: `_${string}`, params?: unknown) => {
-      void client.notify(method, params).catch(() => undefined)
-    }
-    for (const event of activityFeed?.snapshot() ?? [])
-      notify(AOS_METHODS.notify.activity, event)
+    // The workspace's events reach this connection as its stack shows them.
+    const show = (event: WorkspaceEvent) => sessions.show(client, event)
+    for (const activity of activityFeed?.snapshot() ?? [])
+      show({ kind: "activity", activity })
     const stops = [
-      activityFeed?.subscribe((event) =>
-        notify(AOS_METHODS.notify.activity, event)
+      activityFeed?.subscribe((activity) =>
+        show({ kind: "activity", activity })
       ),
-      extensions.invalidation
-        ? await runtime.subscribeCatalogChanges?.(() =>
-            notify(AOS_METHODS.notify.catalogInvalidated)
-          )
-        : undefined,
+      catalog.invalidation.subscribe(() =>
+        show({ kind: "catalog-invalidated" })
+      ),
       // A connection that authenticated over ACP ends with its credential.
       context.authentication?.expire(() => connection.close()),
     ]

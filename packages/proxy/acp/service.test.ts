@@ -29,7 +29,7 @@ function connectionContext(
     principalId,
     role: "operator",
     runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
-    sessionRows: {} as AcpConnectionContext["sessionRows"],
+    catalog: {} as AcpConnectionContext["catalog"],
     readState: {} as AcpConnectionContext["readState"],
     activityFeed: {} as AcpConnectionContext["activityFeed"],
     translators: {} as AcpConnectionContext["translators"],

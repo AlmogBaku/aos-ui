@@ -1,4 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
+import { createCatalog } from "./core/catalog"
 import { createChannels } from "./core/channel"
 import type { AcpLogger } from "./acp/types"
 import {
@@ -219,8 +220,20 @@ export async function createConfiguredProxy(
    */
   const { sessions } = runtimeInstance
   const { turns } = runtimeInstance.runtime
+  /**
+   * One row cache per process: the catalog keeps it current and push delivery
+   * reads the same rows to gate a notification on read state.
+   */
+  const sessionRows = createSessionRows(clock)
+  /** One workspace catalog per process, which both listeners share. */
+  const catalog = createCatalog({
+    runtime: runtimeInstance.runtime,
+    coordinator: sessions,
+    rows: sessionRows,
+  })
   const channels = createChannels({
-    snapshot: (scope) => sessions.snapshot(scope),
+    coordinator: sessions,
+    runtime: runtimeInstance.runtime,
     // A channel adopts what the runtime starts only where the runtime
     // reports it.
     ...(turns.subscribeTurns
@@ -257,6 +270,7 @@ export async function createConfiguredProxy(
         invitations: service,
         attachmentStages,
         channels,
+        catalog,
         guestActiveExecutions: config.limits.guestActiveExecutions,
         logger: dependencies.logger,
         ...clock,
@@ -268,11 +282,6 @@ export async function createConfiguredProxy(
       ? guestListener(config.guest.publicOrigin, invitations)
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
-  /**
-   * One row cache for the operator surface: the ACP listener keeps it current and
-   * push delivery reads the same rows to gate a notification on read state.
-   */
-  const sessionRows = createSessionRows(clock)
   const push = config.push
     ? await createPushDelivery(
         config.push,
@@ -287,7 +296,7 @@ export async function createConfiguredProxy(
     runtimeInstance,
     attachmentStages,
     channels,
-    sessionRows,
+    catalog,
     logger: dependencies.logger,
     ...(push ? { presence: push.presence } : {}),
     ...clock,

@@ -1,11 +1,12 @@
-import type { AosActivityNotification } from "../../protocol/acp"
+import type { Catalog } from "../core/catalog"
 import {
   PendingRequestKind,
   type ExecutionEvent,
   type PendingRequest,
 } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
-import type { SessionRow, SessionRows } from "../core/session-rows"
+import type { Activity } from "../core/member"
+import type { SessionCoordinator } from "../core/session-coordinator"
+import type { SessionRow } from "../core/session-rows"
 import type { ActivityFeed } from "./types"
 
 const DEFAULT_LIMIT = 200
@@ -14,8 +15,8 @@ const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000
 const HYDRATION_PAGE_SIZE = 100
 
 export type ActivityFeedOptions = {
-  runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  catalog: Pick<Catalog, "list" | "rows" | "scope">
+  coordinator: Pick<SessionCoordinator, "snapshot" | "subscribeExecutions">
   now?: () => number
   limit?: number
   maxAgeMs?: number
@@ -30,7 +31,7 @@ export function attentionKindOf(
     : "question"
 }
 
-function notificationOf(event: ExecutionEvent): AosActivityNotification {
+function activityOf(event: ExecutionEvent): Activity {
   const base = {
     agentId: event.agentId,
     sessionId: event.sessionId,
@@ -54,15 +55,14 @@ function notificationOf(event: ExecutionEvent): AosActivityNotification {
 }
 
 export function createActivityFeed({
-  runtimeInstance,
-  sessionRows,
+  catalog,
+  coordinator,
   now = Date.now,
   limit = DEFAULT_LIMIT,
   maxAgeMs = DEFAULT_MAX_AGE_MS,
 }: ActivityFeedOptions): ActivityFeed {
-  const { runtime, sessions: coordinator } = runtimeInstance
-  const buffer: AosActivityNotification[] = []
-  const listeners = new Set<(event: AosActivityNotification) => void>()
+  const buffer: Activity[] = []
+  const listeners = new Set<(event: Activity) => void>()
   const lastUnread = new Map<string, boolean>()
   let unsubscribeRows: (() => void) | undefined
   let closed = false
@@ -76,7 +76,7 @@ export function createActivityFeed({
     if (buffer.length > limit) buffer.splice(0, buffer.length - limit)
   }
 
-  const push = (event: AosActivityNotification) => {
+  const push = (event: Activity) => {
     if (closed) return
     buffer.push(event)
     trim()
@@ -101,13 +101,8 @@ export function createActivityFeed({
   /** Republishes what the provider already reports about a Session. */
   const noteExecution = (row: SessionRow) => {
     if (row.status !== "waiting-for-input" && row.status !== "failed") return
-    const providerId = runtime.resolveProviderSessionId(row.agentId, row.id)
-    const execution = providerId
-      ? coordinator.snapshot({
-          agentId: row.agentId,
-          providerSessionId: providerId,
-        })
-      : undefined
+    const scope = catalog.scope(row.agentId, row.id)
+    const execution = scope ? coordinator.snapshot(scope) : undefined
     const base = {
       agentId: row.agentId,
       sessionId: row.id,
@@ -130,11 +125,9 @@ export function createActivityFeed({
 
   const hydrate = async () => {
     try {
-      const catalog = await runtime.listAllSessions(HYDRATION_PAGE_SIZE, 0)
+      const { rows } = await catalog.list(undefined, 0, HYDRATION_PAGE_SIZE)
       if (closed) return
-      sessionRows.rememberList(catalog.sessions)
-      for (const listed of catalog.sessions) {
-        const row = sessionRows.get(listed.agentId, listed.id) ?? listed
+      for (const row of rows) {
         // Seeding read first keeps hydration to the Sessions that need a badge.
         lastUnread.set(rowKey(row), false)
         noteUnread(row)
@@ -143,12 +136,12 @@ export function createActivityFeed({
     } catch {
       // A catalog the provider cannot serve leaves the feed to live events.
     } finally {
-      if (!closed) unsubscribeRows = sessionRows.subscribe(noteUnread)
+      if (!closed) unsubscribeRows = catalog.rows.subscribe(noteUnread)
     }
   }
 
   const unsubscribe = coordinator.subscribeExecutions((event) =>
-    push(notificationOf(event))
+    push(activityOf(event))
   )
   void hydrate()
 

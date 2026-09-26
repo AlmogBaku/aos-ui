@@ -15,7 +15,8 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { AosActivityNotification, AosExtensions } from "../../protocol/acp"
+import type { AosExtensions } from "../../protocol/acp"
+import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
   PendingRequest,
@@ -27,10 +28,9 @@ import type {
   ServerAttachmentStages,
   ServerRuntimeTranslation,
 } from "../core/runtime"
-import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import type { Channels } from "../core/channel"
-import type { Member } from "../core/member"
+import type { Activity, Member } from "../core/member"
 /**
  * Where the ACP listeners write their structured lines, in the shape the proxy
  * composition already receives. Every value passes through `redactForLog`
@@ -51,7 +51,8 @@ type AcpConnectionBase = {
   connectionId: string
   principalId: string
   runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  /** The one workspace catalog per proxy process, which both listeners share. */
+  catalog: Catalog
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
@@ -202,7 +203,6 @@ export interface ReadState {
   focus(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
-  markRead(agentId: string, sessionId: string): Promise<void>
   close(): void
 }
 
@@ -211,8 +211,8 @@ export interface ReadState {
  * snapshots and the session list. Implemented in `activity-feed.ts`.
  */
 export interface ActivityFeed {
-  snapshot(): readonly AosActivityNotification[]
-  subscribe(listener: (event: AosActivityNotification) => void): () => void
+  snapshot(): readonly Activity[]
+  subscribe(listener: (event: Activity) => void): () => void
   close(): void
 }
 

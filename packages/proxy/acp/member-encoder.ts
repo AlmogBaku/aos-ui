@@ -7,12 +7,13 @@ import {
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { Session, SessionContextResponse } from "../../protocol"
+import type { SessionContextResponse } from "../../protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
   AosStateMetaSchema,
+  type AosActivityNotification,
 } from "../../protocol/acp"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
 import {
@@ -20,6 +21,7 @@ import {
   type MemberConnection,
   type MemberEvent,
   type TurnStream,
+  type WorkspaceEvent,
 } from "../core/member"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
@@ -150,15 +152,12 @@ function executionUpdate(
   }
 }
 
-function sessionInfoUpdate(
-  row: SessionRow,
-  status: Session["status"]
-): SessionUpdate {
+function sessionInfoUpdate(row: SessionRow): SessionUpdate {
   return {
     sessionUpdate: "session_info_update",
     title: row.title,
     updatedAt: row.updatedAt,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(row, status) },
+    _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },
   }
 }
 
@@ -413,7 +412,21 @@ export function createMemberEncoder({
     })
   }
 
+  /** A workspace event, as its `_aos/*` notification. */
+  function workspace(event: WorkspaceEvent) {
+    switch (event.kind) {
+      case "catalog-invalidated":
+        return client.notify(AOS_METHODS.notify.catalogInvalidated)
+      case "activity": {
+        const activity: AosActivityNotification = event.activity
+        return client.notify(AOS_METHODS.notify.activity, activity)
+      }
+    }
+    return unhandledKind(event)
+  }
+
   async function encode(event: MemberEvent): Promise<void> {
+    if (!("sessionId" in event)) return workspace(event)
     const { sessionId } = event
     switch (event.kind) {
       case "turn":
@@ -448,7 +461,7 @@ export function createMemberEncoder({
           configOptions: translators.configOptionsOf(event.models),
         })
       case "session-info":
-        return update(sessionId, sessionInfoUpdate(event.row, event.status))
+        return update(sessionId, sessionInfoUpdate(event.row))
       case "commands":
         return update(sessionId, commandsUpdate(event.capabilities))
       case "invalidated":

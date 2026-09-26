@@ -7,7 +7,11 @@ import {
   type Owner,
   type OwnerContext,
 } from "../../lifecycle"
-import type { Session, SessionHistoryResponse } from "../../protocol"
+import type {
+  SessionHistoryResponse,
+  SessionModelsResponse,
+  SessionModelUpdateRequest,
+} from "../../protocol"
 import { JOIN_DEADLINE_MS, PAUSED_DEADLINE_MS } from "./limits"
 import {
   beforeLiveTurn,
@@ -23,6 +27,7 @@ import {
   type RequestReply,
 } from "./events"
 import {
+  CommandRefusedError,
   hasSession,
   promptText,
   runEvents,
@@ -38,6 +43,7 @@ import {
   ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnUncertainError,
+  type ServerRuntime,
   type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
@@ -142,6 +148,22 @@ function declineReply(request: PendingRequest): RequestReply {
 
 /** Where a resuming view already reaches in the live turn. */
 export type ResumePosition = { turnId?: string; after?: number }
+
+/** The bounded history one from-start read or one older page reads. */
+const HISTORY_REPLAY_LIMIT = 500
+
+/** How far back history pages reach; older history reads as truncated. */
+export const HISTORY_MAX_OFFSET = 100_000
+
+/** Whether an older page exists within the reach, past the one just read. */
+export function hasOlderPage(page: SessionHistoryResponse) {
+  return (
+    !page.truncated &&
+    page.nextOffset < page.total &&
+    page.nextOffset > page.offset &&
+    page.nextOffset < HISTORY_MAX_OFFSET
+  )
+}
 
 /**
  * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
@@ -491,7 +513,13 @@ function createChannelTable({
   }
 }
 
-type CreateChannelsOptions = Parameters<typeof createChannelTable>[0] & {
+type CreateChannelsOptions = Omit<
+  Parameters<typeof createChannelTable>[0],
+  "snapshot"
+> & {
+  coordinator: SessionCoordinator
+  /** Where a resume and an older page read the Session's history. */
+  runtime: Pick<ServerRuntime, "history">
   /** Where each membership writes its transitions; silent by default. */
   logger?: Logger
   clock?: Clock
@@ -499,7 +527,6 @@ type CreateChannelsOptions = Parameters<typeof createChannelTable>[0] & {
 
 /** How a transport joins one member to one Session. */
 export type MembershipOptions = {
-  coordinator: SessionCoordinator
   /** The membership the coordinator knows this member's stream by. */
   membershipId: string
   /** One structured line per Session-level event; the transport redacts it. */
@@ -510,14 +537,12 @@ export type MembershipOptions = {
   ) => void
   /** The public code and message a failure is logged under. */
   describe: (cause: unknown) => { code: string; message: string }
-  /**
-   * The Session's row as a replaying cell, with the status its execution
-   * overlays on it: the known row at once, then each change.
-   */
-  subscribeRow: (
-    listener: (row: SessionRow, status: Session["status"]) => void
-  ) => () => void
+  /** The Session's row as a replaying cell: the known row, then each change. */
+  subscribeRow: (listener: (row: SessionRow) => void) => () => void
 }
+
+/** A membership's options, with the coordinator its channels share. */
+type MembershipContext = MembershipOptions & { coordinator: SessionCoordinator }
 
 const SILENT: Logger = {
   debug: () => {},
@@ -601,10 +626,54 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
 }
 
 export function createChannels(options: CreateChannelsOptions) {
-  const channels = createChannelTable(options)
+  const { coordinator, runtime } = options
+  const channels = createChannelTable({
+    ...options,
+    snapshot: (scope) => coordinator.snapshot(scope),
+  })
   const logger = options.logger ?? SILENT
   const clock = options.clock ?? defaultClock
   const machine = membershipMachine(logger, clock)
+  /** The memberships reading an older page: one page at a time each. */
+  const paging = new WeakSet<Membership>()
+
+  /** One history page, `offset` rows back from the newest. */
+  function readHistory(scope: SessionScope, offset = 0) {
+    return runtime.history(
+      scope.agentId,
+      scope.providerSessionId,
+      HISTORY_REPLAY_LIMIT,
+      offset
+    )
+  }
+
+  /**
+   * The history a from-start resume replays. ACP replays all retained
+   * history; a member that pages older history itself gets the newest page
+   * and where the page before it starts. Either way the reach bounds the
+   * reading.
+   */
+  async function readReplay(scope: SessionScope, paged: boolean) {
+    const newest = await readHistory(scope)
+    if (paged) return newest
+    const older: SessionHistoryResponse["messages"][] = []
+    // A turn stored between two reads shifts the offsets, so the same message
+    // can come back on the next older page.
+    const seen = new Set(newest.messages.map(({ id }) => id))
+    let page = newest
+    while (hasOlderPage(page)) {
+      page = await readHistory(scope, page.nextOffset)
+      older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
+      for (const { id } of page.messages) seen.add(id)
+    }
+    return {
+      ...newest,
+      messages: [...older.flat(), ...newest.messages],
+      nextOffset: page.nextOffset,
+      truncated: page.truncated,
+    }
+  }
+
   return {
     ...channels,
     /** Joins one member to one Session until the membership detaches. */
@@ -618,31 +687,81 @@ export function createChannels(options: CreateChannelsOptions) {
           membershipId: membership.membershipId,
         },
       })
-      return new Membership(channels, member, scope, membership, owner)
+      return new Membership(
+        channels,
+        member,
+        scope,
+        { ...membership, coordinator },
+        owner
+      )
     },
 
     /**
-     * Resumes one member's view of its Session. The join lands once the
-     * answer is written, and the Session's execution, readings and row reach
-     * the member as events after it. A Session waiting on input asks its
-     * runtime whether the wait still stands, which the answer does not wait
-     * for.
+     * Resumes one member's view of its Session, rebuilt from its history
+     * first when `replay` asks: the newest page alone for a member that
+     * `paged` older history itself. The join lands once the answer is
+     * written, and the Session's execution, readings and row reach the member
+     * as events after it. A Session waiting on input asks its runtime whether
+     * the wait still stands, which the answer does not wait for.
      */
     async resume(
       membership: Membership,
       position: ResumePosition,
-      read?: () => Promise<SessionHistoryResponse>
+      replay?: { paged: boolean }
     ): Promise<CommandResults["resume"]> {
-      const resumed = await membership.resume(position, read)
+      const resumed = await membership.resume(
+        position,
+        replay && (() => readReplay(membership.scope, replay.paged))
+      )
       if (membership.pending) {
         membership.joined()
         return resumed
       }
       const { scope } = membership
-      const { state, turnId } = options.snapshot(scope)
+      const { state, turnId } = coordinator.snapshot(scope)
       membership.joined({ turnId })
       if (state === "waiting-for-input") void channels.recheck(scope)
       return resumed
+    },
+
+    /**
+     * Shows one member an older page of its Session, as tagged updates ahead
+     * of the answer. A member reads one page at a time.
+     */
+    async olderPage(
+      membership: Membership,
+      older: { cursor: string; offset: number }
+    ): Promise<CommandResults["older-page"]> {
+      if (paging.has(membership)) throw new CommandRefusedError("invalid")
+      paging.add(membership)
+      try {
+        const page = await readHistory(membership.scope, older.offset)
+        // A cursor past this Session's history was never issued for it. One
+        // at its end was: a runtime that estimates `total` learns the start
+        // only by reading an empty page there.
+        if (older.offset > page.total) throw new CommandRefusedError("invalid")
+        await membership.showOlderPage(page, older)
+        return { page }
+      } finally {
+        paging.delete(membership)
+      }
+    },
+
+    /**
+     * Switches the Session's model. Every member hears the switch, and the
+     * `membership` that asked for it once its answer is written.
+     */
+    switchModel(
+      scope: SessionScope,
+      write: SessionModelUpdateRequest,
+      membership?: Membership
+    ): Promise<SessionModelsResponse> {
+      return coordinator.switchModel(
+        scope,
+        write,
+        membership &&
+          ((report) => membership.afterResponse(async () => report()))
+      )
     },
   }
 }
@@ -660,7 +779,7 @@ class Membership {
   readonly #channels: ChannelTable
   readonly #member: Member
   readonly #addressed: MemberScope
-  readonly #options: MembershipOptions
+  readonly #options: MembershipContext
   #subscription: CoordinatedTurnSubscription | undefined
   /** Subscriptions a restart dropped, whose remaining events nobody is owed. */
   readonly #dropped = new WeakSet<CoordinatedTurnSubscription>()
@@ -699,7 +818,7 @@ class Membership {
     channels: ChannelTable,
     member: Member,
     scope: MemberScope,
-    options: MembershipOptions,
+    options: MembershipContext,
     owner: MembershipOwner
   ) {
     this.#channels = channels
@@ -1224,7 +1343,7 @@ class Membership {
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow(
-      (row, status) => void this.#deliver({ kind: "session-info", row, status })
+      (row) => void this.#deliver({ kind: "session-info", row })
     )
     return () => {
       readings()

@@ -5,11 +5,12 @@ import {
 } from "../../core/member"
 
 /**
- * The Session readings a guest is shown: its execution, and its commands,
- * which say what the guest can do. Usage, models and the Session row belong
- * to the operator's workspace, so a guest is given none of them. Every event
- * that is not a reading passes. An operator is given every reading by having
- * no such layer.
+ * The readings a guest is shown: its Session's execution, and its commands,
+ * which say what the guest can do. Usage, models, the Session row, the
+ * Session list's invalidation and the workspace's activity belong to the
+ * operator's workspace, so a guest is given none of them. Every event that is
+ * not a reading passes. An operator is given every reading by having no such
+ * layer.
  */
 export function createFeedsMiddleware(): Middleware {
   return {
@@ -18,6 +19,8 @@ export function createFeedsMiddleware(): Middleware {
         case "usage":
         case "model":
         case "session-info":
+        case "catalog-invalidated":
+        case "activity":
           return undefined
         case "execution":
         case "commands":

@@ -21,6 +21,7 @@ import { createChannels } from "../../../packages/proxy/core/channel"
 import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
+import { createCatalog } from "../../../packages/proxy/core/catalog"
 import {
   PendingRequestKind,
   PromptTurnInputSchema,
@@ -385,25 +386,27 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     },
   }
   const role = "operator" as const
-  const sessionRows = createSessionRows()
+  const catalog = createCatalog({
+    runtime,
+    coordinator,
+    rows: createSessionRows(),
+  })
   const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
     role,
     runtimeInstance,
-    sessionRows,
+    catalog,
     translators,
     attachmentStages,
-    channels: createChannels({
-      snapshot: (scope) => coordinator.snapshot(scope),
-    }),
+    channels: createChannels({ coordinator, runtime }),
     readState: createReadState({
-      runtimeInstance,
-      sessionRows,
+      catalog,
+      relighting: runtime.translation?.relighting,
       onUnreadChanged: () => undefined,
     }),
-    activityFeed: createActivityFeed({ runtimeInstance, sessionRows }),
+    activityFeed: createActivityFeed({ catalog, coordinator }),
   }
   return {
     app: createAosAcpAgent(context),

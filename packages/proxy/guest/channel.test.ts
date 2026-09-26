@@ -40,7 +40,6 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { createSessionRows } from "../core/session-rows"
 import { createGuestConnection } from "./acp"
 
 /**
@@ -95,9 +94,9 @@ async function connectGuest(
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
       channels: test.channels,
+      catalog: test.catalog,
       guestActiveExecutions: 2,
     },
-    createSessionRows(),
     "guest-connection"
   )
   const { connection, recorder } = connectClient(context, {

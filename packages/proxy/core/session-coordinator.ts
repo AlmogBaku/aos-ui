@@ -65,7 +65,10 @@ export type SessionExecutionState =
   "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
 
 /** The Session status each execution state overlays on the provider's row. */
-const EXECUTION_STATUS: Record<SessionExecutionState, Session["status"]> = {
+export const EXECUTION_STATUS: Record<
+  SessionExecutionState,
+  Session["status"]
+> = {
   idle: "idle",
   running: "running",
   stopping: "running",

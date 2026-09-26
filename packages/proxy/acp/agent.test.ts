@@ -973,7 +973,24 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("marks a Session read through the connection's read state", async () => {
+  it("deletes a Session and asks every operator connection to relist", async () => {
+    const test = await harness()
+    const other = await test.connect("connection-2")
+    await test.list()
+
+    await test.agent.request(methods.agent.session.delete, {
+      sessionId: SESSION,
+    })
+    await settled()
+
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
+    expect(relists(test.recorder)).toHaveLength(1)
+    expect(relists(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("marks a Session read at once, and tells the runtime", async () => {
     const test = await harness()
     await test.list()
 
@@ -982,8 +999,9 @@ describe("AOS ACP agent", () => {
       unread: false,
     })
 
-    expect(test.readState.markRead).toHaveBeenCalledWith(AGENT, SESSION)
-    expect(test.updateSession).not.toHaveBeenCalled()
+    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
+      unread: false,
+    })
     test.close()
   })
 

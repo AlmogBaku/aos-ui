@@ -174,6 +174,8 @@ export function createHistoryMiddleware({
         case "commands":
         case "invalidated":
         case "error":
+        case "catalog-invalidated":
+        case "activity":
           return event
       }
       return unhandledKind(event)

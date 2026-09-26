@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { Session } from "../../protocol"
-import type { AosActivityNotification } from "../../protocol/acp"
+import { createCatalog } from "../core/catalog"
 import type { ExecutionEvent, PendingRequest } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
+import type { Activity } from "../core/member"
+import type { ServerRuntime } from "../core/runtime"
+import type { SessionExecutionState } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createActivityFeed } from "./activity-feed"
 
@@ -11,7 +13,7 @@ const AGENT = "researcher"
 const AT = "2026-09-19T10:00:00.000Z"
 
 type Execution = {
-  state: string
+  state: SessionExecutionState
   turnId?: string
   requests: PendingRequest[]
 }
@@ -45,31 +47,29 @@ function harness(
     limit: 100,
     offset: 0,
   }))
-  // The coordinator and the runtime are wide shared surfaces; the feed reads
-  // only the subscription, the execution snapshot, and one catalog page.
-  const runtimeInstance = {
-    id: "hermes-primary",
-    runtime: {
-      listAllSessions,
-      resolveProviderSessionId: (_agentId: string, publicId: string) =>
-        `stored-${publicId}`,
+  const execution = ({ providerSessionId }: { providerSessionId: string }) =>
+    options.executions?.[providerSessionId] ?? {
+      state: "idle" as const,
+      requests: [],
+    }
+  // The runtime is a wide shared surface; the feed reads one catalog page.
+  const runtime = {
+    listAllSessions,
+    resolveProviderSessionId: (_agentId: string, publicId: string) =>
+      `stored-${publicId}`,
+  } as unknown as ServerRuntime
+  const coordinator = {
+    state: (scope: { providerSessionId: string }) => execution(scope).state,
+    snapshot: execution,
+    subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
+      deliver = listener
+      return unsubscribe
     },
-    sessions: {
-      subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
-        deliver = listener
-        return unsubscribe
-      },
-      snapshot: ({
-        providerSessionId: sessionId,
-      }: {
-        providerSessionId: string
-      }) => options.executions?.[sessionId] ?? { state: "idle", requests: [] },
-    },
-  } as unknown as RuntimeInstance
+  }
   const sessionRows = createSessionRows()
   const feed = createActivityFeed({
-    runtimeInstance,
-    sessionRows,
+    catalog: createCatalog({ runtime, coordinator, rows: sessionRows }),
+    coordinator,
     ...(options.now ? { now: options.now } : {}),
     ...(options.limit === undefined ? {} : { limit: options.limit }),
     ...(options.maxAgeMs === undefined ? {} : { maxAgeMs: options.maxAgeMs }),
@@ -153,7 +153,7 @@ describe("createActivityFeed", () => {
       sessions: [session({ unread: true })],
     })
     await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
-    const seen: AosActivityNotification[] = []
+    const seen: Activity[] = []
     const unsubscribe = feed.subscribe((event) => seen.push(event))
 
     deliver(lifecycle("turn-started", "run-1"))
@@ -226,7 +226,7 @@ describe("createActivityFeed", () => {
       sessions: [session({ unread: true })],
     })
     await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
-    const seen: AosActivityNotification[] = []
+    const seen: Activity[] = []
     feed.subscribe((event) => seen.push(event))
 
     feed.close()
