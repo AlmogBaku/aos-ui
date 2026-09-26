@@ -938,11 +938,17 @@ class Membership {
       showsPrompt(this.#channels.current(this.#scope), position, history),
       history !== undefined
     )
-    // A cursor for another turn cannot position this one, and a cursor beyond
-    // bounded replay cannot be served: both need a full reload. A view rebuilt
-    // from history owns nothing of the turn, so it follows without a cursor.
+    // A cursor for another turn cannot position this one, and a cursor the
+    // journal no longer holds cannot be served: both need a full reload. A view
+    // rebuilt from a page cut where the turn began owns nothing of it, so it
+    // follows without a cursor. One rebuilt from the whole page holds what
+    // history holds of the turn, so its stream continues from there on.
     const resync = await this.#followPositioned(
-      history === undefined ? position : {},
+      history === undefined
+        ? position
+        : replay?.restarted === undefined
+          ? { after: 0 }
+          : {},
       replay
     )
     return { ...(history === undefined ? {} : { history }), ...resync }
@@ -1021,9 +1027,9 @@ class Membership {
    * turn began, so `restarted` names the turn the view then shows only while
    * its follow streams it. A page that cannot be cut there, or a turn adopted
    * without its native start, is kept whole and its follow `reset`. Any other
-   * turn keeps the page: its start is gone and a cursorless follow could only
-   * reset it. A turn that starts during the read waits for the page and is
-   * replayed the same way.
+   * turn keeps the page, whose history stands for the start the journal no
+   * longer holds, and its live events follow it. A turn that starts during the
+   * read waits for the page and is replayed the same way.
    */
   async #replayPage(read: () => Promise<SessionHistoryResponse>) {
     const scope = this.#scope

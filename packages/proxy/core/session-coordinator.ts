@@ -174,6 +174,17 @@ export class ServerClientIdReusedError extends Error {
   }
 }
 
+/**
+ * A resume cursor the journal no longer holds the events after, because it
+ * pruned them or outgrew its bounds: only history can rebuild that reader.
+ */
+export class ReplayCursorLostError extends Error {
+  constructor() {
+    super("The replay journal no longer holds this cursor")
+    this.name = "ReplayCursorLostError"
+  }
+}
+
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
   /**
@@ -1463,7 +1474,7 @@ export class SessionCoordinator {
       const plan = request.reset
         ? "reset"
         : replayPlan(existing.segment, request.after)
-      if (plan === "reset") return this.#resetSubscription(existing.segment)
+      if (plan === "reset") return this.#unreplayable(existing.segment, request)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -1480,7 +1491,7 @@ export class SessionCoordinator {
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
-    if (plan === "reset") return this.#resetSubscription(recovered.segment)
+    if (plan === "reset") return this.#unreplayable(recovered.segment, request)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -2223,8 +2234,8 @@ export class SessionCoordinator {
 
   /**
    * A turn that outgrows either replay bound loses its journal. A subscriber the
-   * rest of the segment cannot answer is then sent one reset instead of a
-   * partial history.
+   * rest of the segment cannot answer then rebuilds from history instead of
+   * reading a partial one.
    */
   #remember(segment: Segment, value: SequencedTurnEvent) {
     const journal = segment.journal
@@ -2402,6 +2413,18 @@ export class SessionCoordinator {
         live.close()
       },
     }
+  }
+
+  /**
+   * Answers a reader the journal cannot. One with a cursor is refused, and its
+   * resume answers `resync`: that is its one signal to rebuild from history.
+   * A cursorless reader, or one that holds part of the turn it cannot position,
+   * is sent one reset instead, since nothing else tells it.
+   */
+  #unreplayable(segment: Segment, request: CoordinatorRecoveryRequest) {
+    if (request.after !== undefined && !request.reset)
+      throw new ReplayCursorLostError()
+    return this.#resetSubscription(segment)
   }
 
   #resetSubscription(segment: Segment) {

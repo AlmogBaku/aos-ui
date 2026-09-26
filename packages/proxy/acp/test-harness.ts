@@ -1023,20 +1023,28 @@ export function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
       sessionId: string
       update: Record<string, unknown>
     }
-    if (target !== sessionId) return []
-    switch (update.sessionUpdate) {
-      case "agent_message":
-        return [`history ${String(update.messageId)}`]
-      case "user_message":
-        return [`prompt ${String(update.messageId)}`]
-      case "state_update":
-        return [`state ${String(update.state)}`]
-      case "agent_message_chunk":
-        return [`chunk ${(update.content as { text: string }).text}`]
-      default:
-        return []
-    }
+    return target === sessionId ? shown(update) : []
   })
+}
+
+/** What one Session update shows, as `flow` lists it. */
+export function shown(update: object): string[] {
+  const { sessionUpdate, messageId, state, content } = update as Record<
+    string,
+    unknown
+  >
+  switch (sessionUpdate) {
+    case "agent_message":
+      return [`history ${String(messageId)}`]
+    case "user_message":
+      return [`prompt ${String(messageId)}`]
+    case "state_update":
+      return [`state ${String(state)}`]
+    case "agent_message_chunk":
+      return [`chunk ${(content as { text: string }).text}`]
+    default:
+      return []
+  }
 }
 
 /** The content of every `user_message` one browser received for a Session. */

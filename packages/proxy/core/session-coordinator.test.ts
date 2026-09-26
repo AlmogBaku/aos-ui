@@ -29,6 +29,7 @@ import {
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
 import {
+  ReplayCursorLostError,
   ServerClientIdReusedError,
   SessionCoordinator,
   type CoordinatedTurnSubscription,
@@ -235,31 +236,31 @@ async function deltaFlood(
 
 /**
  * The oldest cursor a journal still replays, probed the way a browser redials.
- * Every cursor before it is answered with one reset instead of a partial run.
+ * Every cursor before it is refused instead of answered with a partial run.
  */
 async function oldestReplayableCursor(
   sessions: SessionCoordinator,
   highest: number
 ) {
-  const resets = async (after: number) => {
-    const probe = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after },
-      access(`probe-${after}`)
-    )
-    const head = await reader(probe)()
-    probe.close()
-    const event = head.value?.event
-    return (
-      event?.kind === TurnEventKind.TurnFailed &&
-      event.code === "AOS_RESET_REQUIRED"
-    )
+  const lost = async (after: number) => {
+    const probe = await sessions
+      .recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "run-1", after },
+        access(`probe-${after}`)
+      )
+      .catch((error: unknown) => {
+        if (error instanceof ReplayCursorLostError) return null
+        throw error
+      })
+    probe?.close()
+    return probe === null
   }
   let low = 1
   let high = highest
   while (low < high) {
     const middle = Math.floor((low + high) / 2)
-    if (await resets(middle)) low = middle + 1
+    if (await lost(middle)) low = middle + 1
     else high = middle
   }
   return low
@@ -1030,7 +1031,7 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
-  it("returns reset-required once for a redial before the retained prefix", async () => {
+  it("refuses a redial before the retained prefix", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => source),
@@ -1041,18 +1042,13 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine, { maxSubscriberBytes: 2 * 1024 })
     await deltaFlood(sessions, source, 400)
 
-    const redial = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
-      access("redial")
-    )
-    const readRedial = reader(redial)
-    await expect(readRedial()).resolves.toMatchObject({
-      value: {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
-      },
-    })
-    await expect(readRedial()).resolves.toMatchObject({ done: true })
+    await expect(
+      sessions.recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
+        access("redial")
+      )
+    ).rejects.toThrow(ReplayCursorLostError)
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
@@ -1290,7 +1286,7 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
-  it("answers a redial for a settled run with reset-required", async () => {
+  it("refuses a redial for a settled run", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => source),
@@ -1313,18 +1309,13 @@ describe("SessionCoordinator", () => {
 
     // Provider history owns a run that ended, so a redial that missed the last
     // events reloads it instead of replaying a journal AOS no longer keeps.
-    const redial = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
-      access("redial")
-    )
-    const readRedial = reader(redial)
-    await expect(readRedial()).resolves.toMatchObject({
-      value: {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
-      },
-    })
-    await expect(readRedial()).resolves.toMatchObject({ done: true })
+    await expect(
+      sessions.recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "run-1", after: 1 },
+        access("redial")
+      )
+    ).rejects.toThrow(ReplayCursorLostError)
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
@@ -1407,7 +1398,7 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
-  it("returns reset-required once when an active run journals more events than AOS can replay", async () => {
+  it("refuses a redial and resets a reload once an active run journals more events than AOS can replay", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => source),
@@ -1433,18 +1424,13 @@ describe("SessionCoordinator", () => {
     }
     initial.close()
 
-    const redial = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
-      access("redial")
-    )
-    const readRedial = reader(redial)
-    await expect(readRedial()).resolves.toMatchObject({
-      value: {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
-      },
-    })
-    await expect(readRedial()).resolves.toMatchObject({ done: true })
+    await expect(
+      sessions.recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
+        access("redial")
+      )
+    ).rejects.toThrow(ReplayCursorLostError)
 
     const reload = await sessions.recover(
       scope,
