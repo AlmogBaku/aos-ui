@@ -12,6 +12,7 @@ import {
 
 import {
   ServerRequestStaleError,
+  ServerSessionNotFoundError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
@@ -139,7 +140,11 @@ function coordinator(
   return new SessionCoordinator({
     engine,
     // No test here subscribes anything to a reading.
-    readings: { context: vi.fn(), models: vi.fn() },
+    readings: {
+      context: vi.fn(),
+      models: vi.fn(),
+      publicError: () => undefined,
+    },
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
@@ -2986,6 +2991,43 @@ describe("SessionCoordinator", () => {
     )
     await expect(
       sessions.start(otherScope, input("run-3"), access("one"))
+    ).resolves.toBeDefined()
+
+    // A Session its provider lost ends its uncertain turn at once: no later
+    // recover can confirm a turn in a Session that is gone.
+    const lost = new EventSource()
+    const recover = vi
+      .fn<ServerTurnEngine["recover"]>()
+      .mockRejectedValue(new ServerSessionNotFoundError())
+    const gone = coordinator(
+      {
+        start: vi.fn<ServerTurnEngine["start"]>().mockResolvedValue(lost),
+        recover,
+      },
+      { maxActiveExecutions: 1 }
+    )
+    const ended: ExecutionEvent[] = []
+    gone.subscribeExecutions((event) => ended.push(event))
+    const onTerminal = vi.fn(async () => undefined)
+    await gone.start(scope, input("run-4"), { ...access("one"), onTerminal })
+    lost.emit(interruptedError)
+    lost.finish()
+    await advance(0)
+
+    expect(gone.state(scope)).toBe("idle")
+    expect(ended.map(({ kind }) => kind)).toEqual([
+      "turn-started",
+      "turn-failed",
+    ])
+    const goneFailure = { kind: TurnEventKind.TurnFailed, code: "not_found" }
+    expect(onTerminal).toHaveBeenLastCalledWith(goneFailure)
+    await expect(reloadedHead(gone, scope, "run-4")).resolves.toMatchObject({
+      event: goneFailure,
+    })
+    await advance(UNCERTAINTY_DEADLINE_MS)
+    expect(recover).toHaveBeenCalledTimes(1)
+    await expect(
+      gone.start(otherScope, input("run-5"), access("one"))
     ).resolves.toBeDefined()
   })
 

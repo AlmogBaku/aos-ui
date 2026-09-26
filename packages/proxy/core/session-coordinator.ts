@@ -58,6 +58,7 @@ import {
   RECONCILE_BACKOFF,
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
+import { coreFailure } from "./failures"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -176,11 +177,11 @@ export type SessionCoordinatorOptions = {
   /**
    * Reads a Session's context window and model catalog for its reporters,
    * writes the model choices a client makes, and creates the Sessions a
-   * client asks for.
+   * client asks for; `publicError` tells a recover that met a Session gone.
    */
   readings: Pick<
     ServerRuntime,
-    "context" | "models" | "updateModel" | "createSession"
+    "context" | "models" | "updateModel" | "createSession" | "publicError"
   >
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
@@ -1428,28 +1429,42 @@ export class SessionCoordinator {
   /**
    * Asks the provider how an uncertain turn stands. A recovery that lands
    * confirms the turn running, and its stream reports how the turn ends; one
-   * that fails leaves the turn uncertain for the next reconcile.
+   * that meets its Session gone ends the turn, since no later recover can
+   * confirm it; any other failure leaves it uncertain for the next reconcile.
    */
   async #reconcile(scope: SessionScope, turn: Turn, generation: number) {
     const { value, context } = turn.owner.actor.getSnapshot()
+    const { turnId } = context
     if (
       this.#closed ||
       turn.owner.stale(generation) ||
       value !== "uncertain" ||
-      context.turnId === undefined
+      turnId === undefined
     )
       return
-    await this.#recovery(
-      scope,
-      { sessionId: scope.sessionId, turnId: context.turnId },
-      this.#executions.get(scopeKey(scope))
-    )
+    try {
+      await this.#recovery(
+        scope,
+        { sessionId: scope.sessionId, turnId },
+        this.#executions.get(scopeKey(scope))
+      )
+    } catch (err) {
+      const failure = coreFailure(err) ?? this.options.readings.publicError(err)
+      if (
+        failure?.kind !== "gone" ||
+        !this.#move(turn, generation, { type: "ended" })
+      )
+        throw err
+      const { agentId, sessionId } = scope
+      this.#logger.warn({ err, agentId, sessionId, turnId }, "turn.gone")
+      await this.#failUncertain(scope, turnId, {
+        kind: TurnEventKind.TurnFailed,
+        code: failure.code,
+      })
+    }
   }
 
-  /**
-   * Ends a turn no recover confirmed running by its deadline. Its readers and
-   * observers learn it failed, and its journal keeps why for a redial.
-   */
+  /** Ends a turn no recover confirmed running by its deadline. */
   async #outcomeUnknown(scope: SessionScope, turn: Turn, generation: number) {
     const { turnId } = turnExecution(turn)
     if (this.#closed || turn.owner.stale(generation) || turnId === undefined)
@@ -1458,18 +1473,31 @@ export class SessionCoordinator {
       { agentId: scope.agentId, sessionId: scope.sessionId, turnId },
       "turn.outcome-unknown"
     )
+    await this.#failUncertain(scope, turnId, OUTCOME_UNKNOWN)
+  }
+
+  /**
+   * Ends an uncertain turn with `failure`, once its owner rests idle. Its
+   * readers and observers learn it failed, and its journal keeps why for a
+   * redial.
+   */
+  async #failUncertain(
+    scope: SessionScope,
+    turnId: string,
+    failure: TurnEventOf<typeof TurnEventKind.TurnFailed>
+  ) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
     const owned = segment?.turnId === turnId ? segment : undefined
     if (owned) {
       owned.terminal = true
-      this.#publish(owned, OUTCOME_UNKNOWN)
+      this.#publish(owned, failure)
       owned.fanout.close()
     }
     this.#announce(scope, {
       ...this.#origin(scope, turnId),
       kind: "turn-failed",
     })
-    await owned?.onTerminal?.(OUTCOME_UNKNOWN)
+    await owned?.onTerminal?.(failure)
   }
 
   async #recoverExecution(
