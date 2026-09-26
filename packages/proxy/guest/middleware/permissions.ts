@@ -14,7 +14,8 @@ import {
  * A guest answers no permission. One its own turn raises is declined for it,
  * and one another member's turn raises stays that member's to answer; either
  * way the guest is shown nothing of it. Questions are the conversation's and
- * pass whole.
+ * pass whole, and so is every turn: a guest may Stop or steer any turn in its
+ * invited Session, not only one it started.
  */
 
 function isPermission(request: PendingRequest) {
@@ -40,6 +41,10 @@ export function createPermissionsMiddleware({
           throw new CommandRefusedError("invalid")
         return next(command)
       },
+      // Whoever started the turn; the scope layer keeps it to the invited
+      // Session.
+      stop: (command, next) => next(command),
+      steer: (command, next) => next(command),
     },
     event(event, act): MemberEvent | undefined {
       switch (event.kind) {

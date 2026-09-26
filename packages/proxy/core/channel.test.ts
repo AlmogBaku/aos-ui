@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { defaultClock } from "../../lifecycle"
 import {
   PendingRequestKind,
   type ExecutionEvent,
@@ -95,7 +96,7 @@ function harness() {
       (scope) => snapshots.get(key(scope)) ?? { state: "idle" }
     ),
     runtime: NO_HISTORY,
-    now: () => clock.now,
+    clock: { ...defaultClock, now: () => clock.now },
     backstopMs: 1_000,
   })
   const setSnapshot = (
@@ -568,26 +569,10 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(runtime.discovered).toHaveLength(1)
   })
 
-  it("adopts as an operator even when a guest joined first", async () => {
+  it("adopts in the scope of the member that joined first", async () => {
     const runtime = adoptingHarness()
-    runtime.channels.add(GUEST_SCOPE, member().fake, {
-      hasPrompt: false,
-      role: "guest",
-    })
+    runtime.channels.add(GUEST_SCOPE, member().fake, { hasPrompt: false })
     runtime.channels.add(SCOPE, member().fake, { hasPrompt: false })
-
-    runtime.watchers[0]!.onTurn()
-    await settle()
-
-    expect(runtime.discovered).toEqual([SCOPE])
-  })
-
-  it("adopts in the guest's scope when only a guest is in the channel", async () => {
-    const runtime = adoptingHarness()
-    runtime.channels.add(GUEST_SCOPE, member().fake, {
-      hasPrompt: false,
-      role: "guest",
-    })
 
     runtime.watchers[0]!.onTurn()
     await settle()
@@ -676,7 +661,6 @@ const QUESTION: PendingRequest = {
 function joined(
   options: {
     requests?: PendingRequest[]
-    startedBy?: string
     decline?: (requestId: string, act: MemberAct) => void
     hide?: boolean
   } = {}
@@ -690,9 +674,6 @@ function joined(
       state: requests.length > 0 ? "waiting-for-input" : "idle",
       turnId: "turn-1",
       requests: [...requests],
-      ...(options.startedBy === undefined
-        ? {}
-        : { startedBy: options.startedBy }),
     }),
     subscribeScope(
       _scope: SessionScope,
@@ -763,8 +744,8 @@ function joined(
 const declining = (requestId: string, act: MemberAct) => act.decline(requestId)
 
 describe("a membership's declines", () => {
-  it("denies a permission in the member's own turn once the member was offered it", async () => {
-    const test = joined({ startedBy: GUEST, decline: declining })
+  it("denies a permission its stack declines once the member was offered it", async () => {
+    const test = joined({ decline: declining })
 
     test.membership.reissuePending()
     await settle()
@@ -777,7 +758,6 @@ describe("a membership's declines", () => {
 
   it("cancels a permission that offers no deny", async () => {
     const test = joined({
-      startedBy: GUEST,
       decline: declining,
       hide: true,
       requests: [{ ...APPROVAL, responseSchema: { enum: ["once"] } }],
@@ -789,24 +769,8 @@ describe("a membership's declines", () => {
     expect(test.log).toEqual(["answered:approval-1:cancelled:undefined"])
   })
 
-  it("leaves a request alone in a turn the member did not start", async () => {
-    for (const startedBy of ["operator:owner", undefined]) {
-      const test = joined({
-        decline: declining,
-        hide: true,
-        ...(startedBy ? { startedBy } : {}),
-      })
-
-      test.membership.reissuePending()
-      await settle()
-
-      expect(test.log).toEqual([])
-    }
-  })
-
-  it("never declines a question, or a request it did not ask this member", async () => {
+  it("declines a question its stack declines, but never a request it did not ask this member", async () => {
     const test = joined({
-      startedBy: GUEST,
       hide: true,
       requests: [QUESTION, { ...APPROVAL, requestId: "approval-2" }],
       decline: (requestId, act) => {
@@ -818,11 +782,14 @@ describe("a membership's declines", () => {
     test.membership.reissuePending()
     await settle()
 
-    expect(test.log).toEqual(["answered:approval-2:resolved:deny"])
+    expect(test.log).toEqual([
+      "answered:question-1:cancelled:undefined",
+      "answered:approval-2:resolved:deny",
+    ])
   })
 
   it("skips a decline whose connection stopped being live before it ran", async () => {
-    const test = joined({ startedBy: GUEST, decline: declining, hide: true })
+    const test = joined({ decline: declining, hide: true })
 
     test.membership.reissuePending()
     test.state.live = false
@@ -833,7 +800,6 @@ describe("a membership's declines", () => {
 
   it("drops a second decline of the same request silently", async () => {
     const test = joined({
-      startedBy: GUEST,
       hide: true,
       decline: (requestId, act) => {
         act.decline(requestId)

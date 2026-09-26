@@ -160,8 +160,8 @@ export type MemberConnection = {
 
 /**
  * What a middleware may do beyond shaping an event. `decline` refuses one
- * permission request this member was asked, in a turn this member started;
- * the Channel runs it once the request was delivered, and ignores any other.
+ * request this member was asked, as the layer decided; the Channel runs it
+ * once the request was delivered, while the Session still holds it.
  */
 export type MemberAct = {
   decline(requestId: string): void

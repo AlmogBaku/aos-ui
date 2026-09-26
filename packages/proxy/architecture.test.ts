@@ -322,8 +322,7 @@ describe("member boundary", () => {
 
   /**
    * A2: the core and the ACP transport are role-blind. Nothing reads a
-   * guest's grant, and a principal's role is read only where a membership
-   * reports it for an adoption's preference for an operator.
+   * guest's grant or a principal's role.
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
@@ -342,7 +341,25 @@ describe("member boundary", () => {
       roleReaders.push(...reads.map(() => path))
     }
 
-    expect(roleReaders).toEqual([join(proxyRoot, "core/channel.ts")])
+    expect(roleReaders).toEqual([])
+  })
+
+  /**
+   * The coordinator owns a turn's states; a channel reads them and moves
+   * none. The one machine the channel sets up is its membership's.
+   */
+  it("leaves every turn-state transition to the coordinator", async () => {
+    const source = stripComments(
+      await readFile(join(proxyRoot, "core/channel.ts"), "utf8")
+    )
+    const machines = [
+      ...source.matchAll(/\bownerSetup\b[^(]*\(\s*["'`]([\w-]+)["'`]/gu),
+    ].map(([, kind]) => kind)
+
+    expect(machines).toEqual(["membership"])
+    expect(source).not.toMatch(
+      /\bstate\s*(?::|=(?!=))\s*["'`](?:idle|running|stopping|waiting-for-input|uncertain)["'`]/u
+    )
   })
   /**
    * The member encoder alone turns member events into ACP updates and

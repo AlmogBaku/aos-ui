@@ -19,7 +19,6 @@ import {
   persistedCorrections,
 } from "./replay-page"
 import {
-  PendingRequestKind,
   ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
@@ -37,7 +36,6 @@ import {
   type PromptPart,
   type SessionEvent,
   type TurnStream,
-  type Role,
 } from "./member"
 import {
   ServerRequestStaleError,
@@ -74,7 +72,7 @@ export type ChannelTurn = {
   turnId: string
   messageId: string
   content: readonly PromptPart[]
-  /** Epoch ms when the turn was admitted. */
+  /** When the turn was admitted, on the channels' monotonic clock. */
   at: number
 }
 
@@ -108,8 +106,6 @@ export type ChannelAdoption = {
 type Delivery = {
   /** The member's own scope, which an adoption runs under. */
   scope: SessionScope
-  /** Which member an adoption runs as: an operator comes first. */
-  role: Role
   /** The turnId whose prompt this member already holds. */
   delivered?: string
   /** Whether the channel sent that prompt, rather than the member owning it. */
@@ -217,27 +213,25 @@ async function attempt<T>(
 }
 
 /**
- * The member an adoption runs as. An operator comes first: the coordinator
- * reports the turn under this member's thread, and activity and push read it.
+ * The member an adoption runs as: the first to join. The coordinator reports
+ * the turn under this member's Session, and activity and push read it.
  */
 function adopter(channel: Channel) {
-  const memberships = [...channel.memberships]
-  return (
-    memberships.find(([, { role }]) => role === "operator") ?? memberships[0]
-  )
+  return [...channel.memberships].at(0)
 }
 
 function createChannelTable({
   snapshot,
   adoption,
-  now = Date.now,
+  clock,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
   snapshot: (scope: ChannelScope) => { state: string; turnId?: string }
   /** Absent when the runtime cannot report the turns it starts. */
   adoption?: ChannelAdoption
-  now?: () => number
+  /** The monotonic clock a turn's admission and the backstop read. */
+  clock: Clock
   backstopMs?: number
 }) {
   const channels = new Map<string, Channel>()
@@ -254,7 +248,7 @@ function createChannelTable({
     // A question may wait on a person indefinitely; the backstop only guards
     // against a turn the coordinator never reports as ended.
     const expired =
-      state !== "waiting-for-input" && now() - turn.at > backstopMs
+      state !== "waiting-for-input" && clock.now() - turn.at > backstopMs
     if (live && !expired) return turn
     channel.turn = undefined
     return undefined
@@ -396,7 +390,7 @@ function createChannelTable({
     add(
       scope: SessionScope,
       member: MembershipDelivery,
-      options: { hasPrompt: boolean; role?: Role }
+      options: { hasPrompt: boolean }
     ) {
       const key = channelKey(scope)
       let channel = channels.get(key)
@@ -414,12 +408,7 @@ function createChannelTable({
         }
       }
       if (joined.memberships.has(member)) return remove
-      const delivery: Delivery = {
-        scope,
-        role: options.role ?? "operator",
-        fromChannel: false,
-      }
-      join(joined, member, delivery, options.hasPrompt)
+      join(joined, member, { scope, fromChannel: false }, options.hasPrompt)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
@@ -441,7 +430,7 @@ function createChannelTable({
         join(
           channel,
           member,
-          { scope: delivery.scope, role: delivery.role, fromChannel: false },
+          { scope: delivery.scope, fromChannel: false },
           options.hasPrompt
         )
     },
@@ -515,7 +504,7 @@ function createChannelTable({
 
 type CreateChannelsOptions = Omit<
   Parameters<typeof createChannelTable>[0],
-  "snapshot"
+  "snapshot" | "clock"
 > & {
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
@@ -541,8 +530,11 @@ export type MembershipOptions = {
   subscribeRow: (listener: (row: SessionRow) => void) => () => void
 }
 
-/** A membership's options, with the coordinator its channels share. */
-type MembershipContext = MembershipOptions & { coordinator: SessionCoordinator }
+/** A membership's options, with the coordinator and clock its channels share. */
+type MembershipContext = MembershipOptions & {
+  coordinator: SessionCoordinator
+  clock: Clock
+}
 
 const SILENT: Logger = {
   debug: () => {},
@@ -627,12 +619,13 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
 
 export function createChannels(options: CreateChannelsOptions) {
   const { coordinator, runtime } = options
+  const clock = options.clock ?? defaultClock
   const channels = createChannelTable({
     ...options,
+    clock,
     snapshot: (scope) => coordinator.snapshot(scope),
   })
   const logger = options.logger ?? SILENT
-  const clock = options.clock ?? defaultClock
   const machine = membershipMachine(logger, clock)
   /** The memberships reading an older page: one page at a time each. */
   const paging = new WeakSet<Membership>()
@@ -691,7 +684,7 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator },
+        { ...membership, coordinator, clock },
         owner
       )
     },
@@ -1234,7 +1227,7 @@ class Membership {
             )
       )
       if (announced) return { messageId }
-      turn = { turnId, messageId, content, at: Date.now() }
+      turn = { turnId, messageId, content, at: this.#options.clock.now() }
     } finally {
       release()
     }
@@ -1254,7 +1247,6 @@ class Membership {
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
-        role: this.#member.principal.role,
       })
       // A request the Session resolves, through another member's answer or a
       // Stop, is withdrawn here so this member stops offering it.
@@ -1450,10 +1442,10 @@ class Membership {
   }
 
   /**
-   * Declines one permission request for this member. Only a request this
-   * member was offered and has not settled, in a turn this member started,
-   * while its credential holds; any other decline, a second one from another
-   * tab included, is dropped silently.
+   * Declines one request as the member's stack decided, which alone knows
+   * which requests are its to decline. Only a request this member was offered
+   * and the Session still holds, while its credential holds; any other
+   * decline, a second one from another tab included, is dropped silently.
    */
   async #decline(requestId: string) {
     if (
@@ -1462,15 +1454,10 @@ class Membership {
       !this.#member.connection.live()
     )
       return
-    const open = this.#coordinator.snapshot(this.#scope)
-    const request = open.requests.find(
-      (pending) => pending.requestId === requestId
-    )
-    if (
-      request?.kind !== PendingRequestKind.Permission ||
-      open.startedBy !== this.#member.principal.id
-    )
-      return
+    const request = this.#coordinator
+      .snapshot(this.#scope)
+      .requests.find((pending) => pending.requestId === requestId)
+    if (!request) return
     try {
       await this.#settle(declineReply(request))
     } catch (cause) {
@@ -1578,10 +1565,7 @@ class Membership {
     )
   }
 
-  /**
-   * How the coordinator sees one subscription of this member. A member may
-   * Stop any turn in its Session, not only one it started.
-   */
+  /** How the coordinator sees one subscription of this member. */
   #access(): CoordinatorAccess {
     return {
       membershipId: this.#options.membershipId,

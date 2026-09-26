@@ -157,7 +157,7 @@ describe("guest in a Session channel", () => {
     guest.close()
   })
 
-  it("shows a guest an operator's prompt as its text alone, and lets it Stop", async () => {
+  it("shows a guest an operator's prompt as its text alone, and lets it steer and Stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const guest = await connectGuest(test)
@@ -191,6 +191,12 @@ describe("guest in a Session channel", () => {
     expect(prompts(other.recorder)).toEqual([
       [{ type: "text", text: "Summarize" }, attachment],
     ])
+    await guest.agent.request(AOS_METHODS.session.steer, {
+      sessionId: GUEST_REF,
+      requestId: "steer-1",
+      text: "Shorter",
+    })
+    expect(test.sources[0]?.steer).toHaveBeenCalledOnce()
     await guest.agent.notify(methods.agent.session.cancel, {
       sessionId: GUEST_REF,
     })
