@@ -782,7 +782,9 @@ export class SessionCoordinator {
       existing?.segment.turnId ?? `aos-recovered-${crypto.randomUUID()}`
     const { turn, generation } = this.#admit(scope, turnId)
     try {
-      this.#assertCapacity(role, existing)
+      // Adopting a turn the runtime started after one this proxy ran is a
+      // turn start; a turn lost to a restart, or a wait refreshed, is not.
+      if (!existing && this.#executions.has(key)) this.#assertCapacity(role)
       const discovered = await this.options.engine.discover!(scope, turnId)
       if (!discovered) {
         if (existing && this.#move(turn, generation, { type: "cleared" })) {
@@ -993,7 +995,6 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     const inFlight = this.#recoveries.get(key)
     if (inFlight) return inFlight
-    this.#assertCapacity(existing?.startedByRole ?? access.role, existing)
     const recovery = this.#recoverExecution(
       scope,
       request,
@@ -1651,8 +1652,8 @@ export class SessionCoordinator {
     return { turnId: segment.turnId, events, close: () => undefined }
   }
 
-  #assertCapacity(role: Role, existing?: Execution) {
-    if (existing) return
+  /** Checked as a turn starts, an adopted one included, and never on recovery. */
+  #assertCapacity(role: Role) {
     const active = [...this.#executions.values()].filter(
       ({ state }) => state !== "idle"
     )

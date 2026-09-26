@@ -2075,6 +2075,35 @@ describe("SessionCoordinator", () => {
     ).rejects.toThrow("already active")
   })
 
+  it("takes up a turn it does not hold whatever the capacity", async () => {
+    const engine: ServerTurnEngine = {
+      start: vi.fn(async () => new EventSource()),
+      recover: vi.fn(async () => new EventSource()),
+      discover: vi.fn(async () => ({
+        handle: new EventSource(),
+        state: "running" as const,
+      })),
+    }
+    const sessions = coordinator(engine, { maxActiveExecutions: 1 })
+    await sessions.start(otherScope, input("run-1"), access("one"))
+
+    await expect(
+      sessions.recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "unheld" },
+        access("two")
+      )
+    ).resolves.toMatchObject({ turnId: "unheld" })
+    // A turn lost to a restart is found when its Session opens, not started.
+    await expect(
+      sessions.discover({
+        agentId: "researcher",
+        providerSessionId: "stored-3",
+        sessionId: "stored-3",
+      })
+    ).resolves.toBeDefined()
+  })
+
   it("coalesces concurrent authoritative recovery", async () => {
     const source = new EventSource()
     let resolveRecovery!: (handle: ServerTurnHandle) => void
