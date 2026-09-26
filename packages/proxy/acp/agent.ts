@@ -377,8 +377,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       info: {
         name: "aos-proxy",
         ...(info ? { title: info.runtime.name } : {}),
-        // The proxy versions the AOS extension contract, not a build.
-        version: `${AOS_EXTENSION_VERSION}`,
+        // The build the proxy serves, so a tab running another one reloads; a
+        // proxy serving none versions the AOS extension contract instead.
+        version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
         session: {

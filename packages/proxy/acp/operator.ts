@@ -23,6 +23,8 @@ export type OperatorAcpServiceOptions = {
   presence?: PresenceRegistry
   /** The workspace catalog the guest listener shares, with its row cache. */
   catalog: Catalog
+  /** The browser build the static root carries; absent without one. */
+  buildId?: string
   now?: () => number
 }
 
@@ -39,6 +41,7 @@ export function createOperatorAcpService({
   logger,
   presence,
   catalog,
+  buildId,
   now = Date.now,
 }: OperatorAcpServiceOptions) {
   const role = "operator" as const
@@ -63,6 +66,7 @@ export function createOperatorAcpService({
       channels,
       logger,
       presence,
+      buildId,
       readState: createReadState({
         catalog,
         relighting: runtimeInstance.runtime.translation?.relighting,

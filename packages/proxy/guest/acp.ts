@@ -60,6 +60,8 @@ export type GuestAcpServiceOptions = {
   guestActiveExecutions: number
   /** Where this listener's connections write their structured lines. */
   logger?: AcpLogger
+  /** The browser build the static root carries; absent without one. */
+  buildId?: string
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
   cancel?: (timer: unknown) => void
@@ -217,6 +219,7 @@ export function createGuestConnection(
     attachmentStages: options.attachmentStages,
     channels: options.channels,
     logger: options.logger,
+    buildId: options.buildId,
     authentication: createGuestAuthentication(options),
   }
 }

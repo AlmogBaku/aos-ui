@@ -167,7 +167,12 @@ describe("AOS ACP agent", () => {
 
     expect(test.initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: { name: "aos-proxy", title: "Test Runtime" },
+      // A proxy serving no build versions the extension contract instead.
+      info: {
+        name: "aos-proxy",
+        title: "Test Runtime",
+        version: `${AOS_EXTENSION_VERSION}`,
+      },
       capabilities: { session: { delete: {}, prompt: { image: {} } } },
       authMethods: [],
       _meta: {
@@ -183,6 +188,13 @@ describe("AOS ACP agent", () => {
         },
       },
     })
+    test.close()
+  })
+
+  it("answers the build it serves as its version, so a tab on another reloads", async () => {
+    const test = await harness({ buildId: "b1" })
+
+    expect(test.initialize).toMatchObject({ info: { version: "b1" } })
     test.close()
   })
 

@@ -69,6 +69,11 @@ type AcpConnectionBase = {
    */
   presence?: PresenceRegistry
   logger?: AcpLogger
+  /**
+   * The browser build the static root carries, which `initialize` answers as
+   * its version so a tab running another build reloads; absent without one.
+   */
+  buildId?: string
   /** Where the connection's lifecycle owner logs; silent without one. */
   ownerLogger?: Logger
 }
