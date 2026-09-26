@@ -44,6 +44,7 @@ import type {
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
@@ -51,6 +52,7 @@ import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
 import { createChannels } from "../core/channel"
+import { withFaults } from "./test-faults"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
@@ -625,6 +627,8 @@ export type HarnessOptions = {
     runtimeInstance: RuntimeInstance
     sessionRows: SessionRows
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
+  /** Where lifecycle owners log; a fresh capture by default. */
+  logs?: LogCapture
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -637,7 +641,14 @@ export async function harness(options: HarnessOptions = {}) {
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
   const discover = vi.fn(options.discover ?? (async () => undefined))
-  const engine: ServerTurnEngine = { start, recover, discover }
+  const engine: ServerTurnEngine = {
+    start,
+    recover,
+    discover,
+    ...(options.subscribeTurns
+      ? { subscribeTurns: options.subscribeTurns }
+      : {}),
+  }
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
@@ -767,9 +778,12 @@ export async function harness(options: HarnessOptions = {}) {
     speak: unsupported,
   }
 
+  // Everything reads the runtime through its faults, which forward every
+  // call until a test arms one.
+  const faults = withFaults(runtime)
   const coordinator = new SessionCoordinator({
-    engine,
-    readings: runtime,
+    engine: faults.runtime.turns,
+    readings: faults.runtime,
     maxActiveExecutions: 8,
     maxGuestActiveExecutions: 2,
     maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
@@ -777,7 +791,7 @@ export async function harness(options: HarnessOptions = {}) {
   })
   const runtimeInstance: RuntimeInstance = {
     id: "test",
-    runtime,
+    runtime: faults.runtime,
     sessions: coordinator,
     close: async () => undefined,
   }
@@ -813,7 +827,7 @@ export async function harness(options: HarnessOptions = {}) {
     options.now ? { now: options.now } : undefined
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
-  const { subscribeTurns } = options
+  const { subscribeTurns } = faults.runtime.turns
   const channels = createChannels({
     snapshot: (channelScope) => coordinator.snapshot(channelScope),
     ...(subscribeTurns
@@ -830,23 +844,12 @@ export async function harness(options: HarnessOptions = {}) {
   })
 
   /**
-   * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and channels, as one deployment's listeners do.
+   * One browser connection's side of the proxy. Every connection shares the
+   * one coordinator, engine, and channels, as one deployment's listeners do.
    */
-  async function connect(
-    connectionId: string,
-    answers: {
-      /** This browser's answer to a permission request, if not the harness's. */
-      permission?: HarnessOptions["permission"]
-      /** This browser's answer to a question, if not the harness's. */
-      question?: HarnessOptions["question"]
-    } = {}
-  ) {
-    const attachmentStages = new AttachmentStageRegistry()
+  function contextFor(connectionId: string): AcpConnectionContext {
     const base = options.translators ?? translators
-    const permission = answers.permission ?? options.permission
-    const question = answers.question ?? options.question
-    const context: AcpConnectionContext = {
+    return {
       connectionId,
       principalId: PRINCIPAL,
       runtimeInstance,
@@ -859,7 +862,7 @@ export async function harness(options: HarnessOptions = {}) {
           return (options.translateHistory ?? base.translateHistory)(history)
         },
       },
-      attachmentStages,
+      attachmentStages: new AttachmentStageRegistry(),
       channels,
       presence,
       logger,
@@ -867,11 +870,23 @@ export async function harness(options: HarnessOptions = {}) {
       feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
+  }
 
+  /** One in-process browser connection to the proxy. */
+  async function connect(
+    connectionId: string,
+    answers: {
+      /** This browser's answer to a permission request, if not the harness's. */
+      permission?: HarnessOptions["permission"]
+      /** This browser's answer to a question, if not the harness's. */
+      question?: HarnessOptions["question"]
+    } = {}
+  ) {
+    const context = contextFor(connectionId)
     const { connection, recorder } = connectClient(context, {
       name: "aos-browser",
-      permission,
-      question,
+      permission: answers.permission ?? options.permission,
+      question: answers.question ?? options.question,
     })
     const initialize = await connection.agent.request(
       methods.agent.initialize,
@@ -890,7 +905,7 @@ export async function harness(options: HarnessOptions = {}) {
       close: () => connection.close(),
       initialize,
       recorder,
-      attachmentStages,
+      attachmentStages: context.attachmentStages,
       /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
       list: () => connection.agent.request(methods.agent.session.list, {}),
       create: () =>
@@ -904,6 +919,7 @@ export async function harness(options: HarnessOptions = {}) {
   }
 
   const primary = await connect(CONNECTION)
+  let browsers = 0
 
   const scope: SessionScope = {
     agentId: AGENT,
@@ -914,8 +930,15 @@ export async function harness(options: HarnessOptions = {}) {
   return {
     ...primary,
     connect,
+    /**
+     * A fresh agent app on a connection of its own, for each socket a real
+     * browser connection opens, so every reconnection is a new connection.
+     */
+    agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
     coordinator,
     runtimeInstance,
+    faults,
+    logs: options.logs ?? captureLogs(),
     channels,
     scope,
     sources,
