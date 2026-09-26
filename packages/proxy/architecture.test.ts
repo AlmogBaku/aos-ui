@@ -6,7 +6,6 @@ import { describe, expect, it } from "vitest"
 
 import { CANONICAL_TOOL_NAMES } from "./adapters/hermes/tool-data"
 import { OPENCODE_CANONICAL_TOOL_NAMES } from "./adapters/opencode/tool-names"
-import type { ServerRuntime } from "./core/runtime"
 
 const COMMON_PROXY_DIRECTORIES = [
   "acp",
@@ -488,14 +487,17 @@ describe("ServerRuntime interface", () => {
    * each adapter retains its own implementation but the interface exposes
    * neither.
    */
-  it("exposes neither authState nor subscribeSessionInvalidation", () => {
-    // Compile-time assertions: these resolve to `true` only when the named
-    // property is absent from the interface, and fail typecheck otherwise.
-    type Absent<T, K extends string> = K extends keyof T ? never : true
-    const _auth: Absent<ServerRuntime, "authState"> = true
-    const _sub: Absent<ServerRuntime, "subscribeSessionInvalidation"> = true
-    // Keep the variables live so the compiler doesn't elide the checks.
-    void _auth
-    void _sub
+  it("exposes neither authState nor subscribeSessionInvalidation", async () => {
+    const source = stripComments(
+      await readFile(join(import.meta.dirname, "core/runtime.ts"), "utf8")
+    )
+    const members = /export interface ServerRuntime \{([\s\S]*?)\n\}/u.exec(
+      source
+    )?.[1]
+
+    expect(members).toBeDefined()
+    expect(members).not.toMatch(
+      /\b(?:authState|subscribeSessionInvalidation)\b/u
+    )
   })
 })
