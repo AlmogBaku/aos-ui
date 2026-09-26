@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   createOwner,
   defaultClock,
@@ -47,6 +49,7 @@ import {
   type TurnSteerRequest,
   type TurnSteerResponse,
 } from "../../protocol"
+import { CLIENT_ADMISSIONS } from "./limits"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -109,10 +112,32 @@ export type CoordinatedTurnSubscription = {
   close(): void
 }
 
+/**
+ * A prompt to admit. A client id names a send its client may repeat, and the
+ * turn and message ids derive from it; without one, the caller mints them.
+ */
+export type SendInput =
+  | PromptTurnInput
+  | (Omit<PromptTurnInput, "turnId" | "messageId"> & { clientId: string })
+
+/** A Session to create; a client id names a create its client may repeat. */
+export type CreateInput = { title?: string; clientId?: string }
+
+/** A client id repeated for another request than the one it first named. */
+export class ServerClientIdReusedError extends Error {
+  constructor() {
+    super("The client id names another request")
+    this.name = "ServerClientIdReusedError"
+  }
+}
+
 export type SessionCoordinatorOptions = {
   engine: ServerTurnEngine
-  /** Reads a Session's context window and model catalog for its reporters. */
-  readings: Pick<ServerRuntime, "context" | "models">
+  /**
+   * Reads a Session's context window and model catalog for its reporters, and
+   * creates the Sessions a client asks for.
+   */
+  readings: Pick<ServerRuntime, "context" | "models" | "createSession">
   maxActiveExecutions: number
   maxGuestActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
@@ -601,6 +626,86 @@ function admissionFingerprint(value: unknown): string {
   return JSON.stringify(canonical(value))
 }
 
+/** The hex key a client id derives within its principal and its target. */
+function clientKey(principalId: string, targetId: string, clientId: string) {
+  return createHash("sha256")
+    .update(principalId)
+    .update("\0")
+    .update(targetId)
+    .update("\0")
+    .update(clientId)
+    .digest("hex")
+}
+
+/**
+ * The ids a repeatable send derives from its client id, so the same send
+ * repeated is the same turn and its prompt the same message.
+ */
+export function clientTurnIds(
+  principalId: string,
+  sessionId: string,
+  clientId: string
+) {
+  const turnId = clientKey(principalId, sessionId, clientId)
+  return { turnId, messageId: `${turnId}-message` }
+}
+
+/** What a repeatable admission answers while its client id is remembered. */
+type ClientAdmission<T> = {
+  fingerprint: string
+  expiresAt: number
+  result: Promise<T>
+}
+
+/**
+ * The admissions clients may repeat, keyed by what each client id derives: a
+ * repeat answers the first one's result, and one asking for something else is
+ * refused. Bounded and expiring on the coordinator's clock, apart from any
+ * Execution, so a repeat still finds its admission once the turn is gone. A
+ * failed admission is forgotten, so its repeat admits afresh.
+ */
+class ClientAdmissions<T> {
+  readonly #entries = new Map<string, ClientAdmission<T>>()
+
+  constructor(private readonly clock: Clock) {}
+
+  /** The first result `key` names while it is remembered. */
+  repeated(key: string, fingerprint: string): Promise<T> | undefined {
+    const now = this.clock.now()
+    // Entries expire in the order they were admitted.
+    for (const [oldest, entry] of this.#entries) {
+      if (entry.expiresAt > now) break
+      this.#entries.delete(oldest)
+    }
+    const first = this.#entries.get(key)
+    if (first && first.fingerprint !== fingerprint)
+      throw new ServerClientIdReusedError()
+    return first?.result
+  }
+
+  remember(key: string, fingerprint: string, result: Promise<T>) {
+    const expiresAt = this.clock.now() + CLIENT_ADMISSIONS.ttlMs
+    const entry = { fingerprint, expiresAt, result }
+    this.#entries.set(key, entry)
+    if (this.#entries.size > CLIENT_ADMISSIONS.entries) {
+      const oldest = this.#entries.keys().next().value
+      if (oldest !== undefined) this.#entries.delete(oldest)
+    }
+    // The admission's own caller reports its failure; this only forgets it.
+    void result.catch(() => {
+      if (this.#entries.get(key) === entry) this.#entries.delete(key)
+    })
+    return result
+  }
+}
+
+/** The stream of a turn nothing is left of. */
+const ENDED: AsyncIterable<SequencedTurnEvent> = {
+  [Symbol.asyncIterator]: () => ({
+    next: async () => ({ done: true, value: undefined }),
+  }),
+}
+
 /** The requests a paused segment still waits on: those nobody has answered. */
 function openRequests(segment: Segment) {
   return segment.requests.filter(
@@ -655,11 +760,16 @@ export class SessionCoordinator {
     CapabilityScope
   >
   #workspace: Pick<ServerRuntime, "workspaceCapabilities"> | undefined
+  /** Each send's landing alone: a repeat subscribes on its own. */
+  readonly #sends: ClientAdmissions<void>
+  readonly #creates: ClientAdmissions<unknown>
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
     this.#logger = options.logger ?? SILENT
     this.#clock = options.clock ?? defaultClock
+    this.#sends = new ClientAdmissions(this.#clock)
+    this.#creates = new ClientAdmissions(this.#clock)
     this.#machine = turnMachine(this.#logger, this.#clock)
     const cell = { logger: this.#logger, clock: this.#clock }
     this.#usage = new SessionReporter({
@@ -942,32 +1052,78 @@ export class SessionCoordinator {
     }
   }
 
+  /**
+   * Creates a Session in `agentId`. A client id names a create its client may
+   * repeat: a repeat answers the Session the first one created, so a retry
+   * leaves no orphan.
+   */
+  async createSession(
+    agentId: string,
+    input: CreateInput,
+    principalId: string
+  ): Promise<unknown> {
+    const create = () =>
+      this.options.readings.createSession(agentId, input.title)
+    if (input.clientId === undefined) return create()
+    const key = clientKey(principalId, agentId, input.clientId)
+    const fingerprint = admissionFingerprint({ title: input.title })
+    return (
+      this.#creates.repeated(key, fingerprint) ??
+      this.#creates.remember(key, fingerprint, create())
+    )
+  }
+
   async start(
+    scope: SessionScope,
+    input: SendInput,
+    access: CoordinatorAccess,
+    attachments?: ServerAttachmentStage
+  ): Promise<CoordinatedTurnSubscription> {
+    if (this.#closed) throw new Error("Session coordinator is closed")
+    if (!("clientId" in input))
+      return this.#startTurn(scope, input, access, attachments)
+    const { clientId, ...prompt } = input
+    const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
+    const fingerprint = admissionFingerprint({
+      ...prompt,
+      attachments: attachments?.artifactIds?.() ?? [],
+    })
+    const repeated = this.#sends.repeated(ids.turnId, fingerprint)
+    if (!repeated) {
+      const started = this.#startTurn(
+        scope,
+        { ...ids, ...prompt },
+        access,
+        attachments
+      )
+      this.#sends.remember(
+        ids.turnId,
+        fingerprint,
+        started.then(() => undefined)
+      )
+      return started
+    }
+    await repeated
+    const execution = this.#executions.get(scopeKey(scope))
+    if (execution?.segment.turnId === ids.turnId)
+      return this.#repeat(execution, access)
+    // The Session no longer holds the turn, so nothing of it is left to replay;
+    // the repeat's reader follows the Session from its history.
+    return { turnId: ids.turnId, events: ENDED, close: () => undefined }
+  }
+
+  async #startTurn(
     scope: SessionScope,
     input: PromptTurnInput,
     access: CoordinatorAccess,
     attachments?: ServerAttachmentStage
   ): Promise<CoordinatedTurnSubscription> {
-    if (this.#closed) throw new Error("Session coordinator is closed")
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerTurnConflictError()
-      if (access.canControl) existing.controllers.add(access.principalId)
-      // A retried admission reads the turn from its beginning, so a journal that
-      // no longer holds that beginning answers it with its live events alone.
-      // For an already-terminal segment that plan is `reset`, and this path
-      // deliberately answers it as an empty live stream rather than a reset: the
-      // duplicate admission is not the browser's live reader, and the reader's
-      // own redial is where a reset is authoritative and acted upon.
-      const plan = replayPlan(existing.segment, 0)
-      return this.#subscribe(
-        existing.segment,
-        0,
-        access,
-        plan === "history" ? "history" : "live"
-      )
+      return this.#repeat(existing, access)
     }
 
     if (existing && existing.state !== "idle") {
@@ -1698,6 +1854,25 @@ export class SessionCoordinator {
       () => undefined
     )
     return result
+  }
+
+  /**
+   * A retried admission reads the turn from its beginning, so a journal that no
+   * longer holds that beginning answers it with its live events alone. For an
+   * already-terminal segment that plan is `reset`, and this path deliberately
+   * answers it as an empty live stream rather than a reset: the duplicate
+   * admission is not the browser's live reader, and the reader's own redial is
+   * where a reset is authoritative and acted upon.
+   */
+  #repeat(execution: Execution, access: CoordinatorAccess) {
+    if (access.canControl) execution.controllers.add(access.principalId)
+    const plan = replayPlan(execution.segment, 0)
+    return this.#subscribe(
+      execution.segment,
+      0,
+      access,
+      plan === "history" ? "history" : "live"
+    )
   }
 
   /**

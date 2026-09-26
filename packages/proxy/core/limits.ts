@@ -10,3 +10,10 @@ export const READING_BACKOFF = { baseMs: 1_000, capMs: 16_000 }
  * not building one, and the next change owes a reading anyway.
  */
 export const READING_RETRIES = 5
+
+/**
+ * The admissions a client may repeat under its client id, sends and creates
+ * each: how many are remembered, and for how long. A repeat after either is
+ * admitted afresh.
+ */
+export const CLIENT_ADMISSIONS = { entries: 1_000, ttlMs: 10 * 60_000 }

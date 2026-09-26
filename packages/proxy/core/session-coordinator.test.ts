@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
@@ -19,7 +20,9 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
+import { CLIENT_ADMISSIONS } from "./limits"
 import {
+  ServerClientIdReusedError,
   SessionCoordinator,
   type CoordinatedTurnSubscription,
   type SessionCoordinatorOptions,
@@ -1557,6 +1560,104 @@ describe("SessionCoordinator", () => {
       sessions.start(scope, reordered, access("two"))
     ).resolves.toBeDefined()
     expect(engine.start).toHaveBeenCalledOnce()
+  })
+
+  describe("admissions a client may repeat", () => {
+    const engine = (): ServerTurnEngine => ({
+      start: vi.fn(async () => new EventSource()),
+      recover: vi.fn(async () => new EventSource()),
+    })
+
+    it("answers a repeated send with its first turn, also once the Session no longer holds it", async () => {
+      const first = new EventSource()
+      const start = vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValue(new EventSource())
+      const sessions = coordinator({ ...engine(), start })
+      const send = { clientId: "client-1", prompt: "Hello" }
+
+      const [admitted, repeated] = await Promise.all([
+        sessions.start(scope, send, access("one")),
+        sessions.start(scope, send, access("one")),
+      ])
+      expect(repeated.turnId).toBe(admitted.turnId)
+      await expect(
+        sessions.start(scope, { ...send, prompt: "Changed" }, access("one"))
+      ).rejects.toThrow(ServerClientIdReusedError)
+
+      const read = reader(admitted)
+      first.emit(turnEnded)
+      await read()
+      await sessions.start(
+        scope,
+        { clientId: "client-2", prompt: "Next" },
+        access("one")
+      )
+
+      await expect(
+        sessions.start(scope, send, access("one"))
+      ).resolves.toMatchObject({ turnId: admitted.turnId })
+      expect(start).toHaveBeenCalledTimes(2)
+    })
+
+    it("answers a repeated create with its first Session, and a failed one afresh", async () => {
+      const createSession = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Provider unavailable"))
+        .mockResolvedValueOnce({ session: { id: "created-1" } })
+        .mockResolvedValue({ session: { id: "created-2" } })
+      const sessions = coordinator(engine(), {
+        readings: { context: vi.fn(), models: vi.fn(), createSession },
+      })
+      const create = { title: "Plans", clientId: "client-1" }
+
+      await expect(
+        sessions.createSession("researcher", create, "operator")
+      ).rejects.toThrow("Provider unavailable")
+      for (let repeat = 0; repeat < 2; repeat++)
+        await expect(
+          sessions.createSession("researcher", create, "operator")
+        ).resolves.toEqual({ session: { id: "created-1" } })
+      await expect(
+        sessions.createSession(
+          "researcher",
+          { ...create, title: "Other" },
+          "operator"
+        )
+      ).rejects.toThrow(ServerClientIdReusedError)
+      // A client id is its principal's own: another's never reads this Session.
+      await expect(
+        sessions.createSession("researcher", create, "guest:invite-1")
+      ).resolves.toEqual({ session: { id: "created-2" } })
+      expect(createSession).toHaveBeenCalledTimes(3)
+    })
+
+    it("forgets a client id once it expires or falls beyond the bound", async () => {
+      const clock = useFakeClock()
+      const createSession = vi.fn(async () => ({}))
+      const sessions = coordinator(engine(), {
+        readings: { context: vi.fn(), models: vi.fn(), createSession },
+      })
+      const create = (clientId: string) =>
+        sessions.createSession("researcher", { clientId }, "operator")
+
+      await create("client-1")
+      await clock.advance(CLIENT_ADMISSIONS.ttlMs - 1)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(1)
+      await clock.advance(1)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(2)
+
+      for (let index = 1; index < CLIENT_ADMISSIONS.entries; index++)
+        await create(`other-${index}`)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 1)
+      await create("other-last")
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 3)
+    })
   })
 
   it("retains a paused execution and resumes it as a fresh segment", async () => {
