@@ -137,8 +137,6 @@ export const initialProjectorState: ProjectorState = {
   todos: [],
 }
 
-type StateMeta = z.infer<typeof AosStateMetaSchema>
-
 const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 
 /** The wire's own instant as epoch ms; the schema validated its format. */
@@ -512,7 +510,7 @@ function withoutCompaction(
 }
 
 /** The vendor stop reasons carry the failure the run reported. */
-function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
+function errorFrom(aos: TurnFailure | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
     ...(aos?.code === undefined ? {} : { code: aos.code }),
     ...(aos?.message === undefined ? {} : { message: aos.message }),
@@ -575,7 +573,7 @@ function applyIdle(
   state: ProjectorState,
   carried: { turnId?: string },
   stopReason: string | undefined,
-  aos: StateMeta | undefined
+  aos: (TurnFailure & { at?: string }) | undefined
 ): ProjectorState {
   const reported = reportedFailure(state, carried.turnId)
   const failed =
@@ -1112,6 +1110,20 @@ export function failLatestTurn(
       ...(error && { error }),
     })
   )
+}
+
+/**
+ * Ends a Session the provider no longer holds: the run it had open fails
+ * there, and a Session with none shows the failure on its latest turn.
+ */
+export function failSession(
+  state: ProjectorState,
+  error: TurnFailure
+): ProjectorState {
+  const ended = applyIdle(state, {}, AOS_STOP_REASONS.error, error)
+  return activeAssistantId(state) === undefined
+    ? failLatestTurn(ended, error)
+    : ended
 }
 
 /**

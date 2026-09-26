@@ -36,6 +36,7 @@ import {
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
+  AosErrorNotificationSchema,
   type AosHistoryCursor,
   type AosPromptMetaSchema,
 } from "@aos/protocol/acp"
@@ -47,6 +48,7 @@ import {
 } from "@/runtime-adapters/thread-history"
 
 import type { AcpApprovals } from "./acp-approvals"
+import { subscribeAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 import {
   applyApprovals,
@@ -55,6 +57,7 @@ import {
   clearTranscript,
   failedWithoutReply,
   failLatestTurn,
+  failSession,
   initialProjectorState,
   LOCAL_PROMPT_PREFIX,
   messageBlocks,
@@ -503,6 +506,16 @@ function createAcpController({
         if (isRecord(params) && params.sessionId === bound)
           queueResume(next, generation)
       }),
+      // The provider no longer holds the Session, so nothing runs in it again.
+      subscribeAosNotification(
+        connection,
+        AOS_METHODS.notify.error,
+        AosErrorNotificationSchema,
+        ({ sessionId, code }) => {
+          if (sessionId === bound && code === "not_found")
+            commit(failSession(state, { code }))
+        }
+      ),
     ]
     unsubscribe = () => {
       clearTimeout(retryTimer)
