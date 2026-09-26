@@ -15,6 +15,7 @@ import {
   ServerTurnCapacityError,
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
+  ServerTurnUncertainError,
 } from "./runtime"
 
 export type FailureKind = "gone" | "unavailable" | "uncertain"
@@ -79,10 +80,16 @@ export function coreFailure(cause: unknown): PublicFailure | undefined {
     return failureOf("gone", cause)
   if (
     cause instanceof ServerTurnCapacityError ||
-    cause instanceof ServerTurnSteerUnavailableError
+    cause instanceof ServerTurnSteerUnavailableError ||
+    // A read past its admission deadline: nothing it asked for happened.
+    (cause instanceof DOMException && cause.name === "TimeoutError")
   )
     return failureOf("unavailable", cause)
-  if (cause instanceof ServerTurnSteerUncertainError)
+  if (
+    cause instanceof ServerTurnSteerUncertainError ||
+    // A start past its admission deadline may have landed.
+    cause instanceof ServerTurnUncertainError
+  )
     return failureOf("uncertain", cause)
   return undefined
 }

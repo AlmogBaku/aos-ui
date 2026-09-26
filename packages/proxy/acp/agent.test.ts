@@ -30,7 +30,7 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { READING_BACKOFF } from "../core/limits"
+import { ADMISSION_DEADLINE_MS, READING_BACKOFF } from "../core/limits"
 import {
   ServerSessionNotFoundError,
   type ServerTurnListener,
@@ -1504,14 +1504,19 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("refuses a lost Session with ACP's code, to a resume and to a prompt", async () => {
+  it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
         throw new ServerSessionNotFoundError()
       },
+      subscribeTurns: () => () => undefined,
     })
     await test.list()
+    const clock = useFakeClock()
+    // The refused start asks the runtime for a turn it may have lost to, and
+    // that read never answers.
+    test.faults.hangUntilAborted("discover")
 
     await expect(
       test.agent.request(methods.agent.session.resume, {
@@ -1522,6 +1527,19 @@ describe("Session rooms", () => {
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
     })
+    // A read past its deadline changed nothing, so it is worth trying again.
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    expect(
+      test.logs.records().filter(({ message }) => message === "channel.failed")
+    ).toMatchObject([{ fields: { errorCode: "temporarily_unavailable" } }])
+
+    // A start past its deadline may have landed: reconcile, never resend.
+    test.faults.hangUntilAborted("start")
+    const unanswered = expect(prompt(test, "Again")).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.uncertainMutation,
+    })
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    await unanswered
     test.close()
   })
 
