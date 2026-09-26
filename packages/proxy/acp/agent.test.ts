@@ -173,23 +173,12 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("creates a Session and joins its creator to the Session's row, commands, model options and usage", async () => {
+  it("answers a created Session's id alone and joins its creator to the Session's row, commands, model options and usage", async () => {
     const test = await harness()
 
     const created = await test.create()
 
-    expect(created).toMatchObject({
-      sessionId: CREATED,
-      configOptions: [{ configId: "model", currentValue: "sonnet" }],
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "idle", archived: false },
-          capabilities: {
-            workspace: { slashCommands: { commands: [{ name: "plan" }] } },
-          },
-        },
-      },
-    })
+    expect(created).toEqual({ sessionId: CREATED })
     await test.recorder.wait(
       () => updates(test.recorder).length === 4,
       "the created Session's readings"
@@ -241,6 +230,20 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    test.close()
+  })
+
+  it("creates one Session for a repeated client id and refuses the id for another create", async () => {
+    const test = await harness()
+
+    const first = await test.create({ clientId: "create-1" })
+    const repeated = await test.create({ clientId: "create-1" })
+
+    expect(repeated).toEqual(first)
+    expect(test.createSession).toHaveBeenCalledTimes(1)
+    await expect(
+      test.create({ clientId: "create-1", title: "Another" })
+    ).rejects.toMatchObject({ code: invalidRequest().code })
     test.close()
   })
 

@@ -13,6 +13,7 @@ import {
   type ServerRuntimePublicError,
 } from "../core/runtime"
 import { MembershipDetachedError } from "../core/channel"
+import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
 
@@ -170,6 +171,7 @@ function coordinatorError(cause: unknown) {
     return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
   if (cause instanceof ServerSessionNotFoundError) return notFound()
+  if (cause instanceof ServerClientIdReusedError) return invalidRequest()
   return undefined
 }
 

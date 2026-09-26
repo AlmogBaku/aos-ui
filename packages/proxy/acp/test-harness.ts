@@ -682,6 +682,13 @@ export async function harness(options: HarnessOptions = {}) {
   const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
     rows.delete(sessionId)
   })
+  const createSession = vi.fn(async (agentId: string, title?: string) => {
+    rows.set(
+      CREATED,
+      sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
+    )
+    return { session: { id: CREATED, agentId } }
+  })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
       models = { ...models, ...ModelPatchSchema.parse(patch) }
@@ -751,13 +758,7 @@ export async function harness(options: HarnessOptions = {}) {
       listAllSessions(limit, offset),
     history,
     getSession,
-    createSession: async (agentId, title) => {
-      rows.set(
-        CREATED,
-        sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
-      )
-      return { session: { id: CREATED, agentId } }
-    },
+    createSession,
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
@@ -908,11 +909,11 @@ export async function harness(options: HarnessOptions = {}) {
       attachmentStages: context.attachmentStages,
       /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
       list: () => connection.agent.request(methods.agent.session.list, {}),
-      create: () =>
+      create: (meta: { title?: string; clientId?: string } = {}) =>
         connection.agent.request(methods.agent.session.new, {
           cwd: "/",
           _meta: {
-            [AOS_META_KEY]: { agentId: AGENT },
+            [AOS_META_KEY]: { agentId: AGENT, ...meta },
           },
         }),
     }
@@ -944,6 +945,7 @@ export async function harness(options: HarnessOptions = {}) {
     sources,
     start,
     discover,
+    createSession,
     updateSession,
     deleteSession,
     updateModel,

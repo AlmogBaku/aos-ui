@@ -7,7 +7,6 @@ import type {
 import {
   SessionCreateResponseSchema,
   SessionModelsResponseSchema,
-  SessionWorkspaceCapabilitiesResponseSchema,
   type TurnSteerRequest,
   type Session,
   type SessionHistoryResponse,
@@ -20,7 +19,10 @@ import {
 } from "../../protocol/acp"
 import * as ids from "../core/ids"
 import type { SessionPatch, SessionScope } from "../core/runtime"
-import type { SessionExecutionState } from "../core/session-coordinator"
+import type {
+  CreateInput,
+  SessionExecutionState,
+} from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { Membership } from "../core/channel"
 import {
@@ -63,7 +65,7 @@ export function overlaidStatus(
         : settled
 }
 
-export function sessionInfoMeta(
+function sessionInfoMeta(
   row: SessionRow,
   status: Session["status"]
 ): AosSessionInfoMeta {
@@ -214,10 +216,11 @@ export function createWorkspace(
           ? runtime.listAllSessions(limit, offset)
           : runtime.listSessions(agentId, limit, offset)
       ),
-    create: (agentId: string, title: string | undefined) =>
+    /** A repeat of a client id answers the Session its first create made. */
+    create: (agentId: string, input: CreateInput) =>
       call(async () => {
         const created = SessionCreateResponseSchema.parse(
-          await runtime.createSession(agentId, title)
+          await coordinator.createSession(agentId, input, context.principalId)
         )
         return created.session.id
       }),
@@ -237,13 +240,6 @@ export function createWorkspace(
       ),
     delete: (scope: SessionScope) =>
       call(() => runtime.deleteSession(scope.agentId, scope.providerSessionId)),
-    /** Addressed by public reference, so an invited Session needs no detail. */
-    capabilities: (scope: Pick<SessionScope, "agentId" | "sessionId">) =>
-      call(async () =>
-        SessionWorkspaceCapabilitiesResponseSchema.parse(
-          await runtime.workspaceCapabilities(scope.agentId, scope.sessionId)
-        )
-      ),
     models: (scope: SessionScope) =>
       call(async () =>
         SessionModelsResponseSchema.parse(
@@ -299,7 +295,7 @@ export function createSessions(
     return member
   }
 
-  const remember = (rows: readonly Session[]) => {
+  const remember = (rows: readonly Pick<Session, "id" | "agentId">[]) => {
     for (const row of rows) owners.set(row.id, row.agentId)
   }
 

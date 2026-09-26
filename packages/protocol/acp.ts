@@ -178,12 +178,6 @@ export const AosSessionInfoMetaSchema = readObject({
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 
-/** `NewSessionResponse._meta.aos` */
-export const AosSessionNewResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-})
-
 /** `ResumeSessionRequest._meta.aos` */
 export const AosSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */

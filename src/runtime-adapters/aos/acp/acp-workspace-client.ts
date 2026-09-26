@@ -315,10 +315,8 @@ export function createAcpWorkspaceClient({
         clientId: crypto.randomUUID(),
         ...(options?.title ? { title: options.title } : {}),
       })
-      if (created.meta.session.agentId !== agentId)
-        throw new Error("Invalid AOS Session ownership")
       store.observe(created.sessionId)
-      remember(created.sessionId, created.meta.session)
+      adopt(created.sessionId, agentId)
       watchCreator(created.sessionId, agentId)
       composer.resume(created.sessionId)
       return { sessionId: created.sessionId }

@@ -199,7 +199,8 @@ export type MemberCommands = {
   }
   focus: { sessionId: string | null; foreground: boolean; idle: boolean }
   list: { agentId?: string; offset: number }
-  new: { agentId: string; title?: string }
+  /** A client id names a create its client may repeat. */
+  new: { agentId: string; title?: string; clientId?: string }
   delete: { sessionId: string }
   /** `{ unread: false }` marks the Session read. */
   update: { sessionId: string; patch: SessionPatch }
@@ -231,12 +232,7 @@ export type CommandResults = {
   answer: void
   focus: void
   list: { rows: readonly Session[]; nextOffset?: number }
-  new: {
-    sessionId: string
-    row: SessionRow
-    capabilities: WorkspaceCapabilities
-    models: SessionModelsResponse
-  }
+  new: { sessionId: string }
   delete: void
   update: void
   "set-config": { models: SessionModelsResponse }

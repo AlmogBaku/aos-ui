@@ -48,7 +48,6 @@ import {
   AosInitializeMetaSchema,
   AosPromptResponseMetaSchema,
   AosSessionInvalidatedNotificationSchema,
-  AosSessionNewResponseMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosSetVisibilityResponseSchema,
   AosSteerAcceptedNotificationSchema,
@@ -831,22 +830,15 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
-      const response = await request("short", (agent, options) =>
+      const { sessionId } = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
           { cwd: SERVER_OWNED_CWD, _meta: { [AOS_META_KEY]: meta } },
           options
         )
       )
-      const created = AosSessionNewResponseMetaSchema.parse(
-        aosMetaOf(response._meta)
-      )
-      owners.set(response.sessionId, created.session.agentId)
-      return {
-        sessionId: response.sessionId,
-        configOptions: response.configOptions ?? [],
-        meta: created,
-      }
+      owners.set(sessionId, meta.agentId)
+      return { sessionId }
     },
 
     async listSessions(meta, cursor) {

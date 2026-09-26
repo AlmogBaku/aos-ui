@@ -274,15 +274,9 @@ function createFakeConnection() {
     },
     async newSession(meta) {
       record("newSession", meta)
-      follow(SESSION_ID, meta.agentId, "idle")
-      return {
-        sessionId: SESSION_ID,
-        configOptions: configOptions(model, effort),
-        meta: {
-          session: { ...sessionInfoMeta(), agentId: meta.agentId },
-          capabilities: capabilities(),
-        },
-      }
+      // Its updates follow the answer that names the Session.
+      queueMicrotask(() => follow(SESSION_ID, meta.agentId, "idle"))
+      return { sessionId: SESSION_ID }
     },
     async listSessions(meta, cursor) {
       record("listSessions", meta, cursor)

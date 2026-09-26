@@ -40,7 +40,6 @@ import type { PresenceReport } from "../push/presence"
 import { redactForLog } from "../redaction"
 import {
   createSessions,
-  sessionInfoMeta,
   sessionInfoOf,
   decodeCursor,
   decodeHistoryCursor,
@@ -415,33 +414,23 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.new, async ({ params, client }) => {
     admit(methods.agent.session.new, "new")
     const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
-    const created = await perform(
+    const { sessionId } = await perform(
       "new",
       {
         agentId: meta.agentId,
         ...(meta.title === undefined ? {} : { title: meta.title }),
+        ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
       },
-      async ({ agentId, title }) => {
-        const sessionId = await workspace.create(agentId, title)
-        const scope = workspace.scope(agentId, sessionId)
-        const row = await workspace.session(scope)
-        sessions.remember([row])
-        const capabilities = await workspace.capabilities(scope)
-        const models = await workspace.models(scope)
-        sessions.join(client, scope).joined()
-        return { sessionId, row, capabilities, models }
+      async ({ agentId, ...input }) => {
+        const sessionId = await workspace.create(agentId, input)
+        sessions.remember([{ id: sessionId, agentId }])
+        // The row, capabilities and model options follow the answer as
+        // updates.
+        sessions.join(client, workspace.scope(agentId, sessionId)).joined()
+        return { sessionId }
       }
     )
-    return {
-      sessionId: created.sessionId,
-      configOptions: translators.configOptionsOf(created.models),
-      _meta: {
-        [AOS_META_KEY]: {
-          session: sessionInfoMeta(created.row, sessions.status(created.row)),
-          capabilities: created.capabilities,
-        },
-      },
-    }
+    return { sessionId }
   })
 
   app.onRequest(methods.agent.session.list, async ({ params }) => {
