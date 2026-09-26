@@ -267,6 +267,60 @@ export default defineConfig([
     },
   },
   {
+    // Type-aware promise rules for the proxy, lifecycle, and browser ACP adapter.
+    // part b removes the per-rule ignores for the six files other lanes own.
+    files: [
+      "packages/proxy/**/*.{ts,tsx}",
+      "packages/lifecycle/**/*.{ts,tsx}",
+      "src/runtime-adapters/**/*.{ts,tsx}",
+    ],
+    ignores: [
+      "**/*.test.{ts,tsx}",
+      "**/*.bun-spec.ts",
+      // part b removes this
+      "packages/proxy/adapters/**",
+      "packages/proxy/core/link.ts",
+      "packages/proxy/core/limits.ts",
+      "packages/proxy/core/channel.ts",
+      "packages/proxy/core/session-coordinator.ts",
+      "packages/proxy/core/session-reporter.ts",
+    ],
+    languageOptions: {
+      parserOptions: {
+        projectService: {
+          // allowDefaultProject covers the virtual lintText paths used in the
+          // architecture test that do not exist on disk. Real source files are
+          // discoverable through packages/proxy/tsconfig.json,
+          // packages/lifecycle/tsconfig.json, and the root tsconfig.json.
+          allowDefaultProject: [
+            "packages/proxy/example.ts",
+            "packages/proxy/acp/example.ts",
+            "packages/proxy/core/example.ts",
+            "packages/lifecycle/example.ts",
+            "src/components/example.tsx",
+            "src/components/example.test.tsx",
+            "src/runtime-adapters/fixture/example.ts",
+            "src/runtime-adapters/aos/example.ts",
+            "src/runtime-adapters/aos/acp/example.ts",
+            "packages/tools-mcp/example.ts",
+            "packages/tools-mcp/views/example.tsx",
+            "shared/example.ts",
+          ],
+        }
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": [
+        "error",
+        { ignoreVoid: false, ignoreIIFE: true },
+      ],
+      "@typescript-eslint/no-misused-promises": [
+        "error",
+        { checksVoidReturn: { attributes: false } },
+      ],
+    },
+  },
+  {
     rules: {
       "no-empty": ["error", { allowEmptyCatch: true }],
     },

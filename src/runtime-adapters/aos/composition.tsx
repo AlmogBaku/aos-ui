@@ -30,6 +30,10 @@ import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
 import { createAcpConnection } from "./acp/connection"
 import { tabAcpLogger } from "./acp/log"
+
+// Lazy logger for background error reporting in this module.
+let _compositionLog: ReturnType<typeof tabAcpLogger> | undefined
+const compositionLog = () => (_compositionLog ??= tabAcpLogger())
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -342,7 +346,7 @@ function ReadyAosRuntimeProvider({
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        void refreshTitle()
+        refreshTitle().catch((err: unknown) => compositionLog().warn({ err }, "session.title_refresh_failed"))
       }, SESSION_TITLE_REFRESH_DEBOUNCE_MS)
     }
     const unsubscribe = client.subscribeSessionInvalidation(

@@ -218,7 +218,9 @@ export function createSessions(
      */
     show(client: AgentContext, event: WorkspaceEvent) {
       if (!identity()) return
-      void showWorkspace(memberOf(client), event).catch(() => undefined)
+      showWorkspace(memberOf(client), event).catch((err: unknown) =>
+        context.logger.warn({ err }, "session.workspace.show_failed")
+      )
     },
 
     close() {

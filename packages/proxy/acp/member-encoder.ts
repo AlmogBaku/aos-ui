@@ -468,7 +468,7 @@ export function createMemberEncoder({
         )
         await client
           .notify(AOS_METHODS.notify.error, { sessionId, ...failure })
-          .catch(() => undefined)
+          .catch((err: unknown) => logger.warn({ err, sessionId }, "acp.error.notify_failed"))
         return
       }
     }

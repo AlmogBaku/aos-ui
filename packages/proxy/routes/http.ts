@@ -63,12 +63,12 @@ export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   const rawLength = request.headers.get("content-length")
   if (rawLength !== null) {
     if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) {
-      void request.body?.cancel().catch(() => undefined)
+      if (request.body) request.body.cancel().catch(() => undefined)
       return undefined
     }
     const contentLength = Number(rawLength)
     if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
-      void request.body?.cancel().catch(() => undefined)
+      if (request.body) request.body.cancel().catch(() => undefined)
       return undefined
     }
   }

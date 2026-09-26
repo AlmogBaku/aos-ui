@@ -47,7 +47,13 @@ import {
   type ThreadHistoryState,
 } from "@/runtime-adapters/thread-history"
 
+import type { Logger } from "@aos/lifecycle"
+import { tabAcpLogger } from "./log"
 import type { AcpApprovals } from "./acp-approvals"
+
+// Lazy logger for background error reporting.
+let _runtimeLog: Logger | undefined
+const runtimeLog = () => (_runtimeLog ??= tabAcpLogger())
 import { subscribeAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 import {
@@ -382,9 +388,12 @@ function createAcpController({
     error: TurnFailure | undefined
   ) => {
     commit(failLatestTurn(state, error))
-    void replaySession(session, generation).then(() => {
-      if (isBound(session, generation)) commit(failLatestTurn(state, error))
-    })
+    replaySession(session, generation).then(
+      () => {
+        if (isBound(session, generation)) commit(failLatestTurn(state, error))
+      },
+      (err: unknown) => runtimeLog().warn({ err }, "session.replay_failed")
+    )
   }
 
   /**
@@ -461,7 +470,7 @@ function createAcpController({
       // say what the Session holds now.
       connection.subscribeNotification(sessionInvalidated, (params) => {
         if (isRecord(params) && params.sessionId === bound)
-          void replaySession(next, generation)
+          replaySession(next, generation).catch((err: unknown) => runtimeLog().warn({ err }, "session.replay_failed"))
       }),
       // The provider no longer holds the Session, so nothing runs in it again.
       subscribeAosNotification(
@@ -477,7 +486,7 @@ function createAcpController({
     unsubscribe = () => {
       for (const off of subscriptions) off()
     }
-    void replaySession(next, generation)
+    replaySession(next, generation).catch((err: unknown) => runtimeLog().warn({ err }, "session.replay_failed"))
   }
 
   /** The bound Session, creating one for a local draft's first turn. */

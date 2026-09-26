@@ -202,4 +202,22 @@ describe("runtime package import boundaries", () => {
       )
     ).toHaveLength(1)
   })
+  it("reports no-floating-promises and no-misused-promises on a virtual proxy file", async () => {
+    // A floating promise (no await, return, or catch) and a misused promise
+    // (async function passed where a void-return callback is expected) must both
+    // be flagged by the type-aware rules enabled for packages/proxy, packages/lifecycle,
+    // and src/runtime-adapters non-test files.
+    const code = `
+      async function doWork(): Promise<void> {}
+      doWork()
+      function run(cb: () => void) { cb() }
+      run(async () => { await doWork() })
+    `
+    const [result] = await eslint.lintText(code, {
+      filePath: "packages/proxy/example.ts",
+    })
+    const ruleIds = result!.messages.map(({ ruleId }) => ruleId)
+    expect(ruleIds).toContain("@typescript-eslint/no-floating-promises")
+    expect(ruleIds).toContain("@typescript-eslint/no-misused-promises")
+  })
 })

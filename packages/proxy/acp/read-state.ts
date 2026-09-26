@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import type { Catalog } from "../core/catalog"
 import type { ServerRuntimeTranslation } from "../core/runtime"
 import type { ReadState } from "./types"
@@ -20,6 +21,7 @@ export type ReadStateOptions = {
   cancel?: (handle: TimerHandle) => void
   /** Projects the settled row to this connection. */
   onUnreadChanged: (agentId: string, sessionId: string, unread: boolean) => void
+  logger?: Logger
 }
 
 function sameTarget(left: Target, right: Target) {
@@ -33,6 +35,7 @@ export function createReadState({
   schedule = setTimeout,
   cancel = clearTimeout,
   onUnreadChanged,
+  logger,
 }: ReadStateOptions): ReadState {
   const { rows } = catalog
   const writtenAt = new Map<string, number>()
@@ -106,7 +109,7 @@ export function createReadState({
     clearPending()
     const handle = schedule(() => {
       pending = undefined
-      void write(target, forced)
+      write(target, forced).catch((err: unknown) => logger?.warn({ err }, "read.state.write_failed"))
     }, delayMs)
     pending = { handle, target, forced }
   }

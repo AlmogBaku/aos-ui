@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import type { Catalog } from "../core/catalog"
 import {
   PendingRequestKind,
@@ -16,6 +17,7 @@ export type ActivityFeedOptions = {
   catalog: Pick<Catalog, "list" | "rows" | "scope">
   coordinator: Pick<SessionCoordinator, "snapshot" | "subscribeExecutions">
   now?: () => number
+  logger?: Logger
 }
 
 /** The one place the attention kind is decided; every non-permission is a question. */
@@ -56,6 +58,7 @@ export function createActivityFeed({
   catalog,
   coordinator,
   now = Date.now,
+  logger,
 }: ActivityFeedOptions): ActivityFeed {
   const stamp = () => new Date(now()).toISOString()
 
@@ -127,7 +130,7 @@ export function createActivityFeed({
     const unsubscribe = coordinator.subscribeExecutions((event) =>
       push(activityOf(event))
     )
-    void hydrate()
+    hydrate().catch((err: unknown) => logger?.warn({ err }, "activity.feed.hydrate_failed"))
 
     return () => {
       closed = true
