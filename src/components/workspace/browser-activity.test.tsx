@@ -401,7 +401,7 @@ function subscribedDevice() {
     getPermission: () => permission,
     requestPermission: async () => permission,
     show: () => ({ close() {} }),
-    onPermissionChange: (listener) => {
+    subscribePermissionChanges: (listener) => {
       permissionChanged = listener
       return () => {
         permissionChanged = undefined
@@ -437,7 +437,7 @@ function subscribedDevice() {
     register: async () => {},
     getSubscription: async () => subscribed,
     subscribe: () => null,
-    onMessage: () => () => {},
+    subscribeMessages: () => () => {},
   }
   const push = createPushSubscriptionManager({ client, platform: pushPlatform })
   const session = {

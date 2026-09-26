@@ -529,7 +529,7 @@ describe("HermesInteractions server requests", () => {
       resumeResult,
     })
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     const snapshot = await interactions.resume(scope)
 
@@ -561,7 +561,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     // A `clarify` frame written while the socket was detached reaches AOS only
     // as an `open_requests` re-delivery of the heal that rebound the Session.
@@ -590,7 +590,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    const stop = interactions.onPendingRequest(scope, notified)
+    const stop = interactions.subscribePendingRequests(scope, notified)
 
     const id = requests.deliver("clarify", {
       session_id: LIVE,
@@ -619,8 +619,8 @@ describe("HermesInteractions server requests", () => {
     bind("live-other", other)
     const notified = vi.fn()
     const otherNotified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
-    interactions.onPendingRequest(other, otherNotified)
+    interactions.subscribePendingRequests(scope, notified)
+    interactions.subscribePendingRequests(other, otherNotified)
 
     requests.deliver("clarify", { session_id: "live-other", question: "?" })
 

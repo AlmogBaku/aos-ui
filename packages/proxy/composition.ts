@@ -120,7 +120,7 @@ async function readMcpServerOverrides(
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
  * configured private one, the stored devices, the presence the ACP listener
- * reports into, and the dispatcher that observes the runtime. A state directory
+ * reports into, and the dispatcher that subscribes to the runtime. A state directory
  * the proxy cannot write fails startup here rather than at the first
  * notification.
  */
@@ -220,13 +220,14 @@ export async function createConfiguredProxy(
     snapshot: (scope) => sessions.snapshot(scope),
     // A channel adopts what the runtime starts only where the runtime
     // reports it.
-    ...(turns.watch
+    ...(turns.subscribeTurns
       ? {
           adoption: {
-            watch: (scope, watcher) => turns.watch!(scope, watcher),
+            subscribeTurns: (scope, listener) =>
+              turns.subscribeTurns!(scope, listener),
             discover: (scope, role) => sessions.discover(scope, role),
-            observe: (scope, listener) =>
-              sessions.observeScope(scope, listener),
+            subscribeExecutions: (scope, listener) =>
+              sessions.subscribeScope(scope, listener),
           },
         }
       : {}),

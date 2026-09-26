@@ -110,7 +110,7 @@ describe("Hermes server adapter", () => {
     ])
     await expect(adapter.activity("researcher", sessionId)).resolves.toEqual({
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       state: "running",
     })
@@ -154,7 +154,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({
       request,
       http,
-      onEvent: vi.fn((next: (event: unknown) => void) => {
+      subscribeEvents: vi.fn((next: (event: unknown) => void) => {
         observers.add(next)
         return () => observers.delete(next)
       }),
@@ -657,8 +657,8 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${method}`)
     })
     const stopObservation = vi.fn()
-    const onEvent = vi.fn(() => stopObservation)
-    const adapter = new HermesServerAdapter({ request, onEvent })
+    const subscribeEvents = vi.fn(() => stopObservation)
+    const adapter = new HermesServerAdapter({ request, subscribeEvents })
     const scope = {
       agentId: "researcher",
       providerSessionId: "stored",
@@ -670,7 +670,7 @@ describe("Hermes server adapter", () => {
       running: false,
     })
     await expect(
-      adapter.native.observe("live-secret", vi.fn())
+      adapter.native.subscribeLive("live-secret", vi.fn())
     ).resolves.toEqual(expect.any(Function))
     await expect(adapter.native.replay("live-secret", 2)).resolves.toEqual({
       epoch: "epoch-1",
@@ -710,10 +710,10 @@ describe("Hermes server adapter", () => {
       ["session.interrupt", { session_id: "live-secret" }],
       ["session.active_list", {}],
     ])
-    // Two AOS observers, each subscribing once for the whole runtime's life:
-    // the attachment registry routes native frames and interactions watch
+    // Two AOS subscribers, each subscribing once for the whole runtime's life:
+    // the attachment registry routes native frames and interactions follow
     // `request.cancel`.
-    expect(onEvent).toHaveBeenCalledTimes(2)
+    expect(subscribeEvents).toHaveBeenCalledTimes(2)
   })
 
   it.each(["redirected", "queued"] as const)(
@@ -1680,7 +1680,7 @@ describe("Hermes server adapter", () => {
     const listener = vi.fn()
     const adapter = new HermesServerAdapter({
       request: vi.fn(),
-      onEvent: vi.fn((next: (event: unknown) => void) => {
+      subscribeEvents: vi.fn((next: (event: unknown) => void) => {
         observers.add(next)
         return () => observers.delete(next)
       }),
@@ -2607,7 +2607,7 @@ describe("Hermes server adapter", () => {
       liveSessionId: "live-first",
     })
     const signals: string[] = []
-    await adapter.native.observe("live-first", (signal) =>
+    await adapter.native.subscribeLive("live-first", (signal) =>
       signals.push(
         signal.kind === "lost" ? `lost:${signal.reason}` : signal.kind
       )
@@ -2639,7 +2639,7 @@ describe("Hermes server adapter", () => {
       sessionId: "stored",
     }
     await adapter.native.resume(scope)
-    await adapter.native.observe("live-first", vi.fn())
+    await adapter.native.subscribeLive("live-first", vi.fn())
 
     await router.connection.restored()
 

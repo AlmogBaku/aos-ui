@@ -42,8 +42,7 @@ function setup(
 ) {
   let current = options.subscription ?? null
   let message:
-    | ((data: unknown, reply?: (answer: unknown) => void) => void)
-    | undefined
+    ((data: unknown, reply?: (answer: unknown) => void) => void) | undefined
   const pushInfo = vi.fn(async () => {
     if (options.info === "failure") throw new Error("offline")
     return (
@@ -77,7 +76,7 @@ function setup(
     register,
     getSubscription: async () => current,
     subscribe,
-    onMessage: (listener) => {
+    subscribeMessages: (listener) => {
       message = listener
       return () => {
         message = undefined
@@ -513,7 +512,7 @@ describe("the browser push platform", () => {
       const received: unknown[] = []
       const answers: unknown[] = []
       const port = { postMessage: (answer: unknown) => answers.push(answer) }
-      const stop = platform.onMessage((data, reply) => {
+      const stop = platform.subscribeMessages((data, reply) => {
         received.push(data)
         reply?.({ type: OPEN_ACK_MESSAGE_TYPE })
       })

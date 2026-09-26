@@ -88,9 +88,9 @@ async function pushConfiguration(stateDir?: string) {
   }
 }
 
-/** A runtime whose coordinator only records who observes it. */
+/** A runtime whose coordinator only records who subscribes to it. */
 function observableRuntime() {
-  const observe = vi.fn(() => vi.fn())
+  const subscribeExecutions = vi.fn(() => vi.fn())
   const runtimeInstance = {
     id: "test-runtime",
     runtime: {
@@ -98,10 +98,10 @@ function observableRuntime() {
       publicError: () => undefined,
       turns: {},
     },
-    sessions: { observe },
+    sessions: { subscribeExecutions },
     close: vi.fn(async () => undefined),
   } as unknown as RuntimeInstance
-  return { observe, runtimeInstance }
+  return { subscribeExecutions, runtimeInstance }
 }
 
 function profile() {
@@ -366,7 +366,7 @@ describe("configured proxy composition", () => {
   })
 
   it("wires push delivery to the runtime and the operator lane's own rows", async () => {
-    const { observe, runtimeInstance } = observableRuntime()
+    const { subscribeExecutions, runtimeInstance } = observableRuntime()
     const input = {
       ...(await configuration()),
       push: await pushConfiguration(),
@@ -379,7 +379,7 @@ describe("configured proxy composition", () => {
 
     // One cache: the ACP lane keeps it current and the read-state gate reads it.
     expect(configured.acpService.sessionRows).toBe(configured.sessionRows)
-    expect(observe).toHaveBeenCalledOnce()
+    expect(subscribeExecutions).toHaveBeenCalledOnce()
     expect(configured.push?.registrations.list("operator")).toEqual([])
 
     const response = await configured.app.request(
@@ -397,7 +397,7 @@ describe("configured proxy composition", () => {
   })
 
   it("serves no push capability when a deployment configures none", async () => {
-    const { runtimeInstance, observe } = observableRuntime()
+    const { runtimeInstance, subscribeExecutions } = observableRuntime()
 
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
@@ -405,7 +405,7 @@ describe("configured proxy composition", () => {
     })
 
     expect(configured.push).toBeUndefined()
-    expect(observe).not.toHaveBeenCalled()
+    expect(subscribeExecutions).not.toHaveBeenCalled()
     await expect(
       (
         await configured.app.request("https://aos.example.test/api/aos/v1/push")

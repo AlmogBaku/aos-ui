@@ -253,7 +253,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const paging = new Set<string>()
 
   /**
-   * One older page of a Session this connection attached, however it did, as
+   * One older page of a Session this connection resumed, however it did, as
    * tagged updates ahead of the reply.
    */
   async function replayOlder({
@@ -279,7 +279,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
-   * Attaches this connection to one Session and follows it. A command that
+   * Resumes one Session on this connection and follows it. A command that
    * names its `scope` addresses a Session outside this connection's catalog:
    * it adopts nothing and reads no row, models or usage, and only a wait can
    * hide a recoverable execution there.

@@ -485,7 +485,7 @@ export function pendingRequestsOf(event: TurnEvent): PendingRequest[] {
 }
 
 /**
- * Workspace-wide execution events published by the coordinator observer for
+ * Workspace-wide execution events published by the coordinator's execution feed for
  * every Session it drives, independent of turn-stream subscribers. Timestamps
  * are RFC 3339 strings.
  */

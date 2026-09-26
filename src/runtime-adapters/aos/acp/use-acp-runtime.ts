@@ -118,10 +118,10 @@ export type UseAcpRuntimeOptions = {
     feedback?: FeedbackAdapter
   }
   /**
-   * Attaches the Session instead of resuming it directly, so a caller that
-   * already records what an attach reports stays the one that performs it.
+   * Resumes the Session in place of the direct `session/resume`, so a caller
+   * that already records what a resume reports stays the one that performs it.
    */
-  attach?: (sessionId: string) => Promise<unknown>
+  resume?: (sessionId: string) => Promise<unknown>
   /**
    * Resolves the Session a local draft's turn belongs to, creating it when the
    * thread has none yet. The controller binds what it resolves before prompting.
@@ -242,7 +242,7 @@ type ControllerOptions = {
  */
 type ControllerCallbacks = Pick<
   UseAcpRuntimeOptions,
-  | "attach"
+  | "resume"
   | "resolveSessionId"
   | "stageAttachments"
   | "messageRewind"
@@ -258,11 +258,11 @@ function createAcpController({
 }: ControllerOptions) {
   let callbacks: ControllerCallbacks = {}
   const resume = (id: string) =>
-    callbacks.attach
-      ? callbacks.attach(id)
+    callbacks.resume
+      ? callbacks.resume(id)
       : connection.resumeSession(id, { replayFromStart: true })
   let state = initialProjectorState
-  /** unbound → bound: the Session this controller observes and prompts. */
+  /** unbound → bound: the Session this controller subscribes to and prompts. */
   let bound: string | undefined
   let unsubscribe: (() => void) | undefined
   /** Whether the Session the thread opened with has replayed its history. */
@@ -443,8 +443,8 @@ function createAcpController({
   }
 
   /**
-   * Subscribes to one Session and replays it from the start. Attaching is what
-   * binds a Session, so a draft's first turn attaches the Session it creates.
+   * Subscribes to one Session and replays it from the start. Resuming is what
+   * binds a Session, so a draft's first turn resumes the Session it creates.
    */
   const bind = (next: string) => {
     if (next === bound) return
@@ -466,7 +466,7 @@ function createAcpController({
     takeApprovals()
     const subscriptions = [
       approvals?.subscribe(next, takeApprovals) ?? (() => {}),
-      connection.onSessionUpdate(next, (update, meta) => {
+      connection.subscribeSessionUpdates(next, (update, meta) => {
         const before = state
         commit(applyUpdate(state, update, meta))
         // A replayed failure is already what the provider holds.
@@ -475,7 +475,7 @@ function createAcpController({
       }),
       // The replay that follows carries the Session whole, so the transcript it
       // replaces goes first, and a fresh cursor comes with it.
-      connection.onSessionReplay(next, () => {
+      connection.subscribeSessionReplay(next, () => {
         commit(clearTranscript(state))
         const before = connection.history(next)
         const rewound = rewinds
@@ -492,14 +492,14 @@ function createAcpController({
           notify()
         }
       }),
-      connection.onNotification(steerAccepted, (params) => {
+      connection.subscribeNotification(steerAccepted, (params) => {
         observe(params, steerAccepted)
       }),
-      connection.onNotification(composerPrefill, observePrefill),
+      connection.subscribeNotification(composerPrefill, observePrefill),
       // The proxy has dropped this Session's live subscriber, so whatever it
       // streamed while unobserved is missing: only a replay from the start can
       // say what the Session holds now.
-      connection.onNotification(sessionInvalidated, (params) => {
+      connection.subscribeNotification(sessionInvalidated, (params) => {
         if (isRecord(params) && params.sessionId === bound)
           queueResume(next, generation)
       }),
@@ -679,12 +679,12 @@ function createAcpController({
     /**
      * Binds the Session the thread list reports. A draft reports none, and its
      * own first turn has already bound the Session it created, so an absent one
-     * never unbinds what is already observed.
+     * never unbinds what is already subscribed.
      */
     bindSession: (next: string | undefined) => {
       if (next !== undefined) bind(next)
     },
-    /** Leaves the Session unobserved, so a remount can attach it again. */
+    /** Unsubscribes from the Session, so a remount can resume it again. */
     unbindSession: () => {
       unsubscribe?.()
       unsubscribe = undefined
@@ -822,10 +822,10 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     [approvals, connection, openedWith]
   )
   // Ordered before the binding so the first resume already reaches the caller's
-  // `attach`, and before the subscription so a replayed update already reports.
+  // `resume`, and before the subscription so a replayed update already reports.
   useEffect(() => {
     controller.setCallbacks({
-      attach: options.attach,
+      resume: options.resume,
       resolveSessionId: options.resolveSessionId,
       stageAttachments: options.stageAttachments,
       messageRewind: options.messageRewind,

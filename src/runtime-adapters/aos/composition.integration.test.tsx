@@ -115,18 +115,18 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },

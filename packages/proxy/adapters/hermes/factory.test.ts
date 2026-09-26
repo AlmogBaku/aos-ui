@@ -80,13 +80,11 @@ describe("Hermes runtime shutdown", () => {
    * The review deployment's state at restart: one durable Session bound to a
    * live Hermes Session, nobody retaining it, its idle close armed.
    */
-  async function attachedRuntime(
-    request: (method: string) => Promise<unknown>
-  ) {
+  async function resumedRuntime(request: (method: string) => Promise<unknown>) {
     const transport = {
       request: vi.fn((method: string) => request(method)),
-      onEvent: () => () => undefined,
-      onConnection: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+      subscribeConnection: () => () => undefined,
       close: vi.fn(async () => undefined),
     }
     const runtime = await createHermesRuntime(
@@ -105,7 +103,7 @@ describe("Hermes runtime shutdown", () => {
 
   it("closes an attached runtime without waiting on a native call that cannot answer", async () => {
     vi.useFakeTimers()
-    const { runtime, transport } = await attachedRuntime(async (method) => {
+    const { runtime, transport } = await resumedRuntime(async (method) => {
       if (method === "session.resume") return { session_id: "live-stored" }
       // Hermes never answers the courtesy close: the socket is going away.
       return new Promise(() => undefined)
@@ -127,17 +125,17 @@ describe("Hermes runtime shutdown", () => {
   })
 
   it("hands the proxy a turn engine that watches for turns Hermes starts by itself", async () => {
-    const { runtime } = await attachedRuntime(async (method) =>
+    const { runtime } = await resumedRuntime(async (method) =>
       method === "session.resume" ? { session_id: "live-stored" } : {}
     )
 
-    expect(runtime.runtime.turns.watch).toBeTypeOf("function")
+    expect(runtime.runtime.turns.subscribeTurns).toBeTypeOf("function")
     await runtime.close()
   })
 
   it("closes at once when Hermes answers the courtesy close", async () => {
     vi.useFakeTimers()
-    const { runtime, transport } = await attachedRuntime(async (method) =>
+    const { runtime, transport } = await resumedRuntime(async (method) =>
       method === "session.resume" ? { session_id: "live-stored" } : {}
     )
 

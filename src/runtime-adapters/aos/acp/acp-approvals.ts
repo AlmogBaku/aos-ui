@@ -102,7 +102,7 @@ const MAX_TIMER_DELAY = 2 ** 31 - 1
 export function createAcpApprovals({
   connection,
 }: {
-  connection: Pick<AcpConnection, "onPendingRequest">
+  connection: Pick<AcpConnection, "subscribePendingRequests">
 }): AcpApprovals {
   const sessions = new Map<string, Map<string, Entry>>()
   const snapshots = new Map<string, readonly AcpApproval[]>()
@@ -135,7 +135,7 @@ export function createAcpApprovals({
     changed(sessionId)
   }
 
-  connection.onPendingRequest((pending) => {
+  connection.subscribePendingRequests((pending) => {
     if (pending.kind !== "permission") return
     const { sessionId, request } = pending
     const meta = AosPermissionMetaSchema.safeParse(

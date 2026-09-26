@@ -176,8 +176,8 @@ export function createAcpConnection(
   let reconnectDelayMs = INITIAL_RECONNECT_MS
   let reconnecting = false
   let recovering = false
-  /** Settles once a recovered transport has reattached every Session. */
-  let reattached: PromiseWithResolvers<void> | undefined
+  /** Settles once a recovered transport has rejoined every Session. */
+  let rejoined: PromiseWithResolvers<void> | undefined
   // The guest listener's principal, replayed when a new transport redeems it.
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
@@ -390,9 +390,9 @@ export function createAcpConnection(
     sessionId: string,
     cursor: string
   ): Promise<AcpHistoryPage> {
-    // The proxy reads a page only for a Session this connection has attached,
-    // which a recovered transport has not done until it reattaches.
-    await reattached?.promise
+    // The proxy reads a page only for a Session this connection has resumed,
+    // which a recovered transport has not done until it rejoins.
+    await rejoined?.promise
     const agent = await withAgent()
     const updates: AcpHistoryPage["updates"][number][] = []
     pages.set(sessionId, updates)
@@ -411,8 +411,8 @@ export function createAcpConnection(
     }
   }
 
-  /** The proxy replays every attached Session from the sequence last seen. */
-  async function resumeAttached() {
+  /** The proxy replays every resumed Session from the sequence last seen. */
+  async function rejoin() {
     // A closed connection loses its presence, so the new one carries the last
     // report again before any replay can make this tab look attended.
     if (lastFocus) {
@@ -459,7 +459,7 @@ export function createAcpConnection(
       .then(async () => {
         reconnectDelayMs = INITIAL_RECONNECT_MS
         setStatus("ready")
-        // Consumers attach Sessions on the first connection themselves; only a
+        // Consumers resume Sessions on the first connection themselves; only a
         // recovered transport owes them a replay.
         if (!recovering) return
         recovering = false
@@ -467,9 +467,9 @@ export function createAcpConnection(
         // its invitation again before anything that login authorizes.
         if (invitation !== undefined && !(await reloginOrClose(invitation)))
           return
-        await resumeAttached()
-        reattached?.resolve()
-        reattached = undefined
+        await rejoin()
+        rejoined?.resolve()
+        rejoined = undefined
       })
       .catch((error: unknown) => connection.close(error))
     const onClosed = () => {
@@ -481,11 +481,11 @@ export function createAcpConnection(
         return
       }
       recovering = true
-      if (!reattached) {
-        reattached = Promise.withResolvers()
+      if (!rejoined) {
+        rejoined = Promise.withResolvers()
         // Closing mid-recovery must not raise an unhandled rejection when no
         // page read is waiting.
-        void reattached.promise.catch(() => {})
+        void rejoined.promise.catch(() => {})
       }
       setStatus("reconnecting")
       scheduleReconnect()
@@ -511,8 +511,8 @@ export function createAcpConnection(
     failInitialized?.(new Error("The ACP connection closed"))
     failInitialized = undefined
     settleInitialized = undefined
-    reattached?.reject(new Error("The ACP connection closed"))
-    reattached = undefined
+    rejoined?.reject(new Error("The ACP connection closed"))
+    rejoined = undefined
     live?.connection.close()
     live = undefined
   }
@@ -631,13 +631,14 @@ export function createAcpConnection(
       )
     },
 
-    onSessionUpdate: (sessionId, listener) =>
+    subscribeSessionUpdates: (sessionId, listener) =>
       subscribeKeyed(updateListeners, sessionId, listener),
-    onSessionReplay: (sessionId, listener) =>
+    subscribeSessionReplay: (sessionId, listener) =>
       subscribeKeyed(replayListeners, sessionId, listener),
-    onNotification: (method, listener) =>
+    subscribeNotification: (method, listener) =>
       subscribeKeyed(notificationListeners, method, listener),
-    onPendingRequest: (listener) => subscribeTo(pendingListeners, listener),
+    subscribePendingRequests: (listener) =>
+      subscribeTo(pendingListeners, listener),
     lastSequence: (sessionId) => positions.get(sessionId),
 
     close: closeConnection,

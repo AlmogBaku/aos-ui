@@ -23,7 +23,7 @@ import {
   type RecoveryRequest,
   type ServerAttachmentStage,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
 } from "../../core/runtime"
 import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
@@ -124,7 +124,7 @@ const REFUSAL_FAILURES: Record<
  * to be re-delivered before AOS reports the question lost.
  */
 const LOST_INTERACTION_GRACE_MS = 2_000
-/** How long a watch waits before each retry; the last delay repeats. */
+/** Each retry's delay for a turn subscription; the last delay repeats. */
 const WATCH_RETRY_MS = [1_000, 5_000, 30_000]
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
@@ -375,7 +375,10 @@ export class HermesTurnEngine {
    * running, and closes on that turn's end. Every lost stream is re-resumed,
    * because a restarted or rebound live Session is only reachable that way.
    */
-  watch(scope: HermesTurnScope, watcher: ServerTurnWatcher): () => void {
+  subscribeTurns(
+    scope: HermesTurnScope,
+    listener: ServerTurnListener
+  ): () => void {
     const key = sessionKey(scope)
     let stopped = false
     let open = false
@@ -386,7 +389,7 @@ export class HermesTurnEngine {
     const announce = (own: boolean) => {
       if (open || stopped) return
       open = true
-      if (!own) watcher.onTurn()
+      if (!own) listener.onTurn()
     }
     const recheck = async (id: string) => {
       const own = this.#ownsTurn(key)
@@ -427,7 +430,7 @@ export class HermesTurnEngine {
         if (stopped) return
         open = false
         liveSessionId = resumed.liveSessionId
-        const stop = await this.#native.observe(liveSessionId, observer)
+        const stop = await this.#native.subscribeLive(liveSessionId, observer)
         if (stopped) return safelyUnsubscribe(stop)
         unsubscribe = stop
         failures = 0
@@ -436,7 +439,7 @@ export class HermesTurnEngine {
         if (stopped) return
         release()
         // One report per outage; the retries continue silently.
-        if (failures === 0) watcher.onError(cause)
+        if (failures === 0) listener.onError(cause)
         const delay =
           WATCH_RETRY_MS[Math.min(failures, WATCH_RETRY_MS.length - 1)]
         failures += 1

@@ -33,7 +33,7 @@ function nativeFor(request: HermesRpcTransport["request"]) {
       invalidate: () => {},
     },
     interactions: {
-      onPendingRequest: () => () => undefined,
+      subscribePendingRequests: () => () => undefined,
       respond: async () => ({ status: "resolved" }),
       resume: async () => ({ running: false, status: "idle" }),
     },
@@ -402,7 +402,7 @@ it("rejects recognized commands with attachments before any write and sends unkn
 it("finishes a synchronous command run without waiting for native conversational events", async () => {
   const native: HermesTurnNative = {
     resume: async () => ({ liveSessionId: "live", running: false }),
-    observe: async () => () => {},
+    subscribeLive: async () => () => {},
     cursor: async () => ({ epoch: "epoch", latestSeq: 0 }),
     replay: async () => ({ epoch: "epoch", lastSeen: 0, events: [] }),
     status: async () => "idle",
@@ -410,7 +410,7 @@ it("finishes a synchronous command run without waiting for native conversational
     redirect: async () => "redirected",
     retain: async () => () => {},
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    onPendingRequest: () => () => undefined,
+    subscribePendingRequests: () => () => undefined,
     respondInteractions: async () => [],
     submit: async () => ({
       acknowledgement: "accepted",

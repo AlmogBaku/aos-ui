@@ -121,9 +121,9 @@ export interface HermesRpcTransport {
     options?: HermesRpcOptions
   ): Promise<unknown>
   http?(path: string, init?: HermesHttpInit): Promise<unknown>
-  onEvent?(listener: (event: unknown) => void): () => void
-  onRequest?(handler: ServerRequestHandler): () => void
-  onConnection?(handler: HermesConnectionHandler): () => void
+  subscribeEvents?(listener: (event: unknown) => void): () => void
+  subscribeRequests?(handler: ServerRequestHandler): () => void
+  subscribeConnection?(handler: HermesConnectionHandler): () => void
   /** Whether a frame written now reaches Hermes; a synchronous answer needs it. */
   connected?(): boolean
   close?(): Promise<void>
@@ -714,12 +714,12 @@ export class HermesGateway implements HermesRpcTransport {
   }
 
   /** One vendored `onAny` subscription fans out to every listener, forever. */
-  onEvent(listener: (event: unknown) => void): () => void {
+  subscribeEvents(listener: (event: unknown) => void): () => void {
     this.#eventListeners.add(listener)
     return () => this.#eventListeners.delete(listener)
   }
 
-  onRequest(handler: ServerRequestHandler): () => void {
+  subscribeRequests(handler: ServerRequestHandler): () => void {
     return this.#client.onRequest(handler)
   }
 
@@ -737,7 +737,7 @@ export class HermesGateway implements HermesRpcTransport {
     )
   }
 
-  onConnection(handler: HermesConnectionHandler): () => void {
+  subscribeConnection(handler: HermesConnectionHandler): () => void {
     this.#connectionHandlers.add(handler)
     return () => this.#connectionHandlers.delete(handler)
   }

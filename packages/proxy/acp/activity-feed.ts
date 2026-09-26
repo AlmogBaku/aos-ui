@@ -147,7 +147,9 @@ export function createActivityFeed({
     }
   }
 
-  const unobserve = coordinator.observe((event) => push(notificationOf(event)))
+  const unsubscribe = coordinator.subscribeExecutions((event) =>
+    push(notificationOf(event))
+  )
   void hydrate()
 
   return {
@@ -164,7 +166,7 @@ export function createActivityFeed({
 
     close() {
       closed = true
-      unobserve()
+      unsubscribe()
       unsubscribeRows?.()
       listeners.clear()
     },

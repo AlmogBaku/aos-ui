@@ -192,8 +192,11 @@ function annotatedTurns(
           },
         }
       : {}),
-    // A watch only signals; the turn it reports is read through `discover`.
-    ...(turns.watch ? { watch: turns.watch.bind(turns) } : {}),
+    // A turn subscription only signals; the turn it reports is read
+    // through `discover`.
+    ...(turns.subscribeTurns
+      ? { subscribeTurns: turns.subscribeTurns.bind(turns) }
+      : {}),
   }
 }
 

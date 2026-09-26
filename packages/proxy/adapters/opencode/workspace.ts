@@ -217,7 +217,7 @@ export function createOpenCodeWorkspaceOperations(input: {
     capabilities: () => ({
       models: {
         status: "available" as const,
-        scope: "attached-session" as const,
+        scope: "session" as const,
         selection: "native-session" as const,
         choices: "provider-reported" as const,
       },

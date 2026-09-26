@@ -82,7 +82,7 @@ export class BrowserActivityCoordinator {
       // A permission revoked or reset from the browser's own settings has to be
       // noticed here, not at the next focus: until it is, this device holds a
       // subscription the proxy would keep pushing into nothing.
-      const stop = this.#options.port.onPermissionChange?.(() => {
+      const stop = this.#options.port.subscribePermissionChanges?.(() => {
         if (this.#active) this.recheckPermission()
       })
       if (stop) this.#cleanup.push(stop)

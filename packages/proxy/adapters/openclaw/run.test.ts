@@ -2345,7 +2345,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
   async function watching(native: ControlledNative) {
     const { subscriptions, engine } = engineFor(native)
     const turns = watcher()
-    const stop = engine.watch(scope, turns)
+    const stop = engine.subscribeTurns(scope, turns)
     await vi.waitFor(() => expect(calls(native, "chat.history")).toBe(1))
     await settle()
     return { subscriptions, engine, turns, stop }
@@ -2423,7 +2423,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
       }
       const { engine } = engineFor(native)
       const turns = watcher()
-      const stop = engine.watch(scope, turns)
+      const stop = engine.subscribeTurns(scope, turns)
       await vi.advanceTimersByTimeAsync(0)
       expect(turns.onError).toHaveBeenCalledOnce()
 

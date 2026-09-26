@@ -376,7 +376,7 @@ export function useActivityCoordinator(
     // `focus` first, so a return to the window is attended before it is reported.
     const idleTracker = createIdleTracker({ target: window })
     idleRef.current = idleTracker
-    const stopWatchingIdle = idleTracker.onChange(() => reportPresence())
+    const stopWatchingIdle = idleTracker.subscribe(() => reportPresence())
     const onFocus = () => {
       browser?.recheckPermission()
       refresh()

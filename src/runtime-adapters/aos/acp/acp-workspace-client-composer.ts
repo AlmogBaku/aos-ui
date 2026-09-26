@@ -247,7 +247,7 @@ function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
       ...entry.capabilities.workspace,
       slashCommands: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         commands: entry.commands,
       },
     },
@@ -257,7 +257,7 @@ function capabilitiesOf(entry: SessionEntry): AosWorkspaceCapabilities {
 export function createAcpComposerStore(connection: AcpConnection) {
   const sessions = new Map<string, SessionEntry>()
   const observed = new Set<string>()
-  /** Updates that land between subscribing and the attach they belong to. */
+  /** Updates that land between subscribing and the resume they belong to. */
   const early = new Map<string, [SessionUpdate, unknown][]>()
   const contextListeners = new Map<string, Set<() => void>>()
   const modelListeners = new Map<string, Set<() => void>>()
@@ -332,16 +332,16 @@ export function createAcpComposerStore(connection: AcpConnection) {
   }
 
   /** Records what `session/new` and `session/resume` reported for a Session. */
-  function attach(
+  function resume(
     sessionId: string,
-    attached: {
+    resumed: {
       configOptions: readonly SessionConfigOption[]
       capabilities: AcpCapabilities
     }
   ) {
     const previous = sessions.get(sessionId)
     const known: SessionEntry = {
-      capabilities: attached.capabilities,
+      capabilities: resumed.capabilities,
       projection: {},
       ...(previous?.current ? { current: previous.current } : {}),
       ...(previous?.context ? { context: previous.context } : {}),
@@ -349,7 +349,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
       ...(previous?.commands ? { commands: previous.commands } : {}),
     }
     sessions.set(sessionId, known)
-    project(known, sessionId, projectModels(attached.configOptions))
+    project(known, sessionId, projectModels(resumed.configOptions))
     observe(sessionId)
     const held = early.get(sessionId) ?? []
     early.delete(sessionId)
@@ -357,7 +357,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
   }
 
   /**
-   * Subscribes before the attach that reports the Session, so an update the
+   * Subscribes before the resume that reports the Session, so an update the
    * proxy sends right behind its `session/resume` answer is held, not lost.
    */
   function observe(sessionId: string) {
@@ -365,12 +365,12 @@ export function createAcpComposerStore(connection: AcpConnection) {
       early.set(sessionId, [])
     if (observed.has(sessionId)) return
     observed.add(sessionId)
-    connection.onSessionUpdate(sessionId, (update, meta) =>
+    connection.subscribeSessionUpdates(sessionId, (update, meta) =>
       accept(sessionId, update, meta)
     )
     // A from-start replay restates every settled turn, so the spend it folds
     // starts over rather than counting each turn twice.
-    connection.onSessionReplay(sessionId, () => {
+    connection.subscribeSessionReplay(sessionId, () => {
       const replayed = sessions.get(sessionId)
       if (replayed) delete replayed.turns
     })
@@ -416,7 +416,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
 
   return {
     observe,
-    attach,
+    resume,
     capabilities: (sessionId: string) => capabilitiesOf(entry(sessionId)),
     models,
     /** The newest reading, or none while the provider has reported none. */

@@ -27,11 +27,11 @@ function fakeGateway() {
   const handlers = new Set<HermesConnectionHandler>()
   return {
     transport: {
-      onEvent(listener: (event: unknown) => void) {
+      subscribeEvents(listener: (event: unknown) => void) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
-      onConnection(handler: HermesConnectionHandler) {
+      subscribeConnection(handler: HermesConnectionHandler) {
         handlers.add(handler)
         return () => handlers.delete(handler)
       },

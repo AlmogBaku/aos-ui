@@ -60,7 +60,7 @@ export type AcpSessionUpdateListener = (
   meta: Record<string, unknown> | undefined
 ) => void
 
-/** One older page of a Session, read without attaching it again. */
+/** One older page of a Session, read without resuming it again. */
 export type AcpHistoryPage = {
   /** The page's updates in arrival order, each with its `_meta.aos`. */
   readonly updates: readonly {
@@ -97,7 +97,7 @@ export interface AcpConnection {
 
   /**
    * Redeems a guest invitation. The connection keeps the token and replays the
-   * login before it resumes attached Sessions on a recovered transport.
+   * login before it rejoins its Sessions on a recovered transport.
    */
   login(token: string): Promise<void>
 
@@ -118,10 +118,10 @@ export interface AcpConnection {
     meta: z.infer<typeof AosSessionResumeResponseMetaSchema>
   }>
   /**
-   * Reads the page before `cursor` of a Session this connection has attached.
-   * Its updates come back here and never reach `onSessionUpdate` or the
+   * Reads the page before `cursor` of a Session this connection has resumed.
+   * Its updates come back here and never reach `subscribeSessionUpdates` or the
    * resume position, so a page cannot disturb the live turn. A recovering
-   * transport reattaches its Sessions first.
+   * transport rejoins its Sessions first.
    */
   resumePage(sessionId: string, cursor: string): Promise<AcpHistoryPage>
   /**
@@ -160,7 +160,7 @@ export interface AcpConnection {
   ): Promise<z.infer<typeof VisibilityUpdateResponseSchema>>
 
   /** `session/update` notifications for one Session, with `_meta.aos`. */
-  onSessionUpdate(
+  subscribeSessionUpdates(
     sessionId: string,
     listener: AcpSessionUpdateListener
   ): () => void
@@ -169,16 +169,18 @@ export interface AcpConnection {
    * Session can drop the transcript that replay is about to resend. A listener
    * may return a callback, called once that replay has settled either way.
    */
-  onSessionReplay(
+  subscribeSessionReplay(
     sessionId: string,
     listener: AcpSessionReplayListener
   ): () => void
   /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
-  onNotification(
+  subscribeNotification(
     method: string,
     listener: (params: unknown) => void
   ): () => void
-  onPendingRequest(listener: (request: AcpPendingRequest) => void): () => void
+  subscribePendingRequests(
+    listener: (request: AcpPendingRequest) => void
+  ): () => void
   /** Last `_meta.aos.sequence` seen for a Session's turn, for resume. */
   lastSequence(sessionId: string): { turnId: string; after: number } | undefined
   close(): void

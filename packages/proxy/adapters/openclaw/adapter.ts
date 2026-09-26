@@ -301,13 +301,13 @@ export class OpenClawServerAdapter implements ServerRuntime {
         },
         models: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           selection: "native-session",
           choices: "provider-reported",
         },
         context: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },

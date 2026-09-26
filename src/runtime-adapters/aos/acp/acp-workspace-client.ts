@@ -23,7 +23,7 @@ import type { AcpConnection } from "./types"
 
 /**
  * A burst of native catalog changes costs one `session/list` page. Rows the
- * browser has not attached learn their `unread`, `status`, and title only from
+ * browser has not resumed learn their `unread`, `status`, and title only from
  * a list, so an invalidation has to re-read one rather than patch a guess in.
  */
 const CATALOG_RELIST_DEBOUNCE_MS = 300
@@ -208,7 +208,7 @@ export function createAcpWorkspaceClient({
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 
-  connection.onNotification(
+  connection.subscribeNotification(
     AOS_METHODS.notify.catalogInvalidated,
     scheduleSessionRelist
   )
@@ -243,8 +243,9 @@ export function createAcpWorkspaceClient({
       revisions.set(agentId, result.agent.revision)
     },
     subscribeAgentCatalog: (listener: () => void) =>
-      connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () =>
-        listener()
+      connection.subscribeNotification(
+        AOS_METHODS.notify.catalogInvalidated,
+        () => listener()
       ),
 
     // Sessions
@@ -270,18 +271,18 @@ export function createAcpWorkspaceClient({
       store.observe(created.sessionId)
       remember(created.sessionId, created.meta.session)
       watchCreator(created.sessionId, agentId)
-      composer.attach(created.sessionId, {
+      composer.resume(created.sessionId, {
         configOptions: created.configOptions,
         capabilities: created.meta.capabilities,
       })
       return { sessionId: created.sessionId }
     },
     /**
-     * Attaches a Session: the proxy replays it and the workspace records the
+     * Resumes a Session: the proxy replays it and the workspace records the
      * capabilities, config options, and execution state it reports. Naming the
-     * owning Agent lets a deep link attach before any list.
+     * owning Agent lets a deep link resume before any list.
      */
-    async attachSession(
+    async resumeSession(
       sessionId: string,
       resume?: { replayFromStart?: boolean }
     ) {
@@ -296,7 +297,7 @@ export function createAcpWorkspaceClient({
       remember(sessionId, resumed.meta.session)
       watchCreator(sessionId, resumed.meta.session.agentId)
       store.setStatus(sessionId, resumed.meta.execution.status)
-      composer.attach(sessionId, {
+      composer.resume(sessionId, {
         configOptions: resumed.configOptions,
         capabilities: resumed.meta.capabilities,
       })
@@ -394,7 +395,7 @@ export function createAcpWorkspaceClient({
     agentIdOf: agentOf,
     /** Ownership for callers that can proceed without knowing it yet. */
     knownAgentIdOf: knownAgentOf,
-    /** The provider's newest Session title, once a Session is attached. */
+    /** The provider's newest Session title, once a Session is resumed. */
     sessionTitle: store.title,
   }
 

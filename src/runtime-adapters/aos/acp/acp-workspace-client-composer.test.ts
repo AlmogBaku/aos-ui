@@ -45,15 +45,18 @@ function configOptions(model: string, effort: string): SessionConfigOption[] {
 }
 
 /** The three connection seams the store uses; the rest is never reached. */
-function createStore({ attached = true } = {}) {
+function createStore({ resumed = true } = {}) {
   let onUpdate: AcpSessionUpdateListener = () => undefined
   let onReplay: AcpSessionReplayListener = () => undefined
   const connection = {
-    onSessionUpdate: (_: string, listener: AcpSessionUpdateListener) => {
+    subscribeSessionUpdates: (
+      _: string,
+      listener: AcpSessionUpdateListener
+    ) => {
       onUpdate = listener
       return () => undefined
     },
-    onSessionReplay: (_: string, listener: AcpSessionReplayListener) => {
+    subscribeSessionReplay: (_: string, listener: AcpSessionReplayListener) => {
       onReplay = listener
       return () => undefined
     },
@@ -63,12 +66,12 @@ function createStore({ attached = true } = {}) {
         : configOptions("sonnet", value),
   } as unknown as AcpConnection
   const store = createAcpComposerStore(connection)
-  const attach = () =>
-    store.attach(SESSION_ID, {
+  const resume = () =>
+    store.resume(SESSION_ID, {
       configOptions: configOptions("sonnet", "low"),
       capabilities: {} as never,
     })
-  if (attached) attach()
+  if (resumed) resume()
   const emit = (update: SessionUpdate, meta?: Record<string, unknown>) =>
     onUpdate(update, meta)
   const idle = (usage?: unknown, cost?: unknown) =>
@@ -84,7 +87,7 @@ function createStore({ attached = true } = {}) {
         ...(cost ? { cost } : {}),
       }
     )
-  return { store, emit, idle, attach, replay: () => onReplay() }
+  return { store, emit, idle, resume, replay: () => onReplay() }
 }
 
 const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 }
@@ -129,10 +132,10 @@ describe("createAcpComposerStore turn usage", () => {
   })
 
   it("keeps a reading that arrives before its resume answer settles", () => {
-    const { store, emit, attach } = createStore({ attached: false })
+    const { store, emit, resume } = createStore({ resumed: false })
     store.observe(SESSION_ID)
     emit({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
-    attach()
+    resume()
     expect(store.context(SESSION_ID)).toMatchObject({
       usedTokens: 120,
       maxTokens: 1_000,

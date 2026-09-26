@@ -444,7 +444,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       .union([
         z.strictObject({
           status: z.literal("available"),
-          scope: z.literal("attached-session"),
+          scope: z.literal("session"),
           commands: z.array(SlashCommandSchema).max(MAX_SLASH_COMMANDS),
         }),
         CapabilityUnavailableSchema,
@@ -457,7 +457,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     models: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-session"),
+        scope: z.literal("session"),
         selection: z.literal("native-session"),
         choices: z.literal("provider-reported"),
       }),
@@ -466,7 +466,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     context: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-session"),
+        scope: z.literal("session"),
         source: z.literal("provider-usage-or-estimate"),
         breakdown: z.literal("provider-categories"),
       }),
@@ -484,7 +484,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     activity: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-active-session"),
+        scope: z.literal("active-session"),
         coverage: z.literal("active-session-only"),
         source: z.literal("provider-session-state"),
       }),
@@ -564,7 +564,7 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
     attachments: z.union([
       z.strictObject({
         status: z.literal("available"),
-        scope: z.literal("attached-session"),
+        scope: z.literal("session"),
         inputs: z.tuple([z.literal("image"), z.literal("file")]),
         imageMimeTypes: z.union([
           z.array(z.string().min(1).max(256)).max(32),
@@ -777,14 +777,14 @@ export const SessionActivityResponseSchema = z.discriminatedUnion("status", [
   z.strictObject({
     status: z.literal("unavailable"),
     reason: z.enum([
-      "session-not-attached",
+      "session-not-resumed",
       "session-idle",
       "session-state-unavailable",
     ]),
   }),
   z.strictObject({
     status: z.literal("available"),
-    scope: z.literal("attached-active-session"),
+    scope: z.literal("active-session"),
     coverage: z.literal("active-session-only"),
     state: z.enum(["running", "waiting-for-input", "idle", "unknown"]),
   }),

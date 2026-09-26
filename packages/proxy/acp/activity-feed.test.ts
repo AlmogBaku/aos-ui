@@ -38,7 +38,7 @@ function harness(
   } = {}
 ) {
   let deliver: ((event: ExecutionEvent) => void) | undefined
-  const unobserve = vi.fn()
+  const unsubscribe = vi.fn()
   const listAllSessions = vi.fn(async () => ({
     sessions: options.sessions ?? [],
     total: options.sessions?.length ?? 0,
@@ -46,7 +46,7 @@ function harness(
     offset: 0,
   }))
   // The coordinator and the runtime are wide shared surfaces; the feed reads
-  // only the observer, the execution snapshot, and one catalog page.
+  // only the subscription, the execution snapshot, and one catalog page.
   const runtimeInstance = {
     id: "hermes-primary",
     runtime: {
@@ -55,9 +55,9 @@ function harness(
         `stored-${publicId}`,
     },
     sessions: {
-      observe: (listener: (event: ExecutionEvent) => void) => {
+      subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
         deliver = listener
-        return unobserve
+        return unsubscribe
       },
       snapshot: ({
         providerSessionId: sessionId,
@@ -77,7 +77,7 @@ function harness(
   return {
     feed,
     sessionRows,
-    unobserve,
+    unsubscribe,
     deliver: (event: ExecutionEvent) => deliver?.(event),
   }
 }
@@ -222,7 +222,7 @@ describe("createActivityFeed", () => {
   })
 
   it("stops observing and publishing after close", async () => {
-    const { deliver, feed, sessionRows, unobserve } = harness({
+    const { deliver, feed, sessionRows, unsubscribe } = harness({
       sessions: [session({ unread: true })],
     })
     await vi.waitFor(() => expect(feed.snapshot()).toHaveLength(1))
@@ -233,7 +233,7 @@ describe("createActivityFeed", () => {
     deliver(lifecycle("turn-started", "run-1"))
     sessionRows.rememberList([session({ unread: false })])
 
-    expect(unobserve).toHaveBeenCalledTimes(1)
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
     expect(seen).toEqual([])
     expect(feed.snapshot()).toHaveLength(1)
   })

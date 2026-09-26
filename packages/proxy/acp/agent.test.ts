@@ -27,7 +27,7 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import type { ServerTurnWatcher, ServerRuntime } from "../core/runtime"
+import type { ServerTurnListener, ServerRuntime } from "../core/runtime"
 import { translateHistory } from "./translate/history"
 import { invalidRequest } from "./validation"
 import {
@@ -2539,12 +2539,12 @@ describe("Session rooms", () => {
   })
 
   it("streams a turn the runtime started by itself to every open browser", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     let started = false
     const test = await harness({
       providerIds: true,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2689,7 +2689,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("shows a reload a turn the runtime started by itself once", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     // The turn stored rows before this proxy adopted it.
     const startedAt = Date.now() - 60_000
@@ -2697,7 +2697,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: storedLiveTurn(new Date(startedAt + 1_000).toISOString()),
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2724,7 +2724,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("resets a reload of a turn the runtime started at a time it does not report", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     const turns = [
       { handle: background, state: "running" as const, fromStart: true },
@@ -2732,7 +2732,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: storedLiveTurn(),
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2851,7 +2851,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("shows each turn once to a reload that lands as the next adopted turn starts", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const first = new EventSource()
     const next = new EventSource()
     const turns = [adopted(first), adopted(next)]
@@ -2863,7 +2863,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: page,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2977,7 +2977,7 @@ describe("History pages", () => {
       cwd: "/",
       replayFrom: { type: "start" },
     })
-    const attached = await test.agent.request(methods.agent.session.resume, {
+    const resumed = await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
     })
@@ -2985,7 +2985,7 @@ describe("History pages", () => {
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
       nextCursor: cursorOf(500),
     })
-    expect(attached._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
+    expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
     test.close()
   })
 
@@ -3181,7 +3181,7 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("serves a page only to a connection that attached the Session", async () => {
+  it("serves a page only to a connection that resumed the Session", async () => {
     const test = await harness({ transcript: conversation(1_200) })
     await test.list()
 
@@ -3353,7 +3353,7 @@ describe("History pages", () => {
   })
 
   it("cuts a turn streamed from its start off every older page it reaches", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     const startedAt = Date.now() - 60_000
     const at = (ms: number) => new Date(startedAt + ms).toISOString()
@@ -3373,7 +3373,7 @@ describe("History pages", () => {
     const test = await harness({
       providerIds: true,
       transcript,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },

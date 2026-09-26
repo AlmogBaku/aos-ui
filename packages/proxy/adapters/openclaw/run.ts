@@ -30,7 +30,7 @@ import {
   type ServerAttachmentStage,
   type ServerTurnEngine,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
 import * as ids from "../../core/ids"
@@ -1254,7 +1254,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
    * events arrive, and any found running when the subscription is set up or
    * reconciled after a reconnect.
    */
-  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     let stopped = false
     let lease: OpenClawSessionLease | undefined
     let retry: ReturnType<typeof setTimeout> | undefined
@@ -1268,13 +1268,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
         return
       announced = runId
-      watcher.onTurn()
+      listener.onTurn()
     }
     const check = async (current: OpenClawSessionLease, again: boolean) => {
       try {
         announce(uniqueActiveRunId(await this.#history(scope, current)), again)
       } catch (error) {
-        if (!stopped) watcher.onError(error)
+        if (!stopped) listener.onError(error)
       }
     }
     const subscribe = () => {
@@ -1294,7 +1294,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           },
           (error: unknown) => {
             if (stopped) return
-            watcher.onError(error)
+            listener.onError(error)
             retry = setTimeout(subscribe, WATCH_RETRY_MS)
           }
         )

@@ -27,7 +27,7 @@ import {
   ServerRequestStaleError,
   ServerTurnConflictError,
   type ServerAttachmentStage,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
 import type {
@@ -42,7 +42,7 @@ import { FanoutOverflowError } from "./subscriber-fanout"
  * have joined it. The coordinator already fans a turn's stream out to many
  * followers, so a channel only carries what the stream cannot: the prompt that
  * started the turn, and a nudge to reload when a member saw a prompt but missed
- * its reply. A channel with members also watches its Session, so a turn the
+ * its reply. A channel with members also subscribes to its Session, so a turn the
  * runtime starts by itself is adopted and streamed to every member like one of
  * their own.
  */
@@ -74,11 +74,11 @@ export type Channels = ReturnType<typeof createChannels>
 type ChannelTable = ReturnType<typeof createChannelTable>
 /** What lets a channel adopt a turn the runtime started by itself. */
 export type ChannelAdoption = {
-  watch(scope: SessionScope, watcher: ServerTurnWatcher): () => void
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener): () => void
   /** Adopts the runtime's running turn, if any, counted under `role`. */
   discover(scope: SessionScope, role: Role): Promise<unknown>
   /** The Session's execution feed. */
-  observe(
+  subscribeExecutions(
     scope: ChannelScope,
     listener: (event: ExecutionEvent) => void
   ): () => void
@@ -97,8 +97,8 @@ type Delivery = {
 type Channel = {
   turn?: ChannelTurn
   memberships: Map<MembershipDelivery, Delivery>
-  /** Ends the channel's watch and its execution feed. */
-  unwatch?: () => void
+  /** Ends the channel's turn subscription and its execution feed. */
+  unsubscribe?: () => void
   /** One adoption runs at a time; a trigger meanwhile asks for one more. */
   adopting?: boolean
   again?: boolean
@@ -339,18 +339,18 @@ function createChannelTable({
     void adopt(channel)
   }
 
-  function watch(scope: SessionScope, channel: Channel) {
+  function subscribe(scope: SessionScope, channel: Channel) {
     if (!adoption) return
-    const unobserve = adoption.observe(scope, (event) =>
+    const unsubscribeExecutions = adoption.subscribeExecutions(scope, (event) =>
       onExecution(channel, event)
     )
-    const unwatch = adoption.watch(scope, {
+    const unsubscribeTurns = adoption.subscribeTurns(scope, {
       onTurn: () => void adopt(channel),
       onError: (cause) => adopter(channel)?.[0].report(cause),
     })
-    channel.unwatch = () => {
-      unwatch()
-      unobserve()
+    channel.unsubscribe = () => {
+      unsubscribeTurns()
+      unsubscribeExecutions()
     }
   }
 
@@ -372,7 +372,7 @@ function createChannelTable({
         joined.memberships.delete(member)
         if (joined.memberships.size === 0 && channels.get(key) === joined) {
           channels.delete(key)
-          joined.unwatch?.()
+          joined.unsubscribe?.()
         }
       }
       if (joined.memberships.has(member)) return remove
@@ -382,9 +382,9 @@ function createChannelTable({
         fromChannel: false,
       }
       join(joined, member, delivery, options.hasPrompt)
-      // Watched once the first member joins, so a turn already running
+      // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
-      if (created) watch(scope, joined)
+      if (created) subscribe(scope, joined)
       return remove
     },
 
@@ -582,7 +582,7 @@ class Membership {
       report: (cause) => {
         if (this.#parted) return
         const failure = options.describe(cause)
-        this.#log("error", "acp.room.failed", {
+        this.#log("error", "channel.failed", {
           errorCode: failure.code,
           message: failure.message,
         })
@@ -590,7 +590,7 @@ class Membership {
     }
   }
 
-  /** The Session this member attaches, as its transport resolved it. */
+  /** The Session this member joined, as its transport resolved it. */
   get scope() {
     return this.#scope
   }
@@ -622,7 +622,7 @@ class Membership {
   }
 
   /**
-   * Attaches this member's view on resume. `read` gives the page a from-start
+   * Builds this member's view on resume. `read` gives the page a from-start
    * resume replays, which rebuilds the view first; without it the view keeps
    * what it holds up to `position`. Either way the member then joins the
    * channel and follows the live turn. Returns the page it replayed, and
@@ -686,7 +686,7 @@ class Membership {
   }
 
   /**
-   * Shows this member one older page of its Session. A page re-attaches
+   * Shows this member one older page of its Session. A page resumes
    * nothing: the view keeps its channel, follow, and reports, and learns
    * only where the next page starts. Beside a live turn the view streams from
    * its start, a turn longer than the newest page leaves its first rows on
@@ -900,12 +900,16 @@ class Membership {
       })
       // A request the Session resolves, through another member's answer or a
       // Stop, is withdrawn here so this member stops offering it.
-      const unobserve = this.#coordinator.observeScope(this.#scope, (event) => {
-        if (event.kind === "attention-resolved") this.#withdraw(event.requestId)
-      })
+      const unsubscribe = this.#coordinator.subscribeScope(
+        this.#scope,
+        (event) => {
+          if (event.kind === "attention-resolved")
+            this.#withdraw(event.requestId)
+        }
+      )
       this.#partChannel = () => {
         part()
-        unobserve()
+        unsubscribe()
       }
     } else if (replayed)
       this.#channels.rejoin(this.#scope, this.#delivery, { hasPrompt })
@@ -1236,7 +1240,7 @@ class Membership {
    * itself the Session from the start, which is what invalidation asks for.
    */
   async #resync(turnId: string, overflow: FanoutOverflowError) {
-    this.#log("error", "acp.fanout.detached", {
+    this.#log("error", "membership.detached", {
       membershipId: this.#options.membershipId,
       turnId,
       events: overflow.events,

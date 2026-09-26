@@ -104,9 +104,10 @@ export type ServerTurnEngine = {
     | undefined
   >
   /**
-   * Watches one Session for turns this adapter did not start: a subagent
-   * result, a loop tick, a heartbeat, cron, or another native client. Rules:
-   * - `onTurn` fires when such a turn starts, and whenever the watch
+   * Subscribes to one Session's turns that this adapter did not start: a
+   * subagent result, a loop tick, a heartbeat, cron, or another native client.
+   * Rules:
+   * - `onTurn` fires when such a turn starts, and whenever it
    *   (re)subscribes, at setup or after a reconnect or rebind, while one is
    *   running;
    * - it stays silent for the adapter's own turns; a foreign turn that starts
@@ -117,10 +118,10 @@ export type ServerTurnEngine = {
    *   failures through `onError`, never by throwing.
    * The returned stop function may be called more than once and ends retries.
    */
-  watch?(scope: SessionScope, watcher: ServerTurnWatcher): () => void
+  subscribeTurns?(scope: SessionScope, listener: ServerTurnListener): () => void
 }
 
-export type ServerTurnWatcher = {
+export type ServerTurnListener = {
   onTurn(): void
   onError(cause: unknown): void
 }

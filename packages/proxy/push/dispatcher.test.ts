@@ -79,13 +79,15 @@ type HarnessOptions = {
 function harness(options: HarnessOptions = {}) {
   const clock = createTestTimers(START)
   const observers = new Set<(event: ExecutionEvent) => void>()
-  const unobserve = vi.fn()
+  const unsubscribe = vi.fn()
   const runtimeInstance = {
     sessions: {
-      observe: vi.fn((listener: (event: ExecutionEvent) => void) => {
-        observers.add(listener)
-        return unobserve
-      }),
+      subscribeExecutions: vi.fn(
+        (listener: (event: ExecutionEvent) => void) => {
+          observers.add(listener)
+          return unsubscribe
+        }
+      ),
     },
   } as unknown as RuntimeInstance
 
@@ -134,7 +136,7 @@ function harness(options: HarnessOptions = {}) {
     registrations,
     send,
     logger,
-    unobserve,
+    unsubscribe,
     stored,
     publish(event: ExecutionEvent) {
       for (const observer of [...observers]) observer(event)
@@ -534,7 +536,7 @@ describe("push dispatcher", () => {
 
     test.dispatcher.close()
 
-    expect(test.unobserve).toHaveBeenCalledOnce()
+    expect(test.unsubscribe).toHaveBeenCalledOnce()
     test.clock.advance(60_000)
     expect(test.send).not.toHaveBeenCalled()
   })

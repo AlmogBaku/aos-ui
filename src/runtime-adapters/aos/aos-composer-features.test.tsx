@@ -15,18 +15,18 @@ function capabilities(): AosWorkspaceCapabilities {
     workspace: {
       slashCommands: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         commands: [{ name: "help" }],
       },
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -69,7 +69,7 @@ function capabilities(): AosWorkspaceCapabilities {
     content: {
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: ["image/png"],
         fileMimeTypes: "valid-type/subtype",
@@ -209,7 +209,7 @@ describe("AOS composer features", () => {
     )
 
     // A later reading is what the composer shows: the window grows with the
-    // conversation, so one read at attach time cannot stay correct.
+    // conversation, so one read at resume time cannot stay correct.
     reading = { ...reading, usedTokens: 4_400 }
     act(() => listeners.forEach((listener) => listener()))
 

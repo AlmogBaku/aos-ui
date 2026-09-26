@@ -470,7 +470,7 @@ describe("Hermes gateway response bounds", () => {
   it("faults the socket on an unreadable frame and leaves observers silent", async () => {
     const { gateway, sockets, factory } = harness()
     const observed = vi.fn()
-    gateway.onEvent(observed)
+    gateway.subscribeEvents(observed)
     await gateway.connect()
 
     const pending = gateway.request("profiles.list", {})
@@ -509,7 +509,7 @@ describe("Hermes gateway response bounds", () => {
   it("drops an oversized event frame and keeps delivering the next one", async () => {
     const { gateway, sockets } = harness()
     const observed = vi.fn()
-    gateway.onEvent(observed)
+    gateway.subscribeEvents(observed)
     await gateway.connect()
 
     sockets[0]!.deliverEvent({
@@ -541,7 +541,7 @@ describe("Hermes gateway event fan-out", () => {
   it("delivers each native frame exactly once after two redials", async () => {
     const { gateway, sockets, factory } = harness()
     const observed = vi.fn()
-    gateway.onEvent(observed)
+    gateway.subscribeEvents(observed)
     await gateway.connect()
 
     for (let generation = 0; generation < 3; generation += 1) {
@@ -568,7 +568,7 @@ describe("Hermes gateway event fan-out", () => {
     const { gateway, sockets } = harness()
     const turn = nativeTurn("live-a")
     const observed: unknown[] = []
-    gateway.onEvent((event) => {
+    gateway.subscribeEvents((event) => {
       observed.push(event)
     })
     await gateway.connect()
@@ -679,7 +679,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const restored = vi.fn()
     const lost = vi.fn()
     const { gateway, sockets, factory } = harness()
-    gateway.onConnection({ restored, lost })
+    gateway.subscribeConnection({ restored, lost })
     await gateway.connect()
     sockets[0]!.deliverReady({ replay_epoch: "e1" })
     await flush()
@@ -704,7 +704,7 @@ describe("Hermes gateway heartbeat and redial", () => {
       backoff: { jitter: false },
       healGraceMs: 20_000,
     })
-    gateway.onConnection({ restored, lost })
+    gateway.subscribeConnection({ restored, lost })
     await gateway.connect()
     control.autoOpen = false
 
@@ -728,7 +728,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const epochChanged = vi.fn()
     const restored = vi.fn()
     const { gateway, sockets } = harness()
-    gateway.onConnection({ restored, epochChanged })
+    gateway.subscribeConnection({ restored, epochChanged })
     await gateway.connect()
     sockets[0]!.deliverReady({ replay_epoch: "e1" })
     await flush()
@@ -752,7 +752,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const epochChanged = vi.fn()
     const restored = vi.fn()
     const { gateway, sockets } = harness()
-    gateway.onConnection({ restored, epochChanged })
+    gateway.subscribeConnection({ restored, epochChanged })
     await gateway.connect()
     sockets[0]!.deliverReady({ replay_epoch: "e1" })
     await flush()
@@ -772,7 +772,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const epochChanged = vi.fn()
     const restored = vi.fn()
     const { gateway } = harness()
-    gateway.onConnection({ restored, epochChanged })
+    gateway.subscribeConnection({ restored, epochChanged })
     await gateway.connect()
     await flush()
 
@@ -876,7 +876,7 @@ describe("Hermes gateway heartbeat and redial", () => {
       releaseRestore = resolve
     })
     const restored = vi.fn(() => restoreDone)
-    gateway.onConnection({ restored })
+    gateway.subscribeConnection({ restored })
 
     const parked = gateway.request("profiles.list", {})
     await vi.waitFor(() => expect(sockets).toHaveLength(1))
@@ -899,7 +899,9 @@ describe("Hermes gateway heartbeat and redial", () => {
 
   it("writes a parked request even when a restored handler rejects", async () => {
     const { gateway, sockets, log } = harness({ autoOpen: false })
-    gateway.onConnection({ restored: () => Promise.reject(new Error("boom")) })
+    gateway.subscribeConnection({
+      restored: () => Promise.reject(new Error("boom")),
+    })
 
     const parked = gateway.request("profiles.list", {})
     await vi.waitFor(() => expect(sockets).toHaveLength(1))
@@ -922,8 +924,8 @@ describe("Hermes gateway lifecycle and server requests", () => {
     const { gateway, sockets, factory } = harness({ autoOpen: false })
     const observed = vi.fn()
     const restored = vi.fn()
-    gateway.onEvent(observed)
-    gateway.onConnection({ restored })
+    gateway.subscribeEvents(observed)
+    gateway.subscribeConnection({ restored })
 
     const dial = gateway.connect()
     await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1))
@@ -954,7 +956,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     const { gateway, sockets } = harness()
     await gateway.connect()
     const declined = vi.fn(() => false as const)
-    gateway.onRequest(declined)
+    gateway.subscribeRequests(declined)
 
     sockets[0]!.deliver({
       id: "srq-000000000001",
@@ -988,7 +990,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     const { gateway, sockets } = harness()
     await gateway.connect()
     const claimed: Array<{ id: string; replayed?: boolean }> = []
-    gateway.onRequest((request) => {
+    gateway.subscribeRequests((request) => {
       claimed.push({ id: request.id, replayed: request.replayed })
       return true
     })
@@ -1018,7 +1020,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     const { gateway, sockets } = harness()
     await gateway.connect()
     const handled = vi.fn(() => true)
-    const stop = gateway.onRequest(handled)
+    const stop = gateway.subscribeRequests(handled)
 
     sockets[0]!.deliver({
       id: "srq-000000000004",

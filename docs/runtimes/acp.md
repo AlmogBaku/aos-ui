@@ -13,8 +13,8 @@ by both ends; nothing else defines these shapes.
 
 The proxy upgrades a GET request to a WebSocket at:
 
-- `/api/aos/v1/acp` — operator lane (`AOS_ACP_OPERATOR_PATH`, `acp.ts:25`)
-- `/api/guest/v1/acp` — guest lane (`AOS_ACP_GUEST_PATH`, `acp.ts:26`), authenticated with the invitation token via `auth/login`
+- `/api/aos/v1/acp` — operator listener (`AOS_ACP_OPERATOR_PATH`, `acp.ts:25`)
+- `/api/guest/v1/acp` — guest listener (`AOS_ACP_GUEST_PATH`, `acp.ts:26`), authenticated with the invitation token via `auth/login`
 
 The response carries an `Acp-Connection-Id` header. One socket per browser tab
 is the current topology; there is no SharedWorker multiplexing. The browser
@@ -51,11 +51,11 @@ transport recovery before resuming sessions.
 }
 ```
 
-`auth/login` for the guest lane uses `methodId: "aos-invite"` (`AOS_AUTH_METHOD_INVITE`,
+`auth/login` for the guest listener uses `methodId: "aos-invite"` (`AOS_AUTH_METHOD_INVITE`,
 `acp.ts:29`) and carries the invitation token in `_meta.aos.token`
 (`AosLoginMetaSchema`, `acp.ts:123-125`).
 
-## Guest lane
+## Guest listener
 
 A guest connection reaches nothing but `initialize` and `auth/login` until it
 redeems an invitation (`packages/proxy/guest/acp.ts`). Its `initialize` omits
@@ -70,7 +70,7 @@ closes the socket instead of being written. A timer also closes the connection
 at expiry; it re-arms in steps of at most 2^31−1 ms, the longest delay one
 timer holds (`guest/acp.ts:65`, `:102-107`).
 
-The guest lane advertises (`GUEST_EXTENSIONS`, `guest/acp.ts:51-62`):
+The guest listener advertises (`GUEST_EXTENSIONS`, `guest/acp.ts:51-62`):
 
 | Extension         | Guest   |
 | ----------------- | ------- |
@@ -154,7 +154,7 @@ Agent before listing. `after` is the last `sequence` the client observed for
 `turnId`. `resync: true` on the response means `after` was beyond bounded
 replay; resume again with `replayFrom: { type: "start" }`.
 
-`replayFrom` is absent (attach without replay), `{ type: "start" }`, or the
+`replayFrom` is absent (resume without replay), `{ type: "start" }`, or the
 `_aos/before` older-page variant described under
 [Older history pages](#older-history-pages). As ACP asks of a receiver that
 does not understand a cursor, the proxy rejects every other `replayFrom` type,
@@ -213,9 +213,9 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   beginning. `truncated: true` with no cursor means the proxy's bound stopped
   the reading, or the runtime's own reach did, and the thread says earlier
   messages can't be loaded.
-- A page is read only for a Session this connection is attached to, whether by
+- A page is read only for a Session this connection has resumed, whether by
   a resume, `session/new`, or a prompt, one at a time per Session. It never
-  re-attaches, restates configuration or usage, or reports execution. A cursor that does not decode, or points past the
+  resumes, restates configuration or usage, or reports execution. A cursor that does not decode, or points past the
   history, is invalid params.
 - An accepted rewind deletes the newest rows, so it marks the browser's cursor
   stale and drops a page still loading; the next load resumes from `start`
@@ -283,7 +283,7 @@ as a `running` update followed by an `_aos_error` idle update for the same
 | `_aos/steer_accepted`      | server→client | Replayable steering acknowledgement                                                                                                                                                                                                                                                                                                          |
 | `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command                                                                                                                                                                                                                                                                                                   |
 | `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)                                                                                                                                                                                                                                                                                                   |
-| `_aos/session_invalidated` | server→client | The proxy dropped this connection's live subscriber for the Session because it fell behind its event/byte bounds (`acp.fanout.detached` in the log), so what the browser holds is incomplete. The browser re-resumes the Session with `replayFrom: { type: "start" }`. Session row changes still reach the browser as `session_info_update`. |
+| `_aos/session_invalidated` | server→client | The proxy dropped this connection's live subscriber for the Session because it fell behind its event/byte bounds (`membership.detached` in the log), so what the browser holds is incomplete. The browser re-resumes the Session with `replayFrom: { type: "start" }`. Session row changes still reach the browser as `session_info_update`. |
 | `_aos/error`               | server→client | Connection-level failure with no request to answer                                                                                                                                                                                                                                                                                           |
 
 #### `_aos/activity` union (`acp.ts:466-493`)
@@ -325,7 +325,7 @@ proxy-side descriptor behind it is `AosArtifactDescriptorSchema`
 The browser fetches the bytes from the artifact route of the Session it is
 viewing: a same-origin
 `GET /api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` on
-the operator lane, or the `/api/guest/v1/...` mirror with the guest's
+the operator listener, or the `/api/guest/v1/...` mirror with the guest's
 invitation token as a Bearer `Authorization` header. The proxy resolves the id only against that Session's own
 provider history.
 
@@ -364,7 +364,7 @@ The proxy returns these vendor error codes beyond the standard JSON-RPC set
 
 | Code     | Name                     | Meaning                                      |
 | -------- | ------------------------ | -------------------------------------------- |
-| `-32001` | `authenticationRequired` | No valid invitation token (guest lane)       |
+| `-32001` | `authenticationRequired` | No valid invitation token (guest listener)   |
 | `-32002` | `turnInProgress`         | Cannot send while a turn is active           |
 | `-32003` | `staleRequest`           | Request ID no longer valid                   |
 | `-32004` | `notFound`               | Agent or Session does not exist              |
@@ -387,7 +387,7 @@ The proxy returns these vendor error codes beyond the standard JSON-RPC set
 | `POST` | `/api/aos/v1/agents/:agentId/audio/speak`                               | Text → audio             |
 | `POST` | `/api/aos/v1/guest-invitations`                                         | Issue a guest invitation |
 
-Guest-lane mirrors under `/api/guest/v1/` (authenticated with the invitation
+Guest-listener mirrors under `/api/guest/v1/` (authenticated with the invitation
 token, scoped to the invited Agent and Session):
 
 | Method | Path                                                                      | Purpose              |

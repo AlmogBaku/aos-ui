@@ -121,18 +121,18 @@ export const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -574,7 +574,7 @@ export type HarnessOptions = {
   ) => Promise<CreateElicitationResponse>
   discover?: ServerTurnEngine["discover"]
   /** Stands for a runtime that reports the turns it starts by itself. */
-  watch?: ServerTurnEngine["watch"]
+  subscribeTurns?: ServerTurnEngine["subscribeTurns"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -813,17 +813,17 @@ export async function harness(options: HarnessOptions = {}) {
     options.now ? { now: options.now } : undefined
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
-  const { watch } = options
+  const { subscribeTurns } = options
   const channels = createChannels({
     snapshot: (channelScope) => coordinator.snapshot(channelScope),
-    ...(watch
+    ...(subscribeTurns
       ? {
           adoption: {
-            watch,
+            subscribeTurns,
             discover: (channelScope, role) =>
               coordinator.discover(channelScope, role),
-            observe: (channelScope, listener) =>
-              coordinator.observeScope(channelScope, listener),
+            subscribeExecutions: (channelScope, listener) =>
+              coordinator.subscribeScope(channelScope, listener),
           },
         }
       : {}),
@@ -1046,7 +1046,7 @@ export function reply(source: EventSource | undefined, text: string) {
 export const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 /**
- * Streams one reply, ending its turn only once every watcher saw it live: a
+ * Streams one reply, ending its turn only once every member saw it live: a
  * browser the channel brings in late must still find the turn running.
  */
 export async function replyWhileWatched(
@@ -1090,7 +1090,7 @@ export function chunk(
 }
 
 /**
- * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * Starts one turn and streams its first chunk, `Live`, until every member
  * has seen it. Returns the prompt's message id.
  */
 export async function liveTurn(

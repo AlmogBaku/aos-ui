@@ -52,6 +52,26 @@ describe("vocabulary", () => {
       "src/runtime-adapters/aos/**",
       "src/runtime-adapters/queue/**",
     ].map((scope) => ({ ...sessionId, scope })),
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "src/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired:
+        /\bonSessionUpdate\b|\bonSessionReplay\b|\bonPendingRequest\b|\bonAosNotification\b|\bonPermissionChange\b/u,
+      scope: "src/**",
+      reason:
+        "our own listening function is `subscribe…` and returns its unsubscribe function",
+    },
+    {
+      retired:
+        /\battachSession\b|\bresumeAttached\b|\battachedSessions?\b|\battachedSessionId\b|\breattached\b/u,
+      scope: "src/**",
+      reason:
+        "a Session a connection follows is resumed, and a new transport rejoins it; an attachment is a file",
+    },
   ]
 
   it("keeps retired names out of the browser", async () => {

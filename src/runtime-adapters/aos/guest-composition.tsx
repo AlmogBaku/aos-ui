@@ -314,7 +314,7 @@ function GuestVoiceState({
   useEffect(() => {
     media.setScope(scopeId)
     media.setSafelyIdle(!running)
-    // Voice belongs to the attached Session, so it waits for its capabilities.
+    // Voice belongs to the resumed Session, so it waits for its capabilities.
     if (!capabilities) return
     media.setAvailability(scopeId, {
       transcription:
@@ -369,11 +369,11 @@ function ReadyGuestAosSurface({
     [connection]
   )
   const media = useMemo(() => new VoiceMediaController(), [])
-  // The invited Session reports what it supports only once it is attached.
+  // The invited Session reports what it supports only once it is resumed.
   const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
-  const attach = useCallback(
-    async (attachedId: string) => {
-      const resumed = await connection.resumeSession(attachedId, {
+  const resume = useCallback(
+    async (resumedId: string) => {
+      const resumed = await connection.resumeSession(resumedId, {
         replayFromStart: true,
       })
       setCapabilities(resumed.meta.capabilities)
@@ -425,7 +425,7 @@ function ReadyGuestAosSurface({
     approvals,
     sessionId,
     agentId,
-    attach,
+    resume,
     stageAttachments,
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,

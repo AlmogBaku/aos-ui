@@ -45,7 +45,7 @@ function elicitationContent(
 export function createAcpInteractions({
   connection,
 }: {
-  connection: Pick<AcpConnection, "onPendingRequest">
+  connection: Pick<AcpConnection, "subscribePendingRequests">
 }): RuntimeInteractionAdapter {
   const entries = new Map<string, PendingEntry>()
   const listeners = new Map<string, Set<() => void>>()
@@ -89,7 +89,7 @@ export function createAcpInteractions({
     return entry.pending
   }
 
-  connection.onPendingRequest((pending) => {
+  connection.subscribePendingRequests((pending) => {
     if (pending.kind !== "elicitation") return
     // Request-scoped elicitations belong to no Session the operator can see.
     const sessionId = pending.sessionId

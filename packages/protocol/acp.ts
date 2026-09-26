@@ -230,7 +230,7 @@ export type AosHistoryCursor = z.infer<typeof AosHistoryCursorSchema>
 
 /**
  * `ResumeSessionResponse._meta.aos` for a `_aos/before` page read: only the
- * cursor, since a page read never re-attaches.
+ * cursor, since a page read never resumes.
  */
 export const AosHistoryPageResponseMetaSchema = readObject({
   history: AosHistoryCursorSchema,

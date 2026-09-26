@@ -166,7 +166,7 @@ export type MemberEncoderOptions = {
   context: AcpConnectionContext
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
-  /** The membership a request is open on, while the Session is attached. */
+  /** The membership a request is open on, while the Session is resumed. */
   membership(sessionId: string): Membership | undefined
   /** Gives one answer through the member's stack. */
   answer(command: MemberCommands["answer"]): Promise<void>
@@ -243,8 +243,8 @@ export function createMemberEncoder({
 
   /** The open request one answer belongs to. */
   function answering(sessionId: string, requestId: string) {
-    const attached = membership(sessionId)
-    return attached && { request: attached.request(requestId) }
+    const resumed = membership(sessionId)
+    return resumed && { request: resumed.request(requestId) }
   }
 
   async function askPermission(

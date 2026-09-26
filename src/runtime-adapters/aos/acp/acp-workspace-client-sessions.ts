@@ -21,11 +21,11 @@ import type {
   TodoItem,
   WorkspaceActivityEvent,
 } from "../../contracts"
-import { onAosNotification } from "./aos-notification"
+import { subscribeAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 
 /**
- * Everything the workspace learns by observing the connection: the Session row
+ * Everything the workspace learns by subscribing to the connection: the Session row
  * cache, execution status, Session Todos, workspace activity, and read state.
  * Writes live in the client facade; this module only reads and publishes.
  */
@@ -39,7 +39,7 @@ type MetadataSubscription = {
 export type AcpSessionStoreOptions = {
   connection: AcpConnection
   now?: () => number
-  /** A live turn of an attached Session just stopped, however it ended. */
+  /** A live turn of a resumed Session just stopped, however it ended. */
   onTurnFinished?: (sessionId: string) => void
 }
 
@@ -182,7 +182,7 @@ export function createAcpSessionStore({
     for (const listener of activityListeners) listener(event)
   }
 
-  /** Tells a Session's observers to re-read what the provider now holds. */
+  /** Tells a Session's listeners to re-read what the provider now holds. */
   function invalidate(sessionId: string) {
     for (const listener of invalidationListeners.get(sessionId) ?? [])
       listener()
@@ -234,13 +234,14 @@ export function createAcpSessionStore({
     }
   }
 
-  /** Attached Sessions stream their own status, Todos, and row changes. */
+  /** Resumed Sessions stream their own status, Todos, and row changes. */
   function observe(sessionId: string) {
     if (observed.has(sessionId)) return
-    const offUpdates = connection.onSessionUpdate(sessionId, (update, meta) =>
-      acceptUpdate(sessionId, update, meta)
+    const offUpdates = connection.subscribeSessionUpdates(
+      sessionId,
+      (update, meta) => acceptUpdate(sessionId, update, meta)
     )
-    const offReplays = connection.onSessionReplay(sessionId, () =>
+    const offReplays = connection.subscribeSessionReplay(sessionId, () =>
       holdReplayedStatus(sessionId)
     )
     observed.set(sessionId, () => {
@@ -249,7 +250,7 @@ export function createAcpSessionStore({
     })
   }
 
-  onAosNotification(
+  subscribeAosNotification(
     connection,
     AOS_METHODS.notify.activity,
     AosActivityNotificationSchema,
@@ -261,7 +262,7 @@ export function createAcpSessionStore({
     }
   )
 
-  onAosNotification(
+  subscribeAosNotification(
     connection,
     AOS_METHODS.notify.sessionInvalidated,
     AosSessionInvalidatedNotificationSchema,
@@ -272,7 +273,7 @@ export function createAcpSessionStore({
     observe,
     put,
     rowsFor,
-    /** The provider's title, as a list page or an attached Session reports it. */
+    /** The provider's title, as a list page or a resumed Session reports it. */
     setTitle: (sessionId: string, title: string) =>
       titles.set(sessionId, title),
     /** The proxy's read state, or the operator's own optimistic ack. */

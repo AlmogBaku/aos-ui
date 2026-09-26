@@ -44,7 +44,7 @@ export type PushPlatform = {
    * Bridges worker messages. `reply` answers the port the worker handed this
    * window, which is how a notification click learns a window took it.
    */
-  onMessage(
+  subscribeMessages(
     listener: (data: unknown, reply?: (answer: unknown) => void) => void
   ): () => void
 }
@@ -258,7 +258,7 @@ export function createPushSubscriptionManager({
     },
     listen(listener) {
       listeners.add(listener)
-      bridge ??= platform.onMessage((data, reply) => {
+      bridge ??= platform.subscribeMessages((data, reply) => {
         const message = openMessageSchema.safeParse(data)
         if (!message.success || message.data.type !== OPEN_MESSAGE_TYPE) return
         // Answered before the observers run: the worker is waiting to hear that
@@ -332,7 +332,7 @@ export function createBrowserPushPlatform(): PushPlatform {
         applicationServerKey: decodeApplicationServerKey(applicationServerKey),
       })
     },
-    onMessage(listener) {
+    subscribeMessages(listener) {
       // A browser without a worker container has nothing to bridge.
       const workers =
         typeof navigator === "undefined" ? undefined : navigator.serviceWorker

@@ -389,7 +389,7 @@ export class HermesServerAdapter implements ServerRuntime {
       this.#mcpToolNames = apps.names
     }
     const requireSession = (agentId: string, publicSessionId: string) =>
-      this.#requireAttachedSession(agentId, publicSessionId)
+      this.#requireResumedSession(agentId, publicSessionId)
     this.#workspace = createHermesWorkspaceOperations({
       authority: { requireSession },
       transport: {
@@ -481,49 +481,50 @@ export class HermesServerAdapter implements ServerRuntime {
         resume: (scope) => this.#resumeNative(scope),
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
       },
-      // The registry requires observation, so a transport that cannot observe
-      // is adapted here rather than silently skipped there: such a transport
-      // serves only the read-only surfaces, and no turn can attach through it.
+      // The registry requires event subscriptions, so a transport that cannot
+      // subscribe is adapted here rather than silently skipped there: such a
+      // transport serves only the read-only surfaces, and no turn can attach
+      // through it.
       {
         // Every observed `session.info` is retained on its way through, so a
         // workspace read never answers from the attach-time snapshot.
-        onEvent: (listener) =>
-          transport.onEvent?.((event) => {
+        subscribeEvents: (listener) =>
+          transport.subscribeEvents?.((event) => {
             this.#retainObservedInfo(event)
             listener(event)
           }) ?? (() => undefined),
-        onConnection: (handler) =>
-          transport.onConnection?.(handler) ?? (() => undefined),
+        subscribeConnection: (handler) =>
+          transport.subscribeConnection?.(handler) ?? (() => undefined),
       },
       { idleMs: options.sessionIdleMs, log: options.log }
     )
     // `refresh` must reach the registry: a caller reconciling a Session (an
     // interactions `resume`) needs Hermes' own answer, whose `open_requests`
     // re-deliver whatever is still waiting on it.
-    const ensureAttached = async (
+    const ensureResumed = async (
       scope: HermesTurnScope,
-      attach: { refresh?: boolean } = {}
+      resume: { refresh?: boolean } = {}
     ) => ({
-      liveSessionId: (await this.#attachments.ensure(scope, attach))
+      liveSessionId: (await this.#attachments.ensure(scope, resume))
         .liveSessionId,
-      running: this.#attachedRunning(scope.agentId, scope.providerSessionId),
+      running: this.#resumedRunning(scope.agentId, scope.providerSessionId),
       info: this.#retainedInfo(scope.agentId, scope.providerSessionId)?.info,
     })
     this.interactions = new HermesInteractions(
       {
         // A transport that cannot carry server→client requests answers none:
         // read-only surfaces still work, no interaction is ever presented.
-        onRequest: (handler) =>
-          transport.onRequest?.(handler) ?? (() => undefined),
-        onEvent: (listener) =>
-          transport.onEvent?.(listener) ?? (() => undefined),
+        subscribeRequests: (handler) =>
+          transport.subscribeRequests?.(handler) ?? (() => undefined),
+        subscribeEvents: (listener) =>
+          transport.subscribeEvents?.(listener) ?? (() => undefined),
         // Only the gateway knows its socket; a transport that cannot say is
         // taken at its word when a write does not throw.
         connected: () => transport.connected?.() ?? true,
         request: (method, params) => transport.request(method, params),
       },
       {
-        ensure: ensureAttached,
+        ensure: ensureResumed,
         retain: (scope, reason) => this.#attachments.retain(scope, reason),
         scopeFor: (liveSessionId) => this.#attachments.scopeFor(liveSessionId),
       },
@@ -532,7 +533,7 @@ export class HermesServerAdapter implements ServerRuntime {
     this.native = new HermesNativeRuntime({
       transport,
       attachments: {
-        ensure: ensureAttached,
+        ensure: ensureResumed,
         retain: (scope, reason) => this.#attachments.retain(scope, reason),
         subscribeLive: (liveSessionId, observer) =>
           this.#attachments.subscribeLive(liveSessionId, observer),
@@ -768,11 +769,11 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
-  async #requireAttachedSession(agentId: string, publicSessionId: string) {
+  async #requireResumedSession(agentId: string, publicSessionId: string) {
     const storedId = storedSessionIdentity(agentId, publicSessionId)
     if (!storedId) throw new HermesSessionNotFoundError()
     await this.getSession(agentId, storedId)
-    const attached = await this.#attachments.ensure({
+    const binding = await this.#attachments.ensure({
       agentId,
       providerSessionId: storedId,
       sessionId: publicSessionId,
@@ -784,9 +785,9 @@ export class HermesServerAdapter implements ServerRuntime {
     return {
       agentId,
       providerSessionId: publicSessionId,
-      liveSessionId: attached.liveSessionId,
-      attached: true,
-      active: this.#attachedRunning(agentId, storedId),
+      liveSessionId: binding.liveSessionId,
+      resumed: true,
+      active: this.#resumedRunning(agentId, storedId),
       usage: info?.usage,
       info: info ?? resumed,
     }
@@ -796,7 +797,7 @@ export class HermesServerAdapter implements ServerRuntime {
    * Last known native turn state of a bound Session, from the authoritative
    * `session.resume` payload the registry recorded.
    */
-  #attachedRunning(agentId: string, sessionId: string) {
+  #resumedRunning(agentId: string, sessionId: string) {
     const resumed = this.#attachmentInfo.get(
       attachmentInfoKey(agentId, sessionId)
     )
@@ -851,7 +852,7 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       slashCommands = {
         status: "available" as const,
-        scope: "attached-session" as const,
+        scope: "session" as const,
         commands: await this.slashCommands(agentId, publicSessionId),
       }
     } catch {
@@ -1237,16 +1238,16 @@ export class HermesServerAdapter implements ServerRuntime {
    * through the per-Session attachment routing.
    */
   async subscribeCatalogChanges(listener: () => void) {
-    if (!this.transport.onEvent) throw new HermesUnavailableError()
-    // A lost connection is not a catalog change, and this observer survives it:
+    if (!this.transport.subscribeEvents) throw new HermesUnavailableError()
+    // A lost connection is not a catalog change, and this listener survives it:
     // the next authoritative read reconciles whatever was missed.
-    return this.transport.onEvent((event) => {
+    return this.transport.subscribeEvents((event) => {
       if (isRecord(event) && event.type === "sessions.changed") listener()
     })
   }
 
   async slashCommands(agentId: string, publicSessionId: string) {
-    const scope = await this.#requireAttachedSession(agentId, publicSessionId)
+    const scope = await this.#requireResumedSession(agentId, publicSessionId)
     try {
       return await nativeSlashCommands(this.transport, {
         session_id: scope.liveSessionId,

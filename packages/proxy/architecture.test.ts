@@ -220,6 +220,32 @@ describe("vocabulary", () => {
       reason:
         "one principal's connections, for push, are its `Presence`; `Principal` is the member's",
     },
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "packages/protocol/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired:
+        /\bServerTurnWatcher\b|\bobserveScope\b|\bonPendingRequest\b|\bonConnection\b|\bunobserve\b|\bunwatch\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "our own listening function is `subscribe…` and returns its unsubscribe function",
+    },
+    {
+      retired:
+        /\bensureAttached\b|#requireAttachedSession\b|#attachedRunning\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session a connection follows is resumed, not attached; an attachment is a file",
+    },
   ]
 
   it("keeps retired names out of the proxy and the protocol", async () => {

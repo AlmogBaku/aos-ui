@@ -148,20 +148,20 @@ function ReadyAosRuntimeProvider({
     [locale]
   )
   // A Session's capabilities, config options, and usage exist only once it is
-  // attached, so the composition reads them from the Session it has attached.
-  const [attachedSessions, setAttachedSessions] = useState<ReadonlySet<string>>(
+  // resumed, so the composition reads them from the Session it has resumed.
+  const [resumedSessions, setResumedSessions] = useState<ReadonlySet<string>>(
     new Set()
   )
-  // The workspace client records what an attach reports, so it performs it.
-  const attach = useCallback(
+  // The workspace client records what a resume reports, so it performs it.
+  const resume = useCallback(
     async (sessionId: string) => {
-      const attached = await client.attachSession(sessionId, {
+      const resumed = await client.resumeSession(sessionId, {
         replayFromStart: true,
       })
-      setAttachedSessions((previous) =>
+      setResumedSessions((previous) =>
         previous.has(sessionId) ? previous : new Set(previous).add(sessionId)
       )
-      return attached
+      return resumed
     },
     [client]
   )
@@ -233,7 +233,7 @@ function ReadyAosRuntimeProvider({
         isDisabled: !agentId,
         enableMessageQueue: Boolean(remoteId),
         adapters: { attachments, ...mediaAdapters },
-        attach,
+        resume,
         resolveSessionId,
         stageAttachments,
         messageRewind: rewindSource,
@@ -247,7 +247,7 @@ function ReadyAosRuntimeProvider({
     },
     [
       approvals,
-      attach,
+      resume,
       attachments,
       client,
       connection,
@@ -376,11 +376,11 @@ function ReadyAosRuntimeProvider({
     : undefined
   const selectedDraftId = selectedDraft?.[0]
   const mediaScopeId = selectedSessionId ?? selectedDraftId
-  const attachedSessionId =
-    selectedSessionId && attachedSessions.has(selectedSessionId)
+  const resumedSessionId =
+    selectedSessionId && resumedSessions.has(selectedSessionId)
       ? selectedSessionId
       : undefined
-  const capabilities = useAosSessionCapabilities(client, attachedSessionId)
+  const capabilities = useAosSessionCapabilities(client, resumedSessionId)
   const selectedSessionStatus = useSyncExternalStore(
     useCallback(
       (listener) =>
@@ -396,7 +396,7 @@ function ReadyAosRuntimeProvider({
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    attachedSessionId,
+    resumedSessionId,
     capabilities
   )
   const capabilitiesReady = capabilities !== undefined

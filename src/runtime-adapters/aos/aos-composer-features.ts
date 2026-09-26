@@ -138,9 +138,9 @@ export function useAosComposerFeatures(
 ): ComposerFeatureViewModel {
   const slashCommands = useAosSlashCommands(capabilities)
   const [models, setModels] = useState<AosModelChoices>()
-  // Usage is pushed, not polled: the provider restates it on every attach, every
+  // Usage is pushed, not polled: the provider restates it on every resume, every
   // settled turn, and every model change, so the composer reads the newest one
-  // rather than whatever a single read at attach time happened to catch.
+  // rather than whatever a single read at resume time happened to catch.
   const subscribeContext = useCallback(
     (listener: () => void) =>
       sessionId

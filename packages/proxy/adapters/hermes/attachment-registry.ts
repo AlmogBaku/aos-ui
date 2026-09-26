@@ -56,7 +56,7 @@ type RegistryNative = {
  * silently skipped.
  */
 type RegistryGateway = Required<
-  Pick<HermesRpcTransport, "onEvent" | "onConnection">
+  Pick<HermesRpcTransport, "subscribeEvents" | "subscribeConnection">
 >
 
 type Entry = {
@@ -148,8 +148,8 @@ export class HermesAttachmentRegistry {
     this.#closeFlushMs = options.closeFlushMs ?? 1_000
     this.#now = options.now ?? Date.now
     this.#log = options.log
-    this.#stopEvents = gateway.onEvent((event) => this.#route(event))
-    this.#stopConnection = gateway.onConnection({
+    this.#stopEvents = gateway.subscribeEvents((event) => this.#route(event))
+    this.#stopConnection = gateway.subscribeConnection({
       restored: () => this.rebindAll(),
       lost: () => this.#reportLoss("disconnected"),
       epochChanged: () => this.#restart(),

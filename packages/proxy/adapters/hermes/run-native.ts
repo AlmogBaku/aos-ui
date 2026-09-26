@@ -127,7 +127,7 @@ export type HermesResumed = {
 
 export interface HermesTurnNative {
   resume(scope: HermesTurnScope): Promise<HermesResumed>
-  observe(
+  subscribeLive(
     liveSessionId: string,
     observer: AttachmentObserver
   ): Promise<() => void>
@@ -147,7 +147,7 @@ export interface HermesTurnNative {
   inspectExecution(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
@@ -170,7 +170,7 @@ export type HermesNativeAttachments = {
 
 /** The interaction surface `run-native.ts` depends on (`HermesInteractions`). */
 export type HermesNativeInteractions = {
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
@@ -347,7 +347,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     return this.#attachments.ensure(scope)
   }
 
-  async observe(liveSessionId: string, observer: AttachmentObserver) {
+  async subscribeLive(liveSessionId: string, observer: AttachmentObserver) {
     try {
       // The registry owns the single native subscription and routes frames by
       // live Session; a caller that never attached has nothing to observe.
@@ -617,11 +617,11 @@ export class HermesNativeRuntime implements HermesTurnNative {
    * Session with a pending request addressable, so a run only asks to be told
    * when one is raised on its Session.
    */
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ) {
-    return this.#interactions.onPendingRequest(scope, listener)
+    return this.#interactions.subscribePendingRequests(scope, listener)
   }
 
   async respondInteractions(

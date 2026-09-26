@@ -44,18 +44,18 @@ function capabilities(): AcpCapabilities {
     workspace: {
       slashCommands: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         commands: [{ name: "help" }],
       },
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -145,7 +145,7 @@ function createProxyAgent(
       updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
       history?: AosHistoryCursor
     }
-    /** Holds each plain resume open briefly, as a real reattach takes time. */
+    /** Holds each plain resume open briefly, as a real rejoin takes time. */
     slowResume?: boolean
   } = {}
 ) {
@@ -558,7 +558,7 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     const replaySettled = vi.fn()
     const dropTranscript = vi.fn(() => replaySettled)
-    connection.onSessionReplay(SESSION_ID, dropTranscript)
+    connection.subscribeSessionReplay(SESSION_ID, dropTranscript)
 
     const resumed = connection.resumeSession(SESSION_ID, {
       replayFromStart: true,
@@ -659,8 +659,9 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     await connection.initialized
     const seen: { update: SessionUpdate; meta?: Record<string, unknown> }[] = []
-    const unsubscribe = connection.onSessionUpdate(SESSION_ID, (update, meta) =>
-      seen.push({ update, meta })
+    const unsubscribe = connection.subscribeSessionUpdates(
+      SESSION_ID,
+      (update, meta) => seen.push({ update, meta })
     )
 
     await proxy.pushUpdate(
@@ -701,12 +702,15 @@ describe("ACP connection", () => {
     await connection.initialized
     const activity: unknown[] = []
     let catalogInvalidations = 0
-    connection.onNotification(AOS_METHODS.notify.activity, (params) =>
+    connection.subscribeNotification(AOS_METHODS.notify.activity, (params) =>
       activity.push(params)
     )
-    connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () => {
-      catalogInvalidations += 1
-    })
+    connection.subscribeNotification(
+      AOS_METHODS.notify.catalogInvalidated,
+      () => {
+        catalogInvalidations += 1
+      }
+    )
 
     await proxy.notify(AOS_METHODS.notify.activity, {
       agentId: AGENT_ID,
@@ -730,7 +734,7 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
-    connection.onPendingRequest((request) => pending.push(request))
+    connection.subscribePendingRequests((request) => pending.push(request))
 
     const answered = proxy.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
@@ -754,7 +758,7 @@ describe("ACP connection", () => {
       const connection = connectInProcess(proxy)
       await connection.initialized
       const pending: AcpPendingRequest[] = []
-      connection.onPendingRequest((request) => pending.push(request))
+      connection.subscribePendingRequests((request) => pending.push(request))
       const withdrawal = new AbortController()
 
       const answered = proxy[ask](withdrawal.signal)
@@ -772,10 +776,10 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
-    connection.onPendingRequest(() => {
+    connection.subscribePendingRequests(() => {
       throw new Error("this consumer cannot project the request")
     })
-    connection.onPendingRequest((request) => pending.push(request))
+    connection.subscribePendingRequests((request) => pending.push(request))
 
     const answered = proxy.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
@@ -815,7 +819,7 @@ describe("ACP connection", () => {
       history: { nextCursor: "cursor-older" },
     }
 
-    it("keeps the latest history a resume reports, and an attach without one leaves it", async () => {
+    it("keeps the latest history a resume reports, and a resume without one leaves it", async () => {
       const proxy = createProxyAgent({ history: { nextCursor: "cursor-1" } })
       const connection = connectInProcess(proxy)
 
@@ -834,7 +838,9 @@ describe("ACP connection", () => {
       const connection = connectInProcess(proxy)
       await connection.initialized
       const live: SessionUpdate[] = []
-      connection.onSessionUpdate(SESSION_ID, (update) => live.push(update))
+      connection.subscribeSessionUpdates(SESSION_ID, (update) =>
+        live.push(update)
+      )
       await proxy.pushUpdate(
         { sessionUpdate: "state_update", state: "running" },
         { sequence: 4, turnId: "run-1" }
@@ -866,7 +872,7 @@ describe("ACP connection", () => {
         turnId: "run-1",
         after: 4,
       })
-      // A page read is not an attach, so the attach cursor is untouched.
+      // A page read is not a resume, so the resume cursor is untouched.
       expect(connection.history(SESSION_ID)).toBeUndefined()
 
       // The live stream is unaffected once the page is in.
@@ -888,7 +894,7 @@ describe("ACP connection", () => {
       connection.close()
     })
 
-    it("waits for a recovering transport to reattach before reading a page", async () => {
+    it("waits for a recovering transport to rejoin before reading a page", async () => {
       const proxy = createProxyAgent({ page: olderPage, slowResume: true })
       const sockets: { close: () => void }[] = []
       const socketConstructor = pipedSocketConstructor(proxy.app)
@@ -905,7 +911,7 @@ describe("ACP connection", () => {
       })
       connection.start()
       await connection.initialized
-      connection.onSessionUpdate(SESSION_ID, () => {})
+      connection.subscribeSessionUpdates(SESSION_ID, () => {})
       await connection.resumeSession(SESSION_ID, { replayFromStart: false })
 
       const recovering = new Promise<void>((resolve) =>
@@ -919,19 +925,19 @@ describe("ACP connection", () => {
 
       const order = proxy.calls.flatMap(({ method, params }) =>
         method === RESUME_REPLIED
-          ? ["reattached"]
+          ? ["rejoined"]
           : method === methods.agent.session.resume &&
               z.object({ replayFrom: AosReplayBeforeSchema }).safeParse(params)
                 .success
             ? ["page"]
             : []
       )
-      expect(order).toEqual(["reattached", "reattached", "page"])
+      expect(order).toEqual(["rejoined", "rejoined", "page"])
       connection.close()
     })
   })
 
-  it("reconnects a dropped transport and resumes every attached Session", async () => {
+  it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const proxy = createProxyAgent({ resyncOnResume: 2 })
     const sockets: { close: () => void }[] = []
     const socketConstructor = pipedSocketConstructor(proxy.app)
@@ -952,7 +958,7 @@ describe("ACP connection", () => {
     })
     connection.start()
     await connection.initialized
-    connection.onSessionUpdate(SESSION_ID, () => {})
+    connection.subscribeSessionUpdates(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, {
       replayFromStart: false,
       agentId: AGENT_ID,
@@ -1018,7 +1024,7 @@ describe("ACP connection", () => {
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.onSessionUpdate(SESSION_ID, () => {})
+    connection.subscribeSessionUpdates(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
     sockets[0]?.close()
@@ -1061,7 +1067,7 @@ describe("ACP connection", () => {
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.onSessionUpdate(SESSION_ID, () => {})
+    connection.subscribeSessionUpdates(SESSION_ID, () => {})
     await connection.resumeSession(SESSION_ID, { replayFromStart: true })
 
     sockets[0]?.close()

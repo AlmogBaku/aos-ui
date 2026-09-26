@@ -36,7 +36,7 @@ export function openCodeCapabilities() {
     content: {
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
         fileMimeTypes: "valid-type/subtype",

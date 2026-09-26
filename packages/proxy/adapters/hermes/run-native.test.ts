@@ -26,7 +26,7 @@ const MAX_REPLAY_RESPONSE_BYTES = 6_291_456
 function stubInteractions() {
   const listeners = new Set<(request: PendingRequest) => void>()
   return {
-    onPendingRequest: vi.fn(
+    subscribePendingRequests: vi.fn(
       (
         _scope: HermesTurnScope,
         listener: (request: PendingRequest) => void
@@ -795,7 +795,7 @@ describe("Hermes native retention", () => {
     })
 
     await expect(
-      native.observe("live-secret", () => {})
+      native.subscribeLive("live-secret", () => {})
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 })

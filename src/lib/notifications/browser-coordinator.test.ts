@@ -76,7 +76,7 @@ function setup(
       getPermission: () => permission,
       requestPermission: request,
       show,
-      onPermissionChange: (listener) => {
+      subscribePermissionChanges: (listener) => {
         permissionChanged = listener
         return () => {
           permissionChanged = undefined

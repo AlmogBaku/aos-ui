@@ -38,7 +38,7 @@ import {
  * The Session half of the ACP agent: the normalized runtime reads and writes
  * the handlers need, the `_meta.aos` projections of a Session row, and the
  * per-connection registry of which Agent owns a Session and which Sessions
- * this connection has attached.
+ * this connection has resumed.
  */
 
 /** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
@@ -326,7 +326,7 @@ export function createSessions(
     remember,
     identity,
 
-    /** The live status of a row, whether or not this connection attached it. */
+    /** The live status of a row, whether or not this connection resumed it. */
     status(row: Session) {
       const sessionId = runtime.resolveProviderSessionId(row.agentId, row.id)
       return sessionId

@@ -111,14 +111,14 @@ function createProxyAgent() {
   const cancelled: string[] = []
   const resumed: string[] = []
   // The proxy keeps each Session's transcript and replays it from the start on
-  // every such resume; it streams live updates only to an attached client.
+  // every such resume; it streams live updates only to a client that resumed it.
   const history = new Map<string, SessionUpdate[]>()
-  const attached = new Set<string>()
+  const memberships = new Set<string>()
   const busy = new Set<string>()
 
   function push(sessionId: string, update: SessionUpdate) {
     history.set(sessionId, [...(history.get(sessionId) ?? []), update])
-    if (attached.has(sessionId))
+    if (memberships.has(sessionId))
       void peer?.notify(methods.client.session.update, { sessionId, update })
   }
 
@@ -201,7 +201,7 @@ function createProxyAgent() {
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       const { sessionId } = params
       resumed.push(sessionId)
-      attached.add(sessionId)
+      memberships.add(sessionId)
       // The proxy replays inside the resume request, before answering it, so a
       // browser that waits for the response has already seen the history.
       if (params.replayFrom?.type === "start")
@@ -408,7 +408,7 @@ describe("provider-neutral AOS runtime composition", () => {
     await settle()
     expect(proxy.resumed).toEqual([SESSION_ID, SECOND_SESSION_ID])
 
-    // The first Session's thread stays mounted and attached while the operator
+    // The first Session's thread stays mounted and resumed while the operator
     // is away, so returning to it replays nothing: what arrived meanwhile is
     // already projected.
     act(() => {

@@ -16,7 +16,7 @@ import {
   type RecoveryRequest,
   type ServerTurnEngine,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type ServerAttachmentStage,
   type SessionScope,
 } from "../../core/runtime"
@@ -289,7 +289,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
   /**
    * The admission each Session's latest AOS start submits, recorded before the
-   * submit so neither a watch nor a discovery takes it for a foreign turn.
+   * submit so neither a turn subscription nor a discovery takes it for a
+   * foreign turn.
    */
   readonly #ownAdmissions = new Map<string, string>()
   /** The foreign admission each Session's latest discovered turn adopted. */
@@ -354,10 +355,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Watches one Session's native log from its tail. A turn is foreign when its
+   * Subscribes to one Session's native log from its tail. A turn is foreign when its
    * admission is not the one this engine last submitted for the Session.
    */
-  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     const key = turnKey(scope)
     const controller = new AbortController()
     let source: OpenCodeSessionEvents | undefined
@@ -370,7 +371,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         return
       considered = admission.seq
       if (admission.data.messageID !== this.#ownAdmissions.get(key))
-        watcher.onTurn()
+        listener.onTurn()
     }
     const subscribe = async () => {
       source = undefined
@@ -403,7 +404,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         throw new OpenCodeClientError("connection_interrupted")
       } catch (error) {
         if (controller.signal.aborted) return
-        watcher.onError(error)
+        listener.onError(error)
         failures += 1
         timer = setTimeout(
           () => void subscribe(),

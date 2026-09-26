@@ -42,13 +42,13 @@ function workspaceCapabilities() {
     workspace: {
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -85,7 +85,7 @@ function workspaceCapabilities() {
     content: {
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: ["image/png"],
         fileMimeTypes: "valid-type/subtype",

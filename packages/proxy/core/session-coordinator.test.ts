@@ -1620,7 +1620,7 @@ describe("SessionCoordinator", () => {
       }
       const sessions = coordinator(engine)
       const observed: ExecutionEvent[] = []
-      sessions.observeScope(scope, (event) => observed.push(event))
+      sessions.subscribeScope(scope, (event) => observed.push(event))
       await sessions.start(scope, input("run-1"), access(starter))
       interrupted.emit({
         kind: TurnEventKind.TurnRequiresAction,
@@ -1749,7 +1749,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     const announced: ExecutionEvent["kind"][] = []
-    sessions.observe((event) => announced.push(event.kind))
+    sessions.subscribeExecutions((event) => announced.push(event.kind))
     const onTerminal = vi.fn(async () => undefined)
     const read = reader(
       await sessions.start(scope, input("run-1"), {
@@ -2252,7 +2252,7 @@ describe("SessionCoordinator", () => {
         fromStart: true,
       }))
       const events: ExecutionEvent[] = []
-      sessions.observe((event) => events.push(event))
+      sessions.subscribeExecutions((event) => events.push(event))
 
       await sessions.discover(scope)
 
@@ -3131,7 +3131,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
-    sessions.observe((event) => observed.push(event))
+    sessions.subscribeExecutions((event) => observed.push(event))
 
     await sessions.start(scope, input("run-1"), access("one"))
     source.emit(turnEnded)
@@ -3161,7 +3161,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
-    sessions.observe((event) => observed.push(event))
+    sessions.subscribeExecutions((event) => observed.push(event))
 
     await sessions.start(scope, input("run-1"), access("one"))
     interrupted.emit({
@@ -3207,7 +3207,7 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
-    const unobserve = sessions.observeScope(
+    const unsubscribe = sessions.subscribeScope(
       { agentId: scope.agentId, providerSessionId: scope.providerSessionId },
       (event) => observed.push(event)
     )
@@ -3223,7 +3223,7 @@ describe("SessionCoordinator", () => {
     other.emit(turnEnded)
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     await vi.waitFor(() => expect(sessions.state(otherScope)).toBe("idle"))
-    unobserve()
+    unsubscribe()
     await sessions.start(scope, input("run-3"), access("one"))
 
     expect(observed.map(({ kind, turnId }) => [kind, turnId])).toEqual([
@@ -3244,7 +3244,9 @@ describe("SessionCoordinator", () => {
     }
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
-    const unobserve = sessions.observe((event) => observed.push(event))
+    const unsubscribe = sessions.subscribeExecutions((event) =>
+      observed.push(event)
+    )
 
     await sessions.start(scope, input("run-1"), access("one"))
     first.emit({
@@ -3260,7 +3262,7 @@ describe("SessionCoordinator", () => {
       ["turn-failed", "run-1"],
     ])
 
-    unobserve()
+    unsubscribe()
     await sessions.start(scope, input("run-2"), access("one"))
     second.emit(turnEnded)
     second.finish()

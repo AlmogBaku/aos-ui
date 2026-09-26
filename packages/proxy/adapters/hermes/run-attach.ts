@@ -92,16 +92,19 @@ export async function attachTurn(
   safelyUnsubscribe(active.unsubscribe)
   // Hermes asks the user through server→client requests, not through the
   // event stream: a request ends this segment wherever it landed.
-  const stopRequests = host.native.onPendingRequest(active.scope, (request) => {
-    if (accepting) host.requireAction(active, [request])
-    else asked = request
-  })
+  const stopRequests = host.native.subscribePendingRequests(
+    active.scope,
+    (request) => {
+      if (accepting) host.requireAction(active, [request])
+      else asked = request
+    }
+  )
   try {
     const resumed = await host.native.resume(active.scope)
     liveSessionId = resumed.liveSessionId
     // The model the turn starts on; a change the run observes is reported.
     active.model ??= sessionModelChoice(resumed.info)
-    unsubscribe = await host.native.observe(liveSessionId, (signal) => {
+    unsubscribe = await host.native.subscribeLive(liveSessionId, (signal) => {
       if (signal.kind === "event") {
         if (nativeEventSessionId(signal.event) !== liveSessionId) return
         if (!accepting) bufferNativeEvent(buffered, signal.event)

@@ -1400,7 +1400,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     })
     const engine = new OpenCodeTurnEngine(state.native, { waitRetryMs: 1 })
     const observer = watcher()
-    const stop = engine.watch(scope, observer)
+    const stop = engine.subscribeTurns(scope, observer)
     await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
     state.sessions.prompt = vi.fn(
       async (_id: string, request: { id: string; prompt: unknown }) => {
@@ -1425,7 +1425,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const handle = await engine.start(scope, input())
     watchStreams[0]!.fail()
     await until(() => expect(state.sessions.events).toHaveBeenCalledTimes(3))
-    // The resubscribed watch reads its stream only after its running check.
+    // The new turn subscription reads its stream only after its running check.
     watchStreams[1]!.publish(live(textEnded(1, "Working")))
     await until(() => expect(watchStreams[1]!.delivered).toBe(1))
 
@@ -1439,7 +1439,10 @@ describe("OpenCodeRunEngine foreign turns", () => {
   it("announces a foreign start once however often it is delivered", async () => {
     const state = client()
     const observer = watcher()
-    const stop = new OpenCodeTurnEngine(state.native).watch(scope, observer)
+    const stop = new OpenCodeTurnEngine(state.native).subscribeTurns(
+      scope,
+      observer
+    )
     await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
 
     state.observation.publish(live(admitted(0, "msg-tui")))
@@ -1461,7 +1464,10 @@ describe("OpenCodeRunEngine foreign turns", () => {
       })),
     })
     const observer = watcher()
-    const stop = new OpenCodeTurnEngine(state.native).watch(scope, observer)
+    const stop = new OpenCodeTurnEngine(state.native).subscribeTurns(
+      scope,
+      observer
+    )
 
     await until(() => expect(observer.onTurn).toHaveBeenCalledOnce())
     expect(state.sessions.events).toHaveBeenCalledWith(
@@ -1490,7 +1496,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const observer = watcher()
     const stop = new OpenCodeTurnEngine(state.native, {
       waitRetryMs: 1,
-    }).watch(scope, observer)
+    }).subscribeTurns(scope, observer)
     await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
 
     // The foreign turn starts while the stream is down.
@@ -1509,7 +1515,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     const observer = watcher()
     const stop = new OpenCodeTurnEngine(state.native, {
       waitRetryMs: 20,
-    }).watch(scope, observer)
+    }).subscribeTurns(scope, observer)
     await until(() => expect(state.sessions.events).toHaveBeenCalledOnce())
 
     state.observation.fail()

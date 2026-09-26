@@ -10,7 +10,7 @@ import type { MemberAct, MemberConnection, Middleware } from "./member"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
 import {
@@ -429,10 +429,10 @@ describe("createChannel", () => {
   })
 })
 
-/** A runtime whose Session the channels watch, driven by hand. */
+/** A runtime whose Session the channels subscribe to, driven by hand. */
 function adoptingHarness() {
   let state: { state: string; turnId?: string } = { state: "idle" }
-  const watchers: ServerTurnWatcher[] = []
+  const watchers: ServerTurnListener[] = []
   const listeners = new Set<(event: ExecutionEvent) => void>()
   const discovered: Array<{ scope: SessionScope; role: string }> = []
   let stopped = 0
@@ -440,7 +440,7 @@ function adoptingHarness() {
   const channels = createChannels({
     snapshot: () => state,
     adoption: {
-      watch(_scope, watcher) {
+      subscribeTurns(_scope, watcher) {
         watchers.push(watcher)
         return () => {
           stopped += 1
@@ -450,7 +450,7 @@ function adoptingHarness() {
         discovered.push({ scope, role })
         return discover()
       },
-      observe(_scope, listener) {
+      subscribeExecutions(_scope, listener) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
@@ -490,7 +490,7 @@ function adoptingHarness() {
 const GUEST_SCOPE: SessionScope = { ...SCOPE, sessionId: "thread-guest" }
 
 describe("createChannel adopting runtime-started turns", () => {
-  it("watches while the channel has members and stops when the last parts", () => {
+  it("subscribes while the channel has members and stops when the last parts", () => {
     const runtime = adoptingHarness()
     const removeFirst = runtime.channels.add(SCOPE, member().fake, {
       hasPrompt: false,
@@ -679,7 +679,10 @@ function joined(
         ? {}
         : { startedBy: options.startedBy }),
     }),
-    observeScope(_scope: SessionScope, listener: (e: ExecutionEvent) => void) {
+    subscribeScope(
+      _scope: SessionScope,
+      listener: (e: ExecutionEvent) => void
+    ) {
       observers.add(listener)
       return () => observers.delete(listener)
     },

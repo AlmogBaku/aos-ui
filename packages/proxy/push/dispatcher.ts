@@ -235,7 +235,7 @@ export function createPushDispatcher({
     },
   })
 
-  const unobserve = runtimeInstance.sessions.observe((event) => {
+  const unsubscribe = runtimeInstance.sessions.subscribeExecutions((event) => {
     const category = categoryOf(event.kind)
     if (!category) return
     // A timestamp the provider left unreadable must not silence a notification.
@@ -249,7 +249,7 @@ export function createPushDispatcher({
 
   return {
     close() {
-      unobserve()
+      unsubscribe()
       coalescer.close()
     },
   }

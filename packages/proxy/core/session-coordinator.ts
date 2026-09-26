@@ -434,7 +434,7 @@ export class SessionCoordinator {
   readonly #admissions = new Set<string>()
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
-  readonly #observers = new Set<{
+  readonly #listeners = new Set<{
     key?: string
     listener: (event: ExecutionEvent) => void
   }>()
@@ -543,28 +543,28 @@ export class SessionCoordinator {
    * Session this coordinator drives, independent of the per-segment turn
    * subscriptions and their replay.
    */
-  observe(listener: (event: ExecutionEvent) => void) {
-    return this.#addObserver({ listener })
+  subscribeExecutions(listener: (event: ExecutionEvent) => void) {
+    return this.#addListener({ listener })
   }
 
   /**
    * One Session's execution feed, matched on its provider scope, so a member can
    * follow the requests its own Session resolves without the event naming them.
    */
-  observeScope(
+  subscribeScope(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     listener: (event: ExecutionEvent) => void
   ) {
-    return this.#addObserver({ key: scopeKey(scope), listener })
+    return this.#addListener({ key: scopeKey(scope), listener })
   }
 
-  #addObserver(observer: {
+  #addListener(entry: {
     key?: string
     listener: (event: ExecutionEvent) => void
   }) {
-    this.#observers.add(observer)
+    this.#listeners.add(entry)
     return () => {
-      this.#observers.delete(observer)
+      this.#listeners.delete(entry)
     }
   }
 
@@ -1075,7 +1075,7 @@ export class SessionCoordinator {
   #origin(scope: SessionScope, turnId: string) {
     return {
       agentId: scope.agentId,
-      // Observers project to the browser, which knows only public identity.
+      // Listeners project to the browser, which knows only public identity.
       sessionId: scope.sessionId,
       turnId,
       occurredAt: new Date().toISOString(),
@@ -1084,12 +1084,12 @@ export class SessionCoordinator {
 
   #announce(scope: SessionScope, event: ExecutionEvent) {
     const key = scopeKey(scope)
-    for (const { key: observed, listener } of [...this.#observers])
+    for (const { key: observed, listener } of [...this.#listeners])
       if (observed === undefined || observed === key)
         try {
           listener(event)
         } catch {
-          // An observer must not rewrite the provider outcome.
+          // A listener must not rewrite the provider outcome.
         }
   }
 
