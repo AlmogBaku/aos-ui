@@ -73,7 +73,14 @@ export type LinkOptions = {
   bindings: LogFields
 }
 
-export type Link = ServerLink & { dispose(): void }
+export type Link = ServerLink & {
+  /**
+   * Whether the breaker holds the dials now, from the failure that opened it
+   * until its half-open trial: a caller waiting for the link waits for no dial.
+   */
+  held(): boolean
+  dispose(): void
+}
 
 type LinkSignal =
   | { type: "lost"; cause: unknown }
@@ -103,6 +110,13 @@ export function createLink({
   bindings,
 }: LinkOptions): Link {
   const circuit = breaker(LINK_BREAKER)
+  let held = false
+  circuit.onBreak(() => {
+    held = true
+  })
+  circuit.onHalfOpen(() => {
+    held = false
+  })
   const log = logger.child(bindings)
   /** Failed dials and drops since the link was last up. */
   let failures = 0
@@ -226,6 +240,7 @@ export function createLink({
   })
   return {
     state: () => state,
+    held: () => held,
     subscribe(listener) {
       listeners.add(listener)
       return () => {

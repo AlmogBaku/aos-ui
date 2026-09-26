@@ -20,7 +20,6 @@ import {
 
 import { Deadline, defaultClock, type Logger } from "../../../lifecycle"
 import { failureOf } from "../../core/failures"
-import { LINK_BREAKER } from "../../core/limits"
 import {
   createLink,
   type Link,
@@ -328,8 +327,6 @@ export class OpenClawClient {
   #gateway?: OpenClawGatewayClient
   /** Why the link is down, until it is next up. */
   #failure?: Error
-  /** The dials failed since the link was last up: at the breaker's count, it no longer dials. */
-  #failedDials = 0
   #policy?: OpenClawNegotiatedPolicy
   #closing?: Promise<void>
   #stopped = false
@@ -363,7 +360,6 @@ export class OpenClawClient {
     this.link.subscribe((state) => {
       if (state !== "ready") return
       this.#failure = undefined
-      this.#failedDials = 0
       this.#settle()
     })
   }
@@ -383,7 +379,7 @@ export class OpenClawClient {
       "runtime_authentication_required"
     )
       for (const listener of [...this.#demand]) listener("ready")
-    if (this.#failedDials >= LINK_BREAKER.failures)
+    if (this.link.held())
       return Promise.reject(
         this.#failure ?? new OpenClawClientUnavailableError()
       )
@@ -548,7 +544,6 @@ export class OpenClawClient {
   /** Records why a dial failed and rejects every waiting start with it. */
   #failed(error: OpenClawClientConnectionError) {
     this.#failure = error
-    this.#failedDials += 1
     this.#settle(error)
     return error
   }
