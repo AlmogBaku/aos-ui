@@ -418,6 +418,8 @@ type Turn = {
    * whoever answers. A turn this proxy recovered or adopted has no starter.
    */
   startedBy?: string
+  /** The capability key for this session, used when evicting its cells. */
+  capabilityKey: string
 }
 
 /**
@@ -853,6 +855,12 @@ export class SessionCoordinator {
     listener: (event: ExecutionEvent) => void
   }>()
   #closed = false
+  /** Active cell subscriber count per session key; zero means evict when idle. */
+  readonly #subscribers = new Map<string, number>()
+  /** Sessions to evict once their turn settles to idle. */
+  readonly #pendingEvictions = new Set<string>()
+  /** How many turns ended with their outcome unknown. */
+  #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
   readonly #usage: SessionReporter<SessionContextResponse>
   /** Changed by a model switch; one the provider reports names its model. */
@@ -935,6 +943,7 @@ export class SessionCoordinator {
     listeners: SessionReadingListeners
   ) {
     const key = scopeKey(scope)
+    this.#addSubscriber(key)
     const leaves = [
       listeners.usage &&
         this.#usage.subscribe(key, scope, membershipId, listeners.usage),
@@ -950,6 +959,7 @@ export class SessionCoordinator {
     ]
     return () => {
       for (const leave of leaves) leave?.()
+      this.#removeSubscriber(key)
     }
   }
 
@@ -997,6 +1007,27 @@ export class SessionCoordinator {
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#turnExecution(scopeKey(scope)).state
+  }
+
+  /** Diagnostic counters for this coordinator's live resources. */
+  gauges(): {
+    executions: number
+    uncertain: number
+    deadlinesFired: number
+    journalBytes: number
+  } {
+    let uncertain = 0
+    for (const turn of this.#turns.values())
+      if (turnExecution(turn).state === "uncertain") uncertain++
+    let journalBytes = 0
+    for (const segment of this.#journals.values())
+      journalBytes += segment.journal?.retained ?? 0
+    return {
+      executions: this.#executions.size,
+      uncertain,
+      deadlinesFired: this.#deadlinesFired,
+      journalBytes,
+    }
   }
 
   snapshot(
@@ -1242,24 +1273,31 @@ export class SessionCoordinator {
       const handle = await deadline.run(() =>
         this.options.engine.start(scope, input, stage, deadline.signal)
       )
-      const execution: Execution = this.#createExecution({
-        scope,
-        turn,
-        turnId: input.turnId,
-        request: input,
-        segment: this.#createSegment({
-          cacheKey: key,
+      try {
+        const execution: Execution = this.#createExecution({
+          scope,
+          turn,
           turnId: input.turnId,
-          generation: this.#landed(turn, generation, "running", input.turnId),
-          handle,
-          history: { journal: "start", at },
-          onTerminal: access.onTerminal,
-        }),
-      })
-      this.#executions.set(key, execution)
-      this.#trackJournal(execution.segment)
-      this.#consume(execution, execution.segment)
-      return this.#subscribe(execution.segment, 0, access)
+          request: input,
+          segment: this.#createSegment({
+            cacheKey: key,
+            turnId: input.turnId,
+            generation: this.#landed(turn, generation, "running", input.turnId),
+            handle,
+            history: { journal: "start", at },
+            onTerminal: access.onTerminal,
+          }),
+        })
+        this.#executions.set(key, execution)
+        this.#trackJournal(execution.segment)
+        this.#consume(execution, execution.segment)
+        return this.#subscribe(execution.segment, 0, access)
+      } catch (innerError) {
+        void handle
+          .stop()
+          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
+        throw innerError
+      }
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId)
@@ -1442,33 +1480,40 @@ export class SessionCoordinator {
       const handle = await new Deadline(ADMISSION_DEADLINE_MS, this.#clock).run(
         (signal) => this.options.engine.recover(scope, providerRequest, signal)
       )
-      const replaced = existing?.segment
-      const segment = this.#createSegment({
-        cacheKey: key,
-        turnId: request.turnId,
-        generation: this.#landed(turn, generation, "running", request.turnId),
-        handle,
-        // One turn keeps one journal and one monotonic sequence across its
-        // segments: a browser cursor can never skip a recovered event.
-        history: { journal: "continue", previous: replaced },
-        onTerminal: replaced?.onTerminal,
-      })
-      if (replaced) this.#forgetJournal(replaced)
-      const execution: Execution =
-        existing ??
-        this.#createExecution({
-          scope,
-          turn,
+      try {
+        const replaced = existing?.segment
+        const segment = this.#createSegment({
+          cacheKey: key,
           turnId: request.turnId,
-          request: providerRequest,
-          segment,
+          generation: this.#landed(turn, generation, "running", request.turnId),
+          handle,
+          // One turn keeps one journal and one monotonic sequence across its
+          // segments: a browser cursor can never skip a recovered event.
+          history: { journal: "continue", previous: replaced },
+          onTerminal: replaced?.onTerminal,
         })
-      if (existing) existing.segment.fanout.close()
-      execution.segment = segment
-      this.#executions.set(key, execution)
-      this.#trackJournal(segment)
-      this.#consume(execution, segment)
-      return execution
+        if (replaced) this.#forgetJournal(replaced)
+        const execution: Execution =
+          existing ??
+          this.#createExecution({
+            scope,
+            turn,
+            turnId: request.turnId,
+            request: providerRequest,
+            segment,
+          })
+        if (existing) existing.segment.fanout.close()
+        execution.segment = segment
+        this.#executions.set(key, execution)
+        this.#trackJournal(segment)
+        this.#consume(execution, segment)
+        return execution
+      } catch (innerError) {
+        void handle
+          .stop()
+          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
+        throw innerError
+      }
     } finally {
       this.#endAdmission(turn, generation)
     }
@@ -1570,6 +1615,52 @@ export class SessionCoordinator {
       reporter.close()
   }
 
+  #addSubscriber(key: string) {
+    this.#subscribers.set(key, (this.#subscribers.get(key) ?? 0) + 1)
+  }
+
+  #removeSubscriber(key: string) {
+    const count = (this.#subscribers.get(key) ?? 0) - 1
+    if (count <= 0) {
+      this.#subscribers.delete(key)
+      this.#checkEvict(key)
+    } else {
+      this.#subscribers.set(key, count)
+    }
+  }
+
+  /**
+   * When the last subscriber of a session leaves, evict if the turn is idle;
+   * otherwise mark it for eviction once it settles.
+   */
+  #checkEvict(key: string) {
+    if ((this.#subscribers.get(key) ?? 0) > 0) return
+    const { state } = this.#turnExecution(key)
+    if (state !== "idle") {
+      this.#pendingEvictions.add(key)
+      return
+    }
+    this.#evict(key)
+  }
+
+  /**
+   * Releases the session's turn owner and reporter cells. Called when the
+   * session is idle and its last subscriber has left.
+   */
+  #evict(key: string) {
+    this.#pendingEvictions.delete(key)
+    const turn = this.#turns.get(key)
+    if (turn) {
+      turn.owner.dispose()
+      this.#turns.delete(key)
+      this.#capabilities.release(turn.capabilityKey)
+    }
+    // Executions for idle sessions have no segment holding resources.
+    this.#executions.delete(key)
+    for (const reporter of [this.#usage, this.#models, this.#execution])
+      reporter.release(key)
+  }
+
   /** One owner per Session, logging under its ids and the turn it moves. */
   #turn(scope: SessionScope): Turn {
     const key = scopeKey(scope)
@@ -1588,10 +1679,14 @@ export class SessionCoordinator {
         later("turn.reconcile.failed", () =>
           this.#reconcile(scope, turn, generation)
         ),
-      outcomeUnknown: (generation) =>
+      outcomeUnknown: (generation) => {
+        // Increment synchronously when the machine fires the deadline, before any
+        // async work or eviction can dispose the owner and prevent the count.
+        this.#deadlinesFired += 1
         later("turn.outcome-unknown.failed", () =>
           this.#outcomeUnknown(scope, turn, generation)
-        ),
+        )
+      },
     })
     const turn: Turn = {
       owner: createOwner(machine, {
@@ -1602,6 +1697,7 @@ export class SessionCoordinator {
         clock: this.#clock,
         bindings: { agentId, sessionId },
       }),
+      capabilityKey: capabilityKey(scope),
     }
     // The execution reading changes with each move the turn makes.
     let reported = turnExecution(turn)
@@ -1611,6 +1707,9 @@ export class SessionCoordinator {
         return
       reported = moved
       this.#execution.report(key)
+      // Evict this session if it became idle while unsubscribed.
+      if (moved.state === "idle" && this.#pendingEvictions.has(key))
+        this.#evict(key)
     })
     this.#turns.set(key, turn)
     return turn
@@ -1665,7 +1764,11 @@ export class SessionCoordinator {
     turnId: string
   ) {
     if (!this.#move(turn, generation, { type: "admitted", state, turnId }))
-      throw new Error("Session coordinator is closed")
+      throw new Error(
+        this.#closed
+          ? "Session coordinator is closed"
+          : "Admission displaced by a concurrent turn"
+      )
     return turn.owner.generation
   }
 
@@ -1699,25 +1802,32 @@ export class SessionCoordinator {
       const handle = await deadline.run((signal) =>
         this.options.engine.start(execution.scope, input, undefined, signal)
       )
-      const segment = this.#createSegment({
-        cacheKey: key,
-        turnId: input.turnId,
-        generation: this.#landed(turn, generation, "running", input.turnId),
-        handle,
-        history: { journal: "start", at },
-      })
-      this.#forgetJournal(execution.segment)
-      // A continued turn is a fresh admission on the same execution record.
-      Object.assign(
-        execution,
-        admittedTurn({
+      try {
+        const segment = this.#createSegment({
+          cacheKey: key,
           turnId: input.turnId,
-          request: input,
-          segment,
+          generation: this.#landed(turn, generation, "running", input.turnId),
+          handle,
+          history: { journal: "start", at },
         })
-      )
-      this.#trackJournal(segment)
-      this.#consume(execution, segment)
+        this.#forgetJournal(execution.segment)
+        // A continued turn is a fresh admission on the same execution record.
+        Object.assign(
+          execution,
+          admittedTurn({
+            turnId: input.turnId,
+            request: input,
+            segment,
+          })
+        )
+        this.#trackJournal(segment)
+        this.#consume(execution, segment)
+      } catch (innerError) {
+        void handle
+          .stop()
+          .catch((e: unknown) => this.#logger.warn({ e }, "handle.stop.failed"))
+        throw innerError
+      }
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId)

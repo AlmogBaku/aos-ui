@@ -3555,4 +3555,100 @@ describe("SessionCoordinator", () => {
 
     expect(observed).toHaveLength(2)
   })
+
+  describe("eviction and gauges", () => {
+    it("evicts an idle execution when its last reading subscriber leaves", async () => {
+      const source = new EventSource()
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => source),
+        recover: vi.fn(async () => source),
+      }
+      const sessions = coordinator(engine)
+      const unsubscribe = sessions.subscribeReadings(
+        scope,
+        "member-1",
+        { execution: async () => undefined }
+      )
+
+      await sessions.start(scope, input("run-1"), access("one"))
+      expect(sessions.gauges().executions).toBe(1)
+      source.emit(turnEnded)
+      source.finish()
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+      expect(sessions.gauges().executions).toBe(1)
+
+      unsubscribe()
+      expect(sessions.gauges().executions).toBe(0)
+    })
+
+    it("does not evict a running execution when its last subscriber leaves", async () => {
+      const source = new EventSource()
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => source),
+        recover: vi.fn(async () => source),
+      }
+      const sessions = coordinator(engine)
+      const unsubscribe = sessions.subscribeReadings(
+        scope,
+        "member-1",
+        { execution: async () => undefined }
+      )
+
+      await sessions.start(scope, input("run-1"), access("one"))
+      source.emit(turnStarted)
+      await vi.waitFor(() => expect(sessions.state(scope)).toBe("running"))
+
+      unsubscribe()
+      // Still running: must not evict.
+      expect(sessions.gauges().executions).toBe(1)
+
+      source.emit(turnEnded)
+      source.finish()
+      await vi.waitFor(() => expect(sessions.gauges().executions).toBe(0))
+    })
+
+    it("evicts a turn that became uncertain once its deadline fires and its subscriber already left", async () => {
+      const { advance } = useFakeClock()
+      // A start that never answers: its turn lands uncertain with no segment.
+      const engine: ServerTurnEngine = {
+        start: vi.fn<ServerTurnEngine["start"]>(
+          (_scope, _input, _stage, signal) =>
+            new Promise((_resolve, reject) => {
+              signal!.addEventListener("abort", () => reject(signal!.reason))
+            })
+        ),
+        recover: vi.fn<ServerTurnEngine["recover"]>(
+          (_scope, _request, signal) =>
+            new Promise((_resolve, reject) => {
+              signal!.addEventListener("abort", () => reject(signal!.reason))
+            })
+        ),
+      }
+      const sessions = coordinator(engine)
+      const unsubscribe = sessions.subscribeReadings(
+        scope,
+        "member-1",
+        { execution: async () => undefined }
+      )
+
+      // The start promise is caught (turns uncertain); don't await it.
+      void sessions.start(scope, input("run-1"), access("one")).catch(() => undefined)
+      await advance(ADMISSION_DEADLINE_MS)
+      // Turn is uncertain (start timed out), no execution segment.
+      expect(sessions.gauges().uncertain).toBe(1)
+      expect(sessions.gauges().executions).toBe(0)
+
+      unsubscribe()
+      // Uncertain: pending eviction, but not yet evicted.
+      expect(sessions.gauges().uncertain).toBe(1)
+
+      // Advance past the uncertainty deadline; first advance ADMISSION_DEADLINE_MS
+      // again (for the in-flight reconcile), then past the remaining uncertainty.
+      await advance(ADMISSION_DEADLINE_MS)
+      await advance(UNCERTAINTY_DEADLINE_MS)
+
+      expect(sessions.gauges().uncertain).toBe(0)
+      expect(sessions.gauges().deadlinesFired).toBe(1)
+    })
+  })
 })

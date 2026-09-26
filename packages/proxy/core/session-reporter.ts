@@ -247,6 +247,14 @@ export class SessionReporter<
     this.#cells.clear()
   }
 
+  /** Releases one cell by key, disposing its owner. */
+  release(key: string) {
+    const cell = this.#cells.get(key)
+    if (!cell) return
+    cell.owner.dispose()
+    this.#cells.delete(key)
+  }
+
   #cell(key: string, scope: S) {
     const known = this.#cells.get(key)
     if (known) return known
