@@ -37,6 +37,7 @@ import {
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
+  ServerTurnUncertainError,
   type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
@@ -1085,6 +1086,10 @@ class Membership {
       void this.#channels.recheck(this.#scope)
       if (cause instanceof ServerTurnConflictError)
         this.afterResponse(() => this.catchUp())
+      // A start the provider may have taken is shown to every member as the
+      // coordinator settles it.
+      if (cause instanceof ServerTurnUncertainError)
+        this.afterResponse(() => this.#channels.sync(this.#scope))
       throw cause
     }
     const release = await enter()

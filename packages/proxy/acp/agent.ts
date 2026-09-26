@@ -307,13 +307,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Admits one user turn in a Session this connection reaches, answering once
-   * the coordinator admitted or refused it. Only a first admission takes its
-   * stage, and a turn that never started releases it: the client keeps its
-   * attachments and stages them anew.
+   * the coordinator admitted or refused it; `signal` aborts the admission.
+   * Only a first admission takes its stage, and a turn that never started
+   * releases it: the client keeps its attachments and stages them anew.
    */
   async function send(
     command: MemberCommands["send"],
-    client: AgentContext
+    client: AgentContext,
+    signal: AbortSignal
   ): Promise<CommandResults["send"]> {
     const scope = command.scope ?? sessions.scope(command.sessionId)
     const { text, attachmentStageId, rewindSourceId } = command
@@ -344,7 +345,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           },
         },
         () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
-        { quota: command.quota }
+        { quota: command.quota, signal }
       )
     } catch (cause) {
       await stage?.cleanup().catch(() => undefined)
@@ -523,9 +524,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         meta.rewindSourceId === undefined
       )
         throw invalidParams()
-      // A prompt its client cancelled is answered as cancelled. Its admission
-      // runs on: a turn admitted meanwhile streams, and a repeat of its client
-      // id finds it.
+      // A prompt its client cancelled is answered as cancelled, and its
+      // admission is aborted: one the provider may have taken leaves its turn
+      // uncertain until the coordinator settles it.
       const { messageId } = await unlessAborted(
         perform(
           "send",
@@ -535,7 +536,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             text,
             ...meta,
           },
-          (command) => send(command, client)
+          (command) => send(command, client, signal)
         ),
         signal
       )

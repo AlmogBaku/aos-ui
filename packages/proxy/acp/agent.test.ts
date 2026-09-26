@@ -539,7 +539,7 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a prompt its client cancelled as cancelled, then reports a stop the provider has not settled and the cancelled turn", async () => {
+  it("answers a prompt its client cancelled as cancelled, aborting its admission, then reports a stop the provider has not settled and the cancelled turn", async () => {
     const admission = gate()
     const test = await harness({ onStart: () => admission.held })
     await test.create()
@@ -558,7 +558,9 @@ describe("AOS ACP agent", () => {
     await expect(sent).rejects.toMatchObject({
       code: RequestError.requestCancelled().code,
     })
-    // The turn it asked for was admitted meanwhile, and runs on.
+    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: true })
+    // The provider took the turn all the same, which the browser follows once
+    // the coordinator settles it.
     admission.release()
     const source = test.sources[0]
     source?.emit(turnStarted())
