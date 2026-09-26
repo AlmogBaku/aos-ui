@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 import {
   isRepliesTurn,
   StopReason,
@@ -708,6 +710,22 @@ function providerUnavailable() {
   )
 }
 
+/** Where a recovery continues an OpenClaw run: its subscription and last event. */
+const OpenClawPositionSchema = z.object({
+  generation: z.number(),
+  lastSeen: z.number(),
+})
+
+/** The opaque token a handle names its position by; only this adapter reads it. */
+const openClawRecoveryToken = {
+  mint: (position: z.infer<typeof OpenClawPositionSchema>) =>
+    JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : OpenClawPositionSchema.parse(JSON.parse(token)),
+}
+
 export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #client: OpenClawRunRequestClient
   readonly #subscriptions: OpenClawSessionSubscriptions
@@ -1073,7 +1091,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const active = this.#bindRun(scope, request.turnId, lease, holder, {
         baseline,
         nativeRunId: nativeRunId ?? "",
-        lastSeen: request.position?.lastSeen ?? 0,
+        lastSeen: openClawRecoveryToken.read(request.position)?.lastSeen ?? 0,
         ...(inFlightSnapshot ? { shown: inFlightSnapshot } : {}),
       })
       if (!nativeRunId)
@@ -1235,10 +1253,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             })(),
             settled: Promise.resolve(),
             stop: () => this.#stopWaiting(waiting),
-            recoveryPosition: () => ({
-              epoch: String(generation),
-              lastSeen: 0,
-            }),
+            recoveryPosition: () =>
+              openClawRecoveryToken.mint({ generation, lastSeen: 0 }),
           },
         }
       }
@@ -1454,10 +1470,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => this.#stop(active),
-      recoveryPosition: () => ({
-        epoch: String(this.#subscriptions.generation),
-        lastSeen: active.lastSeen,
-      }),
+      recoveryPosition: () =>
+        openClawRecoveryToken.mint({
+          generation: this.#subscriptions.generation,
+          lastSeen: active.lastSeen,
+        }),
     }
   }
 

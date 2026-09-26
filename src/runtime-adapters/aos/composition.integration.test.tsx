@@ -218,8 +218,8 @@ class TurnSegment implements ServerTurnHandle {
     this.#resolveSettled()
   }
 
-  recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 0 }
+  recoveryPosition(): string {
+    return JSON.stringify({ epoch: "epoch-1", lastSeen: 0 })
   }
 }
 

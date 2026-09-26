@@ -453,7 +453,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const membership = sessions.join(client, scope)
         membership.afterResponse(async () => {
           await membership.emit({ kind: "commands", capabilities })
-          await membership.reportUsage()
+          membership.reportUsage()
         })
         return { sessionId, row, capabilities, models }
       }
@@ -604,11 +604,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         if (!command.write) throw invalidRequest()
         await workspace.updateModel(scope, command.write)
         const models = await workspace.models(scope)
-        // The window's size belongs to the model, so a switch restates the
-        // usage every browser on the Session holds against the model it has
-        // just left.
+        // A switch restates the model options and the usage, whose window
+        // belongs to the model, for every browser on the Session.
         const membership = sessions.membership(command.sessionId)
-        membership?.afterResponse(() => coordinator.reportUsage(scope))
+        membership?.afterResponse(async () =>
+          coordinator.reportModelSwitch(scope)
+        )
         return { models }
       }
     )

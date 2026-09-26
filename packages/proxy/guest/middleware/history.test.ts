@@ -98,7 +98,7 @@ describe("guest history projection", () => {
             role: "user",
             content: [{ type: "text", text: "Use the tables" }],
             createdAt: "2026-09-15T00:00:01.000Z",
-            metadata: { custom: { correction: true } },
+            correction: true as const,
           },
         ],
         total: 2,
@@ -138,11 +138,7 @@ describe("guest history projection", () => {
               error:
                 "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
             },
-            metadata: {
-              custom: {
-                aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
-              },
-            },
+            turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
           },
         ],
         total: 2,
@@ -219,11 +215,7 @@ describe("guest history projection", () => {
               error:
                 "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
             },
-            metadata: {
-              custom: {
-                aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" },
-              },
-            },
+            turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
           },
         ],
         total: 1,

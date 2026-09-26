@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { z } from "zod"
 
 import {
   TurnEventKind,
@@ -162,6 +163,22 @@ function integer(value: unknown) {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
     ? value
     : undefined
+}
+
+/** Where a recovery continues an OpenCode run: its epoch and last event seen. */
+const OpenCodePositionSchema = z.object({
+  epoch: z.string(),
+  lastSeen: z.number().int().nonnegative(),
+})
+type OpenCodePosition = z.infer<typeof OpenCodePositionSchema>
+
+/** The opaque token a handle names its position by; only this adapter reads it. */
+export const openCodeRecoveryToken = {
+  mint: (position: OpenCodePosition) => JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : OpenCodePositionSchema.parse(JSON.parse(token)),
 }
 
 function positiveInteger(value: unknown, fallback: number) {
@@ -593,17 +610,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       )
     await this.#verifyOwnership(scope)
     const expectedEpoch = `opencode:${scope.providerSessionId}`
-    if (
-      request.position &&
-      (request.position.epoch !== expectedEpoch ||
-        integer(request.position.lastSeen) === undefined)
-    )
+    const position = openCodeRecoveryToken.read(request.position)
+    if (position && position.epoch !== expectedEpoch)
       throw new Error("The reconnect position is invalid")
 
     const adopted = this.#adoptedAdmissions.get(turnKey(scope))
     return this.#recoverRun(
       scope,
-      request.position,
+      position,
       adopted?.turnId === request.turnId
         ? adopted.admissionId
         : admissionId(scope, request.turnId)
@@ -612,7 +626,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
 
   async #recoverRun(
     scope: SessionScope,
-    position: RecoveryRequest["position"],
+    position: OpenCodePosition | undefined,
     expectedAdmission: string
   ): Promise<ServerTurnHandle> {
     const requestedAfter = position?.lastSeen ?? -1
@@ -955,7 +969,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       events: run.queue,
       settled: run.settled,
       stop: () => this.#stop(run),
-      recoveryPosition: () => run.projector.recoveryPosition(),
+      recoveryPosition: () =>
+        openCodeRecoveryToken.mint(run.projector.recoveryPosition()),
     }
   }
 

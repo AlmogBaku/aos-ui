@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
@@ -27,6 +28,7 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
+import { READING_BACKOFF } from "../core/limits"
 import {
   ServerSessionNotFoundError,
   type ServerTurnListener,
@@ -382,12 +384,15 @@ describe("AOS ACP agent", () => {
       (entry) => JSON.stringify(entry.params).includes("end_turn"),
       "an update carrying end_turn"
     )
-    // `session/new` and the settled turn each push usage out of band: the turn
-    // grew the window, so the composer is owed the reading it left behind.
+    // `session/new` and the settled turn each push readings out of band: the
+    // new Session's model options and usage, then the window the turn grew.
     await usageOf(test, 2)
     expect(
       updates(test.recorder).filter(
-        (update) => !JSON.stringify(update).includes("usage_update")
+        (update) =>
+          !["usage_update", "config_option_update"].some((reading) =>
+            JSON.stringify(update).includes(reading)
+          )
       )
     ).toMatchObject([
       { update: { sessionUpdate: "available_commands_update" } },
@@ -614,6 +619,7 @@ describe("AOS ACP agent", () => {
     const test = await harness({ context: coldWindow(3) })
     await test.list()
     useUsageTimers()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
     try {
       await test.agent.request(methods.agent.session.resume, {
         sessionId: SESSION,
@@ -621,8 +627,10 @@ describe("AOS ACP agent", () => {
       })
 
       // The first two reads find a provider still building its agent; the
-      // backoff waits 1s and then 2s before the third one succeeds.
-      await vi.advanceTimersByTimeAsync(2_999)
+      // backoff waits its first two steps before the third one succeeds.
+      const backoff =
+        backoffDelay(0, READING_BACKOFF) + backoffDelay(1, READING_BACKOFF)
+      await vi.advanceTimersByTimeAsync(backoff - 1)
       expect(usages(test.recorder)).toEqual([])
 
       await vi.advanceTimersByTimeAsync(1)
@@ -762,15 +770,16 @@ describe("AOS ACP agent", () => {
     await usageOf(other, 3)
     await settled()
 
-    // One reading on joining, one after the turn, and one after the config
-    // change, which moved the window every browser on the Session holds.
+    // One reading of each on joining, one after the switch the turn made, and
+    // one after the config change, which moved both for every browser on the
+    // Session.
     for (const browser of [test, other]) {
       expect(usages(browser.recorder)).toHaveLength(3)
       expect(
         updates(browser.recorder).filter((update) =>
           JSON.stringify(update).includes("config_option_update")
         )
-      ).toHaveLength(1)
+      ).toHaveLength(3)
     }
     test.close()
     other.close()

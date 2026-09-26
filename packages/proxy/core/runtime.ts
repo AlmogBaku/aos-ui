@@ -52,13 +52,13 @@ export type ServerTurnHandle = {
    * it has no comparable position: recovery then starts without one instead of
    * naming an epoch no provider can match.
    */
-  recoveryPosition(): { epoch: string; lastSeen: number } | undefined
+  recoveryPosition(): string | undefined
 }
 
 export type RecoveryRequest = {
   sessionId: string
   turnId: string
-  position?: { epoch: string; lastSeen: number }
+  position?: string
 }
 
 export type ServerTurnEngine = {

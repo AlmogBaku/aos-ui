@@ -83,9 +83,7 @@ describe("Hermes retained turn", () => {
         error:
           "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException)",
       },
-      metadata: {
-        custom: { aos: { turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE" } },
-      },
+      turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
     })
   })
 

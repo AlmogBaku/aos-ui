@@ -8,6 +8,8 @@
  * a run ends, `run-failures` holds every public failure, `run-frames` reads
  * native frames and `event-queue` bounds what the run publishes.
  */
+import { z } from "zod"
+
 import {
   CompactionStatus,
   isRepliesTurn,
@@ -129,6 +131,22 @@ const WATCH_RETRY_MS = [1_000, 5_000, 30_000]
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_REWIND_SOURCE_LENGTH = 256
+
+/** Where a recovery continues a Hermes stream: its epoch and last frame seen. */
+const HermesPositionSchema = z.object({
+  epoch: z.string(),
+  lastSeen: z.number(),
+})
+type HermesPosition = z.infer<typeof HermesPositionSchema>
+
+/** The opaque token a handle names its position by; only this adapter reads it. */
+export const hermesRecoveryToken = {
+  mint: (position: HermesPosition) => JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : HermesPositionSchema.parse(JSON.parse(token)),
+}
 
 export class HermesTurnEngine {
   readonly #native: HermesTurnNative
@@ -289,6 +307,7 @@ export class HermesTurnEngine {
         "The reconnect position is not authorized for this Session"
       )
     const key = sessionKey(scope)
+    const position = hermesRecoveryToken.read(request.position)
     const existing = this.#active.get(key)
     if (existing) {
       if (
@@ -298,10 +317,7 @@ export class HermesTurnEngine {
         throw new ServerTurnConflictError()
       const handle = await this.#reattach(
         existing,
-        request.position ?? {
-          epoch: existing.epoch,
-          lastSeen: existing.lastSeen,
-        }
+        position ?? { epoch: existing.epoch, lastSeen: existing.lastSeen }
       )
       return { handle, fromStart: false }
     }
@@ -314,11 +330,11 @@ export class HermesTurnEngine {
       fromStart = await attachTurn(
         this.#host,
         active,
-        request.position
+        position
           ? {
               kind: "position",
-              epoch: request.position.epoch,
-              after: request.position.lastSeen,
+              epoch: position.epoch,
+              after: position.lastSeen,
             }
           : // Nothing published a cursor for this run: only Hermes' own open
             // turn identifies it.
@@ -499,7 +515,7 @@ export class HermesTurnEngine {
   /** The same run continues on a new stream from the browser's own cursor. */
   async #reattach(
     active: ActiveTurn,
-    position: { epoch: string; lastSeen: number }
+    position: HermesPosition
   ): Promise<HermesTurnHandle> {
     active.queue = startedTurnQueue()
     active.uncertain = false
@@ -602,10 +618,11 @@ export class HermesTurnEngine {
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
       steer: (request) => steerTurn(this.#host, active, request.text),
-      recoveryPosition: () => ({
-        epoch: active.epoch,
-        lastSeen: active.lastSeen,
-      }),
+      recoveryPosition: () =>
+        hermesRecoveryToken.mint({
+          epoch: active.epoch,
+          lastSeen: active.lastSeen,
+        }),
     }
   }
 

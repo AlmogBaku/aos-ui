@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -18,7 +20,9 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
+import { CLIENT_ADMISSIONS } from "./limits"
 import {
+  ServerClientIdReusedError,
   SessionCoordinator,
   type CoordinatedTurnSubscription,
   type SessionCoordinatorOptions,
@@ -36,10 +40,7 @@ class EventSource implements ServerTurnHandle {
 
   constructor(
     /** `null` for a segment that names no position a recovery can continue. */
-    readonly position: { epoch: string; lastSeen: number } | null = {
-      epoch: "epoch-1",
-      lastSeen: 0,
-    }
+    readonly position: string | null = "token-1"
   ) {
     this.settled = new Promise((resolve) => {
       this.#resolveSettled = resolve
@@ -1558,6 +1559,104 @@ describe("SessionCoordinator", () => {
     expect(engine.start).toHaveBeenCalledOnce()
   })
 
+  describe("admissions a client may repeat", () => {
+    const engine = (): ServerTurnEngine => ({
+      start: vi.fn(async () => new EventSource()),
+      recover: vi.fn(async () => new EventSource()),
+    })
+
+    it("answers a repeated send with its first turn, also once the Session no longer holds it", async () => {
+      const first = new EventSource()
+      const start = vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValue(new EventSource())
+      const sessions = coordinator({ ...engine(), start })
+      const send = { clientId: "client-1", prompt: "Hello" }
+
+      const [admitted, repeated] = await Promise.all([
+        sessions.start(scope, send, access("one")),
+        sessions.start(scope, send, access("one")),
+      ])
+      expect(repeated.turnId).toBe(admitted.turnId)
+      await expect(
+        sessions.start(scope, { ...send, prompt: "Changed" }, access("one"))
+      ).rejects.toThrow(ServerClientIdReusedError)
+
+      const read = reader(admitted)
+      first.emit(turnEnded)
+      await read()
+      await sessions.start(
+        scope,
+        { clientId: "client-2", prompt: "Next" },
+        access("one")
+      )
+
+      await expect(
+        sessions.start(scope, send, access("one"))
+      ).resolves.toMatchObject({ turnId: admitted.turnId })
+      expect(start).toHaveBeenCalledTimes(2)
+    })
+
+    it("answers a repeated create with its first Session, and a failed one afresh", async () => {
+      const createSession = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("Provider unavailable"))
+        .mockResolvedValueOnce({ session: { id: "created-1" } })
+        .mockResolvedValue({ session: { id: "created-2" } })
+      const sessions = coordinator(engine(), {
+        readings: { context: vi.fn(), models: vi.fn(), createSession },
+      })
+      const create = { title: "Plans", clientId: "client-1" }
+
+      await expect(
+        sessions.createSession("researcher", create, "operator")
+      ).rejects.toThrow("Provider unavailable")
+      for (let repeat = 0; repeat < 2; repeat++)
+        await expect(
+          sessions.createSession("researcher", create, "operator")
+        ).resolves.toEqual({ session: { id: "created-1" } })
+      await expect(
+        sessions.createSession(
+          "researcher",
+          { ...create, title: "Other" },
+          "operator"
+        )
+      ).rejects.toThrow(ServerClientIdReusedError)
+      // A client id is its principal's own: another's never reads this Session.
+      await expect(
+        sessions.createSession("researcher", create, "guest:invite-1")
+      ).resolves.toEqual({ session: { id: "created-2" } })
+      expect(createSession).toHaveBeenCalledTimes(3)
+    })
+
+    it("forgets a client id once it expires or falls beyond the bound", async () => {
+      const clock = useFakeClock()
+      const createSession = vi.fn(async () => ({}))
+      const sessions = coordinator(engine(), {
+        readings: { context: vi.fn(), models: vi.fn(), createSession },
+      })
+      const create = (clientId: string) =>
+        sessions.createSession("researcher", { clientId }, "operator")
+
+      await create("client-1")
+      await clock.advance(CLIENT_ADMISSIONS.ttlMs - 1)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(1)
+      await clock.advance(1)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(2)
+
+      for (let index = 1; index < CLIENT_ADMISSIONS.entries; index++)
+        await create(`other-${index}`)
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 1)
+      await create("other-last")
+      await create("client-1")
+      expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 3)
+    })
+  })
+
   it("retains a paused execution and resumes it as a fresh segment", async () => {
     const interrupted = new EventSource()
     const resumed = new EventSource()
@@ -1831,9 +1930,10 @@ describe("SessionCoordinator", () => {
   it("keeps an ambiguous Stop failure uncertain", async () => {
     const source = new EventSource()
     source.stop.mockRejectedValueOnce(new Error("Connection lost"))
+    const recover = vi.fn(async (): Promise<ServerTurnHandle> => source)
     const sessions = coordinator({
       start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
+      recover,
     })
     await sessions.start(scope, input("run-1"), access("operator"))
 
@@ -1841,6 +1941,26 @@ describe("SessionCoordinator", () => {
       "Connection lost"
     )
     expect(sessions.state(scope)).toBe("uncertain")
+
+    // The stream reports the outcome while the next start is recovering the
+    // turn, and that recovery fails: the turn rests where the stream left it.
+    recover.mockImplementationOnce(async () => {
+      const finished = new Promise<void>((resolve) => {
+        const unsubscribe = sessions.subscribeExecutions((event) => {
+          if (event.kind !== "turn-finished") return
+          unsubscribe()
+          resolve()
+        })
+      })
+      source.emit(turnEnded)
+      source.finish()
+      await finished
+      throw new Error("Provider unavailable")
+    })
+    await expect(
+      sessions.start(scope, input("run-2"), access("operator"))
+    ).rejects.toThrow("already active")
+    expect(sessions.state(scope)).toBe("idle")
   })
 
   it("reports a Session idle when its run terminates after every browser detached", async () => {
@@ -2072,6 +2192,35 @@ describe("SessionCoordinator", () => {
         "operator"
       )
     ).rejects.toThrow("already active")
+  })
+
+  it("takes up a turn it does not hold whatever the capacity", async () => {
+    const engine: ServerTurnEngine = {
+      start: vi.fn(async () => new EventSource()),
+      recover: vi.fn(async () => new EventSource()),
+      discover: vi.fn(async () => ({
+        handle: new EventSource(),
+        state: "running" as const,
+      })),
+    }
+    const sessions = coordinator(engine, { maxActiveExecutions: 1 })
+    await sessions.start(otherScope, input("run-1"), access("one"))
+
+    await expect(
+      sessions.recover(
+        scope,
+        { sessionId: scope.sessionId, turnId: "unheld" },
+        access("two")
+      )
+    ).resolves.toMatchObject({ turnId: "unheld" })
+    // A turn lost to a restart is found when its Session opens, not started.
+    await expect(
+      sessions.discover({
+        agentId: "researcher",
+        providerSessionId: "stored-3",
+        sessionId: "stored-3",
+      })
+    ).resolves.toBeDefined()
   })
 
   it("coalesces concurrent authoritative recovery", async () => {
@@ -2478,7 +2627,7 @@ describe("SessionCoordinator", () => {
   })
   it("keeps the journaled prefix across a recoverable interrupt", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const recovered = new EventSource("token-12")
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => interrupted),
       recover: vi.fn(async () => recovered),
@@ -2548,7 +2697,7 @@ describe("SessionCoordinator", () => {
 
   it("delivers recovered events to two redials sharing one cursor", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const recovered = new EventSource("token-12")
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => interrupted),
       recover: vi.fn(async () => recovered),
@@ -2616,7 +2765,7 @@ describe("SessionCoordinator", () => {
 
   it("recovers an uncertain execution before refusing a new turn", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 7 })
+    const recovered = new EventSource("token-7")
     const admitted = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi
@@ -2648,7 +2797,7 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).toHaveBeenCalledWith(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: { epoch: "epoch-1", lastSeen: 0 },
+      position: "token-1",
     })
     expect(engine.start).toHaveBeenCalledTimes(2)
   })
@@ -2900,7 +3049,7 @@ describe("SessionCoordinator", () => {
     // A recovered segment inherits the journal.
     {
       const interrupted = new EventSource()
-      const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 1 })
+      const recovered = new EventSource("token-2")
       const neighbor = new EventSource()
       const onTerminal = vi.fn(async () => undefined)
       const engine: ServerTurnEngine = {
@@ -3147,6 +3296,41 @@ describe("SessionCoordinator", () => {
       sessionId: scope.sessionId,
     })
     expect(Number.isNaN(Date.parse(observed[0]!.occurredAt))).toBe(false)
+  })
+
+  it("logs the transition that finishes a turn with the ids of that turn", async () => {
+    const source = new EventSource()
+    const logs = captureLogs()
+    const sessions = coordinator(
+      { start: vi.fn(async () => source), recover: vi.fn(async () => source) },
+      { logger: logs.logger }
+    )
+    const read = reader(
+      await sessions.start(scope, input("run-1"), access("one"))
+    )
+
+    source.emit(turnEnded)
+    await read()
+
+    expect(
+      logs
+        .records()
+        .filter(
+          ({ message, fields }) =>
+            message === "turn.transition" && fields.to === "idle"
+        )
+    ).toMatchObject([
+      {
+        fields: {
+          from: "running",
+          to: "idle",
+          generation: expect.any(Number),
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          turnId: "run-1",
+        },
+      },
+    ])
   })
 
   it("observes one attention request per pending request and resolves it on reply", async () => {

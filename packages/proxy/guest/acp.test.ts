@@ -294,7 +294,7 @@ function terminalHandle(events: readonly TurnEvent[]): ServerTurnHandle {
     })(),
     settled: Promise.resolve(),
     stop: vi.fn(async () => "idle" as const),
-    recoveryPosition: () => ({ epoch: "native", lastSeen: events.length }),
+    recoveryPosition: () => "token-1",
   }
 }
 
@@ -314,7 +314,7 @@ function openHandle(events: readonly TurnEvent[]): ServerTurnHandle {
       release()
       return "stopping" as const
     }),
-    recoveryPosition: () => ({ epoch: "native", lastSeen: events.length }),
+    recoveryPosition: () => "token-1",
   }
 }
 

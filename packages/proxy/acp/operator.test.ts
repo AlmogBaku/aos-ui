@@ -299,7 +299,7 @@ function correctedHistory(text: string): SessionHistoryResponse {
         role: "user",
         content: [{ type: "text", text }],
         createdAt: NOW,
-        metadata: { custom: { correction: true } },
+        correction: true as const,
       },
     ],
   }
@@ -375,9 +375,10 @@ describe("operator ACP listener", () => {
     source.emit(turnStarted())
     source.emit({ kind: TurnEventKind.ModelChanged, modelId: "opus" })
 
+    // The options the Session opened with come first; the switch restates them.
     const reported = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("config_option_update"),
-      "an update carrying config_option_update"
+      (entry) => JSON.stringify(entry.params).includes('"currentValue":"opus"'),
+      "the model options the switch restated"
     )
     expect(reported.params).toMatchObject({
       sessionId: CREATED,

@@ -334,6 +334,17 @@ export const SessionMessageSchema = z.strictObject({
   metadata: z
     .strictObject({ custom: z.record(z.string(), z.json()) })
     .optional(),
+  /**
+   * Present on a user turn the provider persisted as a mid-turn correction
+   * (a steer the model accepted). Hermes sets this; the coordinator reads it
+   * via `isCorrection` in `core/replay-page.ts`.
+   */
+  correction: z.literal(true).optional(),
+  /**
+   * The normalized failure code for a turn the provider failed. Hermes sets
+   * this; the coordinator reads it via `guest/middleware/history.ts`.
+   */
+  turnErrorCode: z.string().optional(),
 })
 export type SessionMessage = z.infer<typeof SessionMessageSchema>
 

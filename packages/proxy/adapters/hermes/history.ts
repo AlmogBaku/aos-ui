@@ -431,7 +431,7 @@ export function projectHermesHistory(
         // The same turn the journal acknowledges as `aos.steer.accepted`: the
         // flag lets a from-start replay announce it once.
         ...(role === "user" && isRedirectCorrection(value)
-          ? { metadata: { custom: { correction: true } } }
+          ? { correction: true as const }
           : {}),
       })
     }

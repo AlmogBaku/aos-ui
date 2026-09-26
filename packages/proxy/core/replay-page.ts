@@ -10,7 +10,8 @@ import type { SessionHistoryResponse } from "../../protocol"
 export function isCorrection(
   message: SessionHistoryResponse["messages"][number]
 ) {
-  return message.role === "user" && message.metadata?.custom.correction === true
+  if (message.role !== "user") return false
+  return message.correction === true
 }
 
 /** Where the page's last prompt sits: its last user turn that is no correction. */
