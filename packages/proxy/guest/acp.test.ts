@@ -2158,10 +2158,9 @@ describe("guest scope and commands", () => {
     await rewind(own ?? "")
 
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    expect(test.start).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.objectContaining({ rewindSourceId: own })
-    )
+    expect(test.start.mock.lastCall?.[1]).toMatchObject({
+      rewindSourceId: own,
+    })
     test.close()
   })
 

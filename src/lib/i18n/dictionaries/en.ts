@@ -201,6 +201,8 @@ export const en = {
     AOS_SESSION_LIMIT: "The provider has reached its limit of active Sessions.",
     AOS_RESET_REQUIRED:
       "This run must be reconciled with provider history before it can continue.",
+    AOS_OUTCOME_UNKNOWN:
+      "AOS could not confirm how this run ended, so it was closed. Its work may be incomplete.",
     AOS_STOP_UNCERTAIN:
       "Stop could not be confirmed. Reconcile this Session before sending again.",
     AOS_STREAM_OVERFLOW:

@@ -62,32 +62,39 @@ export type RecoveryRequest = {
 }
 
 export type ServerTurnEngine = {
+  /**
+   * Admits a turn. `signal` aborts once the coordinator gives up, and the
+   * turn is then uncertain: the provider may have admitted it.
+   */
   start(
     scope: SessionScope,
     input: TurnInput,
     /** One-shot server-owned content staged for this native admission. */
-    attachments?: ServerAttachmentStage
+    attachments?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle>
   /**
-   * Reattaches to a turn this process already admitted. The returned handle must
-   * speak for that turn: it either publishes at least one event or ends its
-   * stream. Coordination of an uncertain turn waits on that signal, so a handle
-   * that attaches silently and stays silent leaves the turn unanswered.
+   * Reattaches to a turn this process already admitted, or asks how an
+   * uncertain one stands: a handle confirms the turn running, and its stream
+   * reports how the turn ends. `signal` aborts once the coordinator gives up.
    */
   recover(
     scope: SessionScope,
-    request: RecoveryRequest
+    request: RecoveryRequest,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle>
   /**
    * Reconstructs provider-authoritative execution state after process loss, or
    * adopts a turn the runtime started by itself. A repeated call refreshes an
    * existing waiting execution; `undefined` authoritatively clears that
    * recovered wait. A turn this adapter admitted, including one still settling,
-   * is never discovered: the coordinator already owns it.
+   * is never discovered: the coordinator already owns it. `signal` aborts once
+   * the coordinator gives up.
    */
   discover?(
     scope: SessionScope,
-    turnId: string
+    turnId: string,
+    signal?: AbortSignal
   ): Promise<
     | {
         handle: ServerTurnHandle
@@ -145,6 +152,14 @@ export class ServerRequestStaleError extends Error {
   constructor() {
     super("The request is no longer open")
     this.name = "ServerRequestStaleError"
+  }
+}
+
+/** A start that went unanswered: the provider may have admitted its turn. */
+export class ServerTurnUncertainError extends Error {
+  constructor() {
+    super("The AOS turn may have started")
+    this.name = "ServerTurnUncertainError"
   }
 }
 
