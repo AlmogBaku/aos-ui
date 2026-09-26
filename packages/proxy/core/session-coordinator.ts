@@ -862,6 +862,8 @@ export class SessionCoordinator {
   readonly #logger: Logger
   readonly #clock: Clock
   readonly #recoveries = new Map<string, Promise<Execution>>()
+  /** Aborts at close, and with it every admission still waiting on a provider. */
+  readonly #closing = new AbortController()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
   readonly #listeners = new Set<{
     key?: string
@@ -1153,10 +1155,9 @@ export class SessionCoordinator {
       // Adopting a turn the runtime started after one this proxy ran is a
       // turn start; a turn lost to a restart, or a wait refreshed, is not.
       if (!existing && this.#executions.has(key)) this.#assertCapacity(key)
-      const discovered = await new Deadline(
-        ADMISSION_DEADLINE_MS,
-        this.#clock
-      ).run((signal) => this.options.engine.discover!(scope, turnId, signal))
+      const discovered = await this.#deadline().run((signal) =>
+        this.options.engine.discover!(scope, turnId, signal)
+      )
       if (!discovered) {
         if (existing && this.#move(turn, generation, { type: "cleared" })) {
           this.#resolveAttention(existing)
@@ -1280,12 +1281,10 @@ export class SessionCoordinator {
       input.turnId,
       access.principalId
     )
-    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock, signal)
+    const deadline = this.#deadline(signal)
     try {
       const at = Date.now()
-      const handle = await deadline.run(() =>
-        this.options.engine.start(scope, input, stage, deadline.signal)
-      )
+      const handle = await this.#startNative(scope, input, stage, deadline)
       const execution: Execution = this.#createExecution({
         scope,
         turn,
@@ -1516,8 +1515,8 @@ export class SessionCoordinator {
         turnId: request.turnId,
         ...(position ? { position } : {}),
       }
-      const handle = await new Deadline(ADMISSION_DEADLINE_MS, this.#clock).run(
-        (signal) => this.options.engine.recover(scope, providerRequest, signal)
+      const handle = await this.#deadline().run((signal) =>
+        this.options.engine.recover(scope, providerRequest, signal)
       )
       const replaced = existing?.segment
       const segment = this.#createSegment({
@@ -1641,6 +1640,7 @@ export class SessionCoordinator {
   close() {
     if (this.#closed) return
     this.#closed = true
+    this.#closing.abort(new Error("Session coordinator is closed"))
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()
     for (const { owner } of this.#turns.values()) owner.dispose()
@@ -1828,17 +1828,55 @@ export class SessionCoordinator {
     try {
       return this.#landed(turn, generation, "running", turnId)
     } catch (error) {
-      const { agentId, sessionId } = scope
-      void handle
-        .stop()
-        .catch((err: unknown) =>
-          this.#logger.warn(
-            { err, agentId, sessionId, turnId },
-            "turn.late-start.stop.failed"
-          )
-        )
+      this.#stopUnowned(scope, handle, turnId)
       throw error
     }
+  }
+
+  /**
+   * An admission's deadline, given up early when its caller gives up or the
+   * coordinator closes. The close signal is joined, never listened to, so no
+   * number of admissions in flight piles listeners on it.
+   */
+  #deadline(signal?: AbortSignal) {
+    const parent = AbortSignal.any(
+      signal ? [signal, this.#closing.signal] : [this.#closing.signal]
+    )
+    return new Deadline(ADMISSION_DEADLINE_MS, this.#clock, parent)
+  }
+
+  /**
+   * Starts a turn on its provider within `deadline`. A start that answers only
+   * after close has nobody to stop it later, so its handle is stopped here.
+   */
+  #startNative(
+    scope: SessionScope,
+    input: PromptTurnInput | RepliesTurnInput,
+    stage: ServerAttachmentStage | undefined,
+    deadline: Deadline
+  ) {
+    return deadline.run(async (signal) => {
+      const handle = await this.options.engine.start(
+        scope,
+        input,
+        stage,
+        signal
+      )
+      if (this.#closed) this.#stopUnowned(scope, handle, input.turnId)
+      return handle
+    })
+  }
+
+  #stopUnowned(scope: SessionScope, handle: ServerTurnHandle, turnId: string) {
+    const { agentId, sessionId } = scope
+    void handle
+      .stop()
+      .catch((err: unknown) =>
+        this.#logger.warn(
+          { err, agentId, sessionId, turnId },
+          "turn.late-start.stop.failed"
+        )
+      )
   }
 
   /** An admission that did not land returns the turn to where it rested. */
@@ -1865,11 +1903,14 @@ export class SessionCoordinator {
   async #startSegment(execution: Execution, input: RepliesTurnInput) {
     const key = scopeKey(execution.scope)
     const { turn, generation } = this.#admit(execution.scope, input.turnId)
-    const deadline = new Deadline(ADMISSION_DEADLINE_MS, this.#clock)
+    const deadline = this.#deadline()
     try {
       const at = Date.now()
-      const handle = await deadline.run((signal) =>
-        this.options.engine.start(execution.scope, input, undefined, signal)
+      const handle = await this.#startNative(
+        execution.scope,
+        input,
+        undefined,
+        deadline
       )
       const segment = this.#createSegment({
         cacheKey: key,

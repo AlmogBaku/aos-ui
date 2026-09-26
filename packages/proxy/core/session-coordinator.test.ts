@@ -2273,24 +2273,29 @@ describe("SessionCoordinator", () => {
     ).resolves.toBeDefined()
   })
 
-  it("stops a start that lands after close, but leaves a recovered turn running", async () => {
+  it("gives up every admission at close, stops a start that lands after it, but leaves a recovered turn running", async () => {
     const { advance } = useFakeClock()
     const started = new EventSource()
     const recovered = new EventSource()
+    const signals: AbortSignal[] = []
     let answerStart!: (handle: ServerTurnHandle) => void
     let answerRecover!: (handle: ServerTurnHandle) => void
     const engine: ServerTurnEngine = {
-      start: vi.fn(
-        () =>
-          new Promise<ServerTurnHandle>((resolve) => {
+      start: vi.fn<ServerTurnEngine["start"]>(
+        (_target, _input, _stage, signal) => {
+          signals.push(signal!)
+          return new Promise((resolve) => {
             answerStart = resolve
           })
+        }
       ),
-      recover: vi.fn(
-        () =>
-          new Promise<ServerTurnHandle>((resolve) => {
+      recover: vi.fn<ServerTurnEngine["recover"]>(
+        (_target, _request, signal) => {
+          signals.push(signal!)
+          return new Promise((resolve) => {
             answerRecover = resolve
           })
+        }
       ),
     }
     const sessions = coordinator(engine)
@@ -2303,11 +2308,14 @@ describe("SessionCoordinator", () => {
     await advance(0)
 
     sessions.close()
-    answerStart(started)
-    answerRecover(recovered)
-
+    // Neither waits out its deadline for a provider that may never answer.
+    expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
     await expect(start).rejects.toThrow("Session coordinator is closed")
     await expect(recover).rejects.toThrow("Session coordinator is closed")
+    answerStart(started)
+    answerRecover(recovered)
+    await advance(0)
+
     // Nothing owns the start any more; the recovered turn is the user's.
     expect(started.stop).toHaveBeenCalledOnce()
     expect(recovered.stop).not.toHaveBeenCalled()
