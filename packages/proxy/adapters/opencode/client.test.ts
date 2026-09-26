@@ -10,6 +10,7 @@ import {
   OpenCodeMutationUncertainError,
   createOpenCodeClient,
 } from "./client"
+import { openCodeFailure } from "./failures"
 
 type NativeRequest = {
   method: string
@@ -104,6 +105,38 @@ describe("OpenCodeClient", () => {
         "Basic b3BlcmF0b3I6cHctdGVzdC0x",
         "Basic b3BlcmF0b3I6cHctdGVzdC0y",
       ])
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it("holds a password OpenCode refused as refused until it reads another or OpenCode takes it", async () => {
+    let accepts = false
+    const server = await nativeServer(() =>
+      accepts
+        ? Response.json({
+            data: [],
+            cursor: { previous: "previous-page", next: "following-page" },
+          })
+        : new Response(null, { status: 401 })
+    )
+    let password = "pw-test-1"
+    const subject = client(server.baseUrl, async () => password)
+
+    try {
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      await expect(subject.sessions.list()).rejects.toMatchObject({
+        code: "authentication",
+      })
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      password = "pw-test-2"
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      password = "pw-test-1"
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      accepts = true
+      await subject.sessions.list()
+      await expect(subject.credentialRefused()).resolves.toBe(false)
     } finally {
       await subject.close()
       await server.close()
@@ -389,30 +422,30 @@ describe("OpenCodeClient", () => {
     }
   })
 
-  it("aborts each active observation exactly once when closed repeatedly", async () => {
-    let resolveOpened: (() => void) | undefined
-    const opened = new Promise<void>((resolve) => {
-      resolveOpened = resolve
-    })
-    const server = await nativeServer(async (request) => {
-      resolveOpened?.()
-      await new Promise<void>((resolve) => {
-        request.signal.addEventListener("abort", () => resolve(), {
-          once: true,
+  it("aborts each open observation exactly once when closed repeatedly", async () => {
+    const subject = createOpenCodeClient({
+      baseUrl: "http://127.0.0.1:1",
+      directory: "/workspaces/aos",
+      username: "operator",
+      password: async () => "pw-test-1",
+      // An accepted stream that stays open until its request is aborted.
+      fetcher: async (input) => {
+        const { signal } = input as Request
+        signal.throwIfAborted()
+        const body = new ReadableStream({
+          start: (stream) =>
+            signal.addEventListener("abort", () => stream.error(signal.reason)),
         })
-      })
-      return new Response(null, {
-        headers: { "content-type": "text/event-stream" },
-      })
+        return new Response(body, {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
     })
-    const subject = client(server.baseUrl)
 
     const stream = await subject.sessions.events("session-1")
     const next = stream[Symbol.asyncIterator]().next()
-    await opened
     await Promise.all([subject.close(), subject.close()])
     await expect(next).resolves.toEqual({ done: true, value: undefined })
-    await server.close()
   })
 
   it.each([
@@ -447,7 +480,7 @@ describe("OpenCodeClient", () => {
     }
   )
 
-  it("ends a native call that never answers at the adapter call deadline", async () => {
+  it("ends a native call, or a stream's opening, that never answers at the adapter call deadline", async () => {
     const clock = useFakeClock()
     const subject = createOpenCodeClient({
       baseUrl: "http://127.0.0.1:1",
@@ -460,17 +493,21 @@ describe("OpenCodeClient", () => {
           signal.addEventListener("abort", () => reject(signal.reason))
         }),
     })
-    const listed = subject.sessions.list().catch((error: unknown) => error)
+    const settled = (call: Promise<unknown>) =>
+      call.catch((error: unknown) => error)
+    const calls = [
+      settled(subject.sessions.list()),
+      settled(subject.sessions.events("session-1")),
+    ]
 
     await clock.advance(14_999)
     await expect(
-      Promise.race([listed, Promise.resolve("pending")])
+      Promise.race([...calls, Promise.resolve("pending")])
     ).resolves.toBe("pending")
     await clock.advance(1)
-    await expect(listed).resolves.toMatchObject({
-      name: "OpenCodeClientError",
-      code: "connection_interrupted",
-    })
+    // A read past its deadline is unavailable.
+    for (const call of calls)
+      expect(openCodeFailure(await call)?.kind).toBe("unavailable")
     await subject.close()
   })
 
@@ -531,7 +568,7 @@ describe("OpenCodeClient", () => {
     [401, "authentication"],
     [503, "unavailable"],
   ] as const)(
-    "preserves status-only SSE %i failures as %s",
+    "refuses to open an event stream OpenCode answers %i, as %s",
     async (status, code) => {
       const server = await nativeServer(
         () =>
@@ -543,8 +580,7 @@ describe("OpenCodeClient", () => {
       const subject = client(server.baseUrl)
 
       try {
-        const stream = await subject.sessions.events("session-1")
-        await expect(stream[Symbol.asyncIterator]().next()).rejects.toEqual(
+        await expect(subject.sessions.events("session-1")).rejects.toEqual(
           expect.objectContaining({ name: "OpenCodeClientError", code })
         )
       } finally {
@@ -553,28 +589,4 @@ describe("OpenCodeClient", () => {
       }
     }
   )
-
-  it("releases an unconsumed observation when it is aborted", async () => {
-    let requests = 0
-    const server = await nativeServer(() => {
-      requests += 1
-      return new Response(null, {
-        headers: { "content-type": "text/event-stream" },
-      })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      const stream = await subject.sessions.events("session-1")
-      stream.abort()
-      await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
-        done: true,
-        value: undefined,
-      })
-      expect(requests).toBe(0)
-    } finally {
-      await subject.close()
-      await server.close()
-    }
-  })
 })
