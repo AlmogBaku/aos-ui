@@ -175,22 +175,16 @@ export function createSessions(
       const created = existing?.pending === true && hasSession(scope)
       if (existing && !existing.detached && !created) return existing
       if (created) existing.part()
-      const log = (
-        level: "info" | "error",
-        event: string,
-        fields: Record<string, unknown>
-      ) => context.logger[level](fields, event)
+      const logger = context.logger.child({ sessionId: scope.sessionId })
       const membership = context.channels.join(memberOf(client), scope, {
         membershipId: `${context.connectionId}:${scope.sessionId}`,
-        log,
+        logger,
         describe: (cause) => errorNotificationOf(context.publicError, cause),
         subscribeRow: (listener) =>
-          catalog.subscribe(scope, listener, (cause) =>
-            log("error", "session.read.failed", {
-              sessionId: scope.sessionId,
-              errorCode: errorNotificationOf(context.publicError, cause).code,
-            })
-          ),
+          catalog.subscribe(scope, listener, (cause) => {
+            const { code } = errorNotificationOf(context.publicError, cause)
+            logger.error({ errorCode: code }, "session.read.failed")
+          }),
       })
       memberships.set(scope.sessionId, membership)
       return membership

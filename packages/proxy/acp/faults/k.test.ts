@@ -3,7 +3,14 @@ import { describe, expect, it } from "vitest"
 
 import { AOS_JSONRPC_ERRORS } from "../../../protocol/acp"
 import { useFakeClock } from "../../../../test/support/fake-clock"
-import { harness, open, SESSION, settled, type Recorded } from "../test-harness"
+import {
+  CONNECTION,
+  harness,
+  open,
+  SESSION,
+  settled,
+  type Recorded,
+} from "../test-harness"
 
 const modelOptions = (entry: Recorded) =>
   JSON.stringify(entry.params).includes("config_option_update")
@@ -36,6 +43,40 @@ describe("connection faults", () => {
       ])
     )
     expect(test.observers()).toBe(0)
+  })
+
+  it("writes one line for a failed command, naming the request that sent it", async () => {
+    const test = await harness()
+    await test.list()
+    test.faults.failOnce("models")
+
+    await expect(
+      test.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value: "opus",
+      })
+    ).rejects.toThrow()
+
+    expect(
+      test.logs
+        .records()
+        .filter(({ message }) => message === "connection.command.failed")
+    ).toEqual([
+      {
+        level: "warn",
+        message: "connection.command.failed",
+        fields: {
+          connectionId: CONNECTION,
+          role: "operator",
+          command: "set-config",
+          requestId: 2,
+          errorCode: "internal_error",
+        },
+      },
+    ])
+    test.close()
   })
 })
 

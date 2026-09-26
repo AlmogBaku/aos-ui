@@ -189,6 +189,14 @@ export function publicRequestError(
   return classified ? RUNTIME_ERRORS[classified.code]() : cause
 }
 
+/** The machine name a public reply carries `error` as, or `internal_error`. */
+export function publicCodeOf(error: unknown) {
+  return (
+    (error instanceof RequestError && PUBLIC_ERROR_NAMES.get(error.code)) ||
+    "internal_error"
+  )
+}
+
 /**
  * The code and message an `_aos/error` notification reports a failure with.
  * The proxy has no operator-facing copy: a public failure travels as its
@@ -198,9 +206,6 @@ export function errorNotificationOf(
   publicError: AcpConnectionContext["publicError"],
   cause: unknown
 ) {
-  const mapped = publicRequestError(publicError, cause)
-  const code =
-    (mapped instanceof RequestError && PUBLIC_ERROR_NAMES.get(mapped.code)) ||
-    "internal_error"
+  const code = publicCodeOf(publicRequestError(publicError, cause))
   return { code, message: code }
 }

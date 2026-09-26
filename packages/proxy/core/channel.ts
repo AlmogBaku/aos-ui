@@ -510,7 +510,10 @@ type CreateChannelsOptions = Omit<
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
   runtime: Pick<ServerRuntime, "history">
-  /** Where each membership writes its transitions. */
+  /**
+   * The logger the membership machine is set up on; each membership writes
+   * on its own.
+   */
   logger: Logger
   clock?: Clock
 }
@@ -519,12 +522,8 @@ type CreateChannelsOptions = Omit<
 export type MembershipOptions = {
   /** The membership the coordinator knows this member's stream by. */
   membershipId: string
-  /** One structured line per Session-level event; the transport redacts it. */
-  log: (
-    level: "info" | "error",
-    event: string,
-    fields: Record<string, unknown>
-  ) => void
+  /** Where the membership writes, already naming its member and its Session. */
+  logger: Logger
   /** The public code and message a failure is logged under. */
   describe: (cause: unknown) => { code: string; message: string }
   /** The Session's row as a replaying cell: the known row, then each change. */
@@ -664,11 +663,10 @@ export function createChannels(options: CreateChannelsOptions) {
     /** Joins one member to one Session until the membership detaches. */
     join(member: Member, scope: MemberScope, membership: MembershipOptions) {
       const owner = createOwner(machine, {
-        logger,
+        logger: membership.logger,
         clock,
         bindings: {
           agentId: scope.agentId,
-          sessionId: scope.sessionId,
           membershipId: membership.membershipId,
         },
       })
@@ -843,10 +841,10 @@ class Membership {
       report: (cause) => {
         if (this.detached) return
         const failure = options.describe(cause)
-        this.#log("error", "channel.failed", {
-          errorCode: failure.code,
-          message: failure.message,
-        })
+        options.logger.error(
+          { errorCode: failure.code, message: failure.message },
+          "channel.failed"
+        )
       },
     }
   }
@@ -1427,10 +1425,10 @@ class Membership {
 
   /** Gives the Session one reply of this member's. */
   async #settle(reply: RequestReply) {
-    this.#log("info", "acp.request.answered", {
-      requestId: reply.requestId,
-      status: reply.status,
-    })
+    this.#options.logger.info(
+      { requestId: reply.requestId, status: reply.status },
+      "acp.request.answered"
+    )
     // Before the answer resolves this request, so the member answering it
     // is not withdrawn its own request, and a second decline finds none.
     this.#offered.delete(reply.requestId)
@@ -1541,17 +1539,6 @@ class Membership {
     return this.#options.coordinator
   }
 
-  #log(
-    level: "info" | "error",
-    event: string,
-    fields: Record<string, unknown>
-  ) {
-    this.#options.log(level, event, {
-      sessionId: this.#addressed.sessionId,
-      ...fields,
-    })
-  }
-
   /**
    * Whether Stop was acknowledged for the stream being read. The coordinator
    * clears its own `stopping` state as soon as the provider settles, which is
@@ -1653,12 +1640,15 @@ class Membership {
    * itself the Session from the start, which is what invalidation asks for.
    */
   async #resync(turnId: string, overflow: FanoutOverflowError) {
-    this.#log("error", "membership.detached", {
-      membershipId: this.#options.membershipId,
-      turnId,
-      events: overflow.events,
-      bytes: overflow.bytes,
-    })
+    this.#options.logger.error(
+      {
+        membershipId: this.#options.membershipId,
+        turnId,
+        events: overflow.events,
+        bytes: overflow.bytes,
+      },
+      "membership.detached"
+    )
     this.#send({ type: "fell-behind" })
     await this.#invalidate()
   }

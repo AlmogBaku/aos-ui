@@ -726,10 +726,11 @@ function joined(
     },
     live: () => state.live,
   }
+  const { logger } = captureLogs()
   const membership = createChannels({
     coordinator,
     runtime: NO_HISTORY,
-    logger: captureLogs().logger,
+    logger,
   }).join(
     {
       principal: { id: GUEST, role: "guest" },
@@ -739,7 +740,7 @@ function joined(
     SCOPE,
     {
       membershipId: "subscriber-1",
-      log: () => undefined,
+      logger,
       describe: () => ({ code: "failed", message: "failed" }),
       subscribeRow: () => () => undefined,
     }
