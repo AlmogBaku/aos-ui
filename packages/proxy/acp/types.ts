@@ -10,7 +10,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
-import type { Logger } from "../../lifecycle"
+import type { Clock, Logger } from "../../lifecycle"
 import type {
   SessionHistoryResponse,
   SessionModelsResponse,
@@ -72,6 +72,10 @@ type AcpConnectionBase = {
    * its version so a tab running another build reloads; absent without one.
    */
   buildId?: string
+  /** The clock injected by the service; defaults to performance.now when absent. */
+  clock?: Clock
+  /** Called by the agent once initialize succeeds; clears the handshake deadline. */
+  handshakeComplete?: () => void
 }
 
 /**

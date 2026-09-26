@@ -12,6 +12,7 @@ import {
   createOwner,
   defaultClock,
   ownerSetup,
+  type Clock,
   type Logger,
   type OwnerContext,
 } from "../../lifecycle"
@@ -144,11 +145,11 @@ type ConnectionSignal = { type: "initialized" } | { type: "closed" }
  * while it serves its browser, and closed once its socket closes or its
  * handshake fails. What it holds is on its stack, so every exit releases it.
  */
-function connectionMachine(logger: Logger) {
+function connectionMachine(logger: Logger, clock: Clock) {
   return ownerSetup<OwnerContext, ConnectionSignal>(
     "connection",
     logger,
-    defaultClock
+    clock
   ).createMachine({
     context: { generation: 0 },
     initial: "handshaking",
@@ -742,9 +743,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onConnect(async (connection) => {
     const { logger } = context
     // The connection's logger already carries its `connectionId` and `role`.
-    const owner = createOwner(connectionMachine(logger), {
+    const owner = createOwner(connectionMachine(logger, context.clock ?? defaultClock), {
       logger,
-      clock: defaultClock,
+      clock: context.clock ?? defaultClock,
       bindings: {},
     })
     const { stack } = owner
@@ -760,6 +761,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       owner.actor.send({ type: "closed" })
       return
     }
+    context.handshakeComplete?.()
     owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.

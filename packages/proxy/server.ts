@@ -1,3 +1,4 @@
+import type { Logger } from "../lifecycle"
 import { sleep, withinGrace } from "./grace"
 
 type FetchHandler = (
@@ -13,6 +14,15 @@ type Server = {
 /** How often shutdown re-reads the listener's in-flight request count. */
 const DRAIN_POLL_MS = 10
 
+/**
+ * Bun WebSocket server options applied to every mount. These match the Values
+ * table: idleTimeout 120 s, sendPings, 1.1 MB frame cap, 16 MiB backpressure
+ * limit, and automatic close when that limit is exceeded.
+ */
+const WS_IDLE_TIMEOUT_S = 120
+const WS_MAX_PAYLOAD = 1_100_000
+const WS_BACKPRESSURE_LIMIT = 16 * 1_024 * 1_024
+
 /** One authorized upgrade: its principal and any headers the 101 must carry. */
 export type SocketUpgrade = {
   principalId: string
@@ -26,7 +36,11 @@ export type ProxySocket = {
 }
 
 export type ProxySocketPeer = {
-  send(raw: string): void
+  /**
+   * Returns the number of bytes sent, or -1 when the frame was dropped because
+   * the peer's backpressure limit is exceeded or its socket is already closed.
+   */
+  send(raw: string): number
   close(code: number, reason: string): void
 }
 
@@ -58,7 +72,7 @@ type SocketData<Upgrade extends SocketUpgrade> = {
 }
 type SocketPeer<Upgrade extends SocketUpgrade> = {
   data: SocketData<Upgrade>
-  send(raw: string): void
+  send(raw: string): number
   close(code?: number, reason?: string): void
 }
 type UpgradeServer = {
@@ -75,6 +89,11 @@ type ServeOptions<Upgrade extends SocketUpgrade> = {
   port: number
   fetch: FetchHandler
   websocket?: {
+    idleTimeout?: number
+    sendPings?: boolean
+    maxPayloadLength?: number
+    backpressureLimit?: number
+    closeOnBackpressureLimit?: boolean
     open(peer: SocketPeer<Upgrade>): void
     message(
       peer: SocketPeer<Upgrade>,
@@ -110,6 +129,8 @@ export type StartProxyServerOptions<
   onSettled?: (settlement: ShutdownSettlement) => void
   serve?: Serve
   installSignalHandlers?: boolean
+  /** Logs socket and peer failures; silent when absent. */
+  logger?: Logger
 }
 
 function bunServe(): Serve {
@@ -137,9 +158,11 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
   options: StartProxyServerOptions<Upgrade>
 ) {
   const mounts = (options.sockets ?? []).map((mount) => mountState(mount))
-  const failPeer = (peer: SocketPeer<Upgrade>) => {
+  const { logger } = options
+  const failPeer = (peer: SocketPeer<Upgrade>, cause?: unknown) => {
     if (peer.data.failed) return
     peer.data.failed = true
+    if (cause !== undefined) logger?.error({ err: cause }, "acp.peer.failed")
     try {
       peer.data.socket?.close()
     } catch {
@@ -155,6 +178,11 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
   const websocket =
     mounts.length > 0
       ? {
+          idleTimeout: WS_IDLE_TIMEOUT_S,
+          sendPings: true,
+          maxPayloadLength: WS_MAX_PAYLOAD,
+          backpressureLimit: WS_BACKPRESSURE_LIMIT,
+          closeOnBackpressureLimit: true,
           open(peer: SocketPeer<Upgrade>) {
             const mount = peer.data.mount
             if (mount.reserved > 0) mount.reserved -= 1
@@ -168,8 +196,8 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
                 close: (code, reason) => peer.close(code, reason),
               })
               mount.peers.add(peer)
-            } catch {
-              failPeer(peer)
+            } catch (cause) {
+              failPeer(peer, cause)
             }
           },
           message(
@@ -179,7 +207,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
             const frame = raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw
             void Promise.resolve()
               .then(() => peer.data.socket?.receive(frame))
-              .catch(() => failPeer(peer))
+              .catch((cause: unknown) => failPeer(peer, cause))
           },
           close(peer: SocketPeer<Upgrade>) {
             peer.data.mount.peers.delete(peer)
