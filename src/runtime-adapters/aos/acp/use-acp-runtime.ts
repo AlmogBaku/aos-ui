@@ -614,13 +614,13 @@ function createAcpController({
     }
   }
 
-  void connection.initialized.then(
+  connection.initialized.then(
     ({ extensions }) => {
       pagesEnabled = extensions.historyPages
       notify()
     },
     // A failed handshake surfaces through the connection's status.
-    () => {}
+    (err: unknown) => runtimeLog().warn({ err }, "acp.connection.initialized_failed")
   )
 
   return {
@@ -756,7 +756,7 @@ function createQueue(controller: AcpController) {
       const releaseIfNoRun = () => {
         if (busyEdges === edgesAtDispatch) queue.notifyIdle()
       }
-      void controller.send(message).then(releaseIfNoRun, releaseIfNoRun)
+      controller.send(message).then(releaseIfNoRun, releaseIfNoRun)
     },
   })
   return { queue, markBusy: () => (busyEdges += 1) }
