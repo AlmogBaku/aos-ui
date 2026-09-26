@@ -18,6 +18,7 @@ import type {
 } from "./attachment-registry"
 import {
   HermesTurnEngine,
+  hermesRecoveryToken,
   type HermesRecovery,
   type HermesTurnScope,
 } from "./run"
@@ -1734,7 +1735,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 20 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 20 }),
     })
 
     await expect(collect(handle)).resolves.toEqual([
@@ -1899,7 +1900,7 @@ describe("HermesRunEngine", () => {
       await engine.recover(scope, {
         sessionId: scope.sessionId,
         turnId: "run-1",
-        position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
       })
     )
 
@@ -1951,7 +1952,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 10 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 10 }),
     })
 
     await expect(collect(handle)).resolves.toEqual([
@@ -2138,7 +2139,10 @@ describe("HermesRunEngine", () => {
       payload: { message_id: "message-42" },
     })
 
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-7", lastSeen: 41 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-7",
+      lastSeen: 41,
+    })
   })
 
   it("reattaches an interrupted active turn and replays without resubmitting the prompt", async () => {
@@ -2907,7 +2911,10 @@ describe("HermesRunEngine", () => {
       const handle = await engine.start(scope, input())
 
       expect(prompts).toEqual(["Hello Hermes"])
-      expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }))
+      expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+        epoch: "epoch-1",
+        lastSeen: 0,
+      })
     }
   })
 
@@ -3104,7 +3111,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 10 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 10 }),
     })
 
     await expect(collect(handle)).resolves.toEqual([
@@ -3183,7 +3190,7 @@ describe("HermesRunEngine", () => {
     const request = {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
     }
 
     await expect(engine.recover(scope, request)).rejects.toMatchObject({
@@ -3259,7 +3266,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
     })
 
     await expect(collect(handle)).resolves.toEqual([
@@ -3323,7 +3330,7 @@ describe("HermesRunEngine", () => {
       reconnect.recover(scope, {
         sessionId: scope.sessionId,
         turnId: "run-1",
-        position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
       })
     ).rejects.toMatchObject({
       code: "AOS_PROVIDER_UNAVAILABLE",
@@ -3451,7 +3458,7 @@ describe("HermesRunEngine", () => {
         await recovered.recover(scope, {
           sessionId: scope.sessionId,
           turnId: "run-1",
-          position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+          position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
         })
       )
     ).toEqual([
@@ -3876,7 +3883,7 @@ describe("HermesRunEngine", () => {
       await recovery.recover(scope, {
         sessionId: scope.sessionId,
         turnId: "run-1",
-        position: JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }),
+        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
       })
     )
     expect(recovered).toEqual([
@@ -4519,7 +4526,10 @@ describe("HermesRunEngine", () => {
         code: "AOS_CONNECTION_INTERRUPTED",
       },
     ])
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 2 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-1",
+      lastSeen: 2,
+    })
 
     const resumed = await engine.recover(scope, {
       sessionId: scope.sessionId,
@@ -4721,7 +4731,10 @@ describe("HermesRunEngine", () => {
       },
     ])
     expect(submissions).toBe(1)
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-1",
+      lastSeen: 0,
+    })
 
     const resumed = await engine.recover(scope, {
       sessionId: scope.sessionId,
@@ -4780,7 +4793,10 @@ describe("HermesRunEngine", () => {
     await issued
     releaseSubmit()
     const handle = await starting
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-1",
+      lastSeen: 0,
+    })
 
     releasePage({
       epoch: "epoch-1",
@@ -4798,7 +4814,10 @@ describe("HermesRunEngine", () => {
         code: "AOS_SEND_UNCERTAIN",
       },
     ])
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-1",
+      lastSeen: 0,
+    })
     expect(cursors).toEqual([0])
   })
 
@@ -6004,7 +6023,7 @@ describe("HermesRunEngine", () => {
       engine.recover(scope, {
         sessionId: scope.sessionId,
         turnId: "run-1",
-        position: JSON.stringify({ epoch: "epoch-1", lastSeen: 1 }),
+        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 1 }),
       })
     ).resolves.toBeDefined()
   })
@@ -6041,7 +6060,10 @@ describe("HermesRunEngine", () => {
 
     // The observer was released, so the cursor stayed at the last frame this
     // run delivered: nothing published after the Stop was consumed and lost.
-    expect(handle.recoveryPosition()).toBe(JSON.stringify({ epoch: "epoch-1", lastSeen: 0 }))
+    expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
+      epoch: "epoch-1",
+      lastSeen: 0,
+    })
     const recovered = await collect(
       await engine.recover(scope, {
         sessionId: scope.sessionId,
@@ -6084,7 +6106,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: "epoch-1", lastSeen: 5 }),
+      position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 5 }),
     })
     publish(turn.idle())
     const events = await collect(handle)

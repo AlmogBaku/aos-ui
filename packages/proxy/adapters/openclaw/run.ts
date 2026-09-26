@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 import {
   isRepliesTurn,
   StopReason,
@@ -708,26 +710,20 @@ function providerUnavailable() {
   )
 }
 
-/** Encodes an OpenClaw run position as an opaque recovery token. */
-function encodeOpenClawToken(generation: string, lastSeen: number): string {
-  return JSON.stringify({ generation, lastSeen })
-}
+/** Where a recovery continues an OpenClaw run: its subscription and last event. */
+const OpenClawPositionSchema = z.object({
+  generation: z.number(),
+  lastSeen: z.number(),
+})
 
-/** Decodes an OpenClaw recovery token minted by this adapter. */
-function decodeOpenClawToken(token: string): { generation: string; lastSeen: number } {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const parsed = JSON.parse(token)
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof (parsed as Record<string, unknown>).generation !== "string" ||
-    typeof (parsed as Record<string, unknown>).lastSeen !== "number"
-  )
-    throw new Error("OpenClaw recovery token is invalid")
-  return {
-    generation: (parsed as Record<string, unknown>).generation as string,
-    lastSeen: (parsed as Record<string, unknown>).lastSeen as number,
-  }
+/** The opaque token a handle names its position by; only this adapter reads it. */
+const openClawRecoveryToken = {
+  mint: (position: z.infer<typeof OpenClawPositionSchema>) =>
+    JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : OpenClawPositionSchema.parse(JSON.parse(token)),
 }
 
 export class OpenClawTurnEngine implements ServerTurnEngine {
@@ -1095,7 +1091,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const active = this.#bindRun(scope, request.turnId, lease, holder, {
         baseline,
         nativeRunId: nativeRunId ?? "",
-        lastSeen: (request.position ? decodeOpenClawToken(request.position) : undefined)?.lastSeen ?? 0,
+        lastSeen: openClawRecoveryToken.read(request.position)?.lastSeen ?? 0,
         ...(inFlightSnapshot ? { shown: inFlightSnapshot } : {}),
       })
       if (!nativeRunId)
@@ -1257,7 +1253,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             })(),
             settled: Promise.resolve(),
             stop: () => this.#stopWaiting(waiting),
-            recoveryPosition: () => encodeOpenClawToken(String(generation), 0),
+            recoveryPosition: () =>
+              openClawRecoveryToken.mint({ generation, lastSeen: 0 }),
           },
         }
       }
@@ -1473,7 +1470,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => this.#stop(active),
-      recoveryPosition: () => encodeOpenClawToken(String(this.#subscriptions.generation), active.lastSeen),
+      recoveryPosition: () =>
+        openClawRecoveryToken.mint({
+          generation: this.#subscriptions.generation,
+          lastSeen: active.lastSeen,
+        }),
     }
   }
 

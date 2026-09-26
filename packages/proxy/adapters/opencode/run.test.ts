@@ -16,7 +16,7 @@ import { ServerTurnConflictError } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeContent } from "./content"
-import { OpenCodeTurnEngine } from "./run"
+import { OpenCodeTurnEngine, openCodeRecoveryToken } from "./run"
 
 const scope = {
   agentId: "writer",
@@ -690,7 +690,10 @@ describe("OpenCodeRunEngine", () => {
       const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
         sessionId: scope.sessionId,
         turnId: "run-recovered",
-        position: JSON.stringify({ epoch: `opencode:${scope.providerSessionId}`, lastSeen: 1 }),
+        position: openCodeRecoveryToken.mint({
+          epoch: `opencode:${scope.providerSessionId}`,
+          lastSeen: 1,
+        }),
       })
       const events = await collect(handle)
 
@@ -729,7 +732,10 @@ describe("OpenCodeRunEngine", () => {
     const handle = await new OpenCodeTurnEngine(state.native).recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-recovered",
-      position: JSON.stringify({ epoch: `opencode:${scope.providerSessionId}`, lastSeen: 1 }),
+      position: openCodeRecoveryToken.mint({
+        epoch: `opencode:${scope.providerSessionId}`,
+        lastSeen: 1,
+      }),
     })
     const events = await collect(handle)
 
@@ -866,7 +872,11 @@ describe("OpenCodeRunEngine", () => {
         name: "read",
       })
     )
-    await until(() => expect(JSON.parse(handle.recoveryPosition()!).lastSeen).toBe(1))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(handle.recoveryPosition())?.lastSeen
+      ).toBe(1)
+    )
     state.observation.fail()
 
     expect((await collect(handle)).map((event) => event.kind)).toEqual([
@@ -917,7 +927,11 @@ describe("OpenCodeRunEngine", () => {
         delivery: "queue",
       })
     )
-    await until(() => expect(JSON.parse(handle.recoveryPosition()!).lastSeen).toBe(0))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(handle.recoveryPosition())?.lastSeen
+      ).toBe(0)
+    )
     state.observation.fail()
     await until(() => expect(state.observation.abort).toHaveBeenCalled())
 
@@ -978,7 +992,11 @@ describe("OpenCodeRunEngine", () => {
         delivery: "queue",
       })
     )
-    await until(() => expect(JSON.parse(handle.recoveryPosition()!).lastSeen).toBe(0))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(handle.recoveryPosition())?.lastSeen
+      ).toBe(0)
+    )
 
     await expect(handle.stop()).resolves.toBe("idle")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
@@ -1160,7 +1178,11 @@ describe("OpenCodeRunEngine", () => {
         delivery: "queue",
       })
     )
-    await until(() => expect(JSON.parse(prior.recoveryPosition()!).lastSeen).toBe(0))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(prior.recoveryPosition())?.lastSeen
+      ).toBe(0)
+    )
     first.fail()
     await prior.settled
 
@@ -1169,7 +1191,10 @@ describe("OpenCodeRunEngine", () => {
     const recovered = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: `opencode:${scope.providerSessionId}`, lastSeen: 0 }),
+      position: openCodeRecoveryToken.mint({
+        epoch: `opencode:${scope.providerSessionId}`,
+        lastSeen: 0,
+      }),
     })
     const recoveredEventsPromise = collect(recovered)
     running = false
@@ -1236,7 +1261,11 @@ describe("OpenCodeRunEngine", () => {
         delivery: "queue",
       })
     )
-    await until(() => expect(JSON.parse(prior.recoveryPosition()!).lastSeen).toBe(0))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(prior.recoveryPosition())?.lastSeen
+      ).toBe(0)
+    )
     first.fail()
     await prior.settled
 
@@ -1245,7 +1274,10 @@ describe("OpenCodeRunEngine", () => {
     const recovered = await engine.recover(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: JSON.stringify({ epoch: `opencode:${scope.providerSessionId}`, lastSeen: 0 }),
+      position: openCodeRecoveryToken.mint({
+        epoch: `opencode:${scope.providerSessionId}`,
+        lastSeen: 0,
+      }),
     })
     const recoveredEventsPromise = collect(recovered)
 
@@ -1295,7 +1327,11 @@ describe("OpenCodeRunEngine", () => {
         provider: { executed: true },
       })
     )
-    await until(() => expect(JSON.parse(handle.recoveryPosition()!).lastSeen).toBe(1))
+    await until(() =>
+      expect(
+        openCodeRecoveryToken.read(handle.recoveryPosition())?.lastSeen
+      ).toBe(1)
+    )
 
     const events = await collect(handle)
     expect(events).toHaveLength(2)

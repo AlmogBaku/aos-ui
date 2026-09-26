@@ -600,7 +600,7 @@ describe("OpenCodeEventProjector", () => {
     expect(() => projector.accept(malformed)).toThrow(
       OpenCodeEventValidationError
     )
-    expect(JSON.parse(projector.recoveryPosition()).lastSeen).toBe(0)
+    expect(projector.recoveryPosition().lastSeen).toBe(0)
 
     expect(() =>
       projector.accept(
@@ -623,7 +623,7 @@ describe("OpenCodeEventProjector", () => {
         )
       )
     ).toThrow(OpenCodeEventValidationError)
-    expect(JSON.parse(projector.recoveryPosition()).lastSeen).toBe(0)
+    expect(projector.recoveryPosition().lastSeen).toBe(0)
   })
 
   it("rejects forward gaps and unknown durable event types without advancing", () => {
@@ -641,7 +641,7 @@ describe("OpenCodeEventProjector", () => {
     expect(() =>
       projector.accept(live(4, "session.next.future.unknown", { timestamp: 4 }))
     ).toThrow(OpenCodeEventValidationError)
-    expect(JSON.parse(projector.recoveryPosition()).lastSeen).toBe(3)
+    expect(projector.recoveryPosition().lastSeen).toBe(3)
   })
 
   it("allowlists and validates intentionally ignored prompt admission events", () => {
@@ -659,7 +659,7 @@ describe("OpenCodeEventProjector", () => {
         })
       )
     ).toEqual({ events: [], admissionId: "aos-admission" })
-    expect(JSON.parse(projector.recoveryPosition()).lastSeen).toBe(1)
+    expect(projector.recoveryPosition().lastSeen).toBe(1)
     expect(
       projector.accept(
         live(2, "session.next.prompt.admitted", {

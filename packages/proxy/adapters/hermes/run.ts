@@ -8,6 +8,8 @@
  * a run ends, `run-failures` holds every public failure, `run-frames` reads
  * native frames and `event-queue` bounds what the run publishes.
  */
+import { z } from "zod"
+
 import {
   CompactionStatus,
   isRepliesTurn,
@@ -130,26 +132,20 @@ const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_REWIND_SOURCE_LENGTH = 256
 
-/** Encodes Hermes stream position as an opaque recovery token. */
-function encodeHermesToken(epoch: string, lastSeen: number): string {
-  return JSON.stringify({ epoch, lastSeen })
-}
+/** Where a recovery continues a Hermes stream: its epoch and last frame seen. */
+const HermesPositionSchema = z.object({
+  epoch: z.string(),
+  lastSeen: z.number(),
+})
+type HermesPosition = z.infer<typeof HermesPositionSchema>
 
-/** Decodes a Hermes recovery token minted by this adapter. */
-function decodeHermesToken(token: string): { epoch: string; lastSeen: number } {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const parsed = JSON.parse(token)
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof (parsed as Record<string, unknown>).epoch !== "string" ||
-    typeof (parsed as Record<string, unknown>).lastSeen !== "number"
-  )
-    throw new Error("Hermes recovery token is invalid")
-  return {
-    epoch: (parsed as Record<string, unknown>).epoch as string,
-    lastSeen: (parsed as Record<string, unknown>).lastSeen as number,
-  }
+/** The opaque token a handle names its position by; only this adapter reads it. */
+export const hermesRecoveryToken = {
+  mint: (position: HermesPosition) => JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : HermesPositionSchema.parse(JSON.parse(token)),
 }
 
 export class HermesTurnEngine {
@@ -311,7 +307,7 @@ export class HermesTurnEngine {
         "The reconnect position is not authorized for this Session"
       )
     const key = sessionKey(scope)
-    const pos = request.position ? decodeHermesToken(request.position) : undefined
+    const position = hermesRecoveryToken.read(request.position)
     const existing = this.#active.get(key)
     if (existing) {
       if (
@@ -321,7 +317,7 @@ export class HermesTurnEngine {
         throw new ServerTurnConflictError()
       const handle = await this.#reattach(
         existing,
-        pos ?? { epoch: existing.epoch, lastSeen: existing.lastSeen }
+        position ?? { epoch: existing.epoch, lastSeen: existing.lastSeen }
       )
       return { handle, fromStart: false }
     }
@@ -334,8 +330,12 @@ export class HermesTurnEngine {
       fromStart = await attachTurn(
         this.#host,
         active,
-        pos
-          ? { kind: "position", epoch: pos.epoch, after: pos.lastSeen }
+        position
+          ? {
+              kind: "position",
+              epoch: position.epoch,
+              after: position.lastSeen,
+            }
           : // Nothing published a cursor for this run: only Hermes' own open
             // turn identifies it.
             { kind: adopt ? "adopt" : "discover" }
@@ -515,7 +515,7 @@ export class HermesTurnEngine {
   /** The same run continues on a new stream from the browser's own cursor. */
   async #reattach(
     active: ActiveTurn,
-    position: { epoch: string; lastSeen: number }
+    position: HermesPosition
   ): Promise<HermesTurnHandle> {
     active.queue = startedTurnQueue()
     active.uncertain = false
@@ -618,7 +618,11 @@ export class HermesTurnEngine {
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
       steer: (request) => steerTurn(this.#host, active, request.text),
-      recoveryPosition: () => encodeHermesToken(active.epoch, active.lastSeen),
+      recoveryPosition: () =>
+        hermesRecoveryToken.mint({
+          epoch: active.epoch,
+          lastSeen: active.lastSeen,
+        }),
     }
   }
 

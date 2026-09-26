@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { z } from "zod"
 
 import {
   TurnEventKind,
@@ -164,21 +165,20 @@ function integer(value: unknown) {
     : undefined
 }
 
-/** Parses an OpenCode recovery token minted by this adapter. */
-function decodeOpenCodeToken(token: string): { epoch: string; lastSeen: number } {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-  const parsed = JSON.parse(token)
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    typeof (parsed as Record<string, unknown>).epoch !== "string" ||
-    typeof (parsed as Record<string, unknown>).lastSeen !== "number"
-  )
-    throw new Error("OpenCode recovery token is invalid")
-  return {
-    epoch: (parsed as Record<string, unknown>).epoch as string,
-    lastSeen: (parsed as Record<string, unknown>).lastSeen as number,
-  }
+/** Where a recovery continues an OpenCode run: its epoch and last event seen. */
+const OpenCodePositionSchema = z.object({
+  epoch: z.string(),
+  lastSeen: z.number().int().nonnegative(),
+})
+type OpenCodePosition = z.infer<typeof OpenCodePositionSchema>
+
+/** The opaque token a handle names its position by; only this adapter reads it. */
+export const openCodeRecoveryToken = {
+  mint: (position: OpenCodePosition) => JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : OpenCodePositionSchema.parse(JSON.parse(token)),
 }
 
 function positiveInteger(value: unknown, fallback: number) {
@@ -570,7 +570,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (run.segmentClosed)
         throw new Error("OpenCode observation failed before turn mutation")
 
-      const after = decodeOpenCodeToken(run.projector.recoveryPosition()).lastSeen
+      const after = run.projector.recoveryPosition().lastSeen
       if (replies) {
         await this.#options.replies!.dispatch(scope, replies)
       } else {
@@ -610,19 +610,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       )
     await this.#verifyOwnership(scope)
     const expectedEpoch = `opencode:${scope.providerSessionId}`
-    const pos = request.position ? decodeOpenCodeToken(request.position) : undefined
-    if (
-      request.position &&
-      (pos === undefined ||
-        pos.epoch !== expectedEpoch ||
-        integer(pos.lastSeen) === undefined)
-    )
+    const position = openCodeRecoveryToken.read(request.position)
+    if (position && position.epoch !== expectedEpoch)
       throw new Error("The reconnect position is invalid")
 
     const adopted = this.#adoptedAdmissions.get(turnKey(scope))
     return this.#recoverRun(
       scope,
-      pos,
+      position,
       adopted?.turnId === request.turnId
         ? adopted.admissionId
         : admissionId(scope, request.turnId)
@@ -631,7 +626,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
 
   async #recoverRun(
     scope: SessionScope,
-    position: { epoch: string; lastSeen: number } | undefined,
+    position: OpenCodePosition | undefined,
     expectedAdmission: string
   ): Promise<ServerTurnHandle> {
     const requestedAfter = position?.lastSeen ?? -1
@@ -853,14 +848,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         run.reconcileAgain = false
         let cleanIdlePasses = 0
         for (let pass = 0; pass < 3; pass += 1) {
-          const before = decodeOpenCodeToken(run.projector.recoveryPosition()).lastSeen
+          const before = run.projector.recoveryPosition().lastSeen
           await this.#mergeAuthoritative(run)
           const active = await this.#active(
             run.scope.providerSessionId,
             run.controller.signal
           )
           await this.#mergeAuthoritative(run)
-          const after = decodeOpenCodeToken(run.projector.recoveryPosition()).lastSeen
+          const after = run.projector.recoveryPosition().lastSeen
           const clean = after === before && run.buffer.size === 0
           cleanIdlePasses = !active && clean ? cleanIdlePasses + 1 : 0
           if (cleanIdlePasses >= 2) {
@@ -876,7 +871,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   async #mergeAuthoritative(run: ActiveTurn) {
-    const after = decodeOpenCodeToken(run.projector.recoveryPosition()).lastSeen
+    const after = run.projector.recoveryPosition().lastSeen
     const history = await this.#readHistory(
       run.scope.providerSessionId,
       after,
@@ -974,7 +969,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       events: run.queue,
       settled: run.settled,
       stop: () => this.#stop(run),
-      recoveryPosition: () => run.projector.recoveryPosition(),
+      recoveryPosition: () =>
+        openCodeRecoveryToken.mint(run.projector.recoveryPosition()),
     }
   }
 
