@@ -105,7 +105,7 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
 const isNotFound =
   (adapter: OpenClawServerAdapter) =>
   (error: unknown): boolean =>
-    adapter.publicError(error)?.status === 404
+    adapter.publicError(error)?.kind === "gone"
 
 describe("OpenClaw MCP Apps", () => {
   it("names the stored call canonically and describes it as an app", async () => {

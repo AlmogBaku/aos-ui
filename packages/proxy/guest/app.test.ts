@@ -15,6 +15,7 @@ import type {
   ServerTurnEngine,
   ServerRuntime,
 } from "../core/runtime"
+import { failureOf } from "../core/failures"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { createGuestApp } from "./app"
@@ -525,9 +526,9 @@ describe("guest app", () => {
     const outage = new Error("Hermes request failed")
     subject.publicError.mockImplementation((cause) =>
       cause === unreadable
-        ? { code: "not_found", status: 404 }
+        ? failureOf("gone", cause)
         : cause === outage
-          ? { code: "temporarily_unavailable", status: 503 }
+          ? failureOf("unavailable", cause)
           : undefined
     )
     const invite = await token(subject.invitationService)

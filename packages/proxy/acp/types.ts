@@ -24,9 +24,9 @@ import type {
   RequestReply,
   TurnEvent,
 } from "../core/events"
+import type { PublicFailure } from "../core/failures"
 import type {
   ServerAttachmentStages,
-  ServerRuntimePublicError,
   ServerRuntimeTranslation,
 } from "../core/runtime"
 import type { PresenceRegistry } from "../push/presence"
@@ -42,11 +42,11 @@ type AcpConnectionBase = {
   connectionId: string
   principalId: string
   /**
-   * The runtime's classifier of a failure's public code, a function of the
-   * failure alone. The connection reaches a provider only through the catalog
-   * and the channels.
+   * The runtime's classifier of a failure's kind, a function of the failure
+   * alone. The connection reaches a provider only through the catalog and the
+   * channels.
    */
-  publicError(cause: unknown): ServerRuntimePublicError | undefined
+  publicError(cause: unknown): PublicFailure | undefined
   /** The runtime's `ServerRuntimeTranslation.steerAck`, a static hint. */
   steerAck?: ServerRuntimeTranslation["steerAck"]
   /** The one workspace catalog per proxy process, which both listeners share. */

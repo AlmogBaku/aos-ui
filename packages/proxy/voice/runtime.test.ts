@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import { captureLogs } from "../../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { AgentCatalogResponse } from "../../protocol"
+import { failureOf } from "../core/failures"
 import type { ServerTurnEngine, ServerRuntime } from "../core/runtime"
 import type {
   SpeechCapability,
@@ -154,7 +155,7 @@ class FakeNative {
 
   publicError(cause: unknown) {
     return cause instanceof NativeFailure
-      ? { code: "temporarily_unavailable" as const, status: 503 as const }
+      ? failureOf("unavailable", cause)
       : undefined
   }
 }
@@ -451,11 +452,12 @@ describe("withVoiceProviders", () => {
     const nativeCause = new NativeFailure("boom")
 
     expect(
-      wrapped.publicError(new VoiceProviderError("invalid_request"))
-    ).toEqual({ code: "invalid_request", status: 400 })
+      wrapped.publicError(new VoiceProviderError("invalid_request"))?.kind
+    ).toBe("invalid_request")
     expect(
       wrapped.publicError(new VoiceProviderError("temporarily_unavailable"))
-    ).toEqual({ code: "temporarily_unavailable", status: 503 })
+        ?.kind
+    ).toBe("unavailable")
     expect(wrapped.publicError(nativeCause)).toEqual(
       instance.publicError(nativeCause)
     )

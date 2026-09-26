@@ -1,5 +1,6 @@
 import type { Logger } from "../../lifecycle"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../protocol"
+import { failureOf } from "../core/failures"
 import type { ServerRuntime } from "../core/runtime"
 import type { VoiceSynthesizer, VoiceTranscriber } from "./openai-compatible"
 import { VoiceProviderError } from "./openai-compatible"
@@ -91,10 +92,12 @@ export function withVoiceProviders(
     },
     publicError(cause) {
       return cause instanceof VoiceProviderError
-        ? {
-            code: cause.code,
-            status: cause.code === "invalid_request" ? 400 : 503,
-          }
+        ? failureOf(
+            cause.code === "invalid_request"
+              ? "invalid_request"
+              : "unavailable",
+            cause
+          )
         : native.publicError(cause)
     },
   }

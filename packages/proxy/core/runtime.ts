@@ -21,6 +21,7 @@ import type {
   McpAppView,
   ReadResourceResult,
 } from "../../protocol/mcp-apps"
+import type { PublicFailure } from "./failures"
 import type { ProviderSessionId, SessionId } from "./ids"
 
 export type SessionScope = {
@@ -225,18 +226,6 @@ export type ServerAttachmentStages = {
   ): ServerAttachmentStage | undefined
 }
 
-export type ServerRuntimePublicError = {
-  code:
-    | "runtime_authentication_required"
-    | "invalid_request"
-    | "not_found"
-    | "revision_conflict"
-    | "temporarily_unavailable"
-    | "connection_interrupted"
-    | "uncertain_mutation"
-  status: 400 | 401 | 404 | 409 | 503
-}
-
 /**
  * Native semantics the ACP layer reads instead of assuming one provider's. An
  * absent field is the neutral reading: an exposure acknowledges only an unread
@@ -271,7 +260,7 @@ export interface ServerRuntime {
     agentId: string,
     publicSessionId: string
   ): ProviderSessionId | undefined
-  publicError(cause: unknown): ServerRuntimePublicError | undefined
+  publicError(cause: unknown): PublicFailure | undefined
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>

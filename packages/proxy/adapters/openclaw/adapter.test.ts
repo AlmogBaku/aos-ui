@@ -232,14 +232,11 @@ describe("OpenClaw ServerRuntime assembly", () => {
     expect(
       adapter.publicError(
         new OpenClawClientConnectionError("credential-rejected")
-      )
-    ).toEqual({
-      code: "runtime_authentication_required",
-      status: 401,
-    })
+      )?.kind
+    ).toBe("runtime_authentication_required")
     expect(
-      adapter.publicError(new OpenClawClientRequestError("timeout", true))
-    ).toEqual({ code: "uncertain_mutation", status: 503 })
+      adapter.publicError(new OpenClawClientRequestError("timeout", true))?.kind
+    ).toBe("uncertain")
     expect(
       adapter.publicError(new Error("token=private-value"))
     ).toBeUndefined()
@@ -439,13 +436,13 @@ describe("OpenClaw artifact reads", () => {
 
     await expect(
       adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     answer = () => {
       throw new OpenClawClientRequestError("rejected", true, false)
     }
     await expect(
       adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
   })
 
   it("does not find an artifact id this Session never published", async () => {
@@ -463,7 +460,9 @@ describe("OpenClaw artifact reads", () => {
     ])
       await expect(
         adapter.artifact("research", sessionKey, id)
-      ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+      ).rejects.toSatisfy(
+        (error) => adapter.publicError(error)?.kind === "gone"
+      )
     expect(
       request.mock.calls.some(([method]) => method === "sessions.files.get")
     ).toBe(false)
@@ -515,7 +514,7 @@ describe("OpenClaw artifact reads", () => {
     download = nativeDownload({ url: "https://elsewhere.example/file.png" })
     await expect(
       adapter.artifact("research", sessionKey, "artifact_managed_image_abc")
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 })
