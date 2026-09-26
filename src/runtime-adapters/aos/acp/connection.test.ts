@@ -165,7 +165,7 @@ function createProxyAgent(
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
-            lane: "operator",
+            role: "operator",
             extensions: {
               steer: true,
               rewind: true,
@@ -467,7 +467,7 @@ describe("ACP connection", () => {
 
     await expect(connection.initialized).resolves.toEqual({
       version: 1,
-      lane: "operator",
+      role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
     expect(proxy.paramsOf("initialize")).toMatchObject({

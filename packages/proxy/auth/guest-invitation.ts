@@ -115,7 +115,7 @@ export type GuestInvitationRequest = {
 
 export type GuestIdentity = {
   version: 1
-  lane: "guest"
+  role: "guest"
   issuer: "aos-invite"
   audience: "aos-guest"
   deploymentId: string
@@ -232,7 +232,7 @@ function identity(
 ): GuestIdentity {
   return {
     version: 1,
-    lane: "guest",
+    role: "guest",
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
     deploymentId,

@@ -162,7 +162,7 @@ function createProxyAgent() {
       _meta: {
         [AOS_META_KEY]: {
           version: 1,
-          lane: "operator",
+          role: "operator",
           extensions: {
             steer: true,
             rewind: true,

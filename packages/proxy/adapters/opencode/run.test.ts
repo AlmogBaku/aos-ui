@@ -1043,7 +1043,7 @@ describe("OpenCodeRunEngine", () => {
     const access = {
       subscriberId: "operator",
       controllerId: "operator",
-      lane: "operator",
+      role: "operator",
       canControl: true,
     } as const
     const subscription = await sessions.start(scope, input(), access)

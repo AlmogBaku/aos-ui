@@ -389,13 +389,13 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       coordinator.close()
     },
   }
-  const lane = "operator" as const
+  const role = "operator" as const
   const sessionRows = createSessionRows()
   const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
-    lane,
+    role,
     feeds: EVERY_FEED,
     runtimeInstance,
     sessionRows,

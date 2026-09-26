@@ -35,7 +35,7 @@ transport recovery before resuming sessions.
 ```json
 {
   "version": 1,
-  "lane": "operator | guest",
+  "role": "operator | guest",
   "extensions": {
     "steer": true,
     "rewind": true,

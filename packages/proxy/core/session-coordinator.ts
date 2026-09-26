@@ -26,6 +26,7 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
+import type { Role } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
@@ -58,7 +59,7 @@ export type SequencedTurnEvent = {
 export type CoordinatorAccess = {
   subscriberId: string
   controllerId: string
-  lane: "operator" | "guest"
+  role: Role
   canControl: boolean
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
@@ -214,7 +215,7 @@ type Execution = {
   state: SessionExecutionState
   admissionId: string
   admissionFingerprint: string
-  startedByLane: "operator" | "guest"
+  startedByRole: Role
   /**
    * The controller whose admission started this turn, kept across every
    * segment whoever answers. A turn this proxy recovered or adopted without
@@ -251,7 +252,7 @@ type TurnInit = {
 
 type ExecutionInit = TurnInit & {
   scope: SessionScope
-  startedByLane: "operator" | "guest"
+  startedByRole: Role
   startedBy?: string
   controllers?: readonly string[]
 }
@@ -570,12 +571,12 @@ export class SessionCoordinator {
   /**
    * Asks the provider for a turn this coordinator is not already streaming: one
    * it lost to a restart, a wait to refresh, or a turn the runtime started by
-   * itself after an earlier one finished. `lane` is the lane that turn is
+   * itself after an earlier one finished. `role` is the role that turn is
    * counted under.
    */
   async discover(
     scope: SessionScope,
-    lane: Execution["startedByLane"] = "operator"
+    role: Execution["startedByRole"] = "operator"
   ) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
@@ -591,7 +592,7 @@ export class SessionCoordinator {
     const discovery = this.#discover(
       scope,
       key,
-      lane,
+      role,
       existing?.state === "waiting-for-input" ? existing : undefined
     )
     this.#discoveries.set(key, discovery)
@@ -608,11 +609,11 @@ export class SessionCoordinator {
   async #discover(
     scope: SessionScope,
     key: string,
-    lane: Execution["startedByLane"],
+    role: Execution["startedByRole"],
     existing: Execution | undefined
   ) {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    this.#assertCapacity(lane, existing)
+    this.#assertCapacity(role, existing)
     this.#admissions.add(key)
     try {
       const turnId =
@@ -646,7 +647,7 @@ export class SessionCoordinator {
           state: discovered.state,
           turnId,
           request: { turnId },
-          startedByLane: lane,
+          startedByRole: role,
           segment,
         })
       if (existing) {
@@ -698,7 +699,7 @@ export class SessionCoordinator {
       )
         throw new ServerTurnConflictError()
     }
-    this.#assertCapacity(access.lane)
+    this.#assertCapacity(access.role)
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
     try {
@@ -713,7 +714,7 @@ export class SessionCoordinator {
         state: "running",
         turnId: input.turnId,
         request: input,
-        startedByLane: access.lane,
+        startedByRole: access.role,
         startedBy: access.controllerId,
         controllers: access.canControl ? [access.controllerId] : [],
         segment: this.#createSegment({
@@ -827,7 +828,7 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     const inFlight = this.#recoveries.get(key)
     if (inFlight) return inFlight
-    this.#assertCapacity(existing?.startedByLane ?? access.lane, existing)
+    this.#assertCapacity(existing?.startedByRole ?? access.role, existing)
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     const recovery = this.#recoverExecution(scope, request, access, existing)
     this.#recoveries.set(key, recovery)
@@ -905,7 +906,7 @@ export class SessionCoordinator {
           state: "running",
           turnId: request.turnId,
           request: providerRequest,
-          startedByLane: access.lane,
+          startedByRole: access.role,
           segment,
         })
       if (existing) existing.segment.fanout.close()
@@ -1063,7 +1064,7 @@ export class SessionCoordinator {
   #createExecution(init: ExecutionInit): Execution {
     return {
       scope: init.scope,
-      startedByLane: init.startedByLane,
+      startedByRole: init.startedByRole,
       ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
       controllers: new Set(init.controllers ?? []),
       ...admittedTurn(init),
@@ -1424,7 +1425,7 @@ export class SessionCoordinator {
     return { turnId: segment.turnId, events, close: () => undefined }
   }
 
-  #assertCapacity(lane: "operator" | "guest", existing?: Execution) {
+  #assertCapacity(role: Role, existing?: Execution) {
     if (existing) return
     const active = [...this.#executions.values()].filter(
       ({ state }) => state !== "idle"
@@ -1432,8 +1433,8 @@ export class SessionCoordinator {
     if (active.length >= this.options.maxActiveExecutions)
       throw new ServerTurnCapacityError("global")
     if (
-      lane === "guest" &&
-      active.filter(({ startedByLane }) => startedByLane === "guest").length >=
+      role === "guest" &&
+      active.filter(({ startedByRole }) => startedByRole === "guest").length >=
         this.options.maxGuestActiveExecutions
     )
       throw new ServerTurnCapacityError("guest")

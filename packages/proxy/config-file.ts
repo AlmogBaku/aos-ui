@@ -267,7 +267,7 @@ export type ProxyEnvOverride = {
   type: "string" | "int"
   /**
    * The runtime branch this row belongs to, or `guest` for a row that may only
-   * fill a lane the file already opened.
+   * fill a listener the file already opened.
    */
   appliesWhen?: RuntimeKind | "guest"
 }
@@ -627,7 +627,7 @@ export async function loadProxyConfig(
         })
       : DEFAULT_PROXY_CONFIG
   const merged = deepMerge(defaults, document)
-  // `guest:` with no value is not a lane the file opened.
+  // `guest:` with no value is not a listener the file opened.
   const sources = applyEnvOverrides(
     merged,
     options.getenv,

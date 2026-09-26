@@ -27,7 +27,7 @@ function connectionContext(
   return {
     connectionId,
     principalId,
-    lane: "operator",
+    role: "operator",
     feeds: EVERY_FEED,
     runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
     sessionRows: {} as AcpConnectionContext["sessionRows"],
@@ -55,7 +55,7 @@ function acpProxy() {
         path: AOS_ACP_OPERATOR_PATH,
         service: createAcpService({
           publicOrigin: ORIGIN,
-          lane: "operator",
+          role: "operator",
           principalId: OPERATOR_PRINCIPAL,
           agent: initializeOnlyAgent,
           connection: connectionContext,

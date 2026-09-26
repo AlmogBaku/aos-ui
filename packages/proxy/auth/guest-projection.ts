@@ -277,7 +277,7 @@ function validAuthorization(authorization: GuestAuthorization) {
   return (
     plainRecord(authorization) &&
     authorization.version === 1 &&
-    authorization.lane === "guest" &&
+    authorization.role === "guest" &&
     validIdentifier(authorization.runtimeId) &&
     validIdentifier(authorization.agentId) &&
     (authorization.sessionId === undefined ||

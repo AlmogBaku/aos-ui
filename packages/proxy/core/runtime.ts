@@ -148,7 +148,7 @@ export class ServerRequestStaleError extends Error {
 }
 
 export class ServerTurnCapacityError extends Error {
-  constructor(readonly lane: "global" | "guest" = "global") {
+  constructor(readonly pool: "global" | "guest" = "global") {
     super("AOS execution capacity exceeded")
     this.name = "ServerTurnCapacityError"
   }

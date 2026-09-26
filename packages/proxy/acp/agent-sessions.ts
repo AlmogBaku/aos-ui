@@ -304,7 +304,7 @@ export function createSessions(
     return context.authentication
       ? context.authentication.member()
       : {
-          principal: { id: context.principalId, role: context.lane },
+          principal: { id: context.principalId, role: context.role },
           middleware: [],
         }
   }

@@ -30,7 +30,7 @@ type DispatcherLogger = { info(value: unknown): void }
 
 export type PushDispatcherOptions = {
   runtimeInstance: RuntimeInstance
-  /** The same rows the ACP lane maintains, so read state gates delivery. */
+  /** The same rows the ACP listener maintains, so read state gates delivery. */
   sessionRows: SessionRows
   registrations: PushRegistrations
   presence: PresenceRegistry

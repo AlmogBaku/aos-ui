@@ -70,8 +70,8 @@ import {
 } from "./conversation-controls"
 
 /**
- * The invited guest surface: one ACP connection to the proxy's guest lane, one
- * Session — the invitation's conversation reference — and the same Thread,
+ * The invited guest surface: one ACP connection to the proxy's guest listener,
+ * one Session — the invitation's conversation reference — and the same Thread,
  * interactions, and artifacts the operator workspace composes. REST carries
  * only the verified presentation context and bytes.
  */

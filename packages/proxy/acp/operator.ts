@@ -16,22 +16,23 @@ export type OperatorAcpServiceOptions = {
   runtimeInstance: RuntimeInstance
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
-  /** The channels the guest lane shares, so both see one per Session. */
+  /** The channels the guest listener shares, so both see one per Session. */
   channels: Channels
-  /** Where this lane's connections write their structured lines. */
+  /** Where this listener's connections write their structured lines. */
   logger?: AcpLogger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
   /**
-   * The row cache this lane maintains. Push delivery reads the same one to gate
-   * a notification on read state; absent means this lane owns the only cache.
+   * The row cache this listener maintains. Push delivery reads the same one to
+   * gate a notification on read state; absent means this listener owns the only
+   * cache.
    */
   sessionRows?: SessionRows
   now?: () => number
 }
 
 /**
- * The operator lane's ACP service: one Session row cache per deployment and,
+ * The operator listener's ACP service: one Session row cache per deployment and,
  * per accepted connection, its own read-state service and activity feed.
  */
 export function createOperatorAcpService({
@@ -44,16 +45,16 @@ export function createOperatorAcpService({
   now = Date.now,
   sessionRows = createSessionRows({ now }),
 }: OperatorAcpServiceOptions) {
-  const lane = "operator" as const
+  const role = "operator" as const
   const service = createAcpService({
     publicOrigin,
-    lane,
+    role,
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
     connection: (connectionId, principalId): AcpConnectionContext => ({
       connectionId,
       principalId,
-      lane,
+      role,
       runtimeInstance,
       sessionRows,
       translators,
@@ -72,8 +73,9 @@ export function createOperatorAcpService({
       activityFeed: createActivityFeed({ runtimeInstance, sessionRows, now }),
     }),
   })
-  // The cache is part of the lane's surface: push delivery gates on the rows
-  // this lane keeps current, and there is only ever one of them. The channels
-  // are exposed alike, so the composition can show both lanes share them.
+  // The cache is part of the listener's surface: push delivery gates on the
+  // rows this listener keeps current, and there is only ever one of them. The
+  // channels are exposed alike, so the composition can show both listeners
+  // share them.
   return { ...service, sessionRows, channels }
 }

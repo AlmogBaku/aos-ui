@@ -11,9 +11,9 @@ import {
 } from "../../core/member"
 
 /**
- * What a guest may ask at all. The guest lane holds one invited conversation
- * and manages no workspace: it owns no roster, no read state, no catalog, and
- * no model or effort.
+ * What a guest may ask at all. The guest listener holds one invited
+ * conversation and manages no workspace: it owns no roster, no read state, no
+ * catalog, and no model or effort.
  */
 const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   resume: true,
@@ -56,9 +56,9 @@ function refusedText(text: string) {
 }
 
 /**
- * The invited Session's capabilities, projected to what the guest lane serves.
- * The member contract carries the workspace shape, so the fields the REST
- * projection drops outright are reported unavailable here instead. A guest
+ * The invited Session's capabilities, projected to what the guest listener
+ * serves. The member contract carries the workspace shape, so the fields the
+ * REST projection drops outright are reported unavailable here instead. A guest
  * steers the conversation as an operator does, and runs no slash command.
  */
 function projectCapabilities(

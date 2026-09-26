@@ -12,8 +12,9 @@ import {
 import { emptyError, invitationError, type GuestRoutes } from "../context"
 
 /**
- * The guest lane's MCP App views: the invite's own Session only, read like its
- * artifacts, and a view's tool call authorized like the guest's own message.
+ * The guest listener's MCP App views: the invite's own Session only, read like
+ * its artifacts, and a view's tool call authorized like the guest's own
+ * message.
  */
 export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
   const base = `/api/guest/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`

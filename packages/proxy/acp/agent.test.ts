@@ -135,7 +135,7 @@ describe("AOS ACP agent", () => {
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
-          lane: "operator",
+          role: "operator",
           extensions: {
             steer: true,
             focus: true,
@@ -289,7 +289,7 @@ describe("AOS ACP agent", () => {
       {
         subscriberId: "rest",
         controllerId: "operator",
-        lane: "operator",
+        role: "operator",
         canControl: true,
       }
     )
@@ -1164,7 +1164,7 @@ describe("AOS ACP agent", () => {
       expect(test.logged()).toContainEqual({
         event: "acp.turn.cancel",
         connectionId: "connection-1",
-        lane: "operator",
+        role: "operator",
         sessionId: CREATED,
       })
     )
@@ -1172,7 +1172,7 @@ describe("AOS ACP agent", () => {
     expect(test.logged()).toContainEqual({
       event: "acp.connection.opened",
       connectionId: "connection-1",
-      lane: "operator",
+      role: "operator",
     })
     expect(test.logged()).toContainEqual({
       event: "acp.request.answered",
@@ -1187,7 +1187,7 @@ describe("AOS ACP agent", () => {
       expect(test.logged()).toContainEqual({
         event: "acp.connection.closed",
         connectionId: "connection-1",
-        lane: "operator",
+        role: "operator",
       })
     )
   })

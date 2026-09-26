@@ -89,8 +89,8 @@ const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 /**
  * An absolute path that may leave the adapter: any one carrying no credential,
  * and none a projection already masked, since that no longer names the file.
- * Tool data reaches only the operator lane, which sees the Agent's real paths;
- * the guest projection drops tool calls before a path could reach it.
+ * Tool data reaches only the operator listener, which sees the Agent's real
+ * paths; the guest projection drops tool calls before a path could reach it.
  */
 export function publicPath(value: unknown): value is string {
   return (

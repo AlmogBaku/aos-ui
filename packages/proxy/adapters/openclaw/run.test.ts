@@ -202,7 +202,7 @@ function coordinator(engine: OpenClawTurnEngine) {
 const operatorAccess = {
   subscriberId: "operator",
   controllerId: "operator",
-  lane: "operator" as const,
+  role: "operator" as const,
   canControl: true,
 }
 

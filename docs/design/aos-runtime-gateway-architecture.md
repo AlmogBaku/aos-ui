@@ -190,7 +190,7 @@ The browser opens one WebSocket per surface. The 101 response carries
 connection.
 
 **Handshake** (`initialize`): the response `_meta.aos` carries `version`,
-`lane`, and the `extensions` map (`protocol/acp.ts:100-120`; `acp/agent.ts:318-346`).
+`role`, and the `extensions` map (`protocol/acp.ts:100-120`; `acp/agent.ts:318-346`).
 Guests receive the `GUEST_EXTENSIONS` map and an `authMethods` list with the
 invite method.
 
@@ -500,7 +500,7 @@ stack traces never cross either listener.
 | `packages/proxy/architecture.test.ts:24-44`                  | Native types out of common proxy and browser modules                                                                                                                           |
 | `packages/proxy/architecture.test.ts:46-53`                  | AG-UI absent from the proxy                                                                                                                                                    |
 | `packages/proxy/architecture.test.ts:55-69`                  | Each runtime selected in exactly one module                                                                                                                                    |
-| `packages/proxy/architecture.test.ts:194-257`                | No ACP imports in `core/` or `guest/middleware`; no guest code, `.grant` reads, or lane branches in `core/` and `acp/`; no lane reads in `acp/translate` or the member encoder |
+| `packages/proxy/architecture.test.ts:194-257`                | No ACP imports in `core/` or `guest/middleware`; no guest code, `.grant` reads, or role branches in `core/` and `acp/`; no role reads in `acp/translate` or the member encoder |
 | `test/architecture/runtime-import-boundaries.test.ts:19-116` | Provider packages do not import each other                                                                                                                                     |
 | `test/architecture/startup-bundle.test.ts:16-54`             | Browser bundle does not contain server code                                                                                                                                    |
 | `packages/proxy/core/session-coordinator.test.ts`            | Coordinator admission, capacity, conflict                                                                                                                                      |

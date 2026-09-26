@@ -746,7 +746,7 @@ describe("guest ACP lane", () => {
       authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
       _meta: {
         [AOS_META_KEY]: {
-          lane: "guest",
+          role: "guest",
           extensions: {
             guestProjection: true,
             steer: true,
@@ -804,7 +804,7 @@ describe("guest ACP lane", () => {
       {
         subscriberId: "operator",
         controllerId: "operator",
-        lane: "operator",
+        role: "operator",
         canControl: true,
       }
     )
@@ -1425,7 +1425,7 @@ describe("guest ACP lane", () => {
       {
         subscriberId: "operator",
         controllerId: "operator",
-        lane: "operator",
+        role: "operator",
         canControl: true,
       }
     )
@@ -1475,7 +1475,7 @@ describe("guest ACP lane", () => {
       {
         subscriberId: "operator",
         controllerId: "operator",
-        lane: "operator",
+        role: "operator",
         canControl: true,
       }
     )

@@ -189,7 +189,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
-            lane: "guest",
+            role: "guest",
             extensions: {
               // The guest lane carries the operator's conversation controls.
               steer: true,

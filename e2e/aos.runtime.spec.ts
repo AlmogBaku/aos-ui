@@ -361,10 +361,10 @@ const script = {
   },
   guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
   standalonePermission: permissionRequest("permission-2"),
-  /** `InitializeResponse._meta.aos` for the operator lane. */
+  /** `InitializeResponse._meta.aos` for the operator role. */
   initializeMeta: {
     version: 1,
-    lane: "operator",
+    role: "operator",
     extensions: {
       steer: true,
       rewind: true,

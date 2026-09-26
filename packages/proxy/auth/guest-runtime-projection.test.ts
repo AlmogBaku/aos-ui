@@ -9,7 +9,7 @@ import {
 
 const authorization: VerifiedGuestAuthorization = {
   version: 1,
-  lane: "guest",
+  role: "guest",
   issuer: "aos-invite",
   audience: "aos-guest",
   deploymentId: "deployment",

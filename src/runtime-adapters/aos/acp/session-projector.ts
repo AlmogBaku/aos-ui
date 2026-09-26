@@ -803,7 +803,7 @@ function applyWhole(
 /**
  * The artifact a published link names, or `undefined` for an ordinary link. The
  * id is all the link carries: the artifact resolver reads it through the Session
- * and lane this client already holds, never from a location on the wire.
+ * and listener this client already holds, never from a location on the wire.
  */
 function linkedArtifact(block: ContentBlock) {
   if (block.type !== "resource_link" || typeof block.uri !== "string")

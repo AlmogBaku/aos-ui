@@ -21,6 +21,7 @@ import {
   type PromptPart,
   type SessionEvent,
   type TurnStream,
+  type Role,
 } from "./member"
 import {
   ServerRequestStaleError,
@@ -71,14 +72,11 @@ export type MembershipDelivery = {
 
 export type Channels = ReturnType<typeof createChannels>
 type ChannelTable = ReturnType<typeof createChannelTable>
-
-type Lane = "operator" | "guest"
-
 /** What lets a channel adopt a turn the runtime started by itself. */
 export type ChannelAdoption = {
   watch(scope: SessionScope, watcher: ServerTurnWatcher): () => void
-  /** Adopts the runtime's running turn, if any, counted under `lane`. */
-  discover(scope: SessionScope, lane: Lane): Promise<unknown>
+  /** Adopts the runtime's running turn, if any, counted under `role`. */
+  discover(scope: SessionScope, role: Role): Promise<unknown>
   /** The Session's execution feed. */
   observe(
     scope: ChannelScope,
@@ -87,9 +85,9 @@ export type ChannelAdoption = {
 }
 
 type Delivery = {
-  /** The member's own scope and lane, which an adoption runs under. */
+  /** The member's own scope and role, which an adoption runs under. */
   scope: SessionScope
-  lane: Lane
+  role: Role
   /** The turnId whose prompt this member already holds. */
   delivered?: string
   /** Whether the channel sent that prompt, rather than the member owning it. */
@@ -187,7 +185,7 @@ async function attempt<T>(
 function adopter(channel: Channel) {
   const memberships = [...channel.memberships]
   return (
-    memberships.find(([, { lane }]) => lane === "operator") ?? memberships[0]
+    memberships.find(([, { role }]) => role === "operator") ?? memberships[0]
   )
 }
 
@@ -311,10 +309,10 @@ function createChannelTable({
   async function adoptOnce(channel: Channel) {
     const joined = adopter(channel)
     if (!adoption || !joined) return
-    const [member, { scope, lane }] = joined
+    const [member, { scope, role }] = joined
     const before = snapshot(scope).turnId
     try {
-      await adoption.discover(scope, lane)
+      await adoption.discover(scope, role)
     } catch (cause) {
       // A proxy turn still starting refuses it; that turn's end asks again.
       if (!(cause instanceof ServerTurnConflictError)) member.report(cause)
@@ -360,7 +358,7 @@ function createChannelTable({
     add(
       scope: SessionScope,
       member: MembershipDelivery,
-      options: { hasPrompt: boolean; lane?: Lane }
+      options: { hasPrompt: boolean; role?: Role }
     ) {
       const key = channelKey(scope)
       let channel = channels.get(key)
@@ -380,7 +378,7 @@ function createChannelTable({
       if (joined.memberships.has(member)) return remove
       const delivery: Delivery = {
         scope,
-        lane: options.lane ?? "operator",
+        role: options.role ?? "operator",
         fromChannel: false,
       }
       join(joined, member, delivery, options.hasPrompt)
@@ -405,7 +403,7 @@ function createChannelTable({
         join(
           channel,
           member,
-          { scope: delivery.scope, lane: delivery.lane, fromChannel: false },
+          { scope: delivery.scope, role: delivery.role, fromChannel: false },
           options.hasPrompt
         )
     },
@@ -898,7 +896,7 @@ class Membership {
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
-        lane: this.#member.principal.role,
+        role: this.#member.principal.role,
       })
       // A request the Session resolves, through another member's answer or a
       // Stop, is withdrawn here so this member stops offering it.
@@ -1167,7 +1165,7 @@ class Membership {
     return {
       subscriberId: this.#options.subscriberId,
       controllerId: this.#member.principal.id,
-      lane: this.#member.principal.role,
+      role: this.#member.principal.role,
       canControl: true,
     }
   }

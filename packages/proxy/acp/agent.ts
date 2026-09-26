@@ -98,7 +98,7 @@ const withoutParams = () => undefined
 const undecoded = (params: unknown) => params
 
 /**
- * The operator lane's extensions. The proxy implements each of them itself,
+ * The operator listener's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
 function operatorExtensions(runtime: ServerRuntime): AosExtensions {
@@ -142,7 +142,7 @@ function sameExposure(
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { lane, translators, feeds } = context
+  const { role, translators, feeds } = context
   const readState = feeds.has("read-state") ? context.readState : undefined
   const activityFeed = feeds.has("activity") ? context.activityFeed : undefined
   const { runtime, sessions: coordinator } = context.runtimeInstance
@@ -176,7 +176,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       redactForLog({
         event,
         connectionId: context.connectionId,
-        lane,
+        role,
         ...fields,
       })
     )
@@ -408,7 +408,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
-          lane,
+          role,
           extensions: authentication
             ? authentication.extensions
             : operatorExtensions(runtime),
@@ -417,7 +417,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   })
 
-  // The operator lane authenticates its WebSocket upgrade instead.
+  // The operator listener authenticates its WebSocket upgrade instead.
   app.onRequest(methods.agent.auth.login, async ({ params }) => {
     const { authentication } = context
     if (!authentication)

@@ -323,7 +323,7 @@ export const ProxyConfigSchema = z
       context.addIssue({
         code: "custom",
         path: ["guest"],
-        message: "Guest lane must use a separate origin and listener",
+        message: "Guest must use a separate origin and listener",
       })
   })
 

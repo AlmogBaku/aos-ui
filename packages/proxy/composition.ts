@@ -119,9 +119,10 @@ async function readMcpServerOverrides(
 
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
- * configured private one, the stored devices, the presence the ACP lane reports
- * into, and the dispatcher that observes the runtime. A state directory the
- * proxy cannot write fails startup here rather than at the first notification.
+ * configured private one, the stored devices, the presence the ACP listener
+ * reports into, and the dispatcher that observes the runtime. A state directory
+ * the proxy cannot write fails startup here rather than at the first
+ * notification.
  */
 async function createPushLane(
   push: NonNullable<ProxyConfig["push"]>,
@@ -183,7 +184,7 @@ export async function createConfiguredProxy(
       ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch)
       : Promise.resolve(undefined),
   ])
-  // Proxy speech sits in front of the adapter for every lane at once, so the
+  // Proxy speech sits in front of the adapter for every listener at once, so the
   // wrapped runtime is the only one any listener or ACP service ever sees.
   const runtimeInstance: RuntimeInstance = voiceProviders
     ? {
@@ -209,8 +210,8 @@ export async function createConfiguredProxy(
         })
       : undefined
   /**
-   * One set of channels per process, like the runtime both lanes share: a
-   * channel is one provider Session, whichever lane each of its members arrived
+   * One set of channels per process, like the runtime both listeners share: a
+   * channel is one provider Session, whichever listener each of its members arrived
    * on.
    */
   const { sessions } = runtimeInstance
@@ -223,7 +224,7 @@ export async function createConfiguredProxy(
       ? {
           adoption: {
             watch: (scope, watcher) => turns.watch!(scope, watcher),
-            discover: (scope, lane) => sessions.discover(scope, lane),
+            discover: (scope, role) => sessions.discover(scope, role),
             observe: (scope, listener) =>
               sessions.observeScope(scope, listener),
           },
@@ -260,7 +261,7 @@ export async function createConfiguredProxy(
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
   /**
-   * One row cache for the operator surface: the ACP lane keeps it current and
+   * One row cache for the operator surface: the ACP listener keeps it current and
    * push delivery reads the same rows to gate a notification on read state.
    */
   const sessionRows = createSessionRows(clock)

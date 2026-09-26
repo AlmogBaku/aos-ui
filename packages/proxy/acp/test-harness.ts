@@ -268,7 +268,7 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
     ? questionOutbound(request)
     : permissionOutbound(request)
 
-/** Deterministic stand-ins for the translator lane's pure projections. */
+/** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
   translateTurnEvent(state, event, context) {
     const meta = {
@@ -613,12 +613,12 @@ export type HarnessOptions = {
    * so each turn's journal; a small one stands for a long turn.
    */
   maxSubscriberEvents?: number
-  /** The translator lane; defaults to the deterministic stand-ins above. */
+  /** The translators, defaulting to the deterministic stand-ins above. */
   translators?: Translators
   /** The clock Session rows read; wall time by default. */
   now?: () => number
   /**
-   * Composes the operator lane's own read state and activity feed, as
+   * Composes the operator listener's own read state and activity feed, as
    * `createOperatorAcpService` does; observable fakes stand in by default.
    */
   compose?: (parts: {
@@ -808,7 +808,7 @@ export async function harness(options: HarnessOptions = {}) {
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
-  // One lane's connections share its row cache, as the operator lane's do.
+  // A listener's connections share its row cache, as the operator's do.
   const sessionRows = createSessionRows(
     options.now ? { now: options.now } : undefined
   )
@@ -820,8 +820,8 @@ export async function harness(options: HarnessOptions = {}) {
       ? {
           adoption: {
             watch,
-            discover: (channelScope, lane) =>
-              coordinator.discover(channelScope, lane),
+            discover: (channelScope, role) =>
+              coordinator.discover(channelScope, role),
             observe: (channelScope, listener) =>
               coordinator.observeScope(channelScope, listener),
           },
@@ -831,11 +831,11 @@ export async function harness(options: HarnessOptions = {}) {
 
   /**
    * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and channels, as one deployment's lanes do.
+   * coordinator, engine, and channels, as one deployment's listeners do.
    */
   async function connect(
     connectionId: string,
-    lane: {
+    answers: {
       /** This browser's answer to a permission request, if not the harness's. */
       permission?: HarnessOptions["permission"]
       /** This browser's answer to a question, if not the harness's. */
@@ -844,8 +844,8 @@ export async function harness(options: HarnessOptions = {}) {
   ) {
     const attachmentStages = new AttachmentStageRegistry()
     const base = options.translators ?? translators
-    const permission = lane.permission ?? options.permission
-    const question = lane.question ?? options.question
+    const permission = answers.permission ?? options.permission
+    const question = answers.question ?? options.question
     const context: AcpConnectionContext = {
       connectionId,
       principalId: PRINCIPAL,
@@ -863,7 +863,7 @@ export async function harness(options: HarnessOptions = {}) {
       channels,
       presence,
       logger,
-      lane: "operator",
+      role: "operator",
       feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }

@@ -7,6 +7,7 @@ import {
   type TurnEvent,
   type PromptTurnInput,
 } from "./events"
+import type { Role } from "./member"
 
 import {
   ServerRequestStaleError,
@@ -115,11 +116,11 @@ async function continueTurn(sessions: SessionCoordinator) {
   return continued.turnId
 }
 
-function access(id: string, lane: "operator" | "guest" = "operator") {
+function access(id: string, role: Role = "operator") {
   return {
     subscriberId: id,
     controllerId: id,
-    lane,
+    role,
     canControl: true,
   } as const
 }

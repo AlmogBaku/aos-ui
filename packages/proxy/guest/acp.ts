@@ -32,7 +32,7 @@ const VOICE_CAPABILITIES: ReadonlySet<GuestCapability> = new Set([
 ])
 
 /**
- * What an invitation must allow for this lane to serve it at all: every
+ * What an invitation must allow for this listener to serve it at all: every
  * capability but voice, so a new one is required until it is exempted here.
  */
 const ACP_LANE_CAPABILITIES = guestCapabilities.filter(
@@ -40,10 +40,11 @@ const ACP_LANE_CAPABILITIES = guestCapabilities.filter(
 )
 
 /**
- * The guest lane's ACP service: one invited conversation per connection, with
- * the same invitation authorization and output projection the guest REST routes
- * apply. The lane's principal is the invitation, so every per-connection
- * authorization lives in its authentication rather than in the upgrade.
+ * The guest listener's ACP service: one invited conversation per connection,
+ * with the same invitation authorization and output projection the guest REST
+ * routes apply. The listener's principal is the invitation, so every
+ * per-connection authorization lives in its authentication rather than in the
+ * upgrade.
  */
 
 export type GuestAcpServiceOptions = {
@@ -52,9 +53,9 @@ export type GuestAcpServiceOptions = {
   invitations: GuestInvitationService
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
   attachmentStages: ServerAttachmentStages
-  /** The channels the operator lane shares, so both see one per Session. */
+  /** The channels the operator listener shares, so both see one per Session. */
   channels: Channels
-  /** Where this lane's connections write their structured lines. */
+  /** Where this listener's connections write their structured lines. */
   logger?: AcpLogger
   now?: () => number
   schedule?: (delayMs: number, task: () => void) => unknown
@@ -62,7 +63,7 @@ export type GuestAcpServiceOptions = {
 }
 
 /**
- * The guest lane holds one invited conversation and manages no workspace: it
+ * The guest listener holds one invited conversation and manages no workspace: it
  * owns no roster, no read state, and no catalog. It steers, edits, retries,
  * and takes the runtime's prefill as an operator does.
  */
@@ -131,7 +132,7 @@ function createGuestAuthentication(
     async authenticate(token) {
       const identity = await options.invitations.verify(token)
       if (!identity || !guestAuthorizationActive(identity, now)) return false
-      // The lane shows the conversation's text, App cards, artifacts, the
+      // The listener shows the conversation's text, App cards, artifacts, the
       // guest's own attachments and public errors without asking again.
       if (
         !ACP_LANE_CAPABILITIES.every((capability) =>
@@ -203,17 +204,17 @@ export function createGuestConnection(
   sessionRows: SessionRows,
   connectionId: string
 ): AcpConnectionContext {
-  const lane = "guest" as const
+  const role = "guest" as const
   const { runtimeInstance } = options
   const authentication = createGuestAuthentication(
     options,
-    createWorkspace({ runtimeInstance, sessionRows, principalId: lane })
+    createWorkspace({ runtimeInstance, sessionRows, principalId: role })
   )
   return {
     connectionId,
     // The connection's real principal arrives with its redeemed invitation.
-    principalId: lane,
-    lane,
+    principalId: role,
+    role,
     runtimeInstance,
     sessionRows,
     translators,
@@ -228,22 +229,22 @@ export function createGuestConnection(
 }
 
 /**
- * Hosts the guest lane on its own listener path, with one Session row cache per
+ * Hosts the guest listener on its own path, with one Session row cache per
  * deployment behind the per-connection invitations.
  */
 export function createGuestAcpService(options: GuestAcpServiceOptions) {
-  const lane = "guest" as const
+  const role = "guest" as const
   const sessionRows = createSessionRows({ now: options.now ?? Date.now })
   const service = createAcpService({
     publicOrigin: options.publicOrigin,
-    lane,
-    principalId: lane,
+    role,
+    principalId: role,
     agent: createAosAcpAgent,
     // A guest reads a failure's public code, never what the host knows of it.
     publicErrors: PUBLIC_ERRORS,
     connection: (connectionId) =>
       createGuestConnection(options, sessionRows, connectionId),
   })
-  // Exposed so the composition can show both lanes hold the same channels.
+  // Exposed so the composition can show both listeners hold the same channels.
   return { ...service, channels: options.channels }
 }

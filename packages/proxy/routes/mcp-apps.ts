@@ -66,7 +66,7 @@ export function createMcpAppRateLimit(now: () => number = Date.now) {
 }
 
 /**
- * One MCP App request, lane-neutral. The caller has already authorized the
+ * One MCP App request, listener-neutral. The caller has already authorized the
  * Session and resolved `scope`; this reads the body, applies the view's rate
  * limit, and maps every failure to an answer that never names a native detail.
  */

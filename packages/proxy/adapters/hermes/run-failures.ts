@@ -171,7 +171,7 @@ export function stopUncertain() {
  * Hermes' own error text, bounded and only when it carries no credential. The
  * bounded text is what the check reads, because that is all that ever leaves:
  * a value that trips the rule is dropped whole rather than masked. A path or an
- * internal location stays, because the operator acts on it; the guest lane
+ * internal location stays, because the operator acts on it; the guest listener
  * replaces every failure message with its own catalogue's description.
  */
 export function publicDetail(value: unknown) {

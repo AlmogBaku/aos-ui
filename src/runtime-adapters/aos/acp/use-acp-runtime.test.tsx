@@ -60,7 +60,7 @@ const resumeReply = (): ResumeReply => JSON.parse("{}")
 /** The handshake of a proxy that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
   version: 1,
-  lane: "operator",
+  role: "operator",
   extensions: {
     steer: true,
     rewind: true,

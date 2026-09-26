@@ -147,7 +147,7 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
       readState: createReadState({
         runtimeInstance,
         sessionRows,
-        lane: "operator",
+        role: "operator",
         now: clock.now,
         schedule: clock.schedule,
         cancel: clock.cancel,
@@ -271,7 +271,7 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
     {
       subscriberId: "rest",
       controllerId: "operator",
-      lane: "operator",
+      role: "operator",
       canControl: true,
     }
   )

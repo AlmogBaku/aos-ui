@@ -196,9 +196,21 @@ describe("vocabulary", () => {
       reason:
         "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
     },
+    {
+      retired: /\blane\b|\bLane\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "which kind of member it is is its `role` (`Principal.role`); where its socket arrives is a listener",
+    },
+    {
+      retired: /\blane\b|\bLane\b/u,
+      scope: "packages/protocol/**",
+      reason:
+        "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
+    },
   ]
 
-  it("keeps retired names out of the proxy", async () => {
+  it("keeps retired names out of the proxy and the protocol", async () => {
     const repositoryRoot = join(import.meta.dirname, "../..")
     for (const { retired, scope, reason } of retiredNames) {
       const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))
@@ -225,14 +237,18 @@ function importsFrom(directory: string) {
 }
 
 /**
- * A lane compared, in either order. The lane stays the connection's identity,
- * written to the browser's `initialize` meta and to the member's principal,
- * and nothing reads it back. This is a heuristic that catches the comparisons
- * one writes, not every way to branch: the real gates are the per-file count
- * of role reads and the translators and encoder naming no lane at all.
+ * A role compared, in either order; a chat message's `role` is another word.
+ * The role stays the connection's identity, written to the browser's
+ * `initialize` meta and to the member's principal, and nothing reads it back.
+ * This is a heuristic that catches the comparisons one writes, not every way
+ * to branch: the real gates are the per-file count of principal role reads and
+ * the translators and encoder naming no role at all.
  */
-const LANE_BRANCH =
-  /\blane\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?lane\b|\bcase\s+["'](?:guest|operator)["']/u
+const ROLE_BRANCH =
+  /(?<!message\.)\brole\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?(?<!message\.)role\b|\bcase\s+["'](?:guest|operator)["']/u
+
+/** A member's role named at all, outside a chat message's `role`. */
+const ROLE_NAMED = /(?<!message\.)\brole\b|\bRole\b/u
 
 describe("member boundary", () => {
   const proxyRoot = import.meta.dirname
@@ -259,10 +275,10 @@ describe("member boundary", () => {
   })
 
   /**
-   * A2: the core and the ACP transport are lane-blind. Nothing reads a
+   * A2: the core and the ACP transport are role-blind. Nothing reads a
    * guest's grant, and a principal's role is read only where a membership
-   * reports a lane: the coordinator's capacity cap and an adoption's
-   * preference for an operator.
+   * reports it: the coordinator's capacity cap and an adoption's preference
+   * for an operator.
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
@@ -287,18 +303,18 @@ describe("member boundary", () => {
     ])
   })
   /**
-   * A2: the ACP transport never branches on the lane. The translators and
+   * A2: the ACP transport never branches on the role. The translators and
    * the member encoder never name it, and the files that carry it as the
    * connection's identity never compare it.
    */
-  it("never branches the ACP transport on the lane", async () => {
+  it("never branches the ACP transport on the role", async () => {
     for (const path of await productionFiles(join(proxyRoot, "acp"))) {
       const source = stripComments(await readFile(path, "utf8"))
-      expect(source, path).not.toMatch(LANE_BRANCH)
+      expect(source, path).not.toMatch(ROLE_BRANCH)
       const translates =
         relative(proxyRoot, path).startsWith("acp/translate/") ||
         path.endsWith("member-encoder.ts")
-      if (translates) expect(source, path).not.toMatch(/\blane\b/u)
+      if (translates) expect(source, path).not.toMatch(ROLE_NAMED)
     }
   })
 })

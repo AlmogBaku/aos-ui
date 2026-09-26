@@ -116,7 +116,7 @@ function aosMetaOf(meta: unknown): Record<string, unknown> | undefined {
   return parsed.success ? parsed.data[AOS_META_KEY] : undefined
 }
 
-/** One of the proxy's ACP lane paths as a same-origin WebSocket URL. */
+/** One of the proxy's ACP listener paths as a same-origin WebSocket URL. */
 export function acpSocketUrl(path: string) {
   const url = new URL(path, window.location.href)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
@@ -178,7 +178,7 @@ export function createAcpConnection(
   let recovering = false
   /** Settles once a recovered transport has reattached every Session. */
   let reattached: PromiseWithResolvers<void> | undefined
-  // The guest lane's principal, replayed whenever a new transport redeems it.
+  // The guest listener's principal, replayed when a new transport redeems it.
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
   let lastFocus:
