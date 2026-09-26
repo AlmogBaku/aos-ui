@@ -176,6 +176,7 @@ function client(overrides: Record<string, unknown> = {}) {
     native: {
       sessions,
       catalog: {},
+      credentialRefused: async () => false,
       close: async () => undefined,
     } as unknown as OpenCodeClient,
     sessions,
@@ -1654,15 +1655,9 @@ describe("OpenCodeRunEngine foreign turns", () => {
     stop()
   })
 
-  it.each([
-    ["its Session is gone", new OpenCodeClientError("not_found"), "ready"],
-    [
-      "OpenCode refuses the password",
-      new OpenCodeClientError("authentication"),
-      "lost",
-    ],
-  ])("never redials once %s", async (_case, failure, linkState) => {
+  it("never redials once its Session is gone", async () => {
     const clock = useFakeClock()
+    const failure = new OpenCodeClientError("not_found")
     const state = client({
       history: vi.fn(async () => {
         throw failure
@@ -1675,8 +1670,41 @@ describe("OpenCodeRunEngine foreign turns", () => {
 
     expect(state.sessions.history).toHaveBeenCalledOnce()
     expect(observer.onError).toHaveBeenCalledExactlyOnceWith(failure)
-    // A gone Session says nothing of OpenCode's link; a refused password does.
-    expect(engine.link.state()).toBe(linkState)
+    // A gone Session says nothing of OpenCode's link.
+    expect(engine.link.state()).toBe("ready")
+    stop()
+  })
+
+  it("redials a watch OpenCode refused the password only once the password changes", async () => {
+    const clock = useFakeClock()
+    const failure = new OpenCodeClientError("authentication")
+    // OpenCode refuses the first password and takes the rotated one.
+    let password = "pw-test-1"
+    let refused: string | undefined
+    const state = client({
+      history: vi.fn(async () => {
+        if (password === "pw-test-2") return { data: [], hasMore: false }
+        refused = password
+        throw failure
+      }),
+    })
+    const observer = watcher()
+    const engine = new OpenCodeTurnEngine(
+      { ...state.native, credentialRefused: async () => refused === password },
+      { logger }
+    )
+    const stop = engine.subscribeTurns(scope, observer)
+    await clock.advance(60_000)
+
+    expect(state.sessions.history).toHaveBeenCalledOnce()
+    expect(observer.onError).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(engine.link.state()).toBe("lost")
+
+    password = "pw-test-2"
+    await clock.advance(60_000)
+
+    expect(state.sessions.history).toHaveBeenCalledTimes(2)
+    expect(engine.link.state()).toBe("ready")
     stop()
   })
 

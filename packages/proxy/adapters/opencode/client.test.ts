@@ -111,6 +111,38 @@ describe("OpenCodeClient", () => {
     }
   })
 
+  it("holds a password OpenCode refused as refused until it reads another or OpenCode takes it", async () => {
+    let accepts = false
+    const server = await nativeServer(() =>
+      accepts
+        ? Response.json({
+            data: [],
+            cursor: { previous: "previous-page", next: "following-page" },
+          })
+        : new Response(null, { status: 401 })
+    )
+    let password = "pw-test-1"
+    const subject = client(server.baseUrl, async () => password)
+
+    try {
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      await expect(subject.sessions.list()).rejects.toMatchObject({
+        code: "authentication",
+      })
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      password = "pw-test-2"
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      password = "pw-test-1"
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      accepts = true
+      await subject.sessions.list()
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
   it("preserves the native ascending message order before cursor pagination", async () => {
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/message")

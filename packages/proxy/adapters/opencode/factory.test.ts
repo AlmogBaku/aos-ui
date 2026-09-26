@@ -51,6 +51,7 @@ function client(close = vi.fn(async () => {})): OpenCodeAdapterClient {
       questions: { reply: async () => {}, reject: async () => {} },
       permissions: { reply: async () => {} },
     },
+    credentialRefused: async () => false,
     close,
   }
 }

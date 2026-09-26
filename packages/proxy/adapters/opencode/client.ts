@@ -195,6 +195,11 @@ export type OpenCodeClient = Readonly<{
      */
     read(path: string, signal?: AbortSignal): Promise<OpenCodeFileContent>
   }>
+  /**
+   * Whether OpenCode refused the password as it reads now: it answered a
+   * request carrying it 401 or 403 and has taken none since.
+   */
+  credentialRefused(): Promise<boolean>
   close(): Promise<void>
 }>
 
@@ -358,8 +363,13 @@ function parseEvent(value: unknown): OpenCodeDurableEvent {
   return { id: envelope.id, event: envelope.event, data }
 }
 
+/** Whether OpenCode answered a request as one whose credential it refuses. */
+function refusesCredential(status: number | undefined) {
+  return status === 401 || status === 403
+}
+
 function statusError(status: number | undefined, options?: ErrorOptions) {
-  if (status === 401 || status === 403)
+  if (refusesCredential(status))
     return new OpenCodeClientError("authentication")
   if (status === 400) return new OpenCodeClientError("invalid_request")
   if (status === 404) return new OpenCodeClientError("not_found")
@@ -429,14 +439,19 @@ function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
   return guardedFetch as typeof fetch
 }
 
-/** `fetcher`, calling `accepted` once a request it sends is answered with success. */
-function onAccepted(fetcher: typeof fetch, accepted: () => void) {
-  const accepting = async (...request: Parameters<typeof fetch>) => {
+/** `fetcher`, showing `heard` each response and the authorization it answers. */
+function hearing(
+  fetcher: typeof fetch,
+  heard: (response: Response, authorization: string | null) => void
+) {
+  const listening = async (...request: Parameters<typeof fetch>) => {
     const response = await fetcher(...request)
-    if (response.ok) accepted()
+    const [input, init] = request
+    const headers = input instanceof Request ? input.headers : init?.headers
+    heard(response, new Headers(headers).get("authorization"))
     return response
   }
-  return accepting as typeof fetch
+  return listening as typeof fetch
 }
 
 class Facade implements OpenCodeClient {
@@ -446,6 +461,8 @@ class Facade implements OpenCodeClient {
   readonly #password: () => Promise<string>
   readonly #fetch: typeof fetch
   readonly #controllers = new Set<AbortController>()
+  /** The authorization OpenCode last refused, until it takes it. */
+  #refused: string | undefined
   #closed = false
 
   constructor(options: OpenCodeClientOptions) {
@@ -454,7 +471,15 @@ class Facade implements OpenCodeClient {
     this.#username = options.username
     this.#password = options.password
     this.#fetch = discardNativeErrorBodies(
-      options.fetcher ?? globalThis.fetch.bind(globalThis)
+      hearing(
+        options.fetcher ?? globalThis.fetch.bind(globalThis),
+        (response, authorization) => {
+          if (refusesCredential(response.status))
+            this.#refused = authorization ?? undefined
+          else if (response.ok && authorization === this.#refused)
+            this.#refused = undefined
+        }
+      )
     )
     this.#sdk = createOpencodeClient({
       baseUrl: options.baseUrl,
@@ -753,6 +778,13 @@ class Facade implements OpenCodeClient {
       ),
   }
 
+  async credentialRefused() {
+    return (
+      this.#refused !== undefined &&
+      (await this.#authorization()) === this.#refused
+    )
+  }
+
   async close() {
     if (this.#closed) return
     this.#closed = true
@@ -865,7 +897,9 @@ class Facade implements OpenCodeClient {
           ...(await this.#native(
             AbortSignal.any([lease.signal, answer.signal])
           )),
-          fetch: onAccepted(this.#fetch, () => answered(true)),
+          fetch: hearing(this.#fetch, (response) => {
+            if (response.ok) answered(true)
+          }),
           // AOS reconnects from the durable aggregate position itself.
           sseMaxRetryAttempts: 1,
           onSseError: (error) => {
@@ -907,11 +941,16 @@ class Facade implements OpenCodeClient {
     }
   }
 
-  /**
-   * The options for one native call, with the password read for it alone. A
-   * password that cannot be read or sent means the call is never made.
-   */
+  /** The options for one native call. */
   async #native(signal: AbortSignal): Promise<NativeRequest> {
+    return { signal, headers: { authorization: await this.#authorization() } }
+  }
+
+  /**
+   * The Basic authorization, with the password read for it alone. A password
+   * that cannot be read or sent means no call is made with it.
+   */
+  async #authorization() {
     let password: string
     try {
       password = await this.#password()
@@ -921,10 +960,7 @@ class Facade implements OpenCodeClient {
     if (!text(password) || hasControl(password))
       throw new OpenCodeClientError("unavailable")
     const basic = Buffer.from(`${this.#username}:${password}`, "utf8")
-    return {
-      signal,
-      headers: { authorization: `Basic ${basic.toString("base64")}` },
-    }
+    return `Basic ${basic.toString("base64")}`
   }
 
   /**

@@ -68,6 +68,7 @@ type OpenCodeTurnClient = Readonly<{
     OpenCodeClient["sessions"],
     "get" | "active" | "history" | "events" | "prompt" | "interrupt" | "wait"
   >
+  credentialRefused: OpenCodeClient["credentialRefused"]
 }>
 
 export type OpenCodeTurnEngineOptions = Readonly<{
@@ -411,7 +412,11 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     this.#options = options
     this.#logger = options.logger
     this.#clock = options.clock ?? defaultClock
-    this.link = new OpenCodeLink({ logger: this.#logger, clock: this.#clock })
+    this.link = new OpenCodeLink({
+      logger: this.#logger,
+      clock: this.#clock,
+      credentialRefused: () => client.credentialRefused(),
+    })
     this.#maxQueueEvents = positiveInteger(
       options.maxQueueEvents,
       DEFAULT_MAX_QUEUE_EVENTS
