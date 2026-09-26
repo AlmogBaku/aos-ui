@@ -29,6 +29,12 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }
 
+/** A module only tests may import, by its path under the proxy. */
+const TEST_ONLY_MODULE =
+  /(?:^|\/)(?:test-harness|test-faults|runtime-contract)\.ts$|(?:^|\/)test-utils\//u
+const TEST_ONLY_IMPORT =
+  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|test-utils\/)/u
+
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
@@ -167,6 +173,24 @@ describe("runtime adapter boundary", () => {
       }
       expect(selectors, provider).toEqual([selector])
     }
+  })
+
+  /**
+   * The harness, the fault wrapper, the contract suite and the adapters' test
+   * fixtures stand in for a provider, so only a test may reach one.
+   */
+  it("keeps the test-only modules out of production code", async () => {
+    const proxyRoot = import.meta.dirname
+    const importers: string[] = []
+
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (TEST_ONLY_MODULE.test(file)) continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (TEST_ONLY_IMPORT.test(source)) importers.push(file)
+    }
+
+    expect(importers).toEqual([])
   })
 })
 
@@ -362,12 +386,33 @@ describe("member boundary", () => {
     )
   })
   /**
+   * The connection reaches a provider through the channels and the catalog
+   * alone: its context carries neither the runtime nor the coordinator, only
+   * the runtime's error classifier and its static translation hint, and its
+   * agent imports nothing of either.
+   */
+  it("keeps the runtime and the coordinator off the connection", async () => {
+    for (const file of ["acp/agent.ts", "acp/agent-sessions.ts"]) {
+      const source = stripComments(
+        await readFile(join(proxyRoot, file), "utf8")
+      )
+      expect(source, file).not.toMatch(
+        importsFrom("core\\/(?:runtime|session-coordinator)")
+      )
+    }
+    const context = stripComments(
+      await readFile(join(proxyRoot, "acp/types.ts"), "utf8")
+    )
+    expect(context).not.toMatch(
+      /\b(?:RuntimeInstance|ServerRuntime|SessionCoordinator)\b|\bruntimeInstance\b/u
+    )
+  })
+
+  /**
    * The member encoder alone turns member events into ACP updates and
    * notifications, from the event it is given: it reaches neither a
-   * membership nor the runtime, and the connection calls no runtime method:
-   * the catalog and the channels read it. The translators the encoder writes
-   * with are its own pure helpers, and the test harness stands in for a
-   * provider.
+   * membership nor the runtime. The translators the encoder writes with are
+   * its own pure helpers, and the test harness stands in for a provider.
    */
   it("builds every ACP update in the member encoder alone", async () => {
     const encoder = stripComments(
@@ -375,10 +420,6 @@ describe("member boundary", () => {
     )
     expect(encoder).not.toMatch(importsFrom("core\\/(?:channel|runtime)"))
     expect(encoder).not.toMatch(/\bServerRuntime\b|\bruntimeInstance\b/u)
-    const agent = stripComments(
-      await readFile(join(proxyRoot, "acp/agent.ts"), "utf8")
-    )
-    expect(agent).not.toMatch(/\bruntime\.\w+(?:\?\.)?\s*\(/u)
 
     const builders: string[] = []
     const notifiers: string[] = []

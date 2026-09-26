@@ -50,6 +50,7 @@ import {
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
   type ClientSend,
+  type CreateInput,
   type SessionCoordinator,
   type StartOptions,
 } from "./session-coordinator"
@@ -739,6 +740,14 @@ export function createChannels(options: CreateChannelsOptions) {
       } finally {
         paging.delete(membership)
       }
+    },
+
+    /**
+     * Creates a Session in `agentId` for `principalId`. A repeat of a client
+     * id answers the Session its first create made.
+     */
+    createSession(agentId: string, input: CreateInput, principalId: string) {
+      return coordinator.createSession(agentId, input, principalId)
     },
 
     /**

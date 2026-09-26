@@ -9,7 +9,6 @@ import {
   type AosHistoryCursor,
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
-import type { SessionScope } from "../core/runtime"
 import type { SessionRow } from "../core/session-rows"
 import {
   HISTORY_MAX_OFFSET,
@@ -114,7 +113,6 @@ export function createSessions(
   connect: (client: AgentContext) => MemberConnection
 ) {
   const { catalog } = context
-  const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
   const memberships = new Map<string, Membership>()
   /** This connection as a channel's member, once it first joins one. */
@@ -158,7 +156,7 @@ export function createSessions(
       if (!owners.has(publicSessionId)) owners.set(publicSessionId, agentId)
     },
 
-    scope(publicSessionId: string): SessionScope {
+    scope(publicSessionId: string) {
       const agentId = owners.get(publicSessionId)
       const scope =
         agentId === undefined
@@ -189,12 +187,12 @@ export function createSessions(
       const membership = context.channels.join(memberOf(client), scope, {
         membershipId: `${context.connectionId}:${scope.sessionId}`,
         log,
-        describe: (cause) => errorNotificationOf(runtime, cause),
+        describe: (cause) => errorNotificationOf(context.publicError, cause),
         subscribeRow: (listener) =>
           catalog.subscribe(scope, listener, (cause) =>
             log("error", "session.read.failed", {
               sessionId: scope.sessionId,
-              errorCode: errorNotificationOf(runtime, cause).code,
+              errorCode: errorNotificationOf(context.publicError, cause).code,
             })
           ),
       })
@@ -218,10 +216,10 @@ export function createSessions(
       memberships.delete(publicSessionId)
     },
 
-    forget(scope: SessionScope) {
-      memberships.get(scope.sessionId)?.part()
-      memberships.delete(scope.sessionId)
-      owners.delete(scope.sessionId)
+    forget(publicSessionId: string) {
+      memberships.get(publicSessionId)?.part()
+      memberships.delete(publicSessionId)
+      owners.delete(publicSessionId)
     },
 
     /**

@@ -880,7 +880,8 @@ export async function harness(options: HarnessOptions = {}) {
     return {
       connectionId,
       principalId: PRINCIPAL,
-      runtimeInstance,
+      publicError: (cause) => faults.runtime.publicError(cause),
+      steerAck: faults.runtime.translation?.steerAck,
       catalog,
       readState: composed?.readState ?? readState,
       translators: {

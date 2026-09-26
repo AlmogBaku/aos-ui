@@ -9,13 +9,13 @@ import {
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
   ServerSessionNotFoundError,
-  type ServerRuntime,
   type ServerRuntimePublicError,
 } from "../core/runtime"
 import { MembershipDetachedError } from "../core/channel"
 import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
+import type { AcpConnectionContext } from "./types"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
@@ -175,12 +175,18 @@ function coordinatorError(cause: unknown) {
   return undefined
 }
 
-/** The JSON-RPC error a proxy failure travels as, or the failure itself. */
-export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
+/**
+ * The JSON-RPC error a proxy failure travels as, or the failure itself;
+ * `publicError` is the runtime's classifier.
+ */
+export function publicRequestError(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
   const mapped = coordinatorError(cause)
   if (mapped) return mapped
-  const publicError = runtime.publicError(cause)
-  return publicError ? RUNTIME_ERRORS[publicError.code]() : cause
+  const classified = publicError(cause)
+  return classified ? RUNTIME_ERRORS[classified.code]() : cause
 }
 
 /**
@@ -188,8 +194,11 @@ export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
  * The proxy has no operator-facing copy: a public failure travels as its
  * machine code, and the browser owns the localized sentence.
  */
-export function errorNotificationOf(runtime: ServerRuntime, cause: unknown) {
-  const mapped = publicRequestError(runtime, cause)
+export function errorNotificationOf(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
+  const mapped = publicRequestError(publicError, cause)
   const code =
     (mapped instanceof RequestError && PUBLIC_ERROR_NAMES.get(mapped.code)) ||
     "internal_error"

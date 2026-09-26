@@ -208,12 +208,14 @@ export function createGuestConnection(
   connectionId: string
 ): AcpConnectionContext {
   const role = "guest" as const
+  const { runtime } = options.runtimeInstance
   return {
     connectionId,
     // The connection's real principal arrives with its redeemed invitation.
     principalId: role,
     role,
-    runtimeInstance: options.runtimeInstance,
+    publicError: (cause) => runtime.publicError(cause),
+    steerAck: runtime.translation?.steerAck,
     catalog: options.catalog,
     translators,
     attachmentStages: options.attachmentStages,

@@ -27,7 +27,7 @@ function connectionContext(
     connectionId,
     principalId,
     role: "operator",
-    runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
+    publicError: () => undefined,
     catalog: {} as AcpConnectionContext["catalog"],
     readState: {} as ReadState,
     activityFeed: {} as ActivityFeed,
