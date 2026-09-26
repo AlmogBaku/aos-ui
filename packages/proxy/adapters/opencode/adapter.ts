@@ -1,10 +1,8 @@
 import {
-  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   SessionHistoryResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type AgentCatalogResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionAttachmentStageRequest,
@@ -21,20 +19,16 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
-import { failureOf } from "../../core/failures"
-import { READY_LINK } from "../../core/link"
+import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 import { validIdentifier } from "../../core/identifier"
 import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
-  OpenCodeClientAbortError,
   OpenCodeClientError,
-  OpenCodeMutationUncertainError,
   type OpenCodeClient,
   type OpenCodeFileContent,
   type OpenCodePageOptions,
-  type OpenCodeSessionEvents,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
 import {
@@ -53,20 +47,14 @@ import {
   storedOpenCodeToolCall,
   type OpenCodeMcpCatalog,
 } from "./mcp-apps"
-import {
-  OpenCodeInteractionPublicError,
-  OpenCodeInteractions,
-} from "./interactions"
+import { OpenCodeInteractions } from "./interactions"
+import { openCodeFailure } from "./failures"
 import {
   openCodeModelOptionId,
   parseOpenCodeMessageCatalog,
   parseOpenCodeModelCatalog,
   parseOpenCodeSession,
 } from "./native-schemas"
-import {
-  OpenCodeEventValidationError,
-  validateOpenCodeLiveEvent,
-} from "./events"
 import {
   createOpenCodeWorkspaceOperations,
   OpenCodeWorkspaceScopeError,
@@ -102,6 +90,7 @@ export type OpenCodeAdapterClient = Readonly<{
     | "permissions"
   >
   files: Pick<OpenCodeClient["files"], "read">
+  credentialRefused: OpenCodeClient["credentialRefused"]
   close(): Promise<void>
 }>
 
@@ -114,6 +103,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   creatorAgentId?: string
   /** The project's MCP servers; without them, no tool opens a view. */
   mcp?: OpenCodeMcpCatalog
+  /** The turn engine's watches' link; without one, the runtime is always up. */
+  link?: ServerLink
 }>
 
 /**
@@ -245,17 +236,17 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
-  readonly link = READY_LINK
+  readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly mcpApps?: ServerMcpApps
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
-  readonly #invalidations = new Set<() => void>()
   #closePromise: Promise<void> | undefined
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
     this.turns = options.turns
+    this.link = options.link ?? READY_LINK
     this.#workspace = createOpenCodeWorkspaceOperations({
       client: options.client,
       creatorAgentId: options.creatorAgentId,
@@ -296,62 +287,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   publicError(cause: unknown) {
-    if (cause instanceof OpenCodeMutationUncertainError)
-      return failureOf("uncertain", cause)
-    // A lost stream is a read: a write that may have landed is already a
-    // mutation-uncertain error.
-    if (cause instanceof OpenCodeClientAbortError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeClientError) {
-      if (cause.code === "authentication")
-        return failureOf("runtime_authentication_required", cause)
-      if (cause.code === "invalid_request")
-        return failureOf("invalid_request", cause)
-      if (cause.code === "not_found") return failureOf("gone", cause)
-      if (cause.code === "conflict")
-        return failureOf("revision_conflict", cause)
-      return failureOf("unavailable", cause)
-    }
-    if (
-      cause instanceof OpenCodeWorkspaceScopeError ||
-      // The receipt is still authoritative, but OpenCode cannot read its file:
-      // unlike a 503, "not found" never invites a retry that cannot succeed.
-      cause instanceof OpenCodeContentUnreadableError
-    )
-      return failureOf("gone", cause)
-    if (cause instanceof OpenCodeWorkspaceUnavailableError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeContentUnavailableError)
-      return failureOf("unavailable", cause)
-    if (cause instanceof OpenCodeInteractionPublicError) {
-      if (cause.code === "AOS_INTERACTION_NOT_FOUND")
-        return failureOf("gone", cause)
-      if (cause.code === "AOS_MUTATION_UNCERTAIN")
-        return failureOf("uncertain", cause)
-      if (
-        cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-        cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
-      )
-        return failureOf("unavailable", cause)
-      return failureOf("invalid_request", cause)
-    }
-    return undefined
-  }
-
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.listAgents()
-      return RuntimeAuthStateSchema.parse({ status: "authenticated" })
-    } catch (error) {
-      if (this.publicError(error)?.code === "runtime_authentication_required")
-        return RuntimeAuthStateSchema.parse({
-          status: "authentication-required",
-        })
-      return RuntimeAuthStateSchema.parse({
-        status: "unavailable",
-        reason: "temporarily-unavailable",
-      })
-    }
+    return openCodeFailure(cause)
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {
@@ -527,56 +463,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     throw new OpenCodeWorkspaceUnavailableError()
   }
 
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ): Promise<() => void> {
-    await this.getSession(agentId, publicSessionId)
-    const controller = new AbortController()
-    let source: OpenCodeSessionEvents | undefined
-    let released = false
-    let lastSeen: number | undefined
-    const release = () => {
-      if (released) return
-      released = true
-      this.#invalidations.delete(release)
-      controller.abort()
-      source?.abort()
-    }
-    const fail = () => {
-      if (released) return
-      release()
-      reset?.()
-    }
-    try {
-      source = await this.options.client.sessions.events(publicSessionId, {
-        signal: controller.signal,
-      })
-    } catch (error) {
-      release()
-      throw error
-    }
-    this.#invalidations.add(release)
-    void (async () => {
-      try {
-        for await (const envelope of source!) {
-          if (released) return
-          const event = validateOpenCodeLiveEvent(envelope, publicSessionId)
-          if (lastSeen !== undefined && event.seq !== lastSeen + 1)
-            throw new OpenCodeEventValidationError()
-          lastSeen = event.seq
-          listener()
-        }
-        fail()
-      } catch {
-        fail()
-      }
-    })()
-    return release
-  }
-
   async stageAttachments(
     agentId: string,
     publicSessionId: string,
@@ -639,7 +525,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   close() {
     this.#closePromise ??= Promise.resolve().then(async () => {
-      for (const release of [...this.#invalidations]) release()
       await this.options.client.close()
     })
     return this.#closePromise

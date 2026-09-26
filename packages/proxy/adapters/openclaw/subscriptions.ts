@@ -15,12 +15,10 @@ import {
 import { isGatewayEventFrame } from "@openclaw/gateway-protocol/frame-guards"
 import { Check } from "typebox/value"
 
-import { backoffDelay, Deadline, type Logger } from "../../../lifecycle"
+import { Deadline, type Logger } from "../../../lifecycle"
 
 /** How long a replaced generation may hold delivery while it re-subscribes and reconciles. */
 const PAUSE_DEADLINE_MS = 30_000
-/** How a lease whose re-subscribe failed tries again. */
-const RESUBSCRIBE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 
 export interface OpenClawSubscriptionRequestClient {
   request<T>(method: string, params: Record<string, unknown>): Promise<T>
@@ -52,6 +50,7 @@ type LogicalLease = {
     reason: "gap" | "reconnect",
     fence: OpenClawReconciliationFence
   ) => void | Promise<void>
+  lost?: (cause: unknown) => void
   native?: GatewaySessionMessageSubscription
   nativeGeneration: number
   approvalReplayKey?: string
@@ -153,7 +152,6 @@ export class OpenClawSessionSubscriptions {
   #transition: Promise<void> = Promise.resolve()
   /** The generation that holds delivery; only that generation resumes it. */
   #paused: number | undefined
-  #retry?: ReturnType<typeof setTimeout>
 
   constructor(client: OpenClawSubscriptionRequestClient, logger: Logger) {
     this.#client = client
@@ -165,13 +163,19 @@ export class OpenClawSessionSubscriptions {
     return this.#generation
   }
 
+  /**
+   * Leases `scope`'s native subscription. After a reconnect, `reconcile`
+   * hears that the subscription was renewed and `lost` that it could not be;
+   * a lost lease's holder decides whether to acquire again.
+   */
   async acquire(
     scope: OpenClawSubscriptionScope,
     listener: (event: EventFrame) => void,
     reconcile?: (
       reason: "gap" | "reconnect",
       fence: OpenClawReconciliationFence
-    ) => void | Promise<void>
+    ) => void | Promise<void>,
+    lost?: (cause: unknown) => void
   ): Promise<OpenClawSessionLease> {
     if (!validIdentity(scope.agentId) || !validIdentity(scope.sessionKey))
       throw new Error("Invalid OpenClaw Session subscription scope")
@@ -181,6 +185,7 @@ export class OpenClawSessionSubscriptions {
         scope,
         listener,
         ...(reconcile ? { reconcile } : {}),
+        ...(lost ? { lost } : {}),
         nativeGeneration: generation,
         approvalDirty: false,
         released: false,
@@ -248,7 +253,6 @@ export class OpenClawSessionSubscriptions {
   pause() {
     this.#generation += 1
     this.#paused = this.#generation
-    clearTimeout(this.#retry)
     for (const lease of this.#leases) lease.dirty = true
     return this.#generation
   }
@@ -256,8 +260,7 @@ export class OpenClawSessionSubscriptions {
   /**
    * Re-subscribes every lease on a new generation and reconciles each,
    * holding delivery until then or until the paused deadline passes. A lease
-   * that fails to re-subscribe tries again on a capped backoff while the
-   * others deliver.
+   * that fails to re-subscribe is told it is lost while the others deliver.
    */
   replaceGeneration(reason: Reason) {
     const generation = this.pause()
@@ -269,32 +272,38 @@ export class OpenClawSessionSubscriptions {
       this.#coordinator = this.#createCoordinator()
       const leases = [...this.#leases]
       const failed = await this.#resubscribe(leases, generation)
+      if (generation !== this.#generation) return
+      for (const [lease, cause] of failed) {
+        try {
+          lease.lost?.(cause)
+        } catch (err) {
+          this.#logger.warn({ err }, "openclaw.subscription.lost_failed")
+        }
+      }
       await this.#reconcile(
-        leases.filter((lease) => !failed.includes(lease)),
+        leases.filter((lease) => !failed.has(lease)),
         reason,
         generation,
         deadline.signal
       )
-      if (failed.length > 0) this.#retryLater(failed, reason, generation, 0)
     }).finally(() => {
       deadline.clear()
       this.#resume(generation)
     })
   }
 
-  /** Stops every retry; the client's own stop ends the native subscriptions. */
+  /** Refuses every generation's pending work; the client's own stop ends the native subscriptions. */
   close() {
     this.#generation += 1
-    clearTimeout(this.#retry)
   }
 
   #resume(generation: number) {
     if (this.#paused === generation) this.#paused = undefined
   }
 
-  /** Re-acquires each live lease on `generation` and returns the ones that failed. */
+  /** Re-acquires each live lease on `generation` and returns the ones that failed, with why. */
   async #resubscribe(leases: readonly LogicalLease[], generation: number) {
-    const failed: LogicalLease[] = []
+    const failed = new Map<LogicalLease, unknown>()
     for (const lease of leases) {
       if (generation !== this.#generation) break
       if (lease.released) continue
@@ -314,7 +323,7 @@ export class OpenClawSessionSubscriptions {
           : undefined
       } catch (err) {
         this.#logger.warn({ err }, "openclaw.subscription.resubscribe_failed")
-        failed.push(lease)
+        failed.set(lease, err)
       }
     }
     return failed
@@ -344,34 +353,6 @@ export class OpenClawSessionSubscriptions {
       }
       dirty = live.some((lease) => !lease.released && lease.dirty)
     } while (dirty && generation === this.#generation && !signal?.aborted)
-  }
-
-  #retryLater(
-    leases: readonly LogicalLease[],
-    reason: Reason,
-    generation: number,
-    attempt: number
-  ) {
-    if (generation !== this.#generation) return
-    clearTimeout(this.#retry)
-    this.#retry = setTimeout(
-      () => {
-        void this.#enqueue(async () => {
-          if (generation !== this.#generation) return
-          const failed = await this.#resubscribe(leases, generation)
-          await this.#reconcile(
-            leases.filter((lease) => !failed.includes(lease)),
-            reason,
-            generation
-          )
-          if (failed.length > 0)
-            this.#retryLater(failed, reason, generation, attempt + 1)
-        }).catch((err: unknown) =>
-          this.#logger.warn({ err }, "openclaw.subscription.retry_failed")
-        )
-      },
-      backoffDelay(attempt, RESUBSCRIBE_BACKOFF)
-    )
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {

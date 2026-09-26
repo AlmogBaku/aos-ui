@@ -379,20 +379,20 @@ describe("Hermes gateway request classification", () => {
     await gateway.close()
   })
 
-  it("aborts a request through the caller signal and writes nothing after it", async () => {
+  it("reports a request aborted after its write as uncertain and writes nothing after it", async () => {
     const { gateway, sockets } = harness()
     await gateway.connect()
     const controller = new AbortController()
 
     const pending = gateway.request(
-      "session.events.since",
-      { session_id: "live-a" },
+      "prompt.submit",
+      { session_id: "live-a", text: "once" },
       { signal: controller.signal }
     )
     await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     controller.abort()
 
-    await expect(pending).rejects.toBeInstanceOf(HermesRequestAbortedError)
+    await expect(pending).rejects.toBeInstanceOf(HermesRpcUncertainError)
     expect(sockets[0]!.sent).toHaveLength(2)
     expect(sockets[0]!.readyState).toBe(1)
     await gateway.close()
@@ -415,6 +415,22 @@ describe("Hermes gateway request classification", () => {
 
     await expect(pending).rejects.toBeInstanceOf(HermesRequestAbortedError)
     expect(sockets[0]!.sent).toEqual([])
+
+    // Aborted once the socket is open but before its frame goes out: unwritten.
+    const late = new AbortController()
+    gateway.link.subscribe((state) => {
+      if (state === "ready") late.abort()
+    })
+    const opening = gateway.request(
+      "profiles.list",
+      {},
+      { signal: late.signal }
+    )
+    await flush()
+    sockets[0]!.open()
+    sockets[0]!.deliverReady()
+    await expect(opening).rejects.toBeInstanceOf(HermesRequestAbortedError)
+    expect(announced(sockets[0]!)).toEqual([])
     await gateway.close()
   })
 
@@ -1012,18 +1028,24 @@ describe("Hermes gateway lifecycle and server requests", () => {
     await gateway.close()
   })
 
-  it("reports whether an answer written now can reach Hermes", async () => {
-    const { gateway, sockets } = harness()
+  it("reports whether an answer written now can reach Hermes, and its link", async () => {
+    const clock = useFakeClock()
+    const { gateway, sockets } = harness({ autoReady: true })
 
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
     await gateway.connect()
     expect(gateway.connected()).toBe(true)
+    await clock.advance(0)
+    expect(gateway.link.state()).toBe("ready")
 
     sockets[0]!.close(1006)
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
 
     await gateway.close()
     expect(gateway.connected()).toBe(false)
+    expect(gateway.link.state()).toBe("lost")
   })
 
   it("re-delivers open requests from a resume result before it resolves", async () => {

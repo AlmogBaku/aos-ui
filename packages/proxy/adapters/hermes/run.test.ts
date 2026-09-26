@@ -12,6 +12,7 @@ import {
 } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import type {
   AttachmentObserver,
   AttachmentSignal,
@@ -7097,17 +7098,22 @@ describe("Hermes turn watch", () => {
   })
 
   it("observes the new live Session after Hermes restarts and announces its running turn", async () => {
+    const clock = useFakeClock()
+    // Half of each full-jitter ceiling, so no backoff is drawn as zero.
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
     const live = ["live-secret", "live-restarted"]
-    const { attachment, hermes, onTurn, subscribeTurns, observed } = watched({
+    const { attachment, hermes, onTurn, subscribeTurns } = watched({
       resume: async () => ({ liveSessionId: live.shift()!, running: false }),
     })
     subscribeTurns()
-    await observed()
+    await clock.advance(0)
+    expect(attachment.observers("live-secret")).toBe(1)
 
     hermes.status = "working"
     attachment.signal("live-secret", { kind: "lost", reason: "restart" })
+    await clock.advance(250)
 
-    await vi.waitFor(() => expect(onTurn).toHaveBeenCalledTimes(1))
+    expect(onTurn).toHaveBeenCalledTimes(1)
     expect(attachment.observers("live-secret")).toBe(0)
     expect(attachment.observers("live-restarted")).toBe(1)
     attachment.publish(
@@ -7128,47 +7134,41 @@ describe("Hermes turn watch", () => {
     await vi.waitFor(() => expect(onTurn).toHaveBeenCalledTimes(1))
   })
 
-  it("reports a failed subscription once and retries until it observes", async () => {
-    vi.useFakeTimers()
-    try {
-      let resumes = 0
-      const { attachment, onError, subscribeTurns } = watched({
-        resume: async () => {
-          resumes += 1
-          if (resumes <= 2) throw new HermesUnavailableError()
-          return { liveSessionId: "live-secret", running: false }
-        },
-      })
-      subscribeTurns()
-      await vi.advanceTimersByTimeAsync(60_000)
+  it("reports a failed subscription once and retries on its backoff until it observes", async () => {
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    let resumes = 0
+    const { attachment, onError, subscribeTurns } = watched({
+      resume: async () => {
+        resumes += 1
+        if (resumes <= 2) throw new HermesUnavailableError()
+        return { liveSessionId: "live-secret", running: false }
+      },
+    })
+    subscribeTurns()
+    await clock.advance(1_000)
 
-      expect(resumes).toBe(3)
-      expect(onError).toHaveBeenCalledOnce()
-      expect(attachment.observers("live-secret")).toBe(1)
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(resumes).toBe(3)
+    expect(onError).toHaveBeenCalledOnce()
+    expect(attachment.observers("live-secret")).toBe(1)
   })
 
   it("stops once and for all, however often it is stopped", async () => {
-    vi.useFakeTimers()
-    try {
-      const resume = vi.fn(async () => {
-        throw new HermesUnavailableError()
-      })
-      const { onError, subscribeTurns } = watched({ resume })
-      const stop = subscribeTurns()
-      await vi.advanceTimersByTimeAsync(0)
-      expect(onError).toHaveBeenCalledOnce()
+    const clock = useFakeClock()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const resume = vi.fn(async () => {
+      throw new HermesUnavailableError()
+    })
+    const { onError, subscribeTurns } = watched({ resume })
+    const stop = subscribeTurns()
+    await clock.advance(0)
+    expect(onError).toHaveBeenCalledOnce()
 
-      stop()
-      stop()
-      await vi.advanceTimersByTimeAsync(60_000)
+    stop()
+    stop()
+    await clock.advance(60_000)
 
-      expect(resume).toHaveBeenCalledOnce()
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(resume).toHaveBeenCalledOnce()
   })
 
   it("releases its observation when stopped", async () => {

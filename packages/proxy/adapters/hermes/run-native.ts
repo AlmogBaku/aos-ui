@@ -20,7 +20,7 @@ import {
   type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
-import type { AttachmentObserver } from "./attachment-registry"
+import { isSessionGone, type AttachmentObserver } from "./attachment-registry"
 import { isRecord, trimmedText } from "./native"
 import { projectHermesHistory } from "./history"
 import { publishedArtifact } from "./media-artifacts"
@@ -200,18 +200,16 @@ export type HermesNativeOptions = {
 const MAX_REPLAY_RESPONSE_BYTES = 6 * 1_048_576
 
 /**
- * Hermes' documented rejection codes for a session-scoped mutation. Anything
- * else is `unknown`: authoritative, but without a public reason of its own.
+ * Hermes' documented rejection codes for a session-scoped mutation, past the
+ * ones saying its live Session is gone. Anything else is `unknown`:
+ * authoritative, but without a public reason of its own.
  */
 const REJECTION_BY_CODE = new Map<number, HermesSubmitRejection>([
-  [4001, "session-gone"],
-  [4007, "session-gone"],
   [4009, "busy"],
   [4091, "busy"],
   [5070, "storage"],
   [5071, "storage"],
   [-32600, "invalid"],
-  [-32602, "invalid"],
 ])
 
 /**
@@ -225,6 +223,7 @@ const REJECTION_BY_SLOT_REASON = new Map<string, HermesSubmitRejection>([
 ])
 
 function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
+  if (isSessionGone(error)) return "session-gone"
   const reason =
     error.code === 4090
       ? REJECTION_BY_SLOT_REASON.get(error.reason ?? "")
@@ -233,9 +232,6 @@ function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
         : REJECTION_BY_CODE.get(error.code)
   return reason ?? "unknown"
 }
-
-/** Hermes has no live Session left to address; the binding must be rebound. */
-const GONE_CODES = new Set([4001, 4007, -32602])
 
 /**
  * Classify the reply to a write Hermes already accepted. An unusable admission
@@ -535,7 +531,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         this.#logRejection("session.interrupt", error)
         // Hermes stating there is no live Session left is an authoritative
         // answer that nothing remains to stop, not an uncertain mutation.
-        if (error.code !== undefined && GONE_CODES.has(error.code)) {
+        if (isSessionGone(error)) {
           this.#attachments.invalidate(liveSessionId)
           return "gone"
         }
@@ -559,8 +555,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         throw new ServerTurnSteerUncertainError()
       if (error instanceof HermesRpcRejectedError) {
         this.#logRejection("session.redirect", error)
-        if (error.code !== undefined && GONE_CODES.has(error.code))
-          this.#attachments.invalidate(liveSessionId)
+        if (isSessionGone(error)) this.#attachments.invalidate(liveSessionId)
         throw new HermesUnavailableError()
       }
       throwUnavailable(error)

@@ -9,6 +9,7 @@
  */
 import type { PendingRequest } from "../../core/events"
 
+import { HermesSessionGoneError } from "./attachment-registry"
 import { boundedNativeBytes, sessionKey } from "./native"
 import { providerUnavailable, TURN_FAILURES } from "./run-failures"
 import {
@@ -123,13 +124,16 @@ export async function attachTurn(
       if (accepting) lostTurn(host, active, signal.reason)
     })
     cursor = await attachCursor(host, liveSessionId, mode)
-  } catch {
+  } catch (error) {
     safelyUnsubscribe(unsubscribe)
     stopRequests()
     active.uncertain = true
     active.detached = true
     active.queue.close()
-    throw providerUnavailable()
+    // A Session Hermes holds no record of is gone, not out of reach.
+    throw error instanceof HermesSessionGoneError
+      ? error
+      : providerUnavailable()
   }
   active.liveSessionId = liveSessionId
   active.unsubscribe = () => {

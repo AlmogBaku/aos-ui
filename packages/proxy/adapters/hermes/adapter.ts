@@ -12,7 +12,6 @@ import {
   VisibilityUpdateResponseSchema,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionMessage,
@@ -25,7 +24,6 @@ import {
   HermesHttpError,
   HermesUnavailableError,
   throwUnavailable,
-  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 import {
@@ -75,8 +73,8 @@ import type {
   ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
-import { failureOf } from "../../core/failures"
-import { READY_LINK } from "../../core/link"
+import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
+import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
@@ -338,7 +336,8 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
-  readonly link = READY_LINK
+  /** The gateway's socket; a transport that owns none is taken as up. */
+  readonly link: ServerLink
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
@@ -369,7 +368,7 @@ export class HermesServerAdapter implements ServerRuntime {
     private readonly transport: HermesRpcTransport,
     options: {
       sessionIdleMs?: number
-      log?: HermesLog
+      log?: Logger
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
       /**
@@ -379,6 +378,7 @@ export class HermesServerAdapter implements ServerRuntime {
       mcp?: { client: McpAppClient; logger: Logger }
     } = {}
   ) {
+    this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
@@ -557,6 +557,13 @@ export class HermesServerAdapter implements ServerRuntime {
     this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
+      // A watch stops where the adapter reports a Session gone or the token
+      // refused, and redials once the gateway is up again.
+      watch: {
+        publicError: (cause) => this.publicError(cause),
+        upstream: this.link,
+        ...(options.log ? { logger: options.log } : {}),
+      },
     })
   }
 
@@ -701,6 +708,7 @@ export class HermesServerAdapter implements ServerRuntime {
     if (
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
+      cause instanceof HermesSessionGoneError ||
       cause instanceof HermesWorkspaceScopeError ||
       cause instanceof HermesContentScopeError ||
       // The artifact is still authoritative history, but the provider no longer
@@ -716,15 +724,13 @@ export class HermesServerAdapter implements ServerRuntime {
       return failureOf("revision_conflict", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
-    if (
-      cause instanceof HermesTurnPublicError &&
-      cause.code === "AOS_STOP_UNCERTAIN"
-    )
-      return failureOf("uncertain", cause)
+    if (cause instanceof HermesTurnPublicError)
+      return (
+        publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+      )
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
-      cause instanceof HermesTurnPublicError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
@@ -962,17 +968,6 @@ export class HermesServerAdapter implements ServerRuntime {
     return this.#content.speak(agentId, text, signal)
   }
 
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.transport.request("profiles.list", { include_sessions: false })
-      return { status: "authenticated" }
-    } catch (error) {
-      if (error instanceof HermesAuthenticationError)
-        return { status: "authentication-required" }
-      return { status: "unavailable", reason: "temporarily-unavailable" }
-    }
-  }
-
   /** The validated native profile rows, one per distinct Agent id. */
   async #profiles(): Promise<NativeRecord[]> {
     try {
@@ -1192,10 +1187,10 @@ export class HermesServerAdapter implements ServerRuntime {
         this.#retry
       )
     } catch (error) {
-      // A heal must learn that Hermes reaped this live Session so the registry
-      // can invalidate the binding and resume the durable Session again; every
-      // other transport failure stays an outage.
-      if (isSessionGone(error)) throw new HermesSessionGoneError()
+      // A resume addresses the durable Session, so a gone answer means Hermes
+      // holds no record of it; every other failure stays an outage.
+      if (isSessionGone(error))
+        throw new HermesSessionGoneError({ cause: error })
       throwUnavailable(error)
     }
     const liveSessionId =
@@ -1225,23 +1220,6 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch {
       // Idle retention is best-effort; it must never close the shared socket.
     }
-  }
-
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ) {
-    const providerSessionId = storedSessionIdentity(agentId, publicSessionId)
-    if (!providerSessionId) throw new HermesSessionNotFoundError()
-    return this.#attachments.subscribe(
-      { agentId, providerSessionId, sessionId: publicSessionId },
-      (signal) => {
-        if (signal.kind === "event") listener()
-        else if (signal.kind === "lost") reset?.()
-      }
-    )
   }
 
   /**

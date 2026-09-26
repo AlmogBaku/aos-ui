@@ -531,6 +531,33 @@ describe("useAcpRuntime", () => {
     ])
   })
 
+  it("ends the run of a Session the proxy reports gone", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+      fake.emit(chunkUpdate("a1", "Live"))
+    })
+    const gone = (sessionId: string) =>
+      act(async () => {
+        fake.notify(AOS_METHODS.notify.error, {
+          sessionId,
+          code: "not_found",
+          message: "not_found",
+        })
+      })
+
+    await gone("other-session")
+    expect(result.current.thread.getState().isRunning).toBe(true)
+    await gone(SESSION_ID)
+    expect(result.current.thread.getState().isRunning).toBe(false)
+    expect(result.current.thread.getState().messages[0]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: { code: "not_found" },
+    })
+  })
+
   it("tracks the run state the Session reports", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)

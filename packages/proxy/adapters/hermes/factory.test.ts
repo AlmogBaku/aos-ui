@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import { captureLogs } from "../../../../test/support/log-capture"
 import { createProxyLogger } from "../../cli/logger"
 import { sessionId } from "../../core/ids"
@@ -50,6 +51,7 @@ describe("Hermes runtime shutdown", () => {
    * live Hermes Session, nobody retaining it, its idle close armed.
    */
   async function resumedRuntime(
+    clock: ReturnType<typeof useFakeClock>,
     request: (method: string) => Promise<unknown>,
     services: RuntimeServices = {
       logger: captureLogs().logger,
@@ -84,28 +86,32 @@ describe("Hermes runtime shutdown", () => {
       },
       { onTurn: () => undefined, onError: () => undefined }
     )
-    for (let i = 0; i < 10; i++) await Promise.resolve()
+    // The watch's link takes its dial before it releases the observation.
+    await clock.advance(0)
     stop()
     return { runtime, transport, config, gateway: gateway! }
   }
 
   it("closes an attached runtime without waiting on a native call that cannot answer", async () => {
-    vi.useFakeTimers()
-    const { runtime, transport } = await resumedRuntime(async (method) => {
-      if (method === "session.resume") return { session_id: "live-stored" }
-      // Hermes never answers the courtesy close: the socket is going away.
-      return new Promise(() => undefined)
-    })
+    const clock = useFakeClock()
+    const { runtime, transport } = await resumedRuntime(
+      clock,
+      async (method) => {
+        if (method === "session.resume") return { session_id: "live-stored" }
+        // Hermes never answers the courtesy close: the socket is going away.
+        return new Promise(() => undefined)
+      }
+    )
 
     const closed = runtime.close()
     let settled = false
     void closed.then(() => {
       settled = true
     })
-    await vi.advanceTimersByTimeAsync(0)
+    await clock.advance(0)
     expect(settled).toBe(false)
 
-    await vi.advanceTimersByTimeAsync(1_000)
+    await clock.advance(1_000)
     await expect(closed).resolves.toBeUndefined()
     expect(transport.close).toHaveBeenCalledOnce()
     // Nothing the runtime armed may keep the process alive after close().
@@ -121,6 +127,7 @@ describe("Hermes runtime shutdown", () => {
       destination: { write: (line) => void lines.push(line) },
     })
     const { runtime, config, gateway } = await resumedRuntime(
+      useFakeClock(),
       async (method) =>
         method === "session.resume" ? { session_id: "live-stored" } : {},
       { logger, credentials }
@@ -147,9 +154,10 @@ describe("Hermes runtime shutdown", () => {
   })
 
   it("closes at once when Hermes answers the courtesy close", async () => {
-    vi.useFakeTimers()
-    const { runtime, transport } = await resumedRuntime(async (method) =>
-      method === "session.resume" ? { session_id: "live-stored" } : {}
+    const { runtime, transport } = await resumedRuntime(
+      useFakeClock(),
+      async (method) =>
+        method === "session.resume" ? { session_id: "live-stored" } : {}
     )
 
     await expect(runtime.close()).resolves.toBeUndefined()

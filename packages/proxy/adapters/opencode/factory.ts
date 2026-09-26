@@ -72,6 +72,7 @@ export async function createOpenCodeRuntime(
       replies: interactions,
       ...(mcp ? { mcpToolNames: mcp.names } : {}),
     })
+  const engine = turns instanceof OpenCodeTurnEngine ? turns : undefined
   // Wrapped before the coordinator, which runs turns through `runtime.turns`.
   const runtime = withMcpApps(
     new OpenCodeServerAdapter({
@@ -79,6 +80,7 @@ export async function createOpenCodeRuntime(
       turns,
       interactions,
       creatorAgentId: dependencies.creatorAgentId,
+      ...(engine ? { link: engine.link } : {}),
       ...(mcp ? { mcp } : {}),
     })
   )
@@ -91,7 +93,7 @@ export async function createOpenCodeRuntime(
     close() {
       closePromise ??= Promise.resolve().then(async () => {
         sessions.close()
-        if (turns instanceof OpenCodeTurnEngine) turns.close()
+        engine?.close()
         await runtime.close()
         await mcpAppClient?.close()
       })

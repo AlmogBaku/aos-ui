@@ -3,14 +3,11 @@ import { describe, expect, it, vi } from "vitest"
 import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   HermesAttachmentRegistry,
+  HermesSessionGoneError,
   REBIND_BACKOFF,
   type AttachmentSignal,
 } from "./attachment-registry"
-import {
-  HermesRpcRejectedError,
-  HermesUnavailableError,
-  type HermesConnectionHandler,
-} from "./gateway"
+import { HermesUnavailableError, type HermesConnectionHandler } from "./gateway"
 import { nativeTurn } from "./test-utils/native-events"
 
 const scope = {
@@ -216,12 +213,12 @@ describe("HermesAttachmentRegistry", () => {
     ).rejects.toThrow()
   })
 
-  it("invalidates a stale binding and re-resumes when a heal is rejected as gone", async () => {
+  it("drops a binding whose heal finds the durable Session gone", async () => {
     const gateway = fakeGateway()
     const resume = vi
       .fn<() => Promise<{ liveSessionId: string }>>()
       .mockResolvedValueOnce({ liveSessionId: "live-first" })
-      .mockRejectedValueOnce(new HermesRpcRejectedError(4001))
+      .mockRejectedValueOnce(new HermesSessionGoneError())
       .mockResolvedValueOnce({ liveSessionId: "live-second" })
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
