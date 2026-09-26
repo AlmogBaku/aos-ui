@@ -26,5 +26,12 @@ export const RECONNECT_BACKOFF = { baseMs: 250, capMs: 5_000 }
 /** A transport up this long starts the backoff over, rejoined or not. */
 export const STABLE_AFTER_MS = 60_000
 
+/**
+ * How long an opened Session outlives its last listener before it parts, so
+ * an unsubscribe a resubscribe follows at once, as Strict Mode does, costs
+ * neither a close nor a resume.
+ */
+export const PART_GRACE_MS = 2_000
+
 /** The window a reopen waits in after the proxy closes at capacity. */
 export const CAPACITY_BACKOFF = { minMs: 30_000, maxMs: 60_000 }

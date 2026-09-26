@@ -248,19 +248,16 @@ export function createAcpSessionStore({
   }
 
   /** Resumed Sessions stream their own status, Todos, and row changes. */
-  function observe(sessionId: string) {
+  function observe(sessionId: string, agentId?: string) {
     if (observed.has(sessionId)) return
-    const offUpdates = connection.subscribeSessionUpdates(
+    observed.set(
       sessionId,
-      (update, meta) => acceptUpdate(sessionId, update, meta)
+      connection.subscribe(sessionId, {
+        ...(agentId === undefined ? {} : { agentId }),
+        update: (update, meta) => acceptUpdate(sessionId, update, meta),
+        replay: () => holdReplayedStatus(sessionId),
+      })
     )
-    const offReplays = connection.subscribeSessionReplay(sessionId, () =>
-      holdReplayedStatus(sessionId)
-    )
-    observed.set(sessionId, () => {
-      offUpdates()
-      offReplays()
-    })
   }
 
   subscribeAosNotification(

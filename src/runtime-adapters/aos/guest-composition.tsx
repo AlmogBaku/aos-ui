@@ -372,10 +372,12 @@ function ReadyGuestAosSurface({
   const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
   useEffect(
     () =>
-      connection.subscribeSessionUpdates(sessionId, (update, meta) => {
-        if (!SessionUpdate.isAvailableCommandsUpdate(update)) return
-        const reported = AosAvailableCommandsMetaSchema.safeParse(meta)
-        if (reported.success) setCapabilities(reported.data.capabilities)
+      connection.subscribe(sessionId, {
+        update: (update, meta) => {
+          if (!SessionUpdate.isAvailableCommandsUpdate(update)) return
+          const reported = AosAvailableCommandsMetaSchema.safeParse(meta)
+          if (reported.success) setCapabilities(reported.data.capabilities)
+        },
       }),
     [connection, sessionId]
   )

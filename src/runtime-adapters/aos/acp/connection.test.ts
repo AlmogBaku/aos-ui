@@ -412,22 +412,16 @@ describe("ACP connection", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
 
-    await connection.resumeSession(SESSION_ID, {
-      replayFromStart: false,
-      after: 12,
-      turnId: "run-1",
-    })
-    // The Agent `session/new` created the Session in travels on every later
-    // resume.
+    // `session/new` joined the Session, so opening it resumes nothing; the
+    // Agent it was created in travels on every later resume.
+    connection.subscribe(SESSION_ID, {})
+    await connection.replay(SESSION_ID)
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
-      _meta: {
-        [AOS_META_KEY]: { agentId: AGENT_ID, after: 12, turnId: "run-1" },
-      },
+      replayFrom: { type: "start" },
+      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
-    expect(proxy.paramsOf(methods.agent.session.resume)).not.toHaveProperty(
-      "replayFrom"
-    )
 
     await expect(
       connection.prompt(SESSION_ID, [{ type: "text", text: "Hello" }], {
@@ -447,26 +441,24 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     const replaySettled = vi.fn()
     const dropTranscript = vi.fn(() => replaySettled)
-    connection.subscribeSessionReplay(SESSION_ID, dropTranscript)
-
-    const resumed = connection.resumeSession(SESSION_ID, {
-      replayFromStart: true,
+    connection.subscribe(SESSION_ID, {
       agentId: AGENT_ID,
+      replay: dropTranscript,
     })
+
+    // The opening join is the replay asked for, not a second one.
+    const replayed = connection.replay(SESSION_ID)
     expect(replaySettled).not.toHaveBeenCalled()
-    await resumed
+    await replayed
     expect(replaySettled).toHaveBeenCalledTimes(1)
 
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       replayFrom: { type: "start" },
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
     // The whole Session is on its way, so whoever projects it is told to drop
     // what this replay resends.
-    expect(dropTranscript).toHaveBeenCalledTimes(1)
-
-    await connection.resumeSession(SESSION_ID, { replayFromStart: false })
-    // An incremental resume replaces nothing already projected.
     expect(dropTranscript).toHaveBeenCalledTimes(1)
     connection.close()
   })
@@ -490,7 +482,6 @@ describe("ACP connection", () => {
       }
     )
 
-    await connection.closeSession(SESSION_ID)
     await connection.deleteSession(SESSION_ID)
     await connection.updateSession({ sessionId: SESSION_ID, unread: false })
     expect(proxy.paramsOf(AOS_METHODS.session.update)).toEqual({
@@ -543,15 +534,14 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("dispatches Session updates with their AOS metadata and tracks the run position", async () => {
+  it("dispatches Session updates with their AOS metadata to the Session's listeners", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const seen: { update: SessionUpdate; meta?: Record<string, unknown> }[] = []
-    const unsubscribe = connection.subscribeSessionUpdates(
-      SESSION_ID,
-      (update, meta) => seen.push({ update, meta })
-    )
+    const unsubscribe = connection.subscribe(SESSION_ID, {
+      update: (update, meta) => seen.push({ update, meta }),
+    })
 
     await proxy.pushUpdate(
       {
@@ -565,22 +555,15 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0]?.update).toMatchObject({ sessionUpdate: "state_update" })
     expect(seen[0]?.meta).toMatchObject({ sequence: 7, turnId: "run-1" })
-    expect(connection.lastSequence(SESSION_ID)).toEqual({
-      turnId: "run-1",
-      after: 7,
-    })
 
     unsubscribe()
+    const stayed = vi.fn()
+    connection.subscribe(SESSION_ID, { update: stayed })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 8, turnId: "run-1" }
     )
-    await vi.waitFor(() =>
-      expect(connection.lastSequence(SESSION_ID)).toEqual({
-        turnId: "run-1",
-        after: 8,
-      })
-    )
+    await vi.waitFor(() => expect(stayed).toHaveBeenCalledTimes(1))
     expect(seen).toHaveLength(1)
     connection.close()
   })
@@ -708,16 +691,26 @@ describe("ACP connection", () => {
       history: { nextCursor: "cursor-older" },
     }
 
-    it("keeps the latest history a resume reports, and a resume without one leaves it", async () => {
+    it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
+      const clock = useFakeClock()
       const proxy = createProxyAgent({ history: { nextCursor: "cursor-1" } })
-      const connection = connectInProcess(proxy)
+      const pipe = pipedSockets(() => proxy.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://proxy.test/api/aos/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
 
       expect(connection.history(SESSION_ID)).toBeUndefined()
-      await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+      connection.subscribe(SESSION_ID, {})
+      await connection.joined(SESSION_ID)
       expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
 
-      // A resume that replays nothing reports no history: the cursor stands.
-      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+      // A rejoin replays nothing and reports no history: the cursor stands.
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
       expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
       connection.close()
     })
@@ -727,9 +720,10 @@ describe("ACP connection", () => {
       const connection = connectInProcess(proxy)
       await connection.initialized
       const live: SessionUpdate[] = []
-      connection.subscribeSessionUpdates(SESSION_ID, (update) =>
-        live.push(update)
-      )
+      connection.subscribe(SESSION_ID, {
+        update: (update) => live.push(update),
+      })
+      await connection.joined(SESSION_ID)
       await proxy.pushUpdate(
         { sessionUpdate: "state_update", state: "running" },
         { sequence: 4, turnId: "run-1" }
@@ -738,13 +732,11 @@ describe("ACP connection", () => {
 
       const page = await connection.resumePage(SESSION_ID, "cursor-1")
 
-      expect(proxy.callsOf(methods.agent.session.resume)).toEqual([
-        {
-          sessionId: SESSION_ID,
-          cwd: "/",
-          replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
-        },
-      ])
+      expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
+        sessionId: SESSION_ID,
+        cwd: "/",
+        replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
+      })
       expect(page.history).toEqual({ nextCursor: "cursor-older" })
       expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
         "user_message",
@@ -755,12 +747,8 @@ describe("ACP connection", () => {
         turnId: "run-0",
       })
       // The page's idle marker belongs to an old turn: the running turn's
-      // listeners never see it, and a reconnect still resumes the live turn.
+      // listeners never see it.
       expect(live).toHaveLength(1)
-      expect(connection.lastSequence(SESSION_ID)).toEqual({
-        turnId: "run-1",
-        after: 4,
-      })
       // A page read is not a resume, so the resume cursor is untouched.
       expect(connection.history(SESSION_ID)).toBeUndefined()
 
@@ -794,12 +782,10 @@ describe("ACP connection", () => {
       })
       connection.start()
       await connection.initialized
-      connection.subscribeSessionUpdates(SESSION_ID, () => {})
-      const resumed = connection.resumeSession(SESSION_ID, {
-        replayFromStart: false,
-      })
+      connection.subscribe(SESSION_ID, {})
+      const joined = connection.joined(SESSION_ID)
       await clock.advance(20)
-      await resumed
+      await joined
 
       const recovering = new Promise<void>((resolve) =>
         connection.subscribeStatus((status) => {
@@ -857,11 +843,9 @@ describe("ACP connection", () => {
     })
     connection.start()
     await connection.initialized
-    connection.subscribeSessionUpdates(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, {
-      replayFromStart: false,
-      agentId: AGENT_ID,
-    })
+    const seen = vi.fn()
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID, update: seen })
+    await connection.joined(SESSION_ID)
     connection.focus(SESSION_ID, { foreground: true, idle: true })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
@@ -869,7 +853,7 @@ describe("ACP connection", () => {
     )
     // A drop loses whatever is still in flight, so the first report lands first.
     await clock.advance(0)
-    expect(connection.lastSequence(SESSION_ID)).toBeDefined()
+    expect(seen).toHaveBeenCalledTimes(1)
     expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
 
     pipe.sockets[0]?.drop()
@@ -916,8 +900,8 @@ describe("ACP connection", () => {
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.subscribeSessionUpdates(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+    connection.subscribe(SESSION_ID, {})
+    await connection.joined(SESSION_ID)
 
     pipe.sockets[0]?.drop()
     await clock.advance(250)
@@ -952,8 +936,8 @@ describe("ACP connection", () => {
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.subscribeSessionUpdates(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+    connection.subscribe(SESSION_ID, {})
+    await connection.joined(SESSION_ID)
 
     pipe.sockets[0]?.drop()
     await clock.advance(250)

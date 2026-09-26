@@ -10,6 +10,7 @@ import {
 } from "./acp-workspace-client-composer"
 import type {
   AcpConnection,
+  AcpSessionListener,
   AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
@@ -49,15 +50,9 @@ function createStore({ resumed = true } = {}) {
   let onUpdate: AcpSessionUpdateListener = () => undefined
   let onReplay: AcpSessionReplayListener = () => undefined
   const connection = {
-    subscribeSessionUpdates: (
-      _: string,
-      listener: AcpSessionUpdateListener
-    ) => {
-      onUpdate = listener
-      return () => undefined
-    },
-    subscribeSessionReplay: (_: string, listener: AcpSessionReplayListener) => {
-      onReplay = listener
+    subscribe: (_: string, listener: AcpSessionListener) => {
+      if (listener.update) onUpdate = listener.update
+      if (listener.replay) onReplay = listener.replay
       return () => undefined
     },
     setConfigOption: async (_: string, configId: string, value: string) =>

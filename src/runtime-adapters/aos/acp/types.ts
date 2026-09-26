@@ -20,7 +20,6 @@ import type {
   AosPromptMetaSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
-  AosSessionResumeResponseMetaSchema,
   AosSessionUpdateRequestSchema,
   AosSetVisibilityRequestSchema,
   AosSteerRequestSchema,
@@ -74,12 +73,26 @@ export type AcpHistoryPage = {
 /** Told a from-start replay is starting; may return its settle callback. */
 export type AcpSessionReplayListener = () => (() => void) | void
 
-export type AcpResumeOptions = {
-  replayFromStart: boolean
-  /** Owning Agent when known before listing, e.g. from a deep link. */
+/**
+ * Where one opened Session stands: `joining` until the proxy has joined it,
+ * `joined` while it follows the Session, `unavailable` while a refused join
+ * waits out its backoff, and `gone` once the provider no longer has it.
+ */
+export type AcpSessionState = "joining" | "joined" | "unavailable" | "gone"
+
+/** One consumer of an opened Session; it takes only the parts it names. */
+export type AcpSessionListener = {
+  /** The owning Agent, when known before any list, e.g. from a deep link. */
   agentId?: string
-  after?: number
-  turnId?: string
+  /** `session/update` notifications for the Session, with `_meta.aos`. */
+  update?: AcpSessionUpdateListener
+  /**
+   * Fires just before a from-start replay is requested, so whoever projects
+   * the Session can drop the transcript that replay is about to resend. It
+   * may return a callback, called once that replay has settled either way.
+   */
+  replay?: AcpSessionReplayListener
+  state?: (state: AcpSessionState) => void
 }
 
 export interface AcpConnection {
@@ -109,22 +122,38 @@ export interface AcpConnection {
     meta: z.infer<typeof AosSessionListMetaSchema>,
     cursor?: string
   ): Promise<{ sessions: SessionInfo[]; nextCursor?: string }>
-  resumeSession(
-    sessionId: string,
-    options: AcpResumeOptions
-  ): Promise<{ meta: z.infer<typeof AosSessionResumeResponseMetaSchema> }>
   /**
-   * Reads the page before `cursor` of a Session this connection has resumed.
-   * Its updates come back here and never reach `subscribeSessionUpdates` or the
-   * resume position, so a page cannot disturb the live turn. A recovering
-   * transport rejoins its Sessions first.
+   * Opens the Session while any listener subscribes. The connection joins it,
+   * replaying it from the start the first time, rejoins it from its own
+   * position after a reconnect, and retries a refused join on backoff. It
+   * parts, with `session/close`, 2 s after the last listener leaves, so a
+   * listener back within that grace costs neither a close nor a resume. A
+   * listener that subscribes before anything of a from-start replay under way
+   * has arrived takes part in that replay.
+   */
+  subscribe(sessionId: string, listener: AcpSessionListener): () => void
+  /** Resolves once the opened Session is joined; rejects once it is gone or parts. */
+  joined(sessionId: string): Promise<void>
+  /**
+   * Replays the opened Session from the start, after the join in flight, and
+   * resolves once it is joined again. A from-start replay that nothing has
+   * arrived for yet, under way or still owed, serves the call instead.
+   */
+  replay(sessionId: string): Promise<void>
+  /** Where the opened Session stands; undefined for one no listener holds. */
+  sessionState(sessionId: string): AcpSessionState | undefined
+  /**
+   * Reads the page before `cursor` of an opened Session, once it is joined.
+   * Its updates come back here and never reach a listener or the rejoin
+   * position, so a page cannot disturb the live turn.
    */
   resumePage(sessionId: string, cursor: string): Promise<AcpHistoryPage>
   /**
-   * The history cursor the latest replaying resume of this Session reported;
-   * a resume that replays nothing leaves it as it was.
+   * The history cursor the latest from-start replay of this opened Session
+   * reported; a join that replays nothing leaves it as it was.
    */
   history(sessionId: string): AosHistoryCursor | undefined
+  /** Prompts an opened Session once it is joined, as `setConfigOption` and `steer` write. */
   prompt(
     sessionId: string,
     blocks: ContentBlock[],
@@ -136,7 +165,6 @@ export interface AcpConnection {
     configId: string,
     value: string
   ): Promise<SessionConfigOption[]>
-  closeSession(sessionId: string): Promise<void>
   deleteSession(sessionId: string): Promise<void>
 
   updateSession(
@@ -155,20 +183,6 @@ export interface AcpConnection {
     request: z.infer<typeof AosSetVisibilityRequestSchema>
   ): Promise<z.infer<typeof VisibilityUpdateResponseSchema>>
 
-  /** `session/update` notifications for one Session, with `_meta.aos`. */
-  subscribeSessionUpdates(
-    sessionId: string,
-    listener: AcpSessionUpdateListener
-  ): () => void
-  /**
-   * Fires just before a from-start replay is requested, so whoever projects the
-   * Session can drop the transcript that replay is about to resend. A listener
-   * may return a callback, called once that replay has settled either way.
-   */
-  subscribeSessionReplay(
-    sessionId: string,
-    listener: AcpSessionReplayListener
-  ): () => void
   /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
   subscribeNotification(
     method: string,
@@ -177,7 +191,5 @@ export interface AcpConnection {
   subscribePendingRequests(
     listener: (request: AcpPendingRequest) => void
   ): () => void
-  /** Last `_meta.aos.sequence` seen for a Session's turn, for resume. */
-  lastSequence(sessionId: string): { turnId: string; after: number } | undefined
   close(): void
 }

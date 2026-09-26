@@ -215,6 +215,16 @@ function createFakeConnection() {
   const record = (method: string, ...args: unknown[]) => {
     calls.push({ method, args })
   }
+  function listen<Listener>(
+    keyed: Map<string, Set<Listener>>,
+    sessionId: string,
+    listener: Listener
+  ) {
+    const listeners = keyed.get(sessionId) ?? new Set()
+    listeners.add(listener)
+    keyed.set(sessionId, listeners)
+    return () => listeners.delete(listener)
+  }
   let model = "sonnet"
   let effort = "low"
   let listed = listEntry()
@@ -263,12 +273,22 @@ function createFakeConnection() {
       statusListeners.add(listener)
       return () => statusListeners.delete(listener)
     },
-    subscribeSessionReplay(sessionId, listener) {
-      const listeners = replays.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      replays.set(sessionId, listeners)
-      return () => listeners.delete(listener)
+    subscribe(sessionId, listener) {
+      record("subscribe", sessionId, listener.agentId)
+      const offs = [
+        listener.update && listen(updates, sessionId, listener.update),
+        listener.replay && listen(replays, sessionId, listener.replay),
+      ]
+      return () => {
+        for (const off of offs) off?.()
+      }
     },
+    joined: () => Promise.resolve(),
+    async replay(sessionId) {
+      record("replay", sessionId)
+      follow(sessionId, AGENT_ID, "running")
+    },
+    sessionState: () => "joined",
     async login(token) {
       record("login", token)
     },
@@ -287,11 +307,6 @@ function createFakeConnection() {
       }
       return { sessions: [listed], nextCursor: "cursor-2" }
     },
-    async resumeSession(sessionId, resume) {
-      record("resumeSession", sessionId, resume)
-      follow(sessionId, AGENT_ID, "running")
-      return { meta: {} }
-    },
     // Older pages belong to the thread's runtime, never the workspace client.
     resumePage: () => Promise.reject(new Error("unused")),
     history: () => undefined,
@@ -305,9 +320,6 @@ function createFakeConnection() {
       if (configId === "session-model") model = value
       else effort = value
       return configOptions(model, effort)
-    },
-    async closeSession(sessionId) {
-      record("closeSession", sessionId)
     },
     async deleteSession(sessionId) {
       record("deleteSession", sessionId)
@@ -332,12 +344,6 @@ function createFakeConnection() {
         agent: { ...catalogEntry(), revision: "revision-3" },
       }
     },
-    subscribeSessionUpdates(sessionId, listener) {
-      const listeners = updates.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      updates.set(sessionId, listeners)
-      return () => listeners.delete(listener)
-    },
     subscribeNotification(method, listener) {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)
@@ -345,7 +351,6 @@ function createFakeConnection() {
       return () => listeners.delete(listener)
     },
     subscribePendingRequests: () => () => {},
-    lastSequence: () => ({ turnId: "run-1", after: 9 }),
     close: () => record("close"),
   }
 
@@ -886,21 +891,14 @@ describe("ACP workspace client", () => {
     })
   })
 
-  it("resumes a Session by owner and last sequence", async () => {
+  it("opens a Session under its owner, then replays it", async () => {
     const { client, argsOf } = createClient()
     await client.getSessionMetadata([SESSION_ID])
 
     await client.resumeSession(SESSION_ID)
 
-    expect(argsOf("resumeSession")).toEqual([
-      SESSION_ID,
-      {
-        replayFromStart: false,
-        agentId: AGENT_ID,
-        turnId: "run-1",
-        after: 9,
-      },
-    ])
+    expect(argsOf("subscribe")).toEqual([SESSION_ID, AGENT_ID])
+    expect(argsOf("replay")).toEqual([SESSION_ID])
   })
 
   it("reads capabilities, commands, and context from the resumed Session's updates", async () => {

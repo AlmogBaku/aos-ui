@@ -167,13 +167,10 @@ function ReadyAosRuntimeProvider({
   // The workspace client records what a resume reports, so it performs it.
   const resume = useCallback(
     async (sessionId: string) => {
-      const resumed = await client.resumeSession(sessionId, {
-        replayFromStart: true,
-      })
+      await client.resumeSession(sessionId)
       setResumedSessions((previous) =>
         previous.has(sessionId) ? previous : new Set(previous).add(sessionId)
       )
-      return resumed
     },
     [client]
   )
@@ -405,6 +402,23 @@ function ReadyAosRuntimeProvider({
       selectedSessionId ? client.sessionStatus(selectedSessionId) : "unknown",
     () => "unknown"
   )
+  const selectedSessionGone = useSyncExternalStore(
+    useCallback(
+      (listener) => {
+        if (!selectedSessionId) return () => undefined
+        const agentId = client.knownAgentIdOf(selectedSessionId)
+        return connection.subscribe(selectedSessionId, {
+          ...(agentId === undefined ? {} : { agentId }),
+          state: listener,
+        })
+      },
+      [client, connection, selectedSessionId]
+    ),
+    () =>
+      selectedSessionId !== undefined &&
+      connection.sessionState(selectedSessionId) === "gone",
+    () => false
+  )
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
@@ -457,6 +471,7 @@ function ReadyAosRuntimeProvider({
     activityCoverage: "workspace",
     push,
     connectionStatus: connectionStatus === "capacity" ? "capacity" : undefined,
+    sessionStatus: selectedSessionGone ? "unavailable" : undefined,
   })
 }
 

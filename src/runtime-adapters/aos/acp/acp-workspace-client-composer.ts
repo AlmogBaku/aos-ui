@@ -357,14 +357,14 @@ export function createAcpComposerStore(connection: AcpConnection) {
       early.set(sessionId, [])
     if (observed.has(sessionId)) return
     observed.add(sessionId)
-    connection.subscribeSessionUpdates(sessionId, (update, meta) =>
-      accept(sessionId, update, meta)
-    )
-    // A from-start replay restates every settled turn, so the spend it folds
-    // starts over rather than counting each turn twice.
-    connection.subscribeSessionReplay(sessionId, () => {
-      const replayed = sessions.get(sessionId)
-      if (replayed) delete replayed.turns
+    connection.subscribe(sessionId, {
+      update: (update, meta) => accept(sessionId, update, meta),
+      // A from-start replay restates every settled turn, so the spend it
+      // folds starts over rather than counting each turn twice.
+      replay: () => {
+        const replayed = sessions.get(sessionId)
+        if (replayed) delete replayed.turns
+      },
     })
   }
 

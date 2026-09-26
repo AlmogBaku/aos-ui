@@ -133,6 +133,7 @@ const workspaceCopy = {
     completed: "Completed",
     failed: "Failed",
     capacity: "The AOS server is full. Reconnecting shortly.",
+    sessionUnavailable: "This Session is no longer available.",
   },
   he: {
     retry: "ניסיון חוזר",
@@ -148,6 +149,7 @@ const workspaceCopy = {
     completed: "הושלמה",
     failed: "נכשלה",
     capacity: "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
+    sessionUnavailable: "השיחה הזו כבר אינה זמינה.",
   },
 } satisfies Record<Locale, Record<string, unknown>>
 
@@ -465,6 +467,7 @@ function WorkspaceContent({
     environmentLabel,
     activityCoverage,
     connectionStatus,
+    sessionStatus,
     composer: composerFeatures,
   } = bundle
   const assistantInstructions = bundle.assistantConfig?.instructions
@@ -701,7 +704,9 @@ function WorkspaceContent({
           >
             {connectionStatus === "capacity"
               ? workspaceCopy[locale].capacity
-              : null}
+              : sessionStatus === "unavailable"
+                ? workspaceCopy[locale].sessionUnavailable
+                : null}
           </p>
           {workspaceError ? (
             <WorkspaceError

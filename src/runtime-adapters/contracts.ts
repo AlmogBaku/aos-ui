@@ -331,6 +331,8 @@ export type HarnessRuntime = {
    * retrying the connection on its own.
    */
   connectionStatus?: "capacity"
+  /** Present only while the selected Session is gone at its provider. */
+  sessionStatus?: "unavailable"
 }
 
 export type WorkspaceCapabilities = {

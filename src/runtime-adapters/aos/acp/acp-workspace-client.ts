@@ -315,35 +315,27 @@ export function createAcpWorkspaceClient({
         clientId: crypto.randomUUID(),
         ...(options?.title ? { title: options.title } : {}),
       })
-      store.observe(created.sessionId)
+      store.observe(created.sessionId, agentId)
       adopt(created.sessionId, agentId)
       watchCreator(created.sessionId, agentId)
       composer.resume(created.sessionId)
       return { sessionId: created.sessionId }
     },
     /**
-     * Resumes a Session: the proxy replays it, and its row, execution state,
-     * capabilities, and config options follow as updates. Naming the owning
-     * Agent lets a deep link resume before any list.
+     * Opens a Session and replays it from the start: its row, execution
+     * state, capabilities, and config options follow as updates. Naming the
+     * owning Agent lets a deep link resume before any list.
      */
-    async resumeSession(
-      sessionId: string,
-      resume?: { replayFromStart?: boolean }
-    ) {
-      store.observe(sessionId)
-      composer.observe(sessionId)
+    async resumeSession(sessionId: string) {
       const agentId = knownAgentOf(sessionId)
-      const resumed = await connection.resumeSession(sessionId, {
-        replayFromStart: resume?.replayFromStart ?? false,
-        ...(agentId ? { agentId } : {}),
-        ...connection.lastSequence(sessionId),
-      })
+      store.observe(sessionId, agentId)
+      composer.observe(sessionId)
+      await connection.replay(sessionId)
       if (agentId) {
         adopt(sessionId, agentId)
         watchCreator(sessionId, agentId)
       }
       composer.resume(sessionId)
-      return resumed
     },
     async markSessionRead(sessionId: string) {
       store.setUnread(sessionId, false)
