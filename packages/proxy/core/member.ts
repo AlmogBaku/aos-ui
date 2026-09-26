@@ -13,7 +13,7 @@ import type {
 } from "../../protocol"
 import type { PendingRequest, RequestReply, TurnEvent } from "./events"
 import type { SessionPatch, SessionScope } from "./runtime"
-import type { SessionExecutionState } from "./session-coordinator"
+import type { SessionExecutionState, TurnQuota } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
 
 /**
@@ -184,6 +184,8 @@ export type MemberCommands = {
     /** The message an Edit or Retry replaces. */
     rewindSourceId?: string
     attachmentStageId?: string
+    /** The cap a middleware counts this turn under, beside the global one. */
+    quota?: TurnQuota
   }
   steer: {
     sessionId: string

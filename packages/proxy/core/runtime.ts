@@ -149,16 +149,9 @@ export class ServerRequestStaleError extends Error {
 }
 
 export class ServerTurnCapacityError extends Error {
-  constructor(readonly pool: "global" | "guest" = "global") {
+  constructor() {
     super("AOS execution capacity exceeded")
     this.name = "ServerTurnCapacityError"
-  }
-}
-
-export class ServerTurnControlError extends Error {
-  constructor() {
-    super("Turn control is not authorized")
-    this.name = "ServerTurnControlError"
   }
 }
 

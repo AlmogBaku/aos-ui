@@ -26,7 +26,6 @@ import {
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
-  type ServerAttachmentStage,
   type ServerTurnListener,
   type SessionScope,
 } from "./runtime"
@@ -34,6 +33,7 @@ import type {
   CoordinatedTurnSubscription,
   CoordinatorAccess,
   SessionCoordinator,
+  StartOptions,
 } from "./session-coordinator"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
@@ -75,8 +75,8 @@ type ChannelTable = ReturnType<typeof createChannelTable>
 /** What lets a channel adopt a turn the runtime started by itself. */
 export type ChannelAdoption = {
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener): () => void
-  /** Adopts the runtime's running turn, if any, counted under `role`. */
-  discover(scope: SessionScope, role: Role): Promise<unknown>
+  /** Adopts the runtime's running turn, if any. */
+  discover(scope: SessionScope): Promise<unknown>
   /** The Session's execution feed. */
   subscribeExecutions(
     scope: ChannelScope,
@@ -85,8 +85,9 @@ export type ChannelAdoption = {
 }
 
 type Delivery = {
-  /** The member's own scope and role, which an adoption runs under. */
+  /** The member's own scope, which an adoption runs under. */
   scope: SessionScope
+  /** Which member an adoption runs as: an operator comes first. */
   role: Role
   /** The turnId whose prompt this member already holds. */
   delivered?: string
@@ -309,10 +310,10 @@ function createChannelTable({
   async function adoptOnce(channel: Channel) {
     const joined = adopter(channel)
     if (!adoption || !joined) return
-    const [member, { scope, role }] = joined
+    const [member, { scope }] = joined
     const before = snapshot(scope).turnId
     try {
-      await adoption.discover(scope, role)
+      await adoption.discover(scope)
     } catch (cause) {
       // A proxy turn still starting refuses it; that turn's end asks again.
       if (!(cause instanceof ServerTurnConflictError)) member.report(cause)
@@ -853,7 +854,7 @@ class Membership {
   }
 
   /** Admits one user turn and subscribes to the segment it starts. */
-  async startTurn(input: PromptTurnInput, stage?: ServerAttachmentStage) {
+  async startTurn(input: PromptTurnInput, options: StartOptions = {}) {
     await this.#exclusive(async () => {
       let subscription
       try {
@@ -861,7 +862,7 @@ class Membership {
           this.#scope,
           input,
           this.#access(),
-          ...(stage ? [stage] : [])
+          options
         )
       } catch (cause) {
         // No turn started, so no turn end asks the runtime for one it started
@@ -918,10 +919,7 @@ class Membership {
 
   /** Requests Stop, reporting an unsettled provider as `stopping`. */
   async cancel() {
-    const status = await this.#coordinator.stop(
-      this.#scope,
-      this.#member.principal.id
-    )
+    const status = await this.#coordinator.stop(this.#scope)
     if (status !== "stopping") return
     this.#stopRequested = true
     await this.reportExecution()
@@ -1174,8 +1172,6 @@ class Membership {
     return {
       membershipId: this.#options.membershipId,
       principalId: this.#member.principal.id,
-      role: this.#member.principal.role,
-      canControl: true,
     }
   }
 

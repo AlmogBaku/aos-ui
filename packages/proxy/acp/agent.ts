@@ -361,7 +361,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       membership.joinChannel()
       await membership.emit({ kind: "prompt", messageId, content, own: true })
       try {
-        await membership.startTurn(input, stage)
+        await membership.startTurn(input, { stage, quota: command.quota })
       } catch (cause) {
         // The prompt was accepted and echoed, so its turn fails in view.
         if (!(cause instanceof ServerTurnConflictError))
@@ -695,20 +695,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           text: params.text,
         },
         async (command) => {
-          const identity = sessions.identity()
-          if (!identity) throw authenticationRequired()
+          // A connection steers only a Session it joined, as it stops one.
+          if (!sessions.membership(command.sessionId)) throw notFound()
           const scope = command.scope ?? sessions.scope(command.sessionId)
           const { turnId } = coordinator.snapshot(scope)
           if (turnId === undefined) throw turnInProgress()
-          return await workspace.steer(
-            scope,
-            {
-              requestId: command.requestId,
-              expectedTurnId: turnId,
-              text: command.text,
-            },
-            identity.principal.id
-          )
+          return await workspace.steer(scope, {
+            requestId: command.requestId,
+            expectedTurnId: turnId,
+            text: command.text,
+          })
         }
       )
     }

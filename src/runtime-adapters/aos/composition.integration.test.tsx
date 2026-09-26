@@ -374,7 +374,6 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
     engine,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
   })

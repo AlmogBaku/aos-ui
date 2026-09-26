@@ -6,7 +6,6 @@ import {
   ServerRequestStaleError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
-  ServerTurnControlError,
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
   ServerSessionNotFoundError,
@@ -168,11 +167,7 @@ function coordinatorError(cause: unknown) {
   )
     return temporarilyUnavailable()
   if (cause instanceof ServerTurnSteerUncertainError) return uncertainMutation()
-  if (
-    cause instanceof ServerTurnControlError ||
-    cause instanceof ServerSessionNotFoundError
-  )
-    return notFound()
+  if (cause instanceof ServerSessionNotFoundError) return notFound()
   return undefined
 }
 

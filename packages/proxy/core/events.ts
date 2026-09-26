@@ -499,7 +499,7 @@ export type ExecutionEvent = {
   | {
       kind: "attention-requested"
       request: PendingRequest
-      /** The controller that admitted the turn, when this proxy admitted it. */
+      /** The principal that admitted the turn, when this proxy admitted it. */
       startedBy?: string
     }
   | { kind: "attention-resolved"; requestId: string }

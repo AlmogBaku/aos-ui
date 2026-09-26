@@ -1,3 +1,4 @@
+import { GUEST_PRINCIPAL_PREFIX } from "../core/principal"
 import type {
   GuestAuthorization,
   GuestInvitationService,
@@ -28,7 +29,7 @@ export function guestAuthorizationActive(
 }
 
 export function guestPrincipalId(authorization: GuestAuthorization) {
-  return `guest:${authorization.tokenId}`
+  return `${GUEST_PRINCIPAL_PREFIX}${authorization.tokenId}`
 }
 
 export function createGuestRequestAuthorizer(options: {

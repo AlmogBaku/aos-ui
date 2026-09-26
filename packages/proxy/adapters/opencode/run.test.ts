@@ -1048,15 +1048,12 @@ describe("OpenCodeRunEngine", () => {
       // No test here subscribes anything to a reading.
       readings: { context: vi.fn(), models: vi.fn() },
       maxActiveExecutions: 8,
-      maxGuestActiveExecutions: 2,
       maxSubscriberEvents: 8,
       maxSubscriberBytes: 64 * 1024,
     })
     const access = {
       membershipId: "operator",
       principalId: "operator",
-      role: "operator",
-      canControl: true,
     } as const
     const subscription = await sessions.start(scope, input(), access)
     const firstHandle = await started.mock.results[0]!.value
@@ -1074,9 +1071,9 @@ describe("OpenCodeRunEngine", () => {
     durable.push(firstAdmission)
     first.publish({ id: "0", event: "session", data: firstAdmission })
 
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
+    await expect(sessions.stop(scope)).resolves.toBe("stopping")
     running = false
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("idle")
+    await expect(sessions.stop(scope)).resolves.toBe("idle")
     const terminal = await Promise.race([
       Promise.all([collected, firstHandle.settled]),
       new Promise<"timed-out">((resolve) =>

@@ -9,7 +9,6 @@ import {
   type TurnEvent,
   type PromptTurnInput,
 } from "./events"
-import type { Role } from "./member"
 
 import {
   ServerRequestStaleError,
@@ -117,13 +116,8 @@ async function continueTurn(sessions: SessionCoordinator) {
   return continued.turnId
 }
 
-function access(id: string, role: Role = "operator") {
-  return {
-    membershipId: id,
-    principalId: id,
-    role,
-    canControl: true,
-  } as const
+function access(id: string) {
+  return { membershipId: id, principalId: id }
 }
 
 function reader(subscription: CoordinatedTurnSubscription) {
@@ -140,7 +134,6 @@ function coordinator(
     // No test here subscribes anything to a reading.
     readings: { context: vi.fn(), models: vi.fn() },
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
     ...limits,
@@ -272,7 +265,7 @@ describe("SessionCoordinator", () => {
       cleanup: vi.fn(async () => undefined),
     }
 
-    await sessions.start(scope, input("run-1"), access("one"), stage)
+    await sessions.start(scope, input("run-1"), access("one"), { stage })
 
     expect(start).toHaveBeenCalledWith(scope, input("run-1"), stage)
   })
@@ -1776,7 +1769,7 @@ describe("SessionCoordinator", () => {
       expect(engine.start).toHaveBeenCalledOnce()
     })
 
-    it("keeps the controllers and the starter across the continued segment", async () => {
+    it("keeps the starter across the continued segment", async () => {
       const { sessions, observed, resumed } = await waitingOnTwo("starter")
       expect(sessions.snapshot(scope).startedBy).toBe("starter")
       expect(
@@ -1797,7 +1790,6 @@ describe("SessionCoordinator", () => {
       expect(
         observed.filter(({ kind }) => kind === "attention-requested").at(-1)
       ).toMatchObject({ startedBy: "starter" })
-      await expect(sessions.stop(scope, "starter")).resolves.toBe("stopping")
     })
 
     it("names no starter for a turn it recovered or discovered without holding it", async () => {
@@ -1831,7 +1823,7 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     await sessions.start(scope, input("run-1"), access("operator"))
 
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
+    await expect(sessions.stop(scope)).resolves.toBe("stopping")
 
     expect(sessions.state(scope)).toBe("stopping")
   })
@@ -1876,7 +1868,7 @@ describe("SessionCoordinator", () => {
       sessions.start(scope, input("run-2"), access("operator"))
     ).rejects.toBeInstanceOf(ServerTurnConflictError)
 
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
+    await expect(sessions.stop(scope)).resolves.toBe("stopping")
     expect(source.stop).toHaveBeenCalledTimes(1)
     expect(sessions.state(scope)).toBe("stopping")
     const finished = {
@@ -1892,7 +1884,7 @@ describe("SessionCoordinator", () => {
     expect(sessions.state(scope)).toBe("running")
   })
 
-  it("rechecks a stopping handle without granting another controller", async () => {
+  it("stops a turn for whoever asks, not only its starter, and rechecks a stopping handle", async () => {
     const source = new EventSource()
     source.stop.mockResolvedValueOnce("stopping").mockResolvedValueOnce("idle")
     const engine: ServerTurnEngine = {
@@ -1900,13 +1892,12 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     }
     const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("operator"))
+    await sessions.start(scope, input("run-1"), access("starter"))
 
-    await expect(sessions.stop(scope, "unrelated")).rejects.toThrow(
-      "not authorized"
-    )
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("stopping")
-    await expect(sessions.stop(scope, "operator")).resolves.toBe("idle")
+    // A Stop names nobody: the coordinator keeps who started a turn, never
+    // who may stop it.
+    await expect(sessions.stop(scope)).resolves.toBe("stopping")
+    await expect(sessions.stop(scope)).resolves.toBe("idle")
     expect(source.stop).toHaveBeenCalledTimes(2)
     expect(sessions.state(scope)).toBe("idle")
   })
@@ -1923,7 +1914,7 @@ describe("SessionCoordinator", () => {
     })
     await sessions.start(scope, input("run-1"), access("operator"))
 
-    await expect(sessions.stop(scope, "operator")).rejects.toBe(failure)
+    await expect(sessions.stop(scope)).rejects.toBe(failure)
     expect(sessions.state(scope)).toBe("running")
   })
 
@@ -1937,9 +1928,7 @@ describe("SessionCoordinator", () => {
     })
     await sessions.start(scope, input("run-1"), access("operator"))
 
-    await expect(sessions.stop(scope, "operator")).rejects.toThrow(
-      "Connection lost"
-    )
+    await expect(sessions.stop(scope)).rejects.toThrow("Connection lost")
     expect(sessions.state(scope)).toBe("uncertain")
 
     // The stream reports the outcome while the next start is recovering the
@@ -1994,7 +1983,7 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     })
     await sessions.start(scope, input("run-1"), access("operator"))
-    const stopping = sessions.stop(scope, "operator")
+    const stopping = sessions.stop(scope)
 
     source.emit(turnEnded)
     source.finish()
@@ -2021,7 +2010,7 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     })
     await sessions.start(scope, input("run-1"), access("operator"))
-    const stopping = sessions.stop(scope, "operator")
+    const stopping = sessions.stop(scope)
 
     source.emit(turnEnded)
     source.finish()
@@ -2046,7 +2035,7 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => source),
     })
     await sessions.start(scope, input("run-1"), access("operator"))
-    const stopping = sessions.stop(scope, "operator")
+    const stopping = sessions.stop(scope)
 
     // The stream ends without a terminal event and without settling.
     source.close()
@@ -2075,7 +2064,7 @@ describe("SessionCoordinator", () => {
       recover: vi.fn(async () => resumed),
     })
     await sessions.start(scope, input("run-1"), access("operator"))
-    const stopping = sessions.stop(scope, "operator")
+    const stopping = sessions.stop(scope)
 
     interrupted.emit({
       kind: TurnEventKind.TurnRequiresAction,
@@ -2115,15 +2104,11 @@ describe("SessionCoordinator", () => {
     const read = reader(subscription)
 
     await expect(
-      sessions.steer(
-        scope,
-        {
-          requestId: "queue-item-1",
-          expectedTurnId: "run-1",
-          text: "Use the newer API",
-        },
-        "operator"
-      )
+      sessions.steer(scope, {
+        requestId: "queue-item-1",
+        expectedTurnId: "run-1",
+        text: "Use the newer API",
+      })
     ).resolves.toEqual({ status: "steered" })
     await expect(read()).resolves.toMatchObject({
       value: {
@@ -2142,15 +2127,11 @@ describe("SessionCoordinator", () => {
     })
 
     await expect(
-      sessions.steer(
-        scope,
-        {
-          requestId: "queue-item-1",
-          expectedTurnId: "run-1",
-          text: "Use the newer API",
-        },
-        "operator"
-      )
+      sessions.steer(scope, {
+        requestId: "queue-item-1",
+        expectedTurnId: "run-1",
+        text: "Use the newer API",
+      })
     ).resolves.toEqual({ status: "steered" })
     expect(source.steer).toHaveBeenCalledOnce()
   })
@@ -2165,32 +2146,32 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("operator"))
 
     await expect(
-      sessions.steer(
-        scope,
-        { requestId: "one", expectedTurnId: "stale", text: "Correction" },
-        "operator"
-      )
+      sessions.steer(scope, {
+        requestId: "one",
+        expectedTurnId: "stale",
+        text: "Correction",
+      })
     ).rejects.toThrow("already active")
-    await sessions.steer(
-      scope,
-      { requestId: "one", expectedTurnId: "run-1", text: "Correction" },
-      "operator"
-    )
+    await sessions.steer(scope, {
+      requestId: "one",
+      expectedTurnId: "run-1",
+      text: "Correction",
+    })
     await expect(
-      sessions.steer(
-        scope,
-        { requestId: "one", expectedTurnId: "run-1", text: "Different" },
-        "operator"
-      )
+      sessions.steer(scope, {
+        requestId: "one",
+        expectedTurnId: "run-1",
+        text: "Different",
+      })
     ).rejects.toThrow("already active")
 
-    await sessions.stop(scope, "operator")
+    await sessions.stop(scope)
     await expect(
-      sessions.steer(
-        scope,
-        { requestId: "two", expectedTurnId: "run-1", text: "Too late" },
-        "operator"
-      )
+      sessions.steer(scope, {
+        requestId: "two",
+        expectedTurnId: "run-1",
+        text: "Too late",
+      })
     ).rejects.toThrow("already active")
   })
 
@@ -2393,7 +2374,7 @@ describe("SessionCoordinator", () => {
       return { engine, sessions }
     }
 
-    it("adopts it as a fresh execution that any member can stop", async () => {
+    it("adopts it as a fresh execution that no member started", async () => {
       const adopted = new EventSource()
       const { sessions } = await afterOneTurn(async () => ({
         handle: adopted,
@@ -2405,18 +2386,14 @@ describe("SessionCoordinator", () => {
 
       await sessions.discover(scope)
 
-      const { turnId } = sessions.snapshot(scope)
+      const { turnId, startedBy } = sessions.snapshot(scope)
       expect(sessions.state(scope)).toBe("running")
       expect(turnId).toMatch(/^aos-recovered-/u)
+      // The browser started the turn before it, not this one.
+      expect(startedBy).toBeUndefined()
       expect(events).toMatchObject([{ kind: "turn-started", turnId }])
-      const member = await sessions.recover(
-        scope,
-        { sessionId: scope.sessionId, turnId: turnId! },
-        access("member")
-      )
-      await expect(sessions.stop(scope, "member")).resolves.toBe("stopping")
+      await expect(sessions.stop(scope)).resolves.toBe("stopping")
       expect(adopted.stop).toHaveBeenCalledOnce()
-      member.close()
     })
 
     it("replays a turn read from its start to a member that joins without a cursor", async () => {

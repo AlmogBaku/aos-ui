@@ -323,8 +323,7 @@ describe("member boundary", () => {
   /**
    * A2: the core and the ACP transport are role-blind. Nothing reads a
    * guest's grant, and a principal's role is read only where a membership
-   * reports it: the coordinator's capacity cap and an adoption's preference
-   * for an operator.
+   * reports it for an adoption's preference for an operator.
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
@@ -343,10 +342,7 @@ describe("member boundary", () => {
       roleReaders.push(...reads.map(() => path))
     }
 
-    expect(roleReaders).toEqual([
-      join(proxyRoot, "core/channel.ts"),
-      join(proxyRoot, "core/channel.ts"),
-    ])
+    expect(roleReaders).toEqual([join(proxyRoot, "core/channel.ts")])
   })
   /**
    * A2: the ACP transport never branches on the role. The translators and

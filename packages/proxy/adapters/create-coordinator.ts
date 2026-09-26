@@ -15,7 +15,6 @@ export function createCoordinator(
     engine: runtime.turns,
     readings: runtime,
     maxActiveExecutions: limits.activeExecutions,
-    maxGuestActiveExecutions: limits.guestActiveExecutions,
     maxSubscriberEvents: limits.subscriberEvents,
     maxSubscriberBytes: limits.subscriberBytes,
   })
