@@ -32,6 +32,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (outDir) await rm(outDir, { recursive: true, force: true })
+
 })
 
 it("keeps runtime-specific workspace code out of the configuration bootstrap", () => {
@@ -98,4 +99,18 @@ it("ships a push-only worker that takes over from its predecessor", async () => 
   expect(worker).toContain("claim")
   // A worker registered without `type: "module"` cannot import anything.
   expect(worker).not.toMatch(/^(?:import|export) /m)
+})
+
+// The Stately inspector is a dev-only tool: it must never ship in a production
+// bundle so operators are not exposed to external connections they did not ask
+// for. The dynamic import is guarded by `import.meta.env.DEV`; a production
+// build's dead-code elimination removes the entire branch.
+it("excludes the Stately inspector from production chunks", () => {
+  const INSPECTOR_MARKER = "stately.ai/inspect"
+  for (const chunk of chunks) {
+    expect(
+      chunk.code,
+      `${chunk.fileName} contains inspector code`
+    ).not.toContain(INSPECTOR_MARKER)
+  }
 })

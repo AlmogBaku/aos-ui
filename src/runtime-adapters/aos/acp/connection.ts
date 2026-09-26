@@ -65,7 +65,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
-import { loggedStream } from "./log"
+import { acpDebugEnabled, loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionStatus,
@@ -780,10 +780,19 @@ export function createAcpConnection(
    * render React discards leaves no socket behind, and a closed connection
    * stays closed. Recovery after a close belongs to the owner.
    */
-  function start() {
+  async function start() {
     if (started || ended) return
     started = true
-    owner = createOwner(machine, { logger, clock, bindings: {} })
+    let inspect: Parameters<typeof createOwner>[1]["inspect"]
+    if (import.meta.env.DEV) {
+      // Only imported in dev builds; Rollup drops this block in production.
+      if (acpDebugEnabled(globalThis.location?.search ?? "", globalThis.sessionStorage)) {
+        const { createBrowserInspector } = await import("@statelyai/inspect")
+        inspect = createBrowserInspector().inspect
+      }
+    }
+    if (ended) return
+    owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
     owner.stack.defer(shutdown)
   }
 
