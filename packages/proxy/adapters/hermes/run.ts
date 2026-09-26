@@ -191,10 +191,15 @@ export class HermesTurnEngine {
     }
   }
 
+  /**
+   * Admits a turn. `signal` is the admission's: once it aborts, a prompt not
+   * yet written to Hermes never is, and the start rejects.
+   */
   async start(
     scope: HermesTurnScope,
     candidate: unknown,
-    attachments?: ServerAttachmentStage
+    attachments?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<HermesTurnHandle> {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
@@ -278,7 +283,8 @@ export class HermesTurnEngine {
         ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
         ...(attachments?.public.length ? { hasAttachments: true } : {}),
       },
-      false
+      false,
+      signal
     )
     return this.#handle(active)
   }
@@ -538,12 +544,13 @@ export class HermesTurnEngine {
   async #submit(
     active: ActiveTurn,
     prompt: HermesSubmitPrompt,
-    retried: boolean
+    retried: boolean,
+    signal: AbortSignal | undefined
   ) {
     if (!this.#isSubmitEligible(active)) return
     let outcome: Awaited<ReturnType<HermesTurnNative["submit"]>>
     try {
-      outcome = await this.#native.submit(active.liveSessionId, prompt)
+      outcome = await this.#native.submit(active.liveSessionId, prompt, signal)
     } catch (error) {
       if (error instanceof HermesTurnRewindConflictError) {
         this.#fail(active, TURN_FAILURES.rewindConflict)
@@ -609,7 +616,12 @@ export class HermesTurnEngine {
     // A refusal of the `prompt.submit` itself repeats only that write; a
     // refusal from the command execution ran nothing at all, so the whole
     // command path may be dispatched again against the rebound Session.
-    await this.#submit(active, refused ? { ...prompt, refused } : prompt, true)
+    await this.#submit(
+      active,
+      refused ? { ...prompt, refused } : prompt,
+      true,
+      signal
+    )
   }
 
   #handle(active: ActiveTurn): HermesTurnHandle {

@@ -187,21 +187,12 @@ describe("Hermes gateway dial and authentication", () => {
       connectTimeoutMs: 20,
     })
 
-    const pending = gateway.request("profiles.list", {})
-    const outcome = await Promise.race([
-      pending.then(
-        () => "resolved",
-        (error: unknown) => (error as Error).name
-      ),
-      new Promise<string>((resolve) =>
-        setTimeout(() => resolve("deadline missed"), 200)
-      ),
-    ])
+    await expect(gateway.connect()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
     releaseCredentials?.()
-    await pending.catch(() => undefined)
 
-    expect(outcome).toBe("HermesUnavailableError")
-    expect(credentialSignal).toBeInstanceOf(AbortSignal)
+    expect(credentialSignal?.aborted).toBe(true)
     expect(factory).not.toHaveBeenCalled()
     await gateway.close()
   })
@@ -261,7 +252,7 @@ describe("Hermes gateway request classification", () => {
       await gateway.connect()
 
       const request = gateway.request("slash.exec", {})
-      await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+      await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
       const { id } = sockets[0]!.lastRequest() as { id: string }
       sockets[0]!.replyError(id, { code, message: "native secret detail" })
 
@@ -280,7 +271,7 @@ describe("Hermes gateway request classification", () => {
     await gateway.connect()
 
     const request = gateway.request("prompt.submit", {})
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     const { id } = sockets[0]!.lastRequest() as { id: string }
     sockets[0]!.replyError(id, {
       code: 4090,
@@ -376,18 +367,15 @@ describe("Hermes gateway request classification", () => {
   })
 
   it("reports an unopened socket as unavailable without writing anything", async () => {
-    vi.useFakeTimers()
-    const { gateway, sockets } = harness({
-      autoOpen: false,
-      connectTimeoutMs: 500,
-    })
+    const clock = useFakeClock()
+    const { gateway, sockets } = harness({ autoOpen: false })
 
     const pending = gateway.request("profiles.list", {})
     const outcome = pending.catch((error: unknown) => error)
-    await vi.advanceTimersByTimeAsync(600)
+    await clock.advance(10_000)
 
     await expect(outcome).resolves.toBeInstanceOf(HermesUnavailableError)
-    expect(sockets[0]!.sent).toEqual([])
+    expect(sockets.flatMap((socket) => socket.sent)).toEqual([])
     await gateway.close()
   })
 
@@ -430,14 +418,26 @@ describe("Hermes gateway request classification", () => {
     await gateway.close()
   })
 
-  it("refuses a request beyond the in-flight bound without writing it", async () => {
+  it("writes every request made while the link is connecting once it opens", async () => {
+    const { gateway, sockets } = harness({ autoReply: true, autoReady: true })
+
+    const pending = Array.from({ length: 300 }, (_unused, index) =>
+      gateway.request("session.events.since", { session_id: `live-${index}` })
+    )
+
+    await expect(Promise.all(pending)).resolves.toHaveLength(300)
+    expect(announced(sockets[0]!)).toHaveLength(300)
+    await gateway.close()
+  })
+
+  it("refuses a request beyond the in-flight and queue bounds without writing it", async () => {
     const { gateway, sockets } = harness({ requestTimeoutMs: 120_000 })
     await gateway.connect()
 
     // Capabilities is written to the socket but does not count toward the
-    // in-flight bound (it bypasses HermesGateway.request); all 256 user
-    // requests fit, and the 257th is refused without being written.
-    const inFlight = Array.from({ length: 256 }, (_unused, index) =>
+    // in-flight bound (it bypasses HermesGateway.request); 256 user requests
+    // are written, 1024 more wait their turn, and the next is refused unwritten.
+    const inFlight = Array.from({ length: 256 + 1024 }, (_unused, index) =>
       gateway.request("session.events.since", { session_id: `live-${index}` })
     )
     await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(257))
@@ -485,7 +485,7 @@ describe("Hermes gateway response bounds", () => {
       { session_id: "live-a" },
       { maxResponseBytes: Number.MAX_SAFE_INTEGER }
     )
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     const { id } = sockets[0]!.lastRequest() as { id: string }
     sockets[0]!.reply(id, { events: [], epoch: "e1", latest_seq: 4 })
 
@@ -505,7 +505,7 @@ describe("Hermes gateway response bounds", () => {
     await gateway.connect()
 
     const pending = gateway.request("profiles.list", {})
-    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[0]!.sent).toHaveLength(2))
     sockets[0]!.deliverText("{")
 
     await expect(pending).rejects.toBeInstanceOf(HermesRpcUncertainError)
@@ -523,7 +523,7 @@ describe("Hermes gateway response bounds", () => {
     await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(2))
     await vi.waitFor(() => expect(sockets[1]!.readyState).toBe(1))
     const pending = gateway.request("prompt.submit", { text: "x" })
-    await vi.waitFor(() => expect(sockets[1]!.sent).toHaveLength(1))
+    await vi.waitFor(() => expect(sockets[1]!.sent).toHaveLength(2))
 
     // A frame already queued on the abandoned socket must not take down the
     // healthy generation that replaced it.

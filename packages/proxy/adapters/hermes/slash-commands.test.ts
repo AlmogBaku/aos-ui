@@ -262,10 +262,11 @@ it.each(["/unknown", "/constructor", " /help", "/helpful", "normal text"])(
         : { status: "streaming" }
     )
     await nativeFor(request).submit("live", { scope, text, turnId: "run" })
-    expect(request).toHaveBeenCalledWith("prompt.submit", {
-      session_id: "live",
-      text,
-    })
+    expect(request).toHaveBeenCalledWith(
+      "prompt.submit",
+      { session_id: "live", text },
+      { signal: undefined }
+    )
     expect(request.mock.calls.some(([method]) => method === "slash.exec")).toBe(
       false
     )
@@ -294,10 +295,11 @@ it.each([-32601, 4018])(
       { session_id: "live", name: "skill", arg: "arguments" },
       { maxResponseBytes: expect.any(Number) }
     )
-    expect(request).toHaveBeenCalledWith("prompt.submit", {
-      session_id: "live",
-      text: "Expanded skill",
-    })
+    expect(request).toHaveBeenCalledWith(
+      "prompt.submit",
+      { session_id: "live", text: "Expanded skill" },
+      { signal: undefined }
+    )
   }
 )
 

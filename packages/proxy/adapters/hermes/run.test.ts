@@ -671,7 +671,8 @@ describe("HermesRunEngine", () => {
 
     expect(submit).toHaveBeenCalledWith(
       "live-secret",
-      expect.objectContaining({ text: "" })
+      expect.objectContaining({ text: "" }),
+      undefined
     )
   })
 
@@ -5058,22 +5059,34 @@ describe("HermesRunEngine", () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
-        submit: async () => {
+        submit: async (_liveSessionId, _prompt, signal) => {
           submissions += 1
           if (submissions === 1) throw new Error("bearer submit-secret")
+          // Native writes nothing for an admission already abandoned.
+          if (signal?.aborted) throw new HermesUnavailableError()
           return { acknowledgement: "accepted", status: "streaming" }
         },
       })
     )
+    const abandoned = new AbortController()
+    abandoned.abort()
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
       code: "AOS_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
-      engine.start(scope, input({ turnId: "run-2" }))
+      engine.start(
+        scope,
+        input({ turnId: "run-2" }),
+        undefined,
+        abandoned.signal
+      )
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_UNAVAILABLE" })
+    await expect(
+      engine.start(scope, input({ turnId: "run-3" }))
     ).resolves.toBeDefined()
-    expect(submissions).toBe(2)
+    expect(submissions).toBe(3)
   })
 
   /**
