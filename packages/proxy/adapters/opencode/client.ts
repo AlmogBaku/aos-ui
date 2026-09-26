@@ -9,12 +9,11 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 
 import { Deadline, defaultClock } from "../../../lifecycle"
+import { ADAPTER_CALL_MS } from "../../core/limits"
 
 const MAX_IDENTIFIER_LENGTH = 512
 const MAX_PAGE_LIMIT = 100
 const MAX_DURABLE_EVENT_DATA_BYTES = 2 * 1024 * 1024
-/** The innermost bound on one native request that answers once. */
-const ADAPTER_CALL_DEADLINE_MS = 15_000
 
 export type OpenCodeClientErrorCode =
   | "authentication"
@@ -879,7 +878,7 @@ class Facade implements OpenCodeClient {
     identifier(sessionId, "session")
     if (options?.after !== undefined) identifier(options.after, "after")
     const lease = this.#lease(options?.signal, false)
-    const answer = new Deadline(ADAPTER_CALL_DEADLINE_MS)
+    const answer = new Deadline(ADAPTER_CALL_MS)
     let streamError: unknown
     let answered!: (accepted: boolean) => void
     const accepted = new Promise<boolean>((resolve) => {
@@ -974,7 +973,7 @@ class Facade implements OpenCodeClient {
     // The deadline listens on the controller before `release` does, so an
     // abort reaches the call before release clears the deadline.
     const deadline = bounded
-      ? new Deadline(ADAPTER_CALL_DEADLINE_MS, defaultClock, controller.signal)
+      ? new Deadline(ADAPTER_CALL_MS, defaultClock, controller.signal)
       : undefined
     const onAbort = () => controller.abort()
     let released = false

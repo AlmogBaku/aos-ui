@@ -13,10 +13,8 @@
  */
 
 import { Deadline } from "../../../lifecycle"
+import { ADAPTER_CALL_MS } from "../../core/limits"
 import { boundedJsonShape } from "./native"
-
-/** The adapter call deadline: one native call, from its credentials read on. */
-export const HERMES_CALL_MS = 15_000
 
 /** Hard ceiling for one native REST response body. */
 export const MAX_NATIVE_HTTP_RESPONSE_BYTES = 64 * 1024 * 1024
@@ -141,7 +139,7 @@ async function boundedJsonResponse(
 export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
   const { baseUrl } = options
   const fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
-  const timeoutMs = options.timeoutMs ?? HERMES_CALL_MS
+  const timeoutMs = options.timeoutMs ?? ADAPTER_CALL_MS
   return {
     async http(path: string, init: HermesHttpInit = {}) {
       try {

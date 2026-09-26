@@ -65,3 +65,10 @@ export const PAUSED_DEADLINE_MS = 30_000
  * closes the connection; code 4408.
  */
 export const HANDSHAKE_DEADLINE_MS = 15_000
+
+/**
+ * How long one native call an adapter makes may take, from its credential
+ * read on, and one dial: the innermost deadline, well inside the admission
+ * deadline.
+ */
+export const ADAPTER_CALL_MS = 15_000

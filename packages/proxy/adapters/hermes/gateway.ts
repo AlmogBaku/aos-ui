@@ -9,6 +9,7 @@
  */
 
 import { boundedQueue, Deadline, defaultClock } from "../../../lifecycle"
+import { ADAPTER_CALL_MS } from "../../core/limits"
 import type { LinkState, ServerLink } from "../../core/link"
 import {
   isGatewayWebSocketUrl,
@@ -27,7 +28,6 @@ import {
 } from "./vendor/hermes-shared/reconnect-backoff"
 import {
   createHermesHttp,
-  HERMES_CALL_MS,
   HermesAuthenticationError,
   responseLimit,
   type HermesCredentials,
@@ -288,8 +288,8 @@ export class HermesGateway implements HermesRpcTransport {
     this.#baseUrl = options.baseUrl
     this.#credentials = options.credentials
     this.#log = options.log
-    this.#requestTimeoutMs = options.requestTimeoutMs ?? HERMES_CALL_MS
-    this.#connectTimeoutMs = options.connectTimeoutMs ?? HERMES_CALL_MS
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? ADAPTER_CALL_MS
+    this.#connectTimeoutMs = options.connectTimeoutMs ?? ADAPTER_CALL_MS
     this.#healGraceMs = options.healGraceMs ?? DEFAULT_HEAL_GRACE_MS
     this.#backoff = options.backoff
     this.#socketFactory =

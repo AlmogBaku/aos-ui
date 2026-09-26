@@ -20,6 +20,7 @@ import {
 
 import { Deadline, defaultClock, type Logger } from "../../../lifecycle"
 import { failureOf } from "../../core/failures"
+import { ADAPTER_CALL_MS } from "../../core/limits"
 import {
   createLink,
   type Link,
@@ -27,8 +28,6 @@ import {
   type ServerLink,
 } from "../../core/link"
 
-/** The bound on one native call and on one dial. */
-const CALL_MS = 15_000
 /** The bound on a caller waiting for the link, so its call after it ends inside a 30 s admission. */
 const START_MS = 10_000
 
@@ -411,7 +410,7 @@ export class OpenClawClient {
     if (options.signal?.aborted)
       throw new OpenClawClientRequestError("cancelled")
     const dispatch = { accepted: false, requestSent: false }
-    const deadline = new Deadline(CALL_MS, defaultClock, options.signal)
+    const deadline = new Deadline(ADAPTER_CALL_MS, defaultClock, options.signal)
     try {
       /** Each provider leaf validates its exact method params and result before conversion. */
       return await gateway.request<T>(method, params, {
@@ -526,7 +525,7 @@ export class OpenClawClient {
       new GatewayClient(gatewayOptions)
     this.#gateway = gateway
     try {
-      await new Deadline(CALL_MS, defaultClock, signal).run(() => {
+      await new Deadline(ADAPTER_CALL_MS, defaultClock, signal).run(() => {
         gateway.start()
         return hello.promise
       })
