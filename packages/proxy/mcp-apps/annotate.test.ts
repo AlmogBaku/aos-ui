@@ -53,7 +53,7 @@ class NativeTurn implements ServerTurnHandle {
   }
 
   recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 7 }
+    return "token-7"
   }
 }
 

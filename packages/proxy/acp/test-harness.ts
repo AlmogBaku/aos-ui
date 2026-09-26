@@ -232,7 +232,7 @@ export class EventSource implements ServerTurnHandle {
   }
 
   recoveryPosition(): string {
-    return JSON.stringify({ epoch: "epoch-1", lastSeen: 0 })
+    return "token-1"
   }
 }
 

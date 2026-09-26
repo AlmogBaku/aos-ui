@@ -92,7 +92,7 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
     events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),
     stop: async () => "idle",
-    recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),
+    recoveryPosition: () => "token-1",
   }
   const adapter = new OpenClawServerAdapter({
     client,

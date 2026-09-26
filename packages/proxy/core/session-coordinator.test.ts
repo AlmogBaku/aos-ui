@@ -40,10 +40,7 @@ class EventSource implements ServerTurnHandle {
 
   constructor(
     /** `null` for a segment that names no position a recovery can continue. */
-    readonly position: { epoch: string; lastSeen: number } | null = {
-      epoch: "epoch-1",
-      lastSeen: 0,
-    }
+    readonly position: string | null = "token-1"
   ) {
     this.settled = new Promise((resolve) => {
       this.#resolveSettled = resolve
@@ -2609,7 +2606,7 @@ describe("SessionCoordinator", () => {
   })
   it("keeps the journaled prefix across a recoverable interrupt", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const recovered = new EventSource("token-12")
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => interrupted),
       recover: vi.fn(async () => recovered),
@@ -2679,7 +2676,7 @@ describe("SessionCoordinator", () => {
 
   it("delivers recovered events to two redials sharing one cursor", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 12 })
+    const recovered = new EventSource("token-12")
     const engine: ServerTurnEngine = {
       start: vi.fn(async () => interrupted),
       recover: vi.fn(async () => recovered),
@@ -2747,7 +2744,7 @@ describe("SessionCoordinator", () => {
 
   it("recovers an uncertain execution before refusing a new turn", async () => {
     const interrupted = new EventSource()
-    const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 7 })
+    const recovered = new EventSource("token-7")
     const admitted = new EventSource()
     const engine: ServerTurnEngine = {
       start: vi
@@ -2779,7 +2776,7 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).toHaveBeenCalledWith(scope, {
       sessionId: scope.sessionId,
       turnId: "run-1",
-      position: { epoch: "epoch-1", lastSeen: 0 },
+      position: "token-1",
     })
     expect(engine.start).toHaveBeenCalledTimes(2)
   })
@@ -3031,7 +3028,7 @@ describe("SessionCoordinator", () => {
     // A recovered segment inherits the journal.
     {
       const interrupted = new EventSource()
-      const recovered = new EventSource({ epoch: "epoch-1", lastSeen: 1 })
+      const recovered = new EventSource("token-2")
       const neighbor = new EventSource()
       const onTerminal = vi.fn(async () => undefined)
       const engine: ServerTurnEngine = {
