@@ -164,4 +164,22 @@ describe("createSessionRows", () => {
     rows.rememberList([session({ title: "Again", unread: true })])
     expect(listener).toHaveBeenCalledTimes(2)
   })
+
+  it("gives a Session's subscriber its known row at once, then only its changes", () => {
+    const rows = createSessionRows()
+    rows.rememberDetail(session({ title: "Renamed" }))
+    const listener = vi.fn()
+
+    rows.subscribeRow(AGENT, SESSION, listener)
+    expect(listener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ title: "Renamed" })
+    )
+
+    rows.rememberDetail(session({ id: "session-2" }))
+    rows.rememberDetail(session({ title: "Again" }))
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: SESSION, title: "Again" })
+    )
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
 })

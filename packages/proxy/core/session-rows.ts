@@ -48,7 +48,17 @@ export interface SessionRows {
    */
   holdRead(agentId: string, sessionId: string, onRelit: () => void): () => void
   forget(agentId: string, sessionId: string): void
+  /** Every changed row, of every Session. */
   subscribe(listener: SessionRowListener): () => void
+  /**
+   * One Session's row as a replaying cell: the known row at once, then each
+   * change to it.
+   */
+  subscribeRow(
+    agentId: string,
+    sessionId: string,
+    listener: SessionRowListener
+  ): () => void
 }
 
 export const READ_GUARD_MS = 10_000
@@ -121,6 +131,13 @@ export function createSessionRows({
 
   const publish = (row: SessionRow) => {
     for (const listener of [...listeners]) listener(row)
+  }
+
+  const subscribe = (listener: SessionRowListener) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
   }
 
   return {
@@ -197,11 +214,14 @@ export function createSessionRows({
       guardedUntil.delete(key)
     },
 
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
-      }
+    subscribe,
+
+    subscribeRow(agentId, sessionId, listener) {
+      const known = rows.get(rowKey(agentId, sessionId))
+      if (known) listener(known)
+      return subscribe((row) => {
+        if (row.agentId === agentId && row.id === sessionId) listener(row)
+      })
     },
   }
 }
