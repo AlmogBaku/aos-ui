@@ -30,7 +30,7 @@ export function createBrowserNotificationPort(): BrowserNotificationPort {
         },
       }
     },
-    onPermissionChange: (listener) => {
+    subscribePermissionChanges: (listener) => {
       let status: PermissionStatus | undefined
       let stopped = false
       try {

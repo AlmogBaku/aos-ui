@@ -6,6 +6,7 @@ import {
   ReadResourceResultSchema,
 } from "../../protocol/mcp-apps"
 import type { ProxyAppOptions } from "../app"
+import * as ids from "../core/ids"
 import type { ServerRuntime, SessionScope } from "../core/runtime"
 import { McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
@@ -65,7 +66,7 @@ export function createMcpAppRateLimit(now: () => number = Date.now) {
 }
 
 /**
- * One MCP App request, lane-neutral. The caller has already authorized the
+ * One MCP App request, listener-neutral. The caller has already authorized the
  * Session and resolved `scope`; this reads the body, applies the view's rate
  * limit, and maps every failure to an answer that never names a native detail.
  */
@@ -81,7 +82,7 @@ export async function handleMcpAppRequest(input: {
   const apps = runtime.mcpApps
   if (!apps) return failure.not_found
   if (
-    !input.allow(`${scope.agentId}\u0000${scope.threadId}\u0000${toolCallId}`)
+    !input.allow(`${scope.agentId}\u0000${scope.sessionId}\u0000${toolCallId}`)
   )
     return failure.rate_limited
   try {
@@ -144,7 +145,7 @@ export function registerMcpAppRoutes(
     runtime: ServerRuntime,
     agentId: string,
     sessionId: string
-  ) => Promise<string>
+  ) => Promise<ids.ProviderSessionId>
 ) {
   const base = `/api/aos/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`
   const allow = createMcpAppRateLimit(options.clock)
@@ -164,21 +165,29 @@ export function registerMcpAppRoutes(
         return errorResponse("forbidden", 403)
       const params = mcpAppParams(context.req.param())
       if (!params) return errorResponse("not_found", 404)
-      const { agentId, sessionId: threadId, toolCallId } = params
-      const sessionId = await requireScopedSession(runtime, agentId, threadId)
+      const { agentId, sessionId, toolCallId } = params
+      const providerSessionId = await requireScopedSession(
+        runtime,
+        agentId,
+        sessionId
+      )
       options.logger.info(
         redactForLog({
           event: "mcp_app.request",
           requestId: context.get("requestId"),
           operation,
           agentId,
-          sessionId: threadId,
+          sessionId,
           toolCallId,
         })
       )
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, sessionId, threadId },
+        scope: {
+          agentId,
+          providerSessionId,
+          sessionId: ids.sessionId(sessionId),
+        },
         toolCallId,
         operation,
         request: context.req.raw,

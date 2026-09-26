@@ -141,7 +141,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
   const steers: unknown[] = []
   let peer: AgentContext | undefined
   let redeemed = false
-  // The proxy streams a Session only to a client attached to it, so updates
+  // The proxy streams a Session only to a client that resumed it, so updates
   // raised before the resume wait for the replay that carries them.
   const waiting: SessionUpdate[] = [
     {
@@ -157,10 +157,10 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ]
-  let attached = false
+  let resumed = false
 
   function push(update: SessionUpdate) {
-    if (attached)
+    if (resumed)
       void peer?.notify(methods.client.session.update, {
         sessionId: REF,
         update,
@@ -189,7 +189,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
-            lane: "guest",
+            role: "guest",
             extensions: {
               // The guest lane carries the operator's conversation controls.
               steer: true,
@@ -222,7 +222,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       calls.push(methods.agent.session.resume)
       redeemedOrThrow()
       queueMicrotask(() => {
-        attached = true
+        resumed = true
         for (const update of waiting.splice(0))
           void peer?.notify(methods.client.session.update, {
             sessionId: params.sessionId,

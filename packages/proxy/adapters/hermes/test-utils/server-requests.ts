@@ -25,8 +25,8 @@ import {
 export type ServerRequestsHarness = {
   /** The transport surface an answering surface subscribes to. */
   transport: {
-    onRequest(handler: ServerRequestHandler): () => void
-    onEvent(listener: (event: unknown) => void): () => void
+    subscribeRequests(handler: ServerRequestHandler): () => void
+    subscribeEvents(listener: (event: unknown) => void): () => void
     connected(): boolean
     request(
       method: string,
@@ -88,8 +88,8 @@ export function serverRequests(): ServerRequestsHarness {
 
   return {
     transport: {
-      onRequest: (handler) => channel.onRequest(handler),
-      onEvent: (listener) => {
+      subscribeRequests: (handler) => channel.onRequest(handler),
+      subscribeEvents: (listener) => {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },

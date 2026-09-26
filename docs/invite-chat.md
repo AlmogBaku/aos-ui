@@ -41,7 +41,7 @@ controls catalog presentation; it does not restrict what the Agent can access.
 Likewise, invitation scope restricts the guest to one Agent and conversation,
 but it does not sandbox the Agent itself.
 
-Guests get no slash commands. The guest lane advertises none, and it refuses
+Guests get no slash commands. The guest listener advertises none, and it refuses
 any guest message or steer whose text starts with `/`, even after leading
 whitespace.
 

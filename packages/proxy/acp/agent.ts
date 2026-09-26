@@ -98,7 +98,7 @@ const withoutParams = () => undefined
 const undecoded = (params: unknown) => params
 
 /**
- * The operator lane's extensions. The proxy implements each of them itself,
+ * The operator listener's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
 function operatorExtensions(runtime: ServerRuntime): AosExtensions {
@@ -142,7 +142,7 @@ function sameExposure(
 }
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
-  const { lane, translators, feeds } = context
+  const { role, translators, feeds } = context
   const readState = feeds.has("read-state") ? context.readState : undefined
   const activityFeed = feeds.has("activity") ? context.activityFeed : undefined
   const { runtime, sessions: coordinator } = context.runtimeInstance
@@ -150,11 +150,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     createMemberEncoder({
       context,
       client,
-      seat: (sessionId) => sessions.member(sessionId),
+      membership: (sessionId) => sessions.membership(sessionId),
       answer: (command) =>
         perform("answer", command, async ({ sessionId, ...answer }) => {
           await sessions
-            .member(sessionId)
+            .membership(sessionId)
             ?.answer(answer.request, answer.reply, answer.answers)
         }),
     })
@@ -176,7 +176,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       redactForLog({
         event,
         connectionId: context.connectionId,
-        lane,
+        role,
         ...fields,
       })
     )
@@ -253,25 +253,25 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const paging = new Set<string>()
 
   /**
-   * One older page of a Session this connection attached, however it did, as
+   * One older page of a Session this connection resumed, however it did, as
    * tagged updates ahead of the reply.
    */
   async function replayOlder({
     sessionId,
     cursor,
   }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
-    const member = sessions.member(sessionId)
-    if (!member) throw notFound()
+    const membership = sessions.membership(sessionId)
+    if (!membership) throw notFound()
     const offset = decodeHistoryCursor(cursor)
     if (paging.has(sessionId)) throw invalidRequest()
     paging.add(sessionId)
     try {
-      const page = await readHistory(member.scope, offset)
+      const page = await readHistory(membership.scope, offset)
       // A cursor past this Session's history was never issued for it. One at
       // its end was: a runtime that estimates `total` learns the start only
       // by reading an empty page there.
       if (offset > page.total) throw invalidRequest()
-      await member.showOlderPage(page, { cursor, offset })
+      await membership.showOlderPage(page, { cursor, offset })
       return { page }
     } finally {
       paging.delete(sessionId)
@@ -279,7 +279,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   /**
-   * Attaches this connection to one Session and follows it. A command that
+   * Resumes one Session on this connection and follows it. A command that
    * names its `scope` addresses a Session outside this connection's catalog:
    * it adopts nothing and reads no row, models or usage, and only a wait can
    * hide a recoverable execution there.
@@ -301,8 +301,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       (state === "idle" && row?.status === "running")
     )
       await workspace.discover(scope)
-    const member = sessions.join(client, scope)
-    const resumed = await member.resume(
+    const membership = sessions.join(client, scope)
+    const resumed = await membership.resume(
       command,
       command.fromStart ? () => readReplay(scope) : undefined
     )
@@ -313,7 +313,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // start listening for them.
     const models = addressed ? undefined : await workspace.models(scope)
     const capabilities = await workspace.capabilities(scope)
-    member.afterResume(execution.turnId, !addressed)
+    membership.afterResume(execution.turnId, !addressed)
     return {
       agentId: scope.agentId,
       ...(row ? { row } : {}),
@@ -340,7 +340,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ? undefined
         : context.attachmentStages.take(
             scope.agentId,
-            scope.threadId,
+            scope.sessionId,
             attachmentStageId
           )
     if (attachmentStageId !== undefined && !stage) throw invalidRequest()
@@ -354,24 +354,24 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         : { rewindSourceId: command.rewindSourceId }),
     }
     const content = echoedParts(command.content, stage?.artifactIds?.() ?? [])
-    const member = sessions.join(client, scope)
-    member.afterResponse(async () => {
-      // Seated before admission, so a turn that wins the race still reaches
+    const membership = sessions.join(client, scope)
+    membership.afterResponse(async () => {
+      // Joined before admission, so a turn that wins the race still reaches
       // this browser, and shown its own prompt as today.
-      member.enterRoom()
-      await member.emit({ kind: "prompt", messageId, content, own: true })
+      membership.joinChannel()
+      await membership.emit({ kind: "prompt", messageId, content, own: true })
       try {
-        await member.startTurn(input, stage)
+        await membership.startTurn(input, stage)
       } catch (cause) {
         // The prompt was accepted and echoed, so its turn fails in view.
         if (!(cause instanceof ServerTurnConflictError))
-          return member.refuseTurn(input.turnId, cause)
+          return membership.refuseTurn(input.turnId, cause)
         // Another browser's turn won: report the conflict, then follow it.
-        await member.report(cause)
-        await member.catchUp()
+        await membership.report(cause)
+        await membership.catchUp()
         return
       }
-      await member.announce({
+      await membership.announce({
         turnId: input.turnId,
         messageId,
         content,
@@ -408,7 +408,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
-          lane,
+          role,
           extensions: authentication
             ? authentication.extensions
             : operatorExtensions(runtime),
@@ -417,7 +417,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     }
   })
 
-  // The operator lane authenticates its WebSocket upgrade instead.
+  // The operator listener authenticates its WebSocket upgrade instead.
   app.onRequest(methods.agent.auth.login, async ({ params }) => {
     const { authentication } = context
     if (!authentication)
@@ -450,10 +450,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.remember([row])
         const capabilities = await workspace.capabilities(scope)
         const models = await workspace.models(scope)
-        const member = sessions.join(client, scope)
-        member.afterResponse(async () => {
-          await member.emit({ kind: "commands", capabilities })
-          await member.reportUsage()
+        const membership = sessions.join(client, scope)
+        membership.afterResponse(async () => {
+          await membership.emit({ kind: "commands", capabilities })
+          await membership.reportUsage()
         })
         return { sessionId, row, capabilities, models }
       }
@@ -585,9 +585,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     admit(methods.agent.session.cancel, "stop")
     await perform("stop", { sessionId: params.sessionId }, async (command) => {
       // Only a joined Session has a member.
-      const member = sessions.member(command.sessionId)
-      if (!member) return
-      await member.cancel().catch((cause: unknown) => member.report(cause))
+      const membership = sessions.membership(command.sessionId)
+      if (!membership) return
+      await membership
+        .cancel()
+        .catch((cause: unknown) => membership.report(cause))
     })
   })
 
@@ -605,8 +607,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         // The window's size belongs to the model, so a switch restates the
         // usage every browser on the Session holds against the model it has
         // just left.
-        const member = sessions.member(command.sessionId)
-        member?.afterResponse(() => coordinator.reportUsage(scope))
+        const membership = sessions.membership(command.sessionId)
+        membership?.afterResponse(() => coordinator.reportUsage(scope))
         return { models }
       }
     )
@@ -616,7 +618,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.close, async ({ params }) => {
     admit(methods.agent.session.close, "close")
     await perform("close", { sessionId: params.sessionId }, async (command) => {
-      sessions.leave(command.sessionId)
+      sessions.part(command.sessionId)
     })
     return {}
   })
@@ -658,7 +660,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           const scope = sessions.scope(command.sessionId)
           if ("unread" in command.patch && !command.patch.unread) {
-            await readState?.markRead(scope.agentId, scope.threadId)
+            await readState?.markRead(scope.agentId, scope.sessionId)
             return
           }
           await workspace.update(scope, command.patch)
@@ -796,9 +798,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       ),
       feeds.has("session-rows")
         ? context.sessionRows.subscribe((row) => {
-            const member = sessions.member(row.id)
-            if (member)
-              void member
+            const membership = sessions.membership(row.id)
+            if (membership)
+              void membership
                 .emit({
                   kind: "session-info",
                   row,

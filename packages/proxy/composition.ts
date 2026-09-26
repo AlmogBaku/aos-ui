@@ -1,5 +1,5 @@
 import { createOperatorAcpService } from "./acp/operator"
-import { createChannel } from "./core/channel"
+import { createChannels } from "./core/channel"
 import type { AcpLogger } from "./acp/types"
 import {
   createRuntimeInstance,
@@ -119,11 +119,12 @@ async function readMcpServerOverrides(
 
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
- * configured private one, the stored devices, the presence the ACP lane reports
- * into, and the dispatcher that observes the runtime. A state directory the
- * proxy cannot write fails startup here rather than at the first notification.
+ * configured private one, the stored devices, the presence the ACP listener
+ * reports into, and the dispatcher that subscribes to the runtime. A state directory
+ * the proxy cannot write fails startup here rather than at the first
+ * notification.
  */
-async function createPushLane(
+async function createPushDelivery(
   push: NonNullable<ProxyConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
@@ -183,7 +184,7 @@ export async function createConfiguredProxy(
       ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch)
       : Promise.resolve(undefined),
   ])
-  // Proxy speech sits in front of the adapter for every lane at once, so the
+  // Proxy speech sits in front of the adapter for every listener at once, so the
   // wrapped runtime is the only one any listener or ACP service ever sees.
   const runtimeInstance: RuntimeInstance = voiceProviders
     ? {
@@ -209,26 +210,33 @@ export async function createConfiguredProxy(
         })
       : undefined
   /**
-   * One room registry per process, like the runtime both lanes share: a room is
-   * one provider Session, whichever lane each of its members arrived on.
+   * One set of channels per process, like the runtime both listeners share: a
+   * channel is one provider Session, whichever listener each of its members arrived
+   * on.
    */
   const { sessions } = runtimeInstance
   const { turns } = runtimeInstance.runtime
-  const rooms = createChannel({
+  const channels = createChannels({
     snapshot: (scope) => sessions.snapshot(scope),
-    // A room adopts what the runtime starts only where the runtime reports it.
-    ...(turns.watch
+    // A channel adopts what the runtime starts only where the runtime
+    // reports it.
+    ...(turns.subscribeTurns
       ? {
           adoption: {
-            watch: (scope, watcher) => turns.watch!(scope, watcher),
-            discover: (scope, lane) => sessions.discover(scope, lane),
-            observe: (scope, listener) => sessions.observeScope(scope, listener),
+            subscribeTurns: (scope, listener) =>
+              turns.subscribeTurns!(scope, listener),
+            discover: (scope, role) => sessions.discover(scope, role),
+            subscribeExecutions: (scope, listener) =>
+              sessions.subscribeScope(scope, listener),
           },
         }
       : {}),
   })
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
-  const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
+  const guestListener = (
+    publicOrigin: string,
+    service: GuestInvitationService
+  ) => {
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
@@ -245,7 +253,7 @@ export async function createConfiguredProxy(
         runtimeInstance,
         invitations: service,
         attachmentStages,
-        rooms,
+        channels,
         logger: dependencies.logger,
         ...clock,
       }),
@@ -253,16 +261,16 @@ export async function createConfiguredProxy(
   }
   const guest =
     config.guest && invitations
-      ? guestLane(config.guest.publicOrigin, invitations)
+      ? guestListener(config.guest.publicOrigin, invitations)
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
   /**
-   * One row cache for the operator surface: the ACP lane keeps it current and
+   * One row cache for the operator surface: the ACP listener keeps it current and
    * push delivery reads the same rows to gate a notification on read state.
    */
   const sessionRows = createSessionRows(clock)
   const push = config.push
-    ? await createPushLane(
+    ? await createPushDelivery(
         config.push,
         runtimeInstance,
         sessionRows,
@@ -274,7 +282,7 @@ export async function createConfiguredProxy(
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
-    rooms,
+    channels,
     sessionRows,
     logger: dependencies.logger,
     ...(push ? { presence: push.presence } : {}),

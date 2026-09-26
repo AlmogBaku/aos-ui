@@ -149,8 +149,8 @@ external reverse proxy is optional.
   `packages/proxy/core/member.ts`. `packages/proxy/acp` owns ACP translation,
   read state, and the activity feed; `acp/member-encoder.ts` is the only code
   that turns member events into ACP. `packages/proxy/auth` and
-  `packages/proxy/guest` own authorization lanes, and the guest rules live in
-  the `packages/proxy/guest/middleware` stack;
+  `packages/proxy/guest` own the operator and guest roles, and the guest
+  rules live in the `packages/proxy/guest/middleware` stack;
   `packages/proxy/routes` owns HTTP handlers; `packages/proxy/cli` is the
   server entry point. `packages/proxy/voice` owns proxy speech providers (the
   OpenAI-compatible client and the `ServerRuntime` voice wrapper);

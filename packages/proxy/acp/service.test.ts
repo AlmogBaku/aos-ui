@@ -28,14 +28,14 @@ function connectionContext(
   return {
     connectionId,
     principalId,
-    lane: "operator",
+    role: "operator",
     feeds: EVERY_FEED,
     runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
     sessionRows: {} as AcpConnectionContext["sessionRows"],
     readState: {} as AcpConnectionContext["readState"],
     activityFeed: {} as AcpConnectionContext["activityFeed"],
     translators: {} as AcpConnectionContext["translators"],
-    rooms: {} as AcpConnectionContext["rooms"],
+    channels: {} as AcpConnectionContext["channels"],
   }
 }
 
@@ -45,7 +45,7 @@ function service() {
     contexts,
     acp: createAcpService({
       publicOrigin: ORIGIN,
-      lane: "operator",
+      role: "operator",
       principalId: OPERATOR_PRINCIPAL,
       agent(context) {
         contexts.push(context)
@@ -104,7 +104,7 @@ describe("ACP WebSocket service", () => {
     )
 
     expect(upgrade?.principalId).toBe("operator")
-    expect(upgrade?.lane).toBe("operator")
+    expect(upgrade?.role).toBe("operator")
     expect(upgrade?.connectionId).toEqual(expect.any(String))
     expect(upgrade?.headers).toEqual({
       "Acp-Connection-Id": upgrade?.connectionId,
@@ -145,7 +145,7 @@ describe("ACP WebSocket service", () => {
     const contexts: AcpConnectionContext[] = []
     const acp = createAcpService({
       publicOrigin: ORIGIN,
-      lane: "guest",
+      role: "guest",
       principalId: "invite-42",
       agent(context) {
         contexts.push(context)

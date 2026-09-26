@@ -121,7 +121,7 @@ export function createOpenCodeMcpApps(
     {
       servers: (scope) => catalog.servers.get(scope.agentId),
       storedCall: (scope, toolCallId) =>
-        storedCall(scope.agentId, scope.sessionId, toolCallId),
+        storedCall(scope.agentId, scope.providerSessionId, toolCallId),
     },
     catalog.client
   )

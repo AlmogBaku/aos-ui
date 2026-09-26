@@ -13,8 +13,8 @@ describe("OS notification tags", () => {
     ["agent-2", "thread-1", "event-1"],
     ["agent-1", "thread-2", "event-1"],
     ["agent-1", "thread-1", "event-2"],
-  ])("changes for %s/%s/%s", (agentId, threadId, id) => {
-    expect(notificationTag(agentId, threadId, id)).not.toBe(
+  ])("changes for %s/%s/%s", (agentId, sessionId, id) => {
+    expect(notificationTag(agentId, sessionId, id)).not.toBe(
       notificationTag("agent-1", "thread-1", "event-1")
     )
   })

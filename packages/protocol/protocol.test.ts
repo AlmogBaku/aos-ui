@@ -144,7 +144,7 @@ describe("AOS v1 normalized protocol", () => {
       SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
         {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           inputs: ["image", "file"],
           imageMimeTypes: "provider-dependent",
           fileMimeTypes: "provider-dependent",
@@ -165,6 +165,12 @@ describe("AOS v1 normalized protocol", () => {
       maxEncodedRequestBytes: 26_214_400,
       completeRequestValidation: "native-run-input",
     })
+    // The retired scope word is refused, not read as a synonym.
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.safeParse(
+        { ...parsed, scope: "attached-session" }
+      ).success
+    ).toBe(false)
   })
 
   it("represents a missing native attachment capability without hiding other capabilities", () => {
@@ -187,18 +193,18 @@ describe("AOS v1 normalized protocol", () => {
         workspace: {
           slashCommands: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             commands: [{ name: "help", description: "Show help" }],
           },
           models: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             selection: "native-session",
             choices: "provider-reported",
           },
           context: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             source: "provider-usage-or-estimate",
             breakdown: "provider-categories",
           },
@@ -247,7 +253,7 @@ describe("AOS v1 normalized protocol", () => {
         content: {
           attachments: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             inputs: ["image", "file"],
             imageMimeTypes: ["image/png"],
             fileMimeTypes: "valid-type/subtype",
@@ -312,7 +318,7 @@ describe("AOS v1 normalized protocol", () => {
     expect(
       SessionActivityResponseSchema.parse({
         status: "available",
-        scope: "attached-active-session",
+        scope: "active-session",
         coverage: "active-session-only",
         state: "waiting-for-input",
       })

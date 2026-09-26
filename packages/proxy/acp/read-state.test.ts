@@ -45,7 +45,7 @@ function harness(
     runtime: {
       ...(options.neutral ? {} : { translation: { relighting: RELIGHTING } }),
       runtimeInfo,
-      resolveSessionId: (_agentId: string, publicId: string) =>
+      resolveProviderSessionId: (_agentId: string, publicId: string) =>
         `stored-${publicId}`,
       updateSession,
     },

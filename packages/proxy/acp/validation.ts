@@ -42,7 +42,10 @@ export function invalidRequest() {
   return new RequestError(AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request")
 }
 
-/** The guest lane's answer to anything it has not redeemed an invitation for. */
+/**
+ * The guest listener's answer to anything it has not redeemed an invitation
+ * for.
+ */
 export function authenticationRequired() {
   return new RequestError(
     AOS_JSONRPC_ERRORS.authenticationRequired,

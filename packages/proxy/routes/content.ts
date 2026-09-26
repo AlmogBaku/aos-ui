@@ -16,9 +16,12 @@ export async function loadSessionArtifact(
   publicSessionId: string,
   artifactId: string
 ) {
-  const storedId = runtime.resolveSessionId(agentId, publicSessionId)
-  if (!storedId) return undefined
-  await runtime.getSession(agentId, storedId)
+  const providerSessionId = runtime.resolveProviderSessionId(
+    agentId,
+    publicSessionId
+  )
+  if (!providerSessionId) return undefined
+  await runtime.getSession(agentId, providerSessionId)
   return runtime.artifact(agentId, publicSessionId, artifactId)
 }
 

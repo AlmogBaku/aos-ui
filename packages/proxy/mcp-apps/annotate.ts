@@ -16,6 +16,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
+import * as ids from "../core/ids"
 import { MAX_MCP_APP_HTML_BYTES } from "./client"
 
 /** How long a tool call waits to learn whether it opens a view. */
@@ -191,8 +192,11 @@ function annotatedTurns(
           },
         }
       : {}),
-    // A watch only signals; the turn it reports is read through `discover`.
-    ...(turns.watch ? { watch: turns.watch.bind(turns) } : {}),
+    // A turn subscription only signals; the turn it reports is read
+    // through `discover`.
+    ...(turns.subscribeTurns
+      ? { subscribeTurns: turns.subscribeTurns.bind(turns) }
+      : {}),
   }
 }
 
@@ -238,14 +242,14 @@ export function withMcpApps<Runtime extends ServerRuntime>(
     "turns" | "history" | "workspaceCapabilities"
   > = {
     turns,
-    async history(agentId, runtimeSessionId, limit, offset) {
+    async history(agentId, providerSessionId, limit, offset) {
       const history = SessionHistoryResponseSchema.parse(
-        await native.history(agentId, runtimeSessionId, limit, offset)
+        await native.history(agentId, providerSessionId, limit, offset)
       )
       return annotatedHistory(history, apps, {
         agentId,
-        sessionId: runtimeSessionId,
-        threadId: history.sessionId,
+        providerSessionId,
+        sessionId: ids.sessionId(history.sessionId),
       })
     },
     async workspaceCapabilities(agentId, publicSessionId) {

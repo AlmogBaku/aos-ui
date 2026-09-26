@@ -46,13 +46,13 @@ function capabilities(): AcpCapabilities {
       slashCommands: unavailable,
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -226,7 +226,7 @@ function createFakeConnection() {
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
     subscribeStatus: () => () => {},
-    onSessionReplay(sessionId, listener) {
+    subscribeSessionReplay(sessionId, listener) {
       const listeners = replays.get(sessionId) ?? new Set()
       listeners.add(listener)
       replays.set(sessionId, listeners)
@@ -301,19 +301,19 @@ function createFakeConnection() {
         agent: { ...catalogEntry(), revision: "revision-3" },
       }
     },
-    onSessionUpdate(sessionId, listener) {
+    subscribeSessionUpdates(sessionId, listener) {
       const listeners = updates.get(sessionId) ?? new Set()
       listeners.add(listener)
       updates.set(sessionId, listeners)
       return () => listeners.delete(listener)
     },
-    onNotification(method, listener) {
+    subscribeNotification(method, listener) {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)
       notifications.set(method, listeners)
       return () => listeners.delete(listener)
     },
-    onPendingRequest: () => () => {},
+    subscribePendingRequests: () => () => {},
     lastSequence: () => ({ turnId: "run-1", after: 9 }),
     close: () => record("close"),
   }
@@ -398,7 +398,7 @@ describe("ACP workspace client", () => {
 
     expect(metadata).toEqual([
       {
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         agentId: AGENT_ID,
         updatedAt: UPDATED_AT,
         status: "idle",
@@ -458,7 +458,7 @@ describe("ACP workspace client", () => {
     await client.readSessionPage({ agentId: AGENT_ID }, "cursor-2")
     const metadata = await client.getSessionMetadata([SESSION_ID])
 
-    expect(metadata.map(({ threadId }) => threadId)).toEqual([SESSION_ID])
+    expect(metadata.map(({ sessionId }) => sessionId)).toEqual([SESSION_ID])
     expect(calls.filter((call) => call.method === "listSessions")).toEqual([
       { method: "listSessions", args: [{ agentId: AGENT_ID }, "cursor-2"] },
     ])
@@ -484,7 +484,7 @@ describe("ACP workspace client", () => {
       published.push(metadata)
     )
     await settle()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
 
     emitUpdate(
       { sessionUpdate: "session_info_update", title: "Renamed" },
@@ -515,9 +515,9 @@ describe("ACP workspace client", () => {
     // have, which is how a reloaded deep link loses its Session.
     expect(published).toEqual([])
 
-    await client.attachSession(UNLISTED_SESSION_ID)
+    await client.resumeSession(UNLISTED_SESSION_ID)
 
-    expect(published.at(-1)?.map(({ threadId }) => threadId)).toEqual([
+    expect(published.at(-1)?.map(({ sessionId }) => sessionId)).toEqual([
       SESSION_ID,
       UNLISTED_SESSION_ID,
     ])
@@ -591,7 +591,7 @@ describe("ACP workspace client", () => {
       published.push(metadata)
     )
     await settle()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
     const before = published.length
 
     emitUpdate(
@@ -639,7 +639,7 @@ describe("ACP workspace client", () => {
 
   it("derives Session status from the run stream", async () => {
     const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
     expect(client.sessionStatus(SESSION_ID)).toBe("running")
 
     emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
@@ -663,7 +663,7 @@ describe("ACP workspace client", () => {
   it("publishes only the status a replay ends on", async () => {
     const { client, emitUpdate, startReplay } = createClient()
     await client.getSessionMetadata([SESSION_ID])
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
     const statuses: (string | undefined)[] = []
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       statuses.push(metadata[0]?.status)
@@ -691,7 +691,7 @@ describe("ACP workspace client", () => {
 
   it("publishes Session Todos from the plan update", async () => {
     const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
     const seen: unknown[] = []
     client.subscribeTodos(SESSION_ID, (todos) => seen.push(todos))
     await settle()
@@ -739,7 +739,7 @@ describe("ACP workspace client", () => {
       {
         id: `${SESSION_ID}:request-1:attention-requested`,
         agentId: AGENT_ID,
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         occurredAt: UPDATED_AT,
         type: "attention-requested",
         requestId: "request-1",
@@ -754,7 +754,7 @@ describe("ACP workspace client", () => {
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry()])
     await client.listAgents()
-    const { threadId } = await client.createSession(CREATOR_ID)
+    const { sessionId } = await client.createSession(CREATOR_ID)
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     setAgents([creatorEntry(), catalogEntry()])
@@ -767,10 +767,10 @@ describe("ACP workspace client", () => {
 
     expect(events).toEqual([
       {
-        id: `${threadId}:${AGENT_ID}`,
+        id: `${sessionId}:${AGENT_ID}`,
         type: "agent-ready",
         agentId: AGENT_ID,
-        threadId,
+        sessionId,
         occurredAt: UPDATED_AT,
       },
     ])
@@ -802,7 +802,7 @@ describe("ACP workspace client", () => {
 
   it("projects models and writes one config option per half", async () => {
     const { client, argsOf, calls } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
 
     await expect(client.models(SESSION_ID)).resolves.toEqual({
       selectedId: "sonnet",
@@ -845,11 +845,11 @@ describe("ACP workspace client", () => {
     })
   })
 
-  it("resumes an attached Session by owner and last sequence", async () => {
+  it("resumes a Session by owner and last sequence", async () => {
     const { client, argsOf } = createClient()
     await client.getSessionMetadata([SESSION_ID])
 
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
 
     expect(argsOf("resumeSession")).toEqual([
       SESSION_ID,
@@ -862,9 +862,9 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("reads capabilities, commands, and context from the attached Session", async () => {
+  it("reads capabilities, commands, and context from the resumed Session", async () => {
     const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
 
     await expect(
       client.workspaceCapabilities(SESSION_ID)
@@ -898,7 +898,7 @@ describe("ACP workspace client", () => {
 
   it("keeps the provider's own attribution and provenance on a usage reading", async () => {
     const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
     const announced: ReturnType<typeof client.context>[] = []
     client.subscribeContext(SESSION_ID, () =>
       announced.push(client.context(SESSION_ID))
@@ -943,7 +943,7 @@ describe("ACP workspace client", () => {
 
   it("ignores a usage reading that names no window", async () => {
     const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    await client.resumeSession(SESSION_ID)
 
     emitUpdate({ sessionUpdate: "usage_update", used: 0, size: 0 })
 
@@ -955,7 +955,7 @@ describe("ACP workspace client", () => {
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
-    ).resolves.toEqual({ threadId: SESSION_ID })
+    ).resolves.toEqual({ sessionId: SESSION_ID })
     expect(argsOf("newSession")).toEqual([
       { agentId: AGENT_ID, title: "Weekly report" },
     ])
@@ -1027,7 +1027,7 @@ describe("ACP workspace client", () => {
       ).toHaveLength(2)
       expect(published.at(-1)).toEqual([
         {
-          threadId: SESSION_ID,
+          sessionId: SESSION_ID,
           agentId: AGENT_ID,
           updatedAt: UPDATED_AT,
           status: "idle",

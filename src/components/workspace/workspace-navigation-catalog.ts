@@ -38,7 +38,7 @@ export function buildWorkspaceNavigationCatalog({
       if (visibleThreadId) {
         const visible = sessions.find(
           (session) =>
-            session.threadId === visibleThreadId && session.agentId === agentId
+            session.sessionId === visibleThreadId && session.agentId === agentId
         )
         if (visible) {
           manual.add(visibleThreadId)
@@ -59,17 +59,17 @@ export function buildWorkspaceNavigationCatalog({
       const openSessions = view.openSessions
         .filter(
           (session) =>
-            session.pinned === true || !dismissed.has(session.threadId)
+            session.pinned === true || !dismissed.has(session.sessionId)
         )
         .map((session) => ({ ...session, canClose: true }))
-      const openIds = new Set(openSessions.map((session) => session.threadId))
+      const openIds = new Set(openSessions.map((session) => session.sessionId))
       return [
         agentId,
         {
           agentId,
           openSessions,
           historySessions: view.allSessions.filter(
-            (session) => !openIds.has(session.threadId)
+            (session) => !openIds.has(session.sessionId)
           ),
           archivedSessions: view.archivedSessions,
           lastSelectedThreadId: lastSelected.get(agentId) ?? null,

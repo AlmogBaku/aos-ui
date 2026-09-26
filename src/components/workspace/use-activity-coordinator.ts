@@ -74,7 +74,7 @@ type Options = {
   /** Push notifications are authored on the proxy, in the device's language. */
   locale: Locale
   readNow: () => Date
-  onOpenTarget: (agentId: string, threadId: string) => Promise<void>
+  onOpenTarget: (agentId: string, sessionId: string) => Promise<void>
   browser?: {
     port?: BrowserNotificationPort
     platform?: ActivityBrowserPlatform
@@ -129,12 +129,12 @@ export function useActivityCoordinator(
     installFirstRef.current = install.iosInstallHint
   })
   const validateOwnerRef = useRef<
-    (threadId: string, revalidate?: boolean) => Promise<string | undefined>
+    (sessionId: string, revalidate?: boolean) => Promise<string | undefined>
   >(async () => undefined)
   const [records, setRecords] = useDataState<ActivityRecord[]>([])
   const [notice, setNotice] = useState<{ urgent: boolean } | null>(null)
   const reported = useRef<
-    { threadId: string | null; foreground: boolean; idle: boolean } | undefined
+    { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
   >(undefined)
   const idleRef = useRef<IdleTracker | null>(null)
   const [error, setError] = useState(false)
@@ -156,7 +156,7 @@ export function useActivityCoordinator(
   const reportPresence = useEffectEvent((repeat = false) => {
     const state = context()
     const exposed = isSelectionExposed(state)
-      ? (state.selection?.threadId ?? null)
+      ? (state.selection?.sessionId ?? null)
       : null
     const foreground = state.pageVisible && state.pageFocused
     // Only a foreground connection can be attended, so a hidden one is not idle.
@@ -164,12 +164,12 @@ export function useActivityCoordinator(
     const last = reported.current
     if (
       !repeat &&
-      last?.threadId === exposed &&
+      last?.sessionId === exposed &&
       last.foreground === foreground &&
       last.idle === idle
     )
       return
-    reported.current = { threadId: exposed, foreground, idle }
+    reported.current = { sessionId: exposed, foreground, idle }
     current.current.workspace.reportFocus?.(exposed, { foreground, idle })
   })
   const refresh = useEffectEvent(() => {
@@ -192,25 +192,26 @@ export function useActivityCoordinator(
   useEffect(() => {
     let active = true
     const verifiedOwners = new Map<string, string>()
-    const snapshotOwner = (threadId: string) =>
-      current.current.sessions.find((session) => session.threadId === threadId)
-        ?.agentId
-    const owner = (threadId: string) =>
-      snapshotOwner(threadId) ?? verifiedOwners.get(threadId)
-    async function validateOwner(threadId: string, revalidate = false) {
-      const knownOwner = snapshotOwner(threadId)
+    const snapshotOwner = (sessionId: string) =>
+      current.current.sessions.find(
+        (session) => session.sessionId === sessionId
+      )?.agentId
+    const owner = (sessionId: string) =>
+      snapshotOwner(sessionId) ?? verifiedOwners.get(sessionId)
+    async function validateOwner(sessionId: string, revalidate = false) {
+      const knownOwner = snapshotOwner(sessionId)
       if (knownOwner !== undefined && !revalidate) return knownOwner
-      const metadata = await workspace.getSessionMetadata([threadId])
+      const metadata = await workspace.getSessionMetadata([sessionId])
       if (!active) return undefined
       const providerOwner = metadata.find(
-        (session) => session.threadId === threadId
+        (session) => session.sessionId === sessionId
       )?.agentId
       if (providerOwner === undefined) {
-        verifiedOwners.delete(threadId)
-        if (revalidate || snapshotOwner(threadId) === undefined) {
+        verifiedOwners.delete(sessionId)
+        if (revalidate || snapshotOwner(sessionId) === undefined) {
           const stale = store
             .records()
-            .filter((record) => record.threadId === threadId)
+            .filter((record) => record.sessionId === sessionId)
           for (const record of stale) store.markUnavailable(record.id)
           if (stale.length) {
             setUnavailableIds(
@@ -220,10 +221,10 @@ export function useActivityCoordinator(
             setRecords(store.records())
           }
         }
-      } else verifiedOwners.set(threadId, providerOwner)
+      } else verifiedOwners.set(sessionId, providerOwner)
       // A newer authoritative snapshot supersedes an in-flight event lookup.
-      if (!revalidate) return snapshotOwner(threadId) ?? providerOwner
-      const latestOwner = snapshotOwner(threadId)
+      if (!revalidate) return snapshotOwner(sessionId) ?? providerOwner
+      const latestOwner = snapshotOwner(sessionId)
       return latestOwner !== undefined && latestOwner !== providerOwner
         ? undefined
         : providerOwner
@@ -329,7 +330,7 @@ export function useActivityCoordinator(
       queue = queue
         .then(async () => {
           if (!active) return
-          const validatedOwner = await validateOwner(event.threadId)
+          const validatedOwner = await validateOwner(event.sessionId)
           if (!active) return
           if (validatedOwner !== event.agentId) return
           const state = context()
@@ -375,7 +376,7 @@ export function useActivityCoordinator(
     // `focus` first, so a return to the window is attended before it is reported.
     const idleTracker = createIdleTracker({ target: window })
     idleRef.current = idleTracker
-    const stopWatchingIdle = idleTracker.onChange(() => reportPresence())
+    const stopWatchingIdle = idleTracker.subscribe(() => reportPresence())
     const onFocus = () => {
       browser?.recheckPermission()
       refresh()
@@ -421,7 +422,7 @@ export function useActivityCoordinator(
     refresh()
   }, [
     selection?.agentId,
-    selection?.threadId,
+    selection?.sessionId,
     options.sessions,
     options.conversationExposed,
     records.length,
@@ -438,10 +439,10 @@ export function useActivityCoordinator(
 
   const unreadCount = workspaceUnreadCount(options.sessions)
   /** Reading a Session is a provider write; the browser never stores it. */
-  const markSessionsRead = (threadIds: readonly string[]) => {
+  const markSessionsRead = (sessionIds: readonly string[]) => {
     void Promise.all(
-      threadIds.map((threadId) =>
-        current.current.workspace.markSessionRead?.(threadId)
+      sessionIds.map((sessionId) =>
+        current.current.workspace.markSessionRead?.(sessionId)
       )
     ).catch(() => setError(true))
   }
@@ -449,13 +450,13 @@ export function useActivityCoordinator(
     items: records.map((record) => ({
       ...record,
       agentName: options.agents.find(({ id }) => id === record.agentId)?.name,
-      sessionTitle: options.titles.get(record.threadId),
+      sessionTitle: options.titles.get(record.sessionId),
       available:
         !unavailableIds.has(record.id) &&
         options.agents.some(({ id }) => id === record.agentId) &&
         !options.sessions.some(
           (session) =>
-            session.threadId === record.threadId &&
+            session.sessionId === record.sessionId &&
             session.agentId !== record.agentId
         ),
     })),
@@ -469,7 +470,7 @@ export function useActivityCoordinator(
       if (!record || !store) return false
       try {
         const validatedOwner = await validateOwnerRef.current(
-          record.threadId,
+          record.sessionId,
           true
         )
         if (storeRef.current !== store) return false
@@ -483,9 +484,9 @@ export function useActivityCoordinator(
           browserRef.current?.publish()
           return false
         }
-        await current.current.onOpenTarget(record.agentId, record.threadId)
+        await current.current.onOpenTarget(record.agentId, record.sessionId)
         if (storeRef.current !== store) return false
-        markSessionsRead([record.threadId])
+        markSessionsRead([record.sessionId])
         setUnavailableIds(
           (previous) =>
             new Set([...previous].filter((entryId) => entryId !== id))
@@ -503,7 +504,7 @@ export function useActivityCoordinator(
       markSessionsRead(
         current.current.sessions
           .filter(isSessionUnread)
-          .map(({ threadId }) => threadId)
+          .map(({ sessionId }) => sessionId)
       )
       setNotice(null)
     },

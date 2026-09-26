@@ -9,7 +9,7 @@ import {
 
 const authorization: VerifiedGuestAuthorization = {
   version: 1,
-  lane: "guest",
+  role: "guest",
   issuer: "aos-invite",
   audience: "aos-guest",
   deploymentId: "deployment",
@@ -57,13 +57,13 @@ describe("guest runtime projection", () => {
       workspace: {
         models: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           selection: "native-session",
           choices: "provider-reported",
         },
         context: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },
@@ -106,7 +106,7 @@ describe("guest runtime projection", () => {
       content: {
         attachments: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           inputs: ["image", "file"],
           imageMimeTypes: ["image/png"],
           fileMimeTypes: "valid-type/subtype",

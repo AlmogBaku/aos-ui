@@ -6,8 +6,8 @@ import { serverRequests } from "./test-utils/server-requests"
 
 const scope: HermesInteractionScope = {
   agentId: "research",
+  providerSessionId: "session-1",
   sessionId: "session-1",
-  threadId: "session-1",
 }
 
 const LIVE = "live-private"
@@ -493,7 +493,7 @@ describe("HermesInteractions server requests", () => {
   it("ignores a cancellation addressed to another live Session", () => {
     const { requests, interactions, bind } = harness()
     bind()
-    bind("live-other", { ...scope, sessionId: "session-2" })
+    bind("live-other", { ...scope, providerSessionId: "session-2" })
     const id = requests.deliver("clarify", {
       session_id: LIVE,
       question: "Which region?",
@@ -529,7 +529,7 @@ describe("HermesInteractions server requests", () => {
       resumeResult,
     })
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     const snapshot = await interactions.resume(scope)
 
@@ -561,7 +561,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     // A `clarify` frame written while the socket was detached reaches AOS only
     // as an `open_requests` re-delivery of the heal that rebound the Session.
@@ -590,7 +590,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    const stop = interactions.onPendingRequest(scope, notified)
+    const stop = interactions.subscribePendingRequests(scope, notified)
 
     const id = requests.deliver("clarify", {
       session_id: LIVE,
@@ -610,13 +610,17 @@ describe("HermesInteractions server requests", () => {
 
   it("notifies only the run bound to the addressed Session", () => {
     const { requests, interactions, bind } = harness()
-    const other = { ...scope, sessionId: "session-2", threadId: "session-2" }
+    const other = {
+      ...scope,
+      providerSessionId: "session-2",
+      sessionId: "session-2",
+    }
     bind()
     bind("live-other", other)
     const notified = vi.fn()
     const otherNotified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
-    interactions.onPendingRequest(other, otherNotified)
+    interactions.subscribePendingRequests(scope, notified)
+    interactions.subscribePendingRequests(other, otherNotified)
 
     requests.deliver("clarify", { session_id: "live-other", question: "?" })
 
@@ -720,7 +724,7 @@ describe("HermesInteractions server requests", () => {
     // two dimensions an answer may not cross.
     for (const foreign of [
       { ...scope, agentId: "other" },
-      { ...scope, sessionId: "session-2" },
+      { ...scope, providerSessionId: "session-2" },
     ])
       await expect(
         interactions.respond(foreign, {
@@ -796,7 +800,7 @@ describe("HermesInteractions server requests", () => {
 
   it("redacts credentials and keeps the operator's URLs and paths", async () => {
     // A credential is nobody's to read. A location is the operator's own
-    // machine: what a guest may see of it is the ACP lane projection's call.
+    // machine: what a guest may see of it is the guest listener's projection to decide.
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {

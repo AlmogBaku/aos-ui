@@ -2,7 +2,7 @@
  * Hermes asks the user through server→client JSON-RPC requests: the backend
  * writes one `clarify` / `approval` frame and parks the agent until the
  * renderer answers that very frame (`tui_gateway/server_requests.py`). AOS is
- * that renderer, so this module owns exactly one `onRequest` handler and one
+ * that renderer, so this module owns exactly one `subscribeRequests` handler and one
  * `request.cancel` subscription, projects a recognized request into the pending
  * request the browser already renders, and answers through the request handle
  * the vendored channel hands it.
@@ -41,14 +41,14 @@ import {
 } from "./native"
 
 /**
- * The turn scope an interaction belongs to. `threadId` travels with it for the
- * caller's benefit; interactions themselves are Session-scoped, because a
- * Hermes Session carries exactly one thread.
+ * The turn scope an interaction belongs to. The public `sessionId` travels
+ * with it for the caller's benefit; interactions themselves are Session-scoped,
+ * because a Hermes Session carries exactly one thread.
  */
 export type HermesInteractionScope = {
   agentId: string
+  providerSessionId: string
   sessionId: string
-  threadId: string
 }
 
 /**
@@ -57,8 +57,10 @@ export type HermesInteractionScope = {
  * dead socket is swallowed and would report an answer Hermes never received.
  */
 export type HermesInteractionTransport = {
-  onRequest(handler: (request: ServerRequest) => boolean | void): () => void
-  onEvent(listener: (event: unknown) => void): () => void
+  subscribeRequests(
+    handler: (request: ServerRequest) => boolean | void
+  ): () => void
+  subscribeEvents(listener: (event: unknown) => void): () => void
   connected(): boolean
   /**
    * Dispatch one ordinary client→server RPC. Answering through `request.answer`
@@ -561,8 +563,8 @@ function cancellation(event: Record<string, unknown>) {
 /**
  * A Hermes Session carries exactly one thread, so every interaction key is the
  * Session key retainers, listeners and resumes already use: keying a pending
- * request by `threadId` as well would let one of the two release the other's
- * binding.
+ * request by the public `sessionId` as well would let one of the two release
+ * the other's binding.
  */
 function sameSession(
   left: HermesInteractionScope,
@@ -754,10 +756,12 @@ export class HermesInteractions {
     options: { log?: HermesLog } = {}
   ) {
     this.#log = options.log
-    this.#stopRequests = transport.onRequest((request) =>
+    this.#stopRequests = transport.subscribeRequests((request) =>
       this.#deliver(request)
     )
-    this.#stopEvents = transport.onEvent((event) => this.#observe(event))
+    this.#stopEvents = transport.subscribeEvents((event) =>
+      this.#observe(event)
+    )
   }
 
   /** Release both gateway subscriptions, every parked request and retainer. */
@@ -781,7 +785,7 @@ export class HermesInteractions {
   }
 
   /** Notify the turn observing this Session of every live request. */
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesInteractionScope,
     listener: HermesPendingRequestListener
   ) {
@@ -958,7 +962,7 @@ export class HermesInteractions {
   // -------------------------------------------------------------------------
 
   /**
-   * The one `onRequest` handler. Returning `false` declines: the vendored
+   * The one `subscribeRequests` handler. Returning `false` declines: the vendored
    * channel answers `-32601`, which Hermes reads as a skipped question rather
    * than a client that will answer later. A method AOS cannot render is
    * therefore claimed instead: whichever renderer raised that prompt is still

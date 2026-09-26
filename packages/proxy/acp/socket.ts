@@ -25,7 +25,7 @@ const decoder = new TextDecoder()
 export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
 /**
- * How a lane shows its failures: an error reply as a public reply, and an
+ * How a listener shows its failures: an error reply as a public reply, and an
  * `_aos/error` notification's code, whatever it is, as a public code.
  */
 export type PublicErrors = {

@@ -33,16 +33,16 @@ export function getWorkspaceCapabilities(
 export class WorkspaceArtifactStore {
   readonly #todosByThread = new Map<string, TodoItem[]>()
 
-  setTodos(threadId: string, todos: TodoItem[]) {
-    this.#todosByThread.set(threadId, structuredClone(todos))
+  setTodos(sessionId: string, todos: TodoItem[]) {
+    this.#todosByThread.set(sessionId, structuredClone(todos))
   }
 
-  getTodos(threadId: string) {
-    return structuredClone(this.#todosByThread.get(threadId) ?? [])
+  getTodos(sessionId: string) {
+    return structuredClone(this.#todosByThread.get(sessionId) ?? [])
   }
 }
 
-type Selection = { agentId: string; threadId: string }
+type Selection = { agentId: string; sessionId: string }
 
 export class WorkspaceEventCache<TPayload = unknown> {
   #selection: Selection | null = null
@@ -57,7 +57,7 @@ export class WorkspaceEventCache<TPayload = unknown> {
   }
 
   apply(event: WorkspaceProviderEvent<TPayload>) {
-    const key = this.#key(event.agentId, event.threadId)
+    const key = this.#key(event.agentId, event.sessionId)
     const lastSequence = this.#lastSequenceByOrigin.get(key) ?? -1
     if (event.sequence <= lastSequence) return false
 
@@ -68,8 +68,8 @@ export class WorkspaceEventCache<TPayload = unknown> {
     return true
   }
 
-  eventsFor(agentId: string, threadId: string) {
-    const key = this.#key(agentId, threadId)
+  eventsFor(agentId: string, sessionId: string) {
+    const key = this.#key(agentId, sessionId)
     return (this.#eventsByOrigin.get(key) ?? []).map((event) =>
       structuredClone(event)
     )
@@ -77,13 +77,13 @@ export class WorkspaceEventCache<TPayload = unknown> {
 
   visibleEvents() {
     if (!this.#selection) return []
-    const key = this.#key(this.#selection.agentId, this.#selection.threadId)
+    const key = this.#key(this.#selection.agentId, this.#selection.sessionId)
     return (this.#eventsByOrigin.get(key) ?? []).map((event) =>
       structuredClone(event)
     )
   }
 
-  #key(agentId: string, threadId: string) {
-    return `${agentId}\u0000${threadId}`
+  #key(agentId: string, sessionId: string) {
+    return `${agentId}\u0000${sessionId}`
   }
 }

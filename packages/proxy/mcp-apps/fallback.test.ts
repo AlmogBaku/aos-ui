@@ -107,8 +107,8 @@ function appServer(authorization?: string) {
 
 const scope: SessionScope = {
   agentId: "agent-1",
+  providerSessionId: "session-1",
   sessionId: "session-1",
-  threadId: "session-1",
 }
 
 const stored: Record<string, StoredMcpToolCall> = {

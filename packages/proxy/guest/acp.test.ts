@@ -26,7 +26,7 @@ import {
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "../../protocol/acp"
-import { createChannel } from "../core/channel"
+import { createChannels } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
 import type { ConnectionAuthentication } from "../acp/types"
 import {
@@ -111,18 +111,18 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -399,7 +399,7 @@ const asking = (request: PendingRequest, calls: number) =>
   )
 
 const unsupported = () => {
-  throw new Error("The guest ACP lane does not reach this operation")
+  throw new Error("The guest ACP listener does not reach this operation")
 }
 
 type HarnessOptions = {
@@ -420,7 +420,10 @@ type HarnessOptions = {
   /** Whether a first send creates the invited Session; it does by default. */
   creates?: boolean
   /** How the runtime resolves a public Session id; none resolves by default. */
-  resolveSessionId?: (agentId: string, sessionId: string) => string | undefined
+  resolveProviderSessionId?: (
+    agentId: string,
+    sessionId: string
+  ) => string | undefined
   /** What the invited lookup, the capabilities read or a run's start throws instead. */
   fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
 }
@@ -444,7 +447,7 @@ function harness(options: HarnessOptions = {}) {
     async (_agentId: string, _ref: string, create?: object) => {
       if (options.fails?.lookup) throw options.fails.lookup
       return options.existing || (create && options.creates !== false)
-        ? { sessionId: STORED, created: !options.existing }
+        ? { providerSessionId: STORED, created: !options.existing }
         : undefined
     }
   )
@@ -469,7 +472,8 @@ function harness(options: HarnessOptions = {}) {
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
-    resolveSessionId: options.resolveSessionId ?? (() => undefined),
+    resolveProviderSessionId:
+      options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
     authState: unsupported,
     runtimeInfo,
@@ -518,7 +522,7 @@ function harness(options: HarnessOptions = {}) {
   const clock = { now: NOW }
   const invitations = invitationService(options.ttlSeconds)
   const logs: unknown[] = []
-  const lane: GuestAcpServiceOptions = {
+  const listener: GuestAcpServiceOptions = {
     logger: {
       info: (line) => logs.push(line),
       error: (line) => logs.push(line),
@@ -527,7 +531,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    rooms: createChannel({
+    channels: createChannels({
       snapshot: (scope) => coordinator.snapshot(scope),
     }),
     now: () => clock.now,
@@ -538,7 +542,7 @@ function harness(options: HarnessOptions = {}) {
     cancel: () => undefined,
   }
   const context = createGuestConnection(
-    lane,
+    listener,
     createSessionRows({ now: () => NOW }),
     "connection-1"
   )
@@ -558,7 +562,7 @@ function harness(options: HarnessOptions = {}) {
     clock,
     invitations,
     policy: context.authentication,
-    lane,
+    listener,
     coordinator,
     start,
     handles,
@@ -620,8 +624,8 @@ type Frame = {
  * One guest browser on the raw WebSocket the listener opens, frame by frame,
  * so what the socket itself writes and closes is observable.
  */
-async function wire(lane: GuestAcpServiceOptions) {
-  const service = createGuestAcpService(lane)
+async function wire(listener: GuestAcpServiceOptions) {
+  const service = createGuestAcpService(listener)
   const upgrade = await service.authorizeUpgrade(
     new Request(`${ORIGIN}/api/aos/v1/acp`, { headers: { origin: ORIGIN } })
   )
@@ -649,8 +653,8 @@ async function wire(lane: GuestAcpServiceOptions) {
 }
 
 /** Opens a raw guest connection that redeemed `token`. */
-async function loggedInWire(lane: GuestAcpServiceOptions, token: string) {
-  const socket = await wire(lane)
+async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
+  const socket = await wire(listener)
   await socket.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
@@ -666,8 +670,8 @@ async function loggedInWire(lane: GuestAcpServiceOptions, token: string) {
 }
 
 /** Opens a raw guest connection that redeemed `token` and resumed the ref. */
-async function redeemedWire(lane: GuestAcpServiceOptions, token: string) {
-  const socket = await loggedInWire(lane, token)
+async function redeemedWire(listener: GuestAcpServiceOptions, token: string) {
+  const socket = await loggedInWire(listener, token)
   expect(
     await socket.request(methods.agent.session.resume, {
       sessionId: REF,
@@ -730,7 +734,7 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
   ],
 ]
 
-describe("guest ACP lane", () => {
+describe("guest ACP listener", () => {
   it("advertises the invitation auth method, the conversation controls, and no workspace extensions", async () => {
     const test = harness()
 
@@ -742,7 +746,7 @@ describe("guest ACP lane", () => {
       authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
       _meta: {
         [AOS_META_KEY]: {
-          lane: "guest",
+          role: "guest",
           extensions: {
             guestProjection: true,
             steer: true,
@@ -789,18 +793,22 @@ describe("guest ACP lane", () => {
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
     })
-    const invited = { agentId: AGENT, sessionId: STORED, threadId: REF }
+    const invited = {
+      agentId: AGENT,
+      providerSessionId: STORED,
+      sessionId: REF,
+    }
     await test.coordinator.start(
       invited,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
+        membershipId: "operator",
+        principalId: "operator",
+        role: "operator",
         canControl: true,
       }
     )
-    const socket = await wire(test.lane)
+    const socket = await wire(test.listener)
     await socket.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: { name: "aos-guest-browser", version: "1" },
@@ -847,7 +855,7 @@ describe("guest ACP lane", () => {
     test.close()
   })
 
-  it("refuses an invitation narrower than what the lane shows", async () => {
+  it("refuses an invitation narrower than what the listener shows", async () => {
     const test = harness({ existing: true })
     const verify = test.invitations.verify.bind(test.invitations)
     vi.spyOn(test.invitations, "verify").mockImplementation(async (token) => {
@@ -1078,7 +1086,10 @@ describe("guest ACP lane", () => {
 
   it("refuses an operator's method as unknown however its params are spelled", async () => {
     const test = harness({ existing: true })
-    const socket = await loggedInWire(test.lane, await invite(test.invitations))
+    const socket = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     for (const method of [
       AOS_METHODS.session.update,
@@ -1353,7 +1364,7 @@ describe("guest ACP lane", () => {
 
     // The operator's answer names the Session by its provider scope alone.
     await test.coordinator.answer(
-      { agentId: AGENT, sessionId: STORED },
+      { agentId: AGENT, providerSessionId: STORED },
       {
         requestId: QUESTION.requestId,
         status: "resolved",
@@ -1408,20 +1419,23 @@ describe("guest ACP lane", () => {
     })
     const operatorScope = {
       agentId: AGENT,
-      sessionId: "operator-session",
-      threadId: "operator",
+      providerSessionId: "operator-session",
+      sessionId: "operator",
     }
     await test.coordinator.start(
       operatorScope,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
+        membershipId: "operator",
+        principalId: "operator",
+        role: "operator",
         canControl: true,
       }
     )
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
     const before = socket.frames.length
 
     for (const sessionId of ["operator", "operator-session"])
@@ -1458,12 +1472,16 @@ describe("guest ACP lane", () => {
     await test.resume(REF)
 
     const other = await test.coordinator.start(
-      { agentId: AGENT, sessionId: "operator-session", threadId: "operator" },
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
+        membershipId: "operator",
+        principalId: "operator",
+        role: "operator",
         canControl: true,
       }
     )
@@ -1658,7 +1676,7 @@ describe("guest ACP lane", () => {
     async (_name, frame) => {
       const test = harness({ existing: true })
       const socket = await redeemedWire(
-        test.lane,
+        test.listener,
         await invite(test.invitations)
       )
       const written = socket.frames.length
@@ -1838,7 +1856,7 @@ describe("guest scope and commands", () => {
   it("reaches the invited conversation when its reference names another native Session", async () => {
     const test = harness({
       existing: true,
-      resolveSessionId: (_agentId, sessionId) => sessionId,
+      resolveProviderSessionId: (_agentId, sessionId) => sessionId,
     })
     await test.initialize()
     await test.login(await invite(test.invitations, "operator-native"))
@@ -1932,7 +1950,7 @@ describe("guest scope and commands", () => {
       "an update carrying Guest-visible answer"
     )
 
-    // The browser's steer params are the ones this lane accepts.
+    // The browser's steer params are the ones this listener accepts.
     expect(
       AosSteerRequestSchema.safeParse({
         sessionId: REF,
@@ -2001,7 +2019,7 @@ describe("guest scope and commands", () => {
   describe("a staged attachment", () => {
     /** Stages one attachment for the invited conversation, as the REST route does. */
     const staged = (test: ReturnType<typeof harness>) => {
-      const stageId = test.lane.attachmentStages.create(AGENT, REF, {
+      const stageId = test.listener.attachmentStages.create(AGENT, REF, {
         public: [],
         appendTo: (text) => `${text}\n[attached notes.txt]`,
         cleanup: async () => undefined,
@@ -2068,7 +2086,7 @@ describe("guest scope and commands", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
     const rewind = (rewindSourceId: string) => {
-      // The browser's prompt `_meta` is the shape this lane accepts.
+      // The browser's prompt `_meta` is the shape this listener accepts.
       expect(AosPromptMetaSchema.safeParse({ rewindSourceId }).success).toBe(
         true
       )
@@ -2138,7 +2156,7 @@ describe("guest scope and commands", () => {
     const token = await invite(test.invitations)
     const replay = { sessionId: REF, cwd: "/", replayFrom: { type: "start" } }
 
-    const first = await loggedInWire(test.lane, token)
+    const first = await loggedInWire(test.listener, token)
     await first.request(methods.agent.session.resume, replay)
     await first.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2146,7 +2164,7 @@ describe("guest scope and commands", () => {
     })
     await settled()
     // A reload replays from the start and scrolls back a page.
-    const reloaded = await loggedInWire(test.lane, token)
+    const reloaded = await loggedInWire(test.listener, token)
     await reloaded.request(methods.agent.session.resume, replay)
     await reloaded.request(methods.agent.session.resume, {
       ...replay,
@@ -2168,7 +2186,10 @@ describe("guest scope and commands", () => {
 
   it("keeps unknown parameters and metadata from the runtime", async () => {
     const test = harness({ existing: true })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     const smuggledMeta = await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2208,7 +2229,7 @@ describe("guest scope and commands", () => {
     async (_name, failure) => {
       const test = harness({ fails: { lookup: failure() } })
       const socket = await loggedInWire(
-        test.lane,
+        test.listener,
         await invite(test.invitations)
       )
 
@@ -2236,7 +2257,7 @@ describe("guest scope and commands", () => {
         fails: { capabilities: failure() },
       })
       const socket = await loggedInWire(
-        test.lane,
+        test.listener,
         await invite(test.invitations)
       )
 
@@ -2255,7 +2276,10 @@ describe("guest scope and commands", () => {
       existing: true,
       fails: { start: new RequestError(-32000, OPERATOR_SECRET) },
     })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2289,7 +2313,10 @@ describe("guest scope and commands", () => {
 
   it("answers a frame it cannot decode with a public code alone", async () => {
     const test = harness({ existing: true })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     expectPublicError(
       await socket.request(AOS_METHODS.session.steer, {

@@ -21,7 +21,7 @@ describe("fixture artifact adapter", () => {
         source: { type: "inline", encoding: "utf8", data: "Fixture notes" },
       },
       agentId: "agent-aster",
-      threadId: "thread-aster-market",
+      sessionId: "thread-aster-market",
       signal,
     })
     const binary = await adapter.resolve({
@@ -31,7 +31,7 @@ describe("fixture artifact adapter", () => {
         source: { type: "inline", encoding: "base64", data: "AAEC" },
       },
       agentId: "agent-aster",
-      threadId: "thread-aster-market",
+      sessionId: "thread-aster-market",
       signal,
     })
 
@@ -79,7 +79,7 @@ describe("fixture artifact adapter", () => {
       createFixtureArtifactAdapter().resolve({
         artifact: FIXTURE_ARTIFACT_CATALOG.missingProviderReference,
         agentId: "agent-aster",
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         signal: new AbortController().signal,
       })
     ).rejects.toThrow("Fixture artifact reference is unavailable")

@@ -39,20 +39,20 @@ const FIXTURE_LAST_TURN = {
 } as const
 const FIXTURE_SESSION_COST = { amount: 0.42, currency: "USD" } as const
 
-function initialMessageCount(threadId: string) {
-  return threadId === "thread-aster-interviews" ? 64 : 2
+function initialMessageCount(sessionId: string) {
+  return sessionId === "thread-aster-interviews" ? 64 : 2
 }
 
-function contextFor(threadId: string, messageCount: number, modelId: string) {
-  const configured = FIXTURE_USED_TOKENS.get(threadId)
-  const hash = [...threadId].reduce(
+function contextFor(sessionId: string, messageCount: number, modelId: string) {
+  const configured = FIXTURE_USED_TOKENS.get(sessionId)
+  const hash = [...sessionId].reduce(
     (value, character) => (value * 31 + character.charCodeAt(0)) % 24_576,
     0
   )
   const initialUsedTokens = configured ?? 2_048 + hash
   const messages =
     initialUsedTokens +
-    Math.max(0, messageCount - initialMessageCount(threadId)) * 256
+    Math.max(0, messageCount - initialMessageCount(sessionId)) * 256
   return {
     usage: {
       system: 2,
@@ -74,18 +74,18 @@ const DEFAULT_EFFORT_ID = "medium"
 function createFixtureModelStore() {
   const readings = new Map<string, ComposerModelCurrent>()
   const listeners = new Set<() => void>()
-  const read = (threadId: string) => {
-    let reading = readings.get(threadId)
+  const read = (sessionId: string) => {
+    let reading = readings.get(sessionId)
     if (!reading) {
       reading = { selectedId: DEFAULT_MODEL_ID, effortId: DEFAULT_EFFORT_ID }
-      readings.set(threadId, reading)
+      readings.set(sessionId, reading)
     }
     return reading
   }
   return {
     read,
-    write(threadId: string, patch: Partial<ComposerModelCurrent>) {
-      readings.set(threadId, { ...read(threadId), ...patch })
+    write(sessionId: string, patch: Partial<ComposerModelCurrent>) {
+      readings.set(sessionId, { ...read(sessionId), ...patch })
       for (const listener of listeners) listener()
     },
     subscribe(listener: () => void) {
@@ -98,32 +98,32 @@ function createFixtureModelStore() {
 }
 
 export function useFixtureComposerFeatures({
-  threadId,
+  sessionId,
   config,
   runtime,
 }: {
-  threadId: string | undefined
+  sessionId: string | undefined
   config: ComposerFeatureConfig
   runtime: AssistantRuntime
 }): ComposerFeatureViewModel {
   const [models] = useState(createFixtureModelStore)
   const reading = useSyncExternalStore(
     models.subscribe,
-    () => (threadId ? models.read(threadId) : undefined),
+    () => (sessionId ? models.read(sessionId) : undefined),
     () => undefined
   )
   const follow = useMemo<ComposerModelFeed | undefined>(
     () =>
-      threadId
-        ? { current: () => models.read(threadId), subscribe: models.subscribe }
+      sessionId
+        ? { current: () => models.read(sessionId), subscribe: models.subscribe }
         : undefined,
-    [models, threadId]
+    [models, sessionId]
   )
   // The preview settles a pick synchronously: it has no provider to wait for,
   // so it never shows a pending state.
   const update = useCallback(
     async (patch: ComposerModelUpdate) => {
-      if (!threadId) return
+      if (!sessionId) return
       const selectedId =
         patch.selectedId !== undefined &&
         FIXTURE_MODEL_OPTIONS.some((option) => option.id === patch.selectedId)
@@ -131,19 +131,19 @@ export function useFixtureComposerFeatures({
           : undefined
       const option = FIXTURE_MODEL_OPTIONS.find(
         (candidate) =>
-          candidate.id === (selectedId ?? models.read(threadId).selectedId)
+          candidate.id === (selectedId ?? models.read(sessionId).selectedId)
       )
       const effortId =
         patch.effortId !== undefined && option && "efforts" in option
           ? patch.effortId
           : undefined
       if (selectedId === undefined && effortId === undefined) return
-      models.write(threadId, {
+      models.write(sessionId, {
         ...(selectedId ? { selectedId } : {}),
         ...(effortId ? { effortId } : {}),
       })
     },
-    [models, threadId]
+    [models, sessionId]
   )
   const subscribe = useCallback(
     (listener: () => void) => runtime.thread.subscribe(listener),
@@ -162,7 +162,7 @@ export function useFixtureComposerFeatures({
   const effortId = reading?.effortId ?? DEFAULT_EFFORT_ID
 
   return useMemo(() => {
-    if (!threadId) return {}
+    if (!sessionId) return {}
     const selectedOption = FIXTURE_MODEL_OPTIONS.find(
       (option) => option.id === selectedId
     )
@@ -183,7 +183,7 @@ export function useFixtureComposerFeatures({
           }
         : {}),
       ...(config.contextEnabled
-        ? { context: contextFor(threadId, messageCount, selectedId) }
+        ? { context: contextFor(sessionId, messageCount, selectedId) }
         : {}),
     }
   }, [
@@ -193,7 +193,7 @@ export function useFixtureComposerFeatures({
     follow,
     messageCount,
     selectedId,
-    threadId,
+    sessionId,
     update,
   ])
 }

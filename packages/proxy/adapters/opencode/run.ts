@@ -16,7 +16,7 @@ import {
   type RecoveryRequest,
   type ServerTurnEngine,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type ServerAttachmentStage,
   type SessionScope,
 } from "../../core/runtime"
@@ -187,7 +187,7 @@ function validateInput(scope: SessionScope, candidate: TurnInput) {
 
 function admissionId(scope: SessionScope, turnId: string) {
   const digest = createHash("sha256")
-    .update(scope.sessionId)
+    .update(scope.providerSessionId)
     .update("\0")
     .update(turnId)
     .digest("hex")
@@ -199,7 +199,7 @@ function validateSessionOwner(value: unknown, scope: SessionScope) {
   const session = record(envelope?.data)
   if (!session || typeof session.id !== "string")
     throw new OpenCodeClientError("invalid_response")
-  if (session.id !== scope.sessionId || session.agent !== scope.agentId)
+  if (session.id !== scope.providerSessionId || session.agent !== scope.agentId)
     throw new Error("Session does not belong to this Agent")
 }
 
@@ -270,7 +270,7 @@ function settlement(): Settlement {
 }
 
 function turnKey(scope: SessionScope) {
-  return `${scope.agentId}\0${scope.sessionId}`
+  return `${scope.agentId}\0${scope.providerSessionId}`
 }
 
 function isAdmission(event: ValidatedOpenCodeEvent) {
@@ -289,7 +289,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
   /**
    * The admission each Session's latest AOS start submits, recorded before the
-   * submit so neither a watch nor a discovery takes it for a foreign turn.
+   * submit so neither a turn subscription nor a discovery takes it for a
+   * foreign turn.
    */
   readonly #ownAdmissions = new Map<string, string>()
   /** The foreign admission each Session's latest discovered turn adopted. */
@@ -334,9 +335,11 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
    * that admission, so its events begin at the native turn's first event.
    */
   async #discoverRun(scope: SessionScope, turnId: string) {
-    if (!(await this.#active(scope.sessionId))) return undefined
+    if (!(await this.#active(scope.providerSessionId))) return undefined
     const key = turnKey(scope)
-    const admission = latestAdmission(await this.#readHistory(scope.sessionId))
+    const admission = latestAdmission(
+      await this.#readHistory(scope.providerSessionId)
+    )
     const id = admission?.data.messageID as string | undefined
     if (!admission || id === undefined || id === this.#ownAdmissions.get(key))
       return undefined
@@ -352,10 +355,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Watches one Session's native log from its tail. A turn is foreign when its
+   * Subscribes to one Session's native log from its tail. A turn is foreign when its
    * admission is not the one this engine last submitted for the Session.
    */
-  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     const key = turnKey(scope)
     const controller = new AbortController()
     let source: OpenCodeSessionEvents | undefined
@@ -368,26 +371,26 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         return
       considered = admission.seq
       if (admission.data.messageID !== this.#ownAdmissions.get(key))
-        watcher.onTurn()
+        listener.onTurn()
     }
     const subscribe = async () => {
       source = undefined
       try {
         const signal = controller.signal
         const history = await this.#readHistory(
-          scope.sessionId,
+          scope.providerSessionId,
           undefined,
           signal
         )
         const tail = history.at(-1)?.seq ?? -1
-        source = await this.#client.sessions.events(scope.sessionId, {
+        source = await this.#client.sessions.events(scope.providerSessionId, {
           ...(tail < 0 ? {} : { after: String(tail) }),
           signal,
         })
         if (signal.aborted) return
-        if (await this.#active(scope.sessionId, signal)) {
+        if (await this.#active(scope.providerSessionId, signal)) {
           const caughtUp = await this.#readHistory(
-            scope.sessionId,
+            scope.providerSessionId,
             tail,
             signal
           )
@@ -396,12 +399,12 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         failures = 0
         for await (const value of source) {
           if (signal.aborted) return
-          consider(validateOpenCodeLiveEvent(value, scope.sessionId))
+          consider(validateOpenCodeLiveEvent(value, scope.providerSessionId))
         }
         throw new OpenCodeClientError("connection_interrupted")
       } catch (error) {
         if (controller.signal.aborted) return
-        watcher.onError(error)
+        listener.onError(error)
         failures += 1
         timer = setTimeout(
           () => void subscribe(),
@@ -424,7 +427,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   async #discoverWait(scope: SessionScope) {
     const discover = this.#options.replies?.discover
     if (!discover) return undefined
-    const history = await this.#readHistory(scope.sessionId)
+    const history = await this.#readHistory(scope.providerSessionId)
     const after = history.at(-1)?.seq ?? -1
     const controller = new AbortController()
     let source: OpenCodeSessionEvents | undefined
@@ -434,14 +437,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     let reading = false
     let dirty = false
     try {
-      source = await this.#client.sessions.events(scope.sessionId, {
+      source = await this.#client.sessions.events(scope.providerSessionId, {
         ...(after < 0 ? {} : { after: String(after) }),
         signal: controller.signal,
       })
       observation = (async () => {
         try {
           for await (const value of source!) {
-            validateOpenCodeLiveEvent(value, scope.sessionId)
+            validateOpenCodeLiveEvent(value, scope.providerSessionId)
             if (reading) dirty = true
           }
           if (!controller.signal.aborted)
@@ -513,13 +516,13 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (!this.#options.replies)
         throw new Error("OpenCode interaction replies are unavailable")
       await this.#options.replies.validate(scope, replies)
-    } else if (await this.#active(scope.sessionId)) {
+    } else if (await this.#active(scope.providerSessionId)) {
       // The native Session owns a turn AOS did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
       throw new ServerTurnConflictError()
     }
 
-    const before = await this.#readHistory(scope.sessionId)
+    const before = await this.#readHistory(scope.providerSessionId)
     const baseline = before.at(-1)?.seq ?? -1
     const expectedAdmission = replies
       ? undefined
@@ -536,7 +539,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
 
       // Observation is already draining while this second authoritative read
       // closes the history-to-subscription window.
-      const caughtUp = await this.#readHistory(scope.sessionId, baseline)
+      const caughtUp = await this.#readHistory(
+        scope.providerSessionId,
+        baseline
+      )
       if (caughtUp.length) {
         if (!replies)
           throw new Error("OpenCode became active before prompt admission")
@@ -553,7 +559,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       } else {
         this.#ownAdmissions.set(run.key, expectedAdmission!)
         const acknowledgement = await this.#client.sessions.prompt(
-          scope.sessionId,
+          scope.providerSessionId,
           {
             id: expectedAdmission!,
             prompt: { text: text!, ...(files ? { files: [...files] } : {}) },
@@ -562,7 +568,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         )
         validateAdmission(acknowledgement, {
           id: expectedAdmission!,
-          sessionId: scope.sessionId,
+          sessionId: scope.providerSessionId,
           text: text!,
           after,
         })
@@ -581,12 +587,12 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     scope: SessionScope,
     request: RecoveryRequest
   ): Promise<ServerTurnHandle> {
-    if (request.threadId !== scope.threadId)
+    if (request.sessionId !== scope.sessionId)
       throw new Error(
         "The reconnect position is not authorized for this Session"
       )
     await this.#verifyOwnership(scope)
-    const expectedEpoch = `opencode:${scope.sessionId}`
+    const expectedEpoch = `opencode:${scope.providerSessionId}`
     if (
       request.position &&
       (request.position.epoch !== expectedEpoch ||
@@ -616,7 +622,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       // Start consuming immediately. The bounded buffer remains live while the
       // complete authoritative log is read and the requested interval located.
       await this.#attach(run, requestedAfter)
-      const all = await this.#readHistory(scope.sessionId)
+      const all = await this.#readHistory(scope.providerSessionId)
       const admissionIndex = all.findIndex(
         (event) =>
           event.type === "session.next.prompt.admitted" &&
@@ -701,11 +707,15 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       this.#nativeSettlements.set(key, nativeSettlement)
     }
     queue.push({ kind: TurnEventKind.TurnStarted })
-    const projector = new OpenCodeEventProjector(scope.sessionId, after, {
-      admissionId: expectedAdmission,
-      userMessageId,
-      resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
-    })
+    const projector = new OpenCodeEventProjector(
+      scope.providerSessionId,
+      after,
+      {
+        admissionId: expectedAdmission,
+        userMessageId,
+        resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
+      }
+    )
     if (nativeSettlement.stopRequested) projector.markStopping()
     return {
       key,
@@ -732,10 +742,14 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   #projector(run: ActiveTurn, after: number, expectedAdmission?: string) {
-    const projector = new OpenCodeEventProjector(run.scope.sessionId, after, {
-      admissionId: expectedAdmission,
-      resolveMcpTool: this.#options.mcpToolNames?.resolver(run.scope.agentId),
-    })
+    const projector = new OpenCodeEventProjector(
+      run.scope.providerSessionId,
+      after,
+      {
+        admissionId: expectedAdmission,
+        resolveMcpTool: this.#options.mcpToolNames?.resolver(run.scope.agentId),
+      }
+    )
     if (run.nativeSettlement.stopRequested) projector.markStopping()
     return projector
   }
@@ -754,7 +768,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     }
     this.#turns.set(run.key, run)
     run.source = await this.#client.sessions.events(
-      run.scope.sessionId,
+      run.scope.providerSessionId,
       after < 0 ? {} : { after: String(after) }
     )
     this.#pump(run)
@@ -765,7 +779,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       try {
         for await (const value of run.source!) {
           if (run.abandoned || run.nativeTerminal) return
-          const event = validateOpenCodeLiveEvent(value, run.scope.sessionId)
+          const event = validateOpenCodeLiveEvent(
+            value,
+            run.scope.providerSessionId
+          )
           const existing = run.buffer.get(event.seq)
           if (existing && existing.fingerprint !== event.fingerprint)
             throw new OpenCodeEventValidationError()
@@ -820,7 +837,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
           const before = run.projector.recoveryPosition().lastSeen
           await this.#mergeAuthoritative(run)
           const active = await this.#active(
-            run.scope.sessionId,
+            run.scope.providerSessionId,
             run.controller.signal
           )
           await this.#mergeAuthoritative(run)
@@ -842,7 +859,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   async #mergeAuthoritative(run: ActiveTurn) {
     const after = run.projector.recoveryPosition().lastSeen
     const history = await this.#readHistory(
-      run.scope.sessionId,
+      run.scope.providerSessionId,
       after,
       run.controller.signal
     )
@@ -890,7 +907,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     if (run.waiting || run.nativeTerminal || run.abandoned) return
     run.waiting = true
     void this.#client.sessions
-      .wait(run.scope.sessionId, run.controller.signal)
+      .wait(run.scope.providerSessionId, run.controller.signal)
       .then(async () => {
         run.waiting = false
         run.waitFailures = 0
@@ -1047,7 +1064,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   async #stop(run: ActiveTurn): Promise<"stopping" | "idle"> {
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     if (run.nativeSettlement.stopRequested) return this.#recheckStop(run)
-    await this.#client.sessions.interrupt(run.scope.sessionId)
+    await this.#client.sessions.interrupt(run.scope.providerSessionId)
     run.nativeSettlement.stopRequested = true
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     const current = this.#turns.get(run.key)
@@ -1068,7 +1085,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   async #recheckStop(run: ActiveTurn): Promise<"stopping" | "idle"> {
     if (run.nativeTerminal || run.nativeSettlement.done) return "idle"
     try {
-      if (!(await this.#active(run.scope.sessionId))) {
+      if (!(await this.#active(run.scope.providerSessionId))) {
         const current = this.#turns.get(run.key)
         if (current && !current.abandoned) this.#finish(current)
         else this.#settleNative(run.nativeSettlement)
@@ -1084,7 +1101,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
 
   async #verifyOwnership(scope: SessionScope) {
     validateSessionOwner(
-      await this.#client.sessions.get(scope.sessionId),
+      await this.#client.sessions.get(scope.providerSessionId),
       scope
     )
   }
@@ -1111,7 +1128,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         const current = this.#turns.get(settlement.key)
         if (current && !current.abandoned) {
           await this.#reconcile(current)
-        } else if (!(await this.#active(settlement.scope.sessionId))) {
+        } else if (!(await this.#active(settlement.scope.providerSessionId))) {
           this.#settleNative(settlement)
           return
         }

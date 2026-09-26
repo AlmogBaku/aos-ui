@@ -44,8 +44,8 @@ const cloneRepository = (
   repository: ReturnType<typeof ExportedMessageRepository.fromArray>
 ) => structuredClone(repository)
 
-function messagesFor(threadId: string): readonly ThreadMessageLike[] {
-  if (threadId === "thread-aster-market") {
+function messagesFor(sessionId: string): readonly ThreadMessageLike[] {
+  if (sessionId === "thread-aster-market") {
     return [
       {
         id: "message-market-user",
@@ -153,7 +153,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
     ]
   }
 
-  if (threadId === "thread-aster-interviews") {
+  if (sessionId === "thread-aster-interviews") {
     return Array.from({ length: 32 }, (_, index) => {
       const turn = String(index + 1).padStart(2, "0")
       const createdAt = new Date(
@@ -189,23 +189,23 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
     "thread-vela-metrics": "Interpret the activation metrics.",
     "thread-nori-copy": "Polish the launch copy.",
   }
-  const prompt = titleByThread[threadId]
+  const prompt = titleByThread[sessionId]
   if (!prompt) return []
 
   return [
     {
-      id: `${threadId}-user`,
+      id: `${sessionId}-user`,
       role: "user",
       content: prompt,
       createdAt: FIXTURE_NOW,
     },
     {
-      id: `${threadId}-assistant`,
+      id: `${sessionId}-assistant`,
       role: "assistant",
       content:
-        threadId === "thread-lumen-roadmap"
+        sessionId === "thread-lumen-roadmap"
           ? "I’ve reviewed the available roadmap. Which customer segment should define the first release?"
-          : threadId === "thread-aster-launch"
+          : sessionId === "thread-aster-launch"
             ? "I’m reviewing the launch goals, audience, narrative, and risks before recommending the decision that needs executive attention."
             : "The Session is ready to continue. The existing context remains scoped to this Agent.",
       createdAt: FIXTURE_NOW,
@@ -214,7 +214,7 @@ function messagesFor(threadId: string): readonly ThreadMessageLike[] {
 }
 
 type FixtureMessagesForThread = (
-  threadId: string
+  sessionId: string
 ) => readonly ThreadMessageLike[]
 
 class FixtureHistoryStore {
@@ -228,37 +228,37 @@ class FixtureHistoryStore {
     private readonly messagesForThread: FixtureMessagesForThread = messagesFor
   ) {}
 
-  load(threadId: string) {
-    const existing = this.#repositories.get(threadId)
+  load(sessionId: string) {
+    const existing = this.#repositories.get(sessionId)
     if (existing) return cloneRepository(existing)
     const seeded = ExportedMessageRepository.fromArray(
-      this.messagesForThread(threadId)
+      this.messagesForThread(sessionId)
     )
-    this.#repositories.set(threadId, seeded)
+    this.#repositories.set(sessionId, seeded)
     return cloneRepository(seeded)
   }
 
-  upsert(threadId: string, item: ExportedMessageRepositoryItem) {
-    const repository = this.load(threadId)
+  upsert(sessionId: string, item: ExportedMessageRepositoryItem) {
+    const repository = this.load(sessionId)
     const index = repository.messages.findIndex(
       ({ message }) => message.id === item.message.id
     )
     if (index >= 0) repository.messages[index] = item
     else repository.messages.push(item)
     repository.headId = item.message.id
-    this.#repositories.set(threadId, cloneRepository(repository))
+    this.#repositories.set(sessionId, cloneRepository(repository))
   }
 
-  delete(threadId: string, items: ExportedMessageRepositoryItem[]) {
+  delete(sessionId: string, items: ExportedMessageRepositoryItem[]) {
     const ids = new Set(items.map(({ message }) => message.id))
-    const repository = this.load(threadId)
+    const repository = this.load(sessionId)
     repository.messages = repository.messages.filter(
       ({ message }) => !ids.has(message.id)
     )
     if (repository.headId && ids.has(repository.headId)) {
       repository.headId = repository.messages.at(-1)?.message.id ?? null
     }
-    this.#repositories.set(threadId, cloneRepository(repository))
+    this.#repositories.set(sessionId, cloneRepository(repository))
   }
 }
 
@@ -269,27 +269,27 @@ class FixtureHistoryAdapter implements ThreadHistoryAdapter {
       string | undefined | Promise<string | undefined>
   ) {}
 
-  async #threadId() {
-    const threadId = await this.resolveThreadId()
-    if (!threadId) throw new Error("Fixture Session is not initialized")
-    return threadId
+  async #sessionId() {
+    const sessionId = await this.resolveThreadId()
+    if (!sessionId) throw new Error("Fixture Session is not initialized")
+    return sessionId
   }
 
   async load() {
-    const threadId = await this.resolveThreadId()
-    return threadId ? this.store.load(threadId) : { messages: [] }
+    const sessionId = await this.resolveThreadId()
+    return sessionId ? this.store.load(sessionId) : { messages: [] }
   }
 
   async append(item: ExportedMessageRepositoryItem) {
-    this.store.upsert(await this.#threadId(), item)
+    this.store.upsert(await this.#sessionId(), item)
   }
 
   async update(item: ExportedMessageRepositoryItem) {
-    this.store.upsert(await this.#threadId(), item)
+    this.store.upsert(await this.#sessionId(), item)
   }
 
   async delete(items: ExportedMessageRepositoryItem[]) {
-    this.store.delete(await this.#threadId(), items)
+    this.store.delete(await this.#sessionId(), items)
   }
 }
 
@@ -304,8 +304,8 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     this.#history = new FixtureHistoryStore(workspace, messagesForThread)
   }
 
-  historyFor(threadId: string): ThreadHistoryAdapter {
-    return new FixtureHistoryAdapter(this.#history, () => threadId)
+  historyFor(sessionId: string): ThreadHistoryAdapter {
+    return new FixtureHistoryAdapter(this.#history, () => sessionId)
   }
 
   dynamicHistory(
@@ -318,11 +318,11 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     return {
       threads: this.workspace
         .listAllSessionMetadata()
-        .map(({ threadId, agentId, updatedAt, status, archived }) => ({
-          remoteId: threadId,
-          externalId: threadId,
+        .map(({ sessionId, agentId, updatedAt, status, archived }) => ({
+          remoteId: sessionId,
+          externalId: sessionId,
           status: archived ? ("archived" as const) : ("regular" as const),
-          title: this.workspace.getSessionTitle(threadId),
+          title: this.workspace.getSessionTitle(sessionId),
           lastMessageAt: new Date(updatedAt),
           custom: { agentId, status },
         })),
@@ -350,9 +350,9 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     this.workspace.deleteSession(remoteId)
   }
 
-  async initialize(threadId: string) {
-    await this.assertSession(threadId)
-    return { remoteId: threadId, externalId: threadId }
+  async initialize(sessionId: string) {
+    await this.assertSession(sessionId)
+    return { remoteId: sessionId, externalId: sessionId }
   }
 
   async generateTitle() {
@@ -363,21 +363,21 @@ export class FixtureThreadListAdapter implements RemoteThreadListAdapter {
     }) as Awaited<ReturnType<RemoteThreadListAdapter["generateTitle"]>>
   }
 
-  async fetch(threadId: string) {
-    const session = await this.assertSession(threadId)
+  async fetch(sessionId: string) {
+    const session = await this.assertSession(sessionId)
     return {
-      remoteId: session.threadId,
-      externalId: session.threadId,
+      remoteId: session.sessionId,
+      externalId: session.sessionId,
       status: session.archived ? ("archived" as const) : ("regular" as const),
-      title: this.workspace.getSessionTitle(threadId),
+      title: this.workspace.getSessionTitle(sessionId),
       lastMessageAt: new Date(session.updatedAt),
       custom: { agentId: session.agentId, status: session.status },
     }
   }
 
-  private async assertSession(threadId: string) {
-    const [session] = await this.workspace.getSessionMetadata([threadId])
-    if (!session) throw new Error(`Fixture Session not found: ${threadId}`)
+  private async assertSession(sessionId: string) {
+    const [session] = await this.workspace.getSessionMetadata([sessionId])
+    if (!session) throw new Error(`Fixture Session not found: ${sessionId}`)
     return session
   }
 }
@@ -480,17 +480,17 @@ export function createFixtureChatModel(
     onQuestion,
   }: {
     streamDelayMs?: number
-    onQuestion?: (threadId: string, request: RuntimeQuestionRequest) => void
+    onQuestion?: (sessionId: string, request: RuntimeQuestionRequest) => void
   } = {}
 ): ChatModelAdapter {
   return {
     async *run(options): AsyncGenerator<ChatModelRunResult, void> {
       const userText = latestUserText(options)
       const scenario = buildFixtureScenario(userText)
-      const threadId = options.unstable_threadId
-      const activity = threadId
+      const sessionId = options.unstable_threadId
+      const activity = sessionId
         ? workspace.beginRunActivity(
-            threadId,
+            sessionId,
             options.unstable_assistantMessageId
           )
         : undefined
@@ -504,9 +504,9 @@ export function createFixtureChatModel(
         }
         const resolution = resolvedAttention(options)
         if (resolution) {
-          if (threadId) {
+          if (sessionId) {
             workspace.publishAttention(
-              threadId,
+              sessionId,
               "resolved",
               resolution.requestId
             )
@@ -527,31 +527,31 @@ export function createFixtureChatModel(
           return
         }
 
-        if (threadId && scenario.todoEvent) {
-          workspace.emitTodos(threadId, scenario.todoEvent)
+        if (sessionId && scenario.todoEvent) {
+          workspace.emitTodos(sessionId, scenario.todoEvent)
         }
         let scenarioParts = scenario.parts
         if (
-          threadId &&
+          sessionId &&
           (scenario.name === "question" || scenario.name === "permission")
         ) {
           const kind = scenario.name
           const requestId = workspace.createAttentionRequestId(
-            threadId,
+            sessionId,
             kind,
             options.unstable_assistantMessageId
           )
-          workspace.publishAttention(threadId, kind, requestId)
+          workspace.publishAttention(sessionId, kind, requestId)
           if (kind === "question" && scenario.questionTemplate) {
             const {
               prompt,
               options: opts,
               allowFreeform,
             } = scenario.questionTemplate
-            onQuestion?.(threadId, {
+            onQuestion?.(sessionId, {
               kind: "question",
               requestId,
-              sessionId: threadId,
+              sessionId,
               questions: [
                 {
                   prompt,
@@ -643,8 +643,8 @@ export function createFixtureChatModel(
 }
 
 export type FixtureRuntimeBundleOptions = {
-  threadId?: string
-  onThreadIdChange?: (threadId: string | undefined) => void
+  sessionId?: string
+  onThreadIdChange?: (sessionId: string | undefined) => void
   streamDelayMs?: number
   enableAgentCreator?: boolean
   /** Test-only seed overrides keep component tests independent of demo copy. */
@@ -655,7 +655,7 @@ export type FixtureRuntimeBundleOptions = {
 }
 
 export function useFixtureRuntimeBundle({
-  threadId,
+  sessionId,
   onThreadIdChange,
   streamDelayMs,
   enableAgentCreator,
@@ -681,13 +681,13 @@ export function useFixtureRuntimeBundle({
     () =>
       createFixtureChatModel(workspace, {
         streamDelayMs,
-        onQuestion: (threadId, request) => interactions.register(request),
+        onQuestion: (sessionId, request) => interactions.register(request),
       }),
     [streamDelayMs, workspace, interactions]
   )
   const assistantRuntime = useRemoteThreadListRuntime({
     adapter: threadListAdapter,
-    threadId,
+    threadId: sessionId,
     onThreadIdChange,
     allowNesting: true,
     runtimeHook: function useFixtureThreadRuntime() {

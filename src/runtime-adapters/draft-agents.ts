@@ -11,12 +11,12 @@ const DRAFT_PREFIX = "draft:"
 /** Resolved drafts are content-free thread ids, safe to keep in the browser. */
 const RESOLVED_DRAFTS_KEY = "aos-ui.resolved-drafts"
 
-export const draftAgentId = (threadId: string) => `${DRAFT_PREFIX}${threadId}`
+export const draftAgentId = (sessionId: string) => `${DRAFT_PREFIX}${sessionId}`
 
 /**
  * The one interview that is still a local thread. A provider creates the
  * creator Session on the first turn, so this row precedes any Session and
- * therefore names no thread of its own. It sits outside the `draft:<threadId>`
+ * therefore names no thread of its own. It sits outside the `draft:<sessionId>`
  * space so that a Session whose id happens to read like this can never be
  * mistaken for it.
  */
@@ -37,7 +37,7 @@ function isEligible(
   now: number
 ) {
   if (session.agentId !== creatorId) return false
-  if (resolvedThreadIds.has(session.threadId)) return false
+  if (resolvedThreadIds.has(session.sessionId)) return false
   return now - Date.parse(session.updatedAt) < DRAFT_AGENT_WINDOW_MS
 }
 
@@ -85,7 +85,7 @@ export function projectDraftAgents({
   const drafts: AgentSummary[] = []
   const projected = sessions.map((session) => {
     if (!isEligible(session, creator.id, resolvedThreadIds, now)) return session
-    const id = draftAgentId(session.threadId)
+    const id = draftAgentId(session.sessionId)
     drafts.push(draftAgent(id, name))
     return { ...session, agentId: id }
   })

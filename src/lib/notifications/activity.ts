@@ -7,7 +7,7 @@ export const activityTimestamp = z.iso.datetime({ offset: true })
 const base = {
   id: opaqueId,
   agentId: opaqueId,
-  threadId: opaqueId,
+  sessionId: opaqueId,
   occurredAt: activityTimestamp,
 }
 const turn = z.object({
@@ -89,8 +89,8 @@ export function retainActivity<TEntry extends ActivityEntry>(
 }
 
 export function activityScope(
-  event: { agentId: string; threadId: string },
+  event: { agentId: string; sessionId: string },
   id: string
 ) {
-  return JSON.stringify([event.agentId, event.threadId, id])
+  return JSON.stringify([event.agentId, event.sessionId, id])
 }

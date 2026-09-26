@@ -154,17 +154,17 @@ export class AosRemoteClient {
   }
 
   /** REST authorizes byte routes per Agent, so every Session names its owner. */
-  adoptSessionOwnership(threadId: string, agentId: string) {
-    if (!threadId || !agentId)
+  adoptSessionOwnership(sessionId: string, agentId: string) {
+    if (!sessionId || !agentId)
       throw new Error("Invalid Session ownership metadata")
-    const current = this.#sessionOwners.get(threadId)
+    const current = this.#sessionOwners.get(sessionId)
     if (current && current !== agentId)
       throw new Error("Conflicting Session ownership metadata")
-    this.#sessionOwners.set(threadId, agentId)
+    this.#sessionOwners.set(sessionId, agentId)
   }
 
   async stageAttachments(
-    threadId: string,
+    sessionId: string,
     attachments: readonly AosStagedAttachment[]
   ) {
     const request = SessionAttachmentStageRequestSchema.safeParse({
@@ -185,7 +185,7 @@ export class AosRemoteClient {
         "Invalid attachment staging request"
       )
     return this.#read(
-      this.#sessionPath(threadId, "/attachments/stage"),
+      this.#sessionPath(sessionId, "/attachments/stage"),
       SessionAttachmentStageResponseSchema,
       {
         method: "POST",
@@ -196,7 +196,7 @@ export class AosRemoteClient {
   }
 
   async readArtifact(
-    threadId: string,
+    sessionId: string,
     artifactId: string,
     signal?: AbortSignal
   ) {
@@ -204,7 +204,7 @@ export class AosRemoteClient {
       throw new AosClientError("proxy-failure", "Invalid artifact reference")
     return this.#readBlob(
       this.#sessionPath(
-        threadId,
+        sessionId,
         `/artifacts/${encodeURIComponent(artifactId)}`
       ),
       { signal },
@@ -214,9 +214,13 @@ export class AosRemoteClient {
   }
 
   /** The App view a flagged tool call renders; the proxy resolves its resource. */
-  async openMcpApp(threadId: string, toolCallId: string, signal?: AbortSignal) {
+  async openMcpApp(
+    sessionId: string,
+    toolCallId: string,
+    signal?: AbortSignal
+  ) {
     return this.#read(
-      this.#mcpAppPath(threadId, toolCallId),
+      this.#mcpAppPath(sessionId, toolCallId),
       McpAppViewSchema,
       {
         signal,
@@ -226,12 +230,12 @@ export class AosRemoteClient {
 
   /** A tool call the App view makes, answered by the proxy's MCP server. */
   async callMcpAppTool(
-    threadId: string,
+    sessionId: string,
     toolCallId: string,
     request: McpAppToolCallRequest
   ) {
     return this.#postMcpApp(
-      threadId,
+      sessionId,
       toolCallId,
       "/tools/call",
       McpAppToolCallRequestSchema.safeParse(request),
@@ -241,12 +245,12 @@ export class AosRemoteClient {
 
   /** A resource read the App view makes, answered by the proxy's MCP server. */
   async readMcpAppResource(
-    threadId: string,
+    sessionId: string,
     toolCallId: string,
     request: McpAppResourceReadRequest
   ) {
     return this.#postMcpApp(
-      threadId,
+      sessionId,
       toolCallId,
       "/resources/read",
       McpAppResourceReadRequestSchema.safeParse(request),
@@ -254,8 +258,8 @@ export class AosRemoteClient {
     )
   }
 
-  async transcribe(threadId: string, audio: Blob, signal?: AbortSignal) {
-    return this.transcribeForAgent(this.#owner(threadId), audio, signal)
+  async transcribe(sessionId: string, audio: Blob, signal?: AbortSignal) {
+    return this.transcribeForAgent(this.#owner(sessionId), audio, signal)
   }
 
   async transcribeForAgent(agentId: string, audio: Blob, signal?: AbortSignal) {
@@ -281,8 +285,8 @@ export class AosRemoteClient {
     return response.transcript
   }
 
-  async speak(threadId: string, text: string, signal?: AbortSignal) {
-    return this.speakForAgent(this.#owner(threadId), text, signal)
+  async speak(sessionId: string, text: string, signal?: AbortSignal) {
+    return this.speakForAgent(this.#owner(sessionId), text, signal)
   }
 
   async speakForAgent(agentId: string, text: string, signal?: AbortSignal) {
@@ -323,17 +327,17 @@ export class AosRemoteClient {
     }
   }
 
-  #mcpAppPath(threadId: string, toolCallId: string, suffix = "") {
+  #mcpAppPath(sessionId: string, toolCallId: string, suffix = "") {
     if (!toolCallId.trim() || toolCallId.length > 512)
       throw new AosClientError("proxy-failure", "Invalid tool call reference")
     return this.#sessionPath(
-      threadId,
+      sessionId,
       `/tool-calls/${encodeURIComponent(toolCallId)}/app${suffix}`
     )
   }
 
   async #postMcpApp<T>(
-    threadId: string,
+    sessionId: string,
     toolCallId: string,
     suffix: string,
     request: { success: true; data: unknown } | { success: false },
@@ -341,16 +345,16 @@ export class AosRemoteClient {
   ) {
     if (!request.success)
       throw new AosClientError("proxy-failure", "Invalid MCP App request")
-    return this.#read(this.#mcpAppPath(threadId, toolCallId, suffix), schema, {
+    return this.#read(this.#mcpAppPath(sessionId, toolCallId, suffix), schema, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(request.data),
     })
   }
 
-  #sessionPath(threadId: string, suffix: string) {
-    const agentId = this.#owner(threadId)
-    return `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(threadId)}${suffix}`
+  #sessionPath(sessionId: string, suffix: string) {
+    const agentId = this.#owner(sessionId)
+    return `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}${suffix}`
   }
 
   async #readBlob(
@@ -393,8 +397,8 @@ export class AosRemoteClient {
     }
   }
 
-  #owner(threadId: string) {
-    const owner = this.#sessionOwners.get(threadId)
+  #owner(sessionId: string) {
+    const owner = this.#sessionOwners.get(sessionId)
     if (!owner) throw new Error("Session ownership is unknown")
     return owner
   }

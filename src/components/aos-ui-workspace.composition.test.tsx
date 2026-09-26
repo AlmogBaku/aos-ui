@@ -52,11 +52,11 @@ describe("AosUiApp fixture composition", () => {
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true)
     let provider: FixtureWorkspace | undefined
     function ActivityFixture() {
-      const [threadId, setThreadId] = useState<string | undefined>(
+      const [sessionId, setThreadId] = useState<string | undefined>(
         "thread-aster-market"
       )
       const bundle = useFixtureRuntimeBundle({
-        threadId,
+        sessionId,
         onThreadIdChange: setThreadId,
       })
       useEffect(() => {
@@ -168,13 +168,13 @@ describe("AosUiApp fixture composition", () => {
           ],
           sessions: [
             {
-              threadId: "session-primary",
+              sessionId: "session-primary",
               agentId: "agent-primary",
               updatedAt: FIXTURE_NOW.toISOString(),
               status: "running",
             },
             {
-              threadId: "session-secondary",
+              sessionId: "session-secondary",
               agentId: "agent-secondary",
               updatedAt: FIXTURE_NOW.toISOString(),
               status: "idle",
@@ -464,7 +464,7 @@ describe("AosUiApp fixture composition", () => {
     ).not.toBeInTheDocument()
 
     const waiting = fixtureSessions.map((session) =>
-      session.threadId === "thread-aster-pricing"
+      session.sessionId === "thread-aster-pricing"
         ? { ...session, status: "waiting-for-input" as const }
         : session
     )
@@ -500,7 +500,7 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(subscribed).toBe(true))
 
     const waiting = fixtureSessions.map((session) =>
-      session.threadId === "thread-aster-pricing"
+      session.sessionId === "thread-aster-pricing"
         ? { ...session, status: "waiting-for-input" as const }
         : session
     )

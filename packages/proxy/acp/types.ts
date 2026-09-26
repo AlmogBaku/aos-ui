@@ -29,13 +29,10 @@ import type {
 } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
-import type { Channel } from "../core/channel"
+import type { Channels } from "../core/channel"
 import type { Feed, Member } from "../core/member"
-
-export type Lane = "operator" | "guest"
-
 /**
- * Where the ACP lanes write their structured lines, in the shape the proxy
+ * Where the ACP listeners write their structured lines, in the shape the proxy
  * composition already receives. Every value passes through `redactForLog`
  * first. A context built without one logs nothing, which is what a harness
  * asserting only protocol behavior wants.
@@ -59,10 +56,10 @@ type AcpConnectionBase = {
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
   /**
-   * The one room registry per proxy process, shared by both lanes so an
-   * operator and a guest on the same provider Session land in one room.
+   * The one set of channels per proxy process, shared by both listeners so an
+   * operator and a guest on the same provider Session land in one channel.
    */
-  rooms: Channel
+  channels: Channels
   /**
    * Where this connection reports the workspace it shows, shared across the
    * principal's connections. Absent means nothing observes presence, which is
@@ -75,7 +72,7 @@ type AcpConnectionBase = {
 }
 
 /**
- * One connection's context, typed by its lane: only an operator reads the
+ * One connection's context, typed by its role: only an operator reads the
  * activity feed and owns read state, since a guest learns nothing about the
  * rest of the Agent, and only a guest authenticates over ACP rather than at
  * its upgrade.
@@ -83,13 +80,13 @@ type AcpConnectionBase = {
 export type AcpConnectionContext = AcpConnectionBase &
   (
     | {
-        lane: "operator"
+        role: "operator"
         activityFeed: ActivityFeed
         readState: ReadState
         authentication?: never
       }
     | {
-        lane: "guest"
+        role: "guest"
         authentication: ConnectionAuthentication
         activityFeed?: never
         readState?: never
@@ -271,7 +268,10 @@ export type ConfigWriteOf = (
   value: unknown
 ) => { selectedId: string } | { effortId: string } | undefined
 
-/** All translators, injected into the agent so lanes and tests stay decoupled. */
+/**
+ * All translators, injected into the agent so listeners and tests stay
+ * decoupled.
+ */
 export type Translators = {
   translateTurnEvent: TranslateTurnEvent
   translateHistory: TranslateHistory

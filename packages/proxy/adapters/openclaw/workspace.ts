@@ -6,6 +6,7 @@ import type {
 } from "../../../protocol"
 import { SessionCreateResponseSchema } from "../../../protocol"
 import { openClawInviteSessionKey } from "../../core/invite-key"
+import * as ids from "../../core/ids"
 import type { SessionPatch } from "../../core/runtime"
 
 import {
@@ -153,11 +154,16 @@ export type OpenClawWorkspace = Readonly<{
     patch: SessionPatch
   ): Promise<void>
   deleteSession(agentId: string, sessionKey: string): Promise<void>
-  resolveSessionId(agentId: string, publicSessionId: string): string | undefined
+  resolveProviderSessionId(
+    agentId: string,
+    publicSessionId: string
+  ): ids.ProviderSessionId | undefined
   resolveInvitedSession(
     agentId: string,
     ref: string
-  ): Promise<{ sessionId: string; created: false } | undefined>
+  ): Promise<
+    { providerSessionId: ids.ProviderSessionId; created: false } | undefined
+  >
 }>
 
 export function createOpenClawWorkspace(input: {
@@ -328,8 +334,10 @@ export function createOpenClawWorkspace(input: {
         openClawDeleteSessionParams(agentId, sessionKey)
       )
     },
-    resolveSessionId(_agentId, publicSessionId) {
-      return isBoundedSessionKey(publicSessionId) ? publicSessionId : undefined
+    resolveProviderSessionId(_agentId, publicSessionId) {
+      return isBoundedSessionKey(publicSessionId)
+        ? ids.providerSessionId(publicSessionId)
+        : undefined
     },
     async resolveInvitedSession(agentId, ref) {
       const sessionKey = invitedOpenClawSessionKey(agentId, ref)
@@ -345,7 +353,10 @@ export function createOpenClawWorkspace(input: {
       if (!matches.length) return undefined
       if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
       verifyOwnership(agentId, matches[0]!)
-      return { sessionId: sessionKey, created: false }
+      return {
+        providerSessionId: ids.providerSessionId(sessionKey),
+        created: false,
+      }
     },
   }
 }

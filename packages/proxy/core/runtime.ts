@@ -21,13 +21,14 @@ import type {
   McpAppView,
   ReadResourceResult,
 } from "../../protocol/mcp-apps"
+import type { ProviderSessionId, SessionId } from "./ids"
 
 export type SessionScope = {
   agentId: string
   /** Provider-resolved Session identity; never supplied by the browser. */
-  sessionId: string
+  providerSessionId: ProviderSessionId
   /** Opaque public Session identity supplied by the browser. */
-  threadId: string
+  sessionId: SessionId
 }
 
 /** Exactly one Session field a write changes, as the wire request carries it. */
@@ -55,7 +56,7 @@ export type ServerTurnHandle = {
 }
 
 export type RecoveryRequest = {
-  threadId: string
+  sessionId: string
   turnId: string
   position?: { epoch: string; lastSeen: number }
 }
@@ -103,9 +104,10 @@ export type ServerTurnEngine = {
     | undefined
   >
   /**
-   * Watches one Session for turns this adapter did not start: a subagent
-   * result, a loop tick, a heartbeat, cron, or another native client. Rules:
-   * - `onTurn` fires when such a turn starts, and whenever the watch
+   * Subscribes to one Session's turns that this adapter did not start: a
+   * subagent result, a loop tick, a heartbeat, cron, or another native client.
+   * Rules:
+   * - `onTurn` fires when such a turn starts, and whenever it
    *   (re)subscribes, at setup or after a reconnect or rebind, while one is
    *   running;
    * - it stays silent for the adapter's own turns; a foreign turn that starts
@@ -116,10 +118,10 @@ export type ServerTurnEngine = {
    *   failures through `onError`, never by throwing.
    * The returned stop function may be called more than once and ends retries.
    */
-  watch?(scope: SessionScope, watcher: ServerTurnWatcher): () => void
+  subscribeTurns?(scope: SessionScope, listener: ServerTurnListener): () => void
 }
 
-export type ServerTurnWatcher = {
+export type ServerTurnListener = {
   onTurn(): void
   onError(cause: unknown): void
 }
@@ -147,7 +149,7 @@ export class ServerRequestStaleError extends Error {
 }
 
 export class ServerTurnCapacityError extends Error {
-  constructor(readonly lane: "global" | "guest" = "global") {
+  constructor(readonly pool: "global" | "guest" = "global") {
     super("AOS execution capacity exceeded")
     this.name = "ServerTurnCapacityError"
   }
@@ -254,8 +256,13 @@ export interface ServerRuntime {
     agentId: string,
     ref: string,
     create?: { firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string; created: boolean } | undefined>
-  resolveSessionId(agentId: string, publicSessionId: string): string | undefined
+  ): Promise<
+    { providerSessionId: ProviderSessionId; created: boolean } | undefined
+  >
+  resolveProviderSessionId(
+    agentId: string,
+    publicSessionId: string
+  ): ProviderSessionId | undefined
   publicError(cause: unknown): ServerRuntimePublicError | undefined
   authState(): Promise<RuntimeAuthState>
   runtimeInfo(): Promise<RuntimeInfo>
@@ -284,18 +291,24 @@ export interface ServerRuntime {
    */
   history(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: ProviderSessionId,
     limit: number,
     offset: number
   ): Promise<SessionHistoryResponse>
-  getSession(agentId: string, runtimeSessionId: string): Promise<Session>
+  getSession(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<Session>
   createSession(agentId: string, title?: string): Promise<unknown>
   updateSession(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: ProviderSessionId,
     patch: SessionPatch
   ): Promise<void>
-  deleteSession(agentId: string, runtimeSessionId: string): Promise<void>
+  deleteSession(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<void>
   workspaceCapabilities(
     agentId: string,
     publicSessionId: string

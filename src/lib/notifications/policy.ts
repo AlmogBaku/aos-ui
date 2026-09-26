@@ -15,7 +15,7 @@ export type BrowserPreferences = {
 }
 
 export type ActivityContext = {
-  selection: { agentId: string; threadId: string } | null
+  selection: { agentId: string; sessionId: string } | null
   pageVisible: boolean
   pageFocused: boolean
   /** False while a modal surface prevents the user from seeing the selection. */
@@ -64,7 +64,7 @@ export function getActivityPolicy(
   const markRead =
     isSelectionExposed(context) &&
     context.selection?.agentId === event.agentId &&
-    context.selection?.threadId === event.threadId
+    context.selection?.sessionId === event.sessionId
   const eligible = !event.read && !event.resolved
   const category = categoryOf(event.type)
   return {

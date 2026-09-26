@@ -69,11 +69,11 @@ export type AgentSessionHistoryProps = {
   copy: AgentSessionHistoryCopy
   query: string
   onQueryChange: (query: string) => void
-  onOpenSession: (agentId: string, threadId: string) => void | Promise<unknown>
+  onOpenSession: (agentId: string, sessionId: string) => void | Promise<unknown>
   onCreateSession?: (agentId: string) => void | Promise<unknown>
   onRemoveOpenSession?: (
     agentId: string,
-    threadId: string
+    sessionId: string
   ) => void | Promise<unknown>
   /** Runtime-declared Session actions, or `null` until the runtime answers. */
   availability?: SessionActionCapabilities | null
@@ -139,8 +139,8 @@ function SessionRow({
   onActionError,
 }: SessionRowProps) {
   const parsedDate = new Date(session.updatedAt)
-  const isActive = session.threadId === activeThreadId
-  const isLastSelected = session.threadId === navigation.lastSelectedThreadId
+  const isActive = session.sessionId === activeThreadId
+  const isLastSelected = session.sessionId === navigation.lastSelectedThreadId
   const label = [
     `${copy.openSession}: ${session.title}`,
     session.status !== "idle"
@@ -207,11 +207,11 @@ function SessionRow({
       {openable ? (
         <SessionThreadListItem
           runtime={threadListRuntime}
-          threadId={session.threadId}
-          onSwitch={() => onOpenSession(navigation.agentId, session.threadId)}
+          sessionId={session.sessionId}
+          onSwitch={() => onOpenSession(navigation.agentId, session.sessionId)}
           onActionError={onActionError}
           className={styles.sessionRow}
-          data-session-id={session.threadId}
+          data-session-id={session.sessionId}
         >
           <SessionThreadListTrigger
             type="button"
@@ -224,7 +224,7 @@ function SessionRow({
           {menuButton}
         </SessionThreadListItem>
       ) : (
-        <div className={styles.sessionRow} data-session-id={session.threadId}>
+        <div className={styles.sessionRow} data-session-id={session.sessionId}>
           <span className={cn(styles.sessionStatic, "min-h-12 gap-2 p-2 pe-1")}>
             {rowText}
           </span>
@@ -254,7 +254,7 @@ function SessionSection({
         {sessions.map((session) => (
           <SessionRow
             {...row}
-            key={session.threadId}
+            key={session.sessionId}
             session={session}
             dateFormatter={dateFormatter}
           />
@@ -290,7 +290,7 @@ function ArchivedSection({
             sessions.map((session) => (
               <SessionRow
                 {...row}
-                key={session.threadId}
+                key={session.sessionId}
                 session={session}
                 dateFormatter={dateFormatter}
               />
@@ -332,13 +332,13 @@ export function AgentSessionHistory({
 }: AgentSessionHistoryProps) {
   const normalizedQuery = normalizeSearch(query, locale)
   const openIds = new Set(
-    navigation.openSessions.map((session) => session.threadId)
+    navigation.openSessions.map((session) => session.sessionId)
   )
   const filter = (session: WorkspaceSession) =>
     !normalizedQuery ||
     normalizeSearch(session.title, locale).includes(normalizedQuery)
   const historySessions = navigation.historySessions.filter(
-    (session) => !openIds.has(session.threadId)
+    (session) => !openIds.has(session.sessionId)
   )
   const visibleOpen = navigation.openSessions.filter(filter)
   const visibleHistory = historySessions.filter(filter)
@@ -365,7 +365,7 @@ export function AgentSessionHistory({
     onRemoveOpenSession: onRemoveOpenSession
       ? (session) =>
           runAction(
-            () => onRemoveOpenSession(navigation.agentId, session.threadId),
+            () => onRemoveOpenSession(navigation.agentId, session.sessionId),
             onActionError
           )
       : undefined,

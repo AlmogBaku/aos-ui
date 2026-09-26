@@ -41,7 +41,7 @@ import {
 import * as translators from "./translate"
 
 /**
- * The operator lane end to end in process: the real translators, the real ACP
+ * The operator listener end to end in process: the real translators, the real ACP
  * agent, and the real Session coordinator, read state, Session rows, and
  * activity feed, composed exactly as `createOperatorAcpService` composes one
  * accepted connection, against a fake provider engine and an SDK client.
@@ -141,13 +141,13 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
     translators,
     now: clock.now,
     pagesHistory: false,
-    // An operator who never answers declines, which the lane cancels.
+    // An operator who never answers declines, which the listener cancels.
     question: options.question ?? (async () => ({ action: "decline" })),
     compose: ({ runtimeInstance, sessionRows }) => ({
       readState: createReadState({
         runtimeInstance,
         sessionRows,
-        lane: "operator",
+        role: "operator",
         now: clock.now,
         schedule: clock.schedule,
         cancel: clock.cancel,
@@ -253,7 +253,7 @@ function unreadChanges(recorder: Recorder) {
 }
 
 /** The Session the seeded row names, as the coordinator and the routes see it. */
-const SCOPE = { agentId: AGENT, sessionId: SESSION, threadId: SESSION }
+const SCOPE = { agentId: AGENT, providerSessionId: SESSION, sessionId: SESSION }
 
 /**
  * A steered run this connection does not own: the coordinator holds it for a
@@ -269,9 +269,9 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
       prompt: "Summarize the notes",
     },
     {
-      subscriberId: "rest",
-      controllerId: "operator",
-      lane: "operator",
+      membershipId: "rest",
+      principalId: "operator",
+      role: "operator",
       canControl: true,
     }
   )
@@ -367,7 +367,7 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
   }
 }
 
-describe("operator ACP lane", () => {
+describe("operator ACP listener", () => {
   it("restates the model options when the provider switches the model mid-turn", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Summarize")

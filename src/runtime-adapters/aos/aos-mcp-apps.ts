@@ -14,20 +14,20 @@ type McpAppClient = Pick<
 export class AosMcpAppAdapter implements McpAppAdapter {
   constructor(private readonly client: McpAppClient) {}
 
-  open: McpAppAdapter["open"] = ({ threadId, toolCallId }, signal) =>
-    this.client.openMcpApp(threadId, toolCallId, signal)
+  open: McpAppAdapter["open"] = ({ sessionId, toolCallId }, signal) =>
+    this.client.openMcpApp(sessionId, toolCallId, signal)
 
   callTool: McpAppAdapter["callTool"] = ({
-    threadId,
+    sessionId,
     toolCallId,
     name,
     arguments: args,
   }) =>
-    this.client.callMcpAppTool(threadId, toolCallId, { name, arguments: args })
+    this.client.callMcpAppTool(sessionId, toolCallId, { name, arguments: args })
 
   readResource: McpAppAdapter["readResource"] = ({
-    threadId,
+    sessionId,
     toolCallId,
     uri,
-  }) => this.client.readMcpAppResource(threadId, toolCallId, { uri })
+  }) => this.client.readMcpAppResource(sessionId, toolCallId, { uri })
 }

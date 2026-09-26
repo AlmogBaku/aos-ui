@@ -94,30 +94,30 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "stored"
+    const sessionId = "stored"
 
-    await expect(adapter.models("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.models("researcher", sessionId)).resolves.toEqual({
       selectedId: '["native","small"]',
       options: [{ id: '["native","small"]', label: "small", group: "Native" }],
     })
-    await expect(adapter.context("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.context("researcher", sessionId)).resolves.toEqual({
       usedTokens: 20,
       maxTokens: 100,
       source: "provider-usage",
     })
-    await expect(adapter.todos("researcher", threadId)).resolves.toEqual([
+    await expect(adapter.todos("researcher", sessionId)).resolves.toEqual([
       { id: "one", label: "Inspect", status: "active" },
     ])
-    await expect(adapter.activity("researcher", threadId)).resolves.toEqual({
+    await expect(adapter.activity("researcher", sessionId)).resolves.toEqual({
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       state: "running",
     })
     vi.spyOn(adapter, "slashCommands").mockResolvedValue([])
     expect(
       JSON.stringify(
-        await adapter.workspaceCapabilities("researcher", threadId)
+        await adapter.workspaceCapabilities("researcher", sessionId)
       )
     ).not.toContain("live-secret")
   })
@@ -154,7 +154,7 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({
       request,
       http,
-      onEvent: vi.fn((next: (event: unknown) => void) => {
+      subscribeEvents: vi.fn((next: (event: unknown) => void) => {
         observers.add(next)
         return () => observers.delete(next)
       }),
@@ -227,9 +227,9 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${path}`)
     })
     const adapter = new HermesServerAdapter({ request, http })
-    const threadId = "stored"
+    const sessionId = "stored"
 
-    const staged = await adapter.stageAttachments("researcher", threadId, [
+    const staged = await adapter.stageAttachments("researcher", sessionId, [
       { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
     ])
     expect(staged.public).toEqual([
@@ -247,7 +247,7 @@ describe("Hermes server adapter", () => {
     )
 
     await expect(
-      adapter.artifact("researcher", threadId, "artifact-1")
+      adapter.artifact("researcher", sessionId, "artifact-1")
     ).resolves.toEqual({
       bytes: Uint8Array.from([104, 101, 108, 108, 111]),
       filename: "result.txt",
@@ -657,12 +657,12 @@ describe("Hermes server adapter", () => {
       throw new Error(`unexpected ${method}`)
     })
     const stopObservation = vi.fn()
-    const onEvent = vi.fn(() => stopObservation)
-    const adapter = new HermesServerAdapter({ request, onEvent })
+    const subscribeEvents = vi.fn(() => stopObservation)
+    const adapter = new HermesServerAdapter({ request, subscribeEvents })
     const scope = {
       agentId: "researcher",
+      providerSessionId: "stored",
       sessionId: "stored",
-      threadId: "stored",
     }
 
     await expect(adapter.native.resume(scope)).resolves.toEqual({
@@ -670,7 +670,7 @@ describe("Hermes server adapter", () => {
       running: false,
     })
     await expect(
-      adapter.native.observe("live-secret", vi.fn())
+      adapter.native.subscribeLive("live-secret", vi.fn())
     ).resolves.toEqual(expect.any(Function))
     await expect(adapter.native.replay("live-secret", 2)).resolves.toEqual({
       epoch: "epoch-1",
@@ -710,10 +710,10 @@ describe("Hermes server adapter", () => {
       ["session.interrupt", { session_id: "live-secret" }],
       ["session.active_list", {}],
     ])
-    // Two AOS observers, each subscribing once for the whole runtime's life:
-    // the attachment registry routes native frames and interactions watch
+    // Two AOS subscribers, each subscribing once for the whole runtime's life:
+    // the attachment registry routes native frames and interactions follow
     // `request.cancel`.
-    expect(onEvent).toHaveBeenCalledTimes(2)
+    expect(subscribeEvents).toHaveBeenCalledTimes(2)
   })
 
   it.each(["redirected", "queued"] as const)(
@@ -808,8 +808,8 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({ request, http })
     const scope = {
       agentId: "researcher",
+      providerSessionId: "stored",
       sessionId: "stored",
-      threadId: "stored",
     }
 
     await expect(
@@ -845,8 +845,8 @@ describe("Hermes server adapter", () => {
     })
     const scope = {
       agentId: "researcher",
+      providerSessionId: "stored",
       sessionId: "stored",
-      threadId: "stored",
     }
 
     await adapter.native.submit("live-secret", {
@@ -1211,8 +1211,8 @@ describe("Hermes server adapter", () => {
     release()
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { sessionId: "stored-1", created: true },
-      { sessionId: "stored-1", created: true },
+      { providerSessionId: "stored-1", created: true },
+      { providerSessionId: "stored-1", created: true },
     ])
     expect(request.mock.calls).toEqual([
       [
@@ -1284,7 +1284,7 @@ describe("Hermes server adapter", () => {
     const exact = new HermesServerAdapter({ request: exactRequest })
     await expect(
       exact.resolveInvitedSession("researcher", "guest_ref", {})
-    ).resolves.toEqual({ sessionId: "resolved-1", created: false })
+    ).resolves.toEqual({ providerSessionId: "resolved-1", created: false })
     expect(exactRequest).toHaveBeenCalledOnce()
 
     const nativeListShape = new HermesServerAdapter({
@@ -1303,7 +1303,7 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       nativeListShape.resolveInvitedSession("researcher", "guest_ref")
-    ).resolves.toEqual({ sessionId: "stored-2", created: false })
+    ).resolves.toEqual({ providerSessionId: "stored-2", created: false })
 
     const ambiguous = new HermesServerAdapter({
       request: vi.fn(async () => ({
@@ -1680,7 +1680,7 @@ describe("Hermes server adapter", () => {
     const listener = vi.fn()
     const adapter = new HermesServerAdapter({
       request: vi.fn(),
-      onEvent: vi.fn((next: (event: unknown) => void) => {
+      subscribeEvents: vi.fn((next: (event: unknown) => void) => {
         observers.add(next)
         return () => observers.delete(next)
       }),
@@ -2531,8 +2531,8 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
+        providerSessionId: "stored",
         sessionId: "stored",
-        threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
@@ -2558,8 +2558,8 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
+        providerSessionId: "stored",
         sessionId: "stored",
-        threadId: "stored",
       })
     ).resolves.toMatchObject({ liveSessionId: "live-secret" })
     expect(wait).toHaveBeenCalledTimes(2)
@@ -2581,8 +2581,8 @@ describe("Hermes server adapter", () => {
     await expect(
       adapter.native.resume({
         agentId: "researcher",
+        providerSessionId: "stored",
         sessionId: "stored",
-        threadId: "stored",
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
     expect(router.calls("session.resume")).toHaveLength(3)
@@ -2600,14 +2600,14 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter(router)
     const scope = {
       agentId: "researcher",
+      providerSessionId: "stored",
       sessionId: "stored",
-      threadId: "stored",
     }
     await expect(adapter.native.resume(scope)).resolves.toMatchObject({
       liveSessionId: "live-first",
     })
     const signals: string[] = []
-    await adapter.native.observe("live-first", (signal) =>
+    await adapter.native.subscribeLive("live-first", (signal) =>
       signals.push(
         signal.kind === "lost" ? `lost:${signal.reason}` : signal.kind
       )
@@ -2635,11 +2635,11 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter(router, { log: { warn } })
     const scope = {
       agentId: "researcher",
+      providerSessionId: "stored",
       sessionId: "stored",
-      threadId: "stored",
     }
     await adapter.native.resume(scope)
-    await adapter.native.observe("live-first", vi.fn())
+    await adapter.native.subscribeLive("live-first", vi.fn())
 
     await router.connection.restored()
 
@@ -2748,8 +2748,8 @@ describe("Hermes server adapter", () => {
       const adapter = new HermesServerAdapter(router, { sessionIdleMs: 1_000 })
       const scope = {
         agentId: "researcher",
+        providerSessionId: "stored",
         sessionId: "stored",
-        threadId: "stored",
         turnId: "run-1",
       }
 
@@ -2784,8 +2784,8 @@ describe("Hermes server adapter", () => {
       // never close it natively.
       await adapter.native.inspectExecution({
         ...scope,
+        providerSessionId: "draft",
         sessionId: "draft",
-        threadId: "draft",
       })
       await vi.advanceTimersByTimeAsync(1_000)
 

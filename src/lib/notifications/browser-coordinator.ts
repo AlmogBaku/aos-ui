@@ -82,7 +82,7 @@ export class BrowserActivityCoordinator {
       // A permission revoked or reset from the browser's own settings has to be
       // noticed here, not at the next focus: until it is, this device holds a
       // subscription the proxy would keep pushing into nothing.
-      const stop = this.#options.port.onPermissionChange?.(() => {
+      const stop = this.#options.port.subscribePermissionChanges?.(() => {
         if (this.#active) this.recheckPermission()
       })
       if (stop) this.#cleanup.push(stop)
@@ -139,13 +139,13 @@ export class BrowserActivityCoordinator {
     }
   }
   /** The ask waits for a run the operator watched in this tab. */
-  noteTurnStarted(event: { agentId: string; threadId: string }) {
+  noteTurnStarted(event: { agentId: string; sessionId: string }) {
     if (!this.#active || this.#firstRunSeen) return
     const context = this.#options.context()
     if (
       !isSelectionExposed(context) ||
       context.selection?.agentId !== event.agentId ||
-      context.selection?.threadId !== event.threadId
+      context.selection?.sessionId !== event.sessionId
     )
       return
     this.#firstRunSeen = true
@@ -385,7 +385,7 @@ export class BrowserActivityCoordinator {
           body: this.#options.copy()[category],
           icon: "/logo-adaptive.svg",
           timestamp: Date.parse(record.occurredAt),
-          tag: notificationTag(record.agentId, record.threadId, record.id),
+          tag: notificationTag(record.agentId, record.sessionId, record.id),
           renotify: false,
         },
         () => {

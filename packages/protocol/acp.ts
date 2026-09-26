@@ -98,7 +98,7 @@ export const IdentifierSchema = z
     })
   )
 const SequenceSchema = z.number().int().min(0)
-const LaneSchema = z.enum(["operator", "guest"])
+const RoleSchema = z.enum(["operator", "guest"])
 
 /** An agent-to-client object: known keys validated, unknown keys dropped. */
 const readObject = z.object
@@ -134,12 +134,12 @@ export const AosClientCapabilitiesMetaSchema = readObject({
 /** `InitializeResponse._meta.aos` */
 export const AosInitializeMetaSchema = readObject({
   version: z.literal(AOS_EXTENSION_VERSION),
-  lane: LaneSchema,
+  role: RoleSchema,
   extensions: AosExtensionsSchema,
 })
 export type AosInitializeMeta = z.infer<typeof AosInitializeMetaSchema>
 
-/** `LoginAuthRequest._meta.aos` for the guest lane. */
+/** `LoginAuthRequest._meta.aos` for the guest listener. */
 export const AosLoginMetaSchema = z.strictObject({
   token: z.string().min(1).max(4096),
 })
@@ -230,7 +230,7 @@ export type AosHistoryCursor = z.infer<typeof AosHistoryCursorSchema>
 
 /**
  * `ResumeSessionResponse._meta.aos` for a `_aos/before` page read: only the
- * cursor, since a page read never re-attaches.
+ * cursor, since a page read never resumes.
  */
 export const AosHistoryPageResponseMetaSchema = readObject({
   history: AosHistoryCursorSchema,
@@ -512,7 +512,7 @@ const ARTIFACT_URI_PREFIX = `${AOS_ARTIFACT_URI_SCHEME}//`
 /**
  * The uri of the `resource_link` a published artifact is announced as. It
  * carries only the opaque artifact id: never a native path, and no route, since
- * the reader already knows the Session and lane it reads through.
+ * the reader already knows the Session and listener it reads through.
  */
 export function formatArtifactUri(artifactId: string) {
   return `${ARTIFACT_URI_PREFIX}${encodeURIComponent(artifactId)}`

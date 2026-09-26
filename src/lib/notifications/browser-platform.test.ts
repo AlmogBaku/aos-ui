@@ -61,7 +61,7 @@ describe("browser adapters", () => {
       const port = createBrowserNotificationPort()
       const changed = vi.fn()
 
-      const stop = port.onPermissionChange!(changed)
+      const stop = port.subscribePermissionChanges!(changed)
       await vi.waitFor(() => expect(query).toHaveBeenCalledOnce())
       expect(query).toHaveBeenCalledWith({ name: "notifications" })
       status.dispatchEvent(new Event("change"))
@@ -79,7 +79,7 @@ describe("browser adapters", () => {
     const port = createBrowserNotificationPort()
     const changed = vi.fn()
 
-    expect(() => port.onPermissionChange!(changed)()).not.toThrow()
+    expect(() => port.subscribePermissionChanges!(changed)()).not.toThrow()
     expect(changed).not.toHaveBeenCalled()
   })
   it("forwards only allowed notification options and catches callback errors", () => {

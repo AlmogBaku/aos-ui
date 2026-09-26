@@ -28,12 +28,12 @@ const roster: AgentSummary[] = [
 ]
 
 function session(
-  threadId: string,
+  sessionId: string,
   agentId: string,
   ageMs: number
 ): SessionMetadata {
   return {
-    threadId,
+    sessionId,
     agentId,
     updatedAt: new Date(now - ageMs).toISOString(),
     status: "idle",
@@ -86,13 +86,13 @@ describe("projectDraftAgents", () => {
       draftAgentId("fresh"),
     ])
     expect(
-      projected.sessions.map(({ threadId, agentId }) => ({
-        threadId,
+      projected.sessions.map(({ sessionId, agentId }) => ({
+        sessionId,
         agentId,
       }))
     ).toEqual([
-      { threadId: "fresh", agentId: draftAgentId("fresh") },
-      { threadId: "expired", agentId: creator.id },
+      { sessionId: "fresh", agentId: draftAgentId("fresh") },
+      { sessionId: "expired", agentId: creator.id },
     ])
   })
 
@@ -168,7 +168,7 @@ describe("projectDraftAgents", () => {
       id: PENDING_DRAFT_AGENT_ID,
     })
     // The pending draft precedes its Session, so it invents none.
-    expect(projected.sessions.map(({ threadId }) => threadId)).toEqual([
+    expect(projected.sessions.map(({ sessionId }) => sessionId)).toEqual([
       "work",
       "interview",
     ])

@@ -84,7 +84,7 @@ type ArtifactWorkspaceContextValue = {
   labels: Dictionary["artifacts"]
   adapter: ArtifactAdapter | undefined
   agentId: string
-  threadId: string
+  sessionId: string
   occurrences: ArtifactOccurrence[]
   artifactHtmlAssetOrigins: readonly string[]
   selectedArtifact: ArtifactDescriptor | null
@@ -114,7 +114,7 @@ export type ArtifactWorkspaceProviderProps = {
   locale: Locale
   adapter: ArtifactAdapter | undefined
   agentId: string
-  threadId: string
+  sessionId: string
   messages: readonly ArtifactMessage[]
   artifactHtmlAssetOrigins?: readonly string[]
   children: ReactNode
@@ -189,7 +189,7 @@ export function ArtifactWorkspaceProvider({
   locale,
   adapter,
   agentId,
-  threadId,
+  sessionId,
   messages,
   artifactHtmlAssetOrigins = NO_ASSET_ORIGINS,
   children,
@@ -197,7 +197,7 @@ export function ArtifactWorkspaceProvider({
   const [selection, setSelection] = useState<{
     artifact: ArtifactDescriptor
     agentId: string
-    threadId: string
+    sessionId: string
     occurrenceKey: string
   } | null>(null)
   const openingControlRef = useRef<HTMLElement | null>(null)
@@ -210,7 +210,7 @@ export function ArtifactWorkspaceProvider({
   )
   const selectedArtifact =
     selection?.agentId === agentId &&
-    selection.threadId === threadId &&
+    selection.sessionId === sessionId &&
     occurrences.some(
       ({ artifact, key }) =>
         key === selection.occurrenceKey &&
@@ -244,11 +244,11 @@ export function ArtifactWorkspaceProvider({
       setSelection({
         artifact,
         agentId,
-        threadId,
+        sessionId,
         occurrenceKey: publication.key,
       })
     },
-    [agentId, occurrences, threadId]
+    [agentId, occurrences, sessionId]
   )
   const closeArtifact = useCallback(() => {
     const openingControl = openingControlRef.current
@@ -279,7 +279,7 @@ export function ArtifactWorkspaceProvider({
         const blob = await adapter.resolve({
           artifact,
           agentId,
-          threadId,
+          sessionId,
           signal: controller.signal,
         })
         const url = URL.createObjectURL(blob)
@@ -296,7 +296,7 @@ export function ArtifactWorkspaceProvider({
         downloadControllersRef.current.delete(controller)
       }
     },
-    [adapter, agentId, threadId]
+    [adapter, agentId, sessionId]
   )
 
   useEffect(
@@ -306,7 +306,7 @@ export function ArtifactWorkspaceProvider({
       downloadControllersRef.current.clear()
       downloadUrlsRef.current.clear()
     },
-    [agentId, threadId]
+    [agentId, sessionId]
   )
 
   const value = useMemo<ArtifactWorkspaceContextValue>(
@@ -315,7 +315,7 @@ export function ArtifactWorkspaceProvider({
       labels,
       adapter,
       agentId,
-      threadId,
+      sessionId,
       occurrences,
       artifactHtmlAssetOrigins,
       selectedArtifact,
@@ -334,7 +334,7 @@ export function ArtifactWorkspaceProvider({
       occurrences,
       openArtifact,
       selectedArtifact,
-      threadId,
+      sessionId,
     ]
   )
 
@@ -773,14 +773,14 @@ function useArtifactByValue(artifact: ArtifactDescriptor | null) {
 
 /** Loads one artifact's bytes: the opened viewer by default, or an inline player. */
 export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
-  const { adapter, agentId, selectedArtifact, threadId } =
+  const { adapter, agentId, selectedArtifact, sessionId } =
     useArtifactWorkspace()
   const previewArtifact = useArtifactByValue(artifact ?? selectedArtifact)
   const [resolved, setResolved] = useState<{
     artifact: ArtifactDescriptor
     adapter: ArtifactAdapter
     agentId: string
-    threadId: string
+    sessionId: string
     retryToken: number
     state: ArtifactPreviewState
   } | null>(null)
@@ -818,7 +818,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
       artifact: previewArtifact,
       adapter,
       agentId,
-      threadId,
+      sessionId,
       retryToken,
     }
     const finish = (state: ArtifactPreviewState) =>
@@ -828,7 +828,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
       .resolve({
         artifact: previewArtifact,
         agentId,
-        threadId,
+        sessionId,
         signal: controller.signal,
       })
       .then(async (blob) => {
@@ -875,7 +875,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
     previewArtifact,
     retryToken,
     shouldResolve,
-    threadId,
+    sessionId,
   ])
 
   const isCurrentResolution =
@@ -884,7 +884,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
     resolved?.artifact === previewArtifact &&
     resolved.adapter === adapter &&
     resolved.agentId === agentId &&
-    resolved.threadId === threadId &&
+    resolved.sessionId === sessionId &&
     resolved.retryToken === retryToken
   const state =
     preflightState ??

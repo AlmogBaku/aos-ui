@@ -47,7 +47,7 @@ type Entry = PresenceReport & { reportedAt: number }
  * The instant outlives the connection that reported it so a grace window can
  * still be measured once every tab has closed.
  */
-type Principal = { connections: Map<string, Entry>; lastPresentAt?: number }
+type Presence = { connections: Map<string, Entry>; lastPresentAt?: number }
 
 const holdsPresence = (entry: Entry) => entry.foreground && !entry.idle
 
@@ -61,45 +61,45 @@ const wasPresent = (entry: Entry | undefined, at: number) =>
 export function createPresenceRegistry({
   now = Date.now,
 }: { now?: () => number } = {}): PresenceRegistry {
-  const principals = new Map<string, Principal>()
+  const presences = new Map<string, Presence>()
 
   /** True when one fresh report of this principal matches. */
   const some = (principalId: string, matches: (entry: Entry) => boolean) => {
     const at = now()
-    for (const entry of principals.get(principalId)?.connections.values() ?? [])
+    for (const entry of presences.get(principalId)?.connections.values() ?? [])
       if (isFresh(entry, at) && matches(entry)) return true
     return false
   }
 
   return {
     set(principalId, connectionId, report) {
-      const principal = principals.get(principalId) ?? {
+      const presence = presences.get(principalId) ?? {
         connections: new Map<string, Entry>(),
       }
-      principals.set(principalId, principal)
+      presences.set(principalId, presence)
       const reportedAt = now()
-      const previous = principal.connections.get(connectionId)
+      const previous = presence.connections.get(connectionId)
       const entry: Entry = { ...report, reportedAt }
-      principal.connections.set(connectionId, entry)
+      presence.connections.set(connectionId, entry)
       // Presence lapses the moment it stops holding, not one heartbeat earlier:
       // a connection that goes to the background or idle has been present until
       // exactly now, and a grace window is measured from here.
       if (holdsPresence(entry) || wasPresent(previous, reportedAt))
-        principal.lastPresentAt = reportedAt
+        presence.lastPresentAt = reportedAt
     },
 
     clear(principalId, connectionId) {
-      const principal = principals.get(principalId)
-      const removed = principal?.connections.get(connectionId)
-      if (!principal || !removed) return
-      principal.connections.delete(connectionId)
+      const presence = presences.get(principalId)
+      const removed = presence?.connections.get(connectionId)
+      if (!presence || !removed) return
+      presence.connections.delete(connectionId)
       const at = now()
-      if (wasPresent(removed, at)) principal.lastPresentAt = at
+      if (wasPresent(removed, at)) presence.lastPresentAt = at
     },
 
     connected(principalId) {
       // A registered entry is an open socket, whether or not it still reports.
-      return (principals.get(principalId)?.connections.size ?? 0) > 0
+      return (presences.get(principalId)?.connections.size ?? 0) > 0
     },
 
     present(principalId) {
@@ -114,7 +114,7 @@ export function createPresenceRegistry({
     },
 
     lastPresentAt(principalId) {
-      return principals.get(principalId)?.lastPresentAt
+      return presences.get(principalId)?.lastPresentAt
     },
   }
 }

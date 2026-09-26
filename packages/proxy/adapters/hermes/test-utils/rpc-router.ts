@@ -33,7 +33,7 @@ export type RpcHandler = (
 ) => Promise<unknown>
 
 export type RpcRouter = HermesRpcTransport & {
-  /** Publish an event to every active `onEvent` subscriber. */
+  /** Publish an event to every active `subscribeEvents` listener. */
   publish(event: unknown): void
   /**
    * The server→client request half, over the vendored channel: `deliver` sends
@@ -62,9 +62,9 @@ export type RpcRouter = HermesRpcTransport & {
  *  - Any method without a handler throws `Error("unexpected RPC: <method>")`.
  *
  * The returned object records every `request()` call for later assertion.
- * `onEvent`, `onConnection`, and `close` are stubs that track subscriptions;
- * call `publish(event)` to fan out to every active listener and `connection.*`
- * to replay a heal, a loss, or a Hermes restart.
+ * `subscribeEvents`, `subscribeConnection`, and `close` are stubs that track
+ * subscriptions; call `publish(event)` to fan out to every active listener and
+ * `connection.*` to replay a heal, a loss, or a Hermes restart.
  */
 export function rpcRouter(
   handlers: Partial<Record<string, RpcHandler>> = {}
@@ -116,7 +116,7 @@ export function rpcRouter(
       return result
     },
 
-    onEvent: (listener: (event: unknown) => void): (() => void) => {
+    subscribeEvents: (listener: (event: unknown) => void): (() => void) => {
       subscribers.push(listener)
       return () => {
         const index = subscribers.indexOf(listener)
@@ -124,14 +124,14 @@ export function rpcRouter(
       }
     },
 
-    onRequest: (handler: ServerRequestHandler): (() => void) =>
-      requests.transport.onRequest(handler),
+    subscribeRequests: (handler: ServerRequestHandler): (() => void) =>
+      requests.transport.subscribeRequests(handler),
 
     connected: (): boolean => requests.transport.connected(),
 
     requests,
 
-    onConnection: (handler: HermesConnectionHandler): (() => void) => {
+    subscribeConnection: (handler: HermesConnectionHandler): (() => void) => {
       connectionHandlers.push(handler)
       return () => {
         const index = connectionHandlers.indexOf(handler)

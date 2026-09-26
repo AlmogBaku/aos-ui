@@ -56,11 +56,11 @@ function HostedMcpApp({
   host: McpAppHost
 }) {
   const { labels, locale, direction } = useToolUiLocale()
-  const { adapter, agentId, threadId } = host
+  const { adapter, agentId, sessionId } = host
   const { toolCallId } = part
   const target = useMemo(
-    () => ({ agentId, threadId, toolCallId }),
-    [agentId, threadId, toolCallId]
+    () => ({ agentId, sessionId, toolCallId }),
+    [agentId, sessionId, toolCallId]
   )
   // A view opened while its call ran asks again at settle for what the
   // provider recorded, without reloading the view itself.

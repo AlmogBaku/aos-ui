@@ -101,9 +101,12 @@ export function createActivityFeed({
   /** Republishes what the provider already reports about a Session. */
   const noteExecution = (row: SessionRow) => {
     if (row.status !== "waiting-for-input" && row.status !== "failed") return
-    const providerId = runtime.resolveSessionId(row.agentId, row.id)
+    const providerId = runtime.resolveProviderSessionId(row.agentId, row.id)
     const execution = providerId
-      ? coordinator.snapshot({ agentId: row.agentId, sessionId: providerId })
+      ? coordinator.snapshot({
+          agentId: row.agentId,
+          providerSessionId: providerId,
+        })
       : undefined
     const base = {
       agentId: row.agentId,
@@ -144,7 +147,9 @@ export function createActivityFeed({
     }
   }
 
-  const unobserve = coordinator.observe((event) => push(notificationOf(event)))
+  const unsubscribe = coordinator.subscribeExecutions((event) =>
+    push(notificationOf(event))
+  )
   void hydrate()
 
   return {
@@ -161,7 +166,7 @@ export function createActivityFeed({
 
     close() {
       closed = true
-      unobserve()
+      unsubscribe()
       unsubscribeRows?.()
       listeners.clear()
     },

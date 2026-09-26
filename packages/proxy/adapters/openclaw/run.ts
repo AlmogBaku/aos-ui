@@ -30,9 +30,10 @@ import {
   type ServerAttachmentStage,
   type ServerTurnEngine,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
+import * as ids from "../../core/ids"
 import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
@@ -319,7 +320,7 @@ function toolName(value: unknown, resolve: McpToolNameResolver) {
 const unresolved: McpToolNameResolver = () => undefined
 
 function scopeKey(scope: SessionScope) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 function boundedText(value: unknown) {
@@ -750,7 +751,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       throw new Error(
         "OpenClaw request replies cannot include staged attachments"
       )
-    if (!validId(scope.agentId) || !validId(scope.sessionId))
+    if (!validId(scope.agentId) || !validId(scope.providerSessionId))
       throw new Error("AOS turn scope does not match this Session")
     if (replies) {
       if (!this.#replies)
@@ -770,7 +771,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const key = scopeKey(scope)
     const waiting = this.#waiting.get(key)
     const interactionScope = waiting
-      ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
+      ? {
+          ...scope,
+          providerSessionId: ids.providerSessionId(
+            waiting.nativeInteractionSessionKey
+          ),
+        }
       : scope
     const repliesBinding = replies
       ? await this.#replies!.validate(interactionScope, replies)
@@ -787,7 +793,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const holder: { active?: ActiveRun } = {}
       let admissionDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else admissionDirty = true
@@ -1011,8 +1017,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   ): Promise<ServerTurnHandle> {
     if (
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
-      request.threadId !== scope.threadId ||
+      !validId(scope.providerSessionId) ||
+      request.sessionId !== scope.sessionId ||
       !validId(request.turnId)
     )
       throw new Error("AOS recovery scope does not match this Session")
@@ -1040,7 +1046,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const holder: { active?: ActiveRun } = {}
       let recoveryDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else recoveryDirty = true
@@ -1097,7 +1103,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (
       !this.#replies?.discover ||
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
+      !validId(scope.providerSessionId) ||
       !validId(turnId) ||
       this.#active.has(key)
     )
@@ -1122,7 +1128,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       }
       const holder: { waiting?: WaitingRun; active?: ActiveRun } = {}
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else if (holder.waiting) this.#acceptWaiting(holder.waiting, event)
@@ -1161,7 +1167,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         const discovered = await this.#replies.discover(
           {
             ...scope,
-            sessionId: approvalReplayKey,
+            providerSessionId: ids.providerSessionId(approvalReplayKey),
             nativeRunId,
           },
           approvalReplay.replay
@@ -1248,7 +1254,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
    * events arrive, and any found running when the subscription is set up or
    * reconciled after a reconnect.
    */
-  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     let stopped = false
     let lease: OpenClawSessionLease | undefined
     let retry: ReturnType<typeof setTimeout> | undefined
@@ -1262,19 +1268,19 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
         return
       announced = runId
-      watcher.onTurn()
+      listener.onTurn()
     }
     const check = async (current: OpenClawSessionLease, again: boolean) => {
       try {
         announce(uniqueActiveRunId(await this.#history(scope, current)), again)
       } catch (error) {
-        if (!stopped) watcher.onError(error)
+        if (!stopped) listener.onError(error)
       }
     }
     const subscribe = () => {
       this.#subscriptions
         .acquire(
-          { agentId: scope.agentId, sessionKey: scope.sessionId },
+          { agentId: scope.agentId, sessionKey: scope.providerSessionId },
           (event) => announce(progressRunId(event), false),
           async () => {
             if (lease) await check(lease, true)
@@ -1288,7 +1294,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           },
           (error: unknown) => {
             if (stopped) return
-            watcher.onError(error)
+            listener.onError(error)
             retry = setTimeout(subscribe, WATCH_RETRY_MS)
           }
         )

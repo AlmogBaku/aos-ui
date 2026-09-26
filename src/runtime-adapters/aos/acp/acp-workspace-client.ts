@@ -23,7 +23,7 @@ import type { AcpConnection } from "./types"
 
 /**
  * A burst of native catalog changes costs one `session/list` page. Rows the
- * browser has not attached learn their `unread`, `status`, and title only from
+ * browser has not resumed learn their `unread`, `status`, and title only from
  * a list, so an invalidation has to re-read one rather than patch a guess in.
  */
 const CATALOG_RELIST_DEBOUNCE_MS = 300
@@ -50,7 +50,7 @@ export type AcpWorkspaceClientOptions = {
   connection: AcpConnection
   rest: AcpRestClient
   /** Ownership for a Session the row cache has not seen yet. */
-  agentIdFor?: (threadId: string) => string | undefined
+  agentIdFor?: (sessionId: string) => string | undefined
   now?: () => number
 }
 
@@ -63,7 +63,7 @@ export function createAcpWorkspaceClient({
   const store = createAcpSessionStore({
     connection,
     ...(now ? { now } : {}),
-    onTurnFinished: (threadId) => void reportCreatedAgents(threadId),
+    onTurnFinished: (sessionId) => void reportCreatedAgents(sessionId),
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
@@ -74,24 +74,24 @@ export function createAcpWorkspaceClient({
   let sessionActions: Promise<SessionActionCapabilities> | undefined
 
   function remember(
-    threadId: string,
+    sessionId: string,
     info: AosSessionInfoMeta,
     updatedAt?: string | null
   ) {
-    store.put(threadId, info, updatedAt)
+    store.put(sessionId, info, updatedAt)
     try {
-      rest.adoptSessionOwnership(threadId, info.agentId)
+      rest.adoptSessionOwnership(sessionId, info.agentId)
     } catch {
       // The proxy's row is authoritative; REST ownership is only a byte route.
     }
   }
 
-  function knownAgentOf(threadId: string) {
-    return store.agentIdOf(threadId) ?? agentIdFor?.(threadId)
+  function knownAgentOf(sessionId: string) {
+    return store.agentIdOf(sessionId) ?? agentIdFor?.(sessionId)
   }
 
-  function agentOf(threadId: string) {
-    const agentId = knownAgentOf(threadId)
+  function agentOf(sessionId: string) {
+    const agentId = knownAgentOf(sessionId)
     if (!agentId) throw new Error("Session ownership is unknown")
     return agentId
   }
@@ -129,8 +129,8 @@ export function createAcpWorkspaceClient({
       .then((page) => {
         for (const session of page.sessions) {
           const row = rowOf(session)
-          remember(row.threadId, row.info, row.updatedAt)
-          if (row.title) store.setTitle(row.threadId, row.title)
+          remember(row.sessionId, row.info, row.updatedAt)
+          if (row.title) store.setTitle(row.sessionId, row.title)
         }
         return page
       })
@@ -139,9 +139,9 @@ export function createAcpWorkspaceClient({
     return read
   }
 
-  function watchCreator(threadId: string, agentId: string) {
-    if (agentId === creatorId && !creatorBaselines.has(threadId))
-      creatorBaselines.set(threadId, new Set(listedAgentIds))
+  function watchCreator(sessionId: string, agentId: string) {
+    if (agentId === creatorId && !creatorBaselines.has(sessionId))
+      creatorBaselines.set(sessionId, new Set(listedAgentIds))
   }
 
   /**
@@ -150,8 +150,8 @@ export function createAcpWorkspaceClient({
    * creator Session opened, and is listed once one of its turns stops. A
    * visible one is ready; a hidden one still needs its operator.
    */
-  async function reportCreatedAgents(threadId: string) {
-    const baseline = creatorBaselines.get(threadId)
+  async function reportCreatedAgents(sessionId: string) {
+    const baseline = creatorBaselines.get(sessionId)
     if (!baseline) return
     let agents
     try {
@@ -163,11 +163,11 @@ export function createAcpWorkspaceClient({
       if (baseline.has(summary.id)) continue
       baseline.add(summary.id)
       store.emitActivity({
-        id: `${threadId}:${summary.id}`,
+        id: `${sessionId}:${summary.id}`,
         type:
           visibility === "hidden" ? "agent-activation-failed" : "agent-ready",
         agentId: summary.id,
-        threadId,
+        sessionId,
         occurredAt: new Date((now ?? Date.now)()).toISOString(),
       })
     }
@@ -189,8 +189,8 @@ export function createAcpWorkspaceClient({
    * reloaded deep link included, so a Session still missing costs one read of
    * page one, never a walk of every Agent's catalog.
    */
-  async function readRows(threadIds: readonly string[]) {
-    if (threadIds.some((threadId) => !store.knows(threadId)))
+  async function readRows(sessionIds: readonly string[]) {
+    if (sessionIds.some((sessionId) => !store.knows(sessionId)))
       await listSessions()
   }
 
@@ -208,7 +208,7 @@ export function createAcpWorkspaceClient({
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 
-  connection.onNotification(
+  connection.subscribeNotification(
     AOS_METHODS.notify.catalogInvalidated,
     scheduleSessionRelist
   )
@@ -243,8 +243,9 @@ export function createAcpWorkspaceClient({
       revisions.set(agentId, result.agent.revision)
     },
     subscribeAgentCatalog: (listener: () => void) =>
-      connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () =>
-        listener()
+      connection.subscribeNotification(
+        AOS_METHODS.notify.catalogInvalidated,
+        () => listener()
       ),
 
     // Sessions
@@ -255,9 +256,9 @@ export function createAcpWorkspaceClient({
     },
     /** The Agent the thread list pages History for, once one is selected. */
     sessionCatalogScope: () => catalogScope,
-    async getSessionMetadata(threadIds: string[]) {
-      await readRows(threadIds)
-      return store.rowsFor(threadIds)
+    async getSessionMetadata(sessionIds: string[]) {
+      await readRows(sessionIds)
+      return store.rowsFor(sessionIds)
     },
     subscribeSessionMetadata: store.subscribeMetadata,
     async createSession(agentId: string, options?: SessionCreationOptions) {
@@ -270,50 +271,50 @@ export function createAcpWorkspaceClient({
       store.observe(created.sessionId)
       remember(created.sessionId, created.meta.session)
       watchCreator(created.sessionId, agentId)
-      composer.attach(created.sessionId, {
+      composer.resume(created.sessionId, {
         configOptions: created.configOptions,
         capabilities: created.meta.capabilities,
       })
-      return { threadId: created.sessionId }
+      return { sessionId: created.sessionId }
     },
     /**
-     * Attaches a Session: the proxy replays it and the workspace records the
+     * Resumes a Session: the proxy replays it and the workspace records the
      * capabilities, config options, and execution state it reports. Naming the
-     * owning Agent lets a deep link attach before any list.
+     * owning Agent lets a deep link resume before any list.
      */
-    async attachSession(
-      threadId: string,
+    async resumeSession(
+      sessionId: string,
       resume?: { replayFromStart?: boolean }
     ) {
-      store.observe(threadId)
-      composer.observe(threadId)
-      const agentId = knownAgentOf(threadId)
-      const resumed = await connection.resumeSession(threadId, {
+      store.observe(sessionId)
+      composer.observe(sessionId)
+      const agentId = knownAgentOf(sessionId)
+      const resumed = await connection.resumeSession(sessionId, {
         replayFromStart: resume?.replayFromStart ?? false,
         ...(agentId ? { agentId } : {}),
-        ...connection.lastSequence(threadId),
+        ...connection.lastSequence(sessionId),
       })
-      remember(threadId, resumed.meta.session)
-      watchCreator(threadId, resumed.meta.session.agentId)
-      store.setStatus(threadId, resumed.meta.execution.status)
-      composer.attach(threadId, {
+      remember(sessionId, resumed.meta.session)
+      watchCreator(sessionId, resumed.meta.session.agentId)
+      store.setStatus(sessionId, resumed.meta.execution.status)
+      composer.resume(sessionId, {
         configOptions: resumed.configOptions,
         capabilities: resumed.meta.capabilities,
       })
       return resumed
     },
-    async markSessionRead(threadId: string) {
-      store.setUnread(threadId, false)
-      await connection.updateSession({ sessionId: threadId, unread: false })
+    async markSessionRead(sessionId: string) {
+      store.setUnread(sessionId, false)
+      await connection.updateSession({ sessionId, unread: false })
     },
     /** The row leads the write, so a refused pin has to be taken back. */
-    async setSessionPinned(threadId: string, pinned: boolean) {
-      const [previous] = store.rowsFor([threadId])
-      store.setPinned(threadId, pinned)
+    async setSessionPinned(sessionId: string, pinned: boolean) {
+      const [previous] = store.rowsFor([sessionId])
+      store.setPinned(sessionId, pinned)
       try {
-        await connection.updateSession({ sessionId: threadId, pinned })
+        await connection.updateSession({ sessionId, pinned })
       } catch (reason) {
-        store.setPinned(threadId, previous?.pinned)
+        store.setPinned(sessionId, previous?.pinned)
         throw reason
       }
     },
@@ -337,9 +338,9 @@ export function createAcpWorkspaceClient({
       return sessionActions
     },
     reportFocus: (
-      threadId: string | null,
+      sessionId: string | null,
       presence: { foreground: boolean; idle: boolean }
-    ) => connection.focus(threadId, presence),
+    ) => connection.focus(sessionId, presence),
     sessionStatus: store.status,
     subscribeSessionStatus: store.subscribeStatus,
     subscribeSessionInvalidation: store.subscribeInvalidation,
@@ -347,11 +348,11 @@ export function createAcpWorkspaceClient({
     subscribeActivity: store.subscribeActivity,
 
     // Composer
-    async workspaceCapabilities(threadId: string) {
-      return composer.capabilities(threadId)
+    async workspaceCapabilities(sessionId: string) {
+      return composer.capabilities(sessionId)
     },
-    async models(threadId: string) {
-      return composer.models(threadId)
+    async models(sessionId: string) {
+      return composer.models(sessionId)
     },
     /** The newest usage the provider pushed, read synchronously. */
     context: composer.context,
@@ -363,24 +364,24 @@ export function createAcpWorkspaceClient({
     selectEffort: composer.selectEffort,
     /** One provider write per half; the response settles what the Session runs. */
     async updateModel(
-      threadId: string,
+      sessionId: string,
       patch: SessionModelUpdateRequest
     ): Promise<SessionModelUpdateResponse> {
       let models =
         patch.selectedId === undefined
-          ? composer.models(threadId)
-          : await composer.selectModel(threadId, patch.selectedId)
+          ? composer.models(sessionId)
+          : await composer.selectModel(sessionId, patch.selectedId)
       if (patch.effortId !== undefined)
-        models = await composer.selectEffort(threadId, patch.effortId)
+        models = await composer.selectEffort(sessionId, patch.effortId)
       return {
         selectedId: models.selectedId,
         ...(models.effortId === undefined ? {} : { effortId: models.effortId }),
       }
     },
     steerRun: (
-      threadId: string,
+      sessionId: string,
       request: { requestId: string; text: string }
-    ) => connection.steer({ sessionId: threadId, ...request }),
+    ) => connection.steer({ sessionId, ...request }),
 
     // Bytes and runtime metadata stay on REST.
     runtimeInfo: rest.runtimeInfo.bind(rest),
@@ -394,7 +395,7 @@ export function createAcpWorkspaceClient({
     agentIdOf: agentOf,
     /** Ownership for callers that can proceed without knowing it yet. */
     knownAgentIdOf: knownAgentOf,
-    /** The provider's newest Session title, once a Session is attached. */
+    /** The provider's newest Session title, once a Session is resumed. */
     sessionTitle: store.title,
   }
 

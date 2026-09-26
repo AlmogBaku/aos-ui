@@ -40,8 +40,8 @@ browser presentation and drafts
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                                                                                  |
 | Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                                                                                |
-| Member middleware    | Lane rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
-| Channel              | Per-member delivery for one Session room: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                                  |
+| Member middleware    | Role rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
+| Channel              | Per-member delivery for one Session's channel: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                             |
 | `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, turn segment identities, subscriber fanout, bounded replay, per-conversation answer collection, usage and model readings, and authoritative settlement. |
 | Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention.                                                           |
 | Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                                                                                    |
@@ -280,7 +280,7 @@ Guest output is projected by the guest middleware
 (`packages/proxy/acp/member-encoder.ts`) writes it to the guest connection.
 This keeps reasoning, raw tools, permission requests, privileged roles, native
 metadata, paths, live IDs, and provider positions out of memory that an authorized guest
-connection can drain. Adapters stay lane-blind: they never see which member
+connection can drain. Adapters stay role-blind: they never see which member
 asked. A slow or expired guest may lose its own subscriber without delaying or
 stopping operator delivery.
 
@@ -340,28 +340,28 @@ the activity feed on connect; adapters that omit it simply receive no wake.
 
 ### Turns the runtime starts by itself
 
-Implement the optional `watch(scope, { onTurn, onError })` method on
+Implement the optional `subscribeTurns(scope, { onTurn, onError })` method on
 `ServerTurnEngine` when the native runtime can start a turn in a Session
 without the proxy: a subagent result, a loop tick, a heartbeat, cron, or
-another native client. A Session's room watches it while any browser has it
-open. The adapter only signals; the shared core adopts the turn through
+another native client. A Session's channel subscribes while any browser has
+it resumed. The adapter only signals; the shared core adopts the turn through
 `discover` and streams it to every member, who can Stop it like any other.
 
 - Fire `onTurn` when a turn this adapter did not start begins, and again
-  whenever the watch (re)subscribes, at setup or after a reconnect or rebind,
+  whenever the subscription is remade, at setup or after a reconnect or rebind,
   while such a turn is running.
 - Stay silent for the adapter's own turns. A foreign turn that starts during
-  one is found by the `discover` the room runs after every turn's end.
+  one is found by the `discover` the channel runs after every turn's end.
 - Fire at most once per native turn, however often the runtime announces it.
 - Own reconnect retries and report failures through `onError`; never throw.
   The returned stop function may be called more than once and ends retries.
 
-Because the room calls `discover` after every turn's end, `discover` must
+Because the channel calls `discover` after every turn's end, `discover` must
 return `undefined` for a turn the adapter admitted, including one still
 settling. It returns a running foreign turn with its events, and sets
 `fromStart` only when those events begin at the native turn's first event, so
 a browser following it replays the whole turn instead of receiving a reset.
-Adapters that omit `watch` behave as before: only turns the proxy started
+Adapters that omit `subscribeTurns` behave as before: only turns the proxy started
 reach other browsers.
 
 ### Session read state and `unread`
@@ -421,7 +421,7 @@ Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
 Session and return `{bytes, mimeType?, filename}`, read through the harness's
 own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
-(`packages/proxy/routes/content.ts:87`) serves it on both lanes.
+(`packages/proxy/routes/content.ts:87`) serves it on both listeners.
 
 ### MCP tool names
 

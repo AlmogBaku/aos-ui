@@ -7,6 +7,7 @@ import {
   type Session,
   type SessionCatalogResponse,
 } from "../../../protocol"
+import * as ids from "../../core/ids"
 import { inviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 import {
@@ -133,8 +134,12 @@ export function createOpenCodeWorkspaceOperations(input: {
       if (sessions.length > MAX_CATALOG_WINDOW)
         throw new OpenCodeWorkspaceUnavailableError()
     } while (cursor)
-    const ids = new Set<string>()
-    if (sessions.some((session) => ids.has(session.id) || !ids.add(session.id)))
+    const seenIds = new Set<string>()
+    if (
+      sessions.some(
+        (session) => seenIds.has(session.id) || !seenIds.add(session.id)
+      )
+    )
       throw new OpenCodeWorkspaceUnavailableError()
     return sessions
   }
@@ -189,7 +194,8 @@ export function createOpenCodeWorkspaceOperations(input: {
     throw new OpenCodeWorkspaceUnavailableError()
   }
 
-  type InviteResolution = { sessionId: string; created: false } | undefined
+  type InviteResolution =
+    { providerSessionId: ids.ProviderSessionId; created: false } | undefined
   const invitedResolutions = new Map<string, Promise<InviteResolution>>()
 
   async function resolveInvite(
@@ -205,7 +211,10 @@ export function createOpenCodeWorkspaceOperations(input: {
     )
     if (matches.length > 1) throw new OpenCodeWorkspaceUnavailableError()
     if (matches.length === 1)
-      return { sessionId: matches[0]!.id, created: false }
+      return {
+        providerSessionId: ids.providerSessionId(matches[0]!.id),
+        created: false,
+      }
     if (!create) return undefined
     // OpenCode v2 creates only an unmarked Session, and the reserved invitation
     // title would need a second, non-atomic rename that can leave an untitled
@@ -217,7 +226,7 @@ export function createOpenCodeWorkspaceOperations(input: {
     capabilities: () => ({
       models: {
         status: "available" as const,
-        scope: "attached-session" as const,
+        scope: "session" as const,
         selection: "native-session" as const,
         choices: "provider-reported" as const,
       },

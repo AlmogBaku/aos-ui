@@ -69,7 +69,7 @@ const navigation: AgentSessionNavigation = {
   agentId: "agent-a",
   openSessions: [
     {
-      threadId: "open-match",
+      sessionId: "open-match",
       title: "Shared research",
       status: "running",
       updatedAt: "2026-09-08T09:00:00.000Z",
@@ -78,13 +78,13 @@ const navigation: AgentSessionNavigation = {
   ],
   historySessions: [
     {
-      threadId: "history-match",
+      sessionId: "history-match",
       title: "Shared findings",
       status: "idle",
       updatedAt: "2026-09-07T09:00:00.000Z",
     },
     {
-      threadId: "open-match",
+      sessionId: "open-match",
       title: "Duplicate research",
       status: "running",
       updatedAt: "2026-09-08T09:00:00.000Z",
@@ -239,7 +239,7 @@ describe("AgentSessionHistory", () => {
     )
     await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
     expect(onRename).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ threadId: "history-match" })
+      expect.objectContaining({ sessionId: "history-match" })
     )
   })
 
@@ -251,7 +251,7 @@ describe("AgentSessionHistory", () => {
           openSessions: [
             { ...navigation.openSessions[0]!, pinned: true },
             {
-              threadId: "open-other",
+              sessionId: "open-other",
               title: "Quarterly plan",
               status: "idle",
               updatedAt: "2026-09-09T09:00:00.000Z",
@@ -286,7 +286,7 @@ describe("AgentSessionHistory", () => {
           ...navigation,
           archivedSessions: [
             {
-              threadId: "archived-one",
+              sessionId: "archived-one",
               title: "Campaign retrospective",
               status: "idle",
               updatedAt: "2026-09-01T09:00:00.000Z",
@@ -322,7 +322,7 @@ describe("AgentSessionHistory", () => {
     )
     await user.click(await screen.findByRole("menuitem", { name: "Unarchive" }))
     expect(onToggleArchive).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ threadId: "archived-one" })
+      expect.objectContaining({ sessionId: "archived-one" })
     )
   })
 
@@ -367,7 +367,7 @@ describe("AgentSessionHistory", () => {
     )
     await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
     expect(onDelete).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ threadId: "open-match" })
+      expect.objectContaining({ sessionId: "open-match" })
     )
   })
 

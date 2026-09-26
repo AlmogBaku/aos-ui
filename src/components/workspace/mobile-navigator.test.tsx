@@ -36,12 +36,12 @@ const agents: WorkspaceAgent[] = [
 ]
 
 const session = (
-  threadId: string,
+  sessionId: string,
   title: string,
   status: WorkspaceSession["status"] = "idle",
   unread = false
 ): WorkspaceSession => ({
-  threadId,
+  sessionId,
   title,
   status,
   updatedAt: "2026-09-08T09:00:00.000Z",
@@ -340,7 +340,7 @@ describe("MobileNavigator", () => {
     )
     await user.click(await screen.findByRole("menuitem", { name: "Rename" }))
     expect(onRename).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ threadId: "a-1" })
+      expect.objectContaining({ sessionId: "a-1" })
     )
 
     const archived = screen.getByRole("region", { name: "Archived" })

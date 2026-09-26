@@ -127,8 +127,8 @@ export class ThreadReadingPositionController {
    * content, scroll anchoring, a focus change — would otherwise be captured
    * mid-way and pin the thread short of its latest content.
    */
-  capture(threadId: string, viewport: HTMLElement, byReader = true) {
-    const previous = this.#bookmarks.get(threadId)
+  capture(sessionId: string, viewport: HTMLElement, byReader = true) {
+    const previous = this.#bookmarks.get(sessionId)
     const scrolledUp = viewport.scrollTop < this.#scrollTop
     this.#scrollTop = viewport.scrollTop
     if (previous?.mode === "follow" && !(scrolledUp && byReader))
@@ -137,15 +137,15 @@ export class ThreadReadingPositionController {
       viewport,
       this.#bottomThresholdPx
     )
-    this.#bookmarks.set(threadId, bookmark)
+    this.#bookmarks.set(sessionId, bookmark)
     return bookmark
   }
 
-  restore(threadId: string, viewport: HTMLElement) {
-    let bookmark = this.#bookmarks.get(threadId)
+  restore(sessionId: string, viewport: HTMLElement) {
+    let bookmark = this.#bookmarks.get(sessionId)
     if (!bookmark) {
       bookmark = { mode: "follow" }
-      this.#bookmarks.set(threadId, bookmark)
+      this.#bookmarks.set(sessionId, bookmark)
     }
     this.#apply(viewport, bookmark)
     return bookmark
@@ -156,17 +156,17 @@ export class ThreadReadingPositionController {
    * content, so every later growth keeps pinning it to the bottom even while
    * that scroll is still under way.
    */
-  follow(threadId: string) {
-    this.#bookmarks.set(threadId, { mode: "follow" })
+  follow(sessionId: string) {
+    this.#bookmarks.set(sessionId, { mode: "follow" })
   }
 
   /** The thread's last captured place, if the reader has one yet. */
-  bookmark(threadId: string): ThreadReadingBookmark | undefined {
-    return this.#bookmarks.get(threadId)
+  bookmark(sessionId: string): ThreadReadingBookmark | undefined {
+    return this.#bookmarks.get(sessionId)
   }
 
-  syncAfterContentChange(threadId: string, viewport: HTMLElement) {
-    const bookmark = this.#bookmarks.get(threadId)
+  syncAfterContentChange(sessionId: string, viewport: HTMLElement) {
+    const bookmark = this.#bookmarks.get(sessionId)
     if (bookmark) this.#apply(viewport, bookmark)
   }
 
@@ -182,7 +182,7 @@ export class ThreadReadingPositionController {
 
 export type UseThreadReadingPositionOptions = {
   /** Current provider-owned Session/thread ID. */
-  threadId: string | null
+  sessionId: string | null
   /** False while the destination Session history is loading. */
   contentReady: boolean
   /** Ref attached directly to `ThreadPrimitive.Viewport`. */
@@ -201,7 +201,7 @@ function createRuntimeScopedController(runtimeKey: unknown) {
  *
  * Integration in `Thread`:
  * 1. attach `viewportRef` to `ThreadPrimitive.Viewport`;
- * 2. pass `useAuiState(s => s.threadListItem.remoteId)` as `threadId`;
+ * 2. pass `useAuiState(s => s.threadListItem.remoteId)` as `sessionId`;
  * 3. pass false for `contentReady` while the history skeleton is visible;
  * 4. pass the selected Assistant runtime instance as `runtimeKey`.
  *
@@ -212,7 +212,7 @@ function createRuntimeScopedController(runtimeKey: unknown) {
  * while unseen Sessions and followed Sessions open at the latest content.
  */
 export function useThreadReadingPosition({
-  threadId,
+  sessionId,
   contentReady,
   viewportRef,
   runtimeKey,
@@ -224,13 +224,13 @@ export function useThreadReadingPosition({
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
-    if (!threadId || !contentReady || !viewport) return
-    controller.restore(threadId, viewport)
-  }, [contentReady, controller, threadId, viewportRef])
+    if (!sessionId || !contentReady || !viewport) return
+    controller.restore(sessionId, viewport)
+  }, [contentReady, controller, sessionId, viewportRef])
 
   useEffect(() => {
     const viewport = viewportRef.current
-    if (!threadId || !contentReady || !viewport) return
+    if (!sessionId || !contentReady || !viewport) return
 
     let frame: number | null = null
     let capturePending = false
@@ -251,7 +251,7 @@ export function useThreadReadingPosition({
         if (capturePending) {
           capturePending = false
           controller.capture(
-            threadId,
+            sessionId,
             viewport,
             performance.now() - inputAt < READER_INPUT_WINDOW_MS
           )
@@ -260,7 +260,7 @@ export function useThreadReadingPosition({
         // a scroll alone stays where it landed.
         if (resizePending) {
           resizePending = false
-          controller.syncAfterContentChange(threadId, viewport)
+          controller.syncAfterContentChange(sessionId, viewport)
         }
       })
     }
@@ -282,7 +282,7 @@ export function useThreadReadingPosition({
       resizeObserver?.disconnect()
       if (frame !== null) window.cancelAnimationFrame(frame)
     }
-  }, [contentReady, controller, threadId, viewportRef])
+  }, [contentReady, controller, sessionId, viewportRef])
 
   return controller
 }

@@ -42,13 +42,13 @@ function workspaceCapabilities() {
     workspace: {
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -85,7 +85,7 @@ function workspaceCapabilities() {
     content: {
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: ["image/png"],
         fileMimeTypes: "valid-type/subtype",
@@ -109,7 +109,7 @@ function harness(options: { existing?: boolean } = {}) {
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
       options.existing || create
-        ? { sessionId: STORED, created: !options.existing }
+        ? { providerSessionId: STORED, created: !options.existing }
         : undefined
   )
   const artifact = vi.fn(async () => ({
@@ -575,7 +575,7 @@ describe("guest app", () => {
       describe: vi.fn(async () => true),
       // The runtime finds a call only in the Session that made it.
       open: vi.fn(async (scope, toolCallId) => {
-        if (scope.sessionId !== STORED || toolCallId !== "call-1")
+        if (scope.providerSessionId !== STORED || toolCallId !== "call-1")
           throw new McpAppNotFoundError()
         return { html: "<p>view</p>" }
       }),
@@ -594,7 +594,7 @@ describe("guest app", () => {
     })
     expect(own.status).toBe(200)
     expect(mcpApps.open).toHaveBeenLastCalledWith(
-      { agentId: AGENT, sessionId: STORED, threadId: REF },
+      { agentId: AGENT, providerSessionId: STORED, sessionId: REF },
       "call-1",
       expect.anything()
     )

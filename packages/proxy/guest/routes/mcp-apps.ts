@@ -1,6 +1,7 @@
 import type { Hono } from "hono"
 
 import type { GuestOperation } from "../../auth/guest-invitation"
+import * as ids from "../../core/ids"
 import {
   createMcpAppRateLimit,
   handleMcpAppRequest,
@@ -11,8 +12,9 @@ import {
 import { emptyError, invitationError, type GuestRoutes } from "../context"
 
 /**
- * The guest lane's MCP App views: the invite's own Session only, read like its
- * artifacts, and a view's tool call authorized like the guest's own message.
+ * The guest listener's MCP App views: the invite's own Session only, read like
+ * its artifacts, and a view's tool call authorized like the guest's own
+ * message.
  */
 export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
   const base = `/api/guest/v1/agents/:agentId/sessions/:sessionId${MCP_APP_PATH}`
@@ -43,7 +45,11 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
       if (!resolved) return emptyError(404)
       const outcome = await handleMcpAppRequest({
         runtime,
-        scope: { agentId, sessionId: resolved.sessionId, threadId: ref },
+        scope: {
+          agentId,
+          providerSessionId: resolved.providerSessionId,
+          sessionId: ids.sessionId(ref),
+        },
         toolCallId,
         operation,
         request: context.req.raw,

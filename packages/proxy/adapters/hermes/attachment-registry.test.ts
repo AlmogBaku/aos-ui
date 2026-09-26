@@ -11,7 +11,11 @@ import {
 } from "./gateway"
 import { nativeTurn } from "./test-utils/native-events"
 
-const scope = { agentId: "research", sessionId: "stored", threadId: "thread" }
+const scope = {
+  agentId: "research",
+  providerSessionId: "stored",
+  sessionId: "thread",
+}
 
 /**
  * The registry only needs the gateway's observation hooks. This fake records
@@ -23,11 +27,11 @@ function fakeGateway() {
   const handlers = new Set<HermesConnectionHandler>()
   return {
     transport: {
-      onEvent(listener: (event: unknown) => void) {
+      subscribeEvents(listener: (event: unknown) => void) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
-      onConnection(handler: HermesConnectionHandler) {
+      subscribeConnection(handler: HermesConnectionHandler) {
         handlers.add(handler)
         return () => handlers.delete(handler)
       },
@@ -81,7 +85,9 @@ describe("HermesAttachmentRegistry", () => {
     const gateway = fakeGateway()
     const registry = new HermesAttachmentRegistry(
       {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
+        resume: async (value) => ({
+          liveSessionId: `live-${value.providerSessionId}`,
+        }),
         close: async () => undefined,
       },
       gateway.transport
@@ -102,13 +108,13 @@ describe("HermesAttachmentRegistry", () => {
   it("single-flights session resume and routes events by live Session", async () => {
     const gateway = fakeGateway()
     const resume = vi.fn(async (value: typeof scope) => ({
-      liveSessionId: `live-${value.sessionId}`,
+      liveSessionId: `live-${value.providerSessionId}`,
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
       gateway.transport
     )
-    const second = { ...scope, sessionId: "other" }
+    const second = { ...scope, providerSessionId: "other" }
     const [firstAttachment] = await Promise.all([
       registry.ensure(scope),
       registry.ensure(scope),
@@ -303,13 +309,13 @@ describe("HermesAttachmentRegistry", () => {
   it("clears every binding and signals a restart loss when Hermes restarts", async () => {
     const gateway = fakeGateway()
     const resume = vi.fn(async (value: typeof scope) => ({
-      liveSessionId: `live-${value.sessionId}`,
+      liveSessionId: `live-${value.providerSessionId}`,
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
       gateway.transport
     )
-    const second = { ...scope, sessionId: "other" }
+    const second = { ...scope, providerSessionId: "other" }
     const first = vi.fn()
     const other = vi.fn()
     await registry.subscribe(scope, first)
@@ -431,8 +437,8 @@ describe("HermesAttachmentRegistry", () => {
     const gateway = fakeGateway()
     const close = vi.fn(async () => undefined)
     const resume = vi.fn(async (value: typeof scope) => ({
-      liveSessionId: `live-${value.sessionId}`,
-      saved: !value.sessionId.startsWith("draft"),
+      liveSessionId: `live-${value.providerSessionId}`,
+      saved: !value.providerSessionId.startsWith("draft"),
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close },
@@ -443,9 +449,9 @@ describe("HermesAttachmentRegistry", () => {
     await vi.advanceTimersByTimeAsync(200_000)
     // Using the cached binding restarts its idle window rather than ending it.
     await registry.ensure(scope)
-    await registry.ensure({ ...scope, sessionId: "other" })
-    await registry.ensure({ ...scope, sessionId: "draft" })
-    await registry.ensure({ ...scope, sessionId: "draft-sent" })
+    await registry.ensure({ ...scope, providerSessionId: "other" })
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
+    await registry.ensure({ ...scope, providerSessionId: "draft-sent" })
     // Hermes commits a turn before completing it, so the draft is now stored.
     gateway.publish(nativeTurn("live-draft-sent").complete("msg-1", "done"))
     await vi.advanceTimersByTimeAsync(300_000)
@@ -455,7 +461,7 @@ describe("HermesAttachmentRegistry", () => {
     expect(close).toHaveBeenCalledWith("live-draft-sent")
     // Closing a draft natively would delete it; it is only unbound.
     expect(close).not.toHaveBeenCalledWith("live-draft")
-    await registry.ensure({ ...scope, sessionId: "draft" })
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
     expect(resume).toHaveBeenCalledTimes(5)
     vi.useRealTimers()
   })
@@ -581,17 +587,17 @@ describe("HermesAttachmentRegistry", () => {
     const registry = new HermesAttachmentRegistry(
       {
         resume: async (value) => ({
-          liveSessionId: `live-${value.sessionId}`,
-          saved: value.sessionId !== "draft",
+          liveSessionId: `live-${value.providerSessionId}`,
+          saved: value.providerSessionId !== "draft",
         }),
         close,
       },
       gateway.transport
     )
     const release = await registry.retain(scope, "waiting-for-input")
-    await registry.ensure({ ...scope, sessionId: "running" })
-    await registry.ensure({ ...scope, sessionId: "idle" })
-    await registry.ensure({ ...scope, sessionId: "draft" })
+    await registry.ensure({ ...scope, providerSessionId: "running" })
+    await registry.ensure({ ...scope, providerSessionId: "idle" })
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
     gateway.publish(nativeTurn("live-running").messageStart("msg-1"))
 
     await registry.close()

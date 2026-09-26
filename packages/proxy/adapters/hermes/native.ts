@@ -71,8 +71,8 @@ export function containsCredentialValue(value: string) {
 
 /**
  * True when a native string looks like a credential or a private filesystem or
- * internal-network location. It guards what the guest lane may receive from the
- * adapter: published artifact identities. Operator-only data (tool calls,
+ * internal-network location. It guards what the guest listener may receive from
+ * the adapter: published artifact identities. Operator-only data (tool calls,
  * diffs, locations, failure details) is held to `containsCredentialValue`
  * alone, because the guest projection never forwards it.
  */
@@ -377,8 +377,11 @@ export function rowText(row: Record<string, unknown>, content: unknown) {
  * The one map key for a durable Agent/Session pair. The separator cannot occur
  * in a native identifier, so two distinct pairs never collide.
  */
-export function sessionKey(scope: { agentId: string; sessionId: string }) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+export function sessionKey(scope: {
+  agentId: string
+  providerSessionId: string
+}) {
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 // ---------------------------------------------------------------------------

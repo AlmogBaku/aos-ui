@@ -30,7 +30,7 @@ type DispatcherLogger = { info(value: unknown): void }
 
 export type PushDispatcherOptions = {
   runtimeInstance: RuntimeInstance
-  /** The same rows the ACP lane maintains, so read state gates delivery. */
+  /** The same rows the ACP listener maintains, so read state gates delivery. */
   sessionRows: SessionRows
   registrations: PushRegistrations
   presence: PresenceRegistry
@@ -235,7 +235,7 @@ export function createPushDispatcher({
     },
   })
 
-  const unobserve = runtimeInstance.sessions.observe((event) => {
+  const unsubscribe = runtimeInstance.sessions.subscribeExecutions((event) => {
     const category = categoryOf(event.kind)
     if (!category) return
     // A timestamp the provider left unreadable must not silence a notification.
@@ -249,7 +249,7 @@ export function createPushDispatcher({
 
   return {
     close() {
-      unobserve()
+      unsubscribe()
       coalescer.close()
     },
   }

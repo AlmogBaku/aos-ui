@@ -88,9 +88,9 @@ async function pushConfiguration(stateDir?: string) {
   }
 }
 
-/** A runtime whose coordinator only records who observes it. */
+/** A runtime whose coordinator only records who subscribes to it. */
 function observableRuntime() {
-  const observe = vi.fn(() => vi.fn())
+  const subscribeExecutions = vi.fn(() => vi.fn())
   const runtimeInstance = {
     id: "test-runtime",
     runtime: {
@@ -98,10 +98,10 @@ function observableRuntime() {
       publicError: () => undefined,
       turns: {},
     },
-    sessions: { observe },
+    sessions: { subscribeExecutions },
     close: vi.fn(async () => undefined),
   } as unknown as RuntimeInstance
-  return { observe, runtimeInstance }
+  return { subscribeExecutions, runtimeInstance }
 }
 
 function profile() {
@@ -189,7 +189,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("loads one server token and shares one runtime and transport across both lanes", async () => {
+  it("loads one server token and shares one runtime and transport across both listeners", async () => {
     const transportClose = vi.fn(async () => undefined)
     const transportFactory = vi.fn(
       (options: HermesGatewayOptions) =>
@@ -209,9 +209,11 @@ describe("configured proxy composition", () => {
 
     expect(transportFactory).toHaveBeenCalledOnce()
     expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
-    // An operator and a guest on one provider Session meet in one room.
-    expect(configured.acpService.rooms).toBeDefined()
-    expect(configured.guest?.acpService.rooms).toBe(configured.acpService.rooms)
+    // An operator and a guest on one provider Session meet in one channel.
+    expect(configured.acpService.channels).toBeDefined()
+    expect(configured.guest?.acpService.channels).toBe(
+      configured.acpService.channels
+    )
     await expect(
       transportFactory.mock.results[0]?.value.credentials()
     ).resolves.toEqual({ "X-Hermes-Session-Token": "hermes-secret" })
@@ -363,8 +365,8 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("wires push delivery to the runtime and the operator lane's own rows", async () => {
-    const { observe, runtimeInstance } = observableRuntime()
+  it("wires push delivery to the runtime and the operator listener's own rows", async () => {
+    const { subscribeExecutions, runtimeInstance } = observableRuntime()
     const input = {
       ...(await configuration()),
       push: await pushConfiguration(),
@@ -375,9 +377,9 @@ describe("configured proxy composition", () => {
       logger: { info: vi.fn(), error: vi.fn() },
     })
 
-    // One cache: the ACP lane keeps it current and the read-state gate reads it.
+    // One cache: the ACP listener keeps it current and the read-state gate reads it.
     expect(configured.acpService.sessionRows).toBe(configured.sessionRows)
-    expect(observe).toHaveBeenCalledOnce()
+    expect(subscribeExecutions).toHaveBeenCalledOnce()
     expect(configured.push?.registrations.list("operator")).toEqual([])
 
     const response = await configured.app.request(
@@ -395,7 +397,7 @@ describe("configured proxy composition", () => {
   })
 
   it("serves no push capability when a deployment configures none", async () => {
-    const { runtimeInstance, observe } = observableRuntime()
+    const { runtimeInstance, subscribeExecutions } = observableRuntime()
 
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
@@ -403,7 +405,7 @@ describe("configured proxy composition", () => {
     })
 
     expect(configured.push).toBeUndefined()
-    expect(observe).not.toHaveBeenCalled()
+    expect(subscribeExecutions).not.toHaveBeenCalled()
     await expect(
       (
         await configured.app.request("https://aos.example.test/api/aos/v1/push")
@@ -507,7 +509,7 @@ describe("configured proxy composition", () => {
       expect(new Headers(init.headers).get("authorization")).toBe(
         "Bearer tts-secret"
       )
-      // Both lanes and readiness still see one runtime instance.
+      // Both listeners and readiness still see one runtime instance.
       expect(configured.guest).toBeUndefined()
       expect(
         (

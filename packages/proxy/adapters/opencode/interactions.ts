@@ -12,8 +12,8 @@ const MAX_OPTIONS = 64
 const MAX_TEXT_BYTES = 4_096
 export type OpenCodeInteractionScope = {
   agentId: string
+  providerSessionId: string
   sessionId: string
-  threadId: string
   /** A normalized segment ID is not native interaction identity. */
   turnId?: string
 }
@@ -100,7 +100,7 @@ function boundedLines(values: readonly string[]) {
   }
 }
 const identity = (s: Scope) =>
-  JSON.stringify([s.agentId, s.sessionId, s.threadId])
+  JSON.stringify([s.agentId, s.providerSessionId, s.sessionId])
 const key = (s: Scope, id: string) => `${identity(s)}:${id}`
 function parseQuestions(native: unknown, sessionId: string): Question[] {
   const request = record(native)
@@ -158,8 +158,8 @@ export class OpenCodeInteractions {
    */
   async discover(scope: OpenCodeInteractionScope) {
     const [questions, permissions] = await Promise.all([
-      this.transport.questions.list(scope.sessionId),
-      this.transport.permissions.list(scope.sessionId),
+      this.transport.questions.list(scope.providerSessionId),
+      this.transport.permissions.list(scope.providerSessionId),
     ])
     return this.reconcile(scope, { questions, permissions })
   }
@@ -179,8 +179,8 @@ export class OpenCodeInteractions {
   async dispatch(scope: OpenCodeInteractionScope, replies: unknown) {
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     const prepared = this.#prepared.get(identity(s))
     if (
@@ -206,8 +206,8 @@ export class OpenCodeInteractions {
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     if (!this.#pending.has(key(s, id)) && this.#pending.size >= MAX_PENDING)
       throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
@@ -220,7 +220,7 @@ export class OpenCodeInteractions {
       scope: s,
       state: "pending",
       kind: "question",
-      questions: parseQuestions(native, scope.sessionId),
+      questions: parseQuestions(native, scope.providerSessionId),
     })
     return this.snapshot(scope)!
   }
@@ -232,7 +232,7 @@ export class OpenCodeInteractions {
     const id = text(row?.id, 512)
     if (
       !id ||
-      row?.sessionID !== scope.sessionId ||
+      row?.sessionID !== scope.providerSessionId ||
       !text(row.action) ||
       !Array.isArray(row.resources) ||
       row.resources.length > 64 ||
@@ -241,8 +241,8 @@ export class OpenCodeInteractions {
       throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     const existing = this.#pending.get(key(s, id))
     if (
@@ -275,8 +275,8 @@ export class OpenCodeInteractions {
   ) {
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     const qs = Array.isArray(native.questions)
       ? native.questions
@@ -316,8 +316,8 @@ export class OpenCodeInteractions {
   snapshot(scope: OpenCodeInteractionScope): PendingRequest[] | undefined {
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     const pending = [...this.#pending.values()].filter(
       (p) => identity(p.scope) === identity(s)
@@ -361,8 +361,8 @@ export class OpenCodeInteractions {
   #entries(scope: OpenCodeInteractionScope, replies: unknown) {
     const s: Scope = {
       agentId: scope.agentId,
+      providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
-      threadId: scope.threadId,
     }
     const pending = [...this.#pending.values()].filter(
       (p) => identity(p.scope) === identity(s)
@@ -405,9 +405,9 @@ export class OpenCodeInteractions {
       for (const e of entries) {
         if (e.p.kind === "question") {
           if (e.status === "cancelled")
-            await this.transport.questions.reject(s.sessionId, e.p.id)
+            await this.transport.questions.reject(s.providerSessionId, e.p.id)
           else
-            await this.transport.questions.reply(s.sessionId, e.p.id, {
+            await this.transport.questions.reply(s.providerSessionId, e.p.id, {
               answers: e.answers!,
             })
         } else {
@@ -415,7 +415,7 @@ export class OpenCodeInteractions {
           if (choice !== "once" && choice !== "always" && choice !== "deny")
             throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
           await this.transport.permissions.reply(
-            s.sessionId,
+            s.providerSessionId,
             e.p.id,
             choice === "deny" ? "reject" : choice
           )

@@ -91,11 +91,11 @@ function readStoredResolvedDrafts(): ReadonlySet<string> {
   }
 }
 
-function storeResolvedDraft(threadId: string) {
+function storeResolvedDraft(sessionId: string) {
   if (typeof window === "undefined") return
   try {
     const stored = readResolvedDrafts(window.localStorage)
-    stored.add(threadId)
+    stored.add(sessionId)
     writeResolvedDrafts(window.localStorage, stored)
   } catch {
     // Without storage a reload rebuilds the draft; the roster still wins.
@@ -134,7 +134,7 @@ type TodoSnapshot = {
 
 type ConversationDraftSelection = {
   agentId: string
-  threadId: string | null
+  sessionId: string | null
 }
 
 /** Coordinates URL selection and provider-owned Session metadata, never messages. */
@@ -297,10 +297,10 @@ export function useWorkspaceNavigation({
     const ids = [
       ...new Set([...threadState.threadIds, ...threadState.archivedThreadIds]),
     ]
-    return ids.map((threadId) => {
-      const item = threadState.threadItems[threadId]
+    return ids.map((sessionId) => {
+      const item = threadState.threadItems[sessionId]
       return {
-        threadId: item?.remoteId ?? item?.externalId ?? threadId,
+        sessionId: item?.remoteId ?? item?.externalId ?? sessionId,
         title: item?.title?.trim() || dictionary.actions.newSession,
         status: item?.status,
       }
@@ -312,7 +312,7 @@ export function useWorkspaceNavigation({
     threadState.threadItems,
   ])
   const runtimeThreadIds = useMemo(
-    () => runtimeThreads.map(({ threadId }) => threadId),
+    () => runtimeThreads.map(({ sessionId }) => sessionId),
     [runtimeThreads]
   )
   const sessionQueryKey = `${refreshKey}:${runtimeThreadIds.join("\u001f")}`
@@ -323,8 +323,8 @@ export function useWorkspaceNavigation({
   const sessionSnapshotStillCovers = useMemo(() => {
     if (!sessionSnapshot.key.startsWith(`${refreshKey}:`)) return false
     const listed = new Set(runtimeThreadIds)
-    return sessionSnapshot.sessions.every(({ threadId }) =>
-      listed.has(threadId)
+    return sessionSnapshot.sessions.every(({ sessionId }) =>
+      listed.has(sessionId)
     )
   }, [refreshKey, runtimeThreadIds, sessionSnapshot])
   const sessions =
@@ -337,7 +337,7 @@ export function useWorkspaceNavigation({
     (runtimeThreadIds.length > 0 && !sessionSnapshotIsCurrent)
   const titles = useMemo(
     () =>
-      new Map(runtimeThreads.map(({ threadId, title }) => [threadId, title])),
+      new Map(runtimeThreads.map(({ sessionId, title }) => [sessionId, title])),
     [runtimeThreads]
   )
   const mainItem = threadState.threadItems[threadState.mainThreadId]
@@ -345,23 +345,23 @@ export function useWorkspaceNavigation({
   const activeThreadId =
     mainItem?.remoteId ??
     mainItem?.externalId ??
-    (sessions.some(({ threadId }) => threadId === threadState.mainThreadId)
+    (sessions.some(({ sessionId }) => sessionId === threadState.mainThreadId)
       ? threadState.mainThreadId
       : null)
   const visibleThreadId =
     activeThreadId &&
     sessions.some(
       (session) =>
-        session.threadId === activeThreadId &&
+        session.sessionId === activeThreadId &&
         session.agentId === selectedAgentId
     )
       ? activeThreadId
       : null
   const conversationThreadId = conversationDraft
     ? conversationDraft.agentId === selectedProviderAgentId &&
-      conversationDraft.threadId !== null &&
-      mainItemId === conversationDraft.threadId
-      ? conversationDraft.threadId
+      conversationDraft.sessionId !== null &&
+      mainItemId === conversationDraft.sessionId
+      ? conversationDraft.sessionId
       : null
     : visibleThreadId
   // Automatic selection never lands on an archived Session, but the operator
@@ -370,7 +370,7 @@ export function useWorkspaceNavigation({
     () =>
       sessions.filter(
         (session) =>
-          session.archived !== true || session.threadId === visibleThreadId
+          session.archived !== true || session.sessionId === visibleThreadId
       ),
     [sessions, visibleThreadId]
   )
@@ -382,15 +382,15 @@ export function useWorkspaceNavigation({
    */
   const liveDismissedTabs = useMemo(() => {
     const byThread = new Map(
-      sessions.map((session) => [session.threadId, session] as const)
+      sessions.map((session) => [session.sessionId, session] as const)
     )
     return Object.fromEntries(
-      Object.entries(dismissedTabs).map(([agentId, threadIds]) => [
+      Object.entries(dismissedTabs).map(([agentId, sessionIds]) => [
         agentId,
-        threadIds.filter((threadId) => {
-          const session = byThread.get(threadId)
+        sessionIds.filter((sessionId) => {
+          const session = byThread.get(sessionId)
           if (session?.pinned !== true) return true
-          const dismissedAt = pinnedDismissedAt.current.get(threadId) ?? ""
+          const dismissedAt = pinnedDismissedAt.current.get(sessionId) ?? ""
           return !(Date.parse(session.updatedAt) > Date.parse(dismissedAt))
         }),
       ])
@@ -459,7 +459,7 @@ export function useWorkspaceNavigation({
   const acceptCreatedAgent = useEffectEvent(
     async (event: WorkspaceActivityEvent) => {
       const owner = publishedSessions.find(
-        ({ threadId }) => threadId === event.threadId
+        ({ sessionId }) => sessionId === event.sessionId
       )?.agentId
       if (!agentCreator || owner !== agentCreator.id) return
       let catalog = await refreshAgentCatalog()
@@ -472,16 +472,16 @@ export function useWorkspaceNavigation({
         return
       }
       setResolvedDrafts((current) =>
-        current.has(event.threadId)
+        current.has(event.sessionId)
           ? current
-          : new Set(current).add(event.threadId)
+          : new Set(current).add(event.sessionId)
       )
-      storeResolvedDraft(event.threadId)
+      storeResolvedDraft(event.sessionId)
       if (event.type === "agent-activation-failed") {
         setCreatorNotice(dictionary.creator.createdHidden)
         // A retired draft keeps neither the selection nor the route it owned.
         if (
-          selectedAgentId === draftAgentId(event.threadId) &&
+          selectedAgentId === draftAgentId(event.sessionId) &&
           defaultAgentId
         ) {
           noticeOutlivesRoute.current = true
@@ -489,7 +489,7 @@ export function useWorkspaceNavigation({
         }
         return
       }
-      if (selectedAgentId !== draftAgentId(event.threadId)) return
+      if (selectedAgentId !== draftAgentId(event.sessionId)) return
       // The created Agent owns no Session yet, and creation never invents one.
       lastSelected.current.set(event.agentId, null)
       setPreferredAgentId(event.agentId)
@@ -520,15 +520,15 @@ export function useWorkspaceNavigation({
   }, [])
 
   const selectRuntimeThread = useCallback(
-    async (threadId: string) => {
+    async (sessionId: string) => {
       clearLocalDraft()
       const operation = Symbol("selection")
       pendingSelection.current = operation
-      desiredThread.current = threadId
+      desiredThread.current = sessionId
       try {
-        await runtime.threads.switchToThread(threadId)
+        await runtime.threads.switchToThread(sessionId)
         const latestDesired = desiredThread.current
-        if (latestDesired && latestDesired !== threadId) {
+        if (latestDesired && latestDesired !== sessionId) {
           await runtime.threads.switchToThread(latestDesired)
         }
       } finally {
@@ -545,7 +545,7 @@ export function useWorkspaceNavigation({
       localDraftAgent.current = agentId
       localDraftId.current = null
       localDraftRemoteId.current = null
-      setConversationDraft({ agentId, threadId: null })
+      setConversationDraft({ agentId, sessionId: null })
 
       const publishDraft = (draftId: string) => {
         const state = runtime.threads.getState()
@@ -558,7 +558,7 @@ export function useWorkspaceNavigation({
           return
         }
         localDraftId.current = draftId
-        setConversationDraft({ agentId, threadId: draftId })
+        setConversationDraft({ agentId, sessionId: draftId })
       }
 
       try {
@@ -731,7 +731,7 @@ export function useWorkspaceNavigation({
       }
 
       const knownSession = requested?.sessionId
-        ? sessions.find(({ threadId }) => threadId === requested.sessionId)
+        ? sessions.find(({ sessionId }) => sessionId === requested.sessionId)
         : undefined
       // A Session the browser has not listed is known only to the URL: the
       // runtime resolves it from the provider's catalog, and one the catalog
@@ -743,32 +743,32 @@ export function useWorkspaceNavigation({
         sessions: listedSessions,
         activeSessions: [],
       })
-      const threadId =
+      const sessionId =
         (knownSession?.agentId === agentId
-          ? knownSession.threadId
+          ? knownSession.sessionId
           : undefined) ??
         unlistedSession ??
         fallbackThreadId
       setPreferredAgentId(agentId)
-      if (threadId) {
+      if (sessionId) {
         setDismissedTabs((current) => ({
           ...current,
           [agentId]: (current[agentId] ?? []).filter(
-            (candidate) => candidate !== threadId
+            (candidate) => candidate !== sessionId
           ),
         }))
         setManuallyOpened((current) => ({
           ...current,
-          [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],
+          [agentId]: [...new Set([...(current[agentId] ?? []), sessionId])],
         }))
       }
-      lastSelected.current.set(agentId, threadId)
+      lastSelected.current.set(agentId, sessionId)
       // The runtime looks for an unlisted Session in its Agent's own catalog.
       if (unlistedSession) scopeSessionCatalog(agentId)
-      const selection = { agentId, sessionId: threadId }
+      const selection = { agentId, sessionId }
       const canonicalPathname = buildWorkspacePathname(selection)
-      const select = threadId
-        ? selectRuntimeThread(threadId)
+      const select = sessionId
+        ? selectRuntimeThread(sessionId)
         : switchToNewThread(agentId)
       void select
         .then(() => {
@@ -786,7 +786,7 @@ export function useWorkspaceNavigation({
           routeTransitionPathname.current = null
           // A URL can name a Session the provider no longer has. Normalize to
           // what the Agent does have instead of stranding the operator.
-          if (threadId === unlistedSession) {
+          if (sessionId === unlistedSession) {
             updateRoute({ agentId, sessionId: fallbackThreadId }, "replace")
             return
           }
@@ -800,7 +800,7 @@ export function useWorkspaceNavigation({
     // automatic selection repair waits for that switch to settle.
     if (pendingSelection.current) return
     const selectedSession = activeThreadId
-      ? sessions.find(({ threadId }) => threadId === activeThreadId)
+      ? sessions.find(({ sessionId }) => sessionId === activeThreadId)
       : undefined
     const manual = new Set([...(manuallyOpened[selectedAgentId] ?? [])])
     const dismissed = new Set(liveDismissedTabs[selectedAgentId] ?? [])
@@ -812,14 +812,14 @@ export function useWorkspaceNavigation({
       now: eligibilityNow,
       untitledLabel: dictionary.actions.newSession,
       visibleThreadId,
-    }).openSessions.filter(({ threadId }) => !dismissed.has(threadId))
+    }).openSessions.filter(({ sessionId }) => !dismissed.has(sessionId))
     if (
       selectedSession?.agentId === selectedAgentId &&
-      !dismissed.has(selectedSession.threadId)
+      !dismissed.has(selectedSession.sessionId)
     ) {
       if (
         !openSessions.some(
-          ({ threadId }) => threadId === selectedSession.threadId
+          ({ sessionId }) => sessionId === selectedSession.sessionId
         ) &&
         !lastSelected.current.has(selectedAgentId)
       ) {
@@ -828,12 +828,12 @@ export function useWorkspaceNavigation({
           [selectedAgentId]: [
             ...new Set([
               ...(current[selectedAgentId] ?? []),
-              selectedSession.threadId,
+              selectedSession.sessionId,
             ]),
           ],
         }))
       }
-      lastSelected.current.set(selectedAgentId, selectedSession.threadId)
+      lastSelected.current.set(selectedAgentId, selectedSession.sessionId)
       return
     }
 
@@ -844,7 +844,7 @@ export function useWorkspaceNavigation({
         : resolveSessionSelection({
             agentId: selectedAgentId,
             sessions: listedSessions.filter(
-              ({ threadId }) => !dismissed.has(threadId)
+              ({ sessionId }) => !dismissed.has(sessionId)
             ),
             activeSessions: openSessions,
             lastSelectedThreadId: dismissed.has(
@@ -959,14 +959,14 @@ export function useWorkspaceNavigation({
   // thread list disagree, one reload settles which of them is stale.
   useEffect(() => {
     const disagreeing = runtimeThreads
-      .filter(({ threadId, status }) => {
+      .filter(({ sessionId, status }) => {
         if (status !== "regular" && status !== "archived") return false
         const archived = sessions.find(
-          (session) => session.threadId === threadId
+          (session) => session.sessionId === sessionId
         )?.archived
         return archived !== undefined && archived !== (status === "archived")
       })
-      .map(({ threadId }) => threadId)
+      .map(({ sessionId }) => sessionId)
     if (disagreeing.length === 0) {
       reconciledArchival.current = null
       return
@@ -1010,7 +1010,7 @@ export function useWorkspaceNavigation({
   const sessionView = {
     ...rawSessionView,
     openSessions: rawSessionView.openSessions.filter(
-      ({ threadId }) => !selectedDismissedTabs.has(threadId)
+      ({ sessionId }) => !selectedDismissedTabs.has(sessionId)
     ),
   }
   const shellOpenSessions = sessionView.openSessions.map((session) => ({
@@ -1048,10 +1048,10 @@ export function useWorkspaceNavigation({
     const view = {
       ...rawView,
       openSessions: rawView.openSessions.filter(
-        ({ threadId }) => !dismissed.has(threadId)
+        ({ sessionId }) => !dismissed.has(sessionId)
       ),
     }
-    const threadId =
+    const sessionId =
       view.openSessions.length === 0 &&
       lastSelected.current.get(agentId) === null
         ? null
@@ -1059,7 +1059,7 @@ export function useWorkspaceNavigation({
             agentId,
             sessions: listedSessions.filter(
               (session) =>
-                session.agentId === agentId && !dismissed.has(session.threadId)
+                session.agentId === agentId && !dismissed.has(session.sessionId)
             ),
             activeSessions: view.openSessions,
             lastSelectedThreadId: dismissed.has(
@@ -1068,62 +1068,62 @@ export function useWorkspaceNavigation({
               ? undefined
               : lastSelected.current.get(agentId),
           })
-    if (!threadId) {
+    if (!sessionId) {
       desiredThread.current = null
       updateRoute({ agentId, sessionId: null }, "push")
       await switchToNewThread(agentId)
       return
     }
-    if (!view.openSessions.some((session) => session.threadId === threadId)) {
+    if (!view.openSessions.some((session) => session.sessionId === sessionId)) {
       setManuallyOpened((current) => ({
         ...current,
-        [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],
+        [agentId]: [...new Set([...(current[agentId] ?? []), sessionId])],
       }))
     }
-    updateRoute({ agentId, sessionId: threadId }, "push")
-    await selectRuntimeThread(threadId)
+    updateRoute({ agentId, sessionId }, "push")
+    await selectRuntimeThread(sessionId)
   }
 
-  async function openSession(threadId: string, verifiedAgentId?: string) {
+  async function openSession(sessionId: string, verifiedAgentId?: string) {
     const session =
-      sessions.find((item) => item.threadId === threadId) ??
-      (verifiedAgentId ? { threadId, agentId: verifiedAgentId } : undefined)
-    if (!session) throw new Error(`Session not found: ${threadId}`)
+      sessions.find((item) => item.sessionId === sessionId) ??
+      (verifiedAgentId ? { sessionId, agentId: verifiedAgentId } : undefined)
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
     if (session.agentId !== selectedAgentId)
       setPreferredAgentId(session.agentId)
     setDismissedTabs((current) => ({
       ...current,
       [session.agentId]: (current[session.agentId] ?? []).filter(
-        (candidate) => candidate !== threadId
+        (candidate) => candidate !== sessionId
       ),
     }))
     setManuallyOpened((current) => ({
       ...current,
       [session.agentId]: [
-        ...new Set([...(current[session.agentId] ?? []), threadId]),
+        ...new Set([...(current[session.agentId] ?? []), sessionId]),
       ],
     }))
-    lastSelected.current.set(session.agentId, threadId)
-    updateRoute({ agentId: session.agentId, sessionId: threadId }, "push")
-    await selectRuntimeThread(threadId)
+    lastSelected.current.set(session.agentId, sessionId)
+    updateRoute({ agentId: session.agentId, sessionId }, "push")
+    await selectRuntimeThread(sessionId)
   }
 
-  async function closeSession(threadId: string, verifiedAgentId?: string) {
-    const metadata = sessions.find((session) => session.threadId === threadId)
+  async function closeSession(sessionId: string, verifiedAgentId?: string) {
+    const metadata = sessions.find((session) => session.sessionId === sessionId)
     const agentId = metadata?.agentId ?? verifiedAgentId
     const closed = agentId
       ? navigationCatalog
           .get(agentId)
-          ?.openSessions.find((session) => session.threadId === threadId)
+          ?.openSessions.find((session) => session.sessionId === sessionId)
       : undefined
     if (!agentId || !closed?.canClose) return
     const selectionChanged =
-      agentId === selectedAgentId && threadId === activeThreadId
+      agentId === selectedAgentId && sessionId === activeThreadId
     const previousLastSelectedThreadId = lastSelected.current.get(agentId)
-    const clearedLastSelected = previousLastSelectedThreadId === threadId
+    const clearedLastSelected = previousLastSelectedThreadId === sessionId
     tabUndo.remember({
       agentId,
-      threadId,
+      sessionId,
       title: closed.title,
       selectedThreadId: selectionChanged ? activeThreadId : null,
       selectionChanged,
@@ -1131,22 +1131,22 @@ export function useWorkspaceNavigation({
       clearedLastSelected,
     })
     if (closed.pinned === true) {
-      pinnedDismissedAt.current.set(threadId, closed.updatedAt)
+      pinnedDismissedAt.current.set(sessionId, closed.updatedAt)
     }
     setDismissedTabs((current) => ({
       ...current,
-      [agentId]: [...new Set([...(current[agentId] ?? []), threadId])],
+      [agentId]: [...new Set([...(current[agentId] ?? []), sessionId])],
     }))
     setManuallyOpened((current) => ({
       ...current,
       [agentId]: (current[agentId] ?? []).filter(
-        (candidate) => candidate !== threadId
+        (candidate) => candidate !== sessionId
       ),
     }))
     if (clearedLastSelected) {
       lastSelected.current.delete(agentId)
     }
-    await leaveSession(threadId, agentId)
+    await leaveSession(sessionId, agentId)
   }
 
   /**
@@ -1154,11 +1154,11 @@ export function useWorkspaceNavigation({
    * deletion run this before mutating, because Assistant UI would otherwise
    * strand the operator on an unrouted draft of its own choosing.
    */
-  async function leaveSession(threadId: string, agentId: string) {
-    if (agentId !== selectedAgentId || threadId !== activeThreadId) return
+  async function leaveSession(sessionId: string, agentId: string) {
+    if (agentId !== selectedAgentId || sessionId !== activeThreadId) return
     const next = neighborAfterClose(
-      sessionView.openSessions.map((session) => session.threadId),
-      threadId,
+      sessionView.openSessions.map((session) => session.sessionId),
+      sessionId,
       activeThreadId
     )
     if (next) {
@@ -1173,11 +1173,11 @@ export function useWorkspaceNavigation({
     await switchToNewThread(agentId)
   }
 
-  function owningAgentId(threadId: string, verifiedAgentId?: string) {
+  function owningAgentId(sessionId: string, verifiedAgentId?: string) {
     const agentId =
-      sessions.find((session) => session.threadId === threadId)?.agentId ??
+      sessions.find((session) => session.sessionId === sessionId)?.agentId ??
       verifiedAgentId
-    if (!agentId) throw new Error(`Session not found: ${threadId}`)
+    if (!agentId) throw new Error(`Session not found: ${sessionId}`)
     return agentId
   }
 
@@ -1188,64 +1188,64 @@ export function useWorkspaceNavigation({
    */
   function forgetTab(
     agentId: string,
-    threadId: string,
+    sessionId: string,
     mode: "dismiss" | "forget"
   ) {
     setDismissedTabs((current) => {
       const remaining = (current[agentId] ?? []).filter(
-        (candidate) => candidate !== threadId
+        (candidate) => candidate !== sessionId
       )
       return {
         ...current,
-        [agentId]: mode === "dismiss" ? [...remaining, threadId] : remaining,
+        [agentId]: mode === "dismiss" ? [...remaining, sessionId] : remaining,
       }
     })
     setManuallyOpened((current) => ({
       ...current,
       [agentId]: (current[agentId] ?? []).filter(
-        (candidate) => candidate !== threadId
+        (candidate) => candidate !== sessionId
       ),
     }))
-    if (lastSelected.current.get(agentId) === threadId) {
+    if (lastSelected.current.get(agentId) === sessionId) {
       lastSelected.current.delete(agentId)
     }
   }
 
-  async function renameSession(threadId: string, title: string) {
-    await runtime.threads.getItemById(threadId).rename(title)
+  async function renameSession(sessionId: string, title: string) {
+    await runtime.threads.getItemById(sessionId).rename(title)
   }
 
-  async function setSessionPinned(threadId: string, pinned: boolean) {
+  async function setSessionPinned(sessionId: string, pinned: boolean) {
     if (!workspace.setSessionPinned)
       throw new Error("Pinning Sessions is unavailable from this provider")
-    await workspace.setSessionPinned(threadId, pinned)
+    await workspace.setSessionPinned(sessionId, pinned)
   }
 
-  async function archiveSession(threadId: string, verifiedAgentId?: string) {
-    const agentId = owningAgentId(threadId, verifiedAgentId)
-    await leaveSession(threadId, agentId)
-    forgetTab(agentId, threadId, "dismiss")
-    await runtime.threads.getItemById(threadId).archive()
+  async function archiveSession(sessionId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(sessionId, verifiedAgentId)
+    await leaveSession(sessionId, agentId)
+    forgetTab(agentId, sessionId, "dismiss")
+    await runtime.threads.getItemById(sessionId).archive()
   }
 
-  async function unarchiveSession(threadId: string, verifiedAgentId?: string) {
-    const agentId = owningAgentId(threadId, verifiedAgentId)
+  async function unarchiveSession(sessionId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(sessionId, verifiedAgentId)
     try {
-      await runtime.threads.getItemById(threadId).unarchive()
+      await runtime.threads.getItemById(sessionId).unarchive()
     } catch (reason) {
       if (!isThreadStatusError(reason)) throw reason
       await runtime.threads.reload()
-      await runtime.threads.getItemById(threadId).unarchive()
+      await runtime.threads.getItemById(sessionId).unarchive()
     }
     // Archiving dismissed the tab; restoring the Session lets it list again.
-    forgetTab(agentId, threadId, "forget")
+    forgetTab(agentId, sessionId, "forget")
   }
 
-  async function deleteSession(threadId: string, verifiedAgentId?: string) {
-    const agentId = owningAgentId(threadId, verifiedAgentId)
-    await leaveSession(threadId, agentId)
-    await runtime.threads.getItemById(threadId).delete()
-    forgetTab(agentId, threadId, "forget")
+  async function deleteSession(sessionId: string, verifiedAgentId?: string) {
+    const agentId = owningAgentId(sessionId, verifiedAgentId)
+    await leaveSession(sessionId, agentId)
+    await runtime.threads.getItemById(sessionId).delete()
+    forgetTab(agentId, sessionId, "forget")
   }
 
   async function undoCloseSession() {
@@ -1254,13 +1254,13 @@ export function useWorkspaceNavigation({
     setDismissedTabs((current) => ({
       ...current,
       [closed.agentId]: (current[closed.agentId] ?? []).filter(
-        (id) => id !== closed.threadId
+        (id) => id !== closed.sessionId
       ),
     }))
     setManuallyOpened((current) => ({
       ...current,
       [closed.agentId]: [
-        ...new Set([...(current[closed.agentId] ?? []), closed.threadId]),
+        ...new Set([...(current[closed.agentId] ?? []), closed.sessionId]),
       ],
     }))
     if (closed.selectionChanged === false) {
@@ -1299,15 +1299,15 @@ export function useWorkspaceNavigation({
     const created = await workspace.createSession(agentId, {
       title: dictionary.actions.newSession,
     })
-    await workspace.getSessionMetadata([created.threadId])
+    await workspace.getSessionMetadata([created.sessionId])
     setManuallyOpened((current) => ({
       ...current,
-      [agentId]: [...new Set([...(current[agentId] ?? []), created.threadId])],
+      [agentId]: [...new Set([...(current[agentId] ?? []), created.sessionId])],
     }))
-    lastSelected.current.set(agentId, created.threadId)
+    lastSelected.current.set(agentId, created.sessionId)
     await runtime.threads.reload()
-    updateRoute({ agentId, sessionId: created.threadId }, "push")
-    await selectRuntimeThread(created.threadId)
+    updateRoute({ agentId, sessionId: created.sessionId }, "push")
+    await selectRuntimeThread(created.sessionId)
   }
 
   async function openAgentBuilder() {
@@ -1334,13 +1334,13 @@ export function useWorkspaceNavigation({
       })
       return
     }
-    const { threadId } = await workspace.createSession(creator.id, {
+    const { sessionId } = await workspace.createSession(creator.id, {
       title: dictionary.actions.newAgent,
     })
     await runtime.threads.reload()
     const [nextAgents, metadata] = await Promise.all([
       workspace.refreshAgents(),
-      workspace.getSessionMetadata([threadId]),
+      workspace.getSessionMetadata([sessionId]),
     ])
     if (metadata[0]?.agentId !== creator.id) {
       throw new Error(
@@ -1349,21 +1349,22 @@ export function useWorkspaceNavigation({
     }
     setAgents(nextAgents)
     // The operator only ever sees the interview as its own draft Agent.
-    const draftId = draftAgentId(threadId)
+    const draftId = draftAgentId(sessionId)
     setPreferredAgentId(draftId)
     setManuallyOpened((current) => ({
       ...current,
-      [draftId]: [...new Set([...(current[draftId] ?? []), threadId])],
+      [draftId]: [...new Set([...(current[draftId] ?? []), sessionId])],
     }))
-    lastSelected.current.set(draftId, threadId)
-    updateRoute({ agentId: draftId, sessionId: threadId }, "push")
-    await selectRuntimeThread(threadId)
+    lastSelected.current.set(draftId, sessionId)
+    updateRoute({ agentId: draftId, sessionId }, "push")
+    await selectRuntimeThread(sessionId)
     // A newer navigation may have won while the asynchronous switch completed.
     // Never submit the interview to whichever unrelated Session is now selected.
     const selected = runtime.threads.getState()
     const item = selected.threadItems[selected.mainThreadId]
     if (
-      (item?.remoteId ?? item?.externalId ?? selected.mainThreadId) !== threadId
+      (item?.remoteId ?? item?.externalId ?? selected.mainThreadId) !==
+      sessionId
     ) {
       throw new Error(
         "Creator Session selection changed before the interview started"
@@ -1382,8 +1383,8 @@ export function useWorkspaceNavigation({
    */
   async function discardDraft(agentId: string) {
     if (!isDraftAgentId(agentId)) return
-    const threadId = draftThreadId(agentId)
-    if (!threadId) {
+    const sessionId = draftThreadId(agentId)
+    if (!sessionId) {
       clearLocalDraft()
       if (defaultAgentId) await selectAgent(defaultAgentId)
       return
@@ -1393,8 +1394,8 @@ export function useWorkspaceNavigation({
     // this follows the same order archival and Session deletion already use.
     if (defaultAgentId) await selectAgent(defaultAgentId)
     else await runtime.threads.switchToNewThread()
-    await runtime.threads.getItemById(threadId).delete()
-    forgetTab(agentId, threadId, "forget")
+    await runtime.threads.getItemById(sessionId).delete()
+    forgetTab(agentId, sessionId, "forget")
   }
 
   /** The rail's way into the visibility rule Agent management already owns. */

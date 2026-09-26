@@ -119,14 +119,14 @@ class ControlledNative implements OpenClawRunRequestClient {
 
 const scope = {
   agentId: "research",
-  sessionId: "agent:research:main",
-  threadId: "thread-public",
+  providerSessionId: "agent:research:main",
+  sessionId: "thread-public",
 }
 
 const pendingQuestion = {
   id: "question-restored",
   agentId: scope.agentId,
-  sessionKey: scope.sessionId,
+  sessionKey: scope.providerSessionId,
   runId: "native-original",
   createdAtMs: 1,
   expiresAtMs: 1_900_000_000_000,
@@ -148,7 +148,7 @@ const pendingApproval = {
   createdAtMs: 1,
   expiresAtMs: 1_900_000_000_000,
   status: "pending",
-  sourceSessionKey: scope.sessionId,
+  sourceSessionKey: scope.providerSessionId,
   presentation: {
     kind: "plugin",
     title: "External action",
@@ -161,7 +161,7 @@ const pendingApproval = {
 
 function approvalReplay(approvals: unknown[] = [], truncated = false) {
   return {
-    sessionKey: scope.sessionId,
+    sessionKey: scope.providerSessionId,
     updatedAtMs: 1,
     approvals,
     truncated,
@@ -200,9 +200,9 @@ function coordinator(engine: OpenClawTurnEngine) {
 }
 
 const operatorAccess = {
-  subscriberId: "operator",
-  controllerId: "operator",
-  lane: "operator" as const,
+  membershipId: "operator",
+  principalId: "operator",
+  role: "operator" as const,
   canControl: true,
 }
 
@@ -261,7 +261,7 @@ describe("OpenClaw run engine", () => {
     ).toMatchObject([
       {
         params: {
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           message: "Investigate this",
           idempotencyKey: "run-a",
@@ -381,7 +381,7 @@ describe("OpenClaw run engine", () => {
       reads += 1
       if (reads === 1) return first.promise
       return {
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-a",
         messages: [],
         sessionInfo: { hasActiveRun: true, activeRunIds: ["foreign-run"] },
@@ -400,7 +400,7 @@ describe("OpenClaw run engine", () => {
         seq: 1,
         payload: {
           runId: "foreign-run",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "status",
@@ -410,7 +410,7 @@ describe("OpenClaw run engine", () => {
       subscriptions.generation
     )
     first.resolve({
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
@@ -485,7 +485,7 @@ describe("OpenClaw run engine", () => {
     async (_kind, response) => {
       const native = new ControlledNative()
       native.history = {
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-a",
         messages: [],
         sessionInfo: {
@@ -557,7 +557,7 @@ describe("OpenClaw run engine", () => {
   it("preserves an uncertain interaction response without dispatching it again on recovery", async () => {
     const native = new ControlledNative()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -595,7 +595,7 @@ describe("OpenClaw run engine", () => {
     })
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "turn-replies",
     })
     await expect(
@@ -610,7 +610,7 @@ describe("OpenClaw run engine", () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -674,7 +674,7 @@ describe("OpenClaw run engine", () => {
         seq: 71,
         payload: {
           runId: "native-original",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -707,7 +707,7 @@ describe("OpenClaw run engine", () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay([pendingApproval])
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -776,7 +776,7 @@ describe("OpenClaw run engine", () => {
   })
 
   it("uses an acknowledged approval replay key to recover and reply on a canonical Session alias", async () => {
-    const publicScope = { ...scope, sessionId: "global" }
+    const publicScope = { ...scope, providerSessionId: "global" }
     const replayKey = "agent:research:global"
     const approval = {
       ...pendingApproval,
@@ -784,7 +784,7 @@ describe("OpenClaw run engine", () => {
     }
     const native = new ControlledNative()
     native.history = {
-      sessionKey: publicScope.sessionId,
+      sessionKey: publicScope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -799,7 +799,7 @@ describe("OpenClaw run engine", () => {
       subscriptionReads += 1
       if (subscriptionReads === 1) return firstAcknowledgement.promise
       return {
-        key: publicScope.sessionId,
+        key: publicScope.providerSessionId,
         approvalReplay: {
           ...approvalReplay([approval]),
           sessionKey: replayKey,
@@ -848,7 +848,7 @@ describe("OpenClaw run engine", () => {
       subscriptions.generation
     )
     firstAcknowledgement.resolve({
-      key: publicScope.sessionId,
+      key: publicScope.providerSessionId,
       approvalReplay: {
         ...approvalReplay(),
         sessionKey: replayKey,
@@ -893,7 +893,7 @@ describe("OpenClaw run engine", () => {
     const native = new ControlledNative()
     native.approvalReplay = approvalReplay([pendingApproval])
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -921,7 +921,7 @@ describe("OpenClaw run engine", () => {
 
     native.approvalReplay = approvalReplay()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
@@ -966,7 +966,7 @@ describe("OpenClaw run engine", () => {
       const native = new ControlledNative()
       native.approvalReplay = replay
       native.history = {
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-a",
         messages: [],
         sessionInfo: {
@@ -1003,7 +1003,7 @@ describe("OpenClaw run engine", () => {
       historyReads += 1
       if (historyReads === 1) return firstHistory.promise
       return {
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-b",
         messages: [],
         sessionInfo: {
@@ -1040,7 +1040,7 @@ describe("OpenClaw run engine", () => {
     await vi.waitFor(() => expect(historyReads).toBe(1))
     await subscriptions.replaceGeneration("reconnect")
     firstHistory.resolve({
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -1078,7 +1078,7 @@ describe("OpenClaw run engine", () => {
         historyReads += 1
         if (historyReads === 1) return firstHistory.promise
         return {
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           sessionId: "transcript-a",
           messages: [],
           sessionInfo: {
@@ -1116,8 +1116,8 @@ describe("OpenClaw run engine", () => {
           event: "session.approval",
           seq: 91,
           payload: {
-            sessionKey: scope.sessionId,
-            sourceSessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
+            sourceSessionKey: scope.providerSessionId,
             updatedAtMs: 2,
             phase: "pending",
             approval: pendingApproval,
@@ -1126,7 +1126,7 @@ describe("OpenClaw run engine", () => {
         subscriptions.generation
       )
       firstHistory.resolve({
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-a",
         messages: [],
         sessionInfo: {
@@ -1150,7 +1150,7 @@ describe("OpenClaw run engine", () => {
   it("authoritatively binds a cold recovered reply segment to the unique active native run", async () => {
     const native = new ControlledNative()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -1168,7 +1168,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "segment-continued",
     })
     await expect(handle.stop()).resolves.toBe("stopping")
@@ -1177,7 +1177,7 @@ describe("OpenClaw run engine", () => {
     ).toMatchObject([
       {
         params: {
-          key: scope.sessionId,
+          key: scope.providerSessionId,
           agentId: scope.agentId,
           runId: "native-original",
         },
@@ -1215,7 +1215,7 @@ describe("OpenClaw run engine", () => {
     ]
     const native = new ControlledNative()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: {
@@ -1232,7 +1232,7 @@ describe("OpenClaw run engine", () => {
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const dispatch = vi.fn(async () => {
       native.history = {
-        sessionKey: scope.sessionId,
+        sessionKey: scope.providerSessionId,
         sessionId: "transcript-a",
         messages: [],
         sessionInfo: {
@@ -1301,7 +1301,7 @@ describe("OpenClaw run engine", () => {
         seq: 70,
         payload: {
           runId: "native-original",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -1363,7 +1363,7 @@ describe("OpenClaw run engine", () => {
           seq: outerSeq++,
           payload: {
             runId: "run-a",
-            sessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
             agentId: scope.agentId,
             seq: nativeSeq++,
             stream,
@@ -1428,7 +1428,7 @@ describe("OpenClaw run engine", () => {
         seq: outerSeq++,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "delta",
@@ -1444,7 +1444,7 @@ describe("OpenClaw run engine", () => {
         seq: outerSeq++,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 1,
           state: "final",
@@ -1551,7 +1551,7 @@ describe("OpenClaw run engine", () => {
     const iterator = handle.events[Symbol.asyncIterator]()
     await iterator.next()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: ["run-a"] },
@@ -1565,7 +1565,7 @@ describe("OpenClaw run engine", () => {
       {
         method: "sessions.abort",
         params: {
-          key: scope.sessionId,
+          key: scope.providerSessionId,
           agentId: scope.agentId,
           runId: "run-a",
         },
@@ -1577,7 +1577,7 @@ describe("OpenClaw run engine", () => {
       native.calls.filter(({ method }) => method === "sessions.abort")
     ).toHaveLength(1)
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
@@ -1594,7 +1594,7 @@ describe("OpenClaw run engine", () => {
         seq: 12,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "aborted",
@@ -1651,7 +1651,7 @@ describe("OpenClaw run engine", () => {
         seq: 20,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "aborted",
@@ -1721,14 +1721,14 @@ describe("OpenClaw run engine", () => {
     ).toHaveLength(1)
 
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: ["run-a"] },
       inFlightRun: { runId: "run-a", text: "Accepted remotely" },
     }
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
     await expect(
@@ -1759,7 +1759,7 @@ describe("OpenClaw run engine", () => {
           seq,
           payload: {
             runId,
-            sessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
             agentId: scope.agentId,
             seq,
             stream: "tool",
@@ -1795,7 +1795,7 @@ describe("OpenClaw run engine", () => {
         seq: 20,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -1836,7 +1836,7 @@ describe("OpenClaw run engine", () => {
         seq: 30,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -1930,7 +1930,7 @@ describe("OpenClaw run engine", () => {
         seq: 30,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           ...chat,
@@ -1966,7 +1966,7 @@ describe("OpenClaw run engine", () => {
           seq,
           payload: {
             runId: "run-a",
-            sessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
             agentId: scope.agentId,
             seq,
             stream: "tool",
@@ -1983,7 +1983,7 @@ describe("OpenClaw run engine", () => {
         seq: 30,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -2013,7 +2013,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const original = await engine.start(scope, input())
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: ["run-a"] },
@@ -2021,7 +2021,7 @@ describe("OpenClaw run engine", () => {
     }
 
     const recovered = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
       position: original.recoveryPosition(),
     })
@@ -2045,7 +2045,7 @@ describe("OpenClaw run engine", () => {
     ).toHaveLength(1)
 
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: false, activeRunIds: [] },
@@ -2068,7 +2068,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.start(scope, input())
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-foreign",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: ["run-a"] },
@@ -2089,7 +2089,7 @@ describe("OpenClaw run engine", () => {
   it("recovers exact completed assistant text from authoritative history", async () => {
     const native = new ControlledNative()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [
         {
@@ -2104,7 +2104,7 @@ describe("OpenClaw run engine", () => {
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
 
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
     const events: unknown[] = []
@@ -2122,7 +2122,7 @@ describe("OpenClaw run engine", () => {
   it("recovers plan and tools from in-flight history and official session.tool without negotiated detail", async () => {
     const native = new ControlledNative()
     native.history = {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: ["run-a"] },
@@ -2164,7 +2164,7 @@ describe("OpenClaw run engine", () => {
     const subscriptions = new OpenClawSessionSubscriptions(native)
     const engine = new OpenClawTurnEngine({ client: native, subscriptions })
     const handle = await engine.recover(scope, {
-      threadId: scope.threadId,
+      sessionId: scope.sessionId,
       turnId: "run-a",
     })
 
@@ -2176,7 +2176,7 @@ describe("OpenClaw run engine", () => {
           seq: 50 + seq,
           payload: {
             runId: "run-a",
-            sessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
             sessionId: "transcript-a",
             agentId: scope.agentId,
             seq,
@@ -2207,7 +2207,7 @@ describe("OpenClaw run engine", () => {
         seq: 60,
         payload: {
           runId: "run-a",
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           state: "final",
@@ -2258,7 +2258,7 @@ describe("OpenClaw run engine", () => {
 describe("OpenClaw run engine runtime-started turns", () => {
   function running(runId: string, text = "Working") {
     return {
-      sessionKey: scope.sessionId,
+      sessionKey: scope.providerSessionId,
       sessionId: "transcript-a",
       messages: [],
       sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
@@ -2278,7 +2278,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
         seq,
         payload: {
           runId,
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq,
           stream: "assistant",
@@ -2302,7 +2302,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
         seq: 90,
         payload: {
           runId,
-          sessionKey: scope.sessionId,
+          sessionKey: scope.providerSessionId,
           agentId: scope.agentId,
           seq: 0,
           ...payload,
@@ -2345,7 +2345,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
   async function watching(native: ControlledNative) {
     const { subscriptions, engine } = engineFor(native)
     const turns = watcher()
-    const stop = engine.watch(scope, turns)
+    const stop = engine.subscribeTurns(scope, turns)
     await vi.waitFor(() => expect(calls(native, "chat.history")).toBe(1))
     await settle()
     return { subscriptions, engine, turns, stop }
@@ -2423,7 +2423,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
       }
       const { engine } = engineFor(native)
       const turns = watcher()
-      const stop = engine.watch(scope, turns)
+      const stop = engine.subscribeTurns(scope, turns)
       await vi.advanceTimersByTimeAsync(0)
       expect(turns.onError).toHaveBeenCalledOnce()
 
@@ -2518,7 +2518,7 @@ describe("OpenClaw run engine AOS tools", () => {
           seq: 10 + seq,
           payload: {
             runId: "run-a",
-            sessionKey: scope.sessionId,
+            sessionKey: scope.providerSessionId,
             agentId: scope.agentId,
             ...payload,
           },
@@ -2557,7 +2557,7 @@ describe("OpenClaw run engine AOS tools", () => {
     expect(patches).toEqual([
       expect.objectContaining({
         params: expect.objectContaining({
-          key: scope.sessionId,
+          key: scope.providerSessionId,
           toolOverrides: { mcpServers: { other: false, "aos-ui": true } },
           expectedToolOverrides: { mcpServers: { other: false } },
         }),
@@ -2698,7 +2698,7 @@ describe("OpenClaw run engine AOS tools", () => {
         }),
       },
       subscribeSession: async () => () => undefined,
-    }).history(scope.agentId, scope.sessionId, 200, 0)
+    }).history(scope.agentId, scope.providerSessionId, 200, 0)
     expect(replay.messages[0]!.content).toContainEqual({
       type: "data",
       name: "aos.artifact",

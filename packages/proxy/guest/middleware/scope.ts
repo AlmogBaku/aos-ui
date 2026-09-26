@@ -3,6 +3,7 @@ import {
   type Middleware,
   type WorkspaceCapabilities,
 } from "../../core/member"
+import * as ids from "../../core/ids"
 import type { SessionScope } from "../../core/runtime"
 import type { GuestGrant } from "./index"
 
@@ -19,9 +20,9 @@ export type GuestScopeOptions = {
     agentId: string,
     ref: string,
     create?: { firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string } | undefined>
+  ): Promise<{ providerSessionId: ids.ProviderSessionId } | undefined>
   capabilities(
-    scope: Pick<SessionScope, "agentId" | "threadId">
+    scope: Pick<SessionScope, "agentId" | "sessionId">
   ): Promise<WorkspaceCapabilities>
 }
 
@@ -42,8 +43,8 @@ export function createScopeMiddleware({
     return resolved
       ? {
           agentId: grant.agentId,
-          sessionId: resolved.sessionId,
-          threadId: grant.ref,
+          providerSessionId: resolved.providerSessionId,
+          sessionId: ids.sessionId(grant.ref),
         }
       : undefined
   }
@@ -62,7 +63,7 @@ export function createScopeMiddleware({
           agentId: grant.agentId,
           capabilities: await capabilities({
             agentId: grant.agentId,
-            threadId: grant.ref,
+            sessionId: ids.sessionId(grant.ref),
           }),
           execution: { state: "idle" },
         }

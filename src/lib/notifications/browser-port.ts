@@ -21,5 +21,5 @@ export interface BrowserNotificationPort {
    * Present where the browser reports permission changes made outside the page,
    * such as its own notification settings. Absent browsers are noticed on focus.
    */
-  onPermissionChange?(listener: () => void): () => void
+  subscribePermissionChanges?(listener: () => void): () => void
 }

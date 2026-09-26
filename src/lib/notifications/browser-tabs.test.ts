@@ -11,7 +11,7 @@ import type { SessionMetadata } from "@/runtime-adapters/contracts"
 /** The provider keeps this Session unread, so every alert below stays due. */
 const unreadSessions: SessionMetadata[] = [
   {
-    threadId: "t",
+    sessionId: "t",
     agentId: "a",
     status: "idle",
     updatedAt: "2026-09-05T12:00:00.000Z",
@@ -37,14 +37,14 @@ it.each([
       pageFocused: false,
     }
     const foreground = {
-      selection: { agentId: "a", threadId: "t" },
+      selection: { agentId: "a", sessionId: "t" },
       pageVisible: true,
       pageFocused: true,
     }
     // Every tab sees the same authoritative Session state.
     const sessions: SessionMetadata[] = [
       {
-        threadId: "t",
+        sessionId: "t",
         agentId: "a",
         status: "idle",
         updatedAt: new Date(now).toISOString(),
@@ -114,7 +114,7 @@ it.each([
     const event = {
       id: "ready",
       agentId: "a",
-      threadId: "t",
+      sessionId: "t",
       type: "agent-ready" as const,
       occurredAt: new Date(now).toISOString(),
     }
@@ -202,7 +202,7 @@ it("recovers live delivery with heartbeats throttled beyond the lease duration",
   const event = {
     id: "ready",
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     type: "agent-ready" as const,
     occurredAt: new Date(now).toISOString(),
   }
@@ -330,7 +330,7 @@ it("synchronizes live arrivals, delivery announcements, and preferences with one
     id: "ready",
     type: "agent-ready" as const,
     agentId: "a",
-    threadId: "t",
+    sessionId: "t",
     occurredAt: new Date(now).toISOString(),
   }
   b.coordinator.publish(b.store.ingest(event))

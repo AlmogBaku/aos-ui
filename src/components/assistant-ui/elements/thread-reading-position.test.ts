@@ -297,7 +297,7 @@ describe("thread reading position", () => {
     function Harness() {
       const viewportRef = useRef<HTMLDivElement>(null)
       useThreadReadingPosition({
-        threadId: "thread-a",
+        sessionId: "thread-a",
         contentReady: true,
         viewportRef,
       })

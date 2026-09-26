@@ -21,7 +21,7 @@ import {
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
 import { createActivityFeed } from "../../../packages/proxy/acp/activity-feed"
 import { createReadState } from "../../../packages/proxy/acp/read-state"
-import { createChannel } from "../../../packages/proxy/core/channel"
+import { createChannels } from "../../../packages/proxy/core/channel"
 import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
@@ -39,6 +39,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../../../packages/proxy/core/runtime"
+import * as ids from "../../../packages/proxy/core/ids"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
 import { EVERY_FEED } from "../../../packages/proxy/core/member"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
@@ -114,18 +115,18 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -301,7 +302,8 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession: unsupported,
-    resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
+      ids.providerSessionId(publicSessionId),
     publicError: (cause) =>
       cause === UNAVAILABLE
         ? { code: "temporarily_unavailable", status: 503 }
@@ -387,19 +389,19 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       coordinator.close()
     },
   }
-  const lane = "operator" as const
+  const role = "operator" as const
   const sessionRows = createSessionRows()
   const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
-    lane,
+    role,
     feeds: EVERY_FEED,
     runtimeInstance,
     sessionRows,
     translators,
     attachmentStages,
-    rooms: createChannel({
+    channels: createChannels({
       snapshot: (scope) => coordinator.snapshot(scope),
     }),
     readState: createReadState({
@@ -520,14 +522,14 @@ function pipedSocket(app: AgentApp) {
 let activeInteractions: RuntimeInteractionAdapter | undefined
 
 function GatedComposer({ fallback }: { fallback: ReactNode }) {
-  const threadId = useAuiState(
+  const sessionId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id
   )
   if (!activeInteractions) return fallback
   return (
     <PendingInteractionComposer
       locale="en"
-      threadId={threadId}
+      sessionId={sessionId}
       interactions={activeInteractions}
       fallback={fallback}
     />
@@ -811,7 +813,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     expect(proxy.created).toEqual([AGENT_ID])
-    expect(proxy.scopes[0]!.threadId).toBe(CREATED_SESSION_ID)
+    expect(proxy.scopes[0]!.sessionId).toBe(CREATED_SESSION_ID)
     // The turn the operator sent stays on screen across `session/new`.
     expect(messageTexts(runtime())).toEqual(["Ship it"])
     const segment = proxy.segments[0]!

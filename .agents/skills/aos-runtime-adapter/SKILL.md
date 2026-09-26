@@ -16,7 +16,7 @@ and `TURN-LIFECYCLE.md` for a worked example.
 | --- | --- |
 | Native transport, identity, retention, validation, conversion | `packages/proxy/adapters/<kind>/`: `adapter.ts`, `factory.ts`, `capabilities.ts`, `client.ts` / `dashboard-client.ts`, `content.ts`, `history.ts`, `interactions.ts`, `run.ts`, `workspace.ts`, `native-schemas.ts`; Hermes also has `run-attach.ts`, `run-failures.ts`, `run-frames.ts`, `run-native.ts`, `run-settlement.ts`, `run-state.ts`, `slash-commands.ts`, `attachment-registry.ts`, `media-artifacts.ts`, `vendor/` |
 | Seam | `packages/proxy/core/runtime.ts` (`ServerRuntime`, `ServerTurnEngine`, `ServerTurnHandle` with `stop`/`steer?`/`recoveryPosition`, `SessionScope`); vocabulary `core/events.ts`; coordination `core/session-coordinator.ts`; rows `core/session-rows.ts`; stages `core/attachment-stages.ts` |
-| ACP adapter | `packages/proxy/acp/agent.ts` (method handlers, `GUEST_METHODS`, connect-time hydration), `agent-sessions.ts` (per-connection ownership, list cursor), `session-attachment.ts` (`reportExecution`/`reportUsage`/`reissuePending`, `_aos/*` emission), `translate/turn-events.ts`, `translate/history.ts`, `translate/requests.ts`, `translate/updates.ts` (pure reducers from turn vocabulary to ACP), `config-options.ts`, `read-state.ts`, `activity-feed.ts`, `service.ts`/`socket.ts`, `validation.ts`, `types.ts` |
+| ACP adapter | `packages/proxy/acp/agent.ts` (method handlers, `GUEST_METHODS`, connect-time hydration), `agent-sessions.ts` (per-connection ownership, list cursor), `member-encoder.ts` (`_aos/*` emission; each membership's `reportExecution`/`reportUsage`/`reissuePending` live in `core/channel.ts`), `translate/turn-events.ts`, `translate/history.ts`, `translate/requests.ts`, `translate/updates.ts` (pure reducers from turn vocabulary to ACP), `config-options.ts`, `read-state.ts`, `activity-feed.ts`, `service.ts`/`socket.ts`, `validation.ts`, `types.ts` |
 | Contract | `packages/protocol/acp.ts` (`_meta.aos` schemas, `AOS_METHODS`, error codes); browser consumer `src/runtime-adapters/aos/acp/*` |
 
 ## ACP surface coverage
@@ -29,7 +29,7 @@ and `TURN-LIFECYCLE.md` for a worked example.
 | `tool_call_content_chunk`, `terminal_update` / `terminal_output_chunk` | `tool-call-output-chunk`, `terminal-output` | Partial output and command output after the owning call |
 | `compaction_update`, `config_option_update` | `compaction-updated`, `model-changed` | Stable compaction id; model id from the Session catalog |
 | `state_update` idle `stopReason` / `usage`, `_meta.aos.cost`, failure `provider` / `model` | `turn-ended` `stopReason`, `usage`, `cost`; `turn-failed` `provider`, `model` | Fill when the provider reports them; never guess |
-| `usage_update` | `SessionContextResponse` (`session-attachment.ts:85-91, 245, 305-323`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
+| `usage_update` | `SessionContextResponse` (`core/channel.ts` `reportUsage`) | Implement `context(agentId, publicSessionId)` (`core/runtime.ts:247`) or declare unavailable |
 | `session/request_permission` / `elicitation/create` | `PendingRequest` (`translate/requests.ts`, incl. `_allow_session`, multi-select `items.enum`) | Emit `PendingRequest` from `interactions.ts` |
 | `resource_link` `artifact://<id>` chunk | `artifact-published` event with `AosArtifactDescriptor` (`translate/turn-events.ts`); history `data` part `aos.artifact` (`translate/history.ts:33`) | Emit from `run.ts`/`history.ts` on a `present_artifact` receipt, a native `MEDIA:` line, or a trusted delivery receipt; implement `artifact()` (`core/runtime.ts:264-268`) |
 | `_aos/steer_accepted` | `steer` handle + `steer-accepted` event (`core/session-coordinator.ts:809-817`) | Implement `handle.steer` |
@@ -101,8 +101,9 @@ delivery marker and never grant authority to an unmatched one.
 - **Audit:** compare every in-scope capability and lifecycle transition with
   native sources, then report concrete mismatches and protecting tests.
 - **Debug:** trace one failing operation across native input → adapter
-  conversion (`run.ts`/`history.ts`) → coordinator journal (`observe`/`snapshot`)
-  → ACP outbound (`translate/*`, `session-attachment.ts`) → browser projection
+  conversion (`run.ts`/`history.ts`) → coordinator journal
+  (`subscribeExecutions`/`snapshot`) → ACP outbound (`translate/*`,
+  `member-encoder.ts`) → browser projection
   (`src/runtime-adapters/aos/acp/session-projector.ts`). Test the first
   boundary where actual state diverges from expected state.
 
@@ -116,10 +117,10 @@ Run the focused adapter tests and the affected provider-neutral conformance and
 browser tests. Test suites by boundary: `adapters/<kind>/*.test.ts`,
 `core/session-coordinator.test.ts`, `acp/translate/*.test.ts`,
 `acp/agent.test.ts`, `src/runtime-adapters/aos/acp/*.test.ts`, and the
-in-process ACP lane gate `e2e/support/provider-mock.ts` +
+in-process ACP gate `e2e/support/provider-mock.ts` +
 `e2e/aos.runtime.spec.ts`.
 
-Confirm: capability fidelity across both lanes (guest projection in
+Confirm: capability fidelity across both roles (guest projection in
 `packages/proxy/guest/acp.ts` and `packages/proxy/auth/guest-runtime-projection.ts`),
 `_meta.aos.sequence` monotonic on replay, reconnect via `session/resume`
 `after`/`resync` without prompt replay, and the `vendor/` + `UPSTREAM.md` +

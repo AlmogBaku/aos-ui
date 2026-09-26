@@ -71,18 +71,18 @@ const sessionCapabilities = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: slashCommands,
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -94,7 +94,7 @@ const sessionCapabilities = {
     },
     activity: {
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       source: "provider-session-state",
     },
@@ -135,7 +135,7 @@ const sessionCapabilities = {
   content: {
     attachments: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       inputs: ["image", "file"],
       imageMimeTypes: ["image/png"],
       fileMimeTypes: "valid-type/subtype",
@@ -361,10 +361,10 @@ const script = {
   },
   guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
   standalonePermission: permissionRequest("permission-2"),
-  /** `InitializeResponse._meta.aos` for the operator lane. */
+  /** `InitializeResponse._meta.aos` for the operator role. */
   initializeMeta: {
     version: 1,
-    lane: "operator",
+    role: "operator",
     extensions: {
       steer: true,
       rewind: true,
@@ -707,7 +707,7 @@ function installAcpStub(script: AcpScript) {
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
         // An older page is its own read: tagged updates and a cursor, with no
-        // reattach, so neither the configuration nor the window is restated.
+        // resume, so neither the configuration nor the window is restated.
         if (paged && replayFrom.type === "_aos/before") {
           const cursor = String(replayFrom.cursor)
           const offset = Number(cursor.replace("offset-", ""))

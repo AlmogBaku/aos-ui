@@ -13,7 +13,7 @@ function harness() {
   const listeners = new Set<(pending: AcpPendingRequest) => void>()
   const interactions = createAcpInteractions({
     connection: {
-      onPendingRequest(listener) {
+      subscribePendingRequests(listener) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },

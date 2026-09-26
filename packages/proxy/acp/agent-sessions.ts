@@ -18,10 +18,11 @@ import {
   type AosHistoryCursor,
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
+import * as ids from "../core/ids"
 import type { SessionPatch, SessionScope } from "../core/runtime"
 import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
-import type { Seat } from "../core/channel"
+import type { Membership } from "../core/channel"
 import type { Member, MemberConnection } from "../core/member"
 import { redactForLog } from "../redaction"
 import type { AcpConnectionContext, WorkspaceCapabilities } from "./types"
@@ -37,7 +38,7 @@ import {
  * The Session half of the ACP agent: the normalized runtime reads and writes
  * the handlers need, the `_meta.aos` projections of a Session row, and the
  * per-connection registry of which Agent owns a Session and which Sessions
- * this connection has attached.
+ * this connection has resumed.
  */
 
 /** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
@@ -195,9 +196,16 @@ export function createWorkspace(
   }
   return {
     scope(agentId: string, publicSessionId: string): SessionScope {
-      const sessionId = runtime.resolveSessionId(agentId, publicSessionId)
-      if (!sessionId) throw notFound()
-      return { agentId, sessionId, threadId: publicSessionId }
+      const providerSessionId = runtime.resolveProviderSessionId(
+        agentId,
+        publicSessionId
+      )
+      if (!providerSessionId) throw notFound()
+      return {
+        agentId,
+        providerSessionId,
+        sessionId: ids.sessionId(publicSessionId),
+      }
     },
     info: () => call(() => runtime.runtimeInfo()),
     agents: () => call(() => runtime.listAgents()),
@@ -229,40 +237,42 @@ export function createWorkspace(
     session: (scope: SessionScope) =>
       call(async () =>
         context.sessionRows.rememberDetail(
-          await runtime.getSession(scope.agentId, scope.sessionId)
+          await runtime.getSession(scope.agentId, scope.providerSessionId)
         )
       ),
     history: (scope: SessionScope, limit: number, offset = 0) =>
       call(() =>
-        runtime.history(scope.agentId, scope.sessionId, limit, offset)
+        runtime.history(scope.agentId, scope.providerSessionId, limit, offset)
       ),
     update: (scope: SessionScope, patch: SessionPatch) =>
-      call(() => runtime.updateSession(scope.agentId, scope.sessionId, patch)),
+      call(() =>
+        runtime.updateSession(scope.agentId, scope.providerSessionId, patch)
+      ),
     delete: (scope: SessionScope) =>
-      call(() => runtime.deleteSession(scope.agentId, scope.sessionId)),
+      call(() => runtime.deleteSession(scope.agentId, scope.providerSessionId)),
     /** Addressed by public reference, so an invited Session needs no detail. */
-    capabilities: (scope: Pick<SessionScope, "agentId" | "threadId">) =>
+    capabilities: (scope: Pick<SessionScope, "agentId" | "sessionId">) =>
       call(async () =>
         SessionWorkspaceCapabilitiesResponseSchema.parse(
-          await runtime.workspaceCapabilities(scope.agentId, scope.threadId)
+          await runtime.workspaceCapabilities(scope.agentId, scope.sessionId)
         )
       ),
     models: (scope: SessionScope) =>
       call(async () =>
         SessionModelsResponseSchema.parse(
-          await runtime.models(scope.agentId, scope.threadId)
+          await runtime.models(scope.agentId, scope.sessionId)
         )
       ),
     updateModel: (scope: SessionScope, patch: SessionModelUpdateRequest) =>
-      call(() => runtime.updateModel(scope.agentId, scope.threadId, patch)),
+      call(() => runtime.updateModel(scope.agentId, scope.sessionId, patch)),
     /** Reconstructs provider-authoritative execution state before a resume. */
     discover: (scope: SessionScope) => call(() => coordinator.discover(scope)),
-    /** Steers the live turn as `controllerId`, the member the turn knows. */
+    /** Steers the live turn as `principalId`, the member the turn knows. */
     steer: (
       scope: SessionScope,
       request: TurnSteerRequest,
-      controllerId: string
-    ) => call(() => coordinator.steer(scope, request, controllerId)),
+      principalId: string
+    ) => call(() => coordinator.steer(scope, request, principalId)),
   }
 }
 
@@ -282,8 +292,8 @@ export function createSessions(
   const coordinator = context.runtimeInstance.sessions
   const { runtime } = context.runtimeInstance
   const owners = new Map<string, string>()
-  const members = new Map<string, Seat>()
-  /** This connection as the Channel seats it, once it first joins. */
+  const memberships = new Map<string, Membership>()
+  /** This connection as a channel's member, once it first joins one. */
   let member: Member | undefined
 
   /**
@@ -294,7 +304,7 @@ export function createSessions(
     return context.authentication
       ? context.authentication.member()
       : {
-          principal: { id: context.principalId, role: context.lane },
+          principal: { id: context.principalId, role: context.role },
           middleware: [],
         }
   }
@@ -316,12 +326,18 @@ export function createSessions(
     remember,
     identity,
 
-    /** The live status of a row, whether or not this connection attached it. */
+    /** The live status of a row, whether or not this connection resumed it. */
     status(row: Session) {
-      const sessionId = runtime.resolveSessionId(row.agentId, row.id)
-      return sessionId
+      const providerSessionId = runtime.resolveProviderSessionId(
+        row.agentId,
+        row.id
+      )
+      return providerSessionId
         ? overlaidStatus(
-            coordinator.state({ agentId: row.agentId, sessionId }),
+            coordinator.state({
+              agentId: row.agentId,
+              providerSessionId,
+            }),
             row.status
           )
         : row.status
@@ -342,13 +358,13 @@ export function createSessions(
       return workspace.scope(agentId, publicSessionId)
     },
 
-    /** The Session's seat on this connection, taken on first use. */
+    /** The Session's membership on this connection, joined on first use. */
     join(client: AgentContext, scope: SessionScope) {
-      const existing = members.get(scope.threadId)
+      const existing = memberships.get(scope.sessionId)
       if (existing) return existing
-      const seat = context.rooms.join(memberOf(client), scope, {
+      const membership = context.channels.join(memberOf(client), scope, {
         coordinator,
-        subscriberId: `${context.connectionId}:${scope.threadId}`,
+        membershipId: `${context.connectionId}:${scope.sessionId}`,
         log: (level, event, fields) =>
           context.logger?.[level](
             redactForLog({
@@ -360,29 +376,29 @@ export function createSessions(
         describe: (cause) => errorNotificationOf(runtime, cause),
         feeds: context.feeds,
       })
-      members.set(scope.threadId, seat)
-      return seat
+      memberships.set(scope.sessionId, membership)
+      return membership
     },
 
-    member(publicSessionId: string) {
-      return members.get(publicSessionId)
+    membership(publicSessionId: string) {
+      return memberships.get(publicSessionId)
     },
 
-    leave(publicSessionId: string) {
-      members.get(publicSessionId)?.leave()
-      members.delete(publicSessionId)
+    part(publicSessionId: string) {
+      memberships.get(publicSessionId)?.part()
+      memberships.delete(publicSessionId)
     },
 
     forget(scope: SessionScope) {
-      members.get(scope.threadId)?.leave()
-      members.delete(scope.threadId)
-      owners.delete(scope.threadId)
-      context.sessionRows.forget(scope.agentId, scope.threadId)
+      memberships.get(scope.sessionId)?.part()
+      memberships.delete(scope.sessionId)
+      owners.delete(scope.sessionId)
+      context.sessionRows.forget(scope.agentId, scope.sessionId)
     },
 
     close() {
-      for (const member of members.values()) member.leave()
-      members.clear()
+      for (const membership of memberships.values()) membership.part()
+      memberships.clear()
       owners.clear()
     },
   }

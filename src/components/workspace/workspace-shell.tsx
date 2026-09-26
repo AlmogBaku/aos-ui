@@ -112,7 +112,7 @@ type WorkspaceAgentBase = {
 export type WorkspaceAgent = WorkspaceAgentBase & { kind?: "ready" }
 
 export type WorkspaceSession = {
-  threadId: string
+  sessionId: string
   title: string
   status: WorkspaceSessionStatus
   updatedAt: string
@@ -149,17 +149,17 @@ export type WorkspaceShellProps = {
   /** Absent when the runtime cannot change Agent visibility. */
   onHideAgent?: (agentId: string) => WorkspaceActionResult
   onDiscardDraft?: (agentId: string) => WorkspaceActionResult
-  onOpenSession: (threadId: string) => WorkspaceActionResult
-  onCloseSession: (threadId: string, agentId?: string) => WorkspaceActionResult
+  onOpenSession: (sessionId: string) => WorkspaceActionResult
+  onCloseSession: (sessionId: string, agentId?: string) => WorkspaceActionResult
   onCreateSession: (agentId: string) => WorkspaceActionResult
-  onRenameSession?: (threadId: string, title: string) => WorkspaceActionResult
+  onRenameSession?: (sessionId: string, title: string) => WorkspaceActionResult
   onSetSessionPinned?: (
-    threadId: string,
+    sessionId: string,
     pinned: boolean
   ) => WorkspaceActionResult
-  onArchiveSession?: (threadId: string) => WorkspaceActionResult
-  onUnarchiveSession?: (threadId: string) => WorkspaceActionResult
-  onDeleteSession?: (threadId: string) => WorkspaceActionResult
+  onArchiveSession?: (sessionId: string) => WorkspaceActionResult
+  onUnarchiveSession?: (sessionId: string) => WorkspaceActionResult
+  onDeleteSession?: (sessionId: string) => WorkspaceActionResult
   /** Runtime-declared Session actions, or `null` until the runtime answers. */
   sessionActions?: SessionActionCapabilities | null
   onOpenAgentBuilder: () => WorkspaceActionResult
@@ -320,24 +320,24 @@ const focusableSelector = [
   '[tabindex]:not([tabindex="-1"]):not(:disabled)',
 ].join(",")
 
-function getTabId(threadId: string) {
-  return `workspace-tab-${encodeURIComponent(threadId)}`
+function getTabId(sessionId: string) {
+  return `workspace-tab-${encodeURIComponent(sessionId)}`
 }
 
 /** The rename and delete dialogs are hosted once and shared by every surface. */
 type SessionDialog = {
   kind: "rename" | "delete"
-  threadId: string
+  sessionId: string
   title: string
 }
 
 /** Returns focus to the control that opened a Session dialog. */
-function sessionDialogOpener(threadId: string) {
+function sessionDialogOpener(sessionId: string) {
   return (
     [...document.querySelectorAll<HTMLElement>("[data-session-menu]")].find(
-      (element) => element.dataset.sessionMenu === threadId
+      (element) => element.dataset.sessionMenu === sessionId
     ) ??
-    document.getElementById(getTabId(threadId)) ??
+    document.getElementById(getTabId(sessionId)) ??
     null
   )
 }
@@ -687,11 +687,11 @@ function SessionTabs({
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null)
   const activeIndex = openSessions.findIndex(
-    (session) => session.threadId === activeThreadId
+    (session) => session.sessionId === activeThreadId
   )
   const activeSession = openSessions[activeIndex]
   const closingTab = useRef<{
-    threadId: string
+    sessionId: string
     replacement: string | null
   } | null>(null)
   const newSessionRef = useRef<HTMLButtonElement>(null)
@@ -699,7 +699,7 @@ function SessionTabs({
     if (
       !closingTab.current ||
       openSessions.some(
-        ({ threadId }) => threadId === closingTab.current?.threadId
+        ({ sessionId }) => sessionId === closingTab.current?.sessionId
       )
     )
       return
@@ -717,17 +717,17 @@ function SessionTabs({
     )?.focus()
   }, [openSessions, activeThreadId])
 
-  function closeTab(threadId: string) {
+  function closeTab(sessionId: string) {
     closingTab.current = {
-      threadId,
+      sessionId,
       replacement: neighborAfterClose(
-        openSessions.map((session) => session.threadId),
-        threadId,
+        openSessions.map((session) => session.sessionId),
+        sessionId,
         activeThreadId
       ),
     }
     runAction(
-      () => onCloseSession(threadId, selectedAgentId ?? undefined),
+      () => onCloseSession(sessionId, selectedAgentId ?? undefined),
       onActionError
     )
   }
@@ -737,8 +737,8 @@ function SessionTabs({
     if (!session) return
 
     event.preventDefault()
-    tabRefs.current.get(session.threadId)?.focus()
-    runAction(() => onOpenSession(session.threadId), onActionError)
+    tabRefs.current.get(session.sessionId)?.focus()
+    runAction(() => onOpenSession(session.sessionId), onActionError)
   }
 
   function handleTabKeyDown(
@@ -791,7 +791,7 @@ function SessionTabs({
             aria-orientation="horizontal"
           >
             {openSessions.map((session, index) => {
-              const isActive = session.threadId === activeThreadId
+              const isActive = session.sessionId === activeThreadId
               // Tabs name their state in the same order the rows do.
               const stateLabels = [
                 session.unread ? dictionary.status.unread : null,
@@ -800,7 +800,7 @@ function SessionTabs({
 
               return (
                 <SessionRowContextMenu
-                  key={session.threadId}
+                  key={session.sessionId}
                   session={session}
                   copy={menuCopy}
                   locale={locale}
@@ -808,14 +808,14 @@ function SessionTabs({
                   handlers={{
                     ...sessionMenu,
                     onCloseTab: session.canClose
-                      ? () => closeTab(session.threadId)
+                      ? () => closeTab(session.sessionId)
                       : undefined,
                   }}
                 >
                   <SessionThreadListItem
                     runtime={threadListRuntime}
-                    threadId={session.threadId}
-                    onSwitch={() => onOpenSession(session.threadId)}
+                    sessionId={session.sessionId}
+                    onSwitch={() => onOpenSession(session.sessionId)}
                     onActionError={onActionError}
                     className={styles.threadItemContents}
                     onKeyDown={(event) => {
@@ -833,10 +833,10 @@ function SessionTabs({
                       data-closable={session.canClose ? "true" : undefined}
                       ref={(element) => {
                         if (element)
-                          tabRefs.current.set(session.threadId, element)
-                        else tabRefs.current.delete(session.threadId)
+                          tabRefs.current.set(session.sessionId, element)
+                        else tabRefs.current.delete(session.sessionId)
                       }}
-                      id={getTabId(session.threadId)}
+                      id={getTabId(session.sessionId)}
                       type="button"
                       role="tab"
                       aria-selected={isActive}
@@ -851,8 +851,8 @@ function SessionTabs({
                         isActive || (activeIndex === -1 && index === 0) ? 0 : -1
                       }
                       onKeyDown={(event) => handleTabKeyDown(event, index)}
-                      onMouseEnter={() => setHoveredThreadId(session.threadId)}
-                      onFocus={() => setFocusedThreadId(session.threadId)}
+                      onMouseEnter={() => setHoveredThreadId(session.sessionId)}
+                      onFocus={() => setFocusedThreadId(session.sessionId)}
                       onBlur={() => setFocusedThreadId(null)}
                     >
                       <span className={styles.tabLabel}>
@@ -886,15 +886,15 @@ function SessionTabs({
             {openSessions.map((session) => (
               <span
                 className={styles.tabCloseSlot}
-                key={session.threadId}
-                onMouseEnter={() => setHoveredThreadId(session.threadId)}
+                key={session.sessionId}
+                onMouseEnter={() => setHoveredThreadId(session.sessionId)}
               >
                 {session.canClose ? (
                   <Button
                     className={styles.tabClose}
                     data-visible={
-                      hoveredThreadId === session.threadId ||
-                      focusedThreadId === session.threadId
+                      hoveredThreadId === session.sessionId ||
+                      focusedThreadId === session.sessionId
                         ? "true"
                         : undefined
                     }
@@ -902,7 +902,7 @@ function SessionTabs({
                     variant="ghost"
                     size="icon-xs"
                     aria-label={`${dictionary.actions.closeSession}: ${session.title}`}
-                    onClick={() => closeTab(session.threadId)}
+                    onClick={() => closeTab(session.sessionId)}
                   >
                     <X />
                   </Button>
@@ -937,7 +937,7 @@ function SessionTabs({
             handlers={{
               ...sessionMenu,
               onCloseTab: activeSession.canClose
-                ? () => closeTab(activeSession.threadId)
+                ? () => closeTab(activeSession.sessionId)
                 : undefined,
             }}
             className={styles.sessionAction}
@@ -1055,7 +1055,7 @@ function InspectorPanel({
             copy={mobileNavigatorCopy(dictionary)}
             query={query}
             onQueryChange={setQuery}
-            onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+            onOpenSession={(_agentId, sessionId) => onOpenSession(sessionId)}
             onCreateSession={onCreateSession}
             availability={sessionActions}
             sessionMenu={sessionMenu}
@@ -1313,12 +1313,12 @@ export function WorkspaceShell({
     if (!selectedAgentId) return null
     const catalog = navigationCatalog.get(selectedAgentId)
     if (catalog) return catalog
-    const openIds = new Set(openSessions.map((session) => session.threadId))
+    const openIds = new Set(openSessions.map((session) => session.sessionId))
     return {
       agentId: selectedAgentId,
       openSessions,
       historySessions: olderSessions.filter(
-        (session) => !openIds.has(session.threadId)
+        (session) => !openIds.has(session.sessionId)
       ),
       archivedSessions: [],
       lastSelectedThreadId: activeThreadId,
@@ -1345,7 +1345,7 @@ export function WorkspaceShell({
       ? getTabId(activeThreadId)
       : undefined
   const activeSession = [...openSessions, ...olderSessions].find(
-    ({ threadId }) => threadId === activeThreadId
+    ({ sessionId }) => sessionId === activeThreadId
   )
   const retainUndoFocus = useCallback((node: HTMLDivElement | null) => {
     if (!node) return
@@ -1498,14 +1498,14 @@ export function WorkspaceShell({
         ? (session) =>
             setSessionDialog({
               kind: "rename",
-              threadId: session.threadId,
+              sessionId: session.sessionId,
               title: session.title,
             })
         : undefined,
       onTogglePin: onSetSessionPinned
         ? (session) =>
             runAction(
-              () => onSetSessionPinned(session.threadId, !session.pinned),
+              () => onSetSessionPinned(session.sessionId, !session.pinned),
               onActionError
             )
         : undefined,
@@ -1515,8 +1515,8 @@ export function WorkspaceShell({
               runAction(
                 () =>
                   session.archived
-                    ? onUnarchiveSession(session.threadId)
-                    : onArchiveSession(session.threadId),
+                    ? onUnarchiveSession(session.sessionId)
+                    : onArchiveSession(session.sessionId),
                 onActionError
               )
           : undefined,
@@ -1524,7 +1524,7 @@ export function WorkspaceShell({
         ? (session) =>
             setSessionDialog({
               kind: "delete",
-              threadId: session.threadId,
+              sessionId: session.sessionId,
               title: session.title,
             })
         : undefined,
@@ -1877,15 +1877,15 @@ export function WorkspaceShell({
               sessionMenu={sessionMenu}
               onActionError={onActionError}
               onStateChange={dispatchMobileNavigator}
-              onOpenSession={(_agentId, threadId) =>
-                runAction(() => onOpenSession(threadId), onActionError)
+              onOpenSession={(_agentId, sessionId) =>
+                runAction(() => onOpenSession(sessionId), onActionError)
               }
               onCreateSession={(agentId) =>
                 runAction(() => onCreateSession(agentId), onActionError)
               }
-              onRemoveOpenSession={(agentId, threadId) =>
+              onRemoveOpenSession={(agentId, sessionId) =>
                 runAction(
-                  () => onCloseSession(threadId, agentId),
+                  () => onCloseSession(sessionId, agentId),
                   onActionError
                 )
               }
@@ -1930,7 +1930,7 @@ export function WorkspaceShell({
 
         {sessionDialog?.kind === "rename" && onRenameSession ? (
           <SessionRenameDialog
-            key={sessionDialog.threadId}
+            key={sessionDialog.sessionId}
             open
             locale={locale}
             copy={{
@@ -1940,14 +1940,14 @@ export function WorkspaceShell({
               cancel: dictionary.actions.cancel,
             }}
             sessionTitle={sessionDialog.title}
-            finalFocus={() => sessionDialogOpener(sessionDialog.threadId)}
+            finalFocus={() => sessionDialogOpener(sessionDialog.sessionId)}
             onOpenChange={(open) => {
               if (!open) setSessionDialog(null)
             }}
             onSave={(title) => {
               setSessionDialog(null)
               runAction(
-                () => onRenameSession(sessionDialog.threadId, title),
+                () => onRenameSession(sessionDialog.sessionId, title),
                 onActionError
               )
             }}
@@ -1979,7 +1979,7 @@ export function WorkspaceShell({
 
         {sessionDialog?.kind === "delete" && onDeleteSession ? (
           <SessionDeleteDialog
-            key={sessionDialog.threadId}
+            key={sessionDialog.sessionId}
             open
             locale={locale}
             copy={{
@@ -1989,14 +1989,14 @@ export function WorkspaceShell({
               cancel: dictionary.actions.cancel,
             }}
             sessionTitle={sessionDialog.title}
-            finalFocus={() => sessionDialogOpener(sessionDialog.threadId)}
+            finalFocus={() => sessionDialogOpener(sessionDialog.sessionId)}
             onOpenChange={(open) => {
               if (!open) setSessionDialog(null)
             }}
             onConfirm={() => {
               setSessionDialog(null)
               runAction(
-                () => onDeleteSession(sessionDialog.threadId),
+                () => onDeleteSession(sessionDialog.sessionId),
                 onActionError
               )
             }}

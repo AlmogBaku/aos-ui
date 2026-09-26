@@ -104,7 +104,7 @@ describe("AOS V1 proxy", () => {
     })
   })
 
-  it("stages operator attachments for the ACP lane to consume", async () => {
+  it("stages operator attachments for the ACP listener to consume", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(runtime, "getSession").mockResolvedValue(session())
     const cleanup = vi.fn(async () => undefined)
@@ -228,7 +228,7 @@ describe("AOS V1 proxy", () => {
     })
   })
 
-  it("maps a provider failure on the content lane to a friendly error", async () => {
+  it("maps a provider failure on the content routes to a friendly error", async () => {
     const transport: HermesRpcTransport = {
       request: vi.fn(async () => {
         throw new HermesHttpError(503)
@@ -332,11 +332,11 @@ describe("AOS V1 proxy", () => {
     const mcpApps: ServerMcpApps = {
       describe: vi.fn(async () => true),
       open: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { html: "<p>view</p>" }
       }),
       callTool: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { content: [] }
       }),
       readResource: vi.fn(async () => ({ contents: [] })),

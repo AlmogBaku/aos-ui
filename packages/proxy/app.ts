@@ -111,10 +111,13 @@ export function createProxyApp(options: ProxyAppOptions) {
     agentId: string,
     publicSessionId: string
   ) => {
-    const id = selected.resolveSessionId(agentId, publicSessionId)
-    if (!id) throw new ServerSessionNotFoundError()
-    await selected.getSession(agentId, id)
-    return id
+    const providerSessionId = selected.resolveProviderSessionId(
+      agentId,
+      publicSessionId
+    )
+    if (!providerSessionId) throw new ServerSessionNotFoundError()
+    await selected.getSession(agentId, providerSessionId)
+    return providerSessionId
   }
 
   app.get("/api/aos/v1/healthz", (context) =>

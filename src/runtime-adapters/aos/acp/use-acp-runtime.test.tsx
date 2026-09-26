@@ -60,7 +60,7 @@ const resumeReply = (): ResumeReply => JSON.parse("{}")
 /** The handshake of a proxy that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
   version: 1,
-  lane: "operator",
+  role: "operator",
   extensions: {
     steer: true,
     rewind: true,
@@ -149,25 +149,25 @@ function createFakeConnection(
     focus: unused,
     listAgents: unused,
     setVisibility: unused,
-    onSessionUpdate: (sessionId, listener) => {
+    subscribeSessionUpdates: (sessionId, listener) => {
       const listeners = updates.get(sessionId) ?? new Set()
       listeners.add(listener)
       updates.set(sessionId, listeners)
       return () => listeners.delete(listener)
     },
-    onSessionReplay: (sessionId, listener) => {
+    subscribeSessionReplay: (sessionId, listener) => {
       const listeners = replays.get(sessionId) ?? new Set()
       listeners.add(listener)
       replays.set(sessionId, listeners)
       return () => listeners.delete(listener)
     },
-    onNotification: (method, listener) => {
+    subscribeNotification: (method, listener) => {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)
       notifications.set(method, listeners)
       return () => listeners.delete(listener)
     },
-    onPendingRequest: (listener) => {
+    subscribePendingRequests: (listener) => {
       pendingListeners.add(listener)
       return () => pendingListeners.delete(listener)
     },
@@ -265,7 +265,7 @@ async function mount(
   options?: Pick<
     UseAcpRuntimeOptions,
     | "approvals"
-    | "attach"
+    | "resume"
     | "enableMessageQueue"
     | "onComposerPrefill"
     | "stageAttachments"
@@ -312,7 +312,7 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("tells its observers once for a replay, however many updates it carries", async () => {
+  it("tells its listeners once for a replay, however many updates it carries", async () => {
     const fake = createFakeConnection()
     const onStateChange = vi.fn()
     const { result } = renderHook(() =>
@@ -430,11 +430,11 @@ describe("useAcpRuntime", () => {
     expect(fake.resumeSession).toHaveBeenCalledTimes(2)
   })
 
-  it("attaches through the injected attach instead of resuming itself", async () => {
+  it("resumes through the injected resume instead of by itself", async () => {
     const fake = createFakeConnection()
-    const attach = vi.fn(async () => undefined)
-    const { result } = await mount(fake, { attach })
-    expect(attach).toHaveBeenCalledWith(SESSION_ID)
+    const resume = vi.fn(async () => undefined)
+    const { result } = await mount(fake, { resume })
+    expect(resume).toHaveBeenCalledWith(SESSION_ID)
     expect(fake.resumeSession).not.toHaveBeenCalled()
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "Attached"))
@@ -884,18 +884,18 @@ describe("useAcpRuntime", () => {
 
   it("creates the Session a draft's first turn needs, then prompts it", async () => {
     const fake = createFakeConnection()
-    const attach = vi.fn(async () => undefined)
+    const resume = vi.fn(async () => undefined)
     const resolveSessionId = vi.fn(async () => SESSION_ID)
     const { result } = renderHook(() =>
       useAcpRuntime({
         connection: fake.connection,
         sessionId: undefined,
         agentId: "agent-1",
-        attach,
+        resume,
         resolveSessionId,
       })
     )
-    expect(attach).not.toHaveBeenCalled()
+    expect(resume).not.toHaveBeenCalled()
     await act(async () => {
       result.current.thread.append({
         role: "user",
@@ -910,8 +910,8 @@ describe("useAcpRuntime", () => {
       )
     })
     expect(resolveSessionId).toHaveBeenCalledTimes(1)
-    // Binding the resolved Session is what attaches and observes it.
-    expect(attach).toHaveBeenCalledWith(SESSION_ID)
+    // Binding the resolved Session is what resumes and subscribes to it.
+    expect(resume).toHaveBeenCalledWith(SESSION_ID)
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "Shipping it"))
     })

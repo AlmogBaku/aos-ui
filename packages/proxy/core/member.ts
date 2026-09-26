@@ -42,10 +42,13 @@ export type WorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
 >
 
+/** Which kind of member a principal is. */
+export type Role = "operator" | "guest"
+
 /** Who a member acts as. The coordinator knows its turns by `id`. */
 export type Principal = {
   id: string
-  role: "operator" | "guest"
+  role: Role
 }
 
 /**

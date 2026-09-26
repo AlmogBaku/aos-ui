@@ -24,7 +24,7 @@ const activityScenarios: Record<
     {
       id: "fixture:run:aster-market:completed:started",
       agentId: "agent-aster",
-      threadId: "thread-aster-market",
+      sessionId: "thread-aster-market",
       occurredAt: "2026-09-03T12:01:00.000Z",
       type: "turn-started",
       turnId: "fixture:run:aster-market:completed",
@@ -32,7 +32,7 @@ const activityScenarios: Record<
     {
       id: "fixture:run:aster-market:completed:finished",
       agentId: "agent-aster",
-      threadId: "thread-aster-market",
+      sessionId: "thread-aster-market",
       occurredAt: "2026-09-03T12:02:00.000Z",
       type: "turn-finished",
       turnId: "fixture:run:aster-market:completed",
@@ -42,7 +42,7 @@ const activityScenarios: Record<
     {
       id: "fixture:run:nori-copy:failed:started",
       agentId: "agent-nori",
-      threadId: "thread-nori-copy",
+      sessionId: "thread-nori-copy",
       occurredAt: "2026-09-03T12:03:00.000Z",
       type: "turn-started",
       turnId: "fixture:run:nori-copy:failed",
@@ -50,7 +50,7 @@ const activityScenarios: Record<
     {
       id: "fixture:run:nori-copy:failed:terminal",
       agentId: "agent-nori",
-      threadId: "thread-nori-copy",
+      sessionId: "thread-nori-copy",
       occurredAt: "2026-09-03T12:04:00.000Z",
       type: "turn-failed",
       turnId: "fixture:run:nori-copy:failed",
@@ -60,7 +60,7 @@ const activityScenarios: Record<
     {
       id: "fixture:attention:lumen-roadmap:question:requested",
       agentId: "agent-lumen",
-      threadId: "thread-lumen-roadmap",
+      sessionId: "thread-lumen-roadmap",
       occurredAt: "2026-09-03T12:05:00.000Z",
       type: "attention-requested",
       attentionKind: "question",
@@ -71,7 +71,7 @@ const activityScenarios: Record<
     {
       id: "fixture:attention:aster-launch:permission:requested",
       agentId: "agent-aster",
-      threadId: "thread-aster-launch",
+      sessionId: "thread-aster-launch",
       occurredAt: "2026-09-03T12:06:00.000Z",
       type: "attention-requested",
       attentionKind: "permission",
@@ -82,7 +82,7 @@ const activityScenarios: Record<
     {
       id: "fixture:attention:lumen-roadmap:question:resolved",
       agentId: "agent-lumen",
-      threadId: "thread-lumen-roadmap",
+      sessionId: "thread-lumen-roadmap",
       occurredAt: "2026-09-03T12:07:00.000Z",
       type: "attention-resolved",
       requestId: "fixture-question-roadmap",
@@ -92,7 +92,7 @@ const activityScenarios: Record<
     {
       id: "fixture:agent:mica:ready",
       agentId: "agent-mica",
-      threadId: "thread-mica-quarterly",
+      sessionId: "thread-mica-quarterly",
       occurredAt: "2026-09-03T12:08:00.000Z",
       type: "agent-ready",
     },
@@ -101,7 +101,7 @@ const activityScenarios: Record<
     {
       id: "fixture:agent:nori:activation-failed",
       agentId: "agent-nori",
-      threadId: "thread-nori-copy",
+      sessionId: "thread-nori-copy",
       occurredAt: "2026-09-03T12:09:00.000Z",
       type: "agent-activation-failed",
     },
@@ -110,7 +110,7 @@ const activityScenarios: Record<
     {
       id: "fixture:duplicate:started",
       agentId: "agent-aster",
-      threadId: "thread-aster-launch",
+      sessionId: "thread-aster-launch",
       occurredAt: "2026-09-03T12:10:00.000Z",
       type: "turn-started",
       turnId: "fixture:duplicate:lifecycle",
@@ -118,7 +118,7 @@ const activityScenarios: Record<
     {
       id: "fixture:duplicate:finished",
       agentId: "agent-aster",
-      threadId: "thread-aster-launch",
+      sessionId: "thread-aster-launch",
       occurredAt: "2026-09-03T12:10:30.000Z",
       type: "turn-finished",
       turnId: "fixture:duplicate:lifecycle",
@@ -126,7 +126,7 @@ const activityScenarios: Record<
     {
       id: "fixture:duplicate:finished",
       agentId: "agent-aster",
-      threadId: "thread-aster-launch",
+      sessionId: "thread-aster-launch",
       occurredAt: "2026-09-03T12:10:30.000Z",
       type: "turn-finished",
       turnId: "fixture:duplicate:lifecycle",
@@ -136,7 +136,7 @@ const activityScenarios: Record<
     {
       id: "fixture:stale-target:started",
       agentId: "agent-deleted",
-      threadId: "thread-deleted",
+      sessionId: "thread-deleted",
       occurredAt: "2026-09-03T12:10:45.000Z",
       type: "turn-started",
       turnId: "fixture:stale-target:lifecycle",
@@ -144,7 +144,7 @@ const activityScenarios: Record<
     {
       id: "fixture:stale-target:finished",
       agentId: "agent-deleted",
-      threadId: "thread-deleted",
+      sessionId: "thread-deleted",
       occurredAt: "2026-09-03T12:11:00.000Z",
       type: "turn-finished",
       turnId: "fixture:stale-target:lifecycle",
@@ -154,7 +154,7 @@ const activityScenarios: Record<
     {
       id: "fixture:delayed:mica-quarterly:started",
       agentId: "agent-mica",
-      threadId: "thread-mica-quarterly",
+      sessionId: "thread-mica-quarterly",
       occurredAt: "2026-09-03T12:12:00.000Z",
       type: "turn-started",
       turnId: "fixture:delayed:mica-quarterly",
@@ -162,7 +162,7 @@ const activityScenarios: Record<
     {
       id: "fixture:delayed:mica-quarterly:finished",
       agentId: "agent-mica",
-      threadId: "thread-mica-quarterly",
+      sessionId: "thread-mica-quarterly",
       occurredAt: "2026-09-03T12:13:00.000Z",
       type: "turn-finished",
       turnId: "fixture:delayed:mica-quarterly",

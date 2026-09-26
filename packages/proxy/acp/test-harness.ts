@@ -44,12 +44,13 @@ import type {
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { EVERY_FEED } from "../core/member"
 import { createSessionRows, type SessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import { createChannel } from "../core/channel"
+import { createChannels } from "../core/channel"
 import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
 
 export const AGENT = "researcher"
@@ -120,18 +121,18 @@ export const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -267,7 +268,7 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
     ? questionOutbound(request)
     : permissionOutbound(request)
 
-/** Deterministic stand-ins for the translator lane's pure projections. */
+/** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
   translateTurnEvent(state, event, context) {
     const meta = {
@@ -573,7 +574,7 @@ export type HarnessOptions = {
   ) => Promise<CreateElicitationResponse>
   discover?: ServerTurnEngine["discover"]
   /** Stands for a runtime that reports the turns it starts by itself. */
-  watch?: ServerTurnEngine["watch"]
+  subscribeTurns?: ServerTurnEngine["subscribeTurns"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -612,12 +613,12 @@ export type HarnessOptions = {
    * so each turn's journal; a small one stands for a long turn.
    */
   maxSubscriberEvents?: number
-  /** The translator lane; defaults to the deterministic stand-ins above. */
+  /** The translators, defaulting to the deterministic stand-ins above. */
   translators?: Translators
   /** The clock Session rows read; wall time by default. */
   now?: () => number
   /**
-   * Composes the operator lane's own read state and activity feed, as
+   * Composes the operator listener's own read state and activity feed, as
    * `createOperatorAcpService` does; observable fakes stand in by default.
    */
   compose?: (parts: {
@@ -643,7 +644,9 @@ export async function harness(options: HarnessOptions = {}) {
   )
   // A provider id is the public one behind a prefix, so either maps to the other.
   const providerId = (publicId: string) =>
-    options.providerIds ? `provider-${publicId}` : publicId
+    ids.providerSessionId(
+      options.providerIds ? `provider-${publicId}` : publicId
+    )
   const publicId = (sessionId: string) =>
     options.providerIds ? sessionId.replace(/^provider-/u, "") : sessionId
   let models: SessionModelsResponse = MODELS
@@ -723,10 +726,10 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.translation ? { translation: options.translation } : {}),
     // Every invitation in this harness addresses the seeded Session.
     resolveInvitedSession: async () => ({
-      sessionId: providerId(SESSION),
+      providerSessionId: providerId(SESSION),
       created: false,
     }),
-    resolveSessionId: (_agentId, publicSessionId) =>
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
       providerId(publicSessionId),
     publicError: () => undefined,
     authState: unsupported,
@@ -805,22 +808,22 @@ export async function harness(options: HarnessOptions = {}) {
   }
 
   const logger = { info: vi.fn(), error: vi.fn() }
-  // One lane's connections share its row cache, as the operator lane's do.
+  // A listener's connections share its row cache, as the operator's do.
   const sessionRows = createSessionRows(
     options.now ? { now: options.now } : undefined
   )
   const composed = options.compose?.({ runtimeInstance, sessionRows })
-  const { watch } = options
-  const rooms = createChannel({
-    snapshot: (roomScope) => coordinator.snapshot(roomScope),
-    ...(watch
+  const { subscribeTurns } = options
+  const channels = createChannels({
+    snapshot: (channelScope) => coordinator.snapshot(channelScope),
+    ...(subscribeTurns
       ? {
           adoption: {
-            watch,
-            discover: (roomScope, lane) =>
-              coordinator.discover(roomScope, lane),
-            observe: (roomScope, listener) =>
-              coordinator.observeScope(roomScope, listener),
+            subscribeTurns,
+            discover: (channelScope, role) =>
+              coordinator.discover(channelScope, role),
+            subscribeExecutions: (channelScope, listener) =>
+              coordinator.subscribeScope(channelScope, listener),
           },
         }
       : {}),
@@ -828,11 +831,11 @@ export async function harness(options: HarnessOptions = {}) {
 
   /**
    * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and room registry, as one deployment's lanes do.
+   * coordinator, engine, and channels, as one deployment's listeners do.
    */
   async function connect(
     connectionId: string,
-    lane: {
+    answers: {
       /** This browser's answer to a permission request, if not the harness's. */
       permission?: HarnessOptions["permission"]
       /** This browser's answer to a question, if not the harness's. */
@@ -841,8 +844,8 @@ export async function harness(options: HarnessOptions = {}) {
   ) {
     const attachmentStages = new AttachmentStageRegistry()
     const base = options.translators ?? translators
-    const permission = lane.permission ?? options.permission
-    const question = lane.question ?? options.question
+    const permission = answers.permission ?? options.permission
+    const question = answers.question ?? options.question
     const context: AcpConnectionContext = {
       connectionId,
       principalId: PRINCIPAL,
@@ -857,10 +860,10 @@ export async function harness(options: HarnessOptions = {}) {
         },
       },
       attachmentStages,
-      rooms,
+      channels,
       presence,
       logger,
-      lane: "operator",
+      role: "operator",
       feeds: EVERY_FEED,
       activityFeed: composed?.activityFeed ?? activityFeed,
     }
@@ -904,8 +907,8 @@ export async function harness(options: HarnessOptions = {}) {
 
   const scope: SessionScope = {
     agentId: AGENT,
-    sessionId: providerId(SESSION),
-    threadId: SESSION,
+    providerSessionId: providerId(SESSION),
+    sessionId: ids.sessionId(SESSION),
   }
 
   return {
@@ -913,7 +916,7 @@ export async function harness(options: HarnessOptions = {}) {
     connect,
     coordinator,
     runtimeInstance,
-    rooms,
+    channels,
     scope,
     sources,
     start,
@@ -1043,8 +1046,8 @@ export function reply(source: EventSource | undefined, text: string) {
 export const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 /**
- * Streams one reply, ending its turn only once every watcher saw it live: a
- * browser the room brings in late must still find the turn running.
+ * Streams one reply, ending its turn only once every member saw it live: a
+ * browser the channel brings in late must still find the turn running.
  */
 export async function replyWhileWatched(
   source: EventSource | undefined,
@@ -1087,7 +1090,7 @@ export function chunk(
 }
 
 /**
- * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * Starts one turn and streams its first chunk, `Live`, until every member
  * has seen it. Returns the prompt's message id.
  */
 export async function liveTurn(

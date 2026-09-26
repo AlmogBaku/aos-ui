@@ -74,14 +74,14 @@ export function RegisteredDraftWorkspace({
 class DraftPromotingThreadListAdapter extends FixtureThreadListAdapter {
   promotedThreadId: string | null = null
 
-  override async initialize(threadId: string) {
-    const [existing] = await this.workspace.getSessionMetadata([threadId])
-    if (existing) return super.initialize(threadId)
+  override async initialize(sessionId: string) {
+    const [existing] = await this.workspace.getSessionMetadata([sessionId])
+    if (existing) return super.initialize(sessionId)
     const created = await this.workspace.createSession("agent-aster", {
       title: "New Session",
     })
-    this.promotedThreadId = created.threadId
-    return { remoteId: created.threadId, externalId: created.threadId }
+    this.promotedThreadId = created.sessionId
+    return { remoteId: created.sessionId, externalId: created.sessionId }
   }
 }
 
@@ -105,9 +105,9 @@ export function DraftPromotionRaceWorkspace({
     },
   })
   const filteredWorkspace = useMemo(() => {
-    const getSessionMetadata = async (threadIds: string[]) =>
-      (await workspace.getSessionMetadata(threadIds)).filter(
-        ({ threadId }) => threadId !== threadList.promotedThreadId
+    const getSessionMetadata = async (sessionIds: string[]) =>
+      (await workspace.getSessionMetadata(sessionIds)).filter(
+        ({ sessionId }) => sessionId !== threadList.promotedThreadId
       )
     return {
       listAgents: () => workspace.listAgents(),
@@ -118,14 +118,14 @@ export function DraftPromotionRaceWorkspace({
       ) => workspace.createSession(agentId, options),
       getSessionMetadata,
       subscribeSessionMetadata(
-        threadIds: readonly string[],
+        sessionIds: readonly string[],
         listener: Parameters<
           NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
         >[1]
       ) {
         let active = true
         queueMicrotask(() => {
-          void getSessionMetadata([...threadIds]).then((metadata) => {
+          void getSessionMetadata([...sessionIds]).then((metadata) => {
             if (active) listener(metadata)
           })
         })
@@ -218,9 +218,9 @@ export function CreatorFixtureAosUiApp({
     assistantRuntime: WorkspaceFixtureRuntime["assistantRuntime"]
   }) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
+  const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
   const bundle = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
     enableAgentCreator: true,
     ...(workspace ? { testOnly: { workspace } } : {}),
@@ -247,13 +247,13 @@ export function interviewWorkspace(interviewAgeMs: number) {
     ],
     sessions: [
       {
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         agentId: "agent-aster",
         updatedAt: FIXTURE_NOW.toISOString(),
         status: "idle",
       },
       {
-        threadId: "interview-thread",
+        sessionId: "interview-thread",
         agentId: "agent-builder",
         updatedAt: new Date(
           FIXTURE_NOW.getTime() - interviewAgeMs
@@ -288,11 +288,11 @@ class PendingInterviewThreadListAdapter extends FixtureThreadListAdapter {
     this.#owners.set(localThreadId, agentId)
   }
 
-  override async initialize(threadId: string) {
-    const owner = this.#owners.get(threadId)
-    if (!owner) return super.initialize(threadId)
+  override async initialize(sessionId: string) {
+    const owner = this.#owners.get(sessionId)
+    if (!owner) return super.initialize(sessionId)
     await this.firstTurn
-    const { threadId: remoteId } = await this.workspace.createSession(owner)
+    const { sessionId: remoteId } = await this.workspace.createSession(owner)
     return { remoteId, externalId: remoteId }
   }
 }
@@ -310,7 +310,7 @@ export function PendingInterviewFixture({
       agents: [{ kind: "ready", id: "agent-aster", name: "Aster" }],
       sessions: [
         {
-          threadId: "thread-aster-market",
+          sessionId: "thread-aster-market",
           agentId: "agent-aster",
           updatedAt: FIXTURE_NOW.toISOString(),
           status: "idle",
@@ -377,11 +377,11 @@ export function CatalogFixture({
   agentGate?: Promise<void>
   locale?: "en" | "he"
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const agentCreator = fixture.workspace.agentCreator!
@@ -465,20 +465,21 @@ function workspaceFacade(
   return {
     listAgents: () => workspace.listAgents(),
     refreshAgents: () => workspace.refreshAgents(),
-    getSessionMetadata: (threadIds) => workspace.getSessionMetadata(threadIds),
+    getSessionMetadata: (sessionIds) =>
+      workspace.getSessionMetadata(sessionIds),
     createSession: (agentId, options) =>
       workspace.createSession(agentId, options),
     ...(workspace.subscribeTodos
       ? {
           subscribeTodos: (
-            threadId: string,
+            sessionId: string,
             listener: Parameters<
               NonNullable<WorkspaceAdapter["subscribeTodos"]>
             >[1],
             onError?: Parameters<
               NonNullable<WorkspaceAdapter["subscribeTodos"]>
             >[2]
-          ) => workspace.subscribeTodos!(threadId, listener, onError),
+          ) => workspace.subscribeTodos!(sessionId, listener, onError),
         }
       : {}),
     ...(workspace.subscribeAgentCatalog
@@ -496,7 +497,7 @@ function workspaceFacade(
     ...(workspace.subscribeSessionMetadata
       ? {
           subscribeSessionMetadata: (
-            threadIds: readonly string[],
+            sessionIds: readonly string[],
             listener: Parameters<
               NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
             >[1],
@@ -504,7 +505,7 @@ function workspaceFacade(
               NonNullable<WorkspaceAdapter["subscribeSessionMetadata"]>
             >[2]
           ) =>
-            workspace.subscribeSessionMetadata!(threadIds, listener, onError),
+            workspace.subscribeSessionMetadata!(sessionIds, listener, onError),
         }
       : {}),
     ...overrides,
@@ -520,11 +521,11 @@ export function GatedMetadataCreatorFixture({
   hold: () => Promise<void>
   capture: (runtime: WorkspaceFixtureRuntime["assistantRuntime"]) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
     testOnly: { workspace: seed },
   })
@@ -532,9 +533,9 @@ export function GatedMetadataCreatorFixture({
     () => ({
       assistantRuntime: fixture.assistantRuntime,
       workspace: workspaceFacade(fixture.workspace, {
-        getSessionMetadata: async (threadIds) => {
+        getSessionMetadata: async (sessionIds) => {
           await hold()
-          return fixture.workspace.getSessionMetadata(threadIds)
+          return fixture.workspace.getSessionMetadata(sessionIds)
         },
       }),
     }),
@@ -565,11 +566,11 @@ export function BuilderSignalFixture({
   }) => void
 }) {
   const [providerState] = useState(() => ({ completed: false }))
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -676,11 +677,11 @@ export function CreatedAgentFixture({
   hideFor?: number
   hiddenAgentId?: string
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const [state] = useState<CreatedAgentState>(() => ({
@@ -731,11 +732,11 @@ export function BuilderLifecycleFixture({
 }: {
   captureWorkspace: (workspace: FixtureWorkspace) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
 
@@ -759,11 +760,11 @@ export function EmptyAgentFixture({
 }: {
   createSession?: WorkspaceAdapter["createSession"]
 } = {}) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -801,11 +802,11 @@ export function StaleTodoFixture({
 }: {
   captureStaleEmission: (emit: () => void) => void
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
@@ -853,17 +854,17 @@ export function SessionMetadataSignalFixture({
     Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
   >
 }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
   const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       ...(initialMetadata ? { getSessionMetadata: () => initialMetadata } : {}),
-      subscribeSessionMetadata: (_threadIds, listener, onError) => {
+      subscribeSessionMetadata: (_sessionIds, listener, onError) => {
         captureSignal({
           publish: listener,
           fail: (error) => onError?.(error),
@@ -890,11 +891,11 @@ export function SessionMetadataSignalFixture({
 }
 
 export function ClockBoundaryFixture({ readNow }: { readNow: () => Date }) {
-  const [threadId, setThreadId] = useState<string | undefined>(
+  const [sessionId, setThreadId] = useState<string | undefined>(
     "thread-aster-market"
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: setThreadId,
   })
 

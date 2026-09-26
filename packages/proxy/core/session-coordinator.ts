@@ -26,6 +26,7 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
+import type { Role } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
@@ -56,9 +57,9 @@ export type SequencedTurnEvent = {
 }
 
 export type CoordinatorAccess = {
-  subscriberId: string
-  controllerId: string
-  lane: "operator" | "guest"
+  membershipId: string
+  principalId: string
+  role: Role
   canControl: boolean
   onDetach?(): void
   /** Owns request-scoped resources until the provider outcome is known. */
@@ -67,7 +68,7 @@ export type CoordinatorAccess = {
 
 export type CoordinatorRecoveryRequest = Pick<
   RecoveryRequest,
-  "threadId" | "turnId"
+  "sessionId" | "turnId"
 > & {
   after?: number
   /** The reader holds part of the turn it cannot position, so it reloads. */
@@ -214,7 +215,7 @@ type Execution = {
   state: SessionExecutionState
   admissionId: string
   admissionFingerprint: string
-  startedByLane: "operator" | "guest"
+  startedByRole: Role
   /**
    * The controller whose admission started this turn, kept across every
    * segment whoever answers. A turn this proxy recovered or adopted without
@@ -251,7 +252,7 @@ type TurnInit = {
 
 type ExecutionInit = TurnInit & {
   scope: SessionScope
-  startedByLane: "operator" | "guest"
+  startedByRole: Role
   startedBy?: string
   controllers?: readonly string[]
 }
@@ -273,8 +274,8 @@ function admittedTurn(init: TurnInit): AdmittedTurn {
 
 const MAX_STEERING_REQUESTS_PER_EXECUTION = 256
 
-function scopeKey(scope: Pick<SessionScope, "agentId" | "sessionId">) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+function scopeKey(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 function safeEventBytes(event: TurnEvent) {
@@ -433,7 +434,7 @@ export class SessionCoordinator {
   readonly #admissions = new Set<string>()
   readonly #recoveries = new Map<string, Promise<Execution>>()
   readonly #discoveries = new Map<string, Promise<Execution | undefined>>()
-  readonly #observers = new Set<{
+  readonly #listeners = new Set<{
     key?: string
     listener: (event: ExecutionEvent) => void
   }>()
@@ -448,7 +449,7 @@ export class SessionCoordinator {
     this.#usage = new SessionReporter({
       read: async (scope) =>
         SessionContextResponseSchema.parse(
-          await readings.context(scope.agentId, scope.threadId)
+          await readings.context(scope.agentId, scope.sessionId)
         ),
       retryDelaysMs: USAGE_RETRY_DELAYS_MS,
     })
@@ -456,7 +457,7 @@ export class SessionCoordinator {
     this.#models = new SessionReporter({
       read: async (scope, selectedId: string) => ({
         ...SessionModelsResponseSchema.parse(
-          await readings.models(scope.agentId, scope.threadId)
+          await readings.models(scope.agentId, scope.sessionId)
         ),
         selectedId,
       }),
@@ -475,15 +476,15 @@ export class SessionCoordinator {
   /** Subscribes one subscriber to its Session's readings, until it closes. */
   subscribeReadings(
     scope: SessionScope,
-    subscriberId: string,
+    membershipId: string,
     listeners: SessionReadingListeners
   ) {
     const key = scopeKey(scope)
     const leaves = [
       listeners.usage &&
-        this.#usage.subscribe(key, scope, subscriberId, listeners.usage),
+        this.#usage.subscribe(key, scope, membershipId, listeners.usage),
       listeners.model &&
-        this.#models.subscribe(key, scope, subscriberId, listeners.model),
+        this.#models.subscribe(key, scope, membershipId, listeners.model),
     ]
     return () => {
       for (const leave of leaves) leave?.()
@@ -496,22 +497,22 @@ export class SessionCoordinator {
    * the first attempt has delivered or deferred it.
    */
   reportUsage(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
-    subscriberId?: string
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    membershipId?: string
   ) {
     return this.#usage.report(
       scopeKey(scope),
       undefined,
-      subscriberId === undefined ? undefined : [subscriberId]
+      membershipId === undefined ? undefined : [membershipId]
     )
   }
 
-  state(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+  state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#executions.get(scopeKey(scope))?.state ?? "idle"
   }
 
   snapshot(
-    scope: Pick<SessionScope, "agentId" | "sessionId">
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">
   ): SessionSnapshot {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution) return { state: "idle", requests: [] }
@@ -530,7 +531,7 @@ export class SessionCoordinator {
    * that start was if it is known: a view rebuilt from history reads the turn
    * from there.
    */
-  replayStart(scope: Pick<SessionScope, "agentId" | "sessionId">) {
+  replayStart(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
     if (!segment || replayPlan(segment, undefined) !== "history")
       return undefined
@@ -542,40 +543,40 @@ export class SessionCoordinator {
    * Session this coordinator drives, independent of the per-segment turn
    * subscriptions and their replay.
    */
-  observe(listener: (event: ExecutionEvent) => void) {
-    return this.#addObserver({ listener })
+  subscribeExecutions(listener: (event: ExecutionEvent) => void) {
+    return this.#addListener({ listener })
   }
 
   /**
    * One Session's execution feed, matched on its provider scope, so a member can
    * follow the requests its own Session resolves without the event naming them.
    */
-  observeScope(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+  subscribeScope(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     listener: (event: ExecutionEvent) => void
   ) {
-    return this.#addObserver({ key: scopeKey(scope), listener })
+    return this.#addListener({ key: scopeKey(scope), listener })
   }
 
-  #addObserver(observer: {
+  #addListener(entry: {
     key?: string
     listener: (event: ExecutionEvent) => void
   }) {
-    this.#observers.add(observer)
+    this.#listeners.add(entry)
     return () => {
-      this.#observers.delete(observer)
+      this.#listeners.delete(entry)
     }
   }
 
   /**
    * Asks the provider for a turn this coordinator is not already streaming: one
    * it lost to a restart, a wait to refresh, or a turn the runtime started by
-   * itself after an earlier one finished. `lane` is the lane that turn is
+   * itself after an earlier one finished. `role` is the role that turn is
    * counted under.
    */
   async discover(
     scope: SessionScope,
-    lane: Execution["startedByLane"] = "operator"
+    role: Execution["startedByRole"] = "operator"
   ) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
@@ -591,7 +592,7 @@ export class SessionCoordinator {
     const discovery = this.#discover(
       scope,
       key,
-      lane,
+      role,
       existing?.state === "waiting-for-input" ? existing : undefined
     )
     this.#discoveries.set(key, discovery)
@@ -608,11 +609,11 @@ export class SessionCoordinator {
   async #discover(
     scope: SessionScope,
     key: string,
-    lane: Execution["startedByLane"],
+    role: Execution["startedByRole"],
     existing: Execution | undefined
   ) {
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
-    this.#assertCapacity(lane, existing)
+    this.#assertCapacity(role, existing)
     this.#admissions.add(key)
     try {
       const turnId =
@@ -646,7 +647,7 @@ export class SessionCoordinator {
           state: discovered.state,
           turnId,
           request: { turnId },
-          startedByLane: lane,
+          startedByRole: role,
           segment,
         })
       if (existing) {
@@ -675,7 +676,7 @@ export class SessionCoordinator {
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerTurnConflictError()
-      if (access.canControl) existing.controllers.add(access.controllerId)
+      if (access.canControl) existing.controllers.add(access.principalId)
       // A retried admission reads the turn from its beginning, so a journal that
       // no longer holds that beginning answers it with its live events alone.
       // For an already-terminal segment that plan is `reset`, and this path
@@ -698,7 +699,7 @@ export class SessionCoordinator {
       )
         throw new ServerTurnConflictError()
     }
-    this.#assertCapacity(access.lane)
+    this.#assertCapacity(access.role)
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     this.#admissions.add(key)
     try {
@@ -713,9 +714,9 @@ export class SessionCoordinator {
         state: "running",
         turnId: input.turnId,
         request: input,
-        startedByLane: access.lane,
-        startedBy: access.controllerId,
-        controllers: access.canControl ? [access.controllerId] : [],
+        startedByRole: access.role,
+        startedBy: access.principalId,
+        controllers: access.canControl ? [access.principalId] : [],
         segment: this.#createSegment({
           cacheKey: key,
           turnId: input.turnId,
@@ -739,11 +740,12 @@ export class SessionCoordinator {
    * never asked, is stale. Each answer withdraws its request from every member
    * at once; the last one continues the turn as a fresh segment, whose turnId
    * this returns with the one it continues. Every member follows that segment
-   * the way it follows any other. A member answers through its Seat, never
-   * here, so the Channel's offered and delivered records stay in step.
+   * the way it follows any other. A member answers through its Membership,
+   * never here, so the membership's offered and delivered records stay in
+   * step.
    */
   async answer(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     reply: RequestReply
   ) {
     const execution = this.#executions.get(scopeKey(scope))
@@ -785,7 +787,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess
   ): Promise<CoordinatedTurnSubscription> {
     if (this.#closed) throw new Error("Session coordinator is closed")
-    if (request.threadId !== scope.threadId)
+    if (request.sessionId !== scope.sessionId)
       throw new Error("Recovery scope does not match this Session")
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
@@ -797,7 +799,7 @@ export class SessionCoordinator {
         ? "reset"
         : replayPlan(existing.segment, request.after)
       if (plan === "reset") return this.#resetSubscription(existing.segment)
-      if (access.canControl) existing.controllers.add(access.controllerId)
+      if (access.canControl) existing.controllers.add(access.principalId)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -813,7 +815,7 @@ export class SessionCoordinator {
     const after = existing ? request.after : undefined
     const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
     if (plan === "reset") return this.#resetSubscription(recovered.segment)
-    if (access.canControl) recovered.controllers.add(access.controllerId)
+    if (access.canControl) recovered.controllers.add(access.principalId)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -826,7 +828,7 @@ export class SessionCoordinator {
     const key = scopeKey(scope)
     const inFlight = this.#recoveries.get(key)
     if (inFlight) return inFlight
-    this.#assertCapacity(existing?.startedByLane ?? access.lane, existing)
+    this.#assertCapacity(existing?.startedByRole ?? access.role, existing)
     if (this.#admissions.has(key)) throw new ServerTurnConflictError()
     const recovery = this.#recoverExecution(scope, request, access, existing)
     this.#recoveries.set(key, recovery)
@@ -853,7 +855,7 @@ export class SessionCoordinator {
     try {
       recovered = await this.#recovery(
         scope,
-        { threadId: scope.threadId, turnId: execution.segment.turnId },
+        { sessionId: scope.sessionId, turnId: execution.segment.turnId },
         access,
         execution
       )
@@ -881,7 +883,7 @@ export class SessionCoordinator {
       // without a position: a fabricated one would never match a real epoch.
       const position = existing?.segment.handle.recoveryPosition()
       const providerRequest: RecoveryRequest = {
-        threadId: request.threadId,
+        sessionId: request.sessionId,
         turnId: request.turnId,
         ...(position ? { position } : {}),
       }
@@ -904,13 +906,13 @@ export class SessionCoordinator {
           state: "running",
           turnId: request.turnId,
           request: providerRequest,
-          startedByLane: access.lane,
+          startedByRole: access.role,
           segment,
         })
       if (existing) existing.segment.fanout.close()
       execution.state = "running"
       execution.segment = segment
-      if (access.canControl) execution.controllers.add(access.controllerId)
+      if (access.canControl) execution.controllers.add(access.principalId)
       this.#executions.set(key, execution)
       this.#trackJournal(segment)
       this.#consume(execution, segment)
@@ -937,13 +939,13 @@ export class SessionCoordinator {
   }
 
   async stop(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
-    controllerId: string
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    principalId: string
   ) {
     const execution = this.#executions.get(scopeKey(scope))
     if (!execution || execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
-      if (!execution.controllers.has(controllerId))
+      if (!execution.controllers.has(principalId))
         throw new ServerTurnControlError()
       const stopped = execution.segment
       try {
@@ -968,9 +970,9 @@ export class SessionCoordinator {
   }
 
   async steer(
-    scope: Pick<SessionScope, "agentId" | "sessionId">,
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     request: TurnSteerRequest,
-    controllerId: string
+    principalId: string
   ): Promise<TurnSteerResponse> {
     const execution = this.#executions.get(scopeKey(scope))
     if (
@@ -979,7 +981,7 @@ export class SessionCoordinator {
       execution.segment.turnId !== request.expectedTurnId
     )
       throw new ServerTurnConflictError()
-    if (!execution.controllers.has(controllerId))
+    if (!execution.controllers.has(principalId))
       throw new ServerTurnControlError()
 
     const fingerprint = admissionFingerprint({
@@ -1062,7 +1064,7 @@ export class SessionCoordinator {
   #createExecution(init: ExecutionInit): Execution {
     return {
       scope: init.scope,
-      startedByLane: init.startedByLane,
+      startedByRole: init.startedByRole,
       ...(init.startedBy === undefined ? {} : { startedBy: init.startedBy }),
       controllers: new Set(init.controllers ?? []),
       ...admittedTurn(init),
@@ -1073,8 +1075,8 @@ export class SessionCoordinator {
   #origin(scope: SessionScope, turnId: string) {
     return {
       agentId: scope.agentId,
-      // Observers project to the browser, which knows only public identity.
-      sessionId: scope.threadId,
+      // Listeners project to the browser, which knows only public identity.
+      sessionId: scope.sessionId,
       turnId,
       occurredAt: new Date().toISOString(),
     }
@@ -1082,12 +1084,12 @@ export class SessionCoordinator {
 
   #announce(scope: SessionScope, event: ExecutionEvent) {
     const key = scopeKey(scope)
-    for (const { key: observed, listener } of [...this.#observers])
+    for (const { key: observed, listener } of [...this.#listeners])
       if (observed === undefined || observed === key)
         try {
           listener(event)
         } catch {
-          // An observer must not rewrite the provider outcome.
+          // A listener must not rewrite the provider outcome.
         }
   }
 
@@ -1361,14 +1363,14 @@ export class SessionCoordinator {
       plan === "history"
         ? compactedReplay(segment.journal?.entries ?? [], after)
         : []
-    const { subscriberId } = access
+    const { membershipId } = access
     const usage = this.#usage
     const models = this.#models
     // A reading follows what the subscriber has read, never overtakes it: the
     // code after a `yield` runs once the reader asks for the next event.
     const read = ({ event }: SequencedTurnEvent) => {
       if (event.kind === TurnEventKind.ModelChanged)
-        void models.report(segment.cacheKey, event.modelId, [subscriberId])
+        void models.report(segment.cacheKey, event.modelId, [membershipId])
     }
     let closed = false
     const events: AsyncIterable<SequencedTurnEvent> = {
@@ -1390,7 +1392,7 @@ export class SessionCoordinator {
           // stream its reader closed, or dropped for falling behind, is owed
           // nothing: the reader follows another or resyncs.
           if (!closed)
-            void usage.report(segment.cacheKey, undefined, [subscriberId])
+            void usage.report(segment.cacheKey, undefined, [membershipId])
         } finally {
           live.close()
         }
@@ -1423,7 +1425,7 @@ export class SessionCoordinator {
     return { turnId: segment.turnId, events, close: () => undefined }
   }
 
-  #assertCapacity(lane: "operator" | "guest", existing?: Execution) {
+  #assertCapacity(role: Role, existing?: Execution) {
     if (existing) return
     const active = [...this.#executions.values()].filter(
       ({ state }) => state !== "idle"
@@ -1431,8 +1433,8 @@ export class SessionCoordinator {
     if (active.length >= this.options.maxActiveExecutions)
       throw new ServerTurnCapacityError("global")
     if (
-      lane === "guest" &&
-      active.filter(({ startedByLane }) => startedByLane === "guest").length >=
+      role === "guest" &&
+      active.filter(({ startedByRole }) => startedByRole === "guest").length >=
         this.options.maxGuestActiveExecutions
     )
       throw new ServerTurnCapacityError("guest")

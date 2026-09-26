@@ -260,7 +260,7 @@ export function SessionRowMenuButton({
       <Menu.Trigger
         render={<Button variant="ghost" size={size} className={className} />}
         aria-label={`${menu.copy.sessionActions}: ${menu.session.title}`}
-        data-session-menu={menu.session.threadId}
+        data-session-menu={menu.session.sessionId}
       >
         <Ellipsis aria-hidden="true" />
       </Menu.Trigger>
