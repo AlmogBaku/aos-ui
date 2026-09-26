@@ -400,7 +400,7 @@ function createFakeConnection() {
         listener()
       )
       return () => {
-        for (const settle of settles) settle?.()
+        for (const settle of settles) settle?.(true)
       }
     },
   }

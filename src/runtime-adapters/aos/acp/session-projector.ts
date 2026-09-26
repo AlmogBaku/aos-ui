@@ -1035,20 +1035,30 @@ export function renameMessage(
 }
 
 /**
- * Drops the transcript ahead of a replay that resends the whole Session. The
- * replay's parts arrive as chunks, so the ones already projected would be
- * doubled rather than replaced; the Session's own state stays, because the
- * replay restates that itself.
- *
+ * The turns a replay that resends the whole Session replaces, as it starts.
  * A prompt the provider has not echoed yet is the browser's alone: a draft's
  * first turn binds and resumes while its own prompt is in flight, and the reply
  * re-keys it onto the id the proxy assigned, which drops it if the replay
  * already carried that turn.
  */
-export function clearTranscript(state: ProjectorState): ProjectorState {
-  const kept = state.messages.filter((message) =>
-    message.id.startsWith(LOCAL_PROMPT_PREFIX)
+export function replacedTurns(state: ProjectorState): ReadonlySet<string> {
+  return new Set(
+    state.messages.flatMap((message) =>
+      message.id.startsWith(LOCAL_PROMPT_PREFIX) ? [] : [message.id]
+    )
   )
+}
+
+/**
+ * Drops the turns a replay replaces. The replay's parts arrive as chunks, so
+ * the ones already projected would be doubled rather than replaced; the
+ * Session's own state stays, because the replay restates that itself.
+ */
+export function clearTranscript(
+  state: ProjectorState,
+  replaced = replacedTurns(state)
+): ProjectorState {
+  const kept = state.messages.filter((message) => !replaced.has(message.id))
   const bare = !state.terminals && !state.early
   if (kept.length === state.messages.length && bare) return state
   return {

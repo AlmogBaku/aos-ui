@@ -42,7 +42,11 @@ async function connectBrowser(options?: HarnessOptions) {
 
 type Frame = {
   method?: string
-  params?: { sessionId?: string; _meta?: { aos?: { clientId?: string } } }
+  params?: {
+    sessionId?: string
+    replayFrom?: { type: string }
+    _meta?: { aos?: { clientId?: string } }
+  }
 }
 
 /**
@@ -174,6 +178,32 @@ describe("browser connection faults", () => {
     expect(methodsOf(frames, SESSION)).toEqual([
       "session/resume",
       "session/close",
+    ])
+  })
+
+  it("replays from the start again a from-start replay its transport dropped", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { pipe, connection, faults } = await connectBrowser()
+    const frames = sentFrames()
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+
+    faults.hangUntilAborted("history")
+    const replayed = connection.replay(SESSION)
+    await clock.advance(0)
+    pipe.sockets[0]!.drop()
+    await clock.advance(125)
+    await replayed
+
+    const resumes = frames.filter(
+      ({ method, params }) =>
+        method === "session/resume" && params?.sessionId === SESSION
+    )
+    expect(resumes.map(({ params }) => params?.replayFrom?.type)).toEqual([
+      "start",
+      "start",
+      "start",
     ])
   })
 
@@ -319,7 +349,7 @@ describe("browser connection faults", () => {
     // Block the probe so it times out and forces a reconnect.
     pipe.sockets[0]!.halfOpen()
     await clock.advance(10_000) // explicit focus probe deadline
-    await clock.advance(125)   // reconnect backoff
+    await clock.advance(125) // reconnect backoff
 
     expect(pipe.sockets).toHaveLength(2)
     // The first focus frame was the explicit call; the one from recover() follows.

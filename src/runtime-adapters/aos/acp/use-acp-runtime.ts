@@ -60,6 +60,7 @@ import {
   messageBlocks,
   prependMessages,
   renameMessage,
+  replacedTurns,
   retainMessages,
   toThreadMessages,
   type ProjectorExecution,
@@ -266,7 +267,7 @@ function createAcpController({
    * each page after it did; `undefined` means no replay has said yet. A page
    * belongs to the transcript it was asked for: every replay start and settle,
    * binding, and accepted rewind bumps `transcripts`, and a page that lands
-   * under another one is dropped.
+   * under another one is dropped. A page waits for any replay under way.
    */
   let pagesEnabled = false
   let cursor: AosHistoryCursor | undefined
@@ -277,8 +278,6 @@ function createAcpController({
   let transcripts = 0
   /** Accepted rewinds, so a replay that started before one leaves it stale. */
   let rewinds = 0
-  /** Replays under way; a page waits for the transcript they refill. */
-  let replaysOpen = 0
   /** The load that owns `olderLoading`, so a rebinding can release it. */
   let loads = 0
 
@@ -288,15 +287,24 @@ function createAcpController({
   }
 
   /**
-   * A replay arrives as one update per stored part, so a Session with hundreds
-   * of them would rebuild the thread and repaint once per part for a transcript
-   * the reader only ever sees whole. Every update still applies in arrival
-   * order; only the telling waits for the replay that carries them.
+   * A from-start replay arrives as one update per stored part, so a Session
+   * with hundreds of them would rebuild the thread and repaint once per part
+   * for a transcript the reader only ever sees whole. Every update still
+   * applies in arrival order; only the telling waits until no replay is under
+   * way, and until then the reader keeps the transcript it was last told.
    */
   let replaying = 0
   let untold = false
+  let shown = state
+  /**
+   * The turns the latest replay replaces, until it drops them: at its first
+   * update, or as it completes if it carried none. A refused replay drops
+   * nothing, so the transcript stays as the provider last replayed it.
+   */
+  let replacing: ReadonlySet<string> | undefined
 
   const announce = () => {
+    shown = state
     untold = false
     notify()
     callbacks.onStateChange?.(state)
@@ -310,17 +318,6 @@ function createAcpController({
       return
     }
     announce()
-  }
-
-  /** Holds a replay's updates back until the replay itself settles. */
-  const whileReplaying = async (run: () => Promise<unknown>) => {
-    replaying += 1
-    try {
-      return await run()
-    } finally {
-      replaying -= 1
-      if (replaying === 0 && untold) announce()
-    }
   }
 
   const observe = (params: unknown, method: string) => {
@@ -358,7 +355,7 @@ function createAcpController({
   ): Promise<ResumeOutcome> => {
     let outcome: ResumeOutcome = "replayed"
     try {
-      await whileReplaying(() => connection.replay(session))
+      await connection.replay(session)
     } catch {
       outcome = isBound(session, generation) ? "refused" : "abandoned"
     }
@@ -415,29 +412,40 @@ function createAcpController({
       connection.subscribe(next, {
         update: (update, meta) => {
           const before = state
-          commit(applyUpdate(state, update, meta))
+          const base =
+            replacing === undefined ? state : clearTranscript(state, replacing)
+          replacing = undefined
+          commit(applyUpdate(base, update, meta))
           // A replayed failure is already what the provider holds.
           if (replaying === 0 && failedWithoutReply(before, state))
             failUnanswered(next, generation, state.execution.error)
         },
-        // The replay that follows carries the Session whole, so the transcript
-        // it replaces goes first, and a fresh cursor comes with it.
+        // The replay carries the Session whole: it replaces the transcript,
+        // and a fresh cursor comes with it.
         replay: () => {
-          commit(clearTranscript(state))
+          const replaced = replacedTurns(state)
+          replacing = replaced
+          replaying += 1
+          transcripts += 1
           const before = connection.history(next)
           const rewound = rewinds
-          replaysOpen += 1
-          transcripts += 1
-          return () => {
-            replaysOpen -= 1
+          return (replayed) => {
+            if (replacing === replaced) {
+              replacing = undefined
+              if (replayed) commit(clearTranscript(state, replaced))
+            }
             transcripts += 1
             const after = connection.history(next)
-            if (bound !== next || after === before) return
-            cursor = after
-            // A rewind accepted mid-replay may have moved what it already
-            // read.
-            if (rewinds === rewound) cursorStale = false
-            notify()
+            const moved = bound === next && after !== before
+            if (moved) {
+              cursor = after
+              // A rewind accepted mid-replay may have moved what it already
+              // read.
+              if (rewinds === rewound) cursorStale = false
+            }
+            replaying -= 1
+            if (replaying === 0 && untold) announce()
+            else if (moved) notify()
           }
         },
       }),
@@ -545,7 +553,7 @@ function createAcpController({
       !pagesEnabled ||
       session === undefined ||
       olderLoading ||
-      replaysOpen > 0 ||
+      replaying > 0 ||
       cursor?.nextCursor === undefined
     )
       return
@@ -612,12 +620,12 @@ function createAcpController({
       return () => listeners.delete(listener)
     },
     getVersion: () => version,
-    getState: () => state,
+    getState: () => shown,
     isLoading: () => loading,
     getRepository: () => {
-      if (repositoryOf !== state) {
-        repository = toRepository(toThreadMessages(state))
-        repositoryOf = state
+      if (repositoryOf !== shown) {
+        repository = toRepository(toThreadMessages(shown))
+        repositoryOf = shown
       }
       return repository
     },
@@ -668,7 +676,7 @@ function createAcpController({
       // first sent, so the provider re-attaches the turn's images itself from
       // the row the rewind replaces.
       const blocks = parentId
-        ? messageBlocks(state, parentId).filter(
+        ? messageBlocks(shown, parentId).filter(
             (block) => block.type === "text"
           )
         : []

@@ -70,8 +70,12 @@ export type AcpHistoryPage = {
   readonly history: AosHistoryCursor
 }
 
-/** Told a from-start replay is starting; may return its settle callback. */
-export type AcpSessionReplayListener = () => (() => void) | void
+/**
+ * Told a from-start replay is starting; may return its settle callback, told
+ * whether the replay completed.
+ */
+export type AcpSessionReplayListener = () =>
+  ((replayed: boolean) => void) | void
 
 /**
  * Where one opened Session stands: `joining` until the proxy has joined it,

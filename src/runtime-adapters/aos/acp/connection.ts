@@ -220,7 +220,10 @@ function subscribeKeyed<Listener>(
  * Adds an `onReceived` callback on every inbound frame, used to drive the
  * inbound-silence timer without coupling logging to liveness tracking.
  */
-function trackedInbound(stream: WireStream, onReceived: () => void): WireStream {
+function trackedInbound(
+  stream: WireStream,
+  onReceived: () => void
+): WireStream {
   return {
     readable: stream.readable.pipeThrough(
       new TransformStream<AnyWireMessage, AnyWireMessage>({
@@ -319,7 +322,10 @@ export function createAcpConnection(
     /** A from-start replay is owed: asked for, or a rejoin's resync. */
     replayOwed: boolean
     /** The from-start replay in flight and the settle callbacks it owes. */
-    replaying?: { settles: (() => void)[]; delivered: boolean }
+    replaying?: {
+      settles: ((replayed: boolean) => void)[]
+      delivered: boolean
+    }
     waiters?: PromiseWithResolvers<void>
     grace?: unknown
   }
@@ -687,6 +693,7 @@ export function createAcpConnection(
       ? { settles: [...open.listeners].flatMap(settleOf), delivered: false }
       : undefined
     open.replaying = replaying
+    let replayed = false
     try {
       const response = await requestOn(
         transport,
@@ -717,11 +724,17 @@ export function createAcpConnection(
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
       if (meta.history) open.history = meta.history
-      if (fromStart) open.replayed = true
+      if (fromStart) {
+        open.replayed = true
+        replayed = true
+      }
       if (meta.resync) open.replayOwed = true
     } finally {
+      // A from-start replay that did not complete is still owed: its
+      // listeners may already hold part of it.
+      if (fromStart && !replayed) open.replayOwed = true
       if (open.replaying === replaying) open.replaying = undefined
-      for (const settle of replaying?.settles ?? []) settle()
+      for (const settle of replaying?.settles ?? []) settle(replayed)
     }
   }
 
@@ -1176,8 +1189,14 @@ export function createAcpConnection(
     const handleOnline = () => {
       if (status === "ready") sendLivenessProbeAsync()
     }
-    globalThis.document?.addEventListener("visibilitychange", handleVisibilityChange)
-    ;(globalThis as unknown as EventTarget).addEventListener("online", handleOnline)
+    globalThis.document?.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange
+    )
+    ;(globalThis as unknown as EventTarget).addEventListener(
+      "online",
+      handleOnline
+    )
     owner.stack.defer(() => {
       clock.clearTimeout(silenceTimer)
       silenceTimer = undefined

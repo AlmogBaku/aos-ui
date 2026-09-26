@@ -103,11 +103,13 @@ function createFakeConnection(
     for (const update of replayedTurns)
       for (const listener of updates.get(sessionId) ?? [])
         listener(update, TURN_META)
+    let replayed = false
     try {
       await reply
       if (fake.history) histories.set(sessionId, { ...fake.history })
+      replayed = true
     } finally {
-      for (const settle of settles) settle?.()
+      for (const settle of settles) settle?.(replayed)
     }
   }
   // As the connection does: a from-start replay announces itself, so whoever
@@ -337,6 +339,55 @@ describe("useAcpRuntime", () => {
       fake.emit(chunkUpdate("a1", " now"))
     })
     expect(onStateChange).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the transcript in view until a resync's replay settles, and after a refused one", async () => {
+    const fake = createFakeConnection()
+    const { result, rerender } = renderHook(
+      ({ isDisabled }: { isDisabled: boolean }) =>
+        useAcpRuntime({
+          connection: fake.connection,
+          sessionId: SESSION_ID,
+          agentId: "agent-1",
+          isDisabled,
+        }),
+      { initialProps: { isDisabled: false } }
+    )
+    await act(async () => {
+      await fake.settleResume()
+    })
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(chunkUpdate("a1", "On it"))
+    })
+    const prior = visible(result.current)
+
+    await act(() =>
+      fake.resync(Promise.reject(new Error("refused"))).catch(() => {})
+    )
+    expect(visible(result.current)).toEqual(prior)
+
+    fake.replayOnResume([
+      textUpdate("user_message", "u1", "Ship it"),
+      chunkUpdate("a1", "Shipped"),
+    ])
+    const reply = Promise.withResolvers<void>()
+    let replayed = Promise.resolve()
+    act(() => {
+      replayed = fake.resync(reply.promise)
+    })
+    // A re-render mid-replay reads the transcript the reader was last told.
+    rerender({ isDisabled: true })
+    expect(visible(result.current)).toEqual(prior)
+
+    await act(async () => {
+      reply.resolve()
+      await replayed
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a1", role: "assistant", text: "Shipped" },
+    ])
   })
 
   it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {
@@ -1442,13 +1493,13 @@ describe("useAcpRuntime older history", () => {
       })
       newestPage(fake)
       await retry(fake, result.current)
-      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
       // The replay read the provider's positions before the rewind moved them.
       fake.history = { nextCursor: "cursor-before-rewind" }
       await act(async () => {
         reply.resolve()
         await replayed
       })
+      expect(ids(result.current)).toEqual(["u3"])
 
       fake.history = { nextCursor: "cursor-rebuilt" }
       await loadOlder(result.current)
