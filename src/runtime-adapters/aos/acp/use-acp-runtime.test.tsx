@@ -1156,6 +1156,25 @@ describe("useAcpRuntime", () => {
       expect(controlsOf(result.current)?.editText(id!, "Gone")).toBe(false)
     })
 
+    it("reorders a message an MCP App appended against one the composer queued", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await act(async () => {
+        result.current.thread.composer.setText("Typed")
+        result.current.thread.composer.send({ steer: false })
+      })
+      await queue(result.current, "From the app")
+      const [typed, fromApp] = queuedIds(result.current)
+      act(() => {
+        result.current.thread.composer.moveQueueItem(fromApp!, {
+          insertBefore: typed!,
+        })
+      })
+      await ends(fake)
+      await waitFor(() => expect(sentText(fake)).toEqual(["From the app"]))
+    })
+
     it("keeps the next message waiting past the turn's end until the hold is released", async () => {
       const fake = createFakeConnection()
       const { result } = await mount(fake, { enableMessageQueue: true })

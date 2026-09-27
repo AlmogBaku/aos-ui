@@ -136,17 +136,16 @@ export function createQueue(session: QueueSession) {
       // A new send re-arms a queue Stop paused.
       stopped = false
       push(message)
-      const added = [...adapter.items, ...adapter.steerItems].find(
-        (item) => !queued.has(item.id)
-      )
+      const added = adapter.items.find((item) => !queued.has(item.id))
       if (added) queued.set(added.id, message)
     }
   adapter.enqueue = remember(adapter.enqueue)
-  adapter.steer = remember(adapter.steer)
+  // With no `cancel`, the steer lane would only jump the line. An append the
+  // composer did not mark (an MCP App's) waits in the one lane instead, so
+  // `queueItem.move`, which cannot anchor across lanes, reorders every row.
+  adapter.steer = adapter.enqueue
   queue.subscribe(() => {
-    const waiting = new Set(
-      [...adapter.items, ...adapter.steerItems].map((item) => item.id)
-    )
+    const waiting = new Set(adapter.items.map((item) => item.id))
     for (const id of queued.keys()) if (!waiting.has(id)) queued.delete(id)
   })
   const cancelled = queue.notifyCancelled
