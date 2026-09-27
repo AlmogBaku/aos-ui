@@ -727,13 +727,20 @@ describe("OpenClaw Agent avatars", () => {
     // not a schema validation error.
     let vanishPatchSent = false
     const vanishBase = configuredGateway({
-      agents: [{ id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } }],
+      agents: [
+        { id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } },
+      ],
       configured: ["agent-a"],
     })
     const vanishClient = {
       request: async (method: string, params: unknown) => {
         if (method === "agents.list" && vanishPatchSent)
-          return { defaultId: "agent-a", mainKey: "main", scope: "global", agents: [] }
+          return {
+            defaultId: "agent-a",
+            mainKey: "main",
+            scope: "global",
+            agents: [],
+          }
         if (method === "config.patch") {
           vanishPatchSent = true
           return vanishBase.request(method, params)

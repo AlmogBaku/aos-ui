@@ -323,8 +323,7 @@ export function createOpenClawWorkspace(input: {
       const updated = confirmed.agents.find(
         (entry) => entry.summary.id === agent.id
       )
-      if (!updated) throw new OpenClawWorkspaceUnavailableError()
-      if ((updated.summary.avatar ?? null) !== avatar.data)
+      if (!updated || (updated.summary.avatar ?? null) !== avatar.data)
         throw new OpenClawWorkspaceUnavailableError()
       return AgentUpdateResponseSchema.parse({
         revision: confirmed.revision,
