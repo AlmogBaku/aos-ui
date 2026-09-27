@@ -46,7 +46,7 @@ export async function createHermesRuntime(
   // is not up yet is retried in the background instead of failing whichever
   // request happens to arrive first.
   if (transport instanceof HermesGateway)
-    void transport.connect().catch(() => undefined)
+    transport.connect().catch((err: unknown) => logger.warn({ err }, "hermes.transport.connect_failed"))
   const mcpAppClient = createMcpAppClient({
     servers: dependencies.mcpServerOverrides,
   })

@@ -246,7 +246,7 @@ export class HermesTurnEngine {
 
     // Warm the profile's MCP tool names while the turn is admitted, so its
     // first tool call already reads under its canonical name.
-    void this.#mcpToolNames?.load(scope.agentId).catch(() => undefined)
+    this.#mcpToolNames?.load(scope.agentId).catch((err: unknown) => this.#log.warn({ err }, "hermes.run.mcp_tool_names_load_failed"))
     const key = sessionKey(scope)
     const stale = this.#active.get(key)
     if (this.#admissions.has(key) || (stale && !stale.uncertain))
@@ -530,7 +530,7 @@ export class HermesTurnEngine {
       !active.detached &&
       active.liveSessionId === liveSessionId &&
       active.lastSeen === lastSeen
-    const timer = setTimeout(async () => {
+    const checkLost = async () => {
       if (!unchanged()) return
       const status = await readStatus(this.#host, liveSessionId)
       if (status !== "waiting" || !unchanged()) return
@@ -542,7 +542,15 @@ export class HermesTurnEngine {
         code,
         awaitingStop: true,
       })
-    }, this.#lostInteractionGraceMs)
+    }
+    const timer = setTimeout(
+      () => {
+        checkLost().catch((err: unknown) =>
+          this.#log.warn({ err }, "hermes.run.interaction_lost_check_failed")
+        )
+      },
+      this.#lostInteractionGraceMs
+    )
     // Detection is reconciliation, never a reason to keep the process alive.
     if (typeof timer !== "number") timer.unref()
   }
@@ -801,7 +809,7 @@ export class HermesTurnEngine {
         active.errorObserved = true
         const failure = nativeFailure(payload)
         active.failure ??= failure
-        void reconcileNativeError(this.#host, active, failure)
+        reconcileNativeError(this.#host, active, failure).catch((err: unknown) => this.#log.warn({ err }, "hermes.run.reconcile_error_failed"))
         return
       }
       case "message.complete":
