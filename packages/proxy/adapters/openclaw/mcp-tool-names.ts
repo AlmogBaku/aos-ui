@@ -117,11 +117,12 @@ export function createOpenClawMcpToolNames(
     sessions.set(key, created)
     return created
   }
-  const settle = (list: Promise<unknown>) =>
+  const settle = (list: Promise<unknown>): void => {
     list.then(
       () => undefined,
       () => undefined
     )
+  }
   return {
     async load(agentId, sessionKey, expected = []) {
       const names = record(agentId, sessionKey)
@@ -138,7 +139,7 @@ export function createOpenClawMcpToolNames(
       return (rawName) => {
         const hit = names.latest?.(rawName)
         if (!hit && mayBeMcpToolName(rawName))
-          void settle(names.cache.refresh(NAMES))
+          settle(names.cache.refresh(NAMES))
         return hit
       }
     },

@@ -65,7 +65,7 @@ function declaredLength(response: Response, maxBytes: number) {
 }
 
 function cancelBody(response: Response) {
-  void response.body?.cancel().catch(() => undefined)
+  response.body?.cancel().catch(() => undefined)
 }
 
 /** Clamp a caller's requested byte budget to `ceiling`; throws when unusable. */

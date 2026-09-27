@@ -324,7 +324,7 @@ export function scheduleCatchUp(
   const running = active.catchUp !== undefined
   const buffer = (active.catchUp ??= nativeEventBuffer())
   if (value !== undefined) bufferNativeEvent(buffer, value)
-  if (!running) void catchUp(host, active)
+  if (!running) catchUp(host, active).catch((err: unknown) => host.log.warn({ err }, "hermes.run.catch_up_failed"))
 }
 
 /**

@@ -361,7 +361,7 @@ export function createOpenCodeWorkspaceOperations(input: {
         if (invitedResolutions.get(key) === pending)
           invitedResolutions.delete(key)
       }
-      void pending.then(release, release)
+      pending.then(release, release)
       return pending
     },
   }

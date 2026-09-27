@@ -159,12 +159,13 @@ export async function createOpenClawRuntime(
   await credentials()
   const { logger } = dependencies
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
-  const resubscribe = (reason: "gap" | "reconnect") =>
-    void state.subscriptions
+  const resubscribe = (reason: "gap" | "reconnect") => {
+    state.subscriptions
       ?.replaceGeneration(reason)
       .catch((err: unknown) =>
         logger.warn({ err, reason }, "openclaw.subscription.replace_failed")
       )
+  }
   const client = (
     dependencies.clientFactory ?? ((options) => new OpenClawClient(options))
   )({
@@ -223,12 +224,13 @@ export async function createOpenClawRuntime(
           { agentId, sessionKey },
           onInvalidate
         )
-        return () =>
-          void lease
+        return () => {
+          lease
             .release()
             .catch((err: unknown) =>
               logger.warn({ err }, "openclaw.history.release_failed")
             )
+        }
       },
     })
   )

@@ -422,7 +422,7 @@ function discardNativeErrorBodies(fetcher: typeof fetch): typeof fetch {
   ) => {
     const response = await fetcher(input, init)
     if (response.ok) return response
-    void response.body?.cancel().catch(() => undefined)
+    response.body?.cancel().catch(() => undefined)
     const headers = input instanceof Request ? input.headers : init?.headers
     const url = input instanceof Request ? input.url : String(input)
     if (

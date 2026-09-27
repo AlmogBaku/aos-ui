@@ -456,7 +456,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     // A refused write consumed nothing, so the images it would have carried
     // must not ride along with the Session's next prompt.
     if (outcome.acknowledgement === "rejected")
-      await this.#detachImages(liveSessionId, reattached).catch(() => {})
+      await this.#detachImages(liveSessionId, reattached).catch((err: unknown) => this.#log?.warn({ err }, "hermes.native.detach_failed"))
     return outcome
   }
 
@@ -477,7 +477,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         attached.push(path)
       }
     } catch (error) {
-      await this.#detachImages(liveSessionId, attached).catch(() => {})
+      await this.#detachImages(liveSessionId, attached).catch((err: unknown) => this.#log?.warn({ err }, "hermes.native.detach_failed"))
       throwUnavailable(error)
     }
   }

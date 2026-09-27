@@ -564,7 +564,7 @@ export class HermesAttachmentRegistry {
       }
       this.#byLiveId.delete(liveSessionId)
       entry.attachment = { ...entry.attachment, liveSessionId: "" }
-      void this.native.close(liveSessionId).catch(() => undefined)
+      this.native.close(liveSessionId).catch((err: unknown) => this.#log?.warn({ err }, "hermes.attachment.close_failed"))
       this.#forget(entry)
     }, this.#idleMs)
     // Idle retention is housekeeping: it must never be the reason the process

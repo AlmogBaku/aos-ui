@@ -365,7 +365,7 @@ export class HermesGateway implements HermesRpcTransport {
     // arm the redial ladder.
     if (this.#client.connectionState !== "open")
       throw new HermesUnavailableError()
-    void this.#advertiseCapabilities()
+    this.#advertiseCapabilities().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.capabilities_failed"))
   }
 
   /**
@@ -512,7 +512,7 @@ export class HermesGateway implements HermesRpcTransport {
       this.#redialTimer = undefined
       if (this.#closed || this.#dial) return
       if (this.#client.connectionState === "open") return
-      void this.connect().catch(() => undefined)
+      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
     }, delay)
   }
 
@@ -627,7 +627,7 @@ export class HermesGateway implements HermesRpcTransport {
     if (this.#client.connectionState === "open") return Promise.resolve()
     if (this.#refusal) return Promise.reject(new HermesAuthenticationError())
     if (!this.#dial && this.#redialTimer === undefined)
-      void this.connect().catch(() => undefined)
+      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
     return new Promise<void>((resolve, reject) => {
       // Membership in `#openWaiters` is what settles a waiter exactly once.
       const finish = (complete: () => void) => {
