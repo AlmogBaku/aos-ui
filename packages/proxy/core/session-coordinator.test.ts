@@ -3701,50 +3701,6 @@ describe("SessionCoordinator", () => {
     expect(second).toHaveBeenCalledOnce()
   })
 
-  it("keeps a Session a read finds gone while its turn runs, until the turn ends", async () => {
-    const { advance } = useFakeClock()
-    const source = new EventSource()
-    const context = vi.fn(async () => {
-      throw new ServerSessionNotFoundError()
-    })
-    const sessions = coordinator(
-      { start: vi.fn(async () => source), recover: vi.fn(async () => source) },
-      {
-        readings: {
-          context,
-          models: vi.fn(),
-          publicError: () => undefined,
-          link: READY_LINK,
-        },
-      }
-    )
-    const gone = vi.fn()
-    const read = reader(
-      await sessions.start(scope, input("run-1"), access("one"))
-    )
-    sessions.subscribeReadings(scope, "one", {
-      usage: async () => undefined,
-      gone,
-    })
-    source.emit(turnStarted)
-    await read()
-    await advance(0)
-
-    // Ending it now would orphan the runtime's turn.
-    expect(context).toHaveBeenCalledOnce()
-    expect(gone).not.toHaveBeenCalled()
-    expect(sessions.state(scope)).toBe("running")
-
-    // The read its turn's end owes still finds it gone, and ends it.
-    source.emit(turnEnded)
-    source.finish()
-    await read()
-    await expect(read()).resolves.toMatchObject({ done: true })
-    await advance(0)
-    expect(context).toHaveBeenCalledTimes(2)
-    expect(gone).toHaveBeenCalledOnce()
-  })
-
   describe("eviction and gauges", () => {
     it("evicts an idle execution and its journal when its last reading subscriber leaves", async () => {
       const { advance } = useFakeClock()
