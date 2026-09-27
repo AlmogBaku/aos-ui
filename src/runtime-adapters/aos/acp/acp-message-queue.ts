@@ -82,9 +82,28 @@ export function createQueue(session: QueueSession) {
   // Stop paused the queue and nothing has re-armed it since. A hold marks
   // the queue busy, which un-pauses it, so its release pauses it again.
   let stopped = false
+  // The stopped turn still owes the queue its idle.
+  let cancelOwed = false
+  const notifyIdle = () => {
+    cancelOwed = false
+    queue.notifyIdle()
+  }
+  const notifyBusy = () => {
+    cancelOwed = false
+    queue.notifyBusy()
+  }
   const idle = () => {
-    if (holds > 0) advanceDue = true
-    else queue.notifyIdle()
+    if (holds === 0) return notifyIdle()
+    if (!cancelOwed) {
+      advanceDue = true
+      return
+    }
+    // Settle the stopped turn's idle now, without sending: left owed, a later
+    // turn's busy signal would count it against that turn's own idle, and the
+    // queue would never advance again. The hold keeps the queue busy.
+    notifyBusy()
+    notifyIdle()
+    heldBusy = true
   }
   // A turn that failed before it ran, or ran while a replay held the telling,
   // settles under a turn the Session had not reported before.
@@ -151,7 +170,7 @@ export function createQueue(session: QueueSession) {
   const cancelled = queue.notifyCancelled
   // Stop is offered only while a turn is live.
   const notifyCancelled = () => {
-    if (busy || dispatch) stopped = true
+    if (busy || dispatch) stopped = cancelOwed = true
     cancelled()
   }
   queue.notifyCancelled = notifyCancelled
@@ -162,7 +181,7 @@ export function createQueue(session: QueueSession) {
     busy = isBusy(execution())
     if (busy) {
       if (!wasBusy) {
-        queue.notifyBusy()
+        notifyBusy()
         // As the queue's own busy signal does, a started turn re-arms it and
         // owns the next idle.
         advanceDue = false
@@ -193,7 +212,7 @@ export function createQueue(session: QueueSession) {
     },
     hold: () => {
       if (holds++ === 0 && !busy && !dispatch) {
-        queue.notifyBusy()
+        notifyBusy()
         heldBusy = true
       }
       let released = false
@@ -208,7 +227,7 @@ export function createQueue(session: QueueSession) {
         if (busy || dispatch || !due) return
         // The queue has no `cancel`, so one idle stands for every one held.
         if (stopped) cancelled()
-        queue.notifyIdle()
+        notifyIdle()
       }
     },
   }

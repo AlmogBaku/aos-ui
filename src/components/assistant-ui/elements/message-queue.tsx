@@ -446,7 +446,38 @@ export function MessageQueue({
     },
     [items]
   )
-  const [moved, setMoved] = useState<number>()
+  // The announcement is fixed as the move happens, and a repeat of the same
+  // words toggles a trailing space so the live region reads it again.
+  // A message joining or leaving the queue makes the last announcement stale,
+  // so it is kept only while the queue holds the same messages.
+  const members = items
+    .map((item) => item.id)
+    .sort()
+    .join()
+  const [moved, setMoved] = useState<{
+    text: string
+    repeat: boolean
+    members: string
+  }>()
+  const announceMove = useCallback(
+    (position: number) => {
+      const text = labels.moved(position, items.length)
+      setMoved((last) => ({
+        text,
+        repeat: last?.text === text && !last.repeat,
+        members,
+      }))
+    },
+    [items.length, labels, members]
+  )
+  const announcement =
+    moved?.members === members
+      ? `${moved.text}${moved.repeat ? "\u00a0" : ""}`
+      : ""
+  // An editor whose message left the queue is closed.
+  const openEditing = items.some((item) => item.id === editing?.id)
+    ? editing
+    : undefined
   return (
     <div
       data-slot="aui_message-queue"
@@ -463,16 +494,16 @@ export function MessageQueue({
               onUnconfirmed={onUnconfirmed}
               direction={direction}
               placeOf={placeOf}
-              onMoved={setMoved}
+              onMoved={announceMove}
               controls={controls}
-              editing={editing}
+              editing={openEditing}
               onEditingChange={onEditingChange}
             />
           )}
         </ComposerPrimitive.Queue>
       </ul>
       <span className="sr-only" role="status" aria-live="polite">
-        {moved === undefined ? "" : labels.moved(moved, items.length)}
+        {announcement}
       </span>
     </div>
   )

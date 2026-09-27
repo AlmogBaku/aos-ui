@@ -1679,8 +1679,15 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(order()).toEqual(["B", "C", "A"]))
     expect(remove).toHaveFocus()
 
+    // A message leaving is no move, so the last announcement goes quiet.
+    await user.click(
+      within(rows()[0]!).getByRole("button", { name: "Remove queued message" })
+    )
+    await waitFor(() => expect(order()).toEqual(["C", "A"]))
+    expect(within(region).queryByText(/^Moved to/)).not.toBeInTheDocument()
+
     finish()
-    await waitFor(() => expect(sent).toEqual(["first", "B", "C", "A"]))
+    await waitFor(() => expect(sent).toEqual(["first", "C", "A"]))
   })
 
   it("clears a draft only after two idle Escape presses and restores it with ArrowUp", async () => {

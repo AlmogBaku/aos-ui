@@ -1258,6 +1258,29 @@ describe("useAcpRuntime", () => {
       await ends(fake, elsewhere)
       await waitFor(() => expect(sentText(fake)).toEqual(["Queued"]))
     })
+
+    it("sends after a turn from elsewhere that started while held over a Stop", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await queue(result.current, "Queued")
+      const release = controlsOf(result.current)!.hold()
+      await act(async () => {
+        result.current.thread.cancelRun()
+      })
+      await act(async () => {
+        fake.emit({
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "cancelled",
+        })
+      })
+      const elsewhere = { sequence: 0, turnId: "run-2" }
+      running(fake, elsewhere)
+      await act(async () => release())
+      await ends(fake, elsewhere)
+      await waitFor(() => expect(sentText(fake)).toEqual(["Queued"]))
+    })
   })
 
   it("holds the next queued send until the accepted turn ends", async () => {
