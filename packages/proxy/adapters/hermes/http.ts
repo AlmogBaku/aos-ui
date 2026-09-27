@@ -141,8 +141,13 @@ async function boundedJsonResponse(
     bytes.set(chunk, offset)
     offset += chunk.byteLength
   }
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes)
-  const value = JSON.parse(text) as unknown
+  let value: unknown
+  try {
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+  } catch {
+    // Both messages quote the body they refused.
+    throw new Error()
+  }
   if (!boundedJsonShape(value)) throw new Error()
   return value
 }
