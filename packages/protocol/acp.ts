@@ -2,6 +2,8 @@ import { z } from "zod"
 
 import {
   AgentCatalogResponseSchema,
+  AgentUpdateFields,
+  AgentUpdateResponseSchema,
   ArtifactDescriptorSchema,
   type ArtifactDescriptor,
   TurnSteerResponseSchema,
@@ -9,8 +11,7 @@ import {
   SessionStatusSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
-  VisibilityUpdateRequestSchema,
-  VisibilityUpdateResponseSchema,
+  writesAgentField,
 } from "./index"
 
 /**
@@ -45,7 +46,7 @@ export const AOS_METHODS = {
   },
   agents: {
     list: "_aos/agents/list",
-    setVisibility: "_aos/agents/set_visibility",
+    update: "_aos/agents/update",
   },
   notify: {
     activity: "_aos/activity",
@@ -80,6 +81,7 @@ export const AOS_JSONRPC_ERRORS = {
   revisionConflict: -32012,
   temporarilyUnavailable: -32013,
   uncertainMutation: -32014,
+  unsupported: -32015,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
@@ -165,14 +167,15 @@ export const AosSessionListMetaSchema = z.strictObject({
 
 /**
  * `SessionInfo._meta.aos` on `session/list` entries and
- * `session_info_update._meta.aos`. `unread` and `pinned` are absent when the
- * runtime does not track that state or this read cannot know it; absent never
- * overwrites a known value.
+ * `session_info_update._meta.aos`. `unread`, `pinned`, and `createdAt` are
+ * absent when the runtime does not track that state or this read cannot know
+ * it; absent never overwrites a known value.
  */
 export const AosSessionInfoMetaSchema = readObject({
   agentId: IdentifierSchema,
   status: SessionStatusSchema,
   archived: z.boolean(),
+  createdAt: z.string().datetime().optional(),
   unread: z.boolean().optional(),
   pinned: z.boolean().optional(),
 })
@@ -309,9 +312,12 @@ export const AosFocusRequestSchema = z.strictObject({
 // ---------------------------------------------------------------------------
 
 export const AosAgentsListResponseSchema = AgentCatalogResponseSchema
-export const AosSetVisibilityRequestSchema =
-  VisibilityUpdateRequestSchema.extend({ agentId: IdentifierSchema })
-export const AosSetVisibilityResponseSchema = VisibilityUpdateResponseSchema
+/** `_aos/agents/update` params: at least one of visibility and avatar. */
+export const AosAgentUpdateRequestSchema = z
+  .strictObject({ agentId: IdentifierSchema, ...AgentUpdateFields })
+  .refine(writesAgentField, "At least one of visibility, avatar")
+export type AosAgentUpdateRequest = z.infer<typeof AosAgentUpdateRequestSchema>
+export const AosAgentUpdateResponseSchema = AgentUpdateResponseSchema
 
 // ---------------------------------------------------------------------------
 // turn stream `_meta.aos`

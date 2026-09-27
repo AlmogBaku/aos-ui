@@ -316,11 +316,12 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
           visibility: "visible",
           selectable: true,
           editable: true,
+          avatarEditable: false,
           revision: "revision-1",
         },
       ],
     }),
-    updateAgentVisibility: unsupported,
+    updateAgent: unsupported,
     listAllSessions,
     listSessions: async (_agentId, limit, offset) =>
       listAllSessions(limit, offset),

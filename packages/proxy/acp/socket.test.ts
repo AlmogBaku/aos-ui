@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { AOS_METHODS } from "../../protocol/acp"
+import { AOS_JSONRPC_ERRORS, AOS_METHODS } from "../../protocol/acp"
 
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
 import { authenticationRequired, PUBLIC_ERRORS } from "./validation"
@@ -81,6 +81,15 @@ describe("ACP WebSocket shim", () => {
     socket.receive("123456789")
 
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
+  })
+
+  it("keeps an unsupported refusal's code on a public reply", () => {
+    expect(
+      PUBLIC_ERRORS.reply({
+        code: AOS_JSONRPC_ERRORS.unsupported,
+        message: "private detail",
+      })
+    ).toEqual({ code: AOS_JSONRPC_ERRORS.unsupported, message: "unsupported" })
   })
 
   it("writes a listener's error notice as its Session and a public code alone", () => {

@@ -36,10 +36,12 @@ import {
   ACP_PROTOCOL_VERSION,
   AOS_ACP_OPERATOR_PATH,
   AOS_AUTH_METHOD_INVITE,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
   AosActivityNotificationSchema,
+  AosAgentUpdateResponseSchema,
   AosAgentsListResponseSchema,
   AosChunkMetaSchema,
   AosComposerPrefillNotificationSchema,
@@ -50,13 +52,13 @@ import {
   AosPromptResponseMetaSchema,
   AosSessionInvalidatedNotificationSchema,
   AosSessionResumeResponseMetaSchema,
-  AosSetVisibilityResponseSchema,
   AosSteerAcceptedNotificationSchema,
   AosSteerResponseSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
+import { AgentUpdateError } from "../../contracts"
 import {
   CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
@@ -205,6 +207,18 @@ const SESSION_STATES = new Map<unknown, AcpSessionState>([
 /** A request's own deadline fired, as opposed to its transport closing. */
 function isTimeout(error: unknown) {
   return error instanceof DOMException && error.name === "TimeoutError"
+}
+
+/** The Agent update refusals a caller can act on, as typed errors. */
+function agentUpdateError(error: unknown) {
+  if (codeOf(error) === AOS_JSONRPC_ERRORS.unsupported)
+    return new AgentUpdateError(
+      "unsupported",
+      "This runtime cannot store that Agent field"
+    )
+  if (codeOf(error) === AOS_JSONRPC_ERRORS.revisionConflict)
+    return new AgentUpdateError("conflict", "The Agent changed; reload it")
+  return error
 }
 
 /** `_meta.aos` of an ACP payload, when it carries one. */
@@ -1484,12 +1498,13 @@ export function createAcpConnection(
       )
     },
 
-    async setVisibility(visibility) {
-      return AosSetVisibilityResponseSchema.parse(
-        await request("short", (agent, options) =>
-          agent.request(AOS_METHODS.agents.setVisibility, visibility, options)
-        )
-      )
+    async updateAgent(update) {
+      const response = await request("short", (agent, options) =>
+        agent.request(AOS_METHODS.agents.update, update, options)
+      ).catch((error: unknown) => {
+        throw agentUpdateError(error)
+      })
+      return AosAgentUpdateResponseSchema.parse(response)
     },
 
     subscribeNotification: (method, listener) =>

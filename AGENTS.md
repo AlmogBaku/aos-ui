@@ -73,8 +73,9 @@ external reverse proxy is optional.
 ## Architecture and invariants
 
 - Assistant UI owns threads, messages, runs, branches, composer state, and
-  thread lifecycle. `WorkspaceAdapter` adds Agent catalog access and visibility
-  mutation, Session metadata (including `unread` read state), creator identity,
+  thread lifecycle. `WorkspaceAdapter` adds Agent catalog access and Agent
+  updates (visibility and avatar), Session metadata (including `unread` read
+  state), creator identity,
   Todos subscription, catalog/metadata/activity subscriptions, `markSessionRead`,
   and `reportFocus`. Session Todos arrive
   as ACP `plan_update` notifications carrying `_meta.aos.todos`. Creation opens

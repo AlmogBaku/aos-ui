@@ -13,7 +13,10 @@ import {
   OpenClawClientRequestError,
   type OpenClawGatewayClient,
 } from "./client"
-import { OpenClawWorkspaceUnavailableError } from "./workspace"
+import {
+  OpenClawWorkspaceRevisionConflictError,
+  OpenClawWorkspaceUnavailableError,
+} from "./workspace"
 
 const sessionKey = "agent:research:main"
 
@@ -247,6 +250,9 @@ describe("OpenClaw ServerRuntime assembly", () => {
     expect(
       adapter.publicError(new OpenClawClientRequestError("timeout", true))?.kind
     ).toBe("uncertain")
+    expect(
+      adapter.publicError(new OpenClawWorkspaceRevisionConflictError())?.kind
+    ).toBe("revision_conflict")
     expect(
       adapter.publicError(new Error("token=private-value"))
     ).toBeUndefined()

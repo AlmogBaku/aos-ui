@@ -11,6 +11,7 @@
  * along as `cause`; each wire maps a kind to its own code.
  */
 import {
+  ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
   ServerTurnCapacityError,
   ServerTurnSteerUnavailableError,
@@ -20,7 +21,10 @@ import {
 
 export type FailureKind = "gone" | "unavailable" | "uncertain"
 export type CallerError =
-  "invalid_request" | "revision_conflict" | "runtime_authentication_required"
+  | "invalid_request"
+  | "revision_conflict"
+  | "runtime_authentication_required"
+  | "unsupported"
 
 export type PublicFailure = {
   readonly kind: FailureKind | CallerError
@@ -40,6 +44,7 @@ const KIND_CODES = {
   invalid_request: "invalid_request",
   revision_conflict: "revision_conflict",
   runtime_authentication_required: "runtime_authentication_required",
+  unsupported: "unsupported",
 } as const satisfies Record<PublicFailure["kind"], string>
 
 /** A failure a runtime classified by its kind. */
@@ -78,6 +83,8 @@ export const TURN_FAILURES = {
 export function coreFailure(cause: unknown): PublicFailure | undefined {
   if (cause instanceof ServerSessionNotFoundError)
     return failureOf("gone", cause)
+  if (cause instanceof ServerAgentUpdateUnsupportedError)
+    return failureOf("unsupported", cause)
   if (
     cause instanceof ServerTurnCapacityError ||
     cause instanceof ServerTurnSteerUnavailableError ||

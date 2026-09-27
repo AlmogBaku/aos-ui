@@ -30,7 +30,7 @@ const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   update: false,
   "set-config": false,
   agents: false,
-  "set-visibility": false,
+  "update-agent": false,
 }
 
 /** What a guest may observe but never operate. */

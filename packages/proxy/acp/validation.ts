@@ -93,6 +93,10 @@ function uncertainMutation() {
   )
 }
 
+function unsupported() {
+  return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
+}
+
 /** The error each kind of public failure travels as. */
 const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
   {
@@ -102,6 +106,7 @@ const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
     invalid_request: invalidParams,
     revision_conflict: revisionConflict,
     runtime_authentication_required: authenticationRequired,
+    unsupported,
   }
 
 /**
@@ -121,6 +126,7 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
       [revisionConflict(), "revision_conflict"],
       [temporarilyUnavailable(), "temporarily_unavailable"],
       [uncertainMutation(), "uncertain_mutation"],
+      [unsupported(), "unsupported"],
     ] as const
   ).map(([error, name]) => [error.code, name])
 )

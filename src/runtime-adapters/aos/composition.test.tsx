@@ -260,6 +260,7 @@ function createProxyAgent() {
           visibility: "visible",
           selectable: true,
           editable: true,
+          avatarEditable: true,
           revision: "revision-1",
         },
       ],

@@ -46,6 +46,7 @@ export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
     agentId: row.agentId,
     status: row.status,
     archived: row.archived,
+    ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
     ...(row.unread === undefined ? {} : { unread: row.unread }),
     ...(row.pinned === undefined ? {} : { pinned: row.pinned }),
   }

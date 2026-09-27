@@ -278,9 +278,35 @@ credentials for its model: Hermes copies a new profile's model block but not
 its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
 another profile's tokens into it.
 
+## Agent icons
+
+Each Agent's icon is an opaque `silhouette/tone` token stored in
+`ui_meta.aos.avatar` of the profile. A stored value that does not match
+`/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/` reads as no icon.
+
+The Agent revision used for the compare-and-set is composite:
+`hermes-bots:N,aos:M`, where `N` and `M` are the per-namespace CAS counters
+that `profiles.list` returns in `ui_meta_revisions`.
+
+`_aos/agents/update` writes the avatar (and optionally visibility) with one
+`profiles.configure` call. That call sends only the `ui_meta` namespaces the
+patch touches, each paired with its current `ui_meta_expected_revisions` entry,
+so unrelated `aos` keys such as `role` survive intact. Passing `null` for the
+avatar removes the key.
+
+`avatarEditable` equals `editable` for every profile. The creator profile is
+never writable.
+
+Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
+
+The first time the workspace opens after the proxy is upgraded, it saves an
+icon for every visible, editable Agent: one `ui_meta.aos.avatar` key per
+profile, written through the same compare-and-set `profiles.configure` call
+visibility uses.
+
 ## Operational behavior
 
-- Native profiles form the AOS Agent catalog and can expose visibility changes.
+- Native profiles form the AOS Agent catalog and can expose Agent updates (visibility and avatar).
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity is workspace-wide: the feed covers every Session the connection may observe.
 - ACP v2 starts or resumes a run and carries its server-to-browser event stream.

@@ -209,9 +209,11 @@ bounded replay; resume again with `replayFrom: { type: "start" }`. A resume that
 replayed carries `history` (`AosHistoryCursorSchema`): `{ nextCursor?, truncated? }`.
 
 **`session_info_update`** `_meta.aos` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
-`{ agentId, status, archived, unread? }`. `unread` is absent when the runtime
-does not track read state or this read cannot know it; **absent never overwrites
-a known value** in the browser.
+`{ agentId, status, archived, createdAt?, unread?, pinned? }`. `createdAt` is
+the UTC ISO timestamp of when the Session was created, absent when the runtime
+does not report it. `unread` and `pinned` are absent when the runtime does not
+track that state or this read cannot know it; **absent never overwrites a known
+value** in the browser.
 
 ### Older history pages
 
@@ -300,13 +302,13 @@ as a `running` update followed by an `_aos_error` idle update for the same
 
 ### Requests (client → server, expect a response)
 
-| Method                       | Purpose                                                                                                                                                                                        |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_aos/session/update`        | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
-| `_aos/session/steer`         | Deliver a text correction to the active run                                                                                                                                                    |
-| `_aos/session/focus`         | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
-| `_aos/agents/list`           | Fetch the agent catalog                                                                                                                                                                        |
-| `_aos/agents/set_visibility` | Mutate agent visibility                                                                                                                                                                        |
+| Method                | Purpose                                                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_aos/session/update` | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
+| `_aos/session/steer`  | Deliver a text correction to the active run                                                                                                                                                    |
+| `_aos/session/focus`  | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
+| `_aos/agents/list`    | Fetch the agent catalog                                                                                                                                                                        |
+| `_aos/agents/update`  | Write visibility and/or avatar; compare-and-set on the observed revision (`AosAgentUpdateRequestSchema`, `acp.ts`)                                                                             |
 
 ### Notifications (no response expected)
 
@@ -415,6 +417,7 @@ block covers only the failures ACP has no code for (`AOS_JSONRPC_ERRORS`,
 | `-32012` | `revisionConflict`       | Edit/rewind source message no longer current |
 | `-32013` | `temporarilyUnavailable` | Runtime not reachable; retry later           |
 | `-32014` | `uncertainMutation`      | Mutation dispatched but outcome unknown      |
+| `-32015` | `unsupported`            | Runtime cannot store a requested Agent field |
 
 Codes `-32001` through `-32009` are no longer used.
 
@@ -434,6 +437,7 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-32012` | `revision_conflict`       |
 | `-32013` | `temporarily_unavailable` |
 | `-32014` | `uncertain_mutation`      |
+| `-32015` | `unsupported`             |
 | (other)  | `internal_error`          |
 
 ## REST remains for bytes and discovery

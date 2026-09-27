@@ -157,7 +157,7 @@ function createFakeConnection(
     steer: unused,
     focus: unused,
     listAgents: unused,
-    setVisibility: unused,
+    updateAgent: unused,
     subscribeNotification: (method, listener) => {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)

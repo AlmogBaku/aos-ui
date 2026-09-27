@@ -1,8 +1,9 @@
 import {
   SESSION_CATALOG_MAX_WINDOW,
   type AgentCatalogResponse,
+  type AgentUpdatePatch,
+  type AgentUpdateResponse,
   type RuntimeInfo,
-  type VisibilityUpdateResponse,
 } from "../../protocol"
 import { defaultClock, type Clock, type Logger } from "../../lifecycle"
 import { coreFailure } from "./failures"
@@ -32,11 +33,11 @@ export type Catalog = {
   readonly rows: SessionRows
   info(): Promise<RuntimeInfo>
   agents(): Promise<AgentCatalogResponse>
-  setVisibility(
+  updateAgent(
     agentId: string,
-    visibility: "visible" | "hidden",
+    patch: AgentUpdatePatch,
     revision: string
-  ): Promise<VisibilityUpdateResponse>
+  ): Promise<AgentUpdateResponse>
   /**
    * The Session an invitation addresses by its conversation reference,
    * created on request; `undefined` if there is none yet.
@@ -165,8 +166,8 @@ export function createCatalog({
     rows,
     info: () => runtime.runtimeInfo(),
     agents: () => runtime.listAgents(),
-    setVisibility: (agentId, visibility, revision) =>
-      runtime.updateAgentVisibility(agentId, visibility, revision),
+    updateAgent: (agentId, patch, revision) =>
+      runtime.updateAgent(agentId, patch, revision),
     invited: (agentId, ref, create) =>
       runtime.resolveInvitedSession(agentId, ref, create),
     scope,

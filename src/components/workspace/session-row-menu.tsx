@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/menu-popup"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
+import { useTouchPress } from "@/lib/touch-press"
 import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
 
 import type { WorkspaceSession } from "./workspace-shell"
@@ -220,19 +221,26 @@ const ROW_CONTROL = '[role="tab"], button, [tabindex]:not([tabindex="-1"])'
 /**
  * Opens the row menu from a right click or a long press. The row element is
  * the trigger, so the pointer target stays the whole row, and focus returns to
- * the row's control when the menu closes.
+ * the row's control when the menu closes. A finger press selects no row text,
+ * because a press has to mean the menu.
  */
 export function SessionRowContextMenu({
   children,
   ...menu
 }: SessionRowMenuProps & { children: ReactElement }) {
   const triggerRef = useRef<HTMLDivElement>(null)
+  const { touchPress, onPointerDown } = useTouchPress()
   const entries = sessionMenuEntries(menu)
   if (entries.items.length === 0 && !entries.destructive) return children
 
   return (
     <ContextMenu.Root>
-      <ContextMenu.Trigger ref={triggerRef} render={children} />
+      <ContextMenu.Trigger
+        ref={triggerRef}
+        render={children}
+        className={touchPress ? "select-none" : undefined}
+        onPointerDown={onPointerDown}
+      />
       <MenuPopup
         entries={menuPopupEntries(entries, menu.copy)}
         dir={getLocaleDirection(menu.locale)}

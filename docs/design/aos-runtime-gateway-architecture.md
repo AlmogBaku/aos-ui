@@ -528,7 +528,7 @@ The fixture adapter is browser-only and has no server-side counterpart.
 
 **REST `ErrorCode` values** (`routes/http.ts:3-34`): `unauthenticated`,
 `forbidden`, `invalid_request`, `not_found`, `revision_conflict`,
-`turn_conflict`, `turn_capacity_exceeded`, `runtime_authentication_required`,
+`unsupported`, `turn_conflict`, `turn_capacity_exceeded`, `runtime_authentication_required`,
 `temporarily_unavailable`, `connection_interrupted`, `uncertain_mutation`,
 `internal_error`.
 
@@ -540,8 +540,8 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
 AOS block `-32010` turnInProgress, `-32011` staleRequest, `-32012`
-revisionConflict, `-32013` temporarilyUnavailable, `-32014` uncertainMutation.
-Codes `-32001` through `-32009` are no longer used.
+revisionConflict, `-32013` temporarilyUnavailable, `-32014` uncertainMutation,
+`-32015` unsupported. Codes `-32001` through `-32009` are no longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
 `_aos_uncertain` (`protocol/acp.ts:53-57`).

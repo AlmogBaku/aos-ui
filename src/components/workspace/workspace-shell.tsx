@@ -5,20 +5,13 @@ import {
   type ThreadListRuntime,
 } from "@assistant-ui/react"
 import {
-  BarChart3,
-  CircleDashed,
-  Compass,
-  Layers3,
   Menu,
   PanelRightClose,
   PanelRightOpen,
-  PenLine,
   Pin,
   Plus,
   Settings2,
-  Sparkles,
   X,
-  type LucideIcon,
 } from "lucide-react"
 import {
   useCallback,
@@ -79,23 +72,13 @@ import {
   SessionThreadListTrigger,
 } from "./session-thread-list-item"
 import { RowIndicators, StatusDot } from "./status-dots"
-import {
-  draftThreadId,
-  isDraftAgentId,
-} from "@/runtime-adapters/draft-agents"
+import { WorkspaceAgentTile } from "./workspace-agent-tile"
+import { draftThreadId, isDraftAgentId } from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
 export type WorkspaceSessionStatus =
   "idle" | "running" | "waiting-for-input" | "failed" | "unknown"
-
-export type WorkspaceAgentIcon =
-  | {
-      kind: "symbol"
-      symbol: "spark" | "layers" | "compass" | "chart" | "pen" | "unassigned"
-      tone: "indigo" | "purple" | "teal" | "ochre" | "slate"
-    }
-  | { kind: "image"; src: string; alt?: string }
 
 type WorkspaceAgentBase = {
   visibility?: "visible" | "hidden"
@@ -106,7 +89,8 @@ type WorkspaceAgentBase = {
   status?: WorkspaceAgentStatus
   /** Provider unread state aggregated from this Agent's Sessions. */
   unread?: boolean
-  icon?: WorkspaceAgentIcon
+  /** The icon token `resolveAgentIcons` chose for this Agent. */
+  avatar?: string
 }
 
 export type WorkspaceAgent = WorkspaceAgentBase & { kind?: "ready" }
@@ -216,22 +200,6 @@ export function WorkspaceConversationShell({
   )
 }
 
-const agentSymbols: Record<
-  Extract<WorkspaceAgentIcon, { kind: "symbol" }>["symbol"],
-  LucideIcon
-> = {
-  spark: Sparkles,
-  layers: Layers3,
-  compass: Compass,
-  chart: BarChart3,
-  pen: PenLine,
-  unassigned: CircleDashed,
-}
-
-const fallbackSymbols = Object.keys(agentSymbols) as Array<
-  keyof typeof agentSymbols
->
-const fallbackTones = ["indigo", "purple", "teal", "ochre", "slate"] as const
 const inspectorPreferenceKey = "aos_ui:workspace:inspector-open"
 const inspectorPreferenceEvent = "aos_ui:inspector-preference-change"
 const artifactWidthPreferenceKey = "aos_ui:workspace:artifact-width"
@@ -287,27 +255,6 @@ function getInspectorPreference() {
   } catch {
     return true
   }
-}
-
-function fallbackAgentIcon(agent: WorkspaceAgent) {
-  const hash = [...`${agent.id}:${agent.name}`].reduce(
-    (value, character) => (value * 31 + character.codePointAt(0)!) >>> 0,
-    7
-  )
-  return {
-    symbol: fallbackSymbols[hash % fallbackSymbols.length]!,
-    tone: fallbackTones[
-      Math.floor(hash / fallbackSymbols.length) % fallbackTones.length
-    ]!,
-  }
-}
-
-function isSafeAgentImageSource(src: string) {
-  return (
-    (src.startsWith("/") && !src.startsWith("//")) ||
-    src.startsWith("blob:") ||
-    /^data:image\/(?:avif|gif|jpeg|png|webp);/u.test(src)
-  )
 }
 
 const focusableSelector = [
@@ -435,40 +382,6 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
   }
 }
 
-export function AgentGlyph({
-  agent,
-  className,
-}: {
-  agent: WorkspaceAgent
-  className?: string
-}) {
-  if (agent.icon?.kind === "image" && isSafeAgentImageSource(agent.icon.src)) {
-    return (
-      <span className={cn(styles.agentIcon, className)}>
-        {/* Provider-owned Agent images may be remote and are intentionally not optimized. */}
-        <img src={agent.icon.src} alt={agent.icon.alt ?? ""} />
-      </span>
-    )
-  }
-
-  const fallback = fallbackAgentIcon(agent)
-  const symbol =
-    agent.icon?.kind === "symbol" ? agent.icon.symbol : fallback.symbol
-  const tone = agent.icon?.kind === "symbol" ? agent.icon.tone : fallback.tone
-  const Icon = agentSymbols[symbol]
-
-  return (
-    <span
-      className={cn(styles.agentIcon, className)}
-      data-agent-symbol={symbol}
-      data-tone={tone}
-      aria-hidden="true"
-    >
-      <Icon />
-    </span>
-  )
-}
-
 type AgentsPanelProps = Pick<
   WorkspaceShellProps,
   | "agents"
@@ -509,7 +422,6 @@ function AgentsPanel({
   activityButton,
   commandsHost = false,
 }: AgentsPanelProps) {
-
   return (
     <div className={styles.agentsPanel}>
       <div className={cn(styles.brand, styles.desktopBrand)}>
@@ -597,10 +509,7 @@ function AgentsPanel({
                   onAfterSelectAgent?.()
                 }}
               >
-                <AgentGlyph
-                  agent={agent}
-                  className="!size-9 !rounded-lg [&_svg]:!size-4"
-                />
+                <WorkspaceAgentTile agent={agent} size={36} />
                 <span className={styles.agentText}>
                   <span className={cn(styles.agentName, "text-sm leading-5")}>
                     <bdi>{agent.name}</bdi>
@@ -1022,10 +931,7 @@ function InspectorPanel({
   return (
     <div className={styles.inspectorPanel}>
       <div className={styles.inspectorHeader}>
-        <AgentGlyph
-          agent={agent}
-          className="!size-7 !rounded-lg [&_svg]:!size-3.5"
-        />
+        <WorkspaceAgentTile agent={agent} size={28} />
         <bdi className={cn(styles.inspectorName, "truncate text-sm leading-5")}>
           {agent.name}
         </bdi>
@@ -1647,7 +1553,7 @@ export function WorkspaceShell({
                   .filter(Boolean)
                   .join(", ")}
               >
-                <AgentGlyph agent={selectedAgent} />
+                <WorkspaceAgentTile agent={selectedAgent} size={28} />
                 <span className={styles.mobileIdentityText}>
                   <bdi className={styles.mobileAgentName}>
                     {selectedAgent.name}
@@ -1912,7 +1818,9 @@ export function WorkspaceShell({
                   commandsHost
                 />
               }
-              renderAgentIcon={(agent) => <AgentGlyph agent={agent} />}
+              renderAgentIcon={(agent) => (
+                <WorkspaceAgentTile agent={agent} size={32} />
+              )}
             />
           </FocusDrawer>
         ) : null}

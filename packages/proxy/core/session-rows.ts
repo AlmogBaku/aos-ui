@@ -3,8 +3,8 @@ import type { Session } from "../../protocol"
 /**
  * One cached Session row. `unread` is present only when a list read reported
  * it or a mark-read write settled it; detail reads never carry it and never
- * clear a known value. `pinned` comes from whichever read reports it, and a
- * read that omits it likewise never clears a known value.
+ * clear a known value. `pinned` and `createdAt` come from whichever read
+ * reports them, and a read that omits one likewise never clears a known value.
  *
  * `readAt` is Unix ms of the moment *we* acknowledged a read for the operator,
  * which is what answers "has the operator seen what happened before this?" — a
@@ -65,8 +65,9 @@ export const READ_GUARD_MS = 10_000
 
 /**
  * Fields a merge compares, which is also everything a projection reads.
- * `unread` and `pinned` are the ones a read may legitimately omit; the merging
- * spread already carries a known `pinned` forward, while `unread` is resolved
+ * `unread`, `pinned`, and `createdAt` are the ones a read may legitimately
+ * omit; the merging spread already carries a known `pinned` or `createdAt`
+ * forward, while `unread` is resolved
  * before the comparison rather than inside it, because our own mark-read
  * outranks a stale page. `readAt` is deliberately absent: moving a private
  * stamp is not a change any subscriber needs to see.
@@ -76,6 +77,7 @@ const COMPARED: readonly (keyof SessionRow)[] = [
   "agentId",
   "title",
   "archived",
+  "createdAt",
   "updatedAt",
   "status",
   "unread",

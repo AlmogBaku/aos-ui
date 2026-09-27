@@ -35,6 +35,7 @@ import {
 const WRITES: ReadonlySet<string> = new Set([
   "approval.resolve",
   "chat.send",
+  "config.patch",
   "mcp.app.callTool",
   "question.resolve",
   "sessions.abort",

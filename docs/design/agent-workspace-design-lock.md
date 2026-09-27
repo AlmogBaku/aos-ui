@@ -80,3 +80,12 @@ Any intentional visual departure must be called out before it is introduced.
   `src/app/globals.css` carry it, gated on `display-mode: standalone`,
   `minimal-ui`, and `window-controls-overlay`. The panes, dividers, tab strip,
   and inspector are untouched.
+- **Generated robot Agent icons (2026-09-25):** the Lucide Agent symbols, the
+  unused image variant, and the `unassigned` draft glyph are replaced by one
+  generated tile: 34 flat robot silhouettes in 8 muted tones, unique per
+  visible Agent and stored opaquely in the runtime's own Agent slot. Drafts
+  share one dashed tile. The pair sensor follows the pointer and blinks while
+  the Agent runs. This is not one of the ornamental effects the lock
+  rules out: the sensor is the Agent's identity, and the blink only mirrors a
+  running state the status indicator already shows. Both motions stop under
+  reduced motion.

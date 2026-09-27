@@ -7,7 +7,7 @@ import { fixtureActivityScenarioNames } from "./fixture-activity"
 import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
 
 describe("FixtureWorkspace", () => {
-  it("publishes visible Agents with unique IDs, names, and supported icons", async () => {
+  it("publishes visible Agents with unique IDs and names", async () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
     const agents = await workspace.listAgents()
     const roster = agents.filter(
@@ -17,7 +17,6 @@ describe("FixtureWorkspace", () => {
     expect(roster.length).toBeGreaterThan(0)
     expect(new Set(roster.map(({ id }) => id)).size).toBe(roster.length)
     expect(roster.every(({ name }) => name.trim().length > 0)).toBe(true)
-    expect(roster.every(({ icon }) => icon?.kind === "symbol")).toBe(true)
     expect(
       roster.every(
         ({ visibility, role }) => visibility === "visible" && role !== "creator"

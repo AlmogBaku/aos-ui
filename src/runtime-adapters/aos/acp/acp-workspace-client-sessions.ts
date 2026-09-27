@@ -93,7 +93,8 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
     left.status === right.status &&
     left.archived === right.archived &&
     left.unread === right.unread &&
-    left.pinned === right.pinned
+    left.pinned === right.pinned &&
+    left.createdAt === right.createdAt
   )
 }
 
@@ -143,8 +144,8 @@ export function createAcpSessionStore({
   }
 
   /**
-   * `unread` and `pinned` are absent when unknowable on this read and never
-   * overwrite; `archived` is on every provider read of a Session.
+   * `unread`, `pinned`, and `createdAt` are absent when unknowable on this
+   * read and never overwrite; `archived` is on every provider read of a Session.
    * A row older than what is already stored (by `updatedAt`) is silently
    * dropped: a live event that arrived before a list page must not be
    * overwritten by the stale page.
@@ -167,6 +168,7 @@ export function createAcpSessionStore({
       return
     const unread = info.unread ?? previous?.unread
     const pinned = info.pinned ?? previous?.pinned
+    const createdAt = info.createdAt ?? previous?.createdAt
     write(sessionId, {
       sessionId,
       agentId: info.agentId,
@@ -176,6 +178,7 @@ export function createAcpSessionStore({
       archived: info.archived,
       ...(unread === undefined ? {} : { unread }),
       ...(pinned === undefined ? {} : { pinned }),
+      ...(createdAt === undefined ? {} : { createdAt }),
     })
   }
 

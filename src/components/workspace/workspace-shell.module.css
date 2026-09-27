@@ -81,12 +81,6 @@
   gap: 0.5rem;
 }
 
-.mobileIdentity .agentIcon {
-  inline-size: 1.75rem;
-  block-size: 1.75rem;
-  border-radius: 0.5rem;
-}
-
 .mobileIdentityText {
   display: flex;
   min-inline-size: 0;
@@ -252,55 +246,6 @@
   color: var(--muted-foreground);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.agentIcon {
-  display: grid;
-  inline-size: 3rem;
-  block-size: 3rem;
-  flex: none;
-  place-items: center;
-  overflow: hidden;
-  border-radius: 0.75rem;
-  background: var(--secondary);
-  color: var(--foreground);
-}
-
-.agentIcon svg {
-  inline-size: 1.375rem;
-  block-size: 1.375rem;
-  stroke-width: 1.8;
-}
-
-.agentIcon img {
-  inline-size: 100%;
-  block-size: 100%;
-  object-fit: cover;
-}
-
-.agentIcon[data-tone="indigo"] {
-  background: oklch(0.42 0.2 282);
-  color: oklch(0.95 0.04 285);
-}
-
-.agentIcon[data-tone="purple"] {
-  background: oklch(0.4 0.18 305);
-  color: oklch(0.95 0.04 305);
-}
-
-.agentIcon[data-tone="teal"] {
-  background: oklch(0.42 0.12 190);
-  color: oklch(0.95 0.04 190);
-}
-
-.agentIcon[data-tone="ochre"] {
-  background: oklch(0.48 0.13 78);
-  color: oklch(0.97 0.04 85);
-}
-
-.agentIcon[data-tone="slate"] {
-  background: oklch(0.42 0.06 255);
-  color: oklch(0.94 0.02 255);
 }
 
 .preferenceActions {

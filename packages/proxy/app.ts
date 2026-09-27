@@ -32,6 +32,7 @@ const FAILURE_RESPONSES: Readonly<
   invalid_request: ["invalid_request", 400],
   revision_conflict: ["revision_conflict", 409],
   runtime_authentication_required: ["runtime_authentication_required", 401],
+  unsupported: ["unsupported", 400],
 }
 
 /**

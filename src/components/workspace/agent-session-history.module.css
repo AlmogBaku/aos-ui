@@ -181,6 +181,22 @@
   }
 }
 
+/*
+ * Where touch is the only pointer, a long press on the row opens the same
+ * menu, so the overflow control leaves the layout. It stays in the
+ * accessibility tree for screen readers, which cannot perform a long press.
+ */
+@media (pointer: coarse) and (not (any-pointer: fine)) {
+  .actionSlot {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .actionSlot {
     transition: none;

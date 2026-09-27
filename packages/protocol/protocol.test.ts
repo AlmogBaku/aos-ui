@@ -2,7 +2,9 @@ import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
+  AgentAvatarSchema,
   AgentCatalogResponseSchema,
+  AgentUpdateRequestSchema,
   ErrorResponseSchema,
   INTERACTION_PROTOCOL,
   RuntimeAuthStateSchema,
@@ -23,12 +25,12 @@ import {
   SessionModelsResponseSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
-  VisibilityUpdateRequestSchema,
 } from "./index"
 import {
   AOS_ARTIFACT_URI_SCHEME,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
+  AosAgentUpdateRequestSchema,
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
   AosExtensionsSchema,
@@ -39,6 +41,7 @@ import {
   AosSessionNewMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
+  AosSessionInfoMetaSchema,
   AosSessionUpdateRequestSchema,
   AosChunkMetaSchema,
   AosStateMetaSchema,
@@ -531,11 +534,13 @@ describe("AOS v1 normalized protocol", () => {
             description: "Investigates primary sources",
             activity: "idle",
             visibility: "visible",
+            avatar: "ring/blue",
           },
           visibility: "visible",
           selectable: true,
           editable: true,
-          revision: "hermes-bots:7",
+          avatarEditable: true,
+          revision: "hermes-bots:7,aos:2",
         },
       ],
     }
@@ -553,15 +558,88 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
-  it("requires the observed revision on every visibility update", () => {
+  it("accepts only token-shaped Agent avatars", () => {
+    expect(AgentAvatarSchema.parse("ring/blue")).toBe("ring/blue")
+    expect(AgentAvatarSchema.parse("chamfer-crop/amber-2")).toBe(
+      "chamfer-crop/amber-2"
+    )
+    for (const invalid of [
+      "Ring/Blue",
+      "a/b/c",
+      "ring",
+      "/blue",
+      `${"a".repeat(33)}/blue`,
+      `ring/${"b".repeat(33)}`,
+    ])
+      expect(AgentAvatarSchema.safeParse(invalid).success).toBe(false)
+  })
+
+  it("refuses a catalog entry whose avatar is not token-shaped", () => {
+    const entry = {
+      summary: { kind: "ready", id: "agent-a", name: "Agent A" },
+      visibility: "visible",
+      selectable: true,
+      editable: true,
+      avatarEditable: false,
+      revision: "rev-1",
+    }
     expect(
-      VisibilityUpdateRequestSchema.parse({
+      AgentCatalogResponseSchema.safeParse({ revision: "r", agents: [entry] })
+        .success
+    ).toBe(true)
+    expect(
+      AgentCatalogResponseSchema.safeParse({
+        revision: "r",
+        agents: [{ ...entry, summary: { ...entry.summary, avatar: "a/b/c" } }],
+      }).success
+    ).toBe(false)
+  })
+
+  it("requires the observed revision and at least one field on every Agent update", () => {
+    expect(
+      AgentUpdateRequestSchema.parse({
         visibility: "hidden",
-        revision: "hermes-bots:7",
+        avatar: null,
+        revision: "rev-1",
       })
-    ).toEqual({ visibility: "hidden", revision: "hermes-bots:7" })
+    ).toEqual({ visibility: "hidden", avatar: null, revision: "rev-1" })
+    expect(
+      AgentUpdateRequestSchema.parse({ avatar: "ring/blue", revision: "rev-1" })
+    ).toEqual({ avatar: "ring/blue", revision: "rev-1" })
     expect(() =>
-      VisibilityUpdateRequestSchema.parse({ visibility: "hidden" })
+      AgentUpdateRequestSchema.parse({ visibility: "hidden" })
+    ).toThrow()
+    expect(() =>
+      AgentUpdateRequestSchema.parse({ revision: "rev-1" })
+    ).toThrow()
+    expect(() => AgentUpdateRequestSchema.parse({})).toThrow()
+    expect(() =>
+      AgentUpdateRequestSchema.parse({ avatar: "Ring/Blue", revision: "rev-1" })
+    ).toThrow()
+    expect(() =>
+      AgentUpdateRequestSchema.parse({ name: "Renamed", revision: "rev-1" })
+    ).toThrow()
+  })
+
+  it("addresses an ACP Agent update by agentId", () => {
+    expect(
+      AosAgentUpdateRequestSchema.parse({
+        agentId: "agent-a",
+        revision: "rev-1",
+        visibility: "visible",
+        avatar: "ring/blue",
+      })
+    ).toEqual({
+      agentId: "agent-a",
+      revision: "rev-1",
+      visibility: "visible",
+      avatar: "ring/blue",
+    })
+    expect(() =>
+      AosAgentUpdateRequestSchema.parse({ agentId: "agent-a", revision: "r" })
+    ).toThrow()
+    expect(() =>
+      AosAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
     ).toThrow()
   })
 
@@ -574,6 +652,7 @@ describe("AOS v1 normalized protocol", () => {
             agentId: "researcher",
             title: "Research",
             archived: false,
+            createdAt: "2025-12-31T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z",
             status: "idle",
           },
@@ -591,6 +670,17 @@ describe("AOS v1 normalized protocol", () => {
         offset: 0,
       })
     ).toThrow()
+  })
+
+  it("reads a Session's creation time when the proxy knows it", () => {
+    const meta = { agentId: "agent-a", status: "idle", archived: false }
+    expect(AosSessionInfoMetaSchema.parse(meta)).toEqual(meta)
+    expect(
+      AosSessionInfoMetaSchema.parse({
+        ...meta,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })
+    ).toEqual({ ...meta, createdAt: "2026-01-01T00:00:00.000Z" })
   })
 
   it("admits exactly one Session mutation intent per patch", () => {
@@ -976,7 +1066,7 @@ describe("AOS v1 normalized protocol", () => {
       },
       agents: {
         list: "_aos/agents/list",
-        setVisibility: "_aos/agents/set_visibility",
+        update: "_aos/agents/update",
       },
       notify: {
         activity: "_aos/activity",
@@ -987,8 +1077,10 @@ describe("AOS v1 normalized protocol", () => {
         error: "_aos/error",
       },
     })
-    for (const code of Object.values(AOS_JSONRPC_ERRORS)) {
-      expect(code).toBeGreaterThanOrEqual(-32014)
+    const codes = Object.values(AOS_JSONRPC_ERRORS)
+    expect(new Set(codes).size).toBe(codes.length)
+    for (const code of codes) {
+      expect(code).toBeGreaterThanOrEqual(-32015)
       expect(code).toBeLessThanOrEqual(-32010)
     }
   })

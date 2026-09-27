@@ -11,7 +11,6 @@ import { afterEach, expect, it, vi } from "vitest"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import { FixtureWorkspace } from "@/runtime-adapters/fixture/fixture-workspace"
-import { AgentVisibilityUpdateError } from "@/runtime-adapters/contracts"
 import { ManageAgents } from "./manage-agents"
 
 afterEach(cleanup)
@@ -23,7 +22,9 @@ it.each([
   "distinguishes shown and hidden read-only Agents in %s",
   async (locale, shown, hidden, ownership) => {
     const workspace = new FixtureWorkspace()
-    const catalog = await workspace.listAgentCatalog()
+    const catalog = (await workspace.listAgentCatalog()).filter(
+      ({ summary }) => summary.role !== "creator"
+    )
     vi.spyOn(workspace, "listAgentCatalog").mockResolvedValue(
       catalog.map((entry) => ({ ...entry, editable: false }))
     )
@@ -40,59 +41,6 @@ it.each([
   }
 )
 
-it.each([
-  [
-    "en",
-    "provider-active",
-    "Wait for active Sessions to finish, then try changing visibility again.",
-  ],
-  [
-    "en",
-    "pending-reload",
-    "Visibility was saved but is not applied yet. Wait for active Sessions to finish, then try the visibility switch again.",
-  ],
-  ["en", null, "Visibility could not be saved. Try again."],
-  [
-    "he",
-    "provider-active",
-    "המתינו לסיום השיחות הפעילות, ואז נסו לשנות שוב את ההצגה בסביבת העבודה.",
-  ],
-] as const)(
-  "shows actionable %s guidance for %s without losing it on refresh",
-  async (locale, code, guidance) => {
-    const user = userEvent.setup()
-    const workspace = new FixtureWorkspace()
-    let notify!: () => void
-    vi.spyOn(workspace, "subscribeAgentCatalog").mockImplementation(
-      (listener) => {
-        notify = listener
-        return () => true
-      }
-    )
-    vi.spyOn(workspace, "updateAgentVisibility").mockRejectedValueOnce(
-      code
-        ? new AgentVisibilityUpdateError(code, "Provider wording")
-        : new Error("pending-reload")
-    )
-    renderCatalog(workspace, locale)
-    const toggle = await screen.findByRole("switch", {
-      name: `${(locale === "he" ? he : en).agentManagement.showInWorkspace}: Aster`,
-    })
-    await user.click(toggle)
-    expect(await screen.findByRole("alert")).toHaveTextContent(guidance)
-    await waitFor(() =>
-      expect(toggle).not.toHaveAttribute("aria-disabled", "true")
-    )
-    await act(async () => {
-      notify()
-    })
-    expect(screen.getByRole("alert")).toHaveTextContent(guidance)
-    await user.click(toggle)
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"))
-    expect(screen.queryByRole("alert")).toBeNull()
-  }
-)
-
 it("preserves mutation failure after a successful catalog notification refresh", async () => {
   const user = userEvent.setup()
   const workspace = new FixtureWorkspace()
@@ -104,7 +52,7 @@ it("preserves mutation failure after a successful catalog notification refresh",
     }
   )
   const update = vi
-    .spyOn(workspace, "updateAgentVisibility")
+    .spyOn(workspace, "updateAgent")
     .mockRejectedValueOnce(new Error("Rejected"))
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
@@ -145,7 +93,7 @@ it("locks the switch until a delayed authoritative catalog refresh completes", a
     .spyOn(workspace, "listAgentCatalog")
     .mockResolvedValueOnce(await readCatalog())
     .mockImplementationOnce(() => delayedCatalog)
-  const update = vi.spyOn(workspace, "updateAgentVisibility")
+  const update = vi.spyOn(workspace, "updateAgent")
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
     name: "Show in workspace: Aster",
@@ -162,7 +110,50 @@ it("locks the switch until a delayed authoritative catalog refresh completes", a
   expect(toggle).not.toHaveAttribute("aria-disabled", "true")
   await user.click(toggle)
   await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"))
-  expect(update).toHaveBeenNthCalledWith(2, "agent-aster", "visible")
+  expect(update).toHaveBeenNthCalledWith(
+    2,
+    "agent-aster",
+    expect.objectContaining({ visibility: "visible" })
+  )
+})
+
+it("hiding sends {visibility: hidden, avatar: null}; showing sends visible with an avatar no visible Agent shows", async () => {
+  const user = userEvent.setup()
+  const workspace = new FixtureWorkspace({
+    agents: [
+      { kind: "ready", id: "agent-a", name: "Alpha", avatar: "ring/blue" },
+      { kind: "ready", id: "agent-b", name: "Bravo", avatar: "disc/rose" },
+      { kind: "ready", id: "agent-c", name: "Charlie", visibility: "hidden" },
+    ],
+  })
+  const update = vi.spyOn(workspace, "updateAgent")
+  renderCatalog(workspace)
+
+  await user.click(
+    await screen.findByRole("switch", { name: "Show in workspace: Alpha" })
+  )
+  await waitFor(() =>
+    expect(update).toHaveBeenCalledWith("agent-a", {
+      visibility: "hidden",
+      avatar: null,
+    })
+  )
+  const charlie = await screen.findByRole("switch", {
+    name: "Show in workspace: Charlie",
+  })
+  await waitFor(() => expect(charlie).not.toHaveAttribute("aria-disabled"))
+  await user.click(charlie)
+  await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+
+  const [agentId, patch] = update.mock.calls[1]
+  expect(agentId).toBe("agent-c")
+  expect(patch.visibility).toBe("visible")
+  const shown = (await workspace.listAgentCatalog())
+    .filter((entry) => entry.visibility === "visible")
+    .filter((entry) => entry.summary.id !== "agent-c")
+    .map((entry) => entry.summary.avatar)
+  expect(typeof patch.avatar).toBe("string")
+  expect(shown).not.toContain(patch.avatar)
 })
 
 function renderCatalog(
@@ -197,7 +188,7 @@ it("does not reconcile a completed mutation after the workspace unmounts", async
   const user = userEvent.setup()
   const workspace = new FixtureWorkspace()
   let finish!: () => void
-  vi.spyOn(workspace, "updateAgentVisibility").mockImplementation(
+  vi.spyOn(workspace, "updateAgent").mockImplementation(
     () =>
       new Promise<void>((resolve) => {
         finish = resolve
@@ -226,7 +217,7 @@ it("keeps a stale switch locked after reconciliation fails until catalog retry s
   vi.spyOn(workspace, "listAgentCatalog")
     .mockResolvedValueOnce(initial)
     .mockRejectedValueOnce(new Error("Read failed"))
-  const update = vi.spyOn(workspace, "updateAgentVisibility")
+  const update = vi.spyOn(workspace, "updateAgent")
   renderCatalog(workspace)
   const toggle = await screen.findByRole("switch", {
     name: "Show in workspace: Aster",
@@ -247,7 +238,7 @@ it("waits for provider confirmation and retains the switch state on failure", as
   const user = userEvent.setup()
   const workspace = new FixtureWorkspace()
   let reject!: (error: Error) => void
-  vi.spyOn(workspace, "updateAgentVisibility").mockImplementation(
+  vi.spyOn(workspace, "updateAgent").mockImplementation(
     () =>
       new Promise((_, rejectPromise) => {
         reject = rejectPromise
