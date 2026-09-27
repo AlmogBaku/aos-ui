@@ -102,7 +102,7 @@ describe("log redaction", () => {
     })
   })
 
-  it("writes no credential value the proxy has read, its rotated successor and Basic form included", async () => {
+  it("writes no credential value the proxy has read or a child binds, its rotated successor and Basic form included", async () => {
     const credentials = new CredentialValues()
     const basic = (password: string) =>
       Buffer.from(`aos:${password}`).toString("base64")
@@ -121,7 +121,7 @@ describe("log redaction", () => {
       destination: { write: (line) => void lines.push(line) },
     })
 
-    logger.child({ peer: "tok-test-1" }).error(
+    logger.child({ peer: "tok-test-1", password: "synthetic-value" }).error(
       {
         event: "opencode.request.failed",
         error: new Error(`Basic ${basic("tok-test-2")} refused`),
@@ -130,8 +130,10 @@ describe("log redaction", () => {
     )
 
     expect(lines).toHaveLength(1)
+    expect(lines[0]).not.toContain("synthetic-value")
     expect(JSON.parse(lines[0]!)).toMatchObject({
       peer: "[REDACTED]",
+      password: "[REDACTED]",
       event: "opencode.request.failed",
       error: { name: "Error", message: "Basic [REDACTED] refused" },
       msg: "[REDACTED] rejected at wss://opencode.example.test/ws",
