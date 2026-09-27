@@ -9,7 +9,7 @@ import {
 import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 
 import type { RuntimeLimits } from "../../config"
-import { createCoordinator } from "../create-coordinator"
+import { coordinatedRuntime } from "../create-coordinator"
 import type { RuntimeServices } from "../create-runtime"
 import type { ServerLink } from "../../core/link"
 import type { RuntimeInstance } from "../../core/runtime"
@@ -149,15 +149,25 @@ function gatewayHttpOrigin(baseUrl: string) {
   return url.origin
 }
 
-export async function createOpenClawRuntime(
-  config: OpenClawRuntimeConfig,
-  limits: RuntimeLimits,
-  dependencies: OpenClawRuntimeFactoryDependencies
-): Promise<RuntimeInstance> {
-  const credentials = () => readCredentials(config, dependencies.credentials)
-  // Read once here so a bad identity fails startup; every dial reads again.
-  await credentials()
-  const { logger } = dependencies
+/** What the OpenClaw runtime is composed from, once config and files are read. */
+export type OpenClawRuntimeParts = Pick<RuntimeServices, "logger"> &
+  Readonly<{
+    /** The Gateway's WebSocket URL. */
+    baseUrl: string
+    credentials: OpenClawClientOptions["credentials"]
+    clientFactory: (options: OpenClawClientOptions) => OpenClawRuntimeClient
+  }>
+
+/**
+ * The OpenClaw runtime over a resolved client factory: what the factory serves
+ * and the runtime contract proves. `mcpToolNames` holds its per-Session records.
+ */
+export function composeOpenClawRuntime({
+  baseUrl,
+  credentials,
+  logger,
+  clientFactory,
+}: OpenClawRuntimeParts) {
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
   const resubscribe = (reason: "gap" | "reconnect") => {
     state.subscriptions
@@ -166,10 +176,8 @@ export async function createOpenClawRuntime(
         logger.warn({ err, reason }, "openclaw.subscription.replace_failed")
       )
   }
-  const client = (
-    dependencies.clientFactory ?? ((options) => new OpenClawClient(options))
-  )({
-    url: config.baseUrl,
+  const client = clientFactory({
+    url: baseUrl,
     credentials,
     role: "operator",
     scopes: [
@@ -217,7 +225,7 @@ export async function createOpenClawRuntime(
     new OpenClawServerAdapter({
       client,
       turns,
-      gatewayOrigin: gatewayHttpOrigin(config.baseUrl),
+      gatewayOrigin: gatewayHttpOrigin(baseUrl),
       mcpToolNames,
       subscribeSession: async (agentId, sessionKey, onInvalidate) => {
         const lease = await subscriptions!.acquire(
@@ -234,19 +242,36 @@ export async function createOpenClawRuntime(
       },
     })
   )
-  const sessions = createCoordinator(runtime, limits, logger)
-  let closePromise: Promise<void> | undefined
   return {
-    id: config.id,
     runtime,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        subscriptions.close()
-        await runtime.close()
-      })
-      return closePromise
+    mcpToolNames,
+    async close() {
+      subscriptions.close()
+      await runtime.close()
     },
   }
+}
+
+export async function createOpenClawRuntime(
+  config: OpenClawRuntimeConfig,
+  limits: RuntimeLimits,
+  dependencies: OpenClawRuntimeFactoryDependencies
+): Promise<RuntimeInstance> {
+  const credentials = () => readCredentials(config, dependencies.credentials)
+  // Read once here so a bad identity fails startup; every dial reads again.
+  await credentials()
+  const { logger } = dependencies
+  return coordinatedRuntime(
+    config.id,
+    composeOpenClawRuntime({
+      baseUrl: config.baseUrl,
+      credentials,
+      logger,
+      clientFactory:
+        dependencies.clientFactory ??
+        ((options) => new OpenClawClient(options)),
+    }),
+    limits,
+    logger
+  )
 }
