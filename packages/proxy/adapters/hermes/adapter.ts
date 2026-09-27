@@ -1669,6 +1669,10 @@ export class HermesServerAdapter implements ServerRuntime {
     return result.data
   }
 
+  /**
+   * A Session Hermes has not stored yet: a draft never prompted, or one this
+   * proxy holds live while Hermes stores its first turn.
+   */
   async #unpersistedDraft(profile: string, storedId: string) {
     let payload: unknown
     try {
@@ -1680,7 +1684,13 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-    if (!isRecord(payload) || !isUnpersistedDraft(payload, profile, storedId))
+    if (
+      !isRecord(payload) ||
+      !(
+        isUnpersistedDraft(payload, profile, storedId) ||
+        this.#holdsLive(payload, profile, storedId)
+      )
+    )
       throw new HermesSessionNotFoundError()
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
@@ -1694,6 +1704,18 @@ export class HermesServerAdapter implements ServerRuntime {
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
+  }
+
+  /**
+   * Whether Hermes resumed the live Session this proxy bound to that stored
+   * id. Until the first turn is stored, Hermes answers from the live record,
+   * which names no stored id or profile.
+   */
+  #holdsLive(payload: NativeRecord, profile: string, storedId: string) {
+    const held = validLiveSessionId(payload.session_id)
+      ? this.#attachments.scopeFor(payload.session_id)
+      : undefined
+    return held?.agentId === profile && held.providerSessionId === storedId
   }
 
   async createSession(profile: string, title?: string) {

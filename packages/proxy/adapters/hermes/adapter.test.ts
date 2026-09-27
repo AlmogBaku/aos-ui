@@ -1415,6 +1415,41 @@ describe("Hermes server adapter", () => {
     })
   })
 
+  it("keeps a Session it holds live until Hermes stores its first turn", async () => {
+    // Hermes answers from the live record, which names no stored id, until
+    // the first turn is stored.
+    const router = rpcRouter({
+      "session.resume": async () => ({
+        session_id: "live-1",
+        session_key: "stored/1",
+        message_count: 2,
+        messages: [],
+        running: true,
+        status: "streaming",
+      }),
+    })
+    const adapter = new HermesServerAdapter({
+      ...router,
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+
+    // A live record this proxy never bound proves nothing.
+    await expect(
+      adapter.getSession("researcher", "stored/1")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    await adapter.native.inspectExecution({
+      agentId: "researcher",
+      providerSessionId: "stored/1",
+      sessionId: "stored/1",
+      turnId: "run-1",
+    })
+    await expect(
+      adapter.getSession("researcher", "stored/1")
+    ).resolves.toMatchObject({ id: "stored/1", agentId: "researcher" })
+  })
+
   it("returns empty Todos for an unpersisted lazy Session", async () => {
     const adapter = new HermesServerAdapter({
       request: vi.fn(async (method: string) => {
