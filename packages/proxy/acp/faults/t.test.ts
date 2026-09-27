@@ -20,6 +20,7 @@ import {
   LINK_BACKOFF,
   READING_BACKOFF,
   RECONCILE_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
 } from "../../core/limits"
 import type { ServerTurnListener } from "../../core/runtime"
 import { createGuestConnection } from "../../guest/acp"
@@ -265,21 +266,40 @@ async function finish(t: Table, source: EventSource) {
 
 /**
  * The running turn's stream fails and ends the way a dropped native link ends
- * it, and each later recover answers with a new stream of the same turn.
+ * it.
  */
-async function interrupt(t: Table) {
+async function dropLink(t: Table) {
   const dropped = t.source()
-  t.test.recover.mockImplementation(async () => {
-    const source = new EventSource()
-    t.test.sources.push(source)
-    return source
-  })
   dropped.emit({
     kind: TurnEventKind.TurnFailed,
     code: "AOS_CONNECTION_INTERRUPTED",
   })
   dropped.finish()
   await t.clock.advance(0)
+}
+
+/**
+ * The native link drops, and each later recover answers with a new stream of
+ * the same turn.
+ */
+async function interrupt(t: Table) {
+  t.test.recover.mockImplementation(async () => {
+    const source = new EventSource()
+    t.test.sources.push(source)
+    return source
+  })
+  await dropLink(t)
+}
+
+/** The failure code of each turn end one member was shown, in order. */
+function endings(member: Member) {
+  return updatesOf(member, "state_update").flatMap(({ params }) => {
+    const { update } = params as {
+      update: { stopReason?: string; _meta?: Record<string, { code?: string }> }
+    }
+    const code = update._meta?.[AOS_META_KEY]?.code
+    return update.stopReason === undefined || code === undefined ? [] : [code]
+  })
 }
 
 const members = (t: Table) => [t.operator, t.guest]
@@ -718,6 +738,25 @@ const ROWS: Row[] = [
         ["admitting", "running"],
       ],
     },
+  },
+  {
+    // No recover confirms the turn, so its deadline ends it: each member it
+    // interrupted is told how, and none has to redial.
+    operation: "unconfirmed turn",
+    fault: "native link drop",
+    stage: "live",
+    async meet(t) {
+      t.test.recover.mockRejectedValue(unavailable())
+      await dropLink(t)
+    },
+    bound: UNCERTAINTY_DEADLINE_MS,
+    recovered(t) {
+      for (const member of members(t))
+        expect(endings(member).at(-1)).toBe("AOS_OUTCOME_UNKNOWN")
+    },
+    // Each reconcile asks on a jittered backoff, so no count is fixed.
+    calls: {},
+    transitions: { turn: [["uncertain", "idle"]] },
   },
   {
     operation: "recover",
