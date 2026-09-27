@@ -225,6 +225,8 @@ export function createLink({
   }
   /** Whether the owner exists: its first dial starts inside `createOwner`. */
   let started = false
+  /** A drop heard as the first dial starts, sent once its owner exists. */
+  let early: { cause: unknown } | undefined
   const kindOf = (cause: unknown) => publicError(cause)?.kind ?? "unavailable"
   const ends = (cause: unknown) => ENDS.has(kindOf(cause))
   const failed = (cause: unknown) => {
@@ -240,9 +242,11 @@ export function createLink({
       const stop = await circuit.execute(
         () =>
           dial(signal, (cause) => {
-            // A drop heard as the first dial starts, before its owner exists,
-            // is left to that dial's own outcome.
-            if (started && !owner.stale(generation))
+            if (!started) {
+              early ??= { cause }
+              return
+            }
+            if (!owner.stale(generation))
               owner.actor.send({ type: "lost", cause })
           }),
         signal
@@ -268,6 +272,8 @@ export function createLink({
   })
   const owner = createOwner(machine, { logger, clock, bindings })
   started = true
+  // The machine takes it as a failed dial, as it does any drop before up.
+  if (early) owner.actor.send({ type: "lost", cause: early.cause })
   owner.stack.defer(down)
   if (upstream)
     owner.stack.defer(
