@@ -2,8 +2,9 @@
  * The failure contract every server runtime meets (ADR D3), proven once over
  * each adapter's own native fake (ADR D14). An adapter's `contract.test.ts`
  * calls `runServerRuntimeContract` with a harness that builds its runtime and
- * drives that fake. A row the native server has no concept for is named in
- * `gaps` with its reason, and every run lists it as skipped with that reason.
+ * drives that fake. A row the adapter cannot express is named in `gaps` with
+ * its reason, and every run lists it as skipped with that reason; a row a
+ * production bug fails is fixed, never named there.
  *
  * Test-only: the architecture guard keeps production code from importing it.
  */
@@ -65,7 +66,7 @@ export type RuntimeContractHarness = {
 export type RuntimeContractOptions = {
   /** The caller errors this runtime can report for a refused read. */
   callerErrors: readonly CallerError[]
-  /** Rows skipped, each with the concept its native server lacks. */
+  /** Rows skipped, each with why the adapter cannot express it. */
   gaps?: Partial<Record<RuntimeContractRow, string>>
 }
 
