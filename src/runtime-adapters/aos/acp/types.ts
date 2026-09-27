@@ -34,6 +34,9 @@ import type {
 export type AcpConnectionStatus =
   "connecting" | "ready" | "reconnecting" | "capacity" | "closed"
 
+/** Why the connection is recovering, as `AcpConnectionStatus` names it. */
+export type AcpConnectionOutage = "reconnecting" | "capacity"
+
 /** A server→client request awaiting the operator's answer. */
 export type AcpPendingRequest =
   | {
@@ -110,6 +113,11 @@ export interface AcpConnection {
   /** Resolves with `InitializeResponse._meta.aos` once the handshake settles. */
   readonly initialized: Promise<z.infer<typeof AosInitializeMetaSchema>>
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void
+  /** Set from a close until every resumed Session has rejoined. */
+  readonly outage: AcpConnectionOutage | undefined
+  subscribeOutage(
+    listener: (outage: AcpConnectionOutage | undefined) => void
+  ): () => void
 
   /**
    * Redeems a guest invitation. The connection keeps the token and replays the

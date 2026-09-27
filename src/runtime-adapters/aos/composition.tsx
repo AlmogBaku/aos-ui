@@ -56,6 +56,7 @@ import {
   applyComposerPrefill,
   rewindSource,
 } from "./conversation-controls"
+import { useConnectionOutage } from "./use-connection-outage"
 
 /**
  * The operator surface over one ACP connection to the proxy. The connection
@@ -117,11 +118,7 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [connection])
-  const connectionStatus = useSyncExternalStore(
-    connection.subscribeStatus,
-    () => connection.status,
-    () => connection.status
-  )
+  const connectionStatus = useConnectionOutage(connection)
   const client = useMemo(
     () => createAcpWorkspaceClient({ connection, rest }),
     [connection, rest]
@@ -470,7 +467,7 @@ function ReadyAosRuntimeProvider({
     media,
     activityCoverage: "workspace",
     push,
-    connectionStatus: connectionStatus === "capacity" ? "capacity" : undefined,
+    connectionStatus,
     sessionStatus: selectedSessionGone ? "unavailable" : undefined,
   })
 }

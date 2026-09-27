@@ -10,3 +10,4 @@ export {
   type WorkspaceShellProps,
 } from "./workspace-shell"
 export { WorkspaceAgentTile } from "./workspace-agent-tile"
+export { WorkspaceStatusNotice } from "./workspace-status-notice"

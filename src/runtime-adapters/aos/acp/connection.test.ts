@@ -953,6 +953,36 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it("reports the outage from a drop until the resumed Session has rejoined", async () => {
+    const clock = useFakeClock()
+    const proxy = createProxyAgent({ slowResume: true })
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/aos/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    connection.subscribe(SESSION_ID, {})
+    const joined = connection.joined(SESSION_ID)
+    await clock.advance(20)
+    await joined
+    expect(connection.outage).toBeUndefined()
+
+    pipe.sockets[0]?.drop()
+    await clock.advance(0)
+    expect(connection.outage).toBe("reconnecting")
+    while (connection.status !== "ready") await clock.advance(1)
+    // The transport is back, but the Session is still rejoining.
+    expect(connection.sessionState(SESSION_ID)).toBe("joining")
+    expect(connection.outage).toBe("reconnecting")
+
+    await clock.advance(20)
+    expect(connection.sessionState(SESSION_ID)).toBe("joined")
+    expect(connection.outage).toBeUndefined()
+    connection.close()
+  })
+
   it("redeems the invitation again before replaying a recovered transport", async () => {
     const clock = useFakeClock()
     const proxy = createProxyAgent()

@@ -132,6 +132,8 @@ function createFakeConnection(
     start: () => {},
     initialized: Promise.resolve(initializeMeta(options.historyPages ?? true)),
     subscribeStatus: () => () => {},
+    outage: undefined,
+    subscribeOutage: () => () => {},
     login: unused,
     newSession: unused,
     listSessions: unused,

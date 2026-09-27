@@ -449,6 +449,11 @@ const script = {
    * held until the test calls `__acpStub.releasePage()`.
    */
   pagedHistory: null as PagedHistory | null,
+  /**
+   * Holds the reply to the next positioned resume until the test calls
+   * `__acpStub.releaseRejoin()`; later rejoins answer at once.
+   */
+  holdRejoin: false,
   recovered: {
     messageId: "reconnect-answer",
     text: "Recovered after reconnect.",
@@ -503,6 +508,8 @@ declare global {
       dropSocket: (code?: number) => void
       /** Sends the held `_aos/before` page, if one is waiting. */
       releasePage: () => void
+      /** Answers the held positioned resume, if one is waiting. */
+      releaseRejoin: () => void
     }
   }
 }
@@ -520,9 +527,11 @@ function installAcpStub(script: AcpScript) {
     sequence: 0,
     dropSocket: () => {},
     releasePage: () => {},
+    releaseRejoin: () => {},
   }
   window.__acpStub = stub
   let turn = 0
+  let holdRejoin = script.holdRejoin
   let requests = 0
 
   const asRecord = (value: unknown): Record<string, unknown> =>
@@ -748,18 +757,29 @@ function installAcpStub(script: AcpScript) {
           this.restate()
           return
         }
-        if (replayFrom.type === "start")
-          for (const entry of script.history)
-            this.message(entry.role, entry.messageId, entry.text)
-        else
-          this.message(
-            "assistant",
-            script.recovered.messageId,
-            script.recovered.text
-          )
-        this.respond(id, { _meta: { aos: {} } })
-        this.restate()
-        this.update({ sessionUpdate: "usage_update", ...script.usage })
+        const reply = () => {
+          if (replayFrom.type === "start")
+            for (const entry of script.history)
+              this.message(entry.role, entry.messageId, entry.text)
+          else
+            this.message(
+              "assistant",
+              script.recovered.messageId,
+              script.recovered.text
+            )
+          this.respond(id, { _meta: { aos: {} } })
+          this.restate()
+          this.update({ sessionUpdate: "usage_update", ...script.usage })
+        }
+        if (holdRejoin && replayFrom.type !== "start") {
+          stub.releaseRejoin = () => {
+            stub.releaseRejoin = () => {}
+            holdRejoin = false
+            reply()
+          }
+          return
+        }
+        reply()
       })
       // The prompt is acknowledged with the minted user message id, then the
       // turn streams. The pending prompt stays running until it is cancelled.
@@ -1016,20 +1036,54 @@ test("AOS proxy at capacity is waited out before the browser reconnects", async 
   page,
 }) => {
   await page.clock.install()
-  await serveAcp(page)
+  await serveAcp(page, { holdRejoin: true })
   await page.goto("/")
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
+  const full = page.getByText("The AOS server is full. Reconnecting shortly.")
 
   // A 1013 close holds the reopen for 30 to 60 s, where any other close
   // reopens within the 250 ms first backoff.
   await page.evaluate(() => window.__acpStub.dropSocket(1013))
+  await expect(full).toBeVisible()
   await page.clock.runFor(29_000)
   expect(await page.evaluate(() => window.__acpStub.connections)).toBe(1)
   await page.clock.runFor(31_000)
   await expect
     .poll(async () => (await recorded(page, "initialize")).length)
     .toBe(2)
+  // The transport is back, but the notice stays until the Session rejoins.
+  await expect(full).toBeVisible()
+  await page.evaluate(() => window.__acpStub.releaseRejoin())
+  await page.clock.runFor(100)
+  await expect(full).toBeHidden()
+})
+
+test("AOS shows a reconnecting notice while a dropped link recovers", async ({
+  page,
+}) => {
+  await page.clock.install()
+  await serveAcp(page, { holdRejoin: true })
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
+  const reconnecting = page.getByText("Reconnecting to AOS…")
+
+  // A rejoin still held past the 2 s grace shows the notice until it lands.
+  await page.evaluate(() => window.__acpStub.dropSocket())
+  await page.clock.runFor(1_900)
+  await expect(reconnecting).toBeHidden()
+  await page.clock.runFor(200)
+  await expect(reconnecting).toBeVisible()
+  await page.evaluate(() => window.__acpStub.releaseRejoin())
+  await page.clock.runFor(100)
+  await expect(reconnecting).toBeHidden()
+
+  // A drop that recovers within the grace shows nothing.
+  await page.evaluate(() => window.__acpStub.dropSocket())
+  await page.clock.runFor(2_500)
+  expect(await page.evaluate(() => window.__acpStub.connections)).toBe(3)
+  await expect(reconnecting).toBeHidden()
 })
 
 test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({

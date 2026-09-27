@@ -41,7 +41,10 @@ import { PendingInteractionComposer } from "@/components/runtime-interactions/pe
 import { ThemeProvider } from "@/components/theme-provider"
 import { McpAppHostProvider } from "@/components/mcp-apps/mcp-app-host"
 import { AosToolPresentation, ToolUiLocaleProvider } from "@/components/tool-ui"
-import { WorkspaceConversationShell } from "@/components/workspace"
+import {
+  WorkspaceConversationShell,
+  WorkspaceStatusNotice,
+} from "@/components/workspace"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type { Locale } from "@/lib/i18n/config"
@@ -59,7 +62,7 @@ import {
   isAuthenticationRequired,
 } from "./acp/connection"
 import { tabAcpLogger } from "./acp/log"
-import type { AcpConnection } from "./acp/types"
+import type { AcpConnection, AcpConnectionOutage } from "./acp/types"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -73,6 +76,7 @@ import {
   applyComposerPrefill,
   rewindSource,
 } from "./conversation-controls"
+import { useConnectionOutage } from "./use-connection-outage"
 
 /**
  * The invited guest surface: one ACP connection to the proxy's guest listener,
@@ -165,6 +169,7 @@ function GuestArtifactShell({
   logoUrl,
   composerFeatures,
   composer,
+  connectionStatus,
 }: {
   locale: Locale
   agentId: string
@@ -177,6 +182,7 @@ function GuestArtifactShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
+  connectionStatus?: AcpConnectionOutage
 }) {
   const stabilize = useMemo(() => createArtifactMessageStabilizer(), [])
   const messages = useAuiState((state: AssistantState) =>
@@ -203,6 +209,7 @@ function GuestArtifactShell({
           logoUrl={logoUrl}
           composerFeatures={composerFeatures}
           composer={composer}
+          connectionStatus={connectionStatus}
         />
       </McpAppHostProvider>
     </ArtifactWorkspaceProvider>
@@ -217,6 +224,7 @@ function GuestConversationShell({
   logoUrl,
   composerFeatures,
   composer,
+  connectionStatus,
 }: {
   locale: Locale
   title?: string
@@ -225,6 +233,7 @@ function GuestConversationShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
+  connectionStatus?: AcpConnectionOutage
 }) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
   return (
@@ -256,18 +265,26 @@ function GuestConversationShell({
       onCloseArtifactViewer={closeArtifact}
     >
       <ArtifactDataUI />
-      <ToolUiLocaleProvider locale={locale}>
-        <Thread
-          composerFeatures={composerFeatures}
-          autoFocus={false}
-          labels={{
-            ...threadLabels[locale],
-            ...(message ? { welcome: message } : {}),
-          }}
-          messageRewind={aosMessageRewind}
-          components={{ ToolFallback: AosToolPresentation, Composer: composer }}
-        />
-      </ToolUiLocaleProvider>
+      <WorkspaceStatusNotice
+        locale={locale}
+        connectionStatus={connectionStatus}
+      >
+        <ToolUiLocaleProvider locale={locale}>
+          <Thread
+            composerFeatures={composerFeatures}
+            autoFocus={false}
+            labels={{
+              ...threadLabels[locale],
+              ...(message ? { welcome: message } : {}),
+            }}
+            messageRewind={aosMessageRewind}
+            components={{
+              ToolFallback: AosToolPresentation,
+              Composer: composer,
+            }}
+          />
+        </ToolUiLocaleProvider>
+      </WorkspaceStatusNotice>
     </WorkspaceConversationShell>
   )
 }
@@ -345,6 +362,7 @@ function ReadyGuestAosSurface({
   const { agentId } = context
   const sessionId = context.conversationRef
   const selectedLocale = context.ui?.lang ?? locale
+  const connectionOutage = useConnectionOutage(connection)
   const brandName = context.ui?.name ?? "AOS"
   const logoUrl = context.ui?.logoUrl ?? "/logo-adaptive.svg"
   const rest = useMemo(() => {
@@ -487,6 +505,7 @@ function ReadyGuestAosSurface({
               logoUrl={logoUrl}
               composerFeatures={composerFeatures}
               composer={composer}
+              connectionStatus={connectionOutage}
             />
           </VoiceMediaProvider>
         </AssistantRuntimeProvider>

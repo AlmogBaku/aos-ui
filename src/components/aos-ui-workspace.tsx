@@ -42,7 +42,11 @@ import {
 } from "@/components/tool-ui"
 import { Button } from "@/components/ui/button"
 import { ErrorToast } from "@/components/ui/error-toast"
-import { WorkspaceAgentTile, WorkspaceShell } from "@/components/workspace"
+import {
+  WorkspaceAgentTile,
+  WorkspaceShell,
+  WorkspaceStatusNotice,
+} from "@/components/workspace"
 import type { WorkspaceShellProps } from "@/components/workspace/workspace-shell"
 import {
   ArtifactDataUI,
@@ -132,8 +136,6 @@ const workspaceCopy = {
     pending: "Pending",
     completed: "Completed",
     failed: "Failed",
-    capacity: "The AOS server is full. Reconnecting shortly.",
-    sessionUnavailable: "This Session is no longer available.",
   },
   he: {
     retry: "ניסיון חוזר",
@@ -148,8 +150,6 @@ const workspaceCopy = {
     pending: "ממתינה",
     completed: "הושלמה",
     failed: "נכשלה",
-    capacity: "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
-    sessionUnavailable: "השיחה הזו כבר אינה זמינה.",
   },
 } satisfies Record<Locale, Record<string, unknown>>
 
@@ -691,18 +691,11 @@ function WorkspaceContent({
         onConversationObscuredChange={setConversationObscured}
         onActionError={(reason) => setActionError(toError(reason))}
       >
-        <div className="relative h-full min-h-0">
-          {/* Mounted empty so the text is announced when it appears. */}
-          <p
-            className="pointer-events-none absolute inset-x-0 top-2 z-10 px-4 text-center text-sm text-muted-foreground"
-            role="status"
-          >
-            {connectionStatus === "capacity"
-              ? workspaceCopy[locale].capacity
-              : sessionStatus === "unavailable"
-                ? workspaceCopy[locale].sessionUnavailable
-                : null}
-          </p>
+        <WorkspaceStatusNotice
+          locale={locale}
+          connectionStatus={connectionStatus}
+          sessionStatus={sessionStatus}
+        >
           {workspaceError ? (
             <WorkspaceError
               key={workspaceError.message}
@@ -746,7 +739,7 @@ function WorkspaceContent({
               />
             )}
           </ToolUiLocaleProvider>
-        </div>
+        </WorkspaceStatusNotice>
         <ManageAgents
           creatorAvailable={Boolean(agentCreator)}
           open={managementOpen}

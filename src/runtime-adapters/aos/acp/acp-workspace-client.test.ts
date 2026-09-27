@@ -281,6 +281,8 @@ function createFakeConnection() {
       statusListeners.add(listener)
       return () => statusListeners.delete(listener)
     },
+    outage: undefined,
+    subscribeOutage: () => () => {},
     subscribe(sessionId, listener) {
       record("subscribe", sessionId, listener.agentId)
       const offs = [

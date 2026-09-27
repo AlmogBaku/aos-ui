@@ -72,6 +72,7 @@ import {
 import { acpDebugEnabled, loggedStream } from "./log"
 import type {
   AcpConnection,
+  AcpConnectionOutage,
   AcpConnectionStatus,
   AcpHistoryPage,
   AcpPendingRequest,
@@ -582,6 +583,9 @@ export function createAcpConnection(
   >()
   const pendingListeners = new Set<(request: AcpPendingRequest) => void>()
   const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
+  const outageListeners = new Set<
+    (outage: AcpConnectionOutage | undefined) => void
+  >()
   /**
    * One `subscribe` call: a listener subscribed twice holds the Session until
    * each of its subscriptions leaves.
@@ -621,6 +625,7 @@ export function createAcpConnection(
   const owners = new Map<string, string>()
 
   let status: AcpConnectionStatus = "connecting"
+  let outage: AcpConnectionOutage | undefined
   let started = false
   /** Settles once a debug dev build has loaded its inspector and opened. */
   let inspecting: Promise<void> | undefined
@@ -655,6 +660,19 @@ export function createAcpConnection(
     if (status === next) return
     status = next
     for (const listener of statusListeners) listener(next)
+  }
+
+  function setOutage(next: AcpConnectionOutage | undefined) {
+    if (outage === next) return
+    outage = next
+    for (const listener of outageListeners) listener(next)
+  }
+
+  /** Ends the outage once the transport is ready and no Session is joining. */
+  function settleOutage() {
+    if (status !== "ready") return
+    for (const open of sessions.values()) if (open.state === "joining") return
+    setOutage(undefined)
   }
 
   function emitPending(request: AcpPendingRequest) {
@@ -1083,6 +1101,7 @@ export function createAcpConnection(
     if (failure !== undefined) open.waiters?.reject(failure)
     if (next === "joined" || failure !== undefined) open.waiters = undefined
     for (const { listener } of open.listeners) listener.state?.(next)
+    settleOutage()
   }
 
   function subscribe(sessionId: string, listener: AcpSessionListener) {
@@ -1151,6 +1170,7 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
+    settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
       agent.request(methods.agent.session.close, { sessionId }, options)
@@ -1270,11 +1290,15 @@ export function createAcpConnection(
     recover,
     inProcess: connectAgent !== undefined,
     closeTransport: () => live?.connection.close(),
-    markReady: () => setStatus("ready"),
+    markReady() {
+      setStatus("ready")
+      settleOutage()
+    },
     lose(next) {
       recovering = true
       joinable = false
       setStatus(next)
+      setOutage(next)
       for (const open of sessions.values())
         open.owner?.actor.send({ type: "lost" })
     },
@@ -1358,6 +1382,7 @@ export function createAcpConnection(
     if (ended) return
     ended = true
     setStatus("closed")
+    setOutage(undefined)
     failInitialized?.(new Error("The ACP connection closed"))
     failInitialized = undefined
     settleInitialized = undefined
@@ -1383,6 +1408,10 @@ export function createAcpConnection(
     start,
     initialized,
     subscribeStatus: (listener) => subscribeTo(statusListeners, listener),
+    get outage() {
+      return outage
+    },
+    subscribeOutage: (listener) => subscribeTo(outageListeners, listener),
 
     login,
 

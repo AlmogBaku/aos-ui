@@ -218,6 +218,7 @@ describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
 
     expect(connection.status).toBe(row.status)
     expect(connection.sessionState(SESSION)).toBe(row.session)
+    expect(connection.outage).toBeUndefined()
     expect(transcript()).toEqual(row.transcript)
     // Settled: nothing is retried, and what recovered stays up.
     const sockets = pipe.sockets.length

@@ -121,6 +121,8 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it.each([
+    ["en", { connectionStatus: "reconnecting" }, "Reconnecting to AOS…"],
+    ["he", { connectionStatus: "reconnecting" }, "מתחברים מחדש ל-AOS…"],
     [
       "en",
       { connectionStatus: "capacity" },

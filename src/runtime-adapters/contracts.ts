@@ -331,10 +331,10 @@ export type HarnessRuntime = {
   push?: PushSubscriptionManager
   environmentLabel?: string
   /**
-   * Present only while the provider's server is full; the runtime keeps
-   * retrying the connection on its own.
+   * Present while the connection is recovering, past its grace; the runtime
+   * keeps retrying on its own.
    */
-  connectionStatus?: "capacity"
+  connectionStatus?: "reconnecting" | "capacity"
   /** Present only while the selected Session is gone at its provider. */
   sessionStatus?: "unavailable"
 }

@@ -154,6 +154,64 @@ describe("browser connection faults", () => {
     })
   })
 
+  it("clears the outage once a failed rejoin leaves the Session unavailable", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { test, pipe, connection } = connectBrowser(await harness())
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+
+    pipe.sockets[0]!.drop()
+    await clock.advance(0)
+    expect(connection.outage).toBe("reconnecting")
+    // A replay owed while away makes the rejoin read the provider's history.
+    void connection.replay(SESSION).catch(() => {})
+    test.faults.failOnce("history")
+    await clock.advance(125)
+
+    expect(connection.sessionState(SESSION)).toBe("unavailable")
+    expect(connection.status).toBe("ready")
+    expect(connection.outage).toBeUndefined()
+  })
+
+  it("clears the outage when a policy close ends a recovering connection", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { test, pipe, connection } = connectBrowser(await harness())
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+
+    pipe.sockets[0]!.drop()
+    void connection.replay(SESSION).catch(() => {})
+    test.faults.hangUntilAborted("history")
+    await clock.advance(125)
+    expect(connection.outage).toBe("reconnecting")
+
+    pipe.sockets[1]!.closeFromProxy(1008)
+    await clock.advance(0)
+    expect(connection.status).toBe("closed")
+    expect(connection.outage).toBeUndefined()
+  })
+
+  it("clears the outage once the Session still rejoining parts", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
+    const clock = useFakeClock()
+    const { test, pipe, connection } = connectBrowser(await harness())
+    const leave = connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+
+    pipe.sockets[0]!.drop()
+    void connection.replay(SESSION).catch(() => {})
+    test.faults.hangUntilAborted("history")
+    await clock.advance(125)
+    expect(connection.status).toBe("ready")
+    expect(connection.outage).toBe("reconnecting")
+
+    leave()
+    await clock.advance(PART_GRACE_MS)
+    expect(connection.outage).toBeUndefined()
+  })
+
   it("sends a write made during a rejoin once the Session has joined, and resends it with its client id", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const clock = useFakeClock()
