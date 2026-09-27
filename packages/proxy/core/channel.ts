@@ -239,6 +239,7 @@ function createChannelTable({
   snapshot,
   adoption,
   clock,
+  logger,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
@@ -247,6 +248,11 @@ function createChannelTable({
   adoption?: ChannelAdoption
   /** The monotonic clock a turn's admission and the backstop read. */
   clock: Clock
+  /**
+   * Where the channels write, and the logger the membership machine is set
+   * up on; each membership writes on its own.
+   */
+  logger: Logger
   backstopMs?: number
 }) {
   const channels = new Map<string, Channel>()
@@ -329,7 +335,10 @@ function createChannelTable({
     const turn = currentTurn(delivery.scope, channel)
     if (!turn) return
     if (hasPrompt) delivery.delivered = turn.turnId
-    else void send(member, delivery, turn)
+    else
+      send(member, delivery, turn).catch((err: unknown) =>
+        logger.error({ err }, "channel.send.failed")
+      )
   }
 
   /**
@@ -351,6 +360,13 @@ function createChannelTable({
     } finally {
       channel.adopting = false
     }
+  }
+
+  /** Asks in the background: nothing awaits the ask, so a failure is logged. */
+  function adoptLater(channel: Channel) {
+    adopt(channel).catch((err: unknown) =>
+      logger.error({ err }, "channel.adopt.failed")
+    )
   }
 
   async function adoptOnce(channel: Channel) {
@@ -394,7 +410,7 @@ function createChannelTable({
     channel.failures += 1
     channel.retry = clock.setTimeout(() => {
       channel.retry = undefined
-      void adopt(channel)
+      adoptLater(channel)
     }, delay)
   }
 
@@ -416,9 +432,11 @@ function createChannelTable({
     if (event.turnId === channel.adopted) {
       channel.adopted = undefined
       for (const member of channel.memberships.keys())
-        void attempt(member, () => member.invalidate())
+        attempt(member, () => member.invalidate()).catch((err: unknown) =>
+          logger.error({ err }, "channel.invalidate.failed")
+        )
     }
-    void adopt(channel)
+    adoptLater(channel)
   }
 
   function subscribe(scope: SessionScope, channel: Channel) {
@@ -427,7 +445,7 @@ function createChannelTable({
       onExecution(channel, event)
     )
     const unsubscribeTurns = adoption.subscribeTurns(scope, {
-      onTurn: () => void adopt(channel),
+      onTurn: () => adoptLater(channel),
       onError: (cause) => adopter(channel)?.[0].report(cause),
     })
     channel.unsubscribe = () => {
@@ -566,11 +584,6 @@ type CreateChannelsOptions = Omit<
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
   runtime: Pick<ServerRuntime, "history">
-  /**
-   * The logger the membership machine is set up on; each membership writes
-   * on its own.
-   */
-  logger: Logger
   clock?: Clock
 }
 
@@ -659,9 +672,9 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
     if (signal.aborted) abort()
-    void work
-      .then(resolve, reject)
+    work
       .finally(() => signal.removeEventListener("abort", abort))
+      .then(resolve, reject)
   })
 }
 
@@ -762,7 +775,12 @@ export function createChannels(options: CreateChannelsOptions) {
       const { scope } = membership
       const { state, turnId } = coordinator.snapshot(scope)
       membership.joined({ turnId })
-      if (state === "waiting-for-input") void channels.recheck(scope)
+      if (state === "waiting-for-input")
+        channels
+          .recheck(scope)
+          .catch((err: unknown) =>
+            logger.error({ err }, "channel.adopt.failed")
+          )
       return resumed
     },
 
@@ -961,10 +979,19 @@ class Membership {
     if (shown?.kind === "request-asked")
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
+    // The caller learns whether the event was sent; the declines run either
+    // way.
+    const decline = () =>
+      Promise.all([...declines].map((id) => this.#decline(id)))
     if (declines.size > 0)
-      void sent
-        .catch(() => undefined)
-        .then(() => Promise.all([...declines].map((id) => this.#decline(id))))
+      sent
+        .then(decline, decline)
+        .catch((err: unknown) =>
+          this.#options.logger.warn(
+            { err },
+            "membership.request.decline.failed"
+          )
+        )
     return sent
   }
 
@@ -1044,7 +1071,7 @@ class Membership {
    */
   afterResponse(task: () => Promise<void>) {
     setTimeout(() => {
-      void task().catch((cause: unknown) => this.report(cause))
+      task().catch((cause: unknown) => this.report(cause))
     }, 0)
   }
 
@@ -1148,7 +1175,9 @@ class Membership {
     this.#rebuilding = false
     if (restarted ? !(await this.#reloadOnce(restarted)) : held) {
       this.joinChannel(false, true)
-      await this.#follow(true).catch(() => undefined)
+      await this.#follow(true).catch((err: unknown) =>
+        this.#options.logger.warn({ err }, "membership.follow.failed")
+      )
     }
   }
 
@@ -1288,12 +1317,20 @@ class Membership {
         options
       )
     } catch (cause) {
-      void entered?.then((release) => release())
+      entered
+        ?.then((release) => release())
+        .catch((err: unknown) =>
+          this.#options.logger.error({ err }, "membership.release.failed")
+        )
       // A Session the start found gone is over: nothing asks after it again.
       if (this.endIfGone(cause)) throw cause
       // No turn started, so no turn end asks the runtime for one it started
       // meanwhile, which may be what refused this one.
-      void this.#channels.recheck(this.#scope)
+      this.#channels
+        .recheck(this.#scope)
+        .catch((err: unknown) =>
+          this.#options.logger.error({ err }, "channel.adopt.failed")
+        )
       if (cause instanceof ServerTurnConflictError)
         this.afterResponse(() => this.catchUp())
       // A start the provider may have taken is shown to every member as the
@@ -1434,9 +1471,11 @@ class Membership {
       gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
-    const row = this.#options.subscribeRow(
-      (row) => void this.#deliver({ kind: "session-info", row })
-    )
+    const row = this.#options.subscribeRow((row) => {
+      this.#deliver({ kind: "session-info", row }).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.row.failed")
+      )
+    })
     return () => {
       readings()
       capabilities()
@@ -1497,9 +1536,15 @@ class Membership {
       this.#offer(request)
   }
 
-  /** Reports a failure that has no request to answer. */
+  /**
+   * Reports a failure that has no request to answer. One the member cannot
+   * be shown is logged, so a report never fails in turn.
+   */
   async report(cause: unknown) {
-    if (!this.endIfGone(cause)) await this.emit({ kind: "error", cause })
+    if (this.endIfGone(cause)) return
+    await this.emit({ kind: "error", cause }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.report.failed")
+    )
   }
 
   /**
@@ -1517,7 +1562,9 @@ class Membership {
 
   /** Tells this member its Session is gone, and parts. */
   #end(cause: unknown) {
-    void this.emit({ kind: "error", cause }).catch(() => undefined)
+    this.emit({ kind: "error", cause }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.gone.failed")
+    )
     this.part()
   }
 
@@ -1660,15 +1707,19 @@ class Membership {
   /** Enters one subscribing task that holds until the returned release. */
   #enter() {
     return new Promise<() => void>((entered) => {
-      void this.#exclusive(
+      this.#exclusive(
         () => new Promise<void>((release) => entered(() => release()))
+      ).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.enter.failed")
       )
     })
   }
 
   /** Asks the member to reload the Session from history. */
   async #invalidate() {
-    await this.emit({ kind: "invalidated" }).catch(() => undefined)
+    await this.emit({ kind: "invalidated" }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.invalidate.failed")
+    )
   }
 
   /**
@@ -1721,11 +1772,13 @@ class Membership {
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
     this.#send({ type: "followed" })
-    void this.#pump(
+    this.#pump(
       subscription,
       this.#owner.generation,
       replayedCorrections,
       shown
+    ).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.stream.failed")
     )
   }
 
@@ -1816,11 +1869,13 @@ class Membership {
     if (!open.requests.some(({ requestId }) => requestId === request.requestId))
       return
     this.#offered.add(request.requestId)
-    void this.emit({
+    this.emit({
       kind: "request-asked",
       request,
       ...(open.startedBy === undefined ? {} : { startedBy: open.startedBy }),
-    })
+    }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.offer.failed")
+    )
   }
 
   /**
@@ -1830,7 +1885,9 @@ class Membership {
   #withdraw(requestId: string) {
     this.#offered.delete(requestId)
     if (!this.#delivered.delete(requestId)) return
-    void this.emit({ kind: "request-withdrawn", requestId })
+    this.emit({ kind: "request-withdrawn", requestId }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.withdraw.failed")
+    )
   }
 
   #openRequest(requestId: string) {
