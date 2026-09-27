@@ -8,6 +8,7 @@ import {
   SessionTranscriptionResponseSchema,
 } from "../../../protocol"
 import { projectGuestOutbound } from "../../auth/guest-projection"
+import { MAXIMUM_STAGE_REQUEST_BYTES } from "../../core/attachment-stages"
 import { recordingBytes } from "../../routes/content"
 import { boundedJson } from "../../routes/http"
 import {
@@ -35,7 +36,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
       )
       if (!authorization) return emptyError(401)
       const body = SessionAttachmentStageRequestSchema.safeParse(
-        await boundedJson(context.req.raw, 35_500_000)
+        await boundedJson(context.req.raw, MAXIMUM_STAGE_REQUEST_BYTES)
       )
       if (!body.success) return emptyError(400)
       try {

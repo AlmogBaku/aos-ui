@@ -6,7 +6,10 @@ import type { GuestInvitationService } from "../auth/guest-invitation"
 import { projectGuestError } from "../auth/guest-runtime-projection"
 import { createGuestRequestAuthorizer } from "../auth/guest-request"
 import type { GuestPublicErrorCode } from "../auth/guest-projection"
-import { AttachmentStageRegistry } from "../core/attachment-stages"
+import {
+  AttachmentStageRegistry,
+  MAXIMUM_STAGE_REQUEST_BYTES,
+} from "../core/attachment-stages"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import { createGuestAudioBudget } from "./audio-budget"
 
@@ -37,10 +40,17 @@ export type GuestAppOptions = {
 
 /**
  * The guest listener's staging limits: smaller and shorter-lived than
- * operators'.
+ * operators'. One invitation holds at most one maximum request's bytes, so the
+ * pool keeps room for about two more guests' maximum uploads.
  */
 export function createGuestAttachmentStages() {
-  return new AttachmentStageRegistry(256, 300_000, 67_108_864, 4)
+  return new AttachmentStageRegistry(
+    256,
+    300_000,
+    128 * 1024 * 1024,
+    4,
+    MAXIMUM_STAGE_REQUEST_BYTES
+  )
 }
 
 /** The guest listener's speech allowance: an operator pays for every operation. */

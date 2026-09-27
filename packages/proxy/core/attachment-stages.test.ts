@@ -10,7 +10,7 @@ function stage(cleanup = vi.fn(async () => undefined)): ServerAttachmentStage {
 describe("AttachmentStageRegistry", () => {
   afterEach(() => vi.useRealTimers())
 
-  it("bounds retained bytes and outstanding stages per Session", () => {
+  it("bounds retained bytes, and outstanding stages and bytes per Session", () => {
     const registry = new AttachmentStageRegistry(10, 300_000, 10, 2)
 
     expect(registry.create("agent", "one", stage(), 4)).toBeDefined()
@@ -18,6 +18,11 @@ describe("AttachmentStageRegistry", () => {
     expect(registry.create("agent", "one", stage(), 1)).toBeUndefined()
     expect(registry.create("agent", "two", stage(), 3)).toBeUndefined()
     expect(registry.create("agent", "two", stage(), 2)).toBeDefined()
+    // A Session at its byte bound is refused while another still stages.
+    const scoped = new AttachmentStageRegistry(10, 300_000, 10, 10, 4)
+    expect(scoped.create("agent", "one", stage(), 3)).toBeDefined()
+    expect(scoped.create("agent", "one", stage(), 2)).toBeUndefined()
+    expect(scoped.create("agent", "two", stage(), 4)).toBeDefined()
     // A registry built without a byte bound still holds at most 256 MiB.
     expect(
       new AttachmentStageRegistry().create(

@@ -13,6 +13,12 @@ type Entry = {
 /** Staged attachment bytes one process holds at once. */
 const MAXIMUM_STAGED_BYTES = 256 * 1024 * 1024
 
+/**
+ * The largest stage request body a route reads, and so the most bytes one
+ * request stages.
+ */
+export const MAXIMUM_STAGE_REQUEST_BYTES = 35_500_000
+
 /** Bounded, expiring one-shot registry; native references remain inside closures. */
 export class AttachmentStageRegistry implements ServerAttachmentStages {
   readonly #entries = new Map<string, Entry>()
@@ -22,7 +28,8 @@ export class AttachmentStageRegistry implements ServerAttachmentStages {
     private readonly maximum = 256,
     private readonly ttlMs = 300_000,
     private readonly maximumBytes = MAXIMUM_STAGED_BYTES,
-    private readonly maximumPerScope = maximum
+    private readonly maximumPerScope = maximum,
+    private readonly maximumBytesPerScope = maximumBytes
   ) {}
 
   create(
@@ -31,13 +38,16 @@ export class AttachmentStageRegistry implements ServerAttachmentStages {
     stage: ServerAttachmentStage,
     sizeBytes = 0
   ) {
+    const scoped = [...this.#entries.values()].filter(
+      (entry) => entry.agentId === agentId && entry.sessionId === sessionId
+    )
     if (
       !Number.isSafeInteger(sizeBytes) ||
       sizeBytes < 0 ||
       this.#entries.size >= this.maximum ||
-      [...this.#entries.values()].filter(
-        (entry) => entry.agentId === agentId && entry.sessionId === sessionId
-      ).length >= this.maximumPerScope ||
+      scoped.length >= this.maximumPerScope ||
+      scoped.reduce((total, entry) => total + entry.sizeBytes, sizeBytes) >
+        this.maximumBytesPerScope ||
       this.#storedBytes + sizeBytes > this.maximumBytes
     )
       return undefined
