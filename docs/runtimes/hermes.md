@@ -301,9 +301,11 @@ another profile's tokens into it.
   This is upstream Hermes behavior; Hermes accepts the token query parameter
   only on loopback or when started with `--insecure`; do not expose a
   `--insecure` Hermes instance beyond a trusted private network.
-  The close code Hermes sends on token rejection (documented as 4401 or 4403)
-  is unverified; treat an immediate WebSocket close after dial as a possible
-  authentication failure and check the Hermes server log.
+  Hermes closes with 4401 on token rejection and with 4403 on host or origin
+  denial. AOS treats 4401 as `runtime_authentication_required` (latches auth
+  until re-credential) and 4403 as `unavailable` (logged, retried). Treat an
+  immediate WebSocket close after dial with either code as an authentication
+  problem and check the Hermes server log.
 - Hermes refusals keep Hermes' own words as the failure's second line. A
   Session another Hermes window owns fails with `AOS_SESSION_IN_USE`; Hermes'
   active-Session limit fails with `AOS_SESSION_LIMIT`; a turn still running
@@ -357,9 +359,10 @@ against a new pin or before confirming a deployment.
   Connection should fail immediately with a recognizable authentication error
   in the server log. No token value should appear in any browser-facing
   response.
-- **Confirm close code on auth rejection**: observe the actual WebSocket close
-  code Hermes sends for a bad token (expected 4401 or 4403, but unverified at
-  the pinned revision). Record the observed code here once confirmed.
+- **Confirm close code on auth rejection**: supply a bad token and observe the
+  WebSocket close code. Expect 4401, which latches the auth failure state in
+  the proxy. 4403 (host/origin denial) retries silently; check the Hermes log
+  if the proxy never comes up.
 
 ## Verify
 

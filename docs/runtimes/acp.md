@@ -35,6 +35,7 @@ Close codes the proxy sends and the browser handles:
 | ------ | ------------------------------------------------------------ | ----------------------------- |
 | `1008` | Policy violation (expired credential, rate or size exceeded) | No reconnect; ends connection |
 | `1013` | Proxy at capacity                                            | Backs off 30–60 s with jitter |
+| `4408` | Proxy handshake deadline: `initialize` not received within 15 s | No reconnect; ends connection |
 
 Any other code triggers a normal reconnect.
 
@@ -439,7 +440,7 @@ The machine name an error travels as — the `message` of a public reply, and th
 
 | Method | Path                                                                    | Purpose                  |
 | ------ | ----------------------------------------------------------------------- | ------------------------ |
-| `GET`  | `/api/aos/v1/healthz`                                                   | Liveness probe           |
+| `GET`  | `/api/aos/v1/healthz`                                                   | Liveness probe (always 200; body `{status, links, gauges}`) |
 | `GET`  | `/api/aos/v1/readyz`                                                    | Readiness probe          |
 | `GET`  | `/api/aos/v1/runtime`                                                   | Runtime discovery        |
 | `POST` | `/api/aos/v1/agents/:agentId/sessions/:sessionId/attachments/stage`     | Stage an attachment      |

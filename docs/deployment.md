@@ -29,7 +29,12 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
   docker compose up --build
 ```
 
-Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`; the readiness endpoint is `/api/aos/v1/readyz` (returns 503 when the runtime is unavailable).
+Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`
+(always HTTP 200; body `{status: "ok"|"degraded", links: [{name, state}],
+gauges: {sockets, memberships, executions, uncertain, deadlinesFired,
+journalBytes}}`); `degraded` means the native link is `lost` but the proxy
+is still running. The readiness endpoint is `/api/aos/v1/readyz` (returns 503
+when the runtime is unavailable).
 
 ## Tools MCP server
 

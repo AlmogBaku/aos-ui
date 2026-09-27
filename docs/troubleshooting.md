@@ -61,7 +61,13 @@ Secret files must be regular non-symlinked files, owner-only (`chmod 600`), non-
 
 ## `/api/aos/v1/readyz` returns 503
 
-`readyz` returns 503 when the proxy cannot reach the configured runtime. `healthz` is liveness only and always returns 200. Resolve the runtime connectivity problem first; `readyz` becomes 200 once the runtime reports ready.
+`readyz` returns 503 when the proxy cannot reach the configured runtime.
+`healthz` is liveness only and always returns 200, with body
+`{status: "ok"|"degraded", links: [{name, state}], gauges: {sockets,
+memberships, executions, uncertain, deadlinesFired, journalBytes}}`.
+`status: "degraded"` means the native link is `lost`; the proxy is still
+running and serving. Resolve the runtime connectivity problem first; `readyz`
+becomes 200 once the runtime reports ready.
 
 ## Hermes authentication fails
 
