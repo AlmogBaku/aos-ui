@@ -483,6 +483,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
       await this.#detachImages(liveSessionId, attached).catch((err: unknown) =>
         this.#log?.warn({ err }, "hermes.native.detach_failed")
       )
+      // Unavailable even if the attach landed: the prompt was never sent.
       throwUnavailable(error)
     }
   }

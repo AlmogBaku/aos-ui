@@ -701,6 +701,9 @@ export class HermesServerAdapter implements ServerRuntime {
     const existing = await this.#findInvitedSession(agentId, title)
     if (existing) return { providerSessionId: existing, created: false }
 
+    // A lost answer from either write below is unavailable, not uncertain:
+    // the create already carries the title, so a retry finds by it, above,
+    // a Session that landed.
     let payload: unknown
     try {
       payload = await this.transport.request("session.create", {
@@ -1706,6 +1709,8 @@ export class HermesServerAdapter implements ServerRuntime {
         ...(title ? { title } : {}),
       })
     } catch (error) {
+      // Unavailable even if it landed: Hermes lists no Session before its
+      // first turn, so a retry leaves at most an empty one nobody sees.
       throwUnavailable(error)
     }
     if (!isRecord(payload)) throw new HermesUnavailableError()

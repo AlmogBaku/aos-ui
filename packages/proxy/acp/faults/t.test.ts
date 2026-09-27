@@ -53,7 +53,10 @@ const NOT_FOUND = -32002
 /** What each member holds of the live stage's turn: its start and one chunk. */
 const LIVE_CURSOR = 2
 
-/** What an adapter call past its own deadline rejects with: nothing happened. */
+/**
+ * What an adapter call past its own deadline rejects with when nothing
+ * happened; a write that may have landed the adapter reports as uncertain.
+ */
 const unavailable = () =>
   new DOMException("The operation timed out.", "TimeoutError")
 

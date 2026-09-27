@@ -6,9 +6,10 @@
  * - `unavailable`: nothing happened; the same request may succeed later.
  * - `uncertain`: a write may have landed; reconcile before trying it again.
  *
- * A read is never uncertain, so an adapter call past its deadline is
- * unavailable for a read and uncertain for a write. The native error travels
- * along as `cause`; each wire maps a kind to its own code.
+ * A read is never uncertain. Only an adapter knows whether a write went out,
+ * so it reports its own timed-out write as uncertain, and a bare deadline that
+ * reaches this module is taken as a call that changed nothing. The native
+ * error travels along as `cause`; each wire maps a kind to its own code.
  */
 import {
   ServerAgentUpdateUnsupportedError,
@@ -88,7 +89,7 @@ export function coreFailure(cause: unknown): PublicFailure | undefined {
   if (
     cause instanceof ServerTurnCapacityError ||
     cause instanceof ServerTurnSteerUnavailableError ||
-    // A read past its admission deadline: nothing it asked for happened.
+    // A bare deadline: its adapter left it a call that changed nothing.
     (cause instanceof DOMException && cause.name === "TimeoutError")
   )
     return failureOf("unavailable", cause)

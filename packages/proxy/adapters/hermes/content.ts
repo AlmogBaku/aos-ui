@@ -388,6 +388,8 @@ export function createHermesContentOperations(input: {
       resumed: scope.resumed,
     }
   }
+  // A lost answer is unavailable, the attach writes' too: what they queue
+  // waits for a prompt not yet sent, so no turn started.
   const nativeRequest = async (
     method: string,
     params: Readonly<Record<string, unknown>>,
