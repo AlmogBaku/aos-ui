@@ -77,6 +77,7 @@ import {
 import {
   isUncertainDelivery,
   MessageQueue,
+  type QueueEditing,
   type UnconfirmedDelivery,
 } from "@/components/assistant-ui/elements/message-queue"
 import {
@@ -237,6 +238,10 @@ export type ThreadLabels = {
   moveQueuedMessageDown: string
   /** Announces where a moved message now waits, counted from one. */
   queuedMessageMoved: (position: number, count: number) => string
+  editQueuedMessage: string
+  saveQueuedMessage: string
+  cancelQueuedMessageEdit: string
+  queuedMessageEditor: string
   deliveryUnconfirmed?: string | undefined
   previous: string
   next: string
@@ -338,6 +343,10 @@ const DEFAULT_LABELS: ThreadLabels = {
   moveQueuedMessageUp: "Move up",
   moveQueuedMessageDown: "Move down",
   queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
+  editQueuedMessage: "Edit",
+  saveQueuedMessage: "Save",
+  cancelQueuedMessageEdit: "Cancel",
+  queuedMessageEditor: "Edit queued message",
   deliveryUnconfirmed: "Delivery unconfirmed",
   previous: "Previous",
   next: "Next",
@@ -831,6 +840,7 @@ const Composer: FC<{
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
   const [steeringError, setSteeringError] = useState<string>()
+  const [queueEditing, setQueueEditing] = useState<QueueEditing>()
   const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
     UnconfirmedDeliveryReceipt[]
   >([])
@@ -853,6 +863,7 @@ const Composer: FC<{
     setHistorySearchIndex(0)
     setSteeringError(undefined)
     setUnconfirmedDeliveries([])
+    setQueueEditing(undefined)
   })
 
   const submitOrdinary = useCallback(() => {
@@ -920,6 +931,14 @@ const Composer: FC<{
       input.setSelectionRange(start, end)
     })
   }, [])
+
+  const changeQueueEditing = useCallback(
+    (next: QueueEditing | undefined) => {
+      if (!next && queueEditing?.returnTo === "composer") focusInput()
+      setQueueEditing(next)
+    },
+    [focusInput, queueEditing]
+  )
 
   const restoreDraft = useCallback(
     (snapshot: RecoverableDraft) => {
@@ -1331,10 +1350,16 @@ const Composer: FC<{
             moveUp: labels.moveQueuedMessageUp,
             moveDown: labels.moveQueuedMessageDown,
             moved: labels.queuedMessageMoved,
+            edit: labels.editQueuedMessage,
+            save: labels.saveQueuedMessage,
+            cancel: labels.cancelQueuedMessageEdit,
+            editor: labels.queuedMessageEditor,
           }}
           steer={hasPendingInteraction ? undefined : features.steer}
           onUnconfirmed={rememberUnconfirmed}
           direction={direction}
+          editing={queueEditing}
+          onEditingChange={changeQueueEditing}
         />
       </AuiIf>
       {visibleUnconfirmedDeliveries.map((delivery) => (

@@ -6,12 +6,15 @@ import {
 import { AssistantRuntimeProvider } from "@assistant-ui/react"
 import {
   act,
+  cleanup,
   render,
   renderHook,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
-import { describe, expect, it, vi } from "vitest"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { ExportedMessageRepository } from "@assistant-ui/core"
 import type { CompleteAttachment } from "@assistant-ui/core"
@@ -27,6 +30,7 @@ import {
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
 import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
@@ -1979,6 +1983,93 @@ describe("useAcpRuntime extras", () => {
     })
     expect(screen.getByText("Run: running")).toBeInTheDocument()
     expect(screen.getByRole("listitem")).toHaveTextContent("Ship it")
+  })
+})
+
+function QueueThread({ connection }: { connection: AcpConnection }) {
+  const runtime = useAcpRuntime({
+    connection,
+    sessionId: SESSION_ID,
+    agentId: "agent-1",
+    enableMessageQueue: true,
+  })
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <Thread autoFocus={false} />
+    </AssistantRuntimeProvider>
+  )
+}
+
+describe("the queue row editor", () => {
+  afterEach(cleanup)
+
+  /** A Thread whose turn is running, with `text` queued behind it. */
+  async function queued(text: string) {
+    const user = userEvent.setup()
+    const fake = createFakeConnection()
+    render(<QueueThread connection={fake.connection} />)
+    await act(async () => {
+      await fake.settleResume()
+    })
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+    const input = screen.getByRole("textbox", { name: "Message input" })
+    await user.type(input, `${text}{Enter}`)
+    const region = await screen.findByRole("region", {
+      name: "Queued messages",
+    })
+    return { user, fake, input, region }
+  }
+
+  it("edits a queued message in place, holding the queue until it is saved", async () => {
+    const { user, fake, region } = await queued("Chekc the logs")
+    await user.click(within(region).getByText("Chekc the logs"))
+    const editor = within(region).getByRole("textbox", {
+      name: "Edit queued message",
+    })
+    expect(editor).toHaveFocus()
+    await user.clear(editor)
+    await user.type(editor, "Check the logs")
+    await act(async () => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(fake.prompt).not.toHaveBeenCalled()
+
+    await user.keyboard("{Enter}")
+    await waitFor(() =>
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "Check the logs" }],
+        expect.objectContaining({})
+      )
+    )
+  })
+
+  it("leaves the message as it was on Escape, without stopping the turn", async () => {
+    const { user, fake, region } = await queued("Keep me")
+    await user.click(
+      within(region).getByRole("button", { name: "Queued message actions" })
+    )
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }))
+    await user.type(
+      within(region).getByRole("textbox", { name: "Edit queued message" }),
+      " not"
+    )
+    await user.keyboard("{Escape}")
+    expect(within(region).getByText("Keep me")).toBeInTheDocument()
+    expect(
+      within(region).queryByRole("textbox", { name: "Edit queued message" })
+    ).not.toBeInTheDocument()
+    expect(
+      within(region).getByRole("button", { name: "Queued message actions" })
+    ).toHaveFocus()
+    expect(fake.cancel).not.toHaveBeenCalled()
   })
 })
 

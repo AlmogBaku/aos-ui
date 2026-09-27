@@ -1624,7 +1624,7 @@ describe("Thread accessibility", () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
-  it("reorders queued messages from the row menu and with Alt+Arrow keys, and sends them in that order", async () => {
+  it("reorders queued messages from the row menu and with Alt+Arrow keys, and sends them in that order, with no Edit on a runtime that cannot edit", async () => {
     const user = userEvent.setup()
     const sent: string[] = []
     let finish!: () => void
@@ -1663,6 +1663,10 @@ describe("Thread accessibility", () => {
     expect(
       await screen.findByRole("menuitem", { name: "Move up" })
     ).toHaveAttribute("aria-disabled", "true")
+    // The local runtime keeps its queue private, so it offers no editing.
+    expect(
+      screen.queryByRole("menuitem", { name: "Edit" })
+    ).not.toBeInTheDocument()
     await user.click(screen.getByRole("menuitem", { name: "Move down" }))
     await waitFor(() => expect(order()).toEqual(["B", "A", "C"]))
     expect(within(region).getByText("Moved to 2 of 3")).toBeInTheDocument()

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type RefObject,
 } from "react"
 import { Menu } from "@base-ui/react/menu"
 import {
@@ -21,6 +22,7 @@ import {
   CornerDownRightIcon,
   EllipsisIcon,
   LoaderCircleIcon,
+  PencilIcon,
   Trash2Icon,
 } from "lucide-react"
 
@@ -28,7 +30,14 @@ import type { ComposerFeatureViewModel } from "@/components/assistant-ui/compose
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import { Button } from "@/components/ui/button"
 import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
+import { Textarea } from "@/components/ui/textarea"
+import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import { steerMessageId } from "@/lib/message-parts"
+import { cn } from "@/lib/utils"
+import {
+  queueControlsExtras,
+  type QueueControls,
+} from "@/runtime-adapters/queue-controls"
 
 export type MessageQueueLabels = {
   readonly region: string
@@ -41,6 +50,16 @@ export type MessageQueueLabels = {
   readonly moveUp: string
   readonly moveDown: string
   readonly moved: (position: number, count: number) => string
+  readonly edit: string
+  readonly save: string
+  readonly cancel: string
+  readonly editor: string
+}
+
+/** The queued message open for editing, and where focus returns after. */
+export type QueueEditing = {
+  readonly id: string
+  readonly returnTo: "row" | "composer"
 }
 
 export type UnconfirmedDelivery = {
@@ -67,6 +86,86 @@ export function isUncertainDelivery(error: unknown) {
   )
 }
 
+/**
+ * The row's text as a field. It holds the queue while it is open, so a turn
+ * ending meanwhile sends nothing until the edit is saved or cancelled.
+ */
+function QueueEditor({
+  labels,
+  initialText,
+  hold,
+  fieldRef,
+  onSave,
+  onCancel,
+}: {
+  labels: MessageQueueLabels
+  initialText: string
+  hold: QueueControls["hold"]
+  fieldRef: RefObject<HTMLTextAreaElement | null>
+  onSave(text: string): void
+  onCancel(): void
+}) {
+  const [text, setText] = useState(initialText)
+  useEffect(() => hold(), [hold])
+  useLayoutEffect(() => {
+    const field = fieldRef.current
+    field?.focus()
+    field?.setSelectionRange(field.value.length, field.value.length)
+  }, [fieldRef])
+  const blank = text.trim() === ""
+  const save = () => {
+    if (!blank) onSave(text)
+  }
+  return (
+    <>
+      <Textarea
+        ref={fieldRef}
+        dir="auto"
+        rows={1}
+        aria-label={labels.editor}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (keyboardEventSafetyReason(event)) return
+          if (event.key === "Escape") {
+            event.preventDefault()
+            onCancel()
+          } else if (
+            event.key === "Enter" &&
+            !event.shiftKey &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey
+          ) {
+            event.preventDefault()
+            save()
+          }
+        }}
+        className="min-h-8 min-w-0 flex-1 resize-none px-2 py-1"
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={blank}
+        className="shrink-0 [@media(pointer:coarse)]:min-h-11"
+        onClick={save}
+      >
+        {labels.save}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="shrink-0 [@media(pointer:coarse)]:min-h-11"
+        onClick={onCancel}
+      >
+        {labels.cancel}
+      </Button>
+    </>
+  )
+}
+
 /** Where a row sits in the queue, and its neighbours to move around. */
 type QueuePlace = {
   readonly position: number
@@ -81,6 +180,9 @@ function QueueRow({
   direction,
   placeOf,
   onMoved,
+  controls,
+  editing,
+  onEditingChange,
 }: {
   labels: MessageQueueLabels
   steer: NonNullable<ComposerFeatureViewModel["steer"]> | undefined
@@ -88,6 +190,9 @@ function QueueRow({
   direction: "ltr" | "rtl"
   placeOf(id: string): QueuePlace
   onMoved(position: number): void
+  controls: QueueControls | undefined
+  editing: QueueEditing | undefined
+  onEditingChange(editing: QueueEditing | undefined): void
 }) {
   const aui = useAui()
   const originThreadId = useAuiState((state) => state.threads.mainThreadId)
@@ -166,7 +271,31 @@ function QueueRow({
     )
   }
   const moreRef = useRef<HTMLButtonElement>(null)
+  const fieldRef = useRef<HTMLTextAreaElement>(null)
+  const isEditing = editing?.id === requestId
+  const edit = () => onEditingChange({ id: requestId, returnTo: "row" })
+  // Focus goes back to More once the row leaves edit mode it opened.
+  const returnToMoreRef = useRef(false)
+  useLayoutEffect(() => {
+    if (isEditing || !returnToMoreRef.current) return
+    returnToMoreRef.current = false
+    moreRef.current?.focus()
+  }, [isEditing])
+  const closeEditor = () => {
+    returnToMoreRef.current = editing?.returnTo === "row"
+    onEditingChange(undefined)
+  }
   const menuEntries: MenuPopupEntry[] = [
+    ...(controls
+      ? [
+          {
+            id: "edit",
+            label: labels.edit,
+            icon: <PencilIcon aria-hidden="true" />,
+            onSelect: edit,
+          },
+        ]
+      : []),
     {
       id: "move-up",
       label: labels.moveUp,
@@ -189,16 +318,36 @@ function QueueRow({
     <li
       data-slot="aui_message-queue-item"
       className="flex min-h-10 min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background px-2.5 py-1.5 text-sm shadow-xs motion-reduce:transition-none"
-      onKeyDown={moveOnKey}
+      // The field keeps Alt+Arrow keys: on macOS they move the caret.
+      onKeyDown={isEditing ? undefined : moveOnKey}
     >
       <CornerDownRightIcon
         aria-hidden="true"
         className="size-3.5 shrink-0 text-muted-foreground"
       />
-      <QueueItemPrimitive.Text
-        dir="auto"
-        className="min-w-0 flex-1 truncate text-start text-foreground/85"
-      />
+      {isEditing && controls ? (
+        <QueueEditor
+          labels={labels}
+          initialText={text}
+          hold={controls.hold}
+          fieldRef={fieldRef}
+          onSave={(edited) => {
+            controls.editText(requestId, edited)
+            closeEditor()
+          }}
+          onCancel={closeEditor}
+        />
+      ) : (
+        <QueueItemPrimitive.Text
+          dir="auto"
+          className={cn(
+            "min-w-0 flex-1 truncate text-start text-foreground/85",
+            controls && "cursor-text"
+          )}
+          // A pointer shortcut for the menu's Edit, which keyboards reach.
+          onClick={controls ? edit : undefined}
+        />
+      )}
       {status === "error" ? (
         <span className="shrink-0 text-xs text-destructive" role="status">
           {labels.failed}
@@ -210,7 +359,7 @@ function QueueRow({
           variant="ghost"
           size="sm"
           aria-label={labels.steerLabel}
-          disabled={pending}
+          disabled={pending || isEditing}
           className="shrink-0 [@media(pointer:coarse)]:min-h-11"
           onClick={() => void submitSteering()}
         >
@@ -224,8 +373,9 @@ function QueueRow({
           {labels.steer}
         </Button>
       ) : null}
-      <Menu.Root>
-        <Menu.Trigger
+      {isEditing ? null : (
+        <Menu.Root>
+          <Menu.Trigger
           ref={moreRef}
           render={
             <TooltipIconButton
@@ -236,10 +386,15 @@ function QueueRow({
             />
           }
         >
-          <EllipsisIcon aria-hidden="true" />
-        </Menu.Trigger>
-        <MenuPopup entries={{ items: menuEntries }} dir={direction} />
-      </Menu.Root>
+            <EllipsisIcon aria-hidden="true" />
+          </Menu.Trigger>
+          <MenuPopup
+            entries={{ items: menuEntries }}
+            dir={direction}
+            finalFocus={() => fieldRef.current ?? moreRef.current}
+          />
+        </Menu.Root>
+      )}
       <QueueItemPrimitive.Remove
         render={
           <TooltipIconButton
@@ -265,13 +420,21 @@ export function MessageQueue({
   steer,
   onUnconfirmed,
   direction,
+  editing,
+  onEditingChange,
 }: {
   labels: MessageQueueLabels
   steer: ComposerFeatureViewModel["steer"]
   onUnconfirmed(delivery: UnconfirmedDelivery): void
   direction: "ltr" | "rtl"
+  editing: QueueEditing | undefined
+  onEditingChange(editing: QueueEditing | undefined): void
 }) {
   const items = useAuiState((state) => state.composer.queue)
+  const controls = queueControlsExtras.use(
+    (extras) => extras.queueControls,
+    undefined
+  )
   const placeOf = useCallback(
     (id: string): QueuePlace => {
       const index = items.findIndex((item) => item.id === id)
@@ -301,6 +464,9 @@ export function MessageQueue({
               direction={direction}
               placeOf={placeOf}
               onMoved={setMoved}
+              controls={controls}
+              editing={editing}
+              onEditingChange={onEditingChange}
             />
           )}
         </ComposerPrimitive.Queue>
