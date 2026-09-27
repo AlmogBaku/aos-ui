@@ -21,6 +21,9 @@ export const DEFAULT_RETRY_SCHEDULE: HermesRetrySchedule = {
 // `_reattach_refusal` (tui_gateway/session_lifecycle.py) is the only 4009 that
 // carries no reason, so its exact text is what tells it from a turn still busy.
 const DISCONNECT_SETTLING = "session disconnect interrupt settling"
+// The same guard's 4007 for a live record reaped or trimmed between lookup and
+// recheck; unlike "session not found", the Session itself still exists.
+const NO_LONGER_LIVE = "session no longer live; retry resume"
 /** `hermes_cli.active_sessions`: the ownership registry could not be read. */
 const COORDINATION_UNAVAILABLE = "SESSION_COORDINATION_UNAVAILABLE"
 
@@ -29,6 +32,7 @@ export function isTransientRejection(error: unknown) {
   return (
     error instanceof HermesRpcRejectedError &&
     ((error.code === 4009 && error.nativeMessage === DISCONNECT_SETTLING) ||
+      (error.code === 4007 && error.nativeMessage === NO_LONGER_LIVE) ||
       (error.code === 4090 && error.reason === COORDINATION_UNAVAILABLE))
   )
 }

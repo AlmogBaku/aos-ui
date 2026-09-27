@@ -2786,28 +2786,32 @@ describe("Hermes server adapter", () => {
     expect(wait).toHaveBeenCalledTimes(2)
   })
 
-  it("reports a disconnect Hermes never finishes settling as unavailable", async () => {
-    const router = rpcRouter({
-      "session.resume": async () => {
-        throw new HermesRpcRejectedError(
-          4009,
-          "session disconnect interrupt settling"
-        )
-      },
-    })
-    const adapter = new HermesServerAdapter(router, {
-      retry: { delaysMs: [0, 0], wait: async () => undefined },
-    })
-
-    await expect(
-      adapter.native.resume({
-        agentId: "researcher",
-        providerSessionId: "stored",
-        sessionId: "stored",
+  it.each([
+    [4009, "session disconnect interrupt settling"],
+    // A live record reaped between lookup and recheck: the Session still exists.
+    [4007, "session no longer live; retry resume"],
+  ] as const)(
+    "reports a transient resume refusal %s Hermes never lifts as unavailable",
+    async (code, message) => {
+      const router = rpcRouter({
+        "session.resume": async () => {
+          throw new HermesRpcRejectedError(code, message)
+        },
       })
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
-    expect(router.calls("session.resume")).toHaveLength(3)
-  })
+      const adapter = new HermesServerAdapter(router, {
+        retry: { delaysMs: [0, 0], wait: async () => undefined },
+      })
+
+      await expect(
+        adapter.native.resume({
+          agentId: "researcher",
+          providerSessionId: "stored",
+          sessionId: "stored",
+        })
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+      expect(router.calls("session.resume")).toHaveLength(3)
+    }
+  )
 
   it("reports a Session gone once its durable resume finds no record", async () => {
     let resumes = 0

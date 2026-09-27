@@ -19,6 +19,7 @@ import {
   type HermesRpcTransport,
 } from "./gateway"
 import { isRecord, nativeId, publicReason, sessionKey } from "./native"
+import { isTransientRejection } from "./transient-rejections"
 
 export type HermesAttachmentScope = {
   agentId: string
@@ -103,13 +104,15 @@ const SESSION_GONE_CODES = new Set([4001, 4007, -32602])
 /**
  * Hermes rejected a call because the Session it named is gone. On a live id
  * that means the binding must be rebound; only on the durable resume does it
- * mean the Session itself is gone.
+ * mean the Session itself is gone. A transient 4007 says neither, even once
+ * its retries are spent.
  */
 export function isSessionGone(error: unknown) {
   return (
     error instanceof HermesRpcRejectedError &&
     error.code !== undefined &&
-    SESSION_GONE_CODES.has(error.code)
+    SESSION_GONE_CODES.has(error.code) &&
+    !isTransientRejection(error)
   )
 }
 
