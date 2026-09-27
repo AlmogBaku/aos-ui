@@ -72,7 +72,7 @@ const URL_IN_TEXT = /\b[a-z][a-z\d+.-]*:\/\/[^\s"<>\\]+/giu
 export function redactText(text: string) {
   return text.replace(URL_IN_TEXT, (url) =>
     url
-      .replace(/^([a-z][a-z\d+.-]*:\/\/)[^/?#]*@/iu, "$1")
+      .replace(/([a-z][a-z\d+.-]*:\/\/)[^/?#]*@/giu, "$1")
       .replace(/[?#].*$/u, "")
   )
 }

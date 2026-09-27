@@ -13,6 +13,8 @@ describe("log redaction", () => {
         url: "https://example.test/oauth/callback?code=native'secret",
         detail:
           "dial wss://aos:tok'test-1@hermes.example.test/api/ws?token=tok-test-1#frame refused",
+        joined:
+          "dial 'https://a.test/x','wss://aos:tok-test-2@h.test/ws' refused",
       })
     ).toEqual({
       event: "hermes.turn.failed",
@@ -20,6 +22,7 @@ describe("log redaction", () => {
       code: "validation_exception",
       url: "https://example.test/oauth/callback",
       detail: "dial wss://hermes.example.test/api/ws refused",
+      joined: "dial 'https://a.test/x','wss://h.test/ws' refused",
     })
   })
 
