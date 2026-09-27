@@ -133,7 +133,7 @@ export async function attachTurn(
     // A Session Hermes holds no record of is gone, not out of reach.
     throw error instanceof HermesSessionGoneError
       ? error
-      : providerUnavailable()
+      : providerUnavailable(error)
   }
   active.liveSessionId = liveSessionId
   active.unsubscribe = () => {

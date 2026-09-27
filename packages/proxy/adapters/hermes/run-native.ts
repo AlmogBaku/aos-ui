@@ -654,7 +654,8 @@ export class HermesNativeRuntime implements HermesTurnNative {
   ): HermesSubmitOutcome {
     if (error instanceof HermesRpcRejectedError) {
       this.#logRejection(method, error)
-      if (isTransientRejection(error)) throw new HermesUnavailableError()
+      if (isTransientRejection(error))
+        throw new HermesUnavailableError({ cause: error })
       const reason = rejectionReason(error)
       if (reason === "session-gone") this.#attachments.invalidate(liveSessionId)
       const detail = publicDetail(error.nativeMessage)

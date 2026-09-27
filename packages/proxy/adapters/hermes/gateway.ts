@@ -76,10 +76,13 @@ export class HermesRpcUncertainError extends Error {
   }
 }
 
-/** Nothing was written: no open socket, a failed dial, or an unusable reply. */
+/**
+ * Nothing was written: no open socket, a failed dial, or an unusable reply.
+ * The native failure behind it, when there is one, stays as `cause`.
+ */
 export class HermesUnavailableError extends Error {
-  constructor() {
-    super("Hermes is temporarily unavailable")
+  constructor(options?: ErrorOptions) {
+    super("Hermes is temporarily unavailable", options)
     this.name = "HermesUnavailableError"
   }
 }
@@ -100,8 +103,12 @@ export class HermesRequestAbortedError extends Error {
  * native failure is an outage the caller must not present as a refusal.
  */
 export function throwUnavailable(error: unknown): never {
-  if (error instanceof HermesAuthenticationError) throw error
-  throw new HermesUnavailableError()
+  if (
+    error instanceof HermesAuthenticationError ||
+    error instanceof HermesUnavailableError
+  )
+    throw error
+  throw new HermesUnavailableError({ cause: error })
 }
 
 export type HermesRpcOptions = {
@@ -353,7 +360,7 @@ export class HermesGateway implements HermesRpcTransport {
     } catch (error) {
       if (this.#refusal) throw new HermesAuthenticationError()
       this.#logDialFailure("handshake_failed", { error })
-      throw new HermesUnavailableError()
+      throw new HermesUnavailableError({ cause: error })
     }
     if (this.#closed) {
       // close() landed mid-handshake: a late open must publish nothing.
@@ -734,7 +741,7 @@ export class HermesGateway implements HermesRpcTransport {
     if (error instanceof HermesAuthenticationError) return error
     return options.signal?.aborted
       ? new HermesRequestAbortedError()
-      : new HermesUnavailableError()
+      : new HermesUnavailableError({ cause: error })
   }
 
   /** Mint the correlation id and bind the dispatching request's byte bound. */
@@ -771,7 +778,7 @@ export class HermesGateway implements HermesRpcTransport {
       )
     // Nothing was written: the generation was gone before the send.
     if (error instanceof Error && error.message === NOT_CONNECTED)
-      return new HermesUnavailableError()
+      return new HermesUnavailableError({ cause: error })
     // Written, outcome unknown: timeout, dropped generation, send failure, or
     // the caller giving up on a frame Hermes may already be running.
     return new HermesRpcUncertainError()

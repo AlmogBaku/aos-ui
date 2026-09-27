@@ -596,7 +596,7 @@ export class HermesTurnEngine {
       // Nothing was written, so this run never began: it settles silently and
       // the caller learns Hermes is unavailable.
       this.#settle(active)
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
     if (active.terminal) return
     if (outcome.acknowledgement === "uncertain") {
