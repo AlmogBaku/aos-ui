@@ -1,11 +1,14 @@
 import {
   methods,
+  RequestError,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
@@ -28,12 +31,18 @@ import {
   type PendingRequest,
 } from "../core/events"
 import {
+  ADMISSION_DEADLINE_MS,
+  READING_BACKOFF,
+  UNCERTAINTY_DEADLINE_MS,
+} from "../core/limits"
+import {
   ServerAgentUpdateUnsupportedError,
-  type ServerTurnWatcher,
+  ServerSessionNotFoundError,
+  type ServerTurnListener,
   type ServerRuntime,
 } from "../core/runtime"
 import { translateHistory } from "./translate/history"
-import { invalidRequest } from "./validation"
+import { invalidParams, notFound } from "./validation"
 import {
   AGENT,
   CONNECTION,
@@ -84,6 +93,30 @@ function sequencesOf(recorder: Recorder) {
   })
 }
 
+/** A recorded model options update that names `model` selected. */
+function selects(model: string) {
+  return (entry: Recorded) => {
+    const params = JSON.stringify(entry.params)
+    return (
+      entry.method === methods.client.session.update &&
+      params.includes("config_option_update") &&
+      params.includes(`"currentValue":"${model}"`)
+    )
+  }
+}
+
+/** The Session rows this connection was shown since entry `from`. */
+function rowsSince(recorder: Recorder, from: number) {
+  return recorder.entries
+    .slice(from)
+    .filter(
+      (entry) =>
+        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes("session_info_update")
+    )
+    .map((entry) => entry.params)
+}
+
 /** Every catalog relist this connection has asked the client for. */
 function relists(recorder: Recorder) {
   return recorder.of(AOS_METHODS.notify.catalogInvalidated)
@@ -110,6 +143,12 @@ async function usageOf(test: { recorder: Recorder }, count = 1) {
  * how a cold Session answers while its agent is still being built. `Infinity`
  * stands for one that never becomes readable.
  */
+/** A runtime whose watch of the Session finds a turn it started by itself. */
+function announceRunningTurn(_scope: unknown, watcher: ServerTurnListener) {
+  void Promise.resolve().then(() => watcher.onTurn())
+  return () => undefined
+}
+
 function coldWindow(readableAttempt: number): ServerRuntime["context"] {
   let attempts = 0
   return async () => {
@@ -133,13 +172,18 @@ describe("AOS ACP agent", () => {
 
     expect(test.initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: { name: "aos-proxy", title: "Test Runtime" },
+      // A proxy serving no build versions the extension contract instead.
+      info: {
+        name: "aos-proxy",
+        title: "Test Runtime",
+        version: `${AOS_EXTENSION_VERSION}`,
+      },
       capabilities: { session: { delete: {}, prompt: { image: {} } } },
       authMethods: [],
       _meta: {
         [AOS_META_KEY]: {
           version: AOS_EXTENSION_VERSION,
-          lane: "operator",
+          role: "operator",
           extensions: {
             steer: true,
             focus: true,
@@ -149,6 +193,13 @@ describe("AOS ACP agent", () => {
         },
       },
     })
+    test.close()
+  })
+
+  it("answers the build it serves as its version, so a tab on another reloads", async () => {
+    const test = await harness({ buildId: "b1" })
+
+    expect(test.initialize).toMatchObject({ info: { version: "b1" } })
     test.close()
   })
 
@@ -165,35 +216,40 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("creates a Session and pushes its commands and context usage", async () => {
+  it("answers a created Session's id alone and joins its creator to the Session's row, commands, model options and usage", async () => {
     const test = await harness()
 
     const created = await test.create()
 
-    expect(created).toMatchObject({
-      sessionId: CREATED,
-      configOptions: [{ configId: "model", currentValue: "sonnet" }],
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "idle", archived: false },
-          capabilities: {
-            workspace: { slashCommands: { commands: [{ name: "plan" }] } },
-          },
-        },
-      },
-    })
+    expect(created).toEqual({ sessionId: CREATED })
     await test.recorder.wait(
-      (entry) =>
-        entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes("usage_update"),
-      "an update carrying usage_update"
+      () => updates(test.recorder).length === 4,
+      "the created Session's readings"
     )
-    expect(updates(test.recorder)).toMatchObject([
+    // Each reading is a cell of its own, so no order holds between them.
+    const readings = updates(test.recorder).sort((left, right) =>
+      left.update.sessionUpdate.localeCompare(right.update.sessionUpdate)
+    )
+    expect(readings).toMatchObject([
       {
         sessionId: CREATED,
         update: {
           sessionUpdate: "available_commands_update",
           availableCommands: [{ name: "plan", description: "Draft a plan" }],
+        },
+      },
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [{ configId: "model", currentValue: "sonnet" }],
+        },
+      },
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "session_info_update",
+          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
         },
       },
       {
@@ -217,6 +273,20 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    test.close()
+  })
+
+  it("creates one Session for a repeated client id and refuses the id for another create", async () => {
+    const test = await harness()
+
+    const first = await test.create({ clientId: "create-1" })
+    const repeated = await test.create({ clientId: "create-1" })
+
+    expect(repeated).toEqual(first)
+    expect(test.createSession).toHaveBeenCalledTimes(1)
+    await expect(
+      test.create({ clientId: "create-1", title: "Another" })
+    ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -306,7 +376,7 @@ describe("AOS ACP agent", () => {
     ])
       await expect(
         test.agent.request(methods.agent.session.list, { cursor })
-      ).rejects.toMatchObject({ code: invalidRequest().code })
+      ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -318,10 +388,8 @@ describe("AOS ACP agent", () => {
       test.scope,
       { turnId: "run-live", messageId: "message-0", prompt: "Go" },
       {
-        subscriberId: "rest",
-        controllerId: "operator",
-        lane: "operator",
-        canControl: true,
+        membershipId: "rest",
+        principalId: "operator",
       }
     )
     test.sources[0]?.emit(turnStarted())
@@ -332,14 +400,10 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    expect(resumed).toMatchObject({
-      configOptions: [{ configId: "model" }],
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "running" },
-          execution: { status: "running", turnId: "run-live" },
-        },
-      },
+    // The answer says only where the replay ended; the row and the model
+    // options follow it as updates.
+    expect(resumed).toEqual({
+      _meta: { [AOS_META_KEY]: { history: expect.any(Object) } },
     })
     expect(updates(test.recorder)[0]).toMatchObject({
       sessionId: SESSION,
@@ -357,6 +421,19 @@ describe("AOS ACP agent", () => {
         _meta: { [AOS_META_KEY]: { turnId: "run-live" } },
       },
     })
+    const row = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("session_info_update"),
+      "the Session's row"
+    )
+    expect(row.params).toMatchObject({
+      update: {
+        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "running" } },
+      },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"configId":"model"'),
+      "the Session's model options"
+    )
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
@@ -389,9 +466,8 @@ describe("AOS ACP agent", () => {
     const messageId = z
       .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
       .parse(accepted)._meta.aos.messageId
-    expect(messageId).toHaveLength(36)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    expect(test.start.mock.calls[0]?.[0]).toMatchObject({ threadId: CREATED })
+    expect(test.start.mock.calls[0]?.[0]).toMatchObject({ sessionId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({
       messageId,
       prompt: "Summarize",
@@ -409,15 +485,21 @@ describe("AOS ACP agent", () => {
       (entry) => JSON.stringify(entry.params).includes("end_turn"),
       "an update carrying end_turn"
     )
-    // `session/new` and the settled turn each push usage out of band: the turn
-    // grew the window, so the composer is owed the reading it left behind.
+    // `session/new` and the settled turn each push readings out of band: the
+    // new Session's row, commands, model options and usage, then the window
+    // the turn grew.
     await usageOf(test, 2)
     expect(
       updates(test.recorder).filter(
-        (update) => !JSON.stringify(update).includes("usage_update")
+        (update) =>
+          ![
+            "session_info_update",
+            "available_commands_update",
+            "usage_update",
+            "config_option_update",
+          ].some((reading) => JSON.stringify(update).includes(reading))
       )
     ).toMatchObject([
-      { update: { sessionUpdate: "available_commands_update" } },
       {
         update: {
           sessionUpdate: "user_message",
@@ -501,15 +583,29 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("reports a stop the provider has not settled, then the cancelled turn", async () => {
-    const test = await harness()
+  it("answers a prompt its client cancelled as cancelled, aborting its admission, then reports a stop the provider has not settled and the cancelled turn", async () => {
+    const admission = gate()
+    const test = await harness({ onStart: () => admission.held })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Long job" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
+    const cancelled = new AbortController()
+    const sent = test.agent.request(
+      methods.agent.session.prompt,
+      {
+        sessionId: CREATED,
+        prompt: [{ type: "text", text: "Long job" }],
+        _meta: { [AOS_META_KEY]: {} },
+      },
+      { cancellationSignal: cancelled.signal }
+    )
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    cancelled.abort()
+    await expect(sent).rejects.toMatchObject({
+      code: RequestError.requestCancelled().code,
+    })
+    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: true })
+    // The provider took the turn all the same, which the browser follows once
+    // the coordinator settles it.
+    admission.release()
     const source = test.sources[0]
     source?.emit(turnStarted())
     await test.recorder.wait(
@@ -550,9 +646,12 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("writes the Session model a config option selects", async () => {
+  it("writes the Session model a config option selects and tells every browser on the Session", async () => {
     const test = await harness()
     await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
 
     const written = await test.agent.request(
       methods.agent.session.setConfigOption,
@@ -565,10 +664,15 @@ describe("AOS ACP agent", () => {
     expect(written).toMatchObject({
       configOptions: [{ configId: "model", currentValue: "opus" }],
     })
+    // The browser that switched never opened the Session, so the switch
+    // reaches the one that did without making the other a member.
+    await other.recorder.wait(selects("opus"), "the switched model options")
+    expect(updates(test.recorder)).toEqual([])
     test.close()
+    other.close()
   })
 
-  it("restates context usage after a config option changes the model", async () => {
+  it("restates the model options and context usage after a config option changes the model, once it is answered", async () => {
     const test = await harness()
     await test.list()
     await test.agent.request(methods.agent.session.resume, {
@@ -583,9 +687,22 @@ describe("AOS ACP agent", () => {
       type: "id",
       value: "opus",
     })
+    test.recorder.add({ method: "switch-answered", params: undefined })
 
     // The window's size belongs to the model, so a switch owes a fresh reading.
     await usageOf(test, 2)
+    await test.recorder.wait(selects("opus"), "the switched model options")
+    const order = test.recorder.entries.map((entry) =>
+      entry.method === "switch-answered"
+        ? entry.method
+        : selects("opus")(entry)
+          ? "config_option_update"
+          : undefined
+    )
+    expect(order.filter(Boolean)).toEqual([
+      "switch-answered",
+      "config_option_update",
+    ])
     test.close()
   })
 
@@ -641,6 +758,7 @@ describe("AOS ACP agent", () => {
     const test = await harness({ context: coldWindow(3) })
     await test.list()
     useUsageTimers()
+    vi.spyOn(Math, "random").mockReturnValue(0.5)
     try {
       await test.agent.request(methods.agent.session.resume, {
         sessionId: SESSION,
@@ -648,8 +766,10 @@ describe("AOS ACP agent", () => {
       })
 
       // The first two reads find a provider still building its agent; the
-      // backoff waits 1s and then 2s before the third one succeeds.
-      await vi.advanceTimersByTimeAsync(2_999)
+      // backoff waits its first two steps before the third one succeeds.
+      const backoff =
+        backoffDelay(0, READING_BACKOFF) + backoffDelay(1, READING_BACKOFF)
+      await vi.advanceTimersByTimeAsync(backoff - 1)
       expect(usages(test.recorder)).toEqual([])
 
       await vi.advanceTimersByTimeAsync(1)
@@ -753,7 +873,7 @@ describe("AOS ACP agent", () => {
     }
   })
 
-  it("brings every operator browser each usage and model reading exactly once", async () => {
+  it("brings every operator browser its usage and model options once on joining and once after each switch", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await open(test)
@@ -789,23 +909,28 @@ describe("AOS ACP agent", () => {
     await usageOf(other, 3)
     await settled()
 
-    // One reading on joining, one after the turn, and one after the config
-    // change, which moved the window every browser on the Session holds.
+    // One reading of each on joining, one after the switch the turn made, and
+    // one after the config change, which moved both for every browser on the
+    // Session.
     for (const browser of [test, other]) {
       expect(usages(browser.recorder)).toHaveLength(3)
       expect(
         updates(browser.recorder).filter((update) =>
           JSON.stringify(update).includes("config_option_update")
         )
-      ).toHaveLength(1)
+      ).toHaveLength(3)
     }
     test.close()
     other.close()
   })
 
-  it("renames a Session and reports the new row", async () => {
+  it("renames a Session for every browser on it, leaving the one that renamed it no membership", async () => {
     const test = await harness()
     await test.list()
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const clock = useFakeClock()
 
     await test.agent.request(AOS_METHODS.session.update, {
       sessionId: SESSION,
@@ -815,32 +940,47 @@ describe("AOS ACP agent", () => {
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       title: "Renamed",
     })
-    expect(updates(test.recorder)).toMatchObject([
-      {
-        sessionId: SESSION,
-        update: {
-          sessionUpdate: "session_info_update",
-          title: "Renamed",
-          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
-        },
+    const renamed = await other.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Renamed"),
+      "the renamed row"
+    )
+    expect(renamed.params).toMatchObject({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "session_info_update",
+        title: "Renamed",
+        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
       },
-    ])
+    })
+    // A membership the rename made would wait out its join deadline.
+    await clock.advance(30_000)
+    expect(
+      test.logs.transitions({ owner: "membership", sessionId: SESSION })
+    ).not.toContainEqual(["joining", "detached"])
     test.close()
+    other.close()
   })
 
-  it("pins a Session and asks the acting client to relist", async () => {
+  it("pins a Session, shows the browser that pinned it the row once, and asks it to relist", async () => {
     const test = await harness()
     await test.list()
+    await open(test)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("session_info"),
+      "the Session's row"
+    )
+    const from = test.recorder.entries.length
 
     await test.agent.request(AOS_METHODS.session.update, {
       sessionId: SESSION,
       pinned: true,
     })
+    await settled()
 
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       pinned: true,
     })
-    expect(updates(test.recorder)).toMatchObject([
+    expect(rowsSince(test.recorder, from)).toMatchObject([
       {
         sessionId: SESSION,
         update: {
@@ -877,7 +1017,24 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("marks a Session read through the connection's read state", async () => {
+  it("deletes a Session and asks every operator connection to relist", async () => {
+    const test = await harness()
+    const other = await test.connect("connection-2")
+    await test.list()
+
+    await test.agent.request(methods.agent.session.delete, {
+      sessionId: SESSION,
+    })
+    await settled()
+
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
+    expect(relists(test.recorder)).toHaveLength(1)
+    expect(relists(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
+  it("marks a Session read at once, and tells the runtime", async () => {
     const test = await harness()
     await test.list()
 
@@ -886,13 +1043,15 @@ describe("AOS ACP agent", () => {
       unread: false,
     })
 
-    expect(test.readState.markRead).toHaveBeenCalledWith(AGENT, SESSION)
-    expect(test.updateSession).not.toHaveBeenCalled()
+    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
+      unread: false,
+    })
     test.close()
   })
 
-  it("steers the active run and reports the delivery", async () => {
-    const test = await harness()
+  it("steers only the run a browser follows, and reports the delivery", async () => {
+    const opening = gate()
+    const test = await harness({ beforeHistory: () => opening.held })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
@@ -903,9 +1062,27 @@ describe("AOS ACP agent", () => {
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
       expect(
-        test.coordinator.state({ agentId: AGENT, sessionId: CREATED })
+        test.coordinator.state({ agentId: AGENT, providerSessionId: CREATED })
       ).toBe("running")
     )
+    // A browser still opening the Session follows no turn, so it steers none.
+    const other = await test.connect("connection-2")
+    await other.list()
+    const opened = other.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    await expect(
+      other.agent.request(AOS_METHODS.session.steer, {
+        sessionId: CREATED,
+        requestId: "steer-0",
+        text: "Stop there",
+      })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+    opening.release()
+    await opened
 
     const steered = await test.agent.request(AOS_METHODS.session.steer, {
       sessionId: CREATED,
@@ -925,18 +1102,24 @@ describe("AOS ACP agent", () => {
       delivery: "steered",
     })
     test.close()
+    other.close()
   })
 
-  it("reports Session focus and blur to read state", async () => {
+  it("reports Session focus and blur to read state, and a report naming no Session as no change", async () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() =>
-      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
-    )
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: null })
-    await waitFor(() => expect(test.readState.blur).toHaveBeenCalled())
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
+    // The report the browser probes its link with.
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, {})
+    ).resolves.toEqual({})
+    expect(test.readState.focus).toHaveBeenCalledTimes(1)
+    expect(test.readState.blur).not.toHaveBeenCalled()
+    expect(test.presence.set).toHaveBeenCalledTimes(1)
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: null })
+    expect(test.readState.blur).toHaveBeenCalled()
     test.close()
   })
 
@@ -944,15 +1127,13 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: SESSION,
-        foreground: true,
-        idle: false,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: SESSION,
+      foreground: true,
+      idle: false,
+    })
     test.close()
   })
 
@@ -960,19 +1141,17 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: SESSION,
       foreground: false,
       idle: true,
     })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: SESSION,
-        foreground: false,
-        idle: true,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: SESSION,
+      foreground: false,
+      idle: true,
+    })
     test.close()
   })
 
@@ -980,18 +1159,16 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: null,
       foreground: true,
     })
 
-    await waitFor(() =>
-      expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-        sessionId: null,
-        foreground: true,
-        idle: false,
-      })
-    )
+    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
     expect(test.readState.blur).toHaveBeenCalled()
     test.close()
   })
@@ -1000,26 +1177,23 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() =>
-      expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
-    )
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await test.agent.notify(AOS_METHODS.session.focus, {
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, {
       sessionId: SESSION,
       foreground: true,
       idle: false,
     })
 
-    await waitFor(() => expect(test.presence.set).toHaveBeenCalledTimes(3))
+    expect(test.presence.set).toHaveBeenCalledTimes(3)
     expect(test.readState.focus).toHaveBeenCalledTimes(1)
     test.close()
   })
 
   it("forgets this connection's presence when it closes", async () => {
     const test = await harness()
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await waitFor(() => expect(test.presence.set).toHaveBeenCalled())
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    expect(test.presence.set).toHaveBeenCalled()
 
     test.close()
 
@@ -1052,6 +1226,55 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("starts a prompt once the coordinator settled the uncertain turn before it", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await prompt(test, "Long job")
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    const lost = test.sources[0]
+    // Recovered, the provider reports the lost turn ended.
+    const recovered = new EventSource()
+    recovered.emit({ kind: TurnEventKind.TurnEnded })
+    test.sources.push(recovered)
+    lost?.emit(turnStarted())
+    lost?.emit({
+      kind: TurnEventKind.TurnFailed,
+      message: "the transport dropped",
+      code: "AOS_CONNECTION_INTERRUPTED",
+    })
+    lost?.finish()
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
+
+    await prompt(test, "Again")
+
+    expect(test.start).toHaveBeenCalledTimes(2)
+    test.close()
+  })
+
+  it("makes one turn of a prompt its client repeats after reconnecting", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup: async () => undefined,
+    })
+    const meta = { clientId: "send-1", attachmentStageId }
+    const messageId = await prompt(test, "Summarize", SESSION, meta)
+    // The reconnected browser sends again what it never saw answered, naming
+    // the stage the first send took.
+    const other = await test.connect("connection-2")
+    await other.list()
+
+    expect(await prompt(other, "Summarize", SESSION, meta)).toBe(messageId)
+    await replyWhileWatched(test.sources[0], "Done", [test, other])
+    expect(test.start).toHaveBeenCalledTimes(1)
+    expect(prompts(test.recorder)).toHaveLength(1)
+    expect(prompts(other.recorder)).toHaveLength(1)
+    test.close()
+    other.close()
+  })
+
   it("refuses a prompt while a turn is in progress", async () => {
     const test = await harness()
     await test.create()
@@ -1081,6 +1304,7 @@ describe("AOS ACP agent", () => {
         withdrawal.resolve(signal)
         return answer.promise
       },
+      subscribeTurns: () => () => undefined,
     })
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1112,7 +1336,7 @@ describe("AOS ACP agent", () => {
       sessionId: CREATED,
       cwd: "/",
     })
-    expect(test.discover).toHaveBeenCalled()
+    await waitFor(() => expect(test.discover).toHaveBeenCalled())
     const signal = await withdrawal.promise
     await waitFor(() => expect(signal.aborted).toBe(true))
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
@@ -1164,7 +1388,7 @@ describe("AOS ACP agent", () => {
     )
   })
 
-  it("logs the connection, the Stop it received, and the reply it settled", async () => {
+  it("logs the connection, its Session's membership, the Stop it received, and the reply it settled", async () => {
     const test = await harness()
     await test.create()
     await test.agent.request(methods.agent.session.prompt, {
@@ -1195,7 +1419,7 @@ describe("AOS ACP agent", () => {
       expect(test.logged()).toContainEqual({
         event: "acp.turn.cancel",
         connectionId: "connection-1",
-        lane: "operator",
+        role: "operator",
         sessionId: CREATED,
       })
     )
@@ -1203,11 +1427,22 @@ describe("AOS ACP agent", () => {
     expect(test.logged()).toContainEqual({
       event: "acp.connection.opened",
       connectionId: "connection-1",
-      lane: "operator",
+      role: "operator",
     })
+    expect(test.logs.records()).toContainEqual(
+      expect.objectContaining({
+        message: "membership.transition",
+        fields: expect.objectContaining({
+          connectionId: "connection-1",
+          sessionId: CREATED,
+          to: "joined",
+        }),
+      })
+    )
     expect(test.logged()).toContainEqual({
-      event: "acp.request.answered",
+      event: "membership.request.answered",
       connectionId: "connection-1",
+      role: "operator",
       sessionId: CREATED,
       requestId: "approval-1",
       status: "resolved",
@@ -1218,7 +1453,7 @@ describe("AOS ACP agent", () => {
       expect(test.logged()).toContainEqual({
         event: "acp.connection.closed",
         connectionId: "connection-1",
-        lane: "operator",
+        role: "operator",
       })
     )
   })
@@ -1313,7 +1548,7 @@ describe("Agent updates", () => {
     ])
       await expect(
         test.agent.request(AOS_METHODS.agents.update, params)
-      ).rejects.toMatchObject({ code: invalidRequest().code })
+      ).rejects.toMatchObject({ code: invalidParams().code })
     expect(test.updateAgent).not.toHaveBeenCalled()
     test.close()
   })
@@ -1364,7 +1599,77 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("shows nobody a prompt the provider refused", async () => {
+  it("answers each failure with its kind's code: a lost Session, a read past its deadline, a start nobody answered, which keeps its stage until its turn settles", async () => {
+    const watchers: ServerTurnListener[] = []
+    const test = await harness({
+      providerIds: true,
+      onStart: () => {
+        throw new ServerSessionNotFoundError()
+      },
+      subscribeTurns: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+    })
+    await test.list()
+
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: "missing",
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: -32002 })
+    await expect(prompt(test, "Summarize")).rejects.toMatchObject({
+      code: -32002,
+    })
+    // A start that found its Session gone tells its sender, who holds no
+    // readings yet, and asks the runtime after it no more.
+    await test.recorder.wait(
+      (entry) => entry.method === AOS_METHODS.notify.error,
+      "the not_found notice"
+    )
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([
+      {
+        method: AOS_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    expect(test.discover).not.toHaveBeenCalled()
+    // The runtime reports a turn it started by itself, and the read that asks
+    // for it never answers.
+    await open(test)
+    const clock = useFakeClock()
+    test.faults.hangUntilAborted("discover")
+    watchers.at(-1)?.onTurn()
+    // A read past its deadline changed nothing, so it is worth trying again.
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    expect(
+      test.logs.records().filter(({ message }) => message === "channel.failed")
+    ).toMatchObject([{ fields: { errorCode: "temporarily_unavailable" } }])
+
+    // A start past its deadline may have landed: reconcile, never resend, and
+    // keep what it staged while the provider may be reading it.
+    test.faults.hangUntilAborted("start")
+    test.recover.mockRejectedValue(new Error("provider unavailable"))
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup,
+    })
+    const unanswered = expect(
+      prompt(test, "Again", SESSION, { attachmentStageId })
+    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.uncertainMutation })
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    await unanswered
+    expect(cleanup).not.toHaveBeenCalled()
+    // No reconcile confirmed the turn by its deadline, so it never started.
+    await clock.advance(UNCERTAINTY_DEADLINE_MS)
+    expect(cleanup).toHaveBeenCalledOnce()
+    test.close()
+  })
+
+  it("answers a prompt the provider refused with its error, releasing its stage and showing nobody the prompt", async () => {
     const test = await harness({
       providerIds: true,
       onStart: () => {
@@ -1375,36 +1680,24 @@ describe("Session rooms", () => {
     const other = await test.connect("connection-2")
     await other.list()
     await open(other)
-
-    await prompt(test, "Summarize")
-    // The sender reads its accepted prompt's turn as one that failed at once.
-    const failed = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes(AOS_STOP_REASONS.error),
-      "a failed state_update"
-    )
-    expect(failed.params).toMatchObject({
-      sessionId: SESSION,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
-        _meta: {
-          [AOS_META_KEY]: {
-            turnId: expect.any(String),
-            code: "internal_error",
-          },
-        },
-      },
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
+      public: [],
+      appendTo: (text) => text,
+      cleanup,
     })
-    expect(
-      test.recorder.entries.some(
-        (entry) => entry.method === AOS_METHODS.notify.error
-      )
-    ).toBe(false)
+
+    await expect(
+      prompt(test, "Summarize", SESSION, { attachmentStageId })
+    ).rejects.toMatchObject({ code: RequestError.internalError().code })
+    // The composer keeps its attachments and stages them anew.
+    expect(cleanup).toHaveBeenCalledOnce()
+    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
 
+    expect(prompts(test.recorder)).toEqual([])
     expect(prompts(other.recorder)).toEqual([])
     expect(prompts(late.recorder)).toEqual([])
     test.close()
@@ -1524,6 +1817,9 @@ describe("Session rooms", () => {
   it("continues a two-question turn once two browsers each answer one", async () => {
     const SECOND: PendingRequest = { ...QUESTION, requestId: "question-2" }
     const withdrawn: AbortSignal[] = []
+    // Neither browser answers before both were asked both questions.
+    const everyoneAsked = gate()
+    let asks = 0
     /**
      * Answers the question asked `mine`th, in the order the turn asks them, and
      * holds the other until it is withdrawn.
@@ -1531,8 +1827,12 @@ describe("Session rooms", () => {
     const answering = (mine: number) => {
       let asked = 0
       return (_params: unknown, signal: AbortSignal) => {
+        if (++asks === 4) everyoneAsked.release()
         if (asked++ === mine)
-          return Promise.resolve({ action: "accept" as const, content: {} })
+          return everyoneAsked.held.then(() => ({
+            action: "accept" as const,
+            content: {},
+          }))
         withdrawn.push(signal)
         return heldUntilWithdrawn(signal)
       }
@@ -1751,19 +2051,42 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("keeps the page of a discovered turn nobody here sent", async () => {
+  it("keeps the page of a discovered turn nobody here sent, streaming on from where it was read", async () => {
+    const background = new EventSource()
+    let reading = false
     const test = await harness({
       providerIds: true,
-      rows: [sessionRow({ status: "running" })],
-      discover: async () => ({ handle: new EventSource(), state: "running" }),
+      subscribeTurns: announceRunningTurn,
+      discover: async () => ({ handle: background, state: "running" }),
       history: storedLiveTurn(),
+      // The turn streams on between the page read and its follow.
+      onReplay: () => {
+        if (reading) chunk(background, "Between")
+      },
     })
     await test.list()
 
     await open(test, { replayFrom: { type: "start" } })
-
-    expect(test.coordinator.state(test.scope)).toBe("running")
+    await test.recorder.wait(
+      said("AOS_RESET_REQUIRED"),
+      "an update carrying AOS_RESET_REQUIRED"
+    )
     expect(flow(test.recorder)).toContain("history assistant-0")
+    // Streamed once the turn was adopted, so the page it reloads holds it too.
+    chunk(background, "Live")
+    reading = true
+    const from = test.recorder.entries.length
+    await open(test, { replayFrom: { type: "start" } })
+    chunk(background, "After")
+    background.emit({ kind: TurnEventKind.TurnEnded })
+    await test.recorder.wait(endedTurn, "the turn to end")
+
+    expect(withoutStates(flow(test.recorder, SESSION, from))).toEqual([
+      "history user-1",
+      "history assistant-0",
+      "chunk Between",
+      "chunk After",
+    ])
     test.close()
   })
 
@@ -2102,11 +2425,14 @@ describe("Session rooms", () => {
     // A follow without a journal reloads history instead of streaming.
     const test = await harness({
       providerIds: true,
-      rows: [sessionRow({ status: "running" })],
+      subscribeTurns: announceRunningTurn,
       discover: async () => ({ handle: new EventSource(), state: "running" }),
     })
     await test.list()
     await open(test)
+    await waitFor(() =>
+      expect(test.coordinator.state(test.scope)).toBe("running")
+    )
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
@@ -2125,7 +2451,7 @@ describe("Session rooms", () => {
       onStart: () => admission.held,
     })
     await test.list()
-    const messageId = await prompt(test, "Summarize")
+    const sent = prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
     const other = await test.connect("connection-2")
@@ -2133,6 +2459,7 @@ describe("Session rooms", () => {
     await open(other)
     const from = other.recorder.entries.length
     admission.release()
+    const messageId = await sent
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(flow(other.recorder, SESSION, from)).toEqual([
@@ -2237,9 +2564,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true })
     await test.list()
 
-    await expect(prompt(test, [])).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
-    })
+    await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
@@ -2253,18 +2578,16 @@ describe("Session rooms", () => {
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
-    const messageId = await prompt(test, "First")
+    const sent = prompt(test, "First")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
-    // The winner is still being admitted, so the loser passes the idle check
-    // and loses at the coordinator.
-    await prompt(other, "Second")
-    const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
-    )
-    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    // The winner is still being admitted when the loser reaches the
+    // coordinator.
+    await expect(prompt(other, "Second")).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.turnInProgress,
+    })
     admission.release()
+    const messageId = await sent
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
@@ -2284,8 +2607,8 @@ describe("Session rooms", () => {
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
-    // The loser passes the idle check, then waits on its staged attachment
-    // while the winner is admitted and announced.
+    // The loser waits on its staged attachment while the winner is admitted
+    // and announced.
     const staged = gate()
     const appendTo = vi.fn(async (text: string) => {
       await staged.held
@@ -2306,12 +2629,9 @@ describe("Session rooms", () => {
     )
 
     staged.release()
-    await losing
-    const refused = await other.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
-      "an _aos/error notification"
-    )
-    expect(refused.params).toMatchObject({ code: "turn_in_progress" })
+    await expect(losing).rejects.toMatchObject({
+      code: AOS_JSONRPC_ERRORS.turnInProgress,
+    })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
@@ -2458,7 +2778,7 @@ describe("Session rooms", () => {
   })
 
   it("keeps streaming a reopen whose turn outgrew its journal", async () => {
-    const test = await harness({ providerIds: true, maxReplayEvents: 2 })
+    const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
@@ -2633,12 +2953,12 @@ describe("Session rooms", () => {
   })
 
   it("streams a turn the runtime started by itself to every open browser", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     let started = false
     const test = await harness({
       providerIds: true,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2783,7 +3103,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("shows a reload a turn the runtime started by itself once", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     // The turn stored rows before this proxy adopted it.
     const startedAt = Date.now() - 60_000
@@ -2791,7 +3111,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: storedLiveTurn(new Date(startedAt + 1_000).toISOString()),
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2818,7 +3138,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("resets a reload of a turn the runtime started at a time it does not report", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     const turns = [
       { handle: background, state: "running" as const, fromStart: true },
@@ -2826,7 +3146,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: storedLiveTurn(),
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -2945,7 +3265,7 @@ describe("Reloading a running turn", () => {
   })
 
   it("shows each turn once to a reload that lands as the next adopted turn starts", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const first = new EventSource()
     const next = new EventSource()
     const turns = [adopted(first), adopted(next)]
@@ -2957,7 +3277,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({
       providerIds: true,
       history: page,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },
@@ -3059,7 +3379,7 @@ const pageTag = (update: SentUpdate) =>
   (update._meta?.[AOS_META_KEY] as { historyPage?: unknown } | undefined)
     ?.historyPage
 
-const invalidParams = { code: invalidRequest().code }
+const INVALID_PARAMS = { code: invalidParams().code }
 
 describe("History pages", () => {
   it("gives a replaying resume the cursor of the next older page", async () => {
@@ -3071,7 +3391,7 @@ describe("History pages", () => {
       cwd: "/",
       replayFrom: { type: "start" },
     })
-    const attached = await test.agent.request(methods.agent.session.resume, {
+    const resumed = await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
     })
@@ -3079,7 +3399,7 @@ describe("History pages", () => {
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
       nextCursor: cursorOf(500),
     })
-    expect(attached._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
+    expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
     test.close()
   })
 
@@ -3275,12 +3595,12 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("serves a page only to a connection that attached the Session", async () => {
+  it("serves a page only to a connection that resumed the Session", async () => {
     const test = await harness({ transcript: conversation(1_200) })
     await test.list()
 
     await expect(older(test, cursorOf(500))).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: notFound().code,
     })
     await test.create()
     await expect(older(test, cursorOf(500), CREATED)).resolves.toEqual({
@@ -3291,7 +3611,7 @@ describe("History pages", () => {
       sessionId: SESSION,
     })
     await expect(older(test, cursorOf(500))).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: notFound().code,
     })
     test.close()
   })
@@ -3312,7 +3632,7 @@ describe("History pages", () => {
     ])
       await expect(
         older(test, cursor, SESSION, replayFrom)
-      ).rejects.toMatchObject(invalidParams)
+      ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -3325,7 +3645,7 @@ describe("History pages", () => {
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     await expect(older(test, cursorOf(100_000))).rejects.toMatchObject(
-      invalidParams
+      INVALID_PARAMS
     )
     test.close()
 
@@ -3416,7 +3736,7 @@ describe("History pages", () => {
       encoded("0"),
       cursorOf(5_000),
     ])
-      await expect(older(test, cursor)).rejects.toMatchObject(invalidParams)
+      await expect(older(test, cursor)).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 
@@ -3434,7 +3754,7 @@ describe("History pages", () => {
     const first = older(test, cursorOf(500))
     await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
     await expect(older(test, cursorOf(500))).rejects.toMatchObject(
-      invalidParams
+      INVALID_PARAMS
     )
     pending.release()
 
@@ -3447,7 +3767,7 @@ describe("History pages", () => {
   })
 
   it("cuts a turn streamed from its start off every older page it reaches", async () => {
-    const watchers: ServerTurnWatcher[] = []
+    const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     const startedAt = Date.now() - 60_000
     const at = (ms: number) => new Date(startedAt + ms).toISOString()
@@ -3467,7 +3787,7 @@ describe("History pages", () => {
     const test = await harness({
       providerIds: true,
       transcript,
-      watch: (_scope, watcher) => {
+      subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined
       },

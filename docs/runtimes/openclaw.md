@@ -6,7 +6,7 @@ The browser connects only to the normalized AOS proxy (`AOS_UI_RUNTIME_MODE=aos`
 
 - A reachable, already configured OpenClaw Gateway
 - Private, owner-only files containing the Gateway device identity and device token
-- A private guest-invitation signing-key file when the guest lane is enabled
+- A private guest-invitation signing-key file when the guest listener is enabled
 
 Start from [`deploy/proxy.openclaw.example.yaml`](../../deploy/proxy.openclaw.example.yaml). Set `runtime.baseUrl` to the Gateway WebSocket URL reachable by the proxy and set `runtime.deviceIdentityFile` and `runtime.deviceTokenFile` to the corresponding private files. The example's `ws://host.docker.internal:18789` is for a Gateway running on the Compose host; replace it when your topology differs.
 
@@ -147,7 +147,11 @@ It requires `operator.admin`.
 
 The `config.get` payload may carry credentials. The proxy keeps only the config
 hash and the set of authored Agent ids, and logs or returns nothing else from
-it. Every catalog read also calls `config.get` to refresh the authorized set.
+it. Every catalog read also calls `config.get` to refresh the authorized set,
+so the credential-bearing payload passes through proxy memory on each read
+before that reduction; the device's `operator.admin` scope can read it anyway.
+OpenClaw merges the patch into `agents.list` by id, refuses one that would drop
+an entry, and applies an `agents` change without restarting the Gateway.
 
 Visibility changes are unsupported for OpenClaw; a patch that includes
 `visibility` is rejected as a whole.

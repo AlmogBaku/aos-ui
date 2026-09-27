@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 import {
   isRepliesTurn,
   StopReason,
@@ -24,15 +26,19 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import {
+  ServerSessionNotFoundError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type RecoveryRequest,
   type ServerAttachmentStage,
   type ServerTurnEngine,
   type ServerTurnHandle,
-  type ServerTurnWatcher,
+  type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
+import * as ids from "../../core/ids"
+import { createLink, type LinkOptions } from "../../core/link"
+import { defaultClock } from "../../../lifecycle"
 import { openClawArtifactReceipt, publicArtifactArgs } from "./artifacts"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import { OpenClawClientRequestError } from "./client"
@@ -44,8 +50,8 @@ import {
 import {
   aosToolsPatch,
   enablesAosTools,
-  openClawInvitedSessionsParams,
   openClawPatchSessionParams,
+  openClawSessionSearchParams,
   parseOpenClawSessions,
 } from "./native-schemas"
 import {
@@ -53,6 +59,7 @@ import {
   type OpenClawReconciliationFence,
   type OpenClawSessionLease,
 } from "./subscriptions"
+import { safeClone, safeJson } from "./json-copy"
 import { openClawToolKind } from "./tool-kinds"
 import { projectTodos, type Todo } from "../todos"
 
@@ -63,12 +70,10 @@ const MAX_QUEUE_BYTES = 8_000_000
 const MAX_SESSION_LOOKUP_ROWS = 100
 /** Native runs remembered as AOS's own, so a settling one is never adopted. */
 const MAX_ADMITTED_RUNS = 1_024
-const WATCH_RETRY_MS = 5_000
 const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
   signal?: AbortSignal
-  timeoutMs?: number | null
   expectFinal?: boolean
   onSent?: () => void
   onAccepted?: (payload: unknown) => void
@@ -109,9 +114,10 @@ export class OpenClawTurnPublicError extends Error {
   constructor(
     readonly code:
       "AOS_PROVIDER_UNAVAILABLE" | "AOS_SEND_UNCERTAIN" | "AOS_STOP_UNCERTAIN",
-    message: string
+    message: string,
+    options?: ErrorOptions
   ) {
-    super(message)
+    super(message, options)
     this.name = "OpenClawRunPublicError"
   }
 }
@@ -318,34 +324,12 @@ function toolName(value: unknown, resolve: McpToolNameResolver) {
 const unresolved: McpToolNameResolver = () => undefined
 
 function scopeKey(scope: SessionScope) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 function boundedText(value: unknown) {
   if (typeof value !== "string") return undefined
   return encoder.encode(value).byteLength <= MAX_TEXT_BYTES ? value : undefined
-}
-
-function safeJson(value: unknown, fallback = "{}") {
-  try {
-    const json = JSON.stringify(value)
-    return typeof json === "string" &&
-      encoder.encode(json).byteLength <= 262_144
-      ? json
-      : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function safeClone(value: unknown) {
-  const json = safeJson(value, "")
-  if (!json) return undefined
-  try {
-    return JSON.parse(json) as unknown
-  } catch {
-    return undefined
-  }
 }
 
 function nonnegativeInteger(value: unknown) {
@@ -714,19 +698,46 @@ function finalAcknowledgement(value: unknown) {
   )
 }
 
-function requestWasSent(error: unknown, callbackObserved: boolean) {
-  return (
-    callbackObserved ||
-    (error instanceof OpenClawClientRequestError && error.requestSent)
+/**
+ * Whether a failed write may have landed: the client's word for its own
+ * failure, and a sent request for a failure after its answer.
+ */
+function mayHaveLanded(error: unknown, sent: boolean) {
+  return error instanceof OpenClawClientRequestError ? error.uncertain : sent
+}
+
+function providerUnavailable(cause: unknown) {
+  return new OpenClawTurnPublicError(
+    "AOS_PROVIDER_UNAVAILABLE",
+    "OpenClaw is temporarily unavailable.",
+    { cause }
   )
 }
 
-function providerUnavailable() {
-  return new OpenClawTurnPublicError(
-    "AOS_PROVIDER_UNAVAILABLE",
-    "OpenClaw is temporarily unavailable."
-  )
+/** Where a recovery continues an OpenClaw run: its subscription and last event. */
+const OpenClawPositionSchema = z.object({
+  generation: z.number(),
+  lastSeen: z.number(),
+})
+
+/** The opaque token a handle names its position by; only this adapter reads it. */
+const openClawRecoveryToken = {
+  mint: (position: z.infer<typeof OpenClawPositionSchema>) =>
+    JSON.stringify(position),
+  read: (token: string | undefined) =>
+    token === undefined
+      ? undefined
+      : OpenClawPositionSchema.parse(JSON.parse(token)),
 }
+
+/**
+ * How a foreign-turn watch stays up: what its failures mean, the Gateway link
+ * it redials with, and where it logs.
+ */
+export type OpenClawTurnWatch = Pick<
+  LinkOptions,
+  "publicError" | "upstream" | "logger"
+>
 
 export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #client: OpenClawRunRequestClient
@@ -734,6 +745,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #toolEvents: boolean
   readonly #replies?: OpenClawBoundReplies
   readonly #mcpToolNames?: OpenClawMcpToolNames
+  readonly #watch: OpenClawTurnWatch
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
   /** Every native run a segment was bound to, oldest first. */
@@ -746,18 +758,21 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     replies?: OpenClawBoundReplies
     /** Resolves OpenClaw's `<server>__<tool>` names to canonical MCP names. */
     mcpToolNames?: OpenClawMcpToolNames
+    watch: OpenClawTurnWatch
   }) {
     this.#client = options.client
     this.#subscriptions = options.subscriptions
     this.#toolEvents = options.toolEvents === true
     this.#replies = options.replies
     this.#mcpToolNames = options.mcpToolNames
+    this.#watch = options.watch
   }
 
   async start(
     scope: SessionScope,
     candidate: Parameters<ServerTurnEngine["start"]>[1],
-    attachmentStage?: ServerAttachmentStage
+    attachmentStage?: ServerAttachmentStage,
+    signal?: AbortSignal
   ): Promise<ServerTurnHandle> {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
@@ -771,7 +786,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       throw new Error(
         "OpenClaw request replies cannot include staged attachments"
       )
-    if (!validId(scope.agentId) || !validId(scope.sessionId))
+    if (!validId(scope.agentId) || !validId(scope.providerSessionId))
       throw new Error("AOS turn scope does not match this Session")
     if (replies) {
       if (!this.#replies)
@@ -791,7 +806,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const key = scopeKey(scope)
     const waiting = this.#waiting.get(key)
     const interactionScope = waiting
-      ? { ...scope, sessionId: waiting.nativeInteractionSessionKey }
+      ? {
+          ...scope,
+          providerSessionId: ids.providerSessionId(
+            waiting.nativeInteractionSessionKey
+          ),
+        }
       : scope
     const repliesBinding = replies
       ? await this.#replies!.validate(interactionScope, replies)
@@ -805,17 +825,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
     let lease: OpenClawSessionLease | undefined
     try {
-      const holder: { active?: ActiveRun } = {}
+      const holder: { active?: ActiveRun; lost?: { cause: unknown } } = {}
       let admissionDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else admissionDirty = true
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
-        }
+        },
+        this.#leaseLost(holder)
       )
       let baseline: HistorySnapshot
       do {
@@ -861,6 +882,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (!replies)
         await this.#enableAosTools(scope.agentId, baseline.sessionKey)
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
+      if (holder.lost) throw holder.lost.cause
 
       const queue = new EventQueue(() => {
         if (holder.active)
@@ -907,7 +929,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (waiting) {
         this.#waiting.delete(key)
         waiting.terminal = true
-        void waiting.lease.release().catch(() => {})
+        waiting.lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       }
 
       if (replies) {
@@ -940,7 +966,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           )
           return this.#handle(active)
         }
-        await this.#reconcile(active).catch(() => this.#markInterrupted(active))
+        await this.#reconcile(active).catch(() => this.#markStreamLost(active))
         return this.#handle(active)
       }
 
@@ -952,8 +978,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         resolveAdmission = resolve
         rejectAdmission = reject
       })
-      const request = this.#client
+      this.#client
         .request<unknown>("chat.send", sendParams!, {
+          // An abandoned admission stops the native request until it is accepted.
+          signal,
           expectFinal: true,
           onSent: () => {
             sent = true
@@ -985,23 +1013,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             resolveAdmission()
           }
           if (active && !active.terminal)
-            void this.#reconcile(active).catch(() =>
-              this.#markInterrupted(active)
-            )
+            this.#reconcile(active).catch(() => this.#markStreamLost(active))
         })
         .catch((error: unknown) => {
           if (!admitted) rejectAdmission(error)
           else if (active && !active.terminal)
-            void this.#reconcile(active).catch(() =>
-              this.#markInterrupted(active)
-            )
+            this.#reconcile(active).catch(() => this.#markStreamLost(active))
         })
-      void request
 
       try {
         await admission
       } catch (error) {
-        if (requestWasSent(error, sent)) {
+        if (mayHaveLanded(error, sent)) {
           active.uncertain = true
           this.#markUncertain(
             active,
@@ -1011,18 +1034,28 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           return this.#handle(active)
         }
         this.#active.delete(key)
-        await lease.release().catch(() => {})
+        await lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
         active.queue.close()
         active.resolveSettled()
-        throw providerUnavailable()
+        throw providerUnavailable(error)
       }
       return this.#handle(active)
     } catch (error) {
-      if (lease && !this.#active.has(key)) await lease.release().catch(() => {})
+      if (lease && !this.#active.has(key))
+        await lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       if (error instanceof ServerTurnConflictError) throw error
+      if (error instanceof ServerSessionNotFoundError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
@@ -1032,8 +1065,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   ): Promise<ServerTurnHandle> {
     if (
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
-      request.threadId !== scope.threadId ||
+      !validId(scope.providerSessionId) ||
+      request.sessionId !== scope.sessionId ||
       !validId(request.turnId)
     )
       throw new Error("AOS recovery scope does not match this Session")
@@ -1052,23 +1085,24 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
       existing.queue.push({ kind: TurnEventKind.TurnStarted })
       await this.#reconcile(existing).catch(() =>
-        this.#markInterrupted(existing)
+        this.#markStreamLost(existing)
       )
       return this.#handle(existing)
     }
     let lease: OpenClawSessionLease | undefined
     try {
-      const holder: { active?: ActiveRun } = {}
+      const holder: { active?: ActiveRun; lost?: { cause: unknown } } = {}
       let recoveryDirty = false
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else recoveryDirty = true
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
-        }
+        },
+        this.#leaseLost(holder)
       )
       let baseline: HistorySnapshot
       do {
@@ -1085,10 +1119,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           ? baseline.inFlightRun
           : undefined
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
+      if (holder.lost) throw holder.lost.cause
       const active = this.#bindRun(scope, request.turnId, lease, holder, {
         baseline,
         nativeRunId: nativeRunId ?? "",
-        lastSeen: request.position?.lastSeen ?? 0,
+        lastSeen: openClawRecoveryToken.read(request.position)?.lastSeen ?? 0,
         ...(inFlightSnapshot ? { shown: inFlightSnapshot } : {}),
       })
       if (!nativeRunId)
@@ -1101,9 +1136,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       return this.#handle(active)
     } catch (error) {
       this.#active.delete(key)
-      await lease?.release().catch(() => {})
+      await lease
+        ?.release()
+        .catch((err: unknown) =>
+          this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+        )
       if (error instanceof ServerTurnConflictError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
@@ -1118,7 +1157,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (
       !this.#replies?.discover ||
       !validId(scope.agentId) ||
-      !validId(scope.sessionId) ||
+      !validId(scope.providerSessionId) ||
       !validId(turnId) ||
       this.#active.has(key)
     )
@@ -1133,17 +1172,25 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         existingWaiting.terminal = true
         if (this.#waiting.get(key) === existingWaiting)
           this.#waiting.delete(key)
-        await existingWaiting.lease.release().catch(() => {})
+        await existingWaiting.lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       }
       const notDiscovered = async () => {
-        await lease?.release().catch(() => {})
+        await lease
+          ?.release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
         lease = undefined
         await retireExisting()
         return undefined
       }
       const holder: { waiting?: WaitingRun; active?: ActiveRun } = {}
       lease = await this.#subscriptions.acquire(
-        { agentId: scope.agentId, sessionKey: scope.sessionId },
+        { agentId: scope.agentId, sessionKey: scope.providerSessionId },
         (event) => {
           if (holder.active) this.#observe(holder.active, event)
           else if (holder.waiting) this.#acceptWaiting(holder.waiting, event)
@@ -1151,6 +1198,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         async (_reason, fence) => {
           if (holder.active) await this.#resync(holder.active, fence)
+          else discoveryDirty = true
+        },
+        () => {
+          if (holder.active) this.#markStreamLost(holder.active)
           else discoveryDirty = true
         }
       )
@@ -1182,7 +1233,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         const discovered = await this.#replies.discover(
           {
             ...scope,
-            sessionId: approvalReplayKey,
+            providerSessionId: ids.providerSessionId(approvalReplayKey),
             nativeRunId,
           },
           approvalReplay.replay
@@ -1250,29 +1301,31 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             })(),
             settled: Promise.resolve(),
             stop: () => this.#stopWaiting(waiting),
-            recoveryPosition: () => ({
-              epoch: String(generation),
-              lastSeen: 0,
-            }),
+            recoveryPosition: () =>
+              openClawRecoveryToken.mint({ generation, lastSeen: 0 }),
           },
         }
       }
     } catch (error) {
-      await lease?.release().catch(() => {})
+      await lease
+        ?.release()
+        .catch((err: unknown) =>
+          this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+        )
       if (error instanceof OpenClawTurnPublicError) throw error
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
   }
 
   /**
    * Announces the Session's native runs AOS did not bind: each once as its
    * events arrive, and any found running when the subscription is set up or
-   * reconciled after a reconnect.
+   * reconciled after a reconnect. The watch is a link: a failed subscription
+   * redials on backoff, and one that is gone or refused stays down until the
+   * Gateway link is up again.
    */
-  watch(scope: SessionScope, watcher: ServerTurnWatcher) {
+  subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     let stopped = false
-    let lease: OpenClawSessionLease | undefined
-    let retry: ReturnType<typeof setTimeout> | undefined
     let announced: string | undefined
     const announce = (runId: string | undefined, again: boolean) => {
       if (
@@ -1283,43 +1336,63 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
         return
       announced = runId
-      watcher.onTurn()
+      listener.onTurn()
     }
-    const check = async (current: OpenClawSessionLease, again: boolean) => {
-      try {
-        announce(uniqueActiveRunId(await this.#history(scope, current)), again)
-      } catch (error) {
-        if (!stopped) watcher.onError(error)
-      }
-    }
-    const subscribe = () => {
-      this.#subscriptions
-        .acquire(
-          { agentId: scope.agentId, sessionKey: scope.sessionId },
+    const check = async (lease: OpenClawSessionLease, again: boolean) =>
+      announce(uniqueActiveRunId(await this.#history(scope, lease)), again)
+    const watch = createLink({
+      ...this.#watch,
+      dial: async (signal, lost) => {
+        // Each subscription announces a run it finds running once more.
+        announced = undefined
+        /** Whether the first check ran: until then there is no recheck. */
+        let checked = false
+        /** A subscription lost before the watch is up fails the dial. */
+        let dropped: { cause: unknown } | undefined
+        const acquired = await this.#subscriptions.acquire(
+          { agentId: scope.agentId, sessionKey: scope.providerSessionId },
           (event) => announce(progressRunId(event), false),
+          // The subscription outlives a Gateway reconnect; a recheck that
+          // fails after one, or a re-subscribe that fails, takes the watch
+          // down to subscribe again.
           async () => {
-            if (lease) await check(lease, true)
-          }
-        )
-        .then(
-          async (acquired) => {
-            if (stopped) return void acquired.release().catch(() => {})
-            lease = acquired
-            await check(acquired, false)
+            if (checked) await check(acquired, true).catch(lost)
           },
-          (error: unknown) => {
-            if (stopped) return
-            watcher.onError(error)
-            retry = setTimeout(subscribe, WATCH_RETRY_MS)
+          (cause) => {
+            if (checked) lost(cause)
+            else dropped = { cause }
           }
         )
-    }
-    subscribe()
+        const release = () => {
+          acquired
+            .release()
+            .catch((err: unknown) =>
+              this.#watch.logger.warn({ err }, "openclaw.watch.release_failed")
+            )
+        }
+        try {
+          signal.throwIfAborted()
+          await check(acquired, false)
+          if (dropped) throw dropped.cause
+        } catch (error) {
+          release()
+          throw error
+        }
+        checked = true
+        return release
+      },
+      onError: (cause) => listener.onError(cause),
+      clock: defaultClock,
+      bindings: {
+        link: "openclaw-turn-watch",
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+      },
+    })
     return () => {
       if (stopped) return
       stopped = true
-      clearTimeout(retry)
-      void lease?.release().catch(() => {})
+      watch.dispose()
     }
   }
 
@@ -1354,11 +1427,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const rows = parseOpenClawSessions(
       await this.#client.request<unknown>(
         "sessions.list",
-        openClawInvitedSessionsParams(agentId, sessionKey)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       MAX_SESSION_LOOKUP_ROWS
     ).filter((row) => row.key === sessionKey)
-    if (rows.length !== 1) throw new Error("OpenClaw did not list this Session")
+    // A Session OpenClaw no longer lists was deleted natively: it is gone.
+    if (rows.length !== 1) throw new ServerSessionNotFoundError()
     const current = rows[0]!.toolOverrides
     if (enablesAosTools(current)) return
     await this.#client.request(
@@ -1371,9 +1445,22 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return authoritativelyIdle(history)
   }
 
-  /** Makes `active` the Session's run and remembers its native run as AOS's. */
+  /**
+   * Makes `active` the Session's run and remembers its native run as AOS's.
+   * Its settlement frees the Session's MCP names; the next turn loads fresh.
+   */
   #register(key: string, active: ActiveRun) {
     this.#active.set(key, active)
+    active.settled
+      .then(() =>
+        this.#mcpToolNames?.forget(
+          active.scope.agentId,
+          active.nativeSessionKey
+        )
+      )
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.run.settled_cleanup_failed")
+      )
     if (!active.nativeRunId) return
     const run = `${key}\u0000${active.nativeRunId}`
     this.#admitted.delete(run)
@@ -1445,6 +1532,17 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return active
   }
 
+  /**
+   * Hears that `holder`'s lease could not re-subscribe: a bound run has lost
+   * its stream, and an admission not yet bound fails before it binds.
+   */
+  #leaseLost(holder: { active?: ActiveRun; lost?: { cause: unknown } }) {
+    return (cause: unknown) => {
+      if (holder.active) this.#markStreamLost(holder.active)
+      else holder.lost = { cause }
+    }
+  }
+
   /** Delivers a subscribed event to a bound run, or defers it to reconciliation. */
   #observe(active: ActiveRun, event: EventFrame) {
     if (active.reconciling) active.reconciliationDirty = true
@@ -1459,7 +1557,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     try {
       await this.#reconcile(active, fence)
     } catch (error) {
-      this.#markInterrupted(active)
+      this.#markStreamLost(active)
       throw error
     }
   }
@@ -1469,10 +1567,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => this.#stop(active),
-      recoveryPosition: () => ({
-        epoch: String(this.#subscriptions.generation),
-        lastSeen: active.lastSeen,
-      }),
+      recoveryPosition: () =>
+        openClawRecoveryToken.mint({
+          generation: this.#subscriptions.generation,
+          lastSeen: active.lastSeen,
+        }),
     }
   }
 
@@ -1496,7 +1595,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     waiting.terminal = true
     if (this.#waiting.get(scopeKey(waiting.scope)) === waiting)
       this.#waiting.delete(scopeKey(waiting.scope))
-    void waiting.lease.release().catch(() => {})
+    waiting.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
   }
 
   async #waitingStatus(waiting: WaitingRun): Promise<"stopping" | "idle"> {
@@ -1555,13 +1658,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         return "idle"
       }
     } catch (error) {
-      if (requestWasSent(error, sent))
+      if (mayHaveLanded(error, sent))
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
-          "OpenClaw may have accepted the Stop request."
+          "OpenClaw may have accepted the Stop request.",
+          { cause: error }
         )
       waiting.stopping = false
-      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable(error))
     }
     return this.#waitingStatus(waiting)
   }
@@ -1586,9 +1690,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (previous >= 0 && sequence > previous + 1) {
       if (!active.gapPending) {
         active.gapPending = true
-        void this.#subscriptions
+        this.#subscriptions
           .replaceGeneration("gap")
-          .catch(() => this.#markInterrupted(active))
+          .catch(() => this.#markStreamLost(active))
           .finally(() => {
             active.gapPending = false
           })
@@ -2007,7 +2111,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         "OpenClaw may have accepted the Stop request."
       )
     if (active.stopping) {
-      await this.#reconcile(active).catch(() => {})
+      await this.#reconcile(active).catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed")
+      )
       return active.terminal ? "idle" : "stopping"
     }
     active.stopping = true
@@ -2048,31 +2154,35 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         throw new Error("OpenClaw aborted a different run")
       status = acknowledgedStatus
     } catch (error) {
-      if (requestWasSent(error, sent)) {
+      if (mayHaveLanded(error, sent)) {
         active.uncertain = true
         throw new OpenClawTurnPublicError(
           "AOS_STOP_UNCERTAIN",
-          "OpenClaw may have accepted the Stop request."
+          "OpenClaw may have accepted the Stop request.",
+          { cause: error }
         )
       }
       active.stopping = false
-      throw new ServerTurnStopNotDispatchedError(providerUnavailable())
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable(error))
     }
     if (active.terminal) return "idle"
     if (status === "no-active-run") {
       this.#finish(active)
       return "idle"
     }
-    await this.#reconcile(active).catch(() => {})
+    await this.#reconcile(active).catch((err: unknown) =>
+      this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed")
+    )
     return active.terminal ? "idle" : "stopping"
   }
 
-  #markInterrupted(active: ActiveRun) {
+  /** The turn's stream was lost mid-turn: OpenClaw may still be running it. */
+  #markStreamLost(active: ActiveRun) {
     if (active.terminal || active.uncertain) return
     this.#markUncertain(
       active,
-      "AOS_CONNECTION_INTERRUPTED",
-      "OpenClaw connection was interrupted."
+      "AOS_SEND_UNCERTAIN",
+      "OpenClaw may still be running this turn."
     )
   }
 
@@ -2098,7 +2208,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ...(active.cost ? { cost: active.cost } : {}),
     })
     this.#active.delete(scopeKey(active.scope))
-    void active.lease.release().catch(() => {})
+    active.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
     active.resolveSettled()
   }
 
@@ -2118,7 +2232,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ...origin,
     })
     this.#active.delete(scopeKey(active.scope))
-    void active.lease.release().catch(() => {})
+    active.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
     active.resolveSettled()
   }
 }

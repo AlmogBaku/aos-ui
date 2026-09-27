@@ -8,6 +8,7 @@ import {
   type AssistantState,
   type CompleteAttachment,
 } from "@assistant-ui/react"
+import { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import {
   useCallback,
   useEffect,
@@ -48,12 +49,16 @@ import { runErrorMessage } from "@/lib/i18n/run-errors"
 import type { GuestSurfaceConfiguration } from "@shared/runtime-config"
 import {
   AOS_ACP_GUEST_PATH,
-  AOS_JSONRPC_ERRORS,
-  type AosSessionResumeResponseMetaSchema,
+  AosAvailableCommandsMetaSchema,
 } from "@aos/protocol/acp"
 import { createAcpApprovals } from "./acp/acp-approvals"
 import { createAcpInteractions } from "./acp/acp-interactions"
-import { acpSocketUrl, createAcpConnection } from "./acp/connection"
+import {
+  acpSocketUrl,
+  createAcpConnection,
+  isAuthenticationRequired,
+} from "./acp/connection"
+import { tabAcpLogger } from "./acp/log"
 import type { AcpConnection } from "./acp/types"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
@@ -70,8 +75,8 @@ import {
 } from "./conversation-controls"
 
 /**
- * The invited guest surface: one ACP connection to the proxy's guest lane, one
- * Session — the invitation's conversation reference — and the same Thread,
+ * The invited guest surface: one ACP connection to the proxy's guest listener,
+ * one Session — the invitation's conversation reference — and the same Thread,
  * interactions, and artifacts the operator workspace composes. REST carries
  * only the verified presentation context and bytes.
  */
@@ -80,14 +85,14 @@ const dictionaries = { en, he } as const
 
 const CLIENT_INFO = { name: "aos-ui-guest", version: "1" }
 
-/** What one `session/resume` reports about the invited Session. */
+/** What the invited Session reports it supports, beside its commands. */
 type GuestSessionCapabilities = z.infer<
-  typeof AosSessionResumeResponseMetaSchema
+  typeof AosAvailableCommandsMetaSchema
 >["capabilities"]
 
 /**
  * Only the presentation context the guest surface renders: the invited
- * Session's capabilities arrive on the ACP resume, not on this read.
+ * Session's capabilities arrive over ACP once it is resumed, not on this read.
  */
 const GuestRuntimeContextSchema = z.object({
   agentId: z.string().min(1).max(256),
@@ -118,16 +123,10 @@ class GuestRuntimeContextError extends Error {
   }
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null
-
 /** An invitation the proxy refuses is finished; anything else may recover. */
 function failureOf(cause: unknown): GuestFailure {
   if (cause instanceof GuestRuntimeContextError) return cause.kind
-  return isRecord(cause) &&
-    cause.code === AOS_JSONRPC_ERRORS.authenticationRequired
-    ? "inactive"
-    : "unavailable"
+  return isAuthenticationRequired(cause) ? "inactive" : "unavailable"
 }
 
 /** The gateway, not decoded bearer claims, selects the guest's public scope. */
@@ -188,13 +187,13 @@ function GuestArtifactShell({
       locale={locale}
       adapter={artifacts}
       agentId={agentId}
-      threadId={sessionId}
+      sessionId={sessionId}
       messages={messages}
     >
       <McpAppHostProvider
         adapter={mcpApps}
         agentId={agentId}
-        threadId={sessionId}
+        sessionId={sessionId}
       >
         <GuestConversationShell
           locale={locale}
@@ -314,7 +313,7 @@ function GuestVoiceState({
   useEffect(() => {
     media.setScope(scopeId)
     media.setSafelyIdle(!running)
-    // Voice belongs to the attached Session, so it waits for its capabilities.
+    // Voice belongs to the resumed Session, so it waits for its capabilities.
     if (!capabilities) return
     media.setAvailability(scopeId, {
       transcription:
@@ -369,17 +368,18 @@ function ReadyGuestAosSurface({
     [connection]
   )
   const media = useMemo(() => new VoiceMediaController(), [])
-  // The invited Session reports what it supports only once it is attached.
+  // The invited Session reports what it supports only once it is resumed.
   const [capabilities, setCapabilities] = useState<GuestSessionCapabilities>()
-  const attach = useCallback(
-    async (attachedId: string) => {
-      const resumed = await connection.resumeSession(attachedId, {
-        replayFromStart: true,
-      })
-      setCapabilities(resumed.meta.capabilities)
-      return resumed
-    },
-    [connection]
+  useEffect(
+    () =>
+      connection.subscribe(sessionId, {
+        update: (update, meta) => {
+          if (!SessionUpdate.isAvailableCommandsUpdate(update)) return
+          const reported = AosAvailableCommandsMetaSchema.safeParse(meta)
+          if (reported.success) setCapabilities(reported.data.capabilities)
+        },
+      }),
+    [connection, sessionId]
   )
   // The invited Session owns the batch, so its bytes are staged per turn and
   // the prompt links whatever the proxy accepted.
@@ -425,7 +425,6 @@ function ReadyGuestAosSurface({
     approvals,
     sessionId,
     agentId,
-    attach,
     stageAttachments,
     // An invitation exposes one conversation, so no turn queues behind a run.
     enableMessageQueue: false,
@@ -455,7 +454,7 @@ function ReadyGuestAosSurface({
         return (
           <PendingInteractionComposer
             locale={selectedLocale}
-            threadId={sessionId}
+            sessionId={sessionId}
             interactions={interactions}
             fallback={fallback}
           />
@@ -564,6 +563,9 @@ export function GuestAosSurface({
     const connection = createAcpConnection({
       url: acpSocketUrl(AOS_ACP_GUEST_PATH),
       clientInfo: CLIENT_INFO,
+      logger: tabAcpLogger(),
+      reload: () => globalThis.location.reload(),
+      storage: globalThis.sessionStorage,
     })
     connection.start()
     // The verified presentation context and the redeemed invitation together
@@ -578,7 +580,7 @@ export function GuestAosSurface({
       await connection.login(inviteToken)
       return resolved
     }
-    void open().then(
+    open().then(
       (resolved) => {
         if (disposed) return
         setLoaded({

@@ -1,79 +1,87 @@
-import { EVERY_FEED } from "../core/member"
+import type { Logger } from "../../lifecycle"
+import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
 import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
 import { createAosAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
-import type { Channel } from "../core/channel"
+import type { Channels } from "../core/channel"
 import * as translators from "./translate"
-import type { AcpConnectionContext, AcpLogger } from "./types"
+import type { AcpConnectionContext } from "./types"
 
 export type OperatorAcpServiceOptions = {
   publicOrigin: string
   runtimeInstance: RuntimeInstance
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
-  /** The one room registry the guest lane shares, so both see one room. */
-  rooms: Channel
-  /** Where this lane's connections write their structured lines. */
-  logger?: AcpLogger
+  /** The channels the guest listener shares, so both see one per Session. */
+  channels: Channels
+  /** Where this listener's connections write their structured lines. */
+  logger: Logger
   /** Shared with push delivery; absent means nothing observes presence. */
   presence?: PresenceRegistry
-  /**
-   * The row cache this lane maintains. Push delivery reads the same one to gate
-   * a notification on read state; absent means this lane owns the only cache.
-   */
-  sessionRows?: SessionRows
+  /** The workspace catalog the guest listener shares, with its row cache. */
+  catalog: Catalog
+  /** The browser build the static root carries; absent without one. */
+  buildId?: string
   now?: () => number
 }
 
 /**
- * The operator lane's ACP service: one Session row cache per deployment and,
- * per accepted connection, its own read-state service and activity feed.
+ * The operator listener's ACP service: the deployment's one catalog and
+ * activity feed, which each connection opens once initialized, and per
+ * accepted connection its own read-state service.
  */
 export function createOperatorAcpService({
   publicOrigin,
   runtimeInstance,
   attachmentStages,
-  rooms,
+  channels,
   logger,
   presence,
+  catalog,
+  buildId,
   now = Date.now,
-  sessionRows = createSessionRows({ now }),
 }: OperatorAcpServiceOptions) {
-  const lane = "operator" as const
+  const role = "operator" as const
+  const activityFeed = createActivityFeed({
+    catalog,
+    coordinator: runtimeInstance.sessions,
+    now,
+  })
   const service = createAcpService({
     publicOrigin,
-    lane,
+    role,
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
     connection: (connectionId, principalId): AcpConnectionContext => ({
       connectionId,
       principalId,
-      lane,
-      runtimeInstance,
-      sessionRows,
+      role,
+      publicError: (cause) => runtimeInstance.runtime.publicError(cause),
+      steerAck: runtimeInstance.runtime.translation?.steerAck,
+      catalog,
       translators,
       attachmentStages,
-      rooms,
-      logger,
+      channels,
+      logger: logger.child({ connectionId, role }),
       presence,
-      feeds: EVERY_FEED,
+      buildId,
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now,
         // The agent already projects every changed row to its connection.
         onUnreadChanged: () => undefined,
       }),
-      activityFeed: createActivityFeed({ runtimeInstance, sessionRows, now }),
+      activityFeed,
     }),
   })
-  // The cache is part of the lane's surface: push delivery gates on the rows
-  // this lane keeps current, and there is only ever one of them. The rooms are
-  // exposed the same way, so the composition can show both lanes share them.
-  return { ...service, sessionRows, rooms }
+  // The cache is part of the listener's surface: push delivery gates on the
+  // rows this listener keeps current, and there is only ever one of them. The
+  // channels are exposed alike, so the composition can show both listeners
+  // share them.
+  return { ...service, sessionRows: catalog.rows, channels }
 }

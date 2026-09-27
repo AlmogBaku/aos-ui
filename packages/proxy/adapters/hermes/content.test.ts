@@ -10,9 +10,9 @@ import { projectHermesAttachedImages } from "./media-artifacts"
 
 const scope = {
   agentId: "research",
-  sessionId: "session-public-1",
+  providerSessionId: "session-public-1",
   liveSessionId: "live-private-1",
-  attached: true,
+  resumed: true,
 }
 
 const png = "data:image/png;base64,aGVsbG8="
@@ -275,7 +275,7 @@ describe("Hermes content operations", () => {
     expect(h.operations.capabilities()).toMatchObject({
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         maxCount: 16,
         maxImageBytes: 26_214_400,
         maxFileBytes: 26_214_400,
@@ -432,7 +432,7 @@ describe("Hermes content operations", () => {
       undefined,
       null,
       "private session",
-      { ...scope, attached: "true" },
+      { ...scope, resumed: "true" },
       { ...scope, liveSessionId: "x".repeat(4_097) },
     ]) {
       const h = harness({ authoritySession })

@@ -81,7 +81,7 @@ const adapter: McpAppAdapter = {
 }
 const target = {
   agentId: "researcher",
-  threadId: "session-1",
+  sessionId: "session-1",
   toolCallId: "t1",
 }
 

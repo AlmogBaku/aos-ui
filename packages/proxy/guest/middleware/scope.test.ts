@@ -7,10 +7,7 @@ const REF = "invited-ref"
 
 const layer = createScopeMiddleware({
   grant: { agentId: "agent", ref: REF, principalId: "guest", expiresAt: 100 },
-  invited: async () => undefined,
-  capabilities: async () => {
-    throw new Error("The scope layer reads no capabilities here")
-  },
+  catalog: { invited: async () => undefined },
 })
 
 /** One event about `sessionId` through the guest's scope layer. */

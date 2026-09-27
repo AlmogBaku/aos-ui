@@ -5,7 +5,7 @@ import { projectGuestOutbound } from "./guest-projection"
 
 const authorization: GuestAuthorization = {
   version: 1,
-  lane: "guest",
+  role: "guest",
   issuer: "https://aos.example.test",
   audience: "aos-guest",
   deploymentId: "aos-prod-il1",

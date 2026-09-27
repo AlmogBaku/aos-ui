@@ -6,7 +6,7 @@ import { createBrowserArtifactAdapter } from "./browser-artifact-adapter"
 const options = (artifact: ArtifactDescriptor) => ({
   artifact,
   agentId: "agent-1",
-  threadId: "thread-1",
+  sessionId: "thread-1",
   signal: new AbortController().signal,
 })
 

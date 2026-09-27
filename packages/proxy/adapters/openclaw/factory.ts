@@ -9,11 +9,14 @@ import {
 import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 
 import type { RuntimeLimits } from "../../config"
-import { SessionCoordinator } from "../../core/session-coordinator"
+import { coordinatedRuntime } from "../create-coordinator"
+import type { RuntimeServices } from "../create-runtime"
+import type { ServerLink } from "../../core/link"
 import type { RuntimeInstance } from "../../core/runtime"
 import { withMcpApps } from "../../mcp-apps/annotate"
+import type { CredentialValues } from "../../redaction"
 import { readSecretFile } from "../../secrets"
-import { OpenClawServerAdapter } from "./adapter"
+import { OpenClawServerAdapter, openClawPublicError } from "./adapter"
 import {
   OpenClawClient,
   type OpenClawClientOptions,
@@ -33,12 +36,14 @@ export type OpenClawRuntimeConfig = Readonly<{
 }>
 
 type OpenClawRuntimeClient = OpenClawGatewayClient & {
+  readonly link: ServerLink
   negotiatedPolicy?(): ReturnType<OpenClawClient["negotiatedPolicy"]>
 }
 
-export type OpenClawRuntimeFactoryDependencies = Readonly<{
-  clientFactory?: (options: OpenClawClientOptions) => OpenClawRuntimeClient
-}>
+export type OpenClawRuntimeFactoryDependencies = RuntimeServices &
+  Readonly<{
+    clientFactory?: (options: OpenClawClientOptions) => OpenClawRuntimeClient
+  }>
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex")
 
@@ -74,14 +79,12 @@ function privateKey(privateKeyPem: string) {
   }
 }
 
-async function readCredentials(config: OpenClawRuntimeConfig) {
-  const [encodedIdentity, deviceToken] = await Promise.all([
-    readSecretFile(config.deviceIdentityFile),
-    readSecretFile(config.deviceTokenFile),
-  ])
+/** The device identity file, checked against the key pair it carries. */
+async function readDeviceIdentity(path: string) {
+  const encoded = await readSecretFile(path)
   let value: unknown
   try {
-    value = JSON.parse(encodedIdentity)
+    value = JSON.parse(encoded)
   } catch {
     throw new Error("Invalid OpenClaw device identity")
   }
@@ -109,11 +112,26 @@ async function readCredentials(config: OpenClawRuntimeConfig) {
   )
     throw new Error("Invalid OpenClaw device identity")
   return {
-    deviceIdentity: {
-      deviceId: value.deviceId,
-      privateKeyPem: value.privateKeyPem,
-      publicKeyPem: value.publicKeyPem,
-    },
+    deviceId: value.deviceId,
+    privateKeyPem: value.privateKeyPem,
+    publicKeyPem: value.publicKeyPem,
+  }
+}
+
+async function readCredentials(
+  config: OpenClawRuntimeConfig,
+  credentials: CredentialValues
+) {
+  const [deviceIdentity, deviceToken] = await Promise.all([
+    credentials.register(readDeviceIdentity, ({ privateKeyPem }) => [
+      privateKeyPem,
+    ])(config.deviceIdentityFile),
+    credentials.register(readSecretFile, (value) => [value])(
+      config.deviceTokenFile
+    ),
+  ])
+  return {
+    deviceIdentity,
     deviceToken,
     signDevicePayload: (pem: string, payload: string) =>
       sign(null, Buffer.from(payload, "utf8"), privateKey(pem)).toString(
@@ -131,25 +149,35 @@ function gatewayHttpOrigin(baseUrl: string) {
   return url.origin
 }
 
-export async function createOpenClawRuntime(
-  config: OpenClawRuntimeConfig,
-  limits: RuntimeLimits,
-  dependencies: OpenClawRuntimeFactoryDependencies = {}
-): Promise<RuntimeInstance> {
-  const credentials = await readCredentials(config)
+/** What the OpenClaw runtime is composed from, once config and files are read. */
+export type OpenClawRuntimeParts = Pick<RuntimeServices, "logger"> &
+  Readonly<{
+    /** The Gateway's WebSocket URL. */
+    baseUrl: string
+    credentials: OpenClawClientOptions["credentials"]
+    clientFactory: (options: OpenClawClientOptions) => OpenClawRuntimeClient
+  }>
+
+/**
+ * The OpenClaw runtime over a resolved client factory: what the factory serves
+ * and the runtime contract proves. `mcpToolNames` holds its per-Session records.
+ */
+export function composeOpenClawRuntime({
+  baseUrl,
+  credentials,
+  logger,
+  clientFactory,
+}: OpenClawRuntimeParts) {
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
-  let generation = 1
-  let transition = Promise.resolve()
-  const replaceGeneration = (reason: "gap" | "reconnect") => {
-    generation += 1
-    transition = transition
-      .catch(() => undefined)
-      .then(async () => state.subscriptions?.replaceGeneration(reason))
+  const resubscribe = (reason: "gap" | "reconnect") => {
+    state.subscriptions
+      ?.replaceGeneration(reason)
+      .catch((err: unknown) =>
+        logger.warn({ err, reason }, "openclaw.subscription.replace_failed")
+      )
   }
-  const client = (
-    dependencies.clientFactory ?? ((options) => new OpenClawClient(options))
-  )({
-    url: config.baseUrl,
+  const client = clientFactory({
+    url: baseUrl,
     credentials,
     role: "operator",
     scopes: [
@@ -167,21 +195,21 @@ export async function createOpenClawRuntime(
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
     ],
     onEvent(event) {
-      const eventGeneration = generation
-      void transition
-        .then(() => state.subscriptions?.accept(event, eventGeneration))
-        .catch(() => undefined)
+      state.subscriptions?.accept(event, state.subscriptions.generation)
     },
     onGap() {
-      replaceGeneration("gap")
+      resubscribe("gap")
     },
-    onClose(close) {
-      if (close.phase === "post-hello" && close.recoverable)
-        replaceGeneration("reconnect")
-    },
+    logger,
   })
-  const subscriptions = new OpenClawSessionSubscriptions(client)
+  const subscriptions = new OpenClawSessionSubscriptions(client, logger)
   state.subscriptions = subscriptions
+  // Each time the link is up, the first included, re-subscribes on a fresh
+  // generation; a drop holds delivery until then.
+  client.link.subscribe((link) => {
+    if (link === "ready") resubscribe("reconnect")
+    else subscriptions.pause()
+  })
   const interactions = new OpenClawInteractions(client)
   const mcpToolNames = createOpenClawMcpToolNames(client)
   const turns = new OpenClawTurnEngine({
@@ -190,44 +218,60 @@ export async function createOpenClawRuntime(
     toolEvents: true,
     replies: interactions,
     mcpToolNames,
+    watch: { publicError: openClawPublicError, upstream: client.link, logger },
   })
   // Wrapped before the coordinator, which runs turns through `runtime.turns`.
   const runtime = withMcpApps(
     new OpenClawServerAdapter({
       client,
       turns,
-      gatewayOrigin: gatewayHttpOrigin(config.baseUrl),
+      gatewayOrigin: gatewayHttpOrigin(baseUrl),
       mcpToolNames,
       subscribeSession: async (agentId, sessionKey, onInvalidate) => {
         const lease = await subscriptions!.acquire(
           { agentId, sessionKey },
           onInvalidate
         )
-        return () => void lease.release()
+        return () => {
+          lease
+            .release()
+            .catch((err: unknown) =>
+              logger.warn({ err }, "openclaw.history.release_failed")
+            )
+        }
       },
     })
   )
-  const sessions = new SessionCoordinator({
-    engine: runtime.turns,
-    readings: runtime,
-    maxActiveExecutions: limits.activeExecutions,
-    maxGuestActiveExecutions: limits.guestActiveExecutions,
-    maxSubscriberEvents: limits.subscriberEvents,
-    maxSubscriberBytes: limits.subscriberBytes,
-    maxReplayEvents: limits.subscriberEvents,
-    maxReplayBytes: limits.subscriberBytes,
-  })
-  let closePromise: Promise<void> | undefined
   return {
-    id: config.id,
     runtime,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        await runtime.close()
-      })
-      return closePromise
+    mcpToolNames,
+    async close() {
+      subscriptions.close()
+      await runtime.close()
     },
   }
+}
+
+export async function createOpenClawRuntime(
+  config: OpenClawRuntimeConfig,
+  limits: RuntimeLimits,
+  dependencies: OpenClawRuntimeFactoryDependencies
+): Promise<RuntimeInstance> {
+  const credentials = () => readCredentials(config, dependencies.credentials)
+  // Read once here so a bad identity fails startup; every dial reads again.
+  await credentials()
+  const { logger } = dependencies
+  return coordinatedRuntime(
+    config.id,
+    composeOpenClawRuntime({
+      baseUrl: config.baseUrl,
+      credentials,
+      logger,
+      clientFactory:
+        dependencies.clientFactory ??
+        ((options) => new OpenClawClient(options)),
+    }),
+    limits,
+    logger
+  )
 }

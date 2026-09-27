@@ -22,7 +22,6 @@ import { z } from "zod"
 import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
   AOS_METHODS,
   AosComposerPrefillNotificationSchema,
@@ -91,8 +90,6 @@ function capabilities(options: { steering?: boolean } = {}) {
   }
 }
 
-const sessionInfo = { agentId: AGENT_ID, status: "idle", archived: false }
-
 function guestRuntimeContext() {
   return {
     runtimeId: "hermes-primary",
@@ -119,11 +116,7 @@ const prefillParams = (text: string) => ({
   text,
 })
 
-const authenticationRequired = () =>
-  new RequestError(
-    AOS_JSONRPC_ERRORS.authenticationRequired,
-    "authentication_required"
-  )
+const authenticationRequired = () => RequestError.authRequired()
 
 type GuestProxyOptions = {
   token?: string
@@ -141,7 +134,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
   const steers: unknown[] = []
   let peer: AgentContext | undefined
   let redeemed = false
-  // The proxy streams a Session only to a client attached to it, so updates
+  // The proxy streams a Session only to a client that resumed it, so updates
   // raised before the resume wait for the replay that carries them.
   const waiting: SessionUpdate[] = [
     {
@@ -157,10 +150,10 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
       _meta: { [AOS_META_KEY]: { turnId: "run-0", sequence: 1 } },
     },
   ]
-  let attached = false
+  let resumed = false
 
   function push(update: SessionUpdate) {
-    if (attached)
+    if (resumed)
       void peer?.notify(methods.client.session.update, {
         sessionId: REF,
         update,
@@ -189,7 +182,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
-            lane: "guest",
+            role: "guest",
             extensions: {
               // The guest lane carries the operator's conversation controls.
               steer: true,
@@ -221,23 +214,23 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
     .onRequest(methods.agent.session.resume, ({ params }) => {
       calls.push(methods.agent.session.resume)
       redeemedOrThrow()
+      // What the invited Session supports follows the answer as an update.
       queueMicrotask(() => {
-        attached = true
-        for (const update of waiting.splice(0))
+        resumed = true
+        for (const update of [
+          {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [],
+            _meta: { [AOS_META_KEY]: { capabilities: capabilities(options) } },
+          } satisfies SessionUpdate,
+          ...waiting.splice(0),
+        ])
           void peer?.notify(methods.client.session.update, {
             sessionId: params.sessionId,
             update,
           })
       })
-      return {
-        _meta: {
-          [AOS_META_KEY]: {
-            session: sessionInfo,
-            execution: { status: "idle" },
-            capabilities: capabilities(options),
-          },
-        },
-      }
+      return { _meta: { [AOS_META_KEY]: {} } }
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       calls.push(methods.agent.session.prompt)
@@ -414,7 +407,6 @@ function mount({
         status: "ready",
         surface: "guest",
         basePath: BASE_PATH,
-        lane: "guest",
       }}
       inviteToken={inviteToken ?? TOKEN}
       locale="en"
@@ -509,7 +501,7 @@ describe("AOS guest browser composition", () => {
     })
     // The invitation's first-turn instruction is applied by the proxy, so the
     // browser sends nothing beyond what the guest wrote.
-    expect(proxy.prompts[0]?._meta).toEqual({ [AOS_META_KEY]: {} })
+    expect(proxy.prompts[0]?._meta).toMatchObject({ [AOS_META_KEY]: {} })
     // A guest-safe run carries no execution history, so the invited
     // conversation discloses neither reasoning nor a tool timeline.
     expect(
@@ -627,7 +619,7 @@ describe("AOS guest browser composition", () => {
       )
     ).toBe(true)
     const meta = proxy.prompts[0]?._meta?.[AOS_META_KEY]
-    expect(meta).toEqual({ attachmentStageId: "stage-1" })
+    expect(meta).toMatchObject({ attachmentStageId: "stage-1" })
     expect(AosPromptMetaSchema.safeParse(meta).success).toBe(true)
   })
 

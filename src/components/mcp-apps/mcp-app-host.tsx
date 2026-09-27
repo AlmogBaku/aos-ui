@@ -7,7 +7,7 @@ import type { McpAppAdapter } from "@/runtime-adapters/contracts"
 export type McpAppHost = {
   adapter: McpAppAdapter
   agentId: string
-  threadId: string
+  sessionId: string
 }
 
 const McpAppHostContext = createContext<McpAppHost | undefined>(undefined)
@@ -16,20 +16,20 @@ const McpAppHostContext = createContext<McpAppHost | undefined>(undefined)
 export function McpAppHostProvider({
   adapter,
   agentId,
-  threadId,
+  sessionId,
   children,
 }: {
   adapter?: McpAppAdapter
   agentId?: string
-  threadId?: string
+  sessionId?: string
   children: ReactNode
 }) {
   const host = useMemo(
     () =>
-      adapter && agentId && threadId
-        ? { adapter, agentId, threadId }
+      adapter && agentId && sessionId
+        ? { adapter, agentId, sessionId }
         : undefined,
-    [adapter, agentId, threadId]
+    [adapter, agentId, sessionId]
   )
   return (
     <McpAppHostContext.Provider value={host}>

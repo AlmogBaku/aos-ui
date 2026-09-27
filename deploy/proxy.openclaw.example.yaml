@@ -27,7 +27,6 @@ guest:
     keys:
       - id: current
         secretFile: /run/secrets/guest-invite-signing-key
-    ttlSeconds: 259200
     clockSkewSeconds: 0
 limits:
   activeExecutions: 256
@@ -35,4 +34,6 @@ limits:
   operatorEventPeers: 256
   subscriberEvents: 512
   subscriberBytes: 2097152
+log:
+  level: info
 shutdownGraceMs: 5000

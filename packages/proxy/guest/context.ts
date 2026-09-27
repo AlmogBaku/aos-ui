@@ -35,12 +35,15 @@ export type GuestAppOptions = {
   now?: () => number
 }
 
-/** The guest lane's staging limits: smaller and shorter-lived than operators'. */
+/**
+ * The guest listener's staging limits: smaller and shorter-lived than
+ * operators'.
+ */
 export function createGuestAttachmentStages() {
   return new AttachmentStageRegistry(256, 300_000, 67_108_864, 4)
 }
 
-/** The guest lane's speech allowance: an operator pays for every operation. */
+/** The guest listener's speech allowance: an operator pays for every operation. */
 const AUDIO_WINDOW_MS = 600_000
 const AUDIO_MAX_IN_FLIGHT = 2
 const AUDIO_MAX_OPS_PER_WINDOW = 60

@@ -515,10 +515,10 @@ const ThreadRoot: FC<{
   const aui = useAui()
   const viewportRef = useRef<HTMLDivElement>(null)
   const messageListRef = useRef<ThreadMessageListHandle>(null)
-  const threadId = useAuiState((state) => state.threadListItem.id)
+  const sessionId = useAuiState((state) => state.threadListItem.id)
   const contentReady = useAuiState((state) => !state.thread.isLoading)
   const readingPosition = useThreadReadingPosition({
-    threadId,
+    sessionId,
     contentReady,
     viewportRef,
   })
@@ -526,12 +526,12 @@ const ThreadRoot: FC<{
   // are measured, so a jump to the latest content follows it rather than
   // aiming at a height that is still an estimate.
   const followLatest = useCallback(() => {
-    if (threadId) readingPosition.follow(threadId)
-  }, [readingPosition, threadId])
+    if (sessionId) readingPosition.follow(sessionId)
+  }, [readingPosition, sessionId])
   useAuiEvent("thread.runStart", followLatest)
   const readingBookmark = useCallback(
-    () => (threadId ? readingPosition.bookmark(threadId) : undefined),
-    [readingPosition, threadId]
+    () => (sessionId ? readingPosition.bookmark(sessionId) : undefined),
+    [readingPosition, sessionId]
   )
   const revealMessage = useCallback(
     (messageId: string) =>
@@ -606,7 +606,7 @@ const ThreadRoot: FC<{
           </AuiIf>
           <ThreadHistoryLoadEarlier viewportRef={viewportRef} labels={labels} />
 
-          <DisclosureMemoryProvider scope={threadId}>
+          <DisclosureMemoryProvider scope={sessionId}>
             <ThreadMessageList
               ref={messageListRef}
               viewportRef={viewportRef}

@@ -10,16 +10,17 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
  * Keeps ACP's `session/request_permission` requests as Assistant UI tool
- * approvals, answered on the card of the tool call they guard. The store lives
- * as long as the connection: the proxy sends an open request once, so a thread
- * that remounts reads what is still pending here rather than on the wire.
+ * approvals, answered on the card of the tool call they guard. The proxy sends
+ * an open request once, so a request still waiting outlives the thread that
+ * showed it, and a thread that remounts reads it here rather than on the wire.
  *
  * Every UI with the Session open receives the same request. When another UI
  * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
  * `$/cancel_request`, which aborts the request's own signal. A withdrawn
  * request that guards a tool call leaves it, since the tool may still run; one
  * that stands alone reads as cancelled. The chosen option stays for as long as
- * the tab does; after a reload the tool's own result says what happened.
+ * a thread shows the Session; once none does and nothing waits, the Session's
+ * approvals drop with it, and the tool's own result says what happened.
  */
 
 export type AcpApprovalOption = {
@@ -102,7 +103,7 @@ const MAX_TIMER_DELAY = 2 ** 31 - 1
 export function createAcpApprovals({
   connection,
 }: {
-  connection: Pick<AcpConnection, "onPendingRequest">
+  connection: Pick<AcpConnection, "subscribePendingRequests">
 }): AcpApprovals {
   const sessions = new Map<string, Map<string, Entry>>()
   const snapshots = new Map<string, readonly AcpApproval[]>()
@@ -116,6 +117,17 @@ export function createAcpApprovals({
       entries ? [...entries.values()].map((entry) => entry.approval) : EMPTY
     )
     listeners.get(sessionId)?.forEach((listener) => listener())
+    release(sessionId)
+  }
+
+  /** Drops a Session no thread shows once none of its requests still waits. */
+  function release(sessionId: string) {
+    if (listeners.has(sessionId)) return
+    const entries = sessions.get(sessionId)?.values() ?? []
+    if ([...entries].some(({ approval }) => !isSettledApproval(approval)))
+      return
+    sessions.delete(sessionId)
+    snapshots.delete(sessionId)
   }
 
   function settle(
@@ -135,7 +147,7 @@ export function createAcpApprovals({
     changed(sessionId)
   }
 
-  connection.onPendingRequest((pending) => {
+  connection.subscribePendingRequests((pending) => {
     if (pending.kind !== "permission") return
     const { sessionId, request } = pending
     const meta = AosPermissionMetaSchema.safeParse(
@@ -195,7 +207,9 @@ export function createAcpApprovals({
       listeners.set(sessionId, existing)
       return () => {
         existing.delete(listener)
-        if (existing.size === 0) listeners.delete(sessionId)
+        if (existing.size > 0 || listeners.get(sessionId) !== existing) return
+        listeners.delete(sessionId)
+        release(sessionId)
       }
     },
 

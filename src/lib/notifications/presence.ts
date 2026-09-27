@@ -13,7 +13,7 @@ type PresenceTarget = Pick<
 
 export type IdleTracker = {
   idle(): boolean
-  onChange(listener: (idle: boolean) => void): () => void
+  subscribe(listener: (idle: boolean) => void): () => void
   stop(): void
 }
 
@@ -89,7 +89,7 @@ export function createIdleTracker({
   attended()
   return {
     idle: () => idle,
-    onChange(listener) {
+    subscribe(listener) {
       listeners.add(listener)
       return () => {
         listeners.delete(listener)

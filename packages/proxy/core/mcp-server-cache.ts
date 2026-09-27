@@ -65,13 +65,3 @@ export function createMcpServerCache<T>(
     },
   }
 }
-
-/** Finds an item in the cached list, refetching once on a miss. */
-export async function resolveWithRefresh<T, R>(
-  cache: McpServerCache<T>,
-  key: string,
-  find: (list: readonly T[]) => R | undefined
-): Promise<R | undefined> {
-  const hit = find(await cache.get(key))
-  return hit ?? find(await cache.refresh(key))
-}

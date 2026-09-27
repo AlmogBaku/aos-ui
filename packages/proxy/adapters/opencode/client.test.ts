@@ -2,12 +2,15 @@ import { createServer } from "node:http"
 
 import { describe, expect, it } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+
 import {
   OpenCodeClientAbortError,
   OpenCodeClientError,
   OpenCodeMutationUncertainError,
   createOpenCodeClient,
 } from "./client"
+import { openCodeFailure } from "./failures"
 
 type NativeRequest = {
   method: string
@@ -60,29 +63,34 @@ async function nativeServer(
   }
 }
 
-function client(baseUrl: string) {
+function client(
+  baseUrl: string,
+  password: () => Promise<string> = async () => "pw-test-1"
+) {
   return createOpenCodeClient({
     baseUrl,
     directory: "/workspaces/aos",
     username: "operator",
-    password: "password",
+    password,
   })
 }
 
 describe("OpenCodeClient", () => {
-  it("binds Session pagination to the configured server, directory, and Basic credential", async () => {
+  it("binds Session pagination to the configured server, directory, and a Basic credential read for each request", async () => {
+    const authorizations: (string | null)[] = []
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session")
       expect(request.url.searchParams.get("limit")).toBe("20")
       expect(request.url.searchParams.get("cursor")).toBe("next-page")
       expect(request.directory).toBe("/workspaces/aos")
-      expect(request.authorization).toBe("Basic b3BlcmF0b3I6cGFzc3dvcmQ=")
+      authorizations.push(request.authorization)
       return Response.json({
         data: [],
         cursor: { previous: "previous-page", next: "following-page" },
       })
     })
-    const subject = client(server.baseUrl)
+    let password = "pw-test-1"
+    const subject = client(server.baseUrl, async () => password)
 
     try {
       await expect(
@@ -91,6 +99,44 @@ describe("OpenCodeClient", () => {
         data: [],
         cursor: { previous: "previous-page", next: "following-page" },
       })
+      password = "pw-test-2"
+      await subject.sessions.list({ limit: 20, cursor: "next-page" })
+      expect(authorizations).toEqual([
+        "Basic b3BlcmF0b3I6cHctdGVzdC0x",
+        "Basic b3BlcmF0b3I6cHctdGVzdC0y",
+      ])
+    } finally {
+      await subject.close()
+      await server.close()
+    }
+  })
+
+  it("holds a password OpenCode refused as refused until it reads another or OpenCode takes it", async () => {
+    let accepts = false
+    const server = await nativeServer(() =>
+      accepts
+        ? Response.json({
+            data: [],
+            cursor: { previous: "previous-page", next: "following-page" },
+          })
+        : new Response(null, { status: 401 })
+    )
+    let password = "pw-test-1"
+    const subject = client(server.baseUrl, async () => password)
+
+    try {
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      await expect(subject.sessions.list()).rejects.toMatchObject({
+        code: "authentication",
+      })
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      password = "pw-test-2"
+      await expect(subject.credentialRefused()).resolves.toBe(false)
+      password = "pw-test-1"
+      await expect(subject.credentialRefused()).resolves.toBe(true)
+      accepts = true
+      await subject.sessions.list()
+      await expect(subject.credentialRefused()).resolves.toBe(false)
     } finally {
       await subject.close()
       await server.close()
@@ -318,7 +364,19 @@ describe("OpenCodeClient", () => {
   })
 
   it("replays and validates durable Session events from the supplied aggregate position", async () => {
-    const completedText = "finished ".repeat(100)
+    // The durable event the v2 route streams, as the pinned SDK types it.
+    const durableEvent = {
+      id: "native-42",
+      type: "session.next.text.ended",
+      durable: { aggregateID: "session-1", seq: 42, version: 1 },
+      data: {
+        timestamp: 1_042,
+        sessionID: "session-1",
+        assistantMessageID: "assistant-1",
+        textID: "text-1",
+        text: "finished ".repeat(100),
+      },
+    }
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/event")
       expect(request.url.searchParams.get("after")).toBe("41")
@@ -327,10 +385,7 @@ describe("OpenCodeClient", () => {
           `data: ${JSON.stringify({
             id: "42",
             event: "session",
-            data: JSON.stringify({
-              type: "session.next.text.ended",
-              properties: { sessionID: "session-1", text: completedText },
-            }),
+            data: JSON.stringify(durableEvent),
           })}`,
           "",
           "",
@@ -344,14 +399,7 @@ describe("OpenCodeClient", () => {
       const stream = await subject.sessions.events("session-1", { after: "41" })
       await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
         done: false,
-        value: {
-          id: "42",
-          event: "session",
-          data: {
-            type: "session.next.text.ended",
-            properties: { sessionID: "session-1", text: completedText },
-          },
-        },
+        value: { id: "42", event: "session", data: durableEvent },
       })
     } finally {
       await subject.close()
@@ -376,53 +424,96 @@ describe("OpenCodeClient", () => {
     }
   })
 
-  it("aborts each active observation exactly once when closed repeatedly", async () => {
-    let resolveOpened: (() => void) | undefined
-    const opened = new Promise<void>((resolve) => {
-      resolveOpened = resolve
-    })
-    const server = await nativeServer(async (request) => {
-      resolveOpened?.()
-      await new Promise<void>((resolve) => {
-        request.signal.addEventListener("abort", () => resolve(), {
-          once: true,
+  it("aborts each open observation exactly once when closed repeatedly", async () => {
+    const subject = createOpenCodeClient({
+      baseUrl: "http://127.0.0.1:1",
+      directory: "/workspaces/aos",
+      username: "operator",
+      password: async () => "pw-test-1",
+      // An accepted stream that stays open until its request is aborted.
+      fetcher: async (input) => {
+        const { signal } = input as Request
+        signal.throwIfAborted()
+        const body = new ReadableStream({
+          start: (stream) =>
+            signal.addEventListener("abort", () => stream.error(signal.reason)),
         })
-      })
-      return new Response(null, {
-        headers: { "content-type": "text/event-stream" },
-      })
+        return new Response(body, {
+          headers: { "content-type": "text/event-stream" },
+        })
+      },
     })
-    const subject = client(server.baseUrl)
 
     const stream = await subject.sessions.events("session-1")
     const next = stream[Symbol.asyncIterator]().next()
-    await opened
     await Promise.all([subject.close(), subject.close()])
     await expect(next).resolves.toEqual({ done: true, value: undefined })
-    await server.close()
   })
 
-  it("classifies a lost mutation acknowledgement as uncertain after the server received it", async () => {
-    let received = false
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/prompt")
-      received = true
-      return { drop: true }
-    })
-    const subject = client(server.baseUrl)
+  it.each([
+    { answer: "a lost acknowledgement", response: () => ({ drop: true }) },
+    {
+      answer: "a server error",
+      response: () => Response.json({}, { status: 503 }),
+    },
+  ] satisfies { answer: string; response: () => NativeResponse }[])(
+    "classifies $answer to a mutation the server received as uncertain",
+    async ({ response }) => {
+      let received = false
+      const server = await nativeServer((request) => {
+        expect(request.url.pathname).toBe("/api/session/session-1/prompt")
+        received = true
+        return response()
+      })
+      const subject = client(server.baseUrl)
 
-    try {
-      await expect(
-        subject.sessions.prompt("session-1", {
-          id: "admission-1",
-          prompt: { text: "continue" },
-        })
-      ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
-      expect(received).toBe(true)
-    } finally {
-      await subject.close()
-      await server.close()
+      try {
+        await expect(
+          subject.sessions.prompt("session-1", {
+            id: "admission-1",
+            prompt: { text: "continue" },
+          })
+        ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
+        expect(received).toBe(true)
+      } finally {
+        await subject.close()
+        await server.close()
+      }
     }
+  )
+
+  it("ends a native call, or a stream's opening, that never answers at the adapter call deadline", async () => {
+    const clock = useFakeClock()
+    const subject = createOpenCodeClient({
+      baseUrl: "http://127.0.0.1:1",
+      directory: "/workspaces/aos",
+      username: "operator",
+      password: async () => "pw-test-1",
+      fetcher: async (input) =>
+        new Promise<Response>((_resolve, reject) => {
+          const { signal } = input as Request
+          signal.addEventListener("abort", () => reject(signal.reason))
+        }),
+    })
+    const settled = (call: Promise<unknown>) =>
+      call.catch((error: unknown) => error)
+    const calls = [
+      settled(subject.sessions.list()),
+      settled(subject.sessions.events("session-1")),
+    ]
+
+    await clock.advance(14_999)
+    await expect(
+      Promise.race([...calls, Promise.resolve("pending")])
+    ).resolves.toBe("pending")
+    await clock.advance(1)
+    // A read past its deadline is unavailable, and names that kind itself.
+    for (const call of calls) {
+      const error = await call
+      expect(error).toMatchObject({ code: "unavailable" })
+      expect(openCodeFailure(error)?.kind).toBe("unavailable")
+    }
+    await subject.close()
   })
 
   it("classifies a malformed successful mutation acknowledgement as uncertain", async () => {
@@ -482,7 +573,7 @@ describe("OpenCodeClient", () => {
     [401, "authentication"],
     [503, "unavailable"],
   ] as const)(
-    "preserves status-only SSE %i failures as %s",
+    "refuses to open an event stream OpenCode answers %i, as %s",
     async (status, code) => {
       const server = await nativeServer(
         () =>
@@ -494,8 +585,7 @@ describe("OpenCodeClient", () => {
       const subject = client(server.baseUrl)
 
       try {
-        const stream = await subject.sessions.events("session-1")
-        await expect(stream[Symbol.asyncIterator]().next()).rejects.toEqual(
+        await expect(subject.sessions.events("session-1")).rejects.toEqual(
           expect.objectContaining({ name: "OpenCodeClientError", code })
         )
       } finally {
@@ -504,28 +594,4 @@ describe("OpenCodeClient", () => {
       }
     }
   )
-
-  it("releases an unconsumed observation when it is aborted", async () => {
-    let requests = 0
-    const server = await nativeServer(() => {
-      requests += 1
-      return new Response(null, {
-        headers: { "content-type": "text/event-stream" },
-      })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      const stream = await subject.sessions.events("session-1")
-      stream.abort()
-      await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
-        done: true,
-        value: undefined,
-      })
-      expect(requests).toBe(0)
-    } finally {
-      await subject.close()
-      await server.close()
-    }
-  })
 })

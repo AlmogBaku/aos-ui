@@ -12,6 +12,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest"
 // temporary directory instead of overwriting the checkout's `dist/`.
 let outDir: string
 let chunks: Rollup.OutputChunk[]
+let buildId: string | undefined
 
 beforeAll(async () => {
   outDir = await mkdtemp(path.join(tmpdir(), "aos-ui-startup-bundle-"))
@@ -25,6 +26,8 @@ beforeAll(async () => {
     ? result.flatMap(({ output }) => output)
     : result.output
   chunks = outputs.filter((output) => output.type === "chunk")
+  const asset = outputs.find((output) => output.fileName === "build-id")
+  buildId = asset?.type === "asset" ? String(asset.source) : undefined
 }, 90_000)
 
 afterAll(async () => {
@@ -53,6 +56,31 @@ it("keeps runtime-specific workspace code out of the configuration bootstrap", (
   expect(initialGzipBytes).toBeLessThan(120_000)
 })
 
+// A tab whose build differs from the proxy's reloads, so the id must change
+// with every chunk the page loads: the entry chunk's hash covers them all.
+it("names the build by its entry chunk's content hash", () => {
+  const entry = chunks.find((chunk) => chunk.isEntry)
+  expect(buildId).toMatch(/^[\w-]{8,}$/)
+  expect(entry?.fileName).toBe(`assets/${entry?.name}-${buildId}.js`)
+})
+
+// A stale tab reloads only if the id it compares is compiled in. The
+// vite-plugin-pwa copies the define block but not the buildIdPlugin's
+// generateBundle hook, so the service worker would keep the placeholder.
+it("compiles the build id in and leaves no placeholder in a chunk or the worker", async () => {
+  const placeholder = "__AOS_BUILD_ID_PLACEHOLDER__"
+  for (const chunk of chunks)
+    expect(chunk.code, `${chunk.fileName} has the placeholder`).not.toContain(
+      placeholder
+    )
+  const worker = await readFile(path.join(outDir, "sw.js"), "utf8")
+  expect(worker, "sw.js has the placeholder").not.toContain(placeholder)
+  // Every chunk importing the entry names it, and so its hash; only a quoted
+  // literal is the id compiled in.
+  const literal = new RegExp(`["'\`]${buildId}["'\`]`)
+  expect(chunks.some((chunk) => literal.test(chunk.code))).toBe(true)
+})
+
 /**
  * The worker's listener registration has no jsdom equivalent, so this asserts
  * the one thing that matters about it: the shipped bundle.
@@ -74,4 +102,18 @@ it("ships a push-only worker that takes over from its predecessor", async () => 
   expect(worker).toContain("claim")
   // A worker registered without `type: "module"` cannot import anything.
   expect(worker).not.toMatch(/^(?:import|export) /m)
+})
+
+// The Stately inspector is a dev-only tool: it must never ship in a production
+// bundle so operators are not exposed to external connections they did not ask
+// for. The dynamic import is guarded by `import.meta.env.DEV`; a production
+// build's dead-code elimination removes the entire branch.
+it("excludes the Stately inspector from production chunks", () => {
+  const INSPECTOR_MARKER = "stately.ai/inspect"
+  for (const chunk of chunks) {
+    expect(
+      chunk.code,
+      `${chunk.fileName} contains inspector code`
+    ).not.toContain(INSPECTOR_MARKER)
+  }
 })

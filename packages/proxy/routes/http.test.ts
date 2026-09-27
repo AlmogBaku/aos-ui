@@ -75,10 +75,6 @@ describe("errorResponse", () => {
       "The service is temporarily unavailable. Please try again.",
     ],
     [
-      "connection_interrupted",
-      "The connection was interrupted. AOS will reconcile before continuing.",
-    ],
-    [
       "uncertain_mutation",
       "The runtime may have accepted the request. Refresh to reconcile before trying again.",
     ],

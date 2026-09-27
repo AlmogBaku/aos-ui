@@ -51,7 +51,7 @@ describe("FixtureWorkspace", () => {
     ])
 
     expect(
-      metadata.map(({ threadId, agentId }) => [threadId, agentId])
+      metadata.map(({ sessionId, agentId }) => [sessionId, agentId])
     ).toEqual([
       ["thread-aster-market", "agent-aster"],
       ["thread-mica-quarterly", "agent-mica"],
@@ -62,13 +62,13 @@ describe("FixtureWorkspace", () => {
     const workspace = createFixtureWorkspace({ clock: () => FIXTURE_NOW })
 
     await expect(workspace.createSession("agent-lumen")).resolves.toEqual({
-      threadId: "fixture-session-001",
+      sessionId: "fixture-session-001",
     })
     await expect(
       workspace.getSessionMetadata(["fixture-session-001"])
     ).resolves.toEqual([
       {
-        threadId: "fixture-session-001",
+        sessionId: "fixture-session-001",
         agentId: "agent-lumen",
         status: "idle",
         updatedAt: FIXTURE_NOW.toISOString(),
@@ -90,7 +90,7 @@ describe("FixtureWorkspace", () => {
       workspace.getSessionMetadata(["thread-lumen-roadmap"])
     ).resolves.toEqual([
       expect.objectContaining({
-        threadId: "thread-lumen-roadmap",
+        sessionId: "thread-lumen-roadmap",
         unread: true,
       }),
     ])
@@ -124,11 +124,11 @@ describe("FixtureWorkspace", () => {
       ])
     ).resolves.toEqual([
       expect.objectContaining({
-        threadId: "thread-vela-metrics",
+        sessionId: "thread-vela-metrics",
         pinned: true,
       }),
       expect.objectContaining({
-        threadId: "thread-vela-retrospective",
+        sessionId: "thread-vela-retrospective",
         archived: true,
       }),
     ])
@@ -180,13 +180,13 @@ describe("FixtureWorkspace", () => {
     const created = await workspace.createSession("agent-lumen", {
       title: "שיחה חדשה",
     })
-    expect(workspace.getSessionTitle(created.threadId)).toBe("שיחה חדשה")
+    expect(workspace.getSessionTitle(created.sessionId)).toBe("שיחה חדשה")
 
     const creatorSession = await workspace.createSession(
       workspace.agentCreator!.id,
       { title: "סוכן חדש" }
     )
-    expect(workspace.getSessionTitle(creatorSession.threadId)).toBe("סוכן חדש")
+    expect(workspace.getSessionTitle(creatorSession.sessionId)).toBe("סוכן חדש")
   })
 
   it("rejects Session creation for an unknown Agent", async () => {
@@ -226,7 +226,7 @@ describe("FixtureWorkspace", () => {
     const unsubscribe = workspace.subscribeAgentCatalog(changed)
     const session = await workspace.createSession(workspace.agentCreator!.id)
     const before = workspace.listAllSessionMetadata()
-    workspace.completeAgentCreation(session.threadId, {
+    workspace.completeAgentCreation(session.sessionId, {
       kind: "ready",
       id: "agent-sora",
       name: "Sora",
@@ -250,7 +250,7 @@ describe("FixtureWorkspace", () => {
     ).toThrow()
     const creator = await workspace.createSession(workspace.agentCreator!.id)
     expect(() =>
-      workspace.completeAgentCreation(creator.threadId, {
+      workspace.completeAgentCreation(creator.sessionId, {
         kind: "ready",
         id: "agent-aster",
         name: "Replacement",
@@ -275,7 +275,7 @@ describe("FixtureWorkspace", () => {
       {
         id: "fixture:run:aster-market:completed:started",
         agentId: "agent-aster",
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         occurredAt: "2026-09-03T12:01:00.000Z",
         type: "turn-started",
         turnId: "fixture:run:aster-market:completed",
@@ -283,7 +283,7 @@ describe("FixtureWorkspace", () => {
       {
         id: "fixture:run:aster-market:completed:finished",
         agentId: "agent-aster",
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         occurredAt: "2026-09-03T12:02:00.000Z",
         type: "turn-finished",
         turnId: "fixture:run:aster-market:completed",
@@ -291,19 +291,19 @@ describe("FixtureWorkspace", () => {
       expect.objectContaining({
         id: "fixture:run:nori-copy:failed:started",
         agentId: "agent-nori",
-        threadId: "thread-nori-copy",
+        sessionId: "thread-nori-copy",
         type: "turn-started",
       }),
       expect.objectContaining({
         id: "fixture:run:nori-copy:failed:terminal",
         agentId: "agent-nori",
-        threadId: "thread-nori-copy",
+        sessionId: "thread-nori-copy",
         type: "turn-failed",
       }),
       expect.objectContaining({
         id: "fixture:attention:lumen-roadmap:question:requested",
         agentId: "agent-lumen",
-        threadId: "thread-lumen-roadmap",
+        sessionId: "thread-lumen-roadmap",
         type: "attention-requested",
         attentionKind: "question",
         requestId: "fixture-question-roadmap",
@@ -311,7 +311,7 @@ describe("FixtureWorkspace", () => {
       expect.objectContaining({
         id: "fixture:attention:aster-launch:permission:requested",
         agentId: "agent-aster",
-        threadId: "thread-aster-launch",
+        sessionId: "thread-aster-launch",
         type: "attention-requested",
         attentionKind: "permission",
         requestId: "fixture-permission-launch",
@@ -324,13 +324,13 @@ describe("FixtureWorkspace", () => {
       expect.objectContaining({
         id: "fixture:agent:mica:ready",
         agentId: "agent-mica",
-        threadId: "thread-mica-quarterly",
+        sessionId: "thread-mica-quarterly",
         type: "agent-ready",
       }),
       expect.objectContaining({
         id: "fixture:agent:nori:activation-failed",
         agentId: "agent-nori",
-        threadId: "thread-nori-copy",
+        sessionId: "thread-nori-copy",
         type: "agent-activation-failed",
       }),
       expect.objectContaining({ id: "fixture:duplicate:started" }),
@@ -340,19 +340,19 @@ describe("FixtureWorkspace", () => {
       expect.objectContaining({
         id: "fixture:stale-target:finished",
         agentId: "agent-deleted",
-        threadId: "thread-deleted",
+        sessionId: "thread-deleted",
         type: "turn-finished",
       }),
       expect.objectContaining({
         id: "fixture:delayed:mica-quarterly:started",
         agentId: "agent-mica",
-        threadId: "thread-mica-quarterly",
+        sessionId: "thread-mica-quarterly",
         type: "turn-started",
       }),
       expect.objectContaining({
         id: "fixture:delayed:mica-quarterly:finished",
         agentId: "agent-mica",
-        threadId: "thread-mica-quarterly",
+        sessionId: "thread-mica-quarterly",
         type: "turn-finished",
       }),
     ])
@@ -366,16 +366,16 @@ describe("FixtureWorkspace", () => {
               "id",
               "occurredAt",
               "requestId",
-              "threadId",
+              "sessionId",
               "type",
             ]
           : event.type === "attention-resolved"
-            ? ["agentId", "id", "occurredAt", "requestId", "threadId", "type"]
+            ? ["agentId", "id", "occurredAt", "requestId", "sessionId", "type"]
             : event.type === "turn-started" ||
                 event.type === "turn-finished" ||
                 event.type === "turn-failed"
-              ? ["agentId", "id", "occurredAt", "threadId", "turnId", "type"]
-              : ["agentId", "id", "occurredAt", "threadId", "type"]
+              ? ["agentId", "id", "occurredAt", "sessionId", "turnId", "type"]
+              : ["agentId", "id", "occurredAt", "sessionId", "type"]
       )
     }
     stop?.()
@@ -386,12 +386,12 @@ describe("FixtureWorkspace", () => {
     const owners = new Map(
       workspace
         .listAllSessionMetadata()
-        .map(({ threadId, agentId }) => [threadId, agentId])
+        .map(({ sessionId, agentId }) => [sessionId, agentId])
     )
     owners.set("thread-deleted", "agent-deleted")
     const store = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
-      getThreadOwner: (threadId) => owners.get(threadId),
+      getThreadOwner: (sessionId) => owners.get(sessionId),
       getSessions: () => workspace.listAllSessionMetadata(),
     })
     workspace.subscribeActivity((event) => store.ingest(event))

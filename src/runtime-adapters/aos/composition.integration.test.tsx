@@ -1,7 +1,3 @@
-import type {
-  AgentApp,
-  AnyWireMessage,
-} from "@agentclientprotocol/sdk/experimental/v2"
 import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react"
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -21,10 +17,12 @@ import {
 import { createAosAcpAgent } from "../../../packages/proxy/acp/agent"
 import { createActivityFeed } from "../../../packages/proxy/acp/activity-feed"
 import { createReadState } from "../../../packages/proxy/acp/read-state"
-import { createChannel } from "../../../packages/proxy/core/channel"
+import { createChannels } from "../../../packages/proxy/core/channel"
 import * as translators from "../../../packages/proxy/acp/translate"
 import type { AcpConnectionContext } from "../../../packages/proxy/acp/types"
 import { AttachmentStageRegistry } from "../../../packages/proxy/core/attachment-stages"
+import { createCatalog } from "../../../packages/proxy/core/catalog"
+import { READY_LINK } from "../../../packages/proxy/core/link"
 import {
   PendingRequestKind,
   PromptTurnInputSchema,
@@ -39,9 +37,10 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../../../packages/proxy/core/runtime"
+import * as ids from "../../../packages/proxy/core/ids"
 import { SessionCoordinator } from "../../../packages/proxy/core/session-coordinator"
-import { EVERY_FEED } from "../../../packages/proxy/core/member"
 import { createSessionRows } from "../../../packages/proxy/core/session-rows"
+import { captureLogs } from "../../../test/support/log-capture"
 
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { en } from "../../lib/i18n/dictionaries/en"
@@ -53,6 +52,7 @@ import type {
   TodoItem,
 } from "../contracts"
 import { runtimeAdapter } from "./composition"
+import { pipedSockets } from "./acp/test-socket"
 
 /**
  * The Phase B gate: the real operator ACP agent bridged in process to the real
@@ -114,18 +114,18 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -220,8 +220,8 @@ class TurnSegment implements ServerTurnHandle {
     this.#resolveSettled()
   }
 
-  recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 0 }
+  recoveryPosition(): string {
+    return JSON.stringify({ epoch: "epoch-1", lastSeen: 0 })
   }
 }
 
@@ -301,12 +301,12 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession: unsupported,
-    resolveSessionId: (_agentId, publicSessionId) => publicSessionId,
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
+      ids.providerSessionId(publicSessionId),
     publicError: (cause) =>
       cause === UNAVAILABLE
-        ? { code: "temporarily_unavailable", status: 503 }
+        ? { kind: "unavailable", code: "temporarily_unavailable", cause }
         : undefined,
-    authState: unsupported,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({
       revision: "revision-1",
@@ -365,22 +365,21 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       maxTokens: 20_000,
       source: "provider-usage" as const,
     }),
-    subscribeSessionInvalidation: async () => () => undefined,
     subscribeCatalogChanges: async () => () => undefined,
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
     speak: unsupported,
+    link: READY_LINK,
   }
+  const { logger } = captureLogs()
   const coordinator = new SessionCoordinator({
     engine,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
+    logger,
   })
   const runtimeInstance: RuntimeInstance = {
     id: "hermes-main",
@@ -390,27 +389,31 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
       coordinator.close()
     },
   }
-  const lane = "operator" as const
-  const sessionRows = createSessionRows()
+  const role = "operator" as const
+  const catalog = createCatalog({
+    runtime,
+    coordinator,
+    rows: createSessionRows(),
+    logger,
+  })
   const attachmentStages = new AttachmentStageRegistry()
   const context: AcpConnectionContext = {
     connectionId: "connection-1",
     principalId: "operator",
-    lane,
-    feeds: EVERY_FEED,
-    runtimeInstance,
-    sessionRows,
+    role,
+    logger: logger.child({ connectionId: "connection-1", role }),
+    publicError: (cause) => runtime.publicError(cause),
+    steerAck: runtime.translation?.steerAck,
+    catalog,
     translators,
     attachmentStages,
-    rooms: createChannel({
-      snapshot: (scope) => coordinator.snapshot(scope),
-    }),
+    channels: createChannels({ coordinator, runtime, logger }),
     readState: createReadState({
-      runtimeInstance,
-      sessionRows,
+      catalog,
+      relighting: runtime.translation?.relighting,
       onUnreadChanged: () => undefined,
     }),
-    activityFeed: createActivityFeed({ runtimeInstance, sessionRows }),
+    activityFeed: createActivityFeed({ catalog, coordinator }),
   }
   return {
     app: createAosAcpAgent(context),
@@ -475,62 +478,19 @@ function stageAttachmentsOverRest(proxy: ProxyAgentApp) {
   return { fetcher, requests, appended }
 }
 
-/** A WebSocket-shaped pipe to the in-process proxy agent. */
-function pipedSocket(app: AgentApp) {
-  return class PipedSocket extends EventTarget {
-    readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
-
-    constructor() {
-      super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      app.connect({
-        readable: this.#inbound.readable,
-        writable: outbound.writable,
-      })
-      this.#writer = this.#inbound.writable.getWriter()
-      void this.#pump(outbound.readable.getReader())
-      queueMicrotask(() => {
-        this.readyState = 1
-        this.dispatchEvent(new Event("open"))
-      })
-    }
-
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) return
-        this.dispatchEvent(
-          new MessageEvent("message", { data: JSON.stringify(value) })
-        )
-      }
-    }
-
-    send(data: string) {
-      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
-    }
-
-    close() {
-      this.readyState = 3
-      this.dispatchEvent(new Event("close"))
-    }
-  }
-}
-
 // The Thread reads the adapter the mounted provider supplied; a stable
 // component keeps the composer from remounting between renders.
 let activeInteractions: RuntimeInteractionAdapter | undefined
 
 function GatedComposer({ fallback }: { fallback: ReactNode }) {
-  const threadId = useAuiState(
+  const sessionId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id
   )
   if (!activeInteractions) return fallback
   return (
     <PendingInteractionComposer
       locale="en"
-      threadId={threadId}
+      sessionId={sessionId}
       interactions={activeInteractions}
       fallback={fallback}
     />
@@ -542,7 +502,7 @@ const components = { Composer: GatedComposer }
 async function mount(stored: readonly SessionMessage[] = STORED_MESSAGES) {
   const proxy = createProxyAgentApp(stored)
   const staging = stageAttachmentsOverRest(proxy)
-  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
   vi.stubGlobal("fetch", staging.fetcher)
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
@@ -814,7 +774,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await send(runtime(), "Ship it")
     await waitFor(() => expect(proxy.start).toHaveBeenCalledTimes(1))
     expect(proxy.created).toEqual([AGENT_ID])
-    expect(proxy.scopes[0]!.threadId).toBe(CREATED_SESSION_ID)
+    expect(proxy.scopes[0]!.sessionId).toBe(CREATED_SESSION_ID)
     // The turn the operator sent stays on screen across `session/new`.
     expect(messageTexts(runtime())).toEqual(["Ship it"])
     const segment = proxy.segments[0]!

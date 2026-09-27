@@ -29,7 +29,12 @@ AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.fixture.json \
   docker compose up --build
 ```
 
-Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`; the readiness endpoint is `/api/aos/v1/readyz` (returns 503 when the runtime is unavailable).
+Open <http://localhost:3000>. The liveness endpoint is `/api/aos/v1/healthz`
+(always HTTP 200; body `{status: "ok"|"degraded", links: [{name, state}],
+gauges: {sockets, memberships, executions, uncertain, deadlinesFired,
+journalBytes}}`); `degraded` means the native link is `lost` but the proxy
+is still running. The readiness endpoint is `/api/aos/v1/readyz` (returns 503
+when the runtime is unavailable).
 
 ## Tools MCP server
 
@@ -240,7 +245,7 @@ settings UI reflects this. The proxy must also be able to reach the browser
 vendors' push services outbound (Firebase FCM, Apple APNs, Mozilla Autopush,
 and equivalents); block that egress only if you intend to disable push.
 
-**Security posture.** The operator lane is unauthenticated by design on a
+**Security posture.** The operator listener is unauthenticated by design on a
 trusted private network. Push adds device registration routes and the proxy's
 first outbound requests to caller-supplied endpoints. Mitigations: mutating
 routes require the AOS origin; endpoints are validated (HTTPS, default port,

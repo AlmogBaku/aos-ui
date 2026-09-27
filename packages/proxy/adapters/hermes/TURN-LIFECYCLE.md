@@ -150,8 +150,9 @@ AOS vendors `JsonRpcGatewayClient` and its companions byte-identical from
 `vendor/hermes-shared/`. The vendored client owns correlation, per-call
 timeouts and `AbortSignal`, JSON-RPC error typing, the `gateway.ping`
 heartbeat, socket generations, and server-to-client request routing. The AOS
-`gateway.ts` wrapper owns the token dial, eager dial and jittered redial, 20 s
-heal grace, auth-close stop, 8 MiB wire-fault guard, 2 MiB event drop, bounded
+`gateway.ts` wrapper owns the token dial (the token re-read on every dial),
+eager dial and jittered redial, 20 s heal grace, a 4401 latch that holds until
+the token changes, 8 MiB wire-fault guard, 2 MiB event drop, bounded
 JSON, three-way error classification (rejected with code / uncertain when
 written / unavailable when nothing was written), one event fan-out, epoch
 changes, and `close()`. Vendored replay is disabled (`replay: false`) because

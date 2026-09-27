@@ -113,20 +113,61 @@ describe("runtime package import boundaries", () => {
       "packages/tools-mcp/example.ts",
       'import { redactForLog } from "../proxy/redaction"',
     ],
+    ["packages/lifecycle/example.ts", 'import { readFile } from "node:fs"'],
+    ["packages/lifecycle/example.ts", 'import { serve } from "bun"'],
+    ["packages/lifecycle/example.ts", 'import { cn } from "@/lib/utils"'],
+    [
+      "packages/lifecycle/example.ts",
+      'import { redactForLog } from "../proxy/redaction"',
+    ],
+    [
+      "packages/proxy/core/example.ts",
+      'import { createOwner } from "@aos/lifecycle"',
+    ],
+    [
+      "src/runtime-adapters/aos/acp/example.ts",
+      'import { Button } from "@/components/ui/button"',
+    ],
+    [
+      "src/runtime-adapters/aos/acp/example.ts",
+      'import { runProxyCli } from "../../../../packages/proxy/cli"',
+    ],
   ])(
-    "keeps the tools MCP server apart from browser and proxy code: %s %s",
+    "keeps each package out of code it must not import: %s %s",
     async (filePath, code) => {
       expect(await restrictedImportErrors(filePath, code)).toHaveLength(1)
     }
   )
 
-  it("lets the tools MCP server import shared contracts", async () => {
-    expect(
-      await restrictedImportErrors(
-        "packages/tools-mcp/example.ts",
-        'import { presentationToolDefinitions } from "../../shared/presentation/tools"'
-      )
-    ).toEqual([])
+  it.each([
+    [
+      "packages/tools-mcp/example.ts",
+      'import { presentationToolDefinitions } from "../../shared/presentation/tools"',
+    ],
+    [
+      "packages/proxy/core/example.ts",
+      'import { createOwner } from "../../lifecycle"',
+    ],
+  ])("allows the sanctioned package imports: %s %s", async (filePath, code) => {
+    expect(await restrictedImportErrors(filePath, code)).toEqual([])
+  })
+
+  it("keeps console logging out of the lifecycle package", async () => {
+    const [result] = await eslint.lintText('console.info("joined")', {
+      filePath: "packages/lifecycle/example.ts",
+    })
+    expect(result!.messages.map(({ ruleId }) => ruleId)).toEqual(["no-console"])
+  })
+
+  it("loads the lifecycle package once through the alias and the relative path", async () => {
+    const [aliased, relative] = await Promise.all([
+      import("@aos/lifecycle"),
+      import("../../packages/lifecycle"),
+    ])
+
+    // Owner state such as each actor's transition track is module-scoped, so
+    // a second copy would split it between the two import styles.
+    expect(aliased.createOwner).toBe(relative.createOwner)
   })
 
   it.each(["vite.config.ts", "shared/example.ts"])(
@@ -160,5 +201,23 @@ describe("runtime package import boundaries", () => {
         'import { AosRemoteClient } from "@/runtime-adapters/aos/aos-client"'
       )
     ).toHaveLength(1)
+  })
+  it("reports no-floating-promises and no-misused-promises on a virtual proxy file", async () => {
+    // A floating promise (no await, return, or catch) and a misused promise
+    // (async function passed where a void-return callback is expected) must both
+    // be flagged by the type-aware rules enabled for packages/proxy, packages/lifecycle,
+    // and src/runtime-adapters non-test files.
+    const code = `
+      async function doWork(): Promise<void> {}
+      doWork()
+      function run(cb: () => void) { cb() }
+      run(async () => { await doWork() })
+    `
+    const [result] = await eslint.lintText(code, {
+      filePath: "packages/proxy/example.ts",
+    })
+    const ruleIds = result!.messages.map(({ ruleId }) => ruleId)
+    expect(ruleIds).toContain("@typescript-eslint/no-floating-promises")
+    expect(ruleIds).toContain("@typescript-eslint/no-misused-promises")
   })
 })

@@ -1,3 +1,4 @@
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -33,9 +34,11 @@ import {
   AosArtifactDescriptorSchema,
   AosElicitationMetaSchema,
   AosExtensionsSchema,
-  AosFocusNotificationSchema,
+  AosFocusRequestSchema,
   AosHistoryPageTagSchema,
+  AosPromptMetaSchema,
   AosReplayBeforeSchema,
+  AosSessionNewMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
   AosSessionInfoMetaSchema,
@@ -148,7 +151,7 @@ describe("AOS v1 normalized protocol", () => {
       SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
         {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           inputs: ["image", "file"],
           imageMimeTypes: "provider-dependent",
           fileMimeTypes: "provider-dependent",
@@ -169,6 +172,12 @@ describe("AOS v1 normalized protocol", () => {
       maxEncodedRequestBytes: 26_214_400,
       completeRequestValidation: "native-run-input",
     })
+    // The retired scope word is refused, not read as a synonym.
+    expect(
+      SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.safeParse(
+        { ...parsed, scope: "attached-session" }
+      ).success
+    ).toBe(false)
   })
 
   it("represents a missing native attachment capability without hiding other capabilities", () => {
@@ -191,18 +200,18 @@ describe("AOS v1 normalized protocol", () => {
         workspace: {
           slashCommands: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             commands: [{ name: "help", description: "Show help" }],
           },
           models: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             selection: "native-session",
             choices: "provider-reported",
           },
           context: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             source: "provider-usage-or-estimate",
             breakdown: "provider-categories",
           },
@@ -251,7 +260,7 @@ describe("AOS v1 normalized protocol", () => {
         content: {
           attachments: {
             status: "available",
-            scope: "attached-session",
+            scope: "session",
             inputs: ["image", "file"],
             imageMimeTypes: ["image/png"],
             fileMimeTypes: "valid-type/subtype",
@@ -316,7 +325,7 @@ describe("AOS v1 normalized protocol", () => {
     expect(
       SessionActivityResponseSchema.parse({
         status: "available",
-        scope: "attached-active-session",
+        scope: "active-session",
         coverage: "active-session-only",
         state: "waiting-for-input",
       })
@@ -613,7 +622,6 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it("addresses an ACP Agent update by agentId", () => {
-    expect(AOS_METHODS.agents.update).toBe("_aos/agents/update")
     expect(
       AosAgentUpdateRequestSchema.parse({
         agentId: "agent-a",
@@ -633,13 +641,6 @@ describe("AOS v1 normalized protocol", () => {
     expect(() =>
       AosAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
     ).toThrow()
-  })
-
-  it("gives an unsupported runtime refusal its own JSON-RPC code", () => {
-    expect(AOS_JSONRPC_ERRORS.unsupported).toBe(-32009)
-    expect(new Set(Object.values(AOS_JSONRPC_ERRORS)).size).toBe(
-      Object.values(AOS_JSONRPC_ERRORS).length
-    )
   })
 
   it("accepts bounded normalized Session pages without native identities", () => {
@@ -878,10 +879,10 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it("reads a focus report with or without the presence flags", () => {
-    expect(
-      AosFocusNotificationSchema.parse({ sessionId: "session-1" })
-    ).toEqual({ sessionId: "session-1" })
-    expect(AosFocusNotificationSchema.parse({ sessionId: null })).toEqual({
+    expect(AosFocusRequestSchema.parse({ sessionId: "session-1" })).toEqual({
+      sessionId: "session-1",
+    })
+    expect(AosFocusRequestSchema.parse({ sessionId: null })).toEqual({
       sessionId: null,
     })
     const reported = {
@@ -889,9 +890,9 @@ describe("AOS v1 normalized protocol", () => {
       foreground: false,
       idle: true,
     }
-    expect(AosFocusNotificationSchema.parse(reported)).toEqual(reported)
+    expect(AosFocusRequestSchema.parse(reported)).toEqual(reported)
     expect(() =>
-      AosFocusNotificationSchema.parse({ sessionId: null, visible: true })
+      AosFocusRequestSchema.parse({ sessionId: null, visible: true })
     ).toThrow()
   })
 
@@ -999,6 +1000,30 @@ describe("AOS v1 normalized protocol", () => {
     expect(history.parse(undefined)).toBeUndefined()
   })
 
+  it("reads the client id a create or send repeats, and the resume position", () => {
+    expect(AosPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
+      clientId: "send-1",
+    })
+    expect(
+      AosSessionNewMetaSchema.parse({
+        agentId: "researcher",
+        clientId: "new-1",
+      })
+    ).toEqual({ agentId: "researcher", clientId: "new-1" })
+    for (const clientId of ["", 7]) {
+      expect(AosPromptMetaSchema.safeParse({ clientId }).success).toBe(false)
+      expect(
+        AosSessionNewMetaSchema.safeParse({ agentId: "researcher", clientId })
+          .success
+      ).toBe(false)
+    }
+    const { position } = AosSessionResumeResponseMetaSchema.shape
+    expect(position.parse({ turnId: "turn-1", sequence: 4 })).toEqual({
+      turnId: "turn-1",
+      sequence: 4,
+    })
+  })
+
   it("tells an older page's updates apart from live ones", () => {
     expect(
       AosHistoryPageTagSchema.parse({
@@ -1032,8 +1057,49 @@ describe("AOS v1 normalized protocol", () => {
     ).toBe(true)
   })
 
-  it("announces artifacts in the message stream, not as a notification", () => {
-    expect(Object.values(AOS_METHODS.notify)).not.toContain("_aos/artifact")
+  it("keeps the AOS extension to its method and error-code footprint", () => {
+    expect(AOS_METHODS).toEqual({
+      session: {
+        update: "_aos/session/update",
+        steer: "_aos/session/steer",
+        focus: "_aos/session/focus",
+      },
+      agents: {
+        list: "_aos/agents/list",
+        update: "_aos/agents/update",
+      },
+      notify: {
+        activity: "_aos/activity",
+        steerAccepted: "_aos/steer_accepted",
+        composerPrefill: "_aos/composer_prefill",
+        catalogInvalidated: "_aos/catalog_invalidated",
+        sessionInvalidated: "_aos/session_invalidated",
+        error: "_aos/error",
+      },
+    })
+    const codes = Object.values(AOS_JSONRPC_ERRORS)
+    expect(new Set(codes).size).toBe(codes.length)
+    for (const code of codes) {
+      expect(code).toBeGreaterThanOrEqual(-32015)
+      expect(code).toBeLessThanOrEqual(-32010)
+    }
+  })
+
+  it("keeps every AOS error code clear of the codes ACP defines", () => {
+    // Each static builder the SDK ships is one ACP error, so an SDK that adds a
+    // code inside the AOS block fails here.
+    const builders = RequestError as unknown as Record<string, unknown>
+    const acpCodes = Object.getOwnPropertyNames(RequestError).flatMap(
+      (name) => {
+        const builder = builders[name]
+        const built: unknown =
+          typeof builder === "function" ? builder.call(RequestError) : undefined
+        return built instanceof RequestError ? [built.code] : []
+      }
+    )
+    expect(acpCodes).toContain(RequestError.authRequired().code)
+    for (const code of Object.values(AOS_JSONRPC_ERRORS))
+      expect(acpCodes).not.toContain(code)
   })
 })
 

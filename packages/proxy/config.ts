@@ -1,6 +1,10 @@
 import { isAbsolute } from "node:path"
 import { z } from "zod"
 
+/** The proxy log's levels, quietest last; `info` is the default. */
+export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
+export type ProxyLogLevel = (typeof PROXY_LOG_LEVELS)[number]
+
 const AbsoluteSecretFileSchema = z
   .string()
   .min(1)
@@ -297,7 +301,6 @@ export const ProxyConfigSchema = z
         publicOrigin: PublicOriginSchema,
         invitations: z.strictObject({
           keys: UniqueSecretKeysSchema,
-          ttlSeconds: z.number().int().min(60).max(2_592_000).default(259_200),
           clockSkewSeconds: z.number().int().min(0).max(60).default(0),
         }),
       })
@@ -305,6 +308,9 @@ export const ProxyConfigSchema = z
     push: PushSchema.optional(),
     voice: VoiceSchema.optional(),
     mcpApps: McpAppsSchema.optional(),
+    log: z
+      .strictObject({ level: z.enum(PROXY_LOG_LEVELS).default("info") })
+      .default({ level: "info" }),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
   .superRefine((config, context) => {
@@ -323,7 +329,7 @@ export const ProxyConfigSchema = z
       context.addIssue({
         code: "custom",
         path: ["guest"],
-        message: "Guest lane must use a separate origin and listener",
+        message: "Guest must use a separate origin and listener",
       })
   })
 

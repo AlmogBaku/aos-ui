@@ -71,20 +71,17 @@ export const AOS_PERMISSION_KIND_SESSION = "_allow_session" as const
 export const AOS_PLAN_ID = "todos" as const
 
 /**
- * JSON-RPC error codes the proxy returns beyond the standard ones. Both ends
- * import this table; the proxy maps `ServerRuntimePublicError` codes onto it.
+ * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
+ * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
+ * these sit in their own block from -32010, clear of the codes ACP uses.
  */
 export const AOS_JSONRPC_ERRORS = {
-  authenticationRequired: -32001,
-  turnInProgress: -32002,
-  staleRequest: -32003,
-  notFound: -32004,
-  revisionConflict: -32005,
-  temporarilyUnavailable: -32006,
-  connectionInterrupted: -32007,
-  uncertainMutation: -32008,
-  unsupported: -32009,
-  invalidRequest: -32602,
+  turnInProgress: -32010,
+  staleRequest: -32011,
+  revisionConflict: -32012,
+  temporarilyUnavailable: -32013,
+  uncertainMutation: -32014,
+  unsupported: -32015,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
@@ -100,7 +97,7 @@ export const IdentifierSchema = z
     })
   )
 const SequenceSchema = z.number().int().min(0)
-const LaneSchema = z.enum(["operator", "guest"])
+const RoleSchema = z.enum(["operator", "guest"])
 
 /** An agent-to-client object: known keys validated, unknown keys dropped. */
 const readObject = z.object
@@ -132,19 +129,16 @@ export type AosExtensions = z.infer<typeof AosExtensionsSchema>
 export const AosClientCapabilitiesMetaSchema = readObject({
   historyPages: z.boolean().default(false),
 })
-export type AosClientCapabilitiesMeta = z.infer<
-  typeof AosClientCapabilitiesMetaSchema
->
 
 /** `InitializeResponse._meta.aos` */
 export const AosInitializeMetaSchema = readObject({
   version: z.literal(AOS_EXTENSION_VERSION),
-  lane: LaneSchema,
+  role: RoleSchema,
   extensions: AosExtensionsSchema,
 })
 export type AosInitializeMeta = z.infer<typeof AosInitializeMetaSchema>
 
-/** `LoginAuthRequest._meta.aos` for the guest lane. */
+/** `LoginAuthRequest._meta.aos` for the guest listener. */
 export const AosLoginMetaSchema = z.strictObject({
   token: z.string().min(1).max(4096),
 })
@@ -153,10 +147,17 @@ export const AosLoginMetaSchema = z.strictObject({
 // sessions
 // ---------------------------------------------------------------------------
 
+/**
+ * The id the browser picks for one create or send, so a retry of it is
+ * recognized as the same request rather than repeated.
+ */
+const ClientIdSchema = IdentifierSchema.optional()
+
 /** `NewSessionRequest._meta.aos` */
 export const AosSessionNewMetaSchema = z.strictObject({
   agentId: IdentifierSchema,
   title: z.string().min(1).max(4096).optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `ListSessionsRequest._meta.aos` */
@@ -179,17 +180,6 @@ export const AosSessionInfoMetaSchema = readObject({
   pinned: z.boolean().optional(),
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
-
-export const AosExecutionSchema = readObject({
-  status: SessionStatusSchema,
-  turnId: IdentifierSchema.optional(),
-})
-
-/** `NewSessionResponse._meta.aos` */
-export const AosSessionNewResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-})
 
 /** `ResumeSessionRequest._meta.aos` */
 export const AosSessionResumeMetaSchema = z.strictObject({
@@ -221,7 +211,6 @@ export const AosReplayBeforeSchema = z.strictObject({
   cursor: z.string().min(1).max(256),
   _meta: z.record(z.string(), z.unknown()).nullish(),
 })
-export type AosReplayBefore = z.infer<typeof AosReplayBeforeSchema>
 
 /**
  * `_meta.aos.history` on a resume that replayed. It follows ACP v2
@@ -237,7 +226,7 @@ export type AosHistoryCursor = z.infer<typeof AosHistoryCursorSchema>
 
 /**
  * `ResumeSessionResponse._meta.aos` for a `_aos/before` page read: only the
- * cursor, since a page read never re-attaches.
+ * cursor, since a page read never resumes.
  */
 export const AosHistoryPageResponseMetaSchema = readObject({
   history: AosHistoryCursorSchema,
@@ -254,15 +243,18 @@ export const AosHistoryPageTagSchema = readObject({
 })
 
 /**
- * `ResumeSessionResponse._meta.aos`. `resync: true` means `after` was beyond
- * bounded replay; the client must resume again with `replayFrom: { type:
- * "start" }`.
+ * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
+ * joined Session's stream stands at, which a later resume continues from.
+ * `resync: true` means `after` was beyond bounded replay; the client must
+ * resume again with `replayFrom: { type: "start" }`. The Session's row,
+ * execution, models and capabilities follow the answer as updates.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
-  session: AosSessionInfoMetaSchema,
-  execution: AosExecutionSchema,
-  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
-  resync: z.boolean().optional(),
+  position: readObject({
+    turnId: IdentifierSchema,
+    sequence: SequenceSchema,
+  }).optional(),
+  resync: z.literal(true).optional(),
   /** Present whenever this resume replayed history. */
   history: AosHistoryCursorSchema.optional(),
 })
@@ -273,6 +265,7 @@ export const AosPromptMetaSchema = z.strictObject({
   rewindSourceId: IdentifierSchema.optional(),
   /** Server-staged attachment batch referenced by `resource_link` blocks. */
   attachmentStageId: IdentifierSchema.optional(),
+  clientId: ClientIdSchema,
 })
 
 /** `_aos/session/update` params: exactly one intent per write. */
@@ -291,9 +284,6 @@ export const AosSessionUpdateRequestSchema = z
       ).length === 1,
     "Exactly one of title, archived, unread, pinned"
   )
-export type AosSessionUpdateRequest = z.infer<
-  typeof AosSessionUpdateRequestSchema
->
 
 /** `_aos/session/steer` params and response. */
 export const AosSteerRequestSchema = z.strictObject({
@@ -304,13 +294,15 @@ export const AosSteerRequestSchema = z.strictObject({
 export const AosSteerResponseSchema = TurnSteerResponseSchema
 
 /**
- * `_aos/session/focus` notification: the exposed Session, or none, plus the
- * workspace presence the browser re-sends every `PRESENCE_HEARTBEAT_MS`. An
- * absent `foreground` means an exposed Session is in the foreground, and an
- * absent `idle` means the operator is still interacting.
+ * `_aos/session/focus` request, answered `{}`: the exposed Session, or none,
+ * plus the workspace presence the browser re-sends every
+ * `PRESENCE_HEARTBEAT_MS`. A report without a `sessionId` changes nothing, so
+ * the browser can probe its link with `{}`. An absent `foreground` means an
+ * exposed Session is in the foreground, and an absent `idle` means the operator
+ * is still interacting.
  */
-export const AosFocusNotificationSchema = z.strictObject({
-  sessionId: IdentifierSchema.nullable(),
+export const AosFocusRequestSchema = z.strictObject({
+  sessionId: IdentifierSchema.nullable().optional(),
   foreground: z.boolean().optional(),
   idle: z.boolean().optional(),
 })
@@ -473,7 +465,14 @@ export const AosUsageMetaSchema = readObject({
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
 })
-export type AosUsageMeta = z.infer<typeof AosUsageMetaSchema>
+
+/**
+ * `available_commands_update._meta.aos`: the Session's capabilities beyond its
+ * slash commands travel with them, as one update.
+ */
+export const AosAvailableCommandsMetaSchema = readObject({
+  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
+})
 
 // ---------------------------------------------------------------------------
 // pending requests `_meta.aos`
@@ -526,7 +525,7 @@ const ARTIFACT_URI_PREFIX = `${AOS_ARTIFACT_URI_SCHEME}//`
 /**
  * The uri of the `resource_link` a published artifact is announced as. It
  * carries only the opaque artifact id: never a native path, and no route, since
- * the reader already knows the Session and lane it reads through.
+ * the reader already knows the Session and listener it reads through.
  */
 export function formatArtifactUri(artifactId: string) {
   return `${ARTIFACT_URI_PREFIX}${encodeURIComponent(artifactId)}`

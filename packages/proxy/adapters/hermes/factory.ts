@@ -1,40 +1,63 @@
-import { SessionCoordinator } from "../../core/session-coordinator"
+import { coordinatedRuntime } from "../create-coordinator"
+import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance } from "../../core/runtime"
 import type { RuntimeConfig, RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
-import { redactForLog } from "../../redaction"
 import { withMcpApps } from "../../mcp-apps/annotate"
-import {
-  createMcpAppClient,
-  type McpServerOverrides,
-} from "../../mcp-apps/client"
+import { createMcpAppClient } from "../../mcp-apps/client"
 import { HermesServerAdapter } from "./adapter"
 import {
   HermesGateway,
   type HermesGatewayOptions,
-  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 
 type HermesRuntimeConfig = RuntimeConfig & { kind: "hermes" }
 
-export type HermesRuntimeFactoryDependencies = {
+export type HermesRuntimeFactoryDependencies = RuntimeServices & {
   transportFactory?: (options: HermesGatewayOptions) => HermesRpcTransport
-  mcpServerOverrides?: McpServerOverrides
 }
 
+/** What the Hermes runtime is composed from, once config and files are read. */
+export type HermesRuntimeParts = Pick<
+  RuntimeServices,
+  "logger" | "mcpServerOverrides"
+> &
+  Readonly<{ transport: HermesRpcTransport; sessionIdleMs: number }>
+
 /**
- * Redacted server-side gateway log. The gateway only ever passes its own event
- * names and bounded fields — never the token, the dial URL or a native payload
- * — and every line still goes through the proxy's shared `redactForLog` and is
- * written as one structured JSON record, like every other proxy log path.
+ * The Hermes runtime over a resolved transport: what the factory serves and
+ * the runtime contract proves.
  */
-export function createGatewayLog(
-  write: (line: string) => void = (line) => console.warn(line)
-): HermesLog {
+export function composeHermesRuntime({
+  transport,
+  logger,
+  sessionIdleMs,
+  mcpServerOverrides,
+}: HermesRuntimeParts) {
+  // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
+  // is not up yet is retried in the background instead of failing whichever
+  // request happens to arrive first.
+  if (transport instanceof HermesGateway)
+    transport
+      .connect()
+      .catch((err: unknown) =>
+        logger.warn({ err }, "hermes.transport.connect_failed")
+      )
+  const mcpAppClient = createMcpAppClient({ servers: mcpServerOverrides })
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  const runtime = withMcpApps(
+    new HermesServerAdapter(transport, {
+      sessionIdleMs,
+      log: logger,
+      mcp: { client: mcpAppClient, logger },
+    })
+  )
   return {
-    warn(event: string, fields: Record<string, unknown>) {
-      write(JSON.stringify(redactForLog({ event, ...fields })))
+    runtime,
+    async close() {
+      await runtime.close()
+      await mcpAppClient.close()
     },
   }
 }
@@ -42,59 +65,36 @@ export function createGatewayLog(
 export async function createHermesRuntime(
   config: HermesRuntimeConfig,
   limits: RuntimeLimits,
-  dependencies: HermesRuntimeFactoryDependencies = {}
+  dependencies: HermesRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const token = await readSecretFile(config.tokenFile)
+  const { logger, credentials } = dependencies
+  // Registered, so the log masks every value it reads, a rotated token too.
+  const readToken = credentials.register(readSecretFile, (value) => [value])
+  // Read once up front: a missing or unreadable token file fails the boot.
+  await readToken(config.tokenFile)
   const transportFactory =
     dependencies.transportFactory ??
     ((options: HermesGatewayOptions) => new HermesGateway(options))
-  // One redacted log for the whole runtime: the gateway reports transport
-  // outages, the attachment registry reports rebinding failures, and the native
-  // run boundary reports the code of every authoritative Hermes rejection.
-  const log = createGatewayLog()
+  // One log for the whole runtime: the gateway reports transport outages, the
+  // attachment registry reports rebinding failures, and the native run
+  // boundary reports the code of every authoritative Hermes rejection.
   const transport = transportFactory({
     baseUrl: config.baseUrl,
-    credentials: async () => ({ "X-Hermes-Session-Token": token }),
-    log,
+    // Re-read on every dial and call, so a rotated token needs no restart.
+    credentials: async () => ({
+      "X-Hermes-Session-Token": await readToken(config.tokenFile),
+    }),
+    log: logger,
   })
-  // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
-  // is not up yet is retried in the background instead of failing whichever
-  // request happens to arrive first.
-  if (transport instanceof HermesGateway)
-    void transport.connect().catch(() => undefined)
-  const mcpAppClient = createMcpAppClient({
-    servers: dependencies.mcpServerOverrides,
-  })
-  // Wrapped before the coordinator, which runs turns through `runtime.runs`.
-  const runtime = withMcpApps(
-    new HermesServerAdapter(transport, {
+  return coordinatedRuntime(
+    config.id,
+    composeHermesRuntime({
+      transport,
+      logger,
       sessionIdleMs: config.sessionIdleMs,
-      log,
-      mcpAppClient,
-    })
+      mcpServerOverrides: dependencies.mcpServerOverrides,
+    }),
+    limits,
+    logger
   )
-  const sessions = new SessionCoordinator({
-    engine: runtime.turns,
-    readings: runtime,
-    maxActiveExecutions: limits.activeExecutions,
-    maxGuestActiveExecutions: limits.guestActiveExecutions,
-    maxSubscriberEvents: limits.subscriberEvents,
-    maxSubscriberBytes: limits.subscriberBytes,
-    maxReplayEvents: limits.subscriberEvents,
-    maxReplayBytes: limits.subscriberBytes,
-  })
-  let closePromise: Promise<void> | undefined
-  return {
-    id: config.id,
-    runtime,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        await runtime.close()
-        await mcpAppClient.close()
-      })
-      return closePromise
-    },
-  }
 }

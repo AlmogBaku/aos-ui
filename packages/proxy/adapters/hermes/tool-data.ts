@@ -17,17 +17,18 @@ import {
   type ToolDiff,
   type ToolLocation,
 } from "../../core/events"
+import { SECRET_TERMS } from "../../redaction"
 
 import {
   boundedGraphBytes,
   containsCredentialValue,
   isRecord,
   parseJson,
-  parseJsonOrValue,
   trimmedText,
   unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
+import { parseJsonOrValue } from "../todos"
 import {
   isCredentialPlaceholder,
   REDACTED,
@@ -88,8 +89,8 @@ const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 /**
  * An absolute path that may leave the adapter: any one carrying no credential,
  * and none a projection already masked, since that no longer names the file.
- * Tool data reaches only the operator lane, which sees the Agent's real paths;
- * the guest projection drops tool calls before a path could reach it.
+ * Tool data reaches only the operator listener, which sees the Agent's real
+ * paths; the guest projection drops tool calls before a path could reach it.
  */
 export function publicPath(value: unknown): value is string {
   return (
@@ -203,32 +204,11 @@ function credentialToolKey(key: string) {
   while (words.length > 1 && CREDENTIAL_WRAPPERS.has(words.at(-1) ?? ""))
     words.pop()
   const core = words.join("")
-  const credentialTerms = [
-    "pwd",
-    "pass",
-    "passcode",
-    "password",
-    "passwd",
-    "passphrase",
-    "privatekey",
-    "secret",
-    "secretkey",
-    "token",
-    "apikey",
-    "accesskey",
-    "accesskeyid",
-    "auth",
-    "authorization",
-    "cookie",
-    "cookiejar",
-    "credential",
-    "credentials",
-  ]
   const prefix = words.slice(0, 2).join("")
   const suffix = words.slice(-2).join("")
   return (
     core === "npmconfiguserconfig" ||
-    credentialTerms.some(
+    SECRET_TERMS.some(
       (term) =>
         core === term ||
         core.endsWith(term) ||

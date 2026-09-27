@@ -3,6 +3,8 @@ import {
   SessionUpdate,
   StateUpdate,
   type AgentContext,
+  type CreateElicitationResponse,
+  type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import type { SessionContextResponse } from "../../protocol"
@@ -11,33 +13,36 @@ import {
   AOS_META_KEY,
   AOS_STOP_REASONS,
   AosStateMetaSchema,
+  type AosActivityNotification,
 } from "../../protocol/acp"
-import type { Seat } from "../core/channel"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
 import {
   unhandledKind,
-  type MemberCommands,
   type MemberConnection,
   type MemberEvent,
   type TurnStream,
+  type WorkspaceEvent,
 } from "../core/member"
 import type { SessionExecutionState } from "../core/session-coordinator"
-import { redactForLog } from "../redaction"
-import { commandsUpdate, sessionInfoUpdate } from "./agent-sessions"
+import type { SessionRow } from "../core/session-rows"
+import { sessionInfoMeta } from "./agent-sessions"
 import { promptBlocks } from "./prompt-content"
-import { answeredQuestionOutbound, shownAnswers } from "./translate/requests"
+import { answeredQuestionOutbound } from "./translate/requests"
 import {
   initialTranslateState,
   type AcpConnectionContext,
   type AcpOutbound,
+  type TranslateContext,
   type TranslateState,
+  type WorkspaceCapabilities,
 } from "./types"
-import { errorNotificationOf, PUBLIC_ERRORS } from "./validation"
 
 /**
  * Writes one connection's member events as ACP: `session/update` and `_aos/*`
- * notifications, and the server→client requests a paused turn asks. The
- * translators' reducer state lives here, one per turn stream.
+ * notifications, and the server→client requests a paused turn asks. It builds
+ * every ACP update from the event alone, and hands each reply back undecoded,
+ * so it reaches neither a membership nor the runtime. The translators'
+ * reducer state lives here, one per turn stream.
  */
 
 type Elicitation = Extract<AcpOutbound, { kind: "elicitation" }>["request"]
@@ -146,6 +151,30 @@ function executionUpdate(
   }
 }
 
+function sessionInfoUpdate(row: SessionRow): SessionUpdate {
+  return {
+    sessionUpdate: "session_info_update",
+    title: row.title,
+    updatedAt: row.updatedAt,
+    _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },
+  }
+}
+
+function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
+  const { slashCommands } = capabilities.workspace
+  return {
+    sessionUpdate: "available_commands_update",
+    availableCommands: (slashCommands.status === "available"
+      ? slashCommands.commands
+      : []
+    ).map(({ name, description }) => ({
+      name,
+      description: description ?? "",
+    })),
+    _meta: { [AOS_META_KEY]: { capabilities } },
+  }
+}
+
 /** One update of an older page, tagged with the cursor that asked for it. */
 function pageUpdate(update: SessionUpdate, cursor: string): SessionUpdate {
   const meta = (update._meta ?? {}) as Record<string, unknown>
@@ -162,42 +191,51 @@ function pageUpdate(update: SessionUpdate, cursor: string): SessionUpdate {
   }
 }
 
+/** The client's reply to one server→client request, as ACP carries it. */
+export type ClientReply =
+  | { kind: "permission"; response: RequestPermissionResponse }
+  | { kind: "elicitation"; response: CreateElicitationResponse }
+
 export type MemberEncoderOptions = {
-  context: AcpConnectionContext
+  /** The connection the encoder logs for, and the translators it writes with. */
+  context: Pick<AcpConnectionContext, "logger" | "translators">
   /** The connection's send port for client-side ACP methods. */
   client: AgentContext
-  /** The seat a request is open on, while the Session is attached. */
-  seat(sessionId: string): Seat | undefined
-  /** Gives one answer through the member's stack. */
-  answer(command: MemberCommands["answer"]): Promise<void>
+  /** How the runtime acknowledges a steer, which a turn's translation reads. */
+  steerAck: TranslateContext["steerAck"]
+  /** The public code and message a failure is shown as. */
+  describe(cause: unknown): { code: string; message: string }
+  /** Hands the client's reply to one request back to the connection. */
+  replied(
+    sessionId: string,
+    requestId: string,
+    reply: ClientReply
+  ): Promise<void>
+  /** Reports a failure that has no request to answer to the Session's member. */
+  report(sessionId: string, cause: unknown): unknown
+  /** Whether the connection's credential still holds. */
+  live(): boolean
 }
 
 export function createMemberEncoder({
   context,
   client,
-  seat,
-  answer,
+  steerAck,
+  describe,
+  replied,
+  report,
+  live,
 }: MemberEncoderOptions): MemberConnection {
-  const { translators } = context
+  const { translators, logger } = context
   const states = new WeakMap<TurnStream, TranslateState>()
   /** The requests asked and not settled, by Session and requestId. */
   const asked = new Map<string, AbortController>()
   const askedKey = (sessionId: string, requestId: string) =>
     `${sessionId}\u0000${requestId}`
 
-  function log(
-    level: "info" | "error",
-    event: string,
-    fields: Record<string, unknown>
-  ) {
-    context.logger?.[level](
-      redactForLog({ event, connectionId: context.connectionId, ...fields })
-    )
-  }
-
   function update(sessionId: string, value: SessionUpdate) {
     const failure = turnFailureOf(value)
-    if (failure) log("error", "acp.turn.failed", { sessionId, ...failure })
+    if (failure) logger.error({ sessionId, ...failure }, "acp.turn.failed")
     return client.notify(methods.client.session.update, {
       sessionId,
       update: value,
@@ -228,23 +266,13 @@ export function createMemberEncoder({
           text: outbound.text,
         })
       // The model reading restates the options, and a request is asked once
-      // the Channel offers it.
+      // the membership offers it.
       case "model-changed":
       case "request-permission":
       case "elicitation":
         return
     }
     return unhandledKind(outbound)
-  }
-
-  function fail(sessionId: string, cause: unknown) {
-    return seat(sessionId)?.report(cause)
-  }
-
-  /** The open request one answer belongs to. */
-  function answering(sessionId: string, requestId: string) {
-    const attached = seat(sessionId)
-    return attached && { request: attached.request(requestId) }
   }
 
   async function askPermission(
@@ -262,12 +290,9 @@ export function createMemberEncoder({
     // An answer that crossed its withdrawal is no longer this member's to give.
     if (signal.aborted) return
     asked.delete(askedKey(sessionId, request.requestId))
-    const target = answering(sessionId, request.requestId)
-    if (!target) return
-    await answer({
-      sessionId,
-      request: target.request,
-      reply: translators.replyFromPermission(target.request, response),
+    await replied(sessionId, request.requestId, {
+      kind: "permission",
+      response,
     })
   }
 
@@ -289,17 +314,13 @@ export function createMemberEncoder({
     )
     if (signal.aborted) return
     asked.delete(askedKey(sessionId, request.requestId))
-    const target = answering(sessionId, request.requestId)
-    if (!target) return
-    await answer({
-      sessionId,
-      request: target.request,
-      reply: translators.replyFromElicitation(target.request, response),
-      answers: shownAnswers(target.request, response),
+    await replied(sessionId, request.requestId, {
+      kind: "elicitation",
+      response,
     })
   }
 
-  /** Issues one server→client request and settles it as the member's answer. */
+  /** Issues one server→client request and hands its reply back. */
   function ask(sessionId: string, request: PendingRequest) {
     const controller = new AbortController()
     const { signal } = controller
@@ -310,7 +331,7 @@ export function createMemberEncoder({
         : askElicitation(sessionId, request, signal)
     ).catch((cause: unknown) =>
       // A withdrawn request is refused as cancelled, which is no failure.
-      signal.aborted ? undefined : fail(sessionId, cause)
+      signal.aborted ? undefined : report(sessionId, cause)
     )
   }
 
@@ -331,7 +352,12 @@ export function createMemberEncoder({
         replayedCorrections: stream.replayedCorrections,
       },
       event.event,
-      { turnId: stream.turnId, sequence, stopping: event.stopping }
+      {
+        turnId: stream.turnId,
+        sequence,
+        stopping: event.stopping,
+        steerAck,
+      }
     )
     states.set(stream, translated.state)
     for (const outbound of translated.outbound) {
@@ -359,11 +385,14 @@ export function createMemberEncoder({
         : []
     )
     for (const value of updates) await update(event.sessionId, value)
-    log("info", "acp.history.page", {
-      sessionId: event.sessionId,
-      offset: older.offset,
-      count: updates.length,
-    })
+    logger.info(
+      {
+        sessionId: event.sessionId,
+        offset: older.offset,
+        count: updates.length,
+      },
+      "acp.history.page"
+    )
   }
 
   /** Shows the member a prompt, as blocks rebuilt from its parts. */
@@ -375,7 +404,21 @@ export function createMemberEncoder({
     })
   }
 
+  /** A workspace event, as its `_aos/*` notification. */
+  function workspace(event: WorkspaceEvent) {
+    switch (event.kind) {
+      case "catalog-invalidated":
+        return client.notify(AOS_METHODS.notify.catalogInvalidated)
+      case "activity": {
+        const activity: AosActivityNotification = event.activity
+        return client.notify(AOS_METHODS.notify.activity, activity)
+      }
+    }
+    return unhandledKind(event)
+  }
+
   async function encode(event: MemberEvent): Promise<void> {
+    if (!("sessionId" in event)) return workspace(event)
     const { sessionId } = event
     switch (event.kind) {
       case "turn":
@@ -410,7 +453,7 @@ export function createMemberEncoder({
           configOptions: translators.configOptionsOf(event.models),
         })
       case "session-info":
-        return update(sessionId, sessionInfoUpdate(event.row, event.status))
+        return update(sessionId, sessionInfoUpdate(event.row))
       case "commands":
         return update(sessionId, commandsUpdate(event.capabilities))
       case "invalidated":
@@ -418,36 +461,16 @@ export function createMemberEncoder({
           sessionId,
         })
       case "error": {
-        const failure = errorNotificationOf(
-          context.runtimeInstance.runtime,
-          event.cause
+        const failure = describe(event.cause)
+        logger.error(
+          { sessionId, errorCode: failure.code, message: failure.message },
+          "acp.error"
         )
-        log("error", "acp.error", {
-          sessionId,
-          errorCode: failure.code,
-          message: failure.message,
-        })
-        // A turn that never started brackets itself as one that failed at
-        // once, the way the browser already reads a run refused before
-        // replying. Only a public code travels, as an `_aos/error` would on a
-        // guest's socket, and no message, so the browser words the notice.
-        if (event.turn) {
-          const code = PUBLIC_ERRORS.notice(failure.code)
-          await update(sessionId, {
-            sessionUpdate: "state_update",
-            state: "running",
-            _meta: { [AOS_META_KEY]: event.turn },
-          })
-          return update(sessionId, {
-            sessionUpdate: "state_update",
-            state: "idle",
-            stopReason: AOS_STOP_REASONS.error,
-            _meta: { [AOS_META_KEY]: { ...event.turn, code } },
-          })
-        }
         await client
           .notify(AOS_METHODS.notify.error, { sessionId, ...failure })
-          .catch(() => undefined)
+          .catch((err: unknown) =>
+            logger.warn({ err, sessionId }, "acp.error.notify_failed")
+          )
         return
       }
     }
@@ -456,7 +479,6 @@ export function createMemberEncoder({
 
   return {
     send: encode,
-    // The upgrade's principal holds for the connection's whole life.
-    live: () => context.authentication?.live() ?? true,
+    live,
   }
 }

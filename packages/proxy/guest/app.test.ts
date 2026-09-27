@@ -3,6 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import {
   createGuestInvitationService,
@@ -14,7 +15,9 @@ import type {
   ServerTurnEngine,
   ServerRuntime,
 } from "../core/runtime"
+import { failureOf } from "../core/failures"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { createGuestApp } from "./app"
 
@@ -33,7 +36,6 @@ function invitations() {
     runtimeId: "hermes-primary",
     keys: [{ id: "current", secret: KEY }],
     now: () => NOW,
-    ttlSeconds: 259_200,
   })
 }
 
@@ -42,13 +44,13 @@ function workspaceCapabilities() {
     workspace: {
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -85,7 +87,7 @@ function workspaceCapabilities() {
     content: {
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: ["image/png"],
         fileMimeTypes: "valid-type/subtype",
@@ -109,7 +111,7 @@ function harness(options: { existing?: boolean } = {}) {
   const resolveInvitedSession = vi.fn(
     async (_agent: string, _ref: string, create?: object) =>
       options.existing || create
-        ? { sessionId: STORED, created: !options.existing }
+        ? { providerSessionId: STORED, created: !options.existing }
         : undefined
   )
   const artifact = vi.fn(async () => ({
@@ -196,6 +198,7 @@ function harness(options: { existing?: boolean } = {}) {
     speak,
     artifact,
     publicError,
+    link: READY_LINK,
   } as unknown as ServerRuntime
   const instance: RuntimeInstance = {
     id: "hermes-primary",
@@ -204,11 +207,9 @@ function harness(options: { existing?: boolean } = {}) {
       engine,
       readings: runtime,
       maxActiveExecutions: 8,
-      maxGuestActiveExecutions: 4,
       maxSubscriberEvents: 32,
       maxSubscriberBytes: 256 * 1024,
-      maxReplayEvents: 64,
-      maxReplayBytes: 512 * 1024,
+      logger: captureLogs().logger,
     }),
     close: vi.fn(async () => undefined),
   }
@@ -526,9 +527,9 @@ describe("guest app", () => {
     const outage = new Error("Hermes request failed")
     subject.publicError.mockImplementation((cause) =>
       cause === unreadable
-        ? { code: "not_found", status: 404 }
+        ? failureOf("gone", cause)
         : cause === outage
-          ? { code: "temporarily_unavailable", status: 503 }
+          ? failureOf("unavailable", cause)
           : undefined
     )
     const invite = await token(subject.invitationService)
@@ -577,7 +578,7 @@ describe("guest app", () => {
       describe: vi.fn(async () => true),
       // The runtime finds a call only in the Session that made it.
       open: vi.fn(async (scope, toolCallId) => {
-        if (scope.sessionId !== STORED || toolCallId !== "call-1")
+        if (scope.providerSessionId !== STORED || toolCallId !== "call-1")
           throw new McpAppNotFoundError()
         return { html: "<p>view</p>" }
       }),
@@ -596,7 +597,7 @@ describe("guest app", () => {
     })
     expect(own.status).toBe(200)
     expect(mcpApps.open).toHaveBeenLastCalledWith(
-      { agentId: AGENT, sessionId: STORED, threadId: REF },
+      { agentId: AGENT, providerSessionId: STORED, sessionId: REF },
       "call-1",
       expect.anything()
     )

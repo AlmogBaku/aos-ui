@@ -2,7 +2,7 @@
  * Hermes asks the user through server→client JSON-RPC requests: the backend
  * writes one `clarify` / `approval` frame and parks the agent until the
  * renderer answers that very frame (`tui_gateway/server_requests.py`). AOS is
- * that renderer, so this module owns exactly one `onRequest` handler and one
+ * that renderer, so this module owns exactly one `subscribeRequests` handler and one
  * `request.cancel` subscription, projects a recognized request into the pending
  * request the browser already renders, and answers through the request handle
  * the vendored channel hands it.
@@ -23,6 +23,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
+import { SECRET_TERMS } from "../../redaction"
 
 import {
   HermesRpcRejectedError,
@@ -40,14 +41,14 @@ import {
 } from "./native"
 
 /**
- * The turn scope an interaction belongs to. `threadId` travels with it for the
- * caller's benefit; interactions themselves are Session-scoped, because a
- * Hermes Session carries exactly one thread.
+ * The turn scope an interaction belongs to. The public `sessionId` travels
+ * with it for the caller's benefit; interactions themselves are Session-scoped,
+ * because a Hermes Session carries exactly one thread.
  */
 export type HermesInteractionScope = {
   agentId: string
+  providerSessionId: string
   sessionId: string
-  threadId: string
 }
 
 /**
@@ -56,8 +57,10 @@ export type HermesInteractionScope = {
  * dead socket is swallowed and would report an answer Hermes never received.
  */
 export type HermesInteractionTransport = {
-  onRequest(handler: (request: ServerRequest) => boolean | void): () => void
-  onEvent(listener: (event: unknown) => void): () => void
+  subscribeRequests(
+    handler: (request: ServerRequest) => boolean | void
+  ): () => void
+  subscribeEvents(listener: (event: unknown) => void): () => void
   connected(): boolean
   /**
    * Dispatch one ordinary client→server RPC. Answering through `request.answer`
@@ -273,8 +276,12 @@ function nativeText(
     : undefined
 }
 
-const credentialText =
-  /(?:\bauthorization\s*[:=]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:access[-_]?token|api[-_]?key|credential|password|secret|token)\s*[=:]\s*[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)/giu
+/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
+const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
+const credentialText = new RegExp(
+  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
+  "giu"
+)
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
  * adapter. Paths and URLs stay: a question reaches every member of the
@@ -556,8 +563,8 @@ function cancellation(event: Record<string, unknown>) {
 /**
  * A Hermes Session carries exactly one thread, so every interaction key is the
  * Session key retainers, listeners and resumes already use: keying a pending
- * request by `threadId` as well would let one of the two release the other's
- * binding.
+ * request by the public `sessionId` as well would let one of the two release
+ * the other's binding.
  */
 function sameSession(
   left: HermesInteractionScope,
@@ -749,10 +756,12 @@ export class HermesInteractions {
     options: { log?: HermesLog } = {}
   ) {
     this.#log = options.log
-    this.#stopRequests = transport.onRequest((request) =>
+    this.#stopRequests = transport.subscribeRequests((request) =>
       this.#deliver(request)
     )
-    this.#stopEvents = transport.onEvent((event) => this.#observe(event))
+    this.#stopEvents = transport.subscribeEvents((event) =>
+      this.#observe(event)
+    )
   }
 
   /** Release both gateway subscriptions, every parked request and retainer. */
@@ -763,7 +772,11 @@ export class HermesInteractions {
     this.#deferred.clear()
     this.#listeners.clear()
     for (const held of [...this.#retainers.values()])
-      void held.then((release) => release())
+      held
+        .then((release) => release())
+        .catch((err: unknown) =>
+          this.#log?.warn({ err }, "hermes.interactions.release_failed")
+        )
     this.#retainers.clear()
   }
 
@@ -776,7 +789,7 @@ export class HermesInteractions {
   }
 
   /** Notify the turn observing this Session of every live request. */
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesInteractionScope,
     listener: HermesPendingRequestListener
   ) {
@@ -833,9 +846,7 @@ export class HermesInteractions {
    * carries the same frame `resolve_response` routes, and is the only path that
    * says whether the request was still open: `expired` means Hermes no longer
    * holds it open (`server_requests.py`), for a reason it does not report.
-   *
-   * An older Hermes without the method falls back to the response frame, whose
-   * silence is what AOS answered with before.
+   * A Hermes without the method cannot answer at all, so it is unavailable.
    */
   async #answer(
     interaction: PendingInteraction,
@@ -856,8 +867,7 @@ export class HermesInteractions {
           "hermes.interactions.answer_unsupported",
           "request.answer"
         )
-        interaction.request.respond(result)
-        return "ok"
+        throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
       }
       return this.#unacknowledge(interaction)
     }
@@ -956,7 +966,7 @@ export class HermesInteractions {
   // -------------------------------------------------------------------------
 
   /**
-   * The one `onRequest` handler. Returning `false` declines: the vendored
+   * The one `subscribeRequests` handler. Returning `false` declines: the vendored
    * channel answers `-32601`, which Hermes reads as a skipped question rather
    * than a client that will answer later. A method AOS cannot render is
    * therefore claimed instead: whichever renderer raised that prompt is still
@@ -1147,7 +1157,11 @@ export class HermesInteractions {
     )
       return
     this.#retainers.delete(key)
-    void held.then((release) => release())
+    held
+      .then((release) => release())
+      .catch((err: unknown) =>
+        this.#log?.warn({ err }, "hermes.interactions.release_failed")
+      )
   }
 
   #notify(scope: HermesInteractionScope, request: PendingRequest) {
@@ -1155,9 +1169,12 @@ export class HermesInteractions {
       try {
         listener(request)
       } catch (error) {
-        this.#log?.warn("hermes.interactions.listener_failed", {
-          reason: publicReason(error),
-        })
+        this.#log?.warn(
+          {
+            reason: publicReason(error),
+          },
+          "hermes.interactions.listener_failed"
+        )
       }
   }
 
@@ -1190,7 +1207,7 @@ export class HermesInteractions {
     )
       return
     this.#loggedMethods.add(key)
-    this.#log?.warn(event, { method: name })
+    this.#log?.warn({ method: name }, event)
   }
 
   #complete(

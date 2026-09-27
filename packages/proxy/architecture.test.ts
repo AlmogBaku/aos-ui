@@ -29,6 +29,12 @@ function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")
 }
 
+/** A module only tests may import, by its path under the proxy. */
+const TEST_ONLY_MODULE =
+  /(?:^|\/)(?:test-harness|test-faults|runtime-contract)\.ts$|(?:^|\/)test-utils\//u
+const TEST_ONLY_IMPORT =
+  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|test-utils\/)/u
+
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
@@ -168,6 +174,125 @@ describe("runtime adapter boundary", () => {
       expect(selectors, provider).toEqual([selector])
     }
   })
+
+  /**
+   * The harness, the fault wrapper, the contract suite and the adapters' test
+   * fixtures stand in for a provider, so only a test may reach one.
+   */
+  it("keeps the test-only modules out of production code", async () => {
+    const proxyRoot = import.meta.dirname
+    const importers: string[] = []
+
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (TEST_ONLY_MODULE.test(file)) continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (TEST_ONLY_IMPORT.test(source)) importers.push(file)
+    }
+
+    expect(importers).toEqual([])
+  })
+})
+
+/**
+ * D10: one name per concept and per id, ACP first, then IRC. Each row retires
+ * a name from a directory once the rename that replaced it has landed.
+ */
+describe("vocabulary", () => {
+  const retiredNames: ReadonlyArray<{
+    retired: RegExp
+    scope: string
+    reason: string
+  }> = [
+    {
+      retired: /\bthreadId\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the public Session id is `sessionId`, from the wire to the adapters",
+    },
+    {
+      retired: /\bruntimeSessionId\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the provider's own Session id is `providerSessionId`, and it never leaves the proxy",
+    },
+    {
+      // Any identifier holding either word, in any case and position. A match
+      // after a comment opener on its line, or inside a dotted string, is
+      // skipped: English prose and log event names are not identifiers.
+      retired:
+        /(?<!(?:\/\/|\/\*|^[ \t]*\*).*|["'`][\w.]*)\b\w*(?:[Rr]oom|[Ss]eat)\w*/mu,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
+    },
+    {
+      // The word alone and inside any identifier: `lane`, `guestLane`,
+      // `ACP_LANE_CAPABILITIES`.
+      retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
+      scope: "packages/proxy/**",
+      reason:
+        "which kind of member it is is its `role` (`Principal.role`); where its socket arrives is a listener",
+    },
+    {
+      retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
+      scope: "packages/protocol/**",
+      reason:
+        "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
+    },
+    {
+      retired: /[cC]ontrollerIds?\b|[sS]ubscriberIds?\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "the member's id on a turn is its `principalId`; one membership's key is its `membershipId`",
+    },
+    {
+      retired: /\btype Principal\b/u,
+      scope: "packages/proxy/push/**",
+      reason:
+        "one principal's connections, for push, are its `Presence`; `Principal` is the member's",
+    },
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "packages/protocol/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired:
+        /\bServerTurnWatcher\b|\bobserveScope\b|\bonPendingRequest\b|\bonConnection\b|\bunobserve\b|\bunwatch\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "our own listening function is `subscribe…` and returns its unsubscribe function",
+    },
+    {
+      retired:
+        /\bensureAttached\b|#requireAttachedSession\b|#attachedRunning\b/u,
+      scope: "packages/proxy/**",
+      reason:
+        "a Session a connection follows is resumed, not attached; an attachment is a file",
+    },
+  ]
+
+  it("keeps retired names out of the proxy and the protocol", async () => {
+    const repositoryRoot = join(import.meta.dirname, "../..")
+    for (const { retired, scope, reason } of retiredNames) {
+      const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))
+      for (const path of await productionFiles(directory)) {
+        const source = await readFile(path, "utf8")
+        expect(
+          source.match(retired)?.[0],
+          `${relative(repositoryRoot, path)}: ${reason}`
+        ).toBeUndefined()
+      }
+    }
+  })
 })
 
 const ACP_IMPORT =
@@ -182,20 +307,27 @@ function importsFrom(directory: string) {
 }
 
 /**
- * A lane compared, in either order. The lane stays the connection's identity,
- * written to the browser's `initialize` meta and to the member's principal,
- * and nothing reads it back. This is a heuristic that catches the comparisons
- * one writes, not every way to branch: the real gates are the per-file count
- * of role reads and the translators and encoder naming no lane at all.
+ * A role compared, in either order; a chat message's `role` is another word.
+ * The role stays the connection's identity, written to the browser's
+ * `initialize` meta and to the member's principal, and nothing reads it back.
+ * This is a heuristic that catches the comparisons one writes, not every way
+ * to branch: the real gates are the per-file count of principal role reads and
+ * the translators and encoder naming no role at all.
  */
-const LANE_BRANCH =
-  /\blane\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?lane\b|\bcase\s+["'](?:guest|operator)["']/u
+const ROLE_BRANCH =
+  /(?<!message\.)\brole\s*[!=]==|[!=]==\s*(?:[\w.]+\.)?(?<!message\.)role\b|\bcase\s+["'](?:guest|operator)["']/u
+
+/** A member's role named at all, outside a chat message's `role`. */
+const ROLE_NAMED = /(?<!message\.)\brole\b|\bRole\b/u
 
 describe("member boundary", () => {
   const proxyRoot = import.meta.dirname
 
-  /** A1: the core and the guest rules speak members, never the ACP wire. */
-  it("keeps ACP out of the core and the guest middleware", async () => {
+  /**
+   * A1: the core and the guest rules speak members, never the ACP wire, and
+   * the guest rules sit below every HTTP route rather than reaching into one.
+   */
+  it("keeps ACP and the routes out of the core and the guest middleware", async () => {
     const core = await productionFiles(join(proxyRoot, "core"))
     const middleware = await productionFiles(
       join(proxyRoot, "guest/middleware")
@@ -208,14 +340,13 @@ describe("member boundary", () => {
     for (const path of middleware) {
       const source = stripComments(await readFile(path, "utf8"))
       expect(source, path).not.toMatch(importsFrom("acp"))
+      expect(source, path).not.toMatch(importsFrom("routes"))
     }
   })
 
   /**
-   * A2: the core and the ACP transport are lane-blind. Nothing reads a
-   * guest's grant, and a principal's role is read only where the Channel
-   * reports a lane: the coordinator's capacity cap and an adoption's
-   * preference for an operator.
+   * A2: the core and the ACP transport are role-blind. Nothing reads a
+   * guest's grant or a principal's role.
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
@@ -234,24 +365,139 @@ describe("member boundary", () => {
       roleReaders.push(...reads.map(() => path))
     }
 
-    expect(roleReaders).toEqual([
-      join(proxyRoot, "core/channel.ts"),
-      join(proxyRoot, "core/channel.ts"),
-    ])
+    expect(roleReaders).toEqual([])
+  })
+
+  /**
+   * The coordinator owns a turn's states; a channel reads them and moves
+   * none. The one machine the channel sets up is its membership's.
+   */
+  it("leaves every turn-state transition to the coordinator", async () => {
+    const source = stripComments(
+      await readFile(join(proxyRoot, "core/channel.ts"), "utf8")
+    )
+    const machines = [
+      ...source.matchAll(/\bownerSetup\b[^(]*\(\s*["'`]([\w-]+)["'`]/gu),
+    ].map(([, kind]) => kind)
+
+    expect(machines).toEqual(["membership"])
+    expect(source).not.toMatch(
+      /\bstate\s*(?::|=(?!=))\s*["'`](?:idle|running|stopping|waiting-for-input|uncertain)["'`]/u
+    )
   })
   /**
-   * A2: the ACP transport never branches on the lane. The translators and
+   * The connection reaches a provider through the channels and the catalog
+   * alone: its context carries neither the runtime nor the coordinator, only
+   * the runtime's error classifier and its static translation hint, and its
+   * agent imports nothing of either.
+   */
+  it("keeps the runtime and the coordinator off the connection", async () => {
+    for (const file of ["acp/agent.ts", "acp/agent-sessions.ts"]) {
+      const source = stripComments(
+        await readFile(join(proxyRoot, file), "utf8")
+      )
+      expect(source, file).not.toMatch(
+        importsFrom("core\\/(?:runtime|session-coordinator)")
+      )
+    }
+    const context = stripComments(
+      await readFile(join(proxyRoot, "acp/types.ts"), "utf8")
+    )
+    expect(context).not.toMatch(
+      /\b(?:RuntimeInstance|ServerRuntime|SessionCoordinator)\b|\bruntimeInstance\b/u
+    )
+  })
+
+  /**
+   * The member encoder alone turns member events into ACP updates and
+   * notifications, from the event it is given: it reaches neither a
+   * membership nor the runtime. The translators the encoder writes with are
+   * its own pure helpers, and the test harness stands in for a provider.
+   */
+  it("builds every ACP update in the member encoder alone", async () => {
+    const encoder = stripComments(
+      await readFile(join(proxyRoot, "acp/member-encoder.ts"), "utf8")
+    )
+    expect(encoder).not.toMatch(importsFrom("core\\/(?:channel|runtime)"))
+    expect(encoder).not.toMatch(/\bServerRuntime\b|\bruntimeInstance\b/u)
+
+    const builders: string[] = []
+    const notifiers: string[] = []
+    for (const path of await productionFiles(proxyRoot)) {
+      const file = relative(proxyRoot, path)
+      if (file.startsWith("acp/translate/") || /\/test-[\w-]+\.ts$/u.test(file))
+        continue
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/\bsessionUpdate\s*:/u.test(source)) builders.push(file)
+      if (/\.notify\s*\(/u.test(source)) notifiers.push(file)
+    }
+    expect(builders).toEqual(["acp/member-encoder.ts"])
+    expect(notifiers).toEqual(["acp/member-encoder.ts"])
+  })
+
+  /**
+   * A2: the ACP transport never branches on the role. The translators and
    * the member encoder never name it, and the files that carry it as the
    * connection's identity never compare it.
    */
-  it("never branches the ACP transport on the lane", async () => {
+  it("never branches the ACP transport on the role", async () => {
     for (const path of await productionFiles(join(proxyRoot, "acp"))) {
       const source = stripComments(await readFile(path, "utf8"))
-      expect(source, path).not.toMatch(LANE_BRANCH)
+      expect(source, path).not.toMatch(ROLE_BRANCH)
       const translates =
         relative(proxyRoot, path).startsWith("acp/translate/") ||
         path.endsWith("member-encoder.ts")
-      if (translates) expect(source, path).not.toMatch(/\blane\b/u)
+      if (translates) expect(source, path).not.toMatch(ROLE_NAMED)
     }
+  })
+})
+
+describe("logging", () => {
+  const proxyRoot = import.meta.dirname
+
+  /** D13: the redacting root is the only way a proxy line reaches stdout. */
+  it("writes every proxy line through the injected logger", async () => {
+    const writers: string[] = []
+
+    for (const path of await productionFiles(proxyRoot)) {
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/\bconsole\.\w+/u.test(source))
+        writers.push(relative(proxyRoot, path))
+    }
+
+    expect(writers).toEqual([])
+  })
+
+  /** Core names each event after the owner that writes it, never the wire. */
+  it("names no core event after ACP", async () => {
+    const named: string[] = []
+
+    for (const path of await productionFiles(join(proxyRoot, "core"))) {
+      const source = stripComments(await readFile(path, "utf8"))
+      if (/["'`]acp\./u.test(source)) named.push(relative(proxyRoot, path))
+    }
+
+    expect(named).toEqual([])
+  })
+})
+
+describe("ServerRuntime interface", () => {
+  /**
+   * D8: the proxy calls neither `authState` nor `subscribeSessionInvalidation`;
+   * each adapter retains its own implementation but the interface exposes
+   * neither.
+   */
+  it("exposes neither authState nor subscribeSessionInvalidation", async () => {
+    const source = stripComments(
+      await readFile(join(import.meta.dirname, "core/runtime.ts"), "utf8")
+    )
+    const members = /export interface ServerRuntime \{([\s\S]*?)\n\}/u.exec(
+      source
+    )?.[1]
+
+    expect(members).toBeDefined()
+    expect(members).not.toMatch(
+      /\b(?:authState|subscribeSessionInvalidation)\b/u
+    )
   })
 })

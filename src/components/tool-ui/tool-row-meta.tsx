@@ -8,7 +8,7 @@ import {
   formatToolDuration,
   formatToolLocation,
 } from "./tool-call-presentation"
-import type { AosDiffStats, AosToolLocation } from "./tool-artifact"
+import type { AosDiffStats, AosToolLocation } from "@/lib/tool-artifact"
 
 type ToolTiming = ToolCallMessagePart["timing"]
 

@@ -88,14 +88,14 @@ export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
     () =>
       interactions
         ? function PendingComposer({ fallback }) {
-            const threadId = useAuiState(
+            const sessionId = useAuiState(
               (state) =>
                 state.threadListItem.remoteId ?? state.threadListItem.id
             )
             return (
               <PendingInteractionComposer
                 locale={locale}
-                threadId={threadId}
+                sessionId={sessionId}
                 interactions={interactions}
                 fallback={fallback}
               />
@@ -132,6 +132,8 @@ const workspaceCopy = {
     pending: "Pending",
     completed: "Completed",
     failed: "Failed",
+    capacity: "The AOS server is full. Reconnecting shortly.",
+    sessionUnavailable: "This Session is no longer available.",
   },
   he: {
     retry: "ניסיון חוזר",
@@ -146,6 +148,8 @@ const workspaceCopy = {
     pending: "ממתינה",
     completed: "הושלמה",
     failed: "נכשלה",
+    capacity: "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
+    sessionUnavailable: "השיחה הזו כבר אינה זמינה.",
   },
 } satisfies Record<Locale, Record<string, unknown>>
 
@@ -198,14 +202,14 @@ function ArtifactWorkspaceBridge({
       locale={locale}
       adapter={bundle.artifacts?.resolver}
       agentId={agentId}
-      threadId={artifactThreadId}
+      sessionId={artifactThreadId}
       messages={artifactMessages}
       artifactHtmlAssetOrigins={artifactHtmlAssetOrigins}
     >
       <McpAppHostProvider
         adapter={bundle.mcpApps}
         agentId={agentId}
-        threadId={artifactThreadId}
+        sessionId={artifactThreadId}
       >
         <ArtifactWorkspaceContent {...shell} locale={locale}>
           {children}
@@ -459,6 +463,8 @@ function WorkspaceContent({
   const {
     environmentLabel,
     activityCoverage,
+    connectionStatus,
+    sessionStatus,
     composer: composerFeatures,
   } = bundle
   const assistantInstructions = bundle.assistantConfig?.instructions
@@ -606,20 +612,20 @@ function WorkspaceContent({
     titles,
     selection:
       selectedAgentId && visibleThreadId
-        ? { agentId: selectedAgentId, threadId: visibleThreadId }
+        ? { agentId: selectedAgentId, sessionId: visibleThreadId }
         : null,
     conversationExposed: !managementOpen && !conversationObscured,
     readNow,
-    onOpenTarget: async (agentId, threadId) => {
+    onOpenTarget: async (agentId, sessionId) => {
       setPreferredAgentId(agentId)
-      await openSession(threadId, agentId)
+      await openSession(sessionId, agentId)
     },
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
   const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
     const agentId = sessions.find(
-      (session) => session.threadId === sessionId
+      (session) => session.sessionId === sessionId
     )?.agentId
     if (!agentId) return undefined
     return {
@@ -686,6 +692,17 @@ function WorkspaceContent({
         onActionError={(reason) => setActionError(toError(reason))}
       >
         <div className="relative h-full min-h-0">
+          {/* Mounted empty so the text is announced when it appears. */}
+          <p
+            className="pointer-events-none absolute inset-x-0 top-2 z-10 px-4 text-center text-sm text-muted-foreground"
+            role="status"
+          >
+            {connectionStatus === "capacity"
+              ? workspaceCopy[locale].capacity
+              : sessionStatus === "unavailable"
+                ? workspaceCopy[locale].sessionUnavailable
+                : null}
+          </p>
           {workspaceError ? (
             <WorkspaceError
               key={workspaceError.message}

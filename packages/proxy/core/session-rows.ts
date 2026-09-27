@@ -48,15 +48,26 @@ export interface SessionRows {
    */
   holdRead(agentId: string, sessionId: string, onRelit: () => void): () => void
   forget(agentId: string, sessionId: string): void
+  /** Every changed row, of every Session. */
   subscribe(listener: SessionRowListener): () => void
+  /**
+   * One Session's row as a replaying cell: the known row at once, then each
+   * change to it.
+   */
+  subscribeRow(
+    agentId: string,
+    sessionId: string,
+    listener: SessionRowListener
+  ): () => void
 }
 
 export const READ_GUARD_MS = 10_000
 
 /**
  * Fields a merge compares, which is also everything a projection reads.
- * `unread` and `pinned` are the ones a read may legitimately omit; the merging
- * spread already carries a known `pinned` forward, while `unread` is resolved
+ * `unread`, `pinned`, and `createdAt` are the ones a read may legitimately
+ * omit; the merging spread already carries a known `pinned` or `createdAt`
+ * forward, while `unread` is resolved
  * before the comparison rather than inside it, because our own mark-read
  * outranks a stale page. `readAt` is deliberately absent: moving a private
  * stamp is not a change any subscriber needs to see.
@@ -122,6 +133,13 @@ export function createSessionRows({
 
   const publish = (row: SessionRow) => {
     for (const listener of [...listeners]) listener(row)
+  }
+
+  const subscribe = (listener: SessionRowListener) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
   }
 
   return {
@@ -198,11 +216,14 @@ export function createSessionRows({
       guardedUntil.delete(key)
     },
 
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
-      }
+    subscribe,
+
+    subscribeRow(agentId, sessionId, listener) {
+      const known = rows.get(rowKey(agentId, sessionId))
+      if (known) listener(known)
+      return subscribe((row) => {
+        if (row.agentId === agentId && row.id === sessionId) listener(row)
+      })
     },
   }
 }

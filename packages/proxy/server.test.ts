@@ -394,4 +394,105 @@ describe("Bun proxy server lifecycle", () => {
     expect(peer.close).toHaveBeenCalledWith(1011, "Event connection failed")
     expect(acpSocket.close).toHaveBeenCalledOnce()
   })
+
+  it("sets Bun WebSocket limits on the mounted websocket options", () => {
+    let served: Record<string, unknown> | undefined
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/aos/v1/acp",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
+            open: vi.fn(() => ({ receive: vi.fn(), close: vi.fn() })),
+          },
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+
+    expect(served!.websocket).toMatchObject({
+      idleTimeout: 120,
+      sendPings: true,
+      maxPayloadLength: 1_100_000,
+      backpressureLimit: 16 * 1_024 * 1_024,
+      closeOnBackpressureLimit: true,
+    })
+  })
+
+  it("logs the failure cause and closes the peer once with 1011", async () => {
+    const errorLog = vi.fn()
+    const logger = {
+      error: errorLog,
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+    }
+    const acpSocket = {
+      receive: vi.fn(async () => {
+        throw new Error("logged receive failure")
+      }),
+      close: vi.fn(),
+    }
+    let served: Record<string, unknown> | undefined
+    let data: unknown
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/aos/v1/acp",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({
+              principalId: "operator",
+              connectionId: "connection-1",
+            })),
+            open: vi.fn(() => acpSocket),
+          },
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      logger,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: { upgrade(request: Request, options: { data: unknown }): boolean }
+    ) => Promise<Response | undefined>
+    await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+      upgrade(_request, options) {
+        data = options.data
+        return true
+      },
+    })
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      message(peer: unknown, raw: string): void
+    }
+    const peer = { data, send: vi.fn(), close: vi.fn() }
+    websocket.open(peer)
+    websocket.message(peer, "frame")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(peer.close).toHaveBeenCalledOnce()
+    expect(peer.close).toHaveBeenCalledWith(1011, "Event connection failed")
+    expect(errorLog).toHaveBeenCalledOnce()
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      "acp.peer.failed"
+    )
+  })
 })

@@ -267,7 +267,7 @@ export type ProxyEnvOverride = {
   type: "string" | "int"
   /**
    * The runtime branch this row belongs to, or `guest` for a row that may only
-   * fill a lane the file already opened.
+   * fill a listener the file already opened.
    */
   appliesWhen?: RuntimeKind | "guest"
 }
@@ -379,12 +379,6 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
     appliesWhen: "guest",
   },
   {
-    path: ["guest", "invitations", "ttlSeconds"],
-    suffix: "GUEST_INVITATIONS_TTL_SECONDS",
-    type: "int",
-    appliesWhen: "guest",
-  },
-  {
     path: ["guest", "invitations", "clockSkewSeconds"],
     suffix: "GUEST_INVITATIONS_CLOCK_SKEW_SECONDS",
     type: "int",
@@ -476,6 +470,7 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
     suffix: "VOICE_SPEECH_FORMAT",
     type: "string",
   },
+  { path: ["log", "level"], suffix: "LOG_LEVEL", type: "string" },
   { path: ["shutdownGraceMs"], suffix: "SHUTDOWN_GRACE_MS", type: "int" },
 ]
 
@@ -601,17 +596,6 @@ function invalidConfiguration(
   )
 }
 
-/**
- * A configuration error is the one start failure an operator must be able to
- * read, and `redactForLog` makes every `Error` opaque. Reporting it as a plain
- * object keeps that invariant for every other failure.
- */
-export function describeStartFailure(error: unknown): unknown {
-  return error instanceof ProxyConfigurationError
-    ? { name: error.name, message: error.message }
-    : error
-}
-
 export async function loadProxyConfig(
   options: ProxyConfigPathSource & ProxyConfigFileAccess
 ): Promise<ProxyConfig> {
@@ -627,7 +611,7 @@ export async function loadProxyConfig(
         })
       : DEFAULT_PROXY_CONFIG
   const merged = deepMerge(defaults, document)
-  // `guest:` with no value is not a lane the file opened.
+  // `guest:` with no value is not a listener the file opened.
   const sources = applyEnvOverrides(
     merged,
     options.getenv,

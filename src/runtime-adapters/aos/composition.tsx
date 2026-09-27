@@ -5,7 +5,6 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   useSyncExternalStore,
 } from "react"
 import {
@@ -30,6 +29,11 @@ import { createAcpInteractions } from "./acp/acp-interactions"
 import { createAcpThreadListAdapter } from "./acp/acp-thread-list"
 import { createAcpWorkspaceClient } from "./acp/acp-workspace-client"
 import { createAcpConnection } from "./acp/connection"
+import { tabAcpLogger } from "./acp/log"
+
+// Lazy logger for background error reporting in this module.
+let _compositionLog: ReturnType<typeof tabAcpLogger> | undefined
+const compositionLog = () => (_compositionLog ??= tabAcpLogger())
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -88,7 +92,13 @@ function ReadyAosRuntimeProvider({
   )
   useEffect(() => () => push.stop(), [push])
   const connection = useMemo(
-    () => createAcpConnection({ clientInfo: CLIENT_INFO }),
+    () =>
+      createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        logger: tabAcpLogger(),
+        reload: () => globalThis.location.reload(),
+        storage: globalThis.sessionStorage,
+      }),
     []
   )
   const connectionMounted = useRef(false)
@@ -107,10 +117,27 @@ function ReadyAosRuntimeProvider({
       })
     }
   }, [connection])
+  const connectionStatus = useSyncExternalStore(
+    connection.subscribeStatus,
+    () => connection.status,
+    () => connection.status
+  )
   const client = useMemo(
     () => createAcpWorkspaceClient({ connection, rest }),
     [connection, rest]
   )
+  const mountedClient = useRef<typeof client>(undefined)
+  // As with the connection, disposal waits out Strict Mode's effect replay, and
+  // a client the memo replaced is disposed once the new one has mounted.
+  useEffect(() => {
+    mountedClient.current = client
+    return () => {
+      mountedClient.current = undefined
+      queueMicrotask(() => {
+        if (mountedClient.current !== client) client.dispose()
+      })
+    }
+  }, [client])
   const drafts = useMemo(() => new AosDraftRegistry(), [])
   const threadList = useMemo(
     () =>
@@ -146,24 +173,6 @@ function ReadyAosRuntimeProvider({
     (code: string | undefined, fallback: string) =>
       runErrorMessage(runtimeDictionaries[locale], code, fallback),
     [locale]
-  )
-  // A Session's capabilities, config options, and usage exist only once it is
-  // attached, so the composition reads them from the Session it has attached.
-  const [attachedSessions, setAttachedSessions] = useState<ReadonlySet<string>>(
-    new Set()
-  )
-  // The workspace client records what an attach reports, so it performs it.
-  const attach = useCallback(
-    async (sessionId: string) => {
-      const attached = await client.attachSession(sessionId, {
-        replayFromStart: true,
-      })
-      setAttachedSessions((previous) =>
-        previous.has(sessionId) ? previous : new Set(previous).add(sessionId)
-      )
-      return attached
-    },
-    [client]
   )
   // The Session owns the batch, so staging waits for the Session a draft's
   // first turn creates; the prompt then links what the proxy accepted.
@@ -233,7 +242,8 @@ function ReadyAosRuntimeProvider({
         isDisabled: !agentId,
         enableMessageQueue: Boolean(remoteId),
         adapters: { attachments, ...mediaAdapters },
-        attach,
+        // The workspace client folds what the bound Session reports.
+        subscribeSession: client.subscribeSession,
         resolveSessionId,
         stageAttachments,
         messageRewind: rewindSource,
@@ -247,7 +257,6 @@ function ReadyAosRuntimeProvider({
     },
     [
       approvals,
-      attach,
       attachments,
       client,
       connection,
@@ -337,7 +346,9 @@ function ReadyAosRuntimeProvider({
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        void refreshTitle()
+        refreshTitle().catch((err: unknown) =>
+          compositionLog().warn({ err }, "session.title_refresh_failed")
+        )
       }, SESSION_TITLE_REFRESH_DEBOUNCE_MS)
     }
     const unsubscribe = client.subscribeSessionInvalidation(
@@ -376,11 +387,9 @@ function ReadyAosRuntimeProvider({
     : undefined
   const selectedDraftId = selectedDraft?.[0]
   const mediaScopeId = selectedSessionId ?? selectedDraftId
-  const attachedSessionId =
-    selectedSessionId && attachedSessions.has(selectedSessionId)
-      ? selectedSessionId
-      : undefined
-  const capabilities = useAosSessionCapabilities(client, attachedSessionId)
+  // Capabilities, config options, and usage are absent until the bound Session
+  // reports them, so the composer reads the selected Session's projection.
+  const capabilities = useAosSessionCapabilities(client, selectedSessionId)
   const selectedSessionStatus = useSyncExternalStore(
     useCallback(
       (listener) =>
@@ -393,10 +402,27 @@ function ReadyAosRuntimeProvider({
       selectedSessionId ? client.sessionStatus(selectedSessionId) : "unknown",
     () => "unknown"
   )
+  const selectedSessionGone = useSyncExternalStore(
+    useCallback(
+      (listener) => {
+        if (!selectedSessionId) return () => undefined
+        const agentId = client.knownAgentIdOf(selectedSessionId)
+        return connection.subscribe(selectedSessionId, {
+          ...(agentId === undefined ? {} : { agentId }),
+          state: listener,
+        })
+      },
+      [client, connection, selectedSessionId]
+    ),
+    () =>
+      selectedSessionId !== undefined &&
+      connection.sessionState(selectedSessionId) === "gone",
+    () => false
+  )
   const composer = useAosComposerFeatures(
     client,
     config.composerFeatures,
-    attachedSessionId,
+    selectedSessionId,
     capabilities
   )
   const capabilitiesReady = capabilities !== undefined
@@ -444,6 +470,8 @@ function ReadyAosRuntimeProvider({
     media,
     activityCoverage: "workspace",
     push,
+    connectionStatus: connectionStatus === "capacity" ? "capacity" : undefined,
+    sessionStatus: selectedSessionGone ? "unavailable" : undefined,
   })
 }
 

@@ -1,6 +1,7 @@
 import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
+import { READY_LINK } from "../../core/link"
 import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
@@ -24,7 +25,7 @@ function idleHandle(): ServerTurnHandle {
     events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),
     stop: async () => "idle",
-    recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),
+    recoveryPosition: () => "token-1",
   }
 }
 
@@ -82,16 +83,26 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   return {
+    link: READY_LINK,
     start: vi.fn(async () => undefined),
     stopAndWait: vi.fn(async () => undefined),
     request,
     ...overrides,
-  } as OpenClawGatewayClient & { request: typeof request }
+  } as OpenClawGatewayClient & {
+    request: typeof request
+    link: typeof READY_LINK
+  }
 }
 
 describe("OpenClaw ServerRuntime assembly", () => {
-  it("starts one provider client and composes exact owned workspace and history reads", async () => {
-    const gateway = client()
+  it("retries a failed provider start and composes exact owned workspace and history reads", async () => {
+    const gateway = client({
+      start: vi
+        .fn(async () => undefined)
+        .mockRejectedValueOnce(
+          new OpenClawClientConnectionError("unavailable")
+        ),
+    })
     const subscribe = vi.fn(async () => () => undefined)
     const adapter = new OpenClawServerAdapter({
       client: gateway,
@@ -99,9 +110,9 @@ describe("OpenClaw ServerRuntime assembly", () => {
       subscribeSession: subscribe,
     })
 
-    await expect(adapter.authState()).resolves.toEqual({
-      status: "authenticated",
-    })
+    await expect(adapter.listAgents()).rejects.toSatisfy(
+      (error) => adapter.publicError(error)?.kind === "unavailable"
+    )
     await expect(adapter.listAgents()).resolves.toMatchObject({
       agents: [
         { summary: { id: "research", name: "Research" }, editable: false },
@@ -131,7 +142,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
       maxTokens: 100,
       source: "provider-usage",
     })
-    expect(gateway.start).toHaveBeenCalledTimes(1)
     expect(subscribe).toHaveBeenCalledWith(
       "research",
       sessionKey,
@@ -235,17 +245,14 @@ describe("OpenClaw ServerRuntime assembly", () => {
     expect(
       adapter.publicError(
         new OpenClawClientConnectionError("credential-rejected")
-      )
-    ).toEqual({
-      code: "runtime_authentication_required",
-      status: 401,
-    })
+      )?.kind
+    ).toBe("runtime_authentication_required")
     expect(
-      adapter.publicError(new OpenClawClientRequestError("timeout", true))
-    ).toEqual({ code: "uncertain_mutation", status: 503 })
+      adapter.publicError(new OpenClawClientRequestError("timeout", true))?.kind
+    ).toBe("uncertain")
     expect(
-      adapter.publicError(new OpenClawWorkspaceRevisionConflictError())
-    ).toEqual({ code: "revision_conflict", status: 409 })
+      adapter.publicError(new OpenClawWorkspaceRevisionConflictError())?.kind
+    ).toBe("revision_conflict")
     expect(
       adapter.publicError(new Error("token=private-value"))
     ).toBeUndefined()
@@ -445,20 +452,20 @@ describe("OpenClaw artifact reads", () => {
 
     await expect(
       adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     answer = () => {
-      throw new OpenClawClientRequestError("rejected", true, false)
+      throw new OpenClawClientRequestError("rejected")
     }
     await expect(
       adapter.artifact("research", sessionKey, id)
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
   })
 
   it("does not find an artifact id this Session never published", async () => {
     const { adapter, request } = artifactAdapter({
       "chat.history": () => ({ messages: [] }),
       "artifacts.download": () => {
-        throw new OpenClawClientRequestError("rejected", true, false)
+        throw new OpenClawClientRequestError("rejected")
       },
     })
 
@@ -469,7 +476,9 @@ describe("OpenClaw artifact reads", () => {
     ])
       await expect(
         adapter.artifact("research", sessionKey, id)
-      ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+      ).rejects.toSatisfy(
+        (error) => adapter.publicError(error)?.kind === "gone"
+      )
     expect(
       request.mock.calls.some(([method]) => method === "sessions.files.get")
     ).toBe(false)
@@ -521,7 +530,7 @@ describe("OpenClaw artifact reads", () => {
     download = nativeDownload({ url: "https://elsewhere.example/file.png" })
     await expect(
       adapter.artifact("research", sessionKey, "artifact_managed_image_abc")
-    ).rejects.toSatisfy((error) => adapter.publicError(error)?.status === 404)
+    ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

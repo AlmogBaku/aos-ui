@@ -4,23 +4,20 @@ import type { z } from "zod"
 import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
   ServerRequestStaleError,
-  ServerTurnCapacityError,
   ServerTurnConflictError,
-  ServerTurnControlError,
-  ServerTurnSteerUnavailableError,
-  ServerTurnSteerUncertainError,
-  ServerSessionNotFoundError,
-  ServerAgentUpdateUnsupportedError,
-  type ServerRuntime,
-  type ServerRuntimePublicError,
 } from "../core/runtime"
+import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
+import { MembershipDetachedError } from "../core/channel"
+import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
+import type { AcpConnectionContext } from "./types"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
- * payloads the shared contract defines, and the JSON-RPC error code a proxy
- * failure travels as. Every code comes from `AOS_JSONRPC_ERRORS`.
+ * payloads the shared contract defines, and the JSON-RPC error a proxy
+ * failure travels as. An error ACP defines is the SDK's own `RequestError`;
+ * only the rest take their code from `AOS_JSONRPC_ERRORS`.
  */
 
 type AcpMeta = { readonly [key: string]: unknown } | null | undefined
@@ -35,31 +32,31 @@ export function parseMeta<Schema extends z.ZodType>(
   meta: AcpMeta
 ): z.output<Schema> {
   const parsed = schema.safeParse(meta?.[AOS_META_KEY] ?? {})
-  if (!parsed.success) throw invalidRequest()
+  if (!parsed.success) throw invalidParams()
   return parsed.data
 }
 
-export function invalidRequest() {
-  return new RequestError(AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request")
+export function invalidParams() {
+  return RequestError.invalidParams()
 }
 
-/** The guest lane's answer to anything it has not redeemed an invitation for. */
+/**
+ * The guest listener's answer to anything it has not redeemed an invitation
+ * for.
+ */
 export function authenticationRequired() {
-  return new RequestError(
-    AOS_JSONRPC_ERRORS.authenticationRequired,
-    "authentication_required"
-  )
+  return RequestError.authRequired()
 }
 
 export function notFound() {
-  return new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
+  return RequestError.resourceNotFound()
 }
 
 /** The JSON-RPC error a member stack's refusal travels as. */
 export function refusalError(refusal: CommandRefusal) {
   switch (refusal) {
     case "invalid":
-      return invalidRequest()
+      return invalidParams()
     case "not-found":
       return notFound()
     case "authentication-required":
@@ -82,40 +79,61 @@ export function staleRequest() {
   return new RequestError(AOS_JSONRPC_ERRORS.staleRequest, "stale_request")
 }
 
-const PUBLIC_ERROR_CODES: Readonly<
-  Record<ServerRuntimePublicError["code"], number>
-> = {
-  runtime_authentication_required: AOS_JSONRPC_ERRORS.authenticationRequired,
-  invalid_request: AOS_JSONRPC_ERRORS.invalidRequest,
-  not_found: AOS_JSONRPC_ERRORS.notFound,
-  revision_conflict: AOS_JSONRPC_ERRORS.revisionConflict,
-  temporarily_unavailable: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-  connection_interrupted: AOS_JSONRPC_ERRORS.connectionInterrupted,
-  uncertain_mutation: AOS_JSONRPC_ERRORS.uncertainMutation,
+function revisionConflict() {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.revisionConflict,
+    "revision_conflict"
+  )
 }
 
-/** JSON-RPC's own code for a method the connection does not serve. */
-const METHOD_NOT_FOUND = -32601
+function uncertainMutation() {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.uncertainMutation,
+    "uncertain_mutation"
+  )
+}
 
-/** Every error code a public reply carries, with the name it travels as. */
-const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map([
-  [AOS_JSONRPC_ERRORS.authenticationRequired, "authentication_required"],
-  [AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress"],
-  [AOS_JSONRPC_ERRORS.staleRequest, "stale_request"],
-  [AOS_JSONRPC_ERRORS.notFound, "not_found"],
-  [AOS_JSONRPC_ERRORS.revisionConflict, "revision_conflict"],
-  [AOS_JSONRPC_ERRORS.temporarilyUnavailable, "temporarily_unavailable"],
-  [AOS_JSONRPC_ERRORS.connectionInterrupted, "connection_interrupted"],
-  [AOS_JSONRPC_ERRORS.uncertainMutation, "uncertain_mutation"],
-  [AOS_JSONRPC_ERRORS.unsupported, "unsupported"],
-  [AOS_JSONRPC_ERRORS.invalidRequest, "invalid_request"],
-  [METHOD_NOT_FOUND, "method_not_found"],
-])
+function unsupported() {
+  return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
+}
+
+/** The error each kind of public failure travels as. */
+const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
+  {
+    gone: notFound,
+    unavailable: temporarilyUnavailable,
+    uncertain: uncertainMutation,
+    invalid_request: invalidParams,
+    revision_conflict: revisionConflict,
+    runtime_authentication_required: authenticationRequired,
+    unsupported,
+  }
+
+/**
+ * Every error code a public reply carries, with the machine name it travels
+ * as: the message of a public reply, and the code an `_aos/error` reports.
+ */
+const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
+  (
+    [
+      [invalidParams(), "invalid_request"],
+      [authenticationRequired(), "authentication_required"],
+      [notFound(), "not_found"],
+      [RequestError.methodNotFound(""), "method_not_found"],
+      [RequestError.requestCancelled(), "request_cancelled"],
+      [turnInProgress(), "turn_in_progress"],
+      [staleRequest(), "stale_request"],
+      [revisionConflict(), "revision_conflict"],
+      [temporarilyUnavailable(), "temporarily_unavailable"],
+      [uncertainMutation(), "uncertain_mutation"],
+      [unsupported(), "unsupported"],
+    ] as const
+  ).map(([error, name]) => [error.code, name])
+)
 
 /** Every code an `_aos/error` notification reports a failure with. */
 const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
   ...PUBLIC_ERROR_NAMES.values(),
-  ...Object.keys(PUBLIC_ERROR_CODES),
   "internal_error",
 ])
 
@@ -140,38 +158,36 @@ export const PUBLIC_ERRORS: PublicErrors = {
       : "internal_error",
 }
 
-/** Coordinator control failures, mirroring the normalized HTTP error map. */
-function coordinatorError(cause: unknown) {
-  if (cause instanceof ServerTurnConflictError) return turnInProgress()
-  if (cause instanceof ServerRequestStaleError) return staleRequest()
-  if (
-    cause instanceof ServerTurnCapacityError ||
-    cause instanceof ServerTurnSteerUnavailableError
-  )
-    return temporarilyUnavailable()
-  if (cause instanceof ServerTurnSteerUncertainError)
-    return new RequestError(
-      AOS_JSONRPC_ERRORS.uncertainMutation,
-      "uncertain_mutation"
-    )
-  if (
-    cause instanceof ServerTurnControlError ||
-    cause instanceof ServerSessionNotFoundError
-  )
-    return notFound()
-  if (cause instanceof ServerAgentUpdateUnsupportedError)
-    return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
-  return undefined
+/** The failure a membership or send error is; the rest are core's own. */
+function channelFailure(cause: unknown) {
+  if (cause instanceof MembershipDetachedError)
+    return failureOf("unavailable", cause)
+  if (cause instanceof ServerClientIdReusedError)
+    return failureOf("invalid_request", cause)
+  return coreFailure(cause)
 }
 
-/** The JSON-RPC error a proxy failure travels as, or the failure itself. */
-export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
-  const mapped = coordinatorError(cause)
-  if (mapped) return mapped
-  const publicError = runtime.publicError(cause)
-  return publicError
-    ? new RequestError(PUBLIC_ERROR_CODES[publicError.code], publicError.code)
-    : cause
+/**
+ * The JSON-RPC error a proxy failure travels as, or the failure itself;
+ * `publicError` is the runtime's classifier. A turn's own control answers
+ * are ACP's; every other failure travels as its kind.
+ */
+export function publicRequestError(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
+  if (cause instanceof ServerTurnConflictError) return turnInProgress()
+  if (cause instanceof ServerRequestStaleError) return staleRequest()
+  const failure = channelFailure(cause) ?? publicError(cause)
+  return failure ? KIND_ERRORS[failure.kind]() : cause
+}
+
+/** The machine name a public reply carries `error` as, or `internal_error`. */
+export function publicCodeOf(error: unknown) {
+  return (
+    (error instanceof RequestError && PUBLIC_ERROR_NAMES.get(error.code)) ||
+    "internal_error"
+  )
 }
 
 /**
@@ -179,9 +195,10 @@ export function publicRequestError(runtime: ServerRuntime, cause: unknown) {
  * The proxy has no operator-facing copy: a public failure travels as its
  * machine code, and the browser owns the localized sentence.
  */
-export function errorNotificationOf(runtime: ServerRuntime, cause: unknown) {
-  const mapped = publicRequestError(runtime, cause)
-  return mapped instanceof RequestError
-    ? { code: mapped.message, message: mapped.message }
-    : { code: "internal_error", message: "internal_error" }
+export function errorNotificationOf(
+  publicError: AcpConnectionContext["publicError"],
+  cause: unknown
+) {
+  const code = publicCodeOf(publicRequestError(publicError, cause))
+  return { code, message: code }
 }

@@ -40,12 +40,11 @@ import {
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { createSessionRows } from "../core/session-rows"
 import { createGuestConnection } from "./acp"
 
 /**
- * The guest lane in a room with operator browsers: a redeemed invitation to
- * the operator harness's seeded Session, on the same runtime and registry.
+ * The guest listener in a channel with operator browsers: a redeemed invitation
+ * to the operator harness's seeded Session, on the same runtime and channels.
  */
 
 const GUEST_REF = "guest-ref"
@@ -73,7 +72,6 @@ async function invite(test: Operator) {
     deploymentId: "deployment-a",
     runtimeId: test.runtimeInstance.id,
     keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
-    ttlSeconds: 259_200,
   })
   const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   return { invitations, token }
@@ -94,9 +92,11 @@ async function connectGuest(
       runtimeInstance: test.runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
-      rooms: test.rooms,
+      channels: test.channels,
+      catalog: test.catalog,
+      guestActiveExecutions: 2,
+      logger: test.logs.logger,
     },
-    createSessionRows(),
     "guest-connection"
   )
   const { connection, recorder } = connectClient(context, {
@@ -119,19 +119,15 @@ async function connectGuest(
   }
 }
 
-describe("guest in a Session room", () => {
+describe("guest in a Session channel", () => {
   it("keeps a guest's exposure out of presence and read state", async () => {
     const test = await harness({ providerIds: true })
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 
-    await guest.agent.notify(AOS_METHODS.session.focus, {
+    await guest.agent.request(AOS_METHODS.session.focus, {
       sessionId: GUEST_REF,
     })
-    // One round trip after the notification proves the lane has handled it.
-    await expect(
-      guest.agent.request(methods.agent.session.list, {})
-    ).rejects.toThrow()
 
     expect(test.presence.set).not.toHaveBeenCalled()
     expect(test.readState.focus).not.toHaveBeenCalled()
@@ -157,7 +153,7 @@ describe("guest in a Session room", () => {
     guest.close()
   })
 
-  it("shows a guest an operator's prompt as its text alone, and lets it Stop", async () => {
+  it("shows a guest an operator's prompt as its text alone, and lets it steer and Stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     const guest = await connectGuest(test)
@@ -191,6 +187,12 @@ describe("guest in a Session room", () => {
     expect(prompts(other.recorder)).toEqual([
       [{ type: "text", text: "Summarize" }, attachment],
     ])
+    await guest.agent.request(AOS_METHODS.session.steer, {
+      sessionId: GUEST_REF,
+      requestId: "steer-1",
+      text: "Shorter",
+    })
+    expect(test.sources[0]?.steer).toHaveBeenCalledOnce()
     await guest.agent.notify(methods.agent.session.cancel, {
       sessionId: GUEST_REF,
     })
@@ -449,7 +451,7 @@ describe("guest in a Session room", () => {
     })
     await test.list()
     // A restart lost the operator's turn; the runtime still waits on it.
-    await test.coordinator.discover(test.scope, "guest")
+    await test.coordinator.discover(test.scope)
     const guest = await connectGuest(test)
 
     await open(guest, { sessionId: GUEST_REF })

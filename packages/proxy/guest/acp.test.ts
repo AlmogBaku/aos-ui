@@ -19,14 +19,13 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
-  AOS_STOP_REASONS,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerAcceptedNotificationSchema,
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "../../protocol/acp"
-import { createChannel } from "../core/channel"
+import { createChannels } from "../core/channel"
 import { promptText, runEvents, type MemberEvent } from "../core/member"
 import type { ConnectionAuthentication } from "../acp/types"
 import {
@@ -43,6 +42,7 @@ import {
   type GuestInvitationService,
 } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog } from "../core/catalog"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -55,8 +55,12 @@ import type {
   ServerTurnHandle,
   ServerRuntime,
 } from "../core/runtime"
+import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   createGuestAcpService,
   createGuestConnection,
@@ -73,6 +77,10 @@ const KEY = new Uint8Array(32).fill(7)
 const INSTRUCTION = "Load the interview skill."
 /** JSON-RPC reserves this code; the SDK's `methodNotFound` returns it. */
 const METHOD_NOT_FOUND = -32601
+/** ACP's own codes, as the SDK builds them. */
+const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
+const NOT_FOUND = RequestError.resourceNotFound().code
+const INVALID_PARAMS = RequestError.invalidParams().code
 
 /** What the redeemed member's stack shows it of one event, if anything. */
 function shown(
@@ -111,18 +119,18 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -261,7 +269,7 @@ const HISTORY = {
 /** The longest delay one timer holds; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1
 
-function invitationService(ttlSeconds = 259_200) {
+function invitationService() {
   return createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
@@ -269,15 +277,19 @@ function invitationService(ttlSeconds = 259_200) {
     runtimeId: RUNTIME_ID,
     keys: [{ id: "current", secret: KEY }],
     now: () => NOW,
-    ttlSeconds,
   })
 }
 
-async function invite(service: GuestInvitationService, ref = REF) {
+async function invite(
+  service: GuestInvitationService,
+  ref = REF,
+  expiresInSeconds?: number
+) {
   return (
     await service.issue({
       agentId: AGENT,
       ref,
+      ...(expiresInSeconds ? { expiresInSeconds } : {}),
       firstTurn: { instruction: INSTRUCTION },
     })
   ).token
@@ -290,7 +302,7 @@ function terminalHandle(events: readonly TurnEvent[]): ServerTurnHandle {
     })(),
     settled: Promise.resolve(),
     stop: vi.fn(async () => "idle" as const),
-    recoveryPosition: () => ({ epoch: "native", lastSeen: events.length }),
+    recoveryPosition: () => "token-1",
   }
 }
 
@@ -310,7 +322,7 @@ function openHandle(events: readonly TurnEvent[]): ServerTurnHandle {
       release()
       return "stopping" as const
     }),
-    recoveryPosition: () => ({ epoch: "native", lastSeen: events.length }),
+    recoveryPosition: () => "token-1",
   }
 }
 
@@ -399,7 +411,7 @@ const asking = (request: PendingRequest, calls: number) =>
   )
 
 const unsupported = () => {
-  throw new Error("The guest ACP lane does not reach this operation")
+  throw new Error("The guest ACP listener does not reach this operation")
 }
 
 type HarnessOptions = {
@@ -415,14 +427,17 @@ type HarnessOptions = {
   ) => Promise<CreateElicitationResponse>
   /** The Session's usage and model readings are readable, as an operator's are. */
   readings?: boolean
-  /** The longest invitation the service issues; three days by default. */
-  ttlSeconds?: number
   /** Whether a first send creates the invited Session; it does by default. */
   creates?: boolean
   /** How the runtime resolves a public Session id; none resolves by default. */
-  resolveSessionId?: (agentId: string, sessionId: string) => string | undefined
-  /** What the invited lookup, the capabilities read or a run's start throws instead. */
-  fails?: { lookup?: unknown; capabilities?: unknown; start?: unknown }
+  resolveProviderSessionId?: (
+    agentId: string,
+    sessionId: string
+  ) => string | undefined
+  /** What the invited lookup or a run's start throws instead. */
+  fails?: { lookup?: unknown; start?: unknown }
+  /** How many turns every guest together may hold; four by default. */
+  guestActiveExecutions?: number
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -444,17 +459,14 @@ function harness(options: HarnessOptions = {}) {
     async (_agentId: string, _ref: string, create?: object) => {
       if (options.fails?.lookup) throw options.fails.lookup
       return options.existing || (create && options.creates !== false)
-        ? { sessionId: STORED, created: !options.existing }
+        ? { providerSessionId: STORED, created: !options.existing }
         : undefined
     }
   )
   const updateSession = vi.fn(async () => undefined)
   const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
-  const workspaceCapabilities = vi.fn(async () => {
-    if (options.fails?.capabilities) throw options.fails.capabilities
-    return CAPABILITIES
-  })
+  const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
   const history = vi.fn(
     async (_agentId: string, _sessionId: string, _limit: number, offset = 0) =>
       options.history?.(offset) ?? HISTORY
@@ -465,21 +477,25 @@ function harness(options: HarnessOptions = {}) {
     limit,
     offset,
   }))
+  let catalogChanged: (() => void) | undefined
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
-    resolveSessionId: options.resolveSessionId ?? (() => undefined),
+    resolveProviderSessionId:
+      options.resolveProviderSessionId ?? (() => undefined),
     publicError: () => undefined,
-    authState: unsupported,
+    link: READY_LINK,
     runtimeInfo,
     listAgents: unsupported,
     updateAgent: unsupported,
     listAllSessions,
     listSessions: unsupported,
     history,
+    // The operator's row of the invited Session, under the id the guest's
+    // row cell is keyed by.
     getSession: async () => ({
-      id: STORED,
+      id: REF,
       agentId: AGENT,
       title: "Operator-owned title",
       archived: false,
@@ -493,8 +509,10 @@ function harness(options: HarnessOptions = {}) {
     models: options.readings ? async () => MODELS : unsupported,
     updateModel: unsupported,
     context: options.readings ? async () => USAGE : unsupported,
-    subscribeSessionInvalidation: unsupported,
-    subscribeCatalogChanges: unsupported,
+    async subscribeCatalogChanges(listener) {
+      catalogChanged = listener
+      return () => undefined
+    },
     stageAttachments: unsupported,
     artifact: unsupported,
     transcribe: unsupported,
@@ -504,12 +522,11 @@ function harness(options: HarnessOptions = {}) {
     engine,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 4,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1_024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1_024,
+    logger: captureLogs().logger,
   })
+  coordinator.bindCapabilities(runtime)
   const runtimeInstance: RuntimeInstance = {
     id: RUNTIME_ID,
     runtime,
@@ -518,20 +535,22 @@ function harness(options: HarnessOptions = {}) {
   }
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
   const clock = { now: NOW }
-  const invitations = invitationService(options.ttlSeconds)
-  const logs: unknown[] = []
-  const lane: GuestAcpServiceOptions = {
-    logger: {
-      info: (line) => logs.push(line),
-      error: (line) => logs.push(line),
-    },
+  const invitations = invitationService()
+  const logs = captureLogs()
+  const listener: GuestAcpServiceOptions = {
+    logger: logs.logger,
     publicOrigin: ORIGIN,
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    rooms: createChannel({
-      snapshot: (scope) => coordinator.snapshot(scope),
+    channels: createChannels({ coordinator, runtime, logger: logs.logger }),
+    catalog: createCatalog({
+      runtime,
+      coordinator,
+      rows: createSessionRows({ now: () => NOW }),
+      logger: logs.logger,
     }),
+    guestActiveExecutions: options.guestActiveExecutions ?? 4,
     now: () => clock.now,
     schedule: (delayMs, task) => {
       scheduled.push({ delayMs, task })
@@ -539,11 +558,7 @@ function harness(options: HarnessOptions = {}) {
     },
     cancel: () => undefined,
   }
-  const context = createGuestConnection(
-    lane,
-    createSessionRows({ now: () => NOW }),
-    "connection-1"
-  )
+  const context = createGuestConnection(listener, "connection-1")
 
   const { connection, recorder } = connectClient(context, {
     name: "aos-guest-browser",
@@ -560,7 +575,7 @@ function harness(options: HarnessOptions = {}) {
     clock,
     invitations,
     policy: context.authentication,
-    lane,
+    listener,
     coordinator,
     start,
     handles,
@@ -570,6 +585,11 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     listAllSessions,
+    /** The runtime reports that its Session list changed. */
+    changeCatalog() {
+      if (!catalogChanged) throw new Error("Nothing watches the catalog")
+      catalogChanged()
+    },
     /** Advertises paging older history, as the AOS browser does, by default. */
     initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
@@ -622,16 +642,22 @@ type Frame = {
  * One guest browser on the raw WebSocket the listener opens, frame by frame,
  * so what the socket itself writes and closes is observable.
  */
-async function wire(lane: GuestAcpServiceOptions) {
-  const service = createGuestAcpService(lane)
+async function wire(listener: GuestAcpServiceOptions) {
+  const service = createGuestAcpService(listener)
   const upgrade = await service.authorizeUpgrade(
     new Request(`${ORIGIN}/api/aos/v1/acp`, { headers: { origin: ORIGIN } })
   )
   if (!upgrade) throw new Error("The guest upgrade was refused")
   const frames: Frame[] = []
   const closed: Array<{ code: number; reason: string }> = []
+  const replies = new Map<Frame["id"], (reply: Frame) => void>()
   const socket = service.open(upgrade, {
-    send: (raw) => frames.push(JSON.parse(raw) as Frame),
+    send: (raw) => {
+      const frame = JSON.parse(raw) as Frame
+      const sent = frames.push(frame)
+      if (frame.method === undefined) replies.get(frame.id)?.(frame)
+      return sent
+    },
     close: (code, reason) => closed.push({ code, reason }),
   })
   let nextId = 0
@@ -640,19 +666,16 @@ async function wire(lane: GuestAcpServiceOptions) {
   const request = (method: string, params: unknown) => {
     nextId += 1
     const id = nextId
+    const reply = new Promise<Frame>((resolve) => replies.set(id, resolve))
     send({ id, method, params })
-    return vi.waitFor(() => {
-      const reply = frames.find((frame) => frame.id === id)
-      if (!reply) throw new Error(`No reply to ${method}`)
-      return reply
-    })
+    return reply
   }
   return { frames, closed, send, request, close: () => socket.close() }
 }
 
 /** Opens a raw guest connection that redeemed `token`. */
-async function loggedInWire(lane: GuestAcpServiceOptions, token: string) {
-  const socket = await wire(lane)
+async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
+  const socket = await wire(listener)
   await socket.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
@@ -667,12 +690,16 @@ async function loggedInWire(lane: GuestAcpServiceOptions, token: string) {
   return socket
 }
 
-/** Opens a raw guest connection that redeemed `token` and resumed the ref. */
-async function redeemedWire(lane: GuestAcpServiceOptions, token: string) {
-  const socket = await loggedInWire(lane, token)
+/** Opens a raw guest connection that redeemed `token` and resumed `ref`. */
+async function redeemedWire(
+  listener: GuestAcpServiceOptions,
+  token: string,
+  ref = REF
+) {
+  const socket = await loggedInWire(listener, token)
   expect(
     await socket.request(methods.agent.session.resume, {
-      sessionId: REF,
+      sessionId: ref,
       cwd: "/",
     })
   ).toMatchObject({ result: {} })
@@ -732,7 +759,7 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
   ],
 ]
 
-describe("guest ACP lane", () => {
+describe("guest ACP listener", () => {
   it("advertises the invitation auth method, the conversation controls, and no workspace extensions", async () => {
     const test = harness()
 
@@ -744,7 +771,7 @@ describe("guest ACP lane", () => {
       authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
       _meta: {
         [AOS_META_KEY]: {
-          lane: "guest",
+          role: "guest",
           extensions: {
             guestProjection: true,
             steer: true,
@@ -766,7 +793,7 @@ describe("guest ACP lane", () => {
   it("answers every method with authentication required before login", async () => {
     const test = harness({ existing: true })
     await test.initialize()
-    const required = { code: AOS_JSONRPC_ERRORS.authenticationRequired }
+    const required = { code: AUTHENTICATION_REQUIRED }
 
     await expect(test.resume(REF)).rejects.toMatchObject(required)
     await expect(test.prompt("Hello")).rejects.toMatchObject(required)
@@ -782,27 +809,32 @@ describe("guest ACP lane", () => {
     await expect(
       test.agent.request(AOS_METHODS.agents.list, undefined)
     ).rejects.toMatchObject(required)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).rejects.toMatchObject(required)
     expect(test.resolveInvitedSession).not.toHaveBeenCalled()
     test.close()
   })
 
-  it("stops nothing, reports no focus and sends no feed before login", async () => {
+  it("stops nothing and sends no feed before login", async () => {
     const test = harness({
       existing: true,
       handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
     })
-    const invited = { agentId: AGENT, sessionId: STORED, threadId: REF }
+    const invited = {
+      agentId: AGENT,
+      providerSessionId: STORED,
+      sessionId: REF,
+    }
     await test.coordinator.start(
       invited,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
-        canControl: true,
+        membershipId: "operator",
+        principalId: "operator",
       }
     )
-    const socket = await wire(test.lane)
+    const socket = await wire(test.listener)
     await socket.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: { name: "aos-guest-browser", version: "1" },
@@ -811,10 +843,6 @@ describe("guest ACP lane", () => {
 
     socket.send({
       method: methods.agent.session.cancel,
-      params: { sessionId: REF },
-    })
-    socket.send({
-      method: AOS_METHODS.session.focus,
       params: { sessionId: REF },
     })
     await settled()
@@ -829,27 +857,50 @@ describe("guest ACP lane", () => {
     socket.close()
   })
 
+  it("closes a guest socket that has not logged in by the handshake deadline", async () => {
+    const clock = useFakeClock()
+    const test = harness({ existing: true })
+    const waiting = await wire(test.listener)
+    await waiting.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+    })
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+
+    await clock.advance(HANDSHAKE_DEADLINE_MS - 1)
+    expect(waiting.closed).toEqual([])
+    await clock.advance(1)
+
+    expect(waiting.closed).toEqual([expect.objectContaining({ code: 4408 })])
+    expect(guest.closed).toEqual([])
+    guest.close()
+    waiting.close()
+  })
+
   it("logs neither a token nor the setup instruction as a guest logs in", async () => {
     const test = harness({ existing: true })
     const token = await invite(test.invitations)
     await test.initialize()
 
     await expect(test.login(`${token}x`)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await test.login(token)
     await test.resume(REF)
     await test.prompt("Start the interview")
     await settled()
 
-    expect(test.logs).not.toEqual([])
-    const logged = JSON.stringify(test.logs)
+    expect(test.logs.records()).not.toEqual([])
+    const logged = JSON.stringify(test.logs.records())
     expect(logged).not.toContain(token)
     expect(logged).not.toContain(INSTRUCTION)
     test.close()
   })
 
-  it("refuses an invitation narrower than what the lane shows", async () => {
+  it("refuses an invitation narrower than what the listener shows", async () => {
     const test = harness({ existing: true })
     const verify = test.invitations.verify.bind(test.invitations)
     vi.spyOn(test.invitations, "verify").mockImplementation(async (token) => {
@@ -868,10 +919,10 @@ describe("guest ACP lane", () => {
     await expect(
       test.login(await invite(test.invitations))
     ).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await expect(test.resume(REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     test.close()
   })
@@ -881,10 +932,10 @@ describe("guest ACP lane", () => {
     await test.initialize()
 
     await expect(test.login("not-a-token")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     await expect(test.resume(REF)).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
     test.close()
   })
@@ -896,33 +947,36 @@ describe("guest ACP lane", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          session: { agentId: AGENT, status: "idle", archived: false },
-          execution: { status: "idle" },
-        },
-      },
-    })
-    // The operator's own Session title never travels to a guest.
-    expect(JSON.stringify(resumed)).not.toContain("Operator-owned title")
-    expect(resumed).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          capabilities: {
-            workspace: {
-              slashCommands: { status: "unavailable" },
-              models: { status: "unavailable" },
+    // The answer says only where the replay ended.
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    const commands = await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(commands.params).toMatchObject({
+      sessionId: REF,
+      update: {
+        availableCommands: [],
+        _meta: {
+          [AOS_META_KEY]: {
+            capabilities: {
+              workspace: {
+                slashCommands: { status: "unavailable" },
+                models: { status: "unavailable" },
+              },
+              interactions: { steering: CAPABILITIES.interactions.steering },
             },
-            interactions: { steering: CAPABILITIES.interactions.steering },
           },
         },
       },
     })
-    expect(JSON.stringify(resumed)).not.toContain("Draft a plan")
+    expect(JSON.stringify(commands.params)).not.toContain("Draft a plan")
     expect(test.history).toHaveBeenCalledWith(AGENT, STORED, 500, 0)
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
+    // The operator's own Session title never travels to a guest.
+    expect(replayed).not.toContain("Operator-owned title")
     expect(replayed).not.toContain("private reasoning")
     expect(replayed).not.toContain(OPERATOR_PATH)
     expect(replayed).not.toContain("+new")
@@ -944,7 +998,7 @@ describe("guest ACP lane", () => {
     // The invitation's setup turn is not part of the guest conversation.
     expect(replayed).not.toContain(INSTRUCTION)
     await expect(test.resume("another-session")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
     test.close()
   })
@@ -1027,9 +1081,7 @@ describe("guest ACP lane", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toMatchObject({
-      _meta: { [AOS_META_KEY]: { execution: { status: "idle" } } },
-    })
+    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: {} } })
     expect(test.resolveInvitedSession).toHaveBeenCalledWith(
       AGENT,
       REF,
@@ -1041,7 +1093,28 @@ describe("guest ACP lane", () => {
       expect.anything()
     )
     expect(test.history).not.toHaveBeenCalled()
-    expect(updates(test.recorder)).toEqual([])
+    // What the guest can do there is all it is shown before its first Send.
+    await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes("available_commands_update"),
+      "the invited Session's commands"
+    )
+    expect(updates(test.recorder)).toMatchObject([
+      {
+        sessionId: REF,
+        update: {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [],
+          _meta: {
+            [AOS_META_KEY]: {
+              capabilities: {
+                workspace: { slashCommands: { status: "unavailable" } },
+              },
+            },
+          },
+        },
+      },
+    ])
     test.close()
   })
 
@@ -1080,7 +1153,10 @@ describe("guest ACP lane", () => {
 
   it("refuses an operator's method as unknown however its params are spelled", async () => {
     const test = harness({ existing: true })
-    const socket = await loggedInWire(test.lane, await invite(test.invitations))
+    const socket = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     for (const method of [
       AOS_METHODS.session.update,
@@ -1353,31 +1429,55 @@ describe("guest ACP lane", () => {
     await test.prompt("Export the notes")
     const signal = await withdrawal.promise
 
-    // The operator's answer names the Session by its provider scope alone.
-    await test.coordinator.answer(
-      { agentId: AGENT, sessionId: STORED },
-      {
-        requestId: QUESTION.requestId,
-        status: "resolved",
-        payload: { answers: [["later"]] },
-      }
-    )
+    // The operator's answer names the Session by its provider scope alone,
+    // and brings the channel into the turn it continues, as the operator's
+    // membership does.
+    const scope = { agentId: AGENT, providerSessionId: STORED }
+    const continued = await test.coordinator.answer(scope, {
+      requestId: QUESTION.requestId,
+      status: "resolved",
+      payload: { answers: [["later"]] },
+    })
+    if (!continued) throw new Error("The answer did not continue the turn")
+    test.listener.channels.continueTurn(scope, continued.from, continued.turnId)
+    await test.listener.channels.sync(scope)
 
     await vi.waitFor(() => expect(signal.aborted).toBe(true))
     // The guest follows the operator's reply to its end, past the withdrawal.
     await test.recorder.wait(
       (entry) =>
-        entry.method === methods.client.session.update &&
+        JSON.stringify(entry.params).includes(continued.turnId) &&
         (entry.params as { update?: { state?: unknown } }).update?.state ===
           "idle",
-      "the turn to settle idle"
+      "the continued turn to settle idle"
     )
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
     test.close()
   })
 
-  it("stops its own run through the controller the projection grants", async () => {
+  it("makes one turn of a prompt its client sends twice", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const send = () =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+        _meta: { [AOS_META_KEY]: { clientId: "send-1" } },
+      })
+
+    const first = await send()
+    expect(await send()).toEqual(first)
+    expect(test.start).toHaveBeenCalledOnce()
+    test.close()
+  })
+
+  it("stops its own run", async () => {
     const test = harness({
       existing: true,
       handle: () =>
@@ -1410,20 +1510,21 @@ describe("guest ACP lane", () => {
     })
     const operatorScope = {
       agentId: AGENT,
-      sessionId: "operator-session",
-      threadId: "operator",
+      providerSessionId: "operator-session",
+      sessionId: "operator",
     }
     await test.coordinator.start(
       operatorScope,
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
-        canControl: true,
+        membershipId: "operator",
+        principalId: "operator",
       }
     )
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
     const before = socket.frames.length
 
     for (const sessionId of ["operator", "operator-session"])
@@ -1445,8 +1546,9 @@ describe("guest ACP lane", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: REF })
-    await test.resume(REF)
+    await expect(
+      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+    ).resolves.toEqual({})
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
@@ -1460,13 +1562,15 @@ describe("guest ACP lane", () => {
     await test.resume(REF)
 
     const other = await test.coordinator.start(
-      { agentId: AGENT, sessionId: "operator-session", threadId: "operator" },
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {
-        subscriberId: "operator",
-        controllerId: "operator",
-        lane: "operator",
-        canControl: true,
+        membershipId: "operator",
+        principalId: "operator",
       }
     )
     for await (const _ of other.events) void _
@@ -1526,7 +1630,7 @@ describe("guest ACP lane", () => {
         cwd: "/",
         replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.notFound })
+    ).rejects.toMatchObject({ code: NOT_FOUND })
     const sent = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)
@@ -1612,46 +1716,15 @@ describe("guest ACP lane", () => {
     await expect(
       test.login(await invite(test.invitations, "other_ref"))
     ).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.authenticationRequired,
+      code: AUTHENTICATION_REQUIRED,
     })
 
     const resumed = await test.resume(REF, true)
     expect(resumed).toMatchObject({ _meta: { [AOS_META_KEY]: {} } })
     expect(JSON.stringify(updates(test.recorder))).not.toContain(INSTRUCTION)
     await expect(test.resume("other_ref")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
-    test.close()
-  })
-
-  it("sends a guest no usage or model reading", async () => {
-    const test = harness({
-      readings: true,
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          { kind: TurnEventKind.ModelChanged, modelId: "opus" },
-          ...RUN_EVENTS.slice(1),
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview")
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes('"idle"'),
-      'an update carrying "idle"'
-    )
-    await settled()
-
-    const kinds = updates(test.recorder).map(
-      (params) =>
-        (params as { update: { sessionUpdate: string } }).update.sessionUpdate
-    )
-    expect(kinds).toContain("agent_message_chunk")
-    expect(kinds).not.toContain("usage_update")
-    expect(kinds).not.toContain("config_option_update")
     test.close()
   })
 
@@ -1660,7 +1733,7 @@ describe("guest ACP lane", () => {
     async (_name, frame) => {
       const test = harness({ existing: true })
       const socket = await redeemedWire(
-        test.lane,
+        test.listener,
         await invite(test.invitations)
       )
       const written = socket.frames.length
@@ -1676,7 +1749,7 @@ describe("guest ACP lane", () => {
                 jsonrpc: "2.0",
                 id: "late",
                 error: expect.objectContaining({
-                  code: AOS_JSONRPC_ERRORS.authenticationRequired,
+                  code: AUTHENTICATION_REQUIRED,
                 }),
               },
             ]
@@ -1689,9 +1762,9 @@ describe("guest ACP lane", () => {
   )
 
   it("keeps an invitation longer than one timer open until it expires", async () => {
-    const test = harness({ existing: true, ttlSeconds: 2_592_000 })
+    const test = harness({ existing: true })
     await test.initialize()
-    await test.login(await invite(test.invitations))
+    await test.login(await invite(test.invitations, REF, 2_592_000))
     await test.resume(REF)
     let closed = false
     void test.closed.then(() => {
@@ -1775,7 +1848,11 @@ const FAILURES: Array<[string, () => unknown]> = [
 /** Every code a guest's error reply may carry. */
 const PUBLIC_CODES: readonly number[] = [
   ...Object.values(AOS_JSONRPC_ERRORS),
+  AUTHENTICATION_REQUIRED,
+  NOT_FOUND,
+  INVALID_PARAMS,
   METHOD_NOT_FOUND,
+  RequestError.requestCancelled().code,
 ]
 
 /** A reply's error carries a public code and nothing that describes the host. */
@@ -1801,7 +1878,7 @@ describe("guest scope and commands", () => {
     const test = harness({ existing: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: AOS_JSONRPC_ERRORS.notFound }
+    const notFound = { code: NOT_FOUND }
 
     await expect(test.resume("another-session")).rejects.toMatchObject(notFound)
     await expect(test.prompt("Hello", "another-session")).rejects.toMatchObject(
@@ -1840,7 +1917,7 @@ describe("guest scope and commands", () => {
   it("reaches the invited conversation when its reference names another native Session", async () => {
     const test = harness({
       existing: true,
-      resolveSessionId: (_agentId, sessionId) => sessionId,
+      resolveProviderSessionId: (_agentId, sessionId) => sessionId,
     })
     await test.initialize()
     await test.login(await invite(test.invitations, "operator-native"))
@@ -1856,7 +1933,7 @@ describe("guest scope and commands", () => {
     const test = harness()
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: AOS_JSONRPC_ERRORS.notFound }
+    const notFound = { code: NOT_FOUND }
 
     await expect(test.steer("Shorter")).rejects.toMatchObject(notFound)
     await expect(
@@ -1881,7 +1958,7 @@ describe("guest scope and commands", () => {
     await test.login(await invite(test.invitations))
 
     await expect(test.prompt("Hello")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.notFound,
+      code: NOT_FOUND,
     })
     expect(test.start).not.toHaveBeenCalled()
     test.close()
@@ -1899,7 +1976,7 @@ describe("guest scope and commands", () => {
           sessionId: REF,
           prompt: blocks.map((text) => ({ type: "text" as const, text })),
         })
-      ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.invalidRequest })
+      ).rejects.toMatchObject({ code: INVALID_PARAMS })
 
       expect(test.resolveInvitedSession).not.toHaveBeenCalled()
       expect(test.start).not.toHaveBeenCalled()
@@ -1916,17 +1993,18 @@ describe("guest scope and commands", () => {
       await test.login(await invite(test.invitations))
 
       await expect(test.steer(blocks.join(""))).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.invalidRequest,
+        code: INVALID_PARAMS,
       })
       expect(test.resolveInvitedSession).not.toHaveBeenCalled()
       test.close()
     }
   )
 
-  it("steers a turn it started, as the invitation's controller", async () => {
+  it("steers a turn it started", async () => {
     const test = harness({ existing: true, handle: steerableHandle })
+    const token = await invite(test.invitations)
     await test.initialize()
-    await test.login(await invite(test.invitations))
+    await test.login(token)
     await test.resume(REF)
     await test.prompt("Start the interview")
     await test.recorder.wait(
@@ -1934,7 +2012,7 @@ describe("guest scope and commands", () => {
       "an update carrying Guest-visible answer"
     )
 
-    // The browser's steer params are the ones this lane accepts.
+    // The browser's steer params are the ones this listener accepts.
     expect(
       AosSteerRequestSchema.safeParse({
         sessionId: REF,
@@ -1956,6 +2034,18 @@ describe("guest scope and commands", () => {
     expect(
       AosSteerAcceptedNotificationSchema.safeParse(accepted.params).data
     ).toMatchObject({ sessionId: REF, requestId: "steer-1" })
+
+    // Another connection on the same invitation steers only once it joins.
+    const other = await loggedInWire(test.listener, token)
+    expect(
+      await other.request(AOS_METHODS.session.steer, {
+        sessionId: REF,
+        requestId: "steer-2",
+        text: "Longer",
+      })
+    ).toMatchObject({ error: { code: NOT_FOUND } })
+    expect(test.handles.at(0)?.steer).toHaveBeenCalledOnce()
+    other.close()
     test.close()
   })
 
@@ -2003,7 +2093,7 @@ describe("guest scope and commands", () => {
   describe("a staged attachment", () => {
     /** Stages one attachment for the invited conversation, as the REST route does. */
     const staged = (test: ReturnType<typeof harness>) => {
-      const stageId = test.lane.attachmentStages.create(AGENT, REF, {
+      const stageId = test.listener.attachmentStages.create(AGENT, REF, {
         public: [],
         appendTo: (text) => `${text}\n[attached notes.txt]`,
         cleanup: async () => undefined,
@@ -2057,7 +2147,7 @@ describe("guest scope and commands", () => {
       await test.resume(REF)
 
       await expect(send(test, "missing-stage")).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.invalidRequest,
+        code: INVALID_PARAMS,
       })
       expect(test.start).not.toHaveBeenCalled()
       test.close()
@@ -2070,7 +2160,7 @@ describe("guest scope and commands", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
     const rewind = (rewindSourceId: string) => {
-      // The browser's prompt `_meta` is the shape this lane accepts.
+      // The browser's prompt `_meta` is the shape this listener accepts.
       expect(AosPromptMetaSchema.safeParse({ rewindSourceId }).success).toBe(
         true
       )
@@ -2083,7 +2173,7 @@ describe("guest scope and commands", () => {
 
     // The invitation's setup turn is in the stored history, never shown.
     await expect(rewind("user-0")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
+      code: INVALID_PARAMS,
     })
     const from = test.recorder.entries.length
     await test.prompt("Hello")
@@ -2107,10 +2197,9 @@ describe("guest scope and commands", () => {
     await rewind(own ?? "")
 
     await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    expect(test.start).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.objectContaining({ rewindSourceId: own })
-    )
+    expect(test.start.mock.lastCall?.[1]).toMatchObject({
+      rewindSourceId: own,
+    })
     test.close()
   })
 
@@ -2140,7 +2229,7 @@ describe("guest scope and commands", () => {
     const token = await invite(test.invitations)
     const replay = { sessionId: REF, cwd: "/", replayFrom: { type: "start" } }
 
-    const first = await loggedInWire(test.lane, token)
+    const first = await loggedInWire(test.listener, token)
     await first.request(methods.agent.session.resume, replay)
     await first.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2148,7 +2237,7 @@ describe("guest scope and commands", () => {
     })
     await settled()
     // A reload replays from the start and scrolls back a page.
-    const reloaded = await loggedInWire(test.lane, token)
+    const reloaded = await loggedInWire(test.listener, token)
     await reloaded.request(methods.agent.session.resume, replay)
     await reloaded.request(methods.agent.session.resume, {
       ...replay,
@@ -2170,7 +2259,10 @@ describe("guest scope and commands", () => {
 
   it("keeps unknown parameters and metadata from the runtime", async () => {
     const test = harness({ existing: true })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     const smuggledMeta = await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2178,7 +2270,7 @@ describe("guest scope and commands", () => {
       _meta: { [AOS_META_KEY]: { smuggled: "operator-only" } },
     })
     expect(smuggledMeta.error).toMatchObject({
-      code: AOS_JSONRPC_ERRORS.invalidRequest,
+      code: INVALID_PARAMS,
     })
     const smuggledParam = await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
@@ -2210,7 +2302,7 @@ describe("guest scope and commands", () => {
     async (_name, failure) => {
       const test = harness({ fails: { lookup: failure() } })
       const socket = await loggedInWire(
-        test.lane,
+        test.listener,
         await invite(test.invitations)
       )
 
@@ -2230,68 +2322,80 @@ describe("guest scope and commands", () => {
     }
   )
 
-  it.each(FAILURES)(
-    "answers %s from a provider call with a public code alone",
-    async (_name, failure) => {
-      const test = harness({
-        existing: true,
-        fails: { capabilities: failure() },
-      })
-      const socket = await loggedInWire(
-        test.lane,
-        await invite(test.invitations)
-      )
-
-      expectPublicError(
-        await socket.request(methods.agent.session.resume, {
-          sessionId: REF,
-          cwd: "/",
-        })
-      )
-      socket.close()
-    }
-  )
-
-  it("reports a run that failed to start with a public code alone", async () => {
+  it("answers a run that failed to start with a public code alone", async () => {
     const test = harness({
       existing: true,
-      fails: { start: new RequestError(-32000, OPERATOR_SECRET) },
+      fails: { start: new RequestError(-32603, OPERATOR_SECRET) },
     })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
-    await socket.request(methods.agent.session.prompt, {
-      sessionId: REF,
-      prompt: [{ type: "text", text: "Hello" }],
-    })
-    const failure = await vi.waitFor(() => {
-      const frame = socket.frames.find(({ params }) =>
-        JSON.stringify(params ?? null).includes(AOS_STOP_REASONS.error)
-      )
-      if (!frame) throw new Error("No failed state_update")
-      return frame
-    })
-
-    expect(failure.params).toEqual({
-      sessionId: REF,
-      update: {
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
-        _meta: {
-          [AOS_META_KEY]: {
-            sequence: expect.any(Number),
-            turnId: expect.any(String),
-            code: "internal_error",
-          },
-        },
-      },
-    })
+    expectPublicError(
+      await socket.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: [{ type: "text", text: "Hello" }],
+      })
+    )
     socket.close()
+  })
+
+  it("counts every guest's turns against one cap, whichever invitation started them, and no operator's", async () => {
+    const test = harness({
+      existing: true,
+      guestActiveExecutions: 1,
+      handle: () => openHandle([{ kind: TurnEventKind.TurnStarted }]),
+    })
+    // Each invitation's conversation is its own native Session.
+    test.resolveInvitedSession.mockImplementation(async (_agentId, ref) => ({
+      providerSessionId: `stored-${ref}`,
+      created: false,
+    }))
+    await test.coordinator.start(
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      { membershipId: "operator", principalId: "operator" }
+    )
+    const hello = [{ type: "text", text: "Hello" }]
+    const first = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    await first.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: hello,
+    })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+
+    const second = await redeemedWire(
+      test.listener,
+      await invite(test.invitations, "second_ref"),
+      "second_ref"
+    )
+    expect(
+      await second.request(methods.agent.session.prompt, {
+        sessionId: "second_ref",
+        prompt: hello,
+      })
+    ).toMatchObject({
+      error: { code: AOS_JSONRPC_ERRORS.temporarilyUnavailable },
+    })
+    expect(test.start).toHaveBeenCalledTimes(2)
+    first.close()
+    second.close()
   })
 
   it("answers a frame it cannot decode with a public code alone", async () => {
     const test = harness({ existing: true })
-    const socket = await redeemedWire(test.lane, await invite(test.invitations))
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
     expectPublicError(
       await socket.request(AOS_METHODS.session.steer, {
@@ -2309,8 +2413,8 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest no Session row, command list, catalog signal or read state", async () => {
-    const test = harness({ existing: true })
+  it("sends a guest its command list and no Session row, usage, model, catalog signal or read state", async () => {
+    const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
@@ -2320,14 +2424,17 @@ describe("guest scope and commands", () => {
       (entry) => JSON.stringify(entry.params).includes('"idle"'),
       'an update carrying "idle"'
     )
+    test.changeCatalog()
     await settled()
 
     const kinds = updates(test.recorder).map(
       (params) =>
         (params as { update: { sessionUpdate: string } }).update.sessionUpdate
     )
+    expect(kinds).toContain("available_commands_update")
     expect(kinds).not.toContain("session_info_update")
-    expect(kinds).not.toContain("available_commands_update")
+    expect(kinds).not.toContain("usage_update")
+    expect(kinds).not.toContain("config_option_update")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
     test.close()

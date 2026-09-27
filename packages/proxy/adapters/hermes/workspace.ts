@@ -2,7 +2,7 @@ import type {
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
 } from "../../../protocol"
-import { projectTodos, type Todo } from "../todos"
+import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import { isRecord, parseJson } from "./native"
 import {
@@ -10,17 +10,16 @@ import {
   nativeProviderSlug,
   projectSessionModel,
 } from "./session-model"
-import { HERMES_TODO_STATUS_ALIASES } from "./todos"
 import { toolCallSelections } from "./tool-data"
 
 type NativeRecord = Record<string, unknown>
 
 export type HermesWorkspaceSession = {
   agentId: string
-  sessionId: string
-  /** Server-only Hermes identifier for an already attached Session. */
+  providerSessionId: string
+  /** Server-only Hermes identifier for an already resumed Session. */
   liveSessionId: string
-  attached: boolean
+  resumed: boolean
   active: boolean
   /** The latest trusted `session.info`/`session.usage` payload, if observed. */
   usage?: unknown
@@ -70,13 +69,13 @@ export class HermesWorkspaceUnavailableError extends Error {
 export type HermesWorkspaceCapabilities = {
   models: {
     status: "available"
-    scope: "attached-session"
+    scope: "session"
     selection: "native-session"
     choices: "provider-reported"
   }
   context: {
     status: "available"
-    scope: "attached-session"
+    scope: "session"
     source: "provider-usage-or-estimate"
     breakdown: "provider-categories"
   }
@@ -91,7 +90,7 @@ export type HermesWorkspaceCapabilities = {
   activity:
     | {
         status: "available"
-        scope: "attached-active-session"
+        scope: "active-session"
         coverage: "active-session-only"
         source: "provider-session-state"
       }
@@ -140,11 +139,11 @@ export type HermesActivity =
   | {
       status: "unavailable"
       reason:
-        "session-not-attached" | "session-idle" | "session-state-unavailable"
+        "session-not-resumed" | "session-idle" | "session-state-unavailable"
     }
   | {
       status: "available"
-      scope: "attached-active-session"
+      scope: "active-session"
       coverage: "active-session-only"
       state: "running" | "waiting-for-input" | "idle" | "unknown"
     }
@@ -399,10 +398,7 @@ export function latestHermesTodos(
       (resultName !== undefined && !names.has(resultName))
     )
       continue
-    const todos = projectTodos(
-      row.content ?? row.result,
-      HERMES_TODO_STATUS_ALIASES
-    )
+    const todos = projectTodos(row.content ?? row.result, TODO_STATUS_ALIASES)
     // A batched call may settle a Todo tool beside another one, and a row that
     // carries no Todo list at all leaves the plan the last one published
     // standing rather than emptying it.
@@ -456,9 +452,9 @@ export function createHermesWorkspaceOperations(input: {
     }
     if (
       scope.agentId !== agentId ||
-      scope.sessionId !== sessionId ||
+      scope.providerSessionId !== sessionId ||
       !stringValue(scope.liveSessionId, 4_096) ||
-      typeof scope.attached !== "boolean" ||
+      typeof scope.resumed !== "boolean" ||
       typeof scope.active !== "boolean"
     )
       throw new HermesWorkspaceScopeError()
@@ -479,7 +475,7 @@ export function createHermesWorkspaceOperations(input: {
     sessionId: string
   ): Promise<HermesModelChoices> => {
     const session = await requireScope(agentId, sessionId)
-    if (!session.attached) throw new HermesWorkspaceUnavailableError()
+    if (!session.resumed) throw new HermesWorkspaceUnavailableError()
     const value = await request("model.options", {
       session_id: session.liveSessionId,
       profile: session.agentId,
@@ -506,13 +502,13 @@ export function createHermesWorkspaceOperations(input: {
       return {
         models: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           selection: "native-session",
           choices: "provider-reported",
         },
         context: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },
@@ -527,7 +523,7 @@ export function createHermesWorkspaceOperations(input: {
         activity: input.transport.sessionInfo
           ? {
               status: "available",
-              scope: "attached-active-session",
+              scope: "active-session",
               coverage: "active-session-only",
               source: "provider-session-state",
             }
@@ -537,7 +533,7 @@ export function createHermesWorkspaceOperations(input: {
     models,
     async updateModel(agentId, sessionId, patch) {
       const session = await requireScope(agentId, sessionId)
-      if (!session.attached) throw new HermesWorkspaceUnavailableError()
+      if (!session.resumed) throw new HermesWorkspaceUnavailableError()
       // Both halves are validated before either is written: the id is the pair
       // this module minted, so splitting it here keeps a write off Hermes'
       // catalog handler, and the ladder is Hermes' own constant one.
@@ -629,7 +625,7 @@ export function createHermesWorkspaceOperations(input: {
     },
     async context(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)
-      if (!session.attached) throw new HermesWorkspaceUnavailableError()
+      if (!session.resumed) throw new HermesWorkspaceUnavailableError()
       const observed = projectContext(session.usage)
       if (observed) return observed
       const context = projectContext(
@@ -653,12 +649,12 @@ export function createHermesWorkspaceOperations(input: {
     },
     async activity(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)
-      if (!session.attached)
-        return { status: "unavailable", reason: "session-not-attached" }
+      if (!session.resumed)
+        return { status: "unavailable", reason: "session-not-resumed" }
       if (!session.active)
         return {
           status: "available",
-          scope: "attached-active-session",
+          scope: "active-session",
           coverage: "active-session-only",
           state: "idle",
         }
@@ -669,7 +665,7 @@ export function createHermesWorkspaceOperations(input: {
       })
       return {
         status: "available",
-        scope: "attached-active-session",
+        scope: "active-session",
         coverage: "active-session-only",
         state: activityState(info),
       }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 
+import type { Logger } from "../../../lifecycle"
 import {
   AgentAvatarSchema,
   AgentCatalogResponseSchema,
@@ -14,7 +15,6 @@ import {
   type AgentCatalogResponse,
   type AgentUpdatePatch,
   type AgentUpdateResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionMessage,
@@ -26,7 +26,6 @@ import {
   HermesHttpError,
   HermesUnavailableError,
   throwUnavailable,
-  type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
 import {
@@ -68,14 +67,20 @@ import {
   HermesAttachmentRegistry,
   HermesSessionGoneError,
   isSessionGone,
+  type HermesAttachmentScope,
 } from "./attachment-registry"
 import {
   ServerAgentUpdateUnsupportedError,
   type ServerMcpApps,
   type ServerRuntime,
+  type ServerRuntimeTranslation,
   type SessionPatch,
 } from "../../core/runtime"
+import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
+import { READY_LINK, type ServerLink } from "../../core/link"
+import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { inviteSessionKey } from "../../core/invite-key"
 import type { McpAppClient } from "../../mcp-apps/client"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
@@ -223,6 +228,27 @@ function validLiveSessionId(value: unknown): value is string {
   return nativeId(value, 256) !== undefined
 }
 
+/**
+ * A `session.resume` answer for a Session Hermes has never persisted: a lazy
+ * live draft with no stored row and no transcript yet.
+ */
+function isUnpersistedDraft(
+  payload: NativeRecord,
+  profile: string,
+  storedId: string
+) {
+  const info = isRecord(payload.info) ? payload.info : undefined
+  return (
+    validLiveSessionId(payload.session_id) &&
+    payload.stored_session_id === storedId &&
+    (payload.message_count === 0 || payload.message_count === 1) &&
+    Array.isArray(payload.messages) &&
+    payload.messages.length === 0 &&
+    info?.lazy === true &&
+    info.profile_name === profile
+  )
+}
+
 /** The `ui_meta` namespaces AOS writes: visibility and the avatar. */
 const UI_META_KEYS = ["hermes-bots", "aos"] as const
 type UiMetaKey = (typeof UI_META_KEYS)[number]
@@ -348,21 +374,30 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 
 export class HermesServerAdapter implements ServerRuntime {
+  /** The gateway's socket; a transport that owns none is taken as up. */
+  readonly link: ServerLink
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
-  /** Live Session id to retained-record key, for events that carry only the id. */
-  readonly #liveInfoKeys = new Map<string, string>()
   readonly #invitedSessionCreates = new Map<
     string,
-    Promise<{ sessionId: string; created: boolean }>
+    Promise<{ providerSessionId: ids.ProviderSessionId; created: boolean }>
   >()
   readonly interactions: HermesInteractions
   /** The typed native turn boundary; `run-native.ts` owns every native outcome. */
   readonly native: HermesTurnNative
   readonly turns: HermesTurnEngine
+  /**
+   * Hermes keeps unread role- and running-blind and moves its watermark only
+   * on a write, so the operator's own turn and a streaming answer both re-light
+   * a Session in view. It stores an accepted steer as a user turn at once.
+   */
+  readonly translation: ServerRuntimeTranslation = {
+    relighting: ["turn-finished", "turn-failed", "attention-requested"],
+    steerAck: "in-history",
+  }
   readonly #retry: HermesRetrySchedule
   readonly mcpApps?: ServerMcpApps
   readonly #mcpToolNames?: McpToolNames
@@ -371,29 +406,33 @@ export class HermesServerAdapter implements ServerRuntime {
     private readonly transport: HermesRpcTransport,
     options: {
       sessionIdleMs?: number
-      log?: HermesLog
+      log?: Logger
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
-      /** The proxy's own MCP client; without one, no tool opens a view. */
-      mcpAppClient?: McpAppClient
+      /**
+       * The proxy's own MCP client and the log of what it reaches upstream;
+       * without one, no tool opens a view.
+       */
+      mcp?: { client: McpAppClient; logger: Logger }
     } = {}
   ) {
+    this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#dashboard = transport.http
       ? new HermesDashboardClient((path, init) => transport.http!(path, init))
       : undefined
-    if (this.#dashboard && options.mcpAppClient) {
+    if (this.#dashboard && options.mcp) {
       const dashboard = this.#dashboard
       const apps = createHermesMcpApps({
         servers: (profile) => dashboard.listMcpServers(profile),
         rawHistory: (scope) => this.#rawHistory(scope),
-        client: options.mcpAppClient,
+        ...options.mcp,
       })
       this.mcpApps = apps.mcpApps
       this.#mcpToolNames = apps.names
     }
     const requireSession = (agentId: string, publicSessionId: string) =>
-      this.#requireAttachedSession(agentId, publicSessionId)
+      this.#requireResumedSession(agentId, publicSessionId)
     this.#workspace = createHermesWorkspaceOperations({
       authority: { requireSession },
       transport: {
@@ -403,13 +442,20 @@ export class HermesServerAdapter implements ServerRuntime {
         // Hermes pushes `session.info` after every model or effort change, and a
         // read taken right after a write must see what this server just applied.
         sessionInfo: async (scope) => {
-          const retained = this.#retainedInfo(scope.agentId, scope.sessionId)
+          const retained = this.#retainedInfo(
+            scope.agentId,
+            scope.providerSessionId
+          )
           if (retained)
             return isRecord(retained.info) ? retained.info : retained
           return (scope as HermesWorkspaceSession & { info?: unknown }).info
         },
         recordSessionInfo: (scope, patch) =>
-          this.#recordSessionInfo(scope.agentId, scope.sessionId, patch),
+          this.#recordSessionInfo(
+            scope.agentId,
+            scope.providerSessionId,
+            patch
+          ),
       },
     })
     this.#content = createHermesContentOperations({
@@ -423,7 +469,10 @@ export class HermesServerAdapter implements ServerRuntime {
           this.transport.request(method, params, { maxResponseBytes }),
         readArtifact: async (scope, reference, maxBytes, maxResponseBytes) => {
           if (!this.#dashboard) throw new HermesUnavailableError()
-          const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+          const storedId = storedSessionIdentity(
+            scope.agentId,
+            scope.providerSessionId
+          )
           if (!storedId) throw new HermesUnavailableError()
           let payload: unknown
           try {
@@ -474,50 +523,55 @@ export class HermesServerAdapter implements ServerRuntime {
       {
         resume: (scope) => this.#resumeNative(scope),
         close: (liveSessionId) => this.#closeNativeSession(liveSessionId),
+        forget: (scope) =>
+          this.#attachmentInfo.delete(
+            attachmentInfoKey(scope.agentId, scope.providerSessionId)
+          ),
       },
-      // The registry requires observation, so a transport that cannot observe
-      // is adapted here rather than silently skipped there: such a transport
-      // serves only the read-only surfaces, and no turn can attach through it.
+      // The registry requires event subscriptions, so a transport that cannot
+      // subscribe is adapted here rather than silently skipped there: such a
+      // transport serves only the read-only surfaces, and no turn can attach
+      // through it.
       {
         // Every observed `session.info` is retained on its way through, so a
         // workspace read never answers from the attach-time snapshot.
-        onEvent: (listener) =>
-          transport.onEvent?.((event) => {
+        subscribeEvents: (listener) =>
+          transport.subscribeEvents?.((event) => {
             this.#retainObservedInfo(event)
             listener(event)
           }) ?? (() => undefined),
-        onConnection: (handler) =>
-          transport.onConnection?.(handler) ?? (() => undefined),
+        subscribeConnection: (handler) =>
+          transport.subscribeConnection?.(handler) ?? (() => undefined),
       },
       { idleMs: options.sessionIdleMs, log: options.log }
     )
     // `refresh` must reach the registry: a caller reconciling a Session (an
     // interactions `resume`) needs Hermes' own answer, whose `open_requests`
     // re-deliver whatever is still waiting on it.
-    const ensureAttached = async (
+    const ensureResumed = async (
       scope: HermesTurnScope,
-      attach: { refresh?: boolean } = {}
+      resume: { refresh?: boolean } = {}
     ) => ({
-      liveSessionId: (await this.#attachments.ensure(scope, attach))
+      liveSessionId: (await this.#attachments.ensure(scope, resume))
         .liveSessionId,
-      running: this.#attachedRunning(scope.agentId, scope.sessionId),
-      info: this.#retainedInfo(scope.agentId, scope.sessionId)?.info,
+      running: this.#resumedRunning(scope.agentId, scope.providerSessionId),
+      info: this.#retainedInfo(scope.agentId, scope.providerSessionId)?.info,
     })
     this.interactions = new HermesInteractions(
       {
         // A transport that cannot carry server→client requests answers none:
         // read-only surfaces still work, no interaction is ever presented.
-        onRequest: (handler) =>
-          transport.onRequest?.(handler) ?? (() => undefined),
-        onEvent: (listener) =>
-          transport.onEvent?.(listener) ?? (() => undefined),
+        subscribeRequests: (handler) =>
+          transport.subscribeRequests?.(handler) ?? (() => undefined),
+        subscribeEvents: (listener) =>
+          transport.subscribeEvents?.(listener) ?? (() => undefined),
         // Only the gateway knows its socket; a transport that cannot say is
         // taken at its word when a write does not throw.
         connected: () => transport.connected?.() ?? true,
         request: (method, params) => transport.request(method, params),
       },
       {
-        ensure: ensureAttached,
+        ensure: ensureResumed,
         retain: (scope, reason) => this.#attachments.retain(scope, reason),
         scopeFor: (liveSessionId) => this.#attachments.scopeFor(liveSessionId),
       },
@@ -526,7 +580,7 @@ export class HermesServerAdapter implements ServerRuntime {
     this.native = new HermesNativeRuntime({
       transport,
       attachments: {
-        ensure: ensureAttached,
+        ensure: ensureResumed,
         retain: (scope, reason) => this.#attachments.retain(scope, reason),
         subscribeLive: (liveSessionId, observer) =>
           this.#attachments.subscribeLive(liveSessionId, observer),
@@ -541,28 +595,40 @@ export class HermesServerAdapter implements ServerRuntime {
     this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
+      // A watch stops where the adapter reports a Session gone or the token
+      // refused, and redials once the gateway is up again.
+      watch: {
+        publicError: (cause) => this.publicError(cause),
+        upstream: this.link,
+        ...(options.log ? { logger: options.log } : {}),
+      },
     })
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
-    return storedSessionIdentity(agentId, publicSessionId)
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
+    const stored = storedSessionIdentity(agentId, publicSessionId)
+    return stored === undefined ? undefined : ids.providerSessionId(stored)
   }
 
   async resolveInvitedSession(
     agentId: string,
     ref: string,
     create?: { readonly firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string; created: boolean } | undefined> {
+  ): Promise<
+    { providerSessionId: ids.ProviderSessionId; created: boolean } | undefined
+  > {
     if (
       Buffer.byteLength(agentId, "utf8") > 256 ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(agentId) ||
       !/^[A-Za-z0-9_-]{1,128}$/u.test(ref)
     )
       throw new HermesSessionNotFoundError()
-    const title = `aos-invite:${ref}`
+    const title = inviteSessionKey(ref)
     if (!create) {
-      const sessionId = await this.#findInvitedSession(agentId, title)
-      return sessionId ? { sessionId, created: false } : undefined
+      const providerSessionId = await this.#findInvitedSession(agentId, title)
+      return providerSessionId
+        ? { providerSessionId, created: false }
+        : undefined
     }
 
     const key = `${agentId}\u0000${ref}`
@@ -604,7 +670,9 @@ export class HermesServerAdapter implements ServerRuntime {
         !validLiveSessionId(row.resolved_id))
     )
       throw new HermesUnavailableError()
-    return validLiveSessionId(row.resolved_id) ? row.resolved_id : row.id
+    return ids.providerSessionId(
+      validLiveSessionId(row.resolved_id) ? row.resolved_id : row.id
+    )
   }
 
   async #reuseOrCreateInvitedSession(
@@ -613,7 +681,7 @@ export class HermesServerAdapter implements ServerRuntime {
     create: { readonly firstTurnInstruction?: string }
   ) {
     const existing = await this.#findInvitedSession(agentId, title)
-    if (existing) return { sessionId: existing, created: false }
+    if (existing) return { providerSessionId: existing, created: false }
 
     let payload: unknown
     try {
@@ -669,15 +737,16 @@ export class HermesServerAdapter implements ServerRuntime {
     const authoritative = await this.#findInvitedSession(agentId, title)
     if (!authoritative || authoritative !== payload.stored_session_id)
       throw new HermesSessionConflictError()
-    return { sessionId: authoritative, created: true }
+    return { providerSessionId: authoritative, created: true }
   }
 
   publicError(cause: unknown) {
     if (cause instanceof HermesAuthenticationError)
-      return { code: "runtime_authentication_required", status: 401 } as const
+      return failureOf("runtime_authentication_required", cause)
     if (
       cause instanceof HermesAgentNotFoundError ||
       cause instanceof HermesSessionNotFoundError ||
+      cause instanceof HermesSessionGoneError ||
       cause instanceof HermesWorkspaceScopeError ||
       cause instanceof HermesContentScopeError ||
       // The artifact is still authoritative history, but the provider no longer
@@ -685,32 +754,31 @@ export class HermesServerAdapter implements ServerRuntime {
       // never invites a retry that cannot succeed.
       cause instanceof HermesContentUnreadableError
     )
-      return { code: "not_found", status: 404 } as const
+      return failureOf("gone", cause)
     if (
       cause instanceof HermesRevisionConflictError ||
       cause instanceof HermesSessionConflictError
     )
-      return { code: "revision_conflict", status: 409 } as const
+      return failureOf("revision_conflict", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
-    if (
-      cause instanceof HermesTurnPublicError &&
-      cause.code === "AOS_STOP_UNCERTAIN"
-    )
-      return { code: "uncertain_mutation", status: 409 } as const
+    if (cause instanceof HermesTurnPublicError)
+      return (
+        publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+      )
     if (
       cause instanceof HermesWorkspaceUnavailableError ||
       cause instanceof HermesContentUnavailableError ||
-      cause instanceof HermesTurnPublicError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
         cause.code === "AOS_PROVIDER_UNAVAILABLE")
     )
-      return { code: "temporarily_unavailable", status: 503 } as const
+      return failureOf("unavailable", cause)
     if (cause instanceof HermesInteractionPublicError)
-      return cause.code === "AOS_INTERACTION_NOT_FOUND"
-        ? ({ code: "not_found", status: 404 } as const)
-        : ({ code: "invalid_request", status: 400 } as const)
+      return failureOf(
+        cause.code === "AOS_INTERACTION_NOT_FOUND" ? "gone" : "invalid_request",
+        cause
+      )
     return undefined
   }
 
@@ -748,9 +816,10 @@ export class HermesServerAdapter implements ServerRuntime {
   #retainObservedInfo(event: unknown) {
     if (!isRecord(event) || event.type !== "session.info") return
     if (!validLiveSessionId(event.session_id)) return
-    const key = this.#liveInfoKeys.get(event.session_id)
+    const bound = this.#attachments.scopeFor(event.session_id)
     const payload = isRecord(event.payload) ? event.payload : undefined
-    if (!key || !payload) return
+    if (!bound || !payload) return
+    const key = attachmentInfoKey(bound.agentId, bound.providerSessionId)
     const retained = this.#attachmentInfo.get(key)
     this.#attachmentInfo.set(key, {
       ...retained,
@@ -761,14 +830,14 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
-  async #requireAttachedSession(agentId: string, publicSessionId: string) {
+  async #requireResumedSession(agentId: string, publicSessionId: string) {
     const storedId = storedSessionIdentity(agentId, publicSessionId)
     if (!storedId) throw new HermesSessionNotFoundError()
     await this.getSession(agentId, storedId)
-    const attached = await this.#attachments.ensure({
+    const binding = await this.#attachments.ensure({
       agentId,
-      sessionId: storedId,
-      threadId: publicSessionId,
+      providerSessionId: storedId,
+      sessionId: publicSessionId,
     })
     const resumed = this.#attachmentInfo.get(
       attachmentInfoKey(agentId, storedId)
@@ -776,10 +845,10 @@ export class HermesServerAdapter implements ServerRuntime {
     const info = resumed && isRecord(resumed.info) ? resumed.info : undefined
     return {
       agentId,
-      sessionId: publicSessionId,
-      liveSessionId: attached.liveSessionId,
-      attached: true,
-      active: this.#attachedRunning(agentId, storedId),
+      providerSessionId: publicSessionId,
+      liveSessionId: binding.liveSessionId,
+      resumed: true,
+      active: this.#resumedRunning(agentId, storedId),
       usage: info?.usage,
       info: info ?? resumed,
     }
@@ -789,7 +858,7 @@ export class HermesServerAdapter implements ServerRuntime {
    * Last known native turn state of a bound Session, from the authoritative
    * `session.resume` payload the registry recorded.
    */
-  #attachedRunning(agentId: string, sessionId: string) {
+  #resumedRunning(agentId: string, sessionId: string) {
     const resumed = this.#attachmentInfo.get(
       attachmentInfoKey(agentId, sessionId)
     )
@@ -802,12 +871,15 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async #rawHistory(
-    scope: Pick<HermesWorkspaceSession, "agentId" | "sessionId"> & {
+    scope: Pick<HermesWorkspaceSession, "agentId" | "providerSessionId"> & {
       info?: unknown
     }
   ) {
     if (!this.#dashboard) throw new HermesUnavailableError()
-    const storedId = storedSessionIdentity(scope.agentId, scope.sessionId)
+    const storedId = storedSessionIdentity(
+      scope.agentId,
+      scope.providerSessionId
+    )
     if (!storedId) throw new HermesSessionNotFoundError()
     let value: unknown
     try {
@@ -841,7 +913,7 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       slashCommands = {
         status: "available" as const,
-        scope: "attached-session" as const,
+        scope: "session" as const,
         commands: await this.slashCommands(agentId, publicSessionId),
       }
     } catch {
@@ -903,8 +975,8 @@ export class HermesServerAdapter implements ServerRuntime {
       turnId,
       ...(await this.interactions.resume({
         agentId,
-        sessionId: storedId,
-        threadId: publicSessionId,
+        providerSessionId: storedId,
+        sessionId: publicSessionId,
       })),
     }
   }
@@ -934,17 +1006,6 @@ export class HermesServerAdapter implements ServerRuntime {
     return this.#content.speak(agentId, text, signal)
   }
 
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.transport.request("profiles.list", { include_sessions: false })
-      return { status: "authenticated" }
-    } catch (error) {
-      if (error instanceof HermesAuthenticationError)
-        return { status: "authentication-required" }
-      return { status: "unavailable", reason: "temporarily-unavailable" }
-    }
-  }
-
   /** The validated native profile rows, one per distinct Agent id. */
   async #profiles(): Promise<NativeRecord[]> {
     try {
@@ -959,8 +1020,7 @@ export class HermesServerAdapter implements ServerRuntime {
         throw new HermesUnavailableError()
       return profiles
     } catch (error) {
-      if (error instanceof HermesAuthenticationError) throw error
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
   }
 
@@ -972,8 +1032,7 @@ export class HermesServerAdapter implements ServerRuntime {
         agents,
       })
     } catch (error) {
-      if (error instanceof HermesAuthenticationError) throw error
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
   }
 
@@ -1172,7 +1231,7 @@ export class HermesServerAdapter implements ServerRuntime {
     await this.transport.close?.()
   }
 
-  async #resumeNative(scope: HermesTurnScope) {
+  async #resumeNative(scope: HermesAttachmentScope) {
     let payload: unknown
     try {
       // A reattach Hermes fences while it settles a disconnect is let through
@@ -1180,17 +1239,17 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await retryTransient(
         () =>
           this.transport.request("session.resume", {
-            session_id: scope.sessionId,
+            session_id: scope.providerSessionId,
             profile: scope.agentId,
             omit_messages: true,
           }),
         this.#retry
       )
     } catch (error) {
-      // A heal must learn that Hermes reaped this live Session so the registry
-      // can invalidate the binding and resume the durable Session again; every
-      // other transport failure stays an outage.
-      if (isSessionGone(error)) throw new HermesSessionGoneError()
+      // A resume addresses the durable Session, so a gone answer means Hermes
+      // holds no record of it; every other failure stays an outage.
+      if (isSessionGone(error))
+        throw new HermesSessionGoneError({ cause: error })
       throwUnavailable(error)
     }
     const liveSessionId =
@@ -1198,15 +1257,18 @@ export class HermesServerAdapter implements ServerRuntime {
         ? payload.session_id
         : undefined
     if (!liveSessionId || !isRecord(payload)) throw new HermesUnavailableError()
-    const key = attachmentInfoKey(scope.agentId, scope.sessionId)
-    this.#attachmentInfo.set(key, payload)
-    // A re-resumed Session answers under a new live id; the previous one can
-    // never name this Session again.
-    for (const [observed, mapped] of this.#liveInfoKeys)
-      if (mapped === key && observed !== liveSessionId)
-        this.#liveInfoKeys.delete(observed)
-    this.#liveInfoKeys.set(liveSessionId, key)
-    return { liveSessionId }
+    this.#attachmentInfo.set(
+      attachmentInfoKey(scope.agentId, scope.providerSessionId),
+      payload
+    )
+    return {
+      liveSessionId,
+      saved: !isUnpersistedDraft(
+        payload,
+        scope.agentId,
+        scope.providerSessionId
+      ),
+    }
   }
 
   async #closeNativeSession(liveSessionId: string) {
@@ -1219,23 +1281,6 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ) {
-    const sessionId = storedSessionIdentity(agentId, publicSessionId)
-    if (!sessionId) throw new HermesSessionNotFoundError()
-    return this.#attachments.subscribe(
-      { agentId, sessionId, threadId: publicSessionId },
-      (signal) => {
-        if (signal.kind === "event") listener()
-        else if (signal.kind === "lost") reset?.()
-      }
-    )
-  }
-
   /**
    * Hermes broadcasts a debounced, payload-less `sessions.changed` on the same
    * multiplexed socket whenever its Session store moves. The frame carries no
@@ -1243,16 +1288,16 @@ export class HermesServerAdapter implements ServerRuntime {
    * through the per-Session attachment routing.
    */
   async subscribeCatalogChanges(listener: () => void) {
-    if (!this.transport.onEvent) throw new HermesUnavailableError()
-    // A lost connection is not a catalog change, and this observer survives it:
+    if (!this.transport.subscribeEvents) throw new HermesUnavailableError()
+    // A lost connection is not a catalog change, and this listener survives it:
     // the next authoritative read reconciles whatever was missed.
-    return this.transport.onEvent((event) => {
+    return this.transport.subscribeEvents((event) => {
       if (isRecord(event) && event.type === "sessions.changed") listener()
     })
   }
 
   async slashCommands(agentId: string, publicSessionId: string) {
-    const scope = await this.#requireAttachedSession(agentId, publicSessionId)
+    const scope = await this.#requireResumedSession(agentId, publicSessionId)
     try {
       return await nativeSlashCommands(this.transport, {
         session_id: scope.liveSessionId,
@@ -1552,8 +1597,8 @@ export class HermesServerAdapter implements ServerRuntime {
       await this.#attachments.ensure(
         {
           agentId,
-          sessionId: storedId,
-          threadId: sessionId(agentId, storedId),
+          providerSessionId: storedId,
+          sessionId: sessionId(agentId, storedId),
         },
         { refresh: true, freshForMs: RESTORE_SNAPSHOT_FRESH_MS }
       )
@@ -1623,18 +1668,7 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch (error) {
       throwUnavailable(error)
     }
-    const info =
-      isRecord(payload) && isRecord(payload.info) ? payload.info : undefined
-    if (
-      !isRecord(payload) ||
-      !validLiveSessionId(payload.session_id) ||
-      payload.stored_session_id !== storedId ||
-      (payload.message_count !== 0 && payload.message_count !== 1) ||
-      !Array.isArray(payload.messages) ||
-      payload.messages.length !== 0 ||
-      info?.lazy !== true ||
-      info.profile_name !== profile
-    )
+    if (!isRecord(payload) || !isUnpersistedDraft(payload, profile, storedId))
       throw new HermesSessionNotFoundError()
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),

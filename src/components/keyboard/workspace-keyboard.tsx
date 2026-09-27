@@ -30,7 +30,7 @@ import workspaceStyles from "@/components/workspace/workspace-shell.module.css"
 
 type WorkspaceKeyboardAgent = { readonly id: string; readonly name: string }
 type WorkspaceKeyboardSession = {
-  readonly threadId: string
+  readonly sessionId: string
   readonly title: string
 }
 
@@ -45,7 +45,7 @@ export type WorkspaceKeyboardProps = {
   agentBuilderAvailable: boolean
   canCreateSession: boolean
   onSelectAgent: (agentId: string) => void | Promise<unknown>
-  onOpenSession: (threadId: string) => void | Promise<unknown>
+  onOpenSession: (sessionId: string) => void | Promise<unknown>
   onCreateSession: (agentId: string) => void | Promise<unknown>
   onOpenAgentBuilder: () => void | Promise<unknown>
 }
@@ -215,7 +215,7 @@ export function WorkspaceKeyboard({
           activeThreadId,
           1,
           onOpenSession,
-          "threadId"
+          "sessionId"
         )
       else if (actionId === "workspace.previousSession")
         selectNeighbor(
@@ -223,7 +223,7 @@ export function WorkspaceKeyboard({
           activeThreadId,
           -1,
           onOpenSession,
-          "threadId"
+          "sessionId"
         )
     },
     [
@@ -393,15 +393,15 @@ export function WorkspaceKeyboard({
       })
     const sessionsByThreadId = new Map<string, WorkspaceKeyboardSession>()
     for (const session of [...openSessions, ...olderSessions]) {
-      if (!sessionsByThreadId.has(session.threadId)) {
-        sessionsByThreadId.set(session.threadId, session)
+      if (!sessionsByThreadId.has(session.sessionId)) {
+        sessionsByThreadId.set(session.sessionId, session)
       }
     }
     for (const session of sessionsByThreadId.values())
       result.push({
-        id: `session:${session.threadId}`,
+        id: `session:${session.sessionId}`,
         title: `${localCopy[locale].openSession}: ${session.title}`,
-        onRun: () => onOpenSession(session.threadId),
+        onRun: () => onOpenSession(session.sessionId),
       })
     return agentBuilderAvailable
       ? result
@@ -481,12 +481,12 @@ function focusRegion(root: HTMLElement | null, name: string) {
   return true
 }
 
-function selectNeighbor<T extends { id?: string; threadId?: string }>(
+function selectNeighbor<T extends { id?: string; sessionId?: string }>(
   items: readonly T[],
   selectedId: string | null,
   delta: 1 | -1,
   callback: (id: string) => void | Promise<unknown>,
-  key: "id" | "threadId" = "id"
+  key: "id" | "sessionId" = "id"
 ) {
   if (items.length === 0) return
   const current = items.findIndex((item) => item[key] === selectedId)

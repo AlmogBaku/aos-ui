@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { TurnEvent } from "../../core/events"
+import { READY_LINK } from "../../core/link"
 import type { ServerTurnHandle } from "../../core/runtime"
 import { OpenClawServerAdapter } from "./adapter"
 import {
@@ -11,7 +12,11 @@ import {
 const sessionKey = "agent:research:main"
 const otherKey = "agent:research:other"
 const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
-const scope = { agentId: "research", sessionId: sessionKey, threadId: "t1" }
+const scope = {
+  agentId: "research",
+  providerSessionId: sessionKey,
+  sessionId: "t1",
+}
 const toolResult = { content: [{ type: "text", text: "drawn" }] }
 
 const appHistory = {
@@ -80,15 +85,16 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
     throw new Error(`Unexpected method ${method}`)
   })
   const client = {
+    link: READY_LINK,
     start: vi.fn(),
     stopAndWait: vi.fn(async () => undefined),
     request,
-  } as unknown as OpenClawGatewayClient
+  } as unknown as OpenClawGatewayClient & { link: typeof READY_LINK }
   const idle: ServerTurnHandle = {
     events: (async function* (): AsyncIterable<TurnEvent> {})(),
     settled: Promise.resolve(),
     stop: async () => "idle",
-    recoveryPosition: () => ({ epoch: "test", lastSeen: 0 }),
+    recoveryPosition: () => "token-1",
   }
   const adapter = new OpenClawServerAdapter({
     client,
@@ -101,7 +107,7 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
 const isNotFound =
   (adapter: OpenClawServerAdapter) =>
   (error: unknown): boolean =>
-    adapter.publicError(error)?.status === 404
+    adapter.publicError(error)?.kind === "gone"
 
 describe("OpenClaw MCP Apps", () => {
   it("names the stored call canonically and describes it as an app", async () => {
@@ -175,7 +181,7 @@ describe("OpenClaw MCP Apps", () => {
 
   it("refuses a tool call id from another Session without asking the gateway", async () => {
     const { adapter, mcpApps, request } = gateway()
-    const other = { ...scope, sessionId: otherKey }
+    const other = { ...scope, providerSessionId: otherKey }
 
     await expect(mcpApps.open(other, "call-1")).rejects.toSatisfy(
       isNotFound(adapter)
@@ -193,7 +199,7 @@ describe("OpenClaw MCP Apps", () => {
 
   it("reports a view the gateway no longer holds as not found", async () => {
     const expired = () => {
-      throw new OpenClawClientRequestError("rejected", true, true)
+      throw new OpenClawClientRequestError("rejected")
     }
     const { adapter, mcpApps } = gateway({
       "mcp.app.view": expired,

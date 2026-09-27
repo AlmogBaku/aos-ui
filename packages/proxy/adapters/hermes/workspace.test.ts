@@ -9,9 +9,9 @@ import {
 
 const scope = {
   agentId: "research",
-  sessionId: "hermes:research:stored-1",
+  providerSessionId: "hermes:research:stored-1",
   liveSessionId: "live-private-1",
-  attached: true,
+  resumed: true,
   active: true,
 }
 
@@ -102,13 +102,13 @@ describe("Hermes workspace operations", () => {
     expect(operations.capabilities()).toEqual({
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -120,7 +120,7 @@ describe("Hermes workspace operations", () => {
       },
       activity: {
         status: "available",
-        scope: "attached-active-session",
+        scope: "active-session",
         coverage: "active-session-only",
         source: "provider-session-state",
       },
@@ -1059,14 +1059,14 @@ describe("Hermes workspace operations", () => {
 
   it("does not claim Session activity until the owned Session is attached and active", async () => {
     const { operations, request } = harness({
-      scope: { attached: false, active: false },
+      scope: { resumed: false, active: false },
     })
 
     await expect(
       operations.activity("research", "hermes:research:stored-1")
     ).resolves.toEqual({
       status: "unavailable",
-      reason: "session-not-attached",
+      reason: "session-not-resumed",
     })
     expect(request).not.toHaveBeenCalled()
   })
@@ -1084,7 +1084,7 @@ describe("Hermes workspace operations", () => {
       operations.activity("research", "hermes:research:stored-1")
     ).resolves.toEqual({
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       state: "running",
     })
@@ -1092,7 +1092,7 @@ describe("Hermes workspace operations", () => {
 
   it("reports an attached idle Session as available and idle", async () => {
     const { operations, request } = harness({
-      scope: { attached: true, active: false },
+      scope: { resumed: true, active: false },
       sessionInfo: { running: false },
     })
 
@@ -1100,7 +1100,7 @@ describe("Hermes workspace operations", () => {
       operations.activity("research", "hermes:research:stored-1")
     ).resolves.toEqual({
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       state: "idle",
     })

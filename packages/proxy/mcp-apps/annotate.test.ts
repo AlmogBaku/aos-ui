@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { TurnEventKind, type TurnEvent } from "../core/events"
 import type {
   ServerMcpApps,
@@ -9,6 +10,7 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import { SessionCoordinator } from "../core/session-coordinator"
+import { READY_LINK } from "../core/link"
 import { withMcpApps } from "./annotate"
 
 /** A provider segment the test feeds by hand, as a native engine would. */
@@ -53,21 +55,19 @@ class NativeTurn implements ServerTurnHandle {
   }
 
   recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 7 }
+    return "token-7"
   }
 }
 
 const scope: SessionScope = {
   agentId: "aos-test",
+  providerSessionId: "stored-1",
   sessionId: "stored-1",
-  threadId: "stored-1",
 }
 
 const access = {
-  subscriberId: "browser",
-  controllerId: "browser",
-  lane: "operator",
-  canControl: true,
+  membershipId: "browser",
+  principalId: "browser",
 } as const
 
 /** A `render_chart` turn exactly as far as the provider streams it. */
@@ -116,16 +116,16 @@ function harness(describeView: ServerMcpApps["describe"]) {
   const runtime = withMcpApps({
     turns: engine,
     mcpApps: apps,
+    publicError: () => undefined,
+    link: READY_LINK,
   } as unknown as ServerRuntime)
   const sessions = new SessionCoordinator({
     engine: runtime.turns,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 64,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 256 * 1024,
+    logger: captureLogs().logger,
   })
   return { native, engine, apps, sessions }
 }
@@ -215,21 +215,21 @@ describe("withMcpApps on a live turn", () => {
 describe("withMcpApps on a watched Session", () => {
   it("keeps the engine's watch, so rooms still hear runtime-started turns", () => {
     const stop = vi.fn()
-    const watch = vi.fn(() => stop)
+    const subscribeTurns = vi.fn(() => stop)
     const engine = {
       start: vi.fn(),
       recover: vi.fn(),
-      watch,
+      subscribeTurns,
     } as unknown as ServerTurnEngine
     const runtime = withMcpApps({
       turns: engine,
       mcpApps: {} as ServerMcpApps,
     } as unknown as ServerRuntime)
-    const watcher = { onTurn: vi.fn(), onError: vi.fn() }
+    const listener = { onTurn: vi.fn(), onError: vi.fn() }
 
-    runtime.turns.watch?.(scope, watcher)()
+    runtime.turns.subscribeTurns?.(scope, listener)()
 
-    expect(watch).toHaveBeenCalledWith(scope, watcher)
+    expect(subscribeTurns).toHaveBeenCalledWith(scope, listener)
     expect(stop).toHaveBeenCalledOnce()
   })
 })

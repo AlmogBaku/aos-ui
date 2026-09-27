@@ -66,23 +66,23 @@ const slashCommands = Array.from({ length: 30 }, (_, index) => ({
   description: `Command ${index}`,
 }))
 
-/** `ResumeSessionResponse._meta.aos.capabilities`. */
+/** What `available_commands_update` carries as `_meta.aos.capabilities`. */
 const sessionCapabilities = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: slashCommands,
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -94,7 +94,7 @@ const sessionCapabilities = {
     },
     activity: {
       status: "available",
-      scope: "attached-active-session",
+      scope: "active-session",
       coverage: "active-session-only",
       source: "provider-session-state",
     },
@@ -135,7 +135,7 @@ const sessionCapabilities = {
   content: {
     attachments: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       inputs: ["image", "file"],
       imageMimeTypes: ["image/png"],
       fileMimeTypes: "valid-type/subtype",
@@ -361,10 +361,10 @@ const script = {
   },
   guardedPermission: permissionRequest("permission-1", GUARDED_TOOL_CALL_ID),
   standalonePermission: permissionRequest("permission-2"),
-  /** `InitializeResponse._meta.aos` for the operator lane. */
+  /** `InitializeResponse._meta.aos` for the operator role. */
   initializeMeta: {
     version: 1,
-    lane: "operator",
+    role: "operator",
     extensions: {
       steer: true,
       rewind: true,
@@ -391,6 +391,7 @@ const script = {
         visibility: "visible",
         selectable: true,
         editable: false,
+        avatarEditable: false,
         revision: "research-1",
       },
     ],
@@ -424,14 +425,14 @@ const script = {
       ],
     },
   ],
-  resumeMeta: {
+  /** What the proxy restates behind a resume's answer, as updates. */
+  restated: {
     session: {
       agentId: AGENT_ID,
       status: "idle",
       archived: false,
       unread: false,
     },
-    execution: { status: "idle" },
     capabilities: sessionCapabilities,
   },
   history: [
@@ -495,8 +496,11 @@ declare global {
       connections: number
       /** The newest `_meta.aos.sequence` the stub has emitted. */
       sequence: number
-      /** Drops the live transport, as a proxy restart would. */
-      dropSocket: () => void
+      /**
+       * Closes the live transport with a close code: 1006 by default, as a
+       * proxy restart would, or 1013 as a proxy at capacity would.
+       */
+      dropSocket: (code?: number) => void
       /** Sends the held `_aos/before` page, if one is waiting. */
       releasePage: () => void
     }
@@ -547,7 +551,7 @@ function installAcpStub(script: AcpScript) {
     constructor() {
       super()
       stub.connections += 1
-      stub.dropSocket = () => this.closeTransport()
+      stub.dropSocket = (code) => this.closeTransport(code)
       this.registerHandlers()
       queueMicrotask(() => {
         this.readyState = 1
@@ -565,10 +569,10 @@ function installAcpStub(script: AcpScript) {
       this.closeTransport()
     }
 
-    closeTransport() {
+    closeTransport(code = 1006) {
       if (this.readyState === 3) return
       this.readyState = 3
-      this.dispatchEvent(new Event("close"))
+      this.dispatchEvent(new CloseEvent("close", { code }))
     }
 
     accept(message: Record<string, unknown>) {
@@ -649,6 +653,27 @@ function installAcpStub(script: AcpScript) {
       })
     }
 
+    /**
+     * The Session's row, models, and capabilities, which follow a resume's
+     * answer as updates rather than riding in it.
+     */
+    restate() {
+      const { session, capabilities } = script.restated
+      this.update({
+        sessionUpdate: "session_info_update",
+        _meta: { aos: session },
+      })
+      this.update({
+        sessionUpdate: "config_option_update",
+        configOptions: script.configOptions,
+      })
+      this.update({
+        sessionUpdate: "available_commands_update",
+        availableCommands: capabilities.workspace.slashCommands.commands,
+        _meta: { aos: { capabilities } },
+      })
+    }
+
     message(
       role: string,
       messageId: string,
@@ -700,14 +725,11 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("session/resume", (params, id) => {
         // A subagent's own Session opens with nothing stored.
         if (params.sessionId !== script.sessionId)
-          return this.respond(id, {
-            configOptions: script.configOptions,
-            _meta: { aos: script.resumeMeta },
-          })
+          return this.respond(id, { _meta: { aos: {} } })
         const replayFrom = asRecord(params.replayFrom)
         const paged = script.pagedHistory
         // An older page is its own read: tagged updates and a cursor, with no
-        // reattach, so neither the configuration nor the window is restated.
+        // resume, so neither the configuration nor the window is restated.
         if (paged && replayFrom.type === "_aos/before") {
           const cursor = String(replayFrom.cursor)
           const offset = Number(cursor.replace("offset-", ""))
@@ -722,10 +744,8 @@ function installAcpStub(script: AcpScript) {
         }
         if (paged && replayFrom.type === "start") {
           const history = this.historyPage(paged, 0)
-          this.respond(id, {
-            configOptions: script.configOptions,
-            _meta: { aos: { ...script.resumeMeta, history } },
-          })
+          this.respond(id, { _meta: { aos: { history } } })
+          this.restate()
           return
         }
         if (replayFrom.type === "start")
@@ -737,10 +757,8 @@ function installAcpStub(script: AcpScript) {
             script.recovered.messageId,
             script.recovered.text
           )
-        this.respond(id, {
-          configOptions: script.configOptions,
-          _meta: { aos: script.resumeMeta },
-        })
+        this.respond(id, { _meta: { aos: {} } })
+        this.restate()
         this.update({ sessionUpdate: "usage_update", ...script.usage })
       })
       // The prompt is acknowledged with the minted user message id, then the
@@ -836,8 +854,33 @@ function installAcpStub(script: AcpScript) {
       this.handlers.set("_aos/session/update", (_params, id) =>
         this.respond(id, {})
       )
-      // Focus is a notification; recording it is all the proxy owes the browser.
-      this.handlers.set("_aos/session/focus", () => {})
+      // Focus is a request; the browser waits for an acknowledgement.
+      this.handlers.set("_aos/session/focus", (_params, id) =>
+        this.respond(id, {})
+      )
+      // A new Session's answer carries only its id; the row arrives as
+      // session_info_update so the workspace sees it without a resume.
+      this.handlers.set("session/new", (params, id) => {
+        const newSessionId = crypto.randomUUID()
+        const aosMeta =
+          typeof params._meta === "object" && params._meta !== null
+            ? (params._meta as Record<string, unknown>).aos
+            : undefined
+        const agentId =
+          typeof aosMeta === "object" && aosMeta !== null
+            ? String((aosMeta as Record<string, unknown>).agentId ?? AGENT_ID)
+            : AGENT_ID
+        this.respond(id, { sessionId: newSessionId })
+        this.notify("session/update", {
+          sessionId: newSessionId,
+          update: {
+            sessionUpdate: "session_info_update",
+            _meta: {
+              aos: { agentId, status: "idle", archived: false, unread: false },
+            },
+          },
+        })
+      })
     }
   }
 
@@ -967,6 +1010,26 @@ test("AOS proxy restores history, offers commands, streams one turn, stops, and 
     .poll(async () => (await resumes(page)).at(-1)?._meta?.aos)
     .toEqual({ agentId: AGENT_ID, after: sequence, turnId: TURN_ID })
   await expect(page.getByText("Recovered after reconnect.")).toBeVisible()
+})
+
+test("AOS proxy at capacity is waited out before the browser reconnects", async ({
+  page,
+}) => {
+  await page.clock.install()
+  await serveAcp(page)
+  await page.goto("/")
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
+
+  // A 1013 close holds the reopen for 30 to 60 s, where any other close
+  // reopens within the 250 ms first backoff.
+  await page.evaluate(() => window.__acpStub.dropSocket(1013))
+  await page.clock.runFor(29_000)
+  expect(await page.evaluate(() => window.__acpStub.connections)).toBe(1)
+  await page.clock.runFor(31_000)
+  await expect
+    .poll(async () => (await recorded(page, "initialize")).length)
+    .toBe(2)
 })
 
 test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({

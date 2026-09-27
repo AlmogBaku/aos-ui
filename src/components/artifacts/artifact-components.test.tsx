@@ -107,7 +107,7 @@ function InlineArtifactTestSurface({
         locale="en"
         adapter={{ resolve: async () => new Blob(["Newer body"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={providerMessages}
       >
         <ArtifactDataUI />
@@ -155,7 +155,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: vi.fn<ArtifactAdapter["resolve"]>() }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={[]}
       >
         <ArtifactToolResultCard
@@ -183,7 +183,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: vi.fn<ArtifactAdapter["resolve"]>() }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactOutputs />
@@ -217,7 +217,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -237,7 +237,7 @@ describe("artifact workspace", () => {
       expect.objectContaining({
         artifact: expect.objectContaining({ id: "newer" }),
         agentId: "agent-aster",
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         signal: expect.any(AbortSignal),
       })
     )
@@ -274,7 +274,7 @@ describe("artifact workspace", () => {
             new Blob([markdownMessages[0]!.content[0]!.data.source.data]),
         }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={markdownMessages}
       >
         <ArtifactTestSurface />
@@ -321,7 +321,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob([source]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={markdownMessages}
       >
         <ArtifactTestSurface />
@@ -365,7 +365,7 @@ describe("artifact workspace", () => {
           resolve: async () => new Blob(["def run():\n    return True"]),
         }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={codeMessages}
       >
         <ArtifactTestSurface />
@@ -393,7 +393,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -407,7 +407,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-pricing"
+        sessionId="thread-aster-pricing"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -431,7 +431,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -448,7 +448,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={[
           ...messages,
           {
@@ -482,7 +482,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -496,7 +496,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages.slice(0, 1)}
       >
         <ArtifactTestSurface />
@@ -516,7 +516,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob(["Newer body"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -533,7 +533,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob(["Newer body"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={[
           messages[0],
           { ...messages[1], id: "replacement-publication" },
@@ -582,7 +582,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob(["Older body"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages.slice(0, 1)}
       >
         <ArtifactTestSurface />
@@ -609,7 +609,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -623,7 +623,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-pricing"
+        sessionId="thread-aster-pricing"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -644,7 +644,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -688,7 +688,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={oversizedMessages}
       >
         <ArtifactTestSurface />
@@ -732,7 +732,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob(["%PDF-1.7"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={pdfMessages}
       >
         <ArtifactTestSurface />
@@ -778,7 +778,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={{ resolve: async () => new Blob(["<h1>Report</h1>"]) }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={htmlMessages}
         artifactHtmlAssetOrigins={["https://assets.example/path"]}
       >
@@ -807,7 +807,7 @@ describe("artifact workspace", () => {
         locale="he"
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages}
       >
         <ArtifactTestSurface />
@@ -828,7 +828,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={undefined}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={messages.slice(0, 1)}
       >
         <ArtifactTestSurface />
@@ -881,7 +881,7 @@ describe("artifact workspace", () => {
         locale={locale}
         adapter={{ resolve }}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={[
           {
             id: messageId,
@@ -957,7 +957,7 @@ describe("artifact workspace", () => {
         locale="en"
         adapter={adapter}
         agentId="agent-aster"
-        threadId="thread-aster-market"
+        sessionId="thread-aster-market"
         messages={[
           {
             id: "media-message",

@@ -2,8 +2,10 @@
 
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { AgentCatalogResponse } from "../../protocol"
+import { failureOf } from "../core/failures"
 import type { ServerTurnEngine, ServerRuntime } from "../core/runtime"
 import type {
   SpeechCapability,
@@ -18,12 +20,12 @@ const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
@@ -153,7 +155,7 @@ class FakeNative {
 
   publicError(cause: unknown) {
     return cause instanceof NativeFailure
-      ? { code: "temporarily_unavailable" as const, status: 503 as const }
+      ? failureOf("unavailable", cause)
       : undefined
   }
 }
@@ -184,10 +186,6 @@ function synthesizer() {
   return { provider, speak }
 }
 
-function logger() {
-  return { info: vi.fn(), error: vi.fn() }
-}
-
 async function content(runtime: ServerRuntime) {
   const value = (await runtime.workspaceCapabilities(
     "agent-one",
@@ -199,7 +197,7 @@ async function content(runtime: ServerRuntime) {
 describe("withVoiceProviders", () => {
   it("delegates every other member to the native runtime it wraps", async () => {
     const { instance, runtime } = native()
-    const wrapped = withVoiceProviders(runtime, {}, logger())
+    const wrapped = withVoiceProviders(runtime, {}, captureLogs().logger)
 
     await expect(wrapped.listAgents()).resolves.toEqual({
       agents: [{ id: "agent-one" }],
@@ -214,7 +212,7 @@ describe("withVoiceProviders", () => {
     const wrapped = withVoiceProviders(
       runtime,
       { speech: { mode: "override", provider: speech.provider } },
-      logger()
+      captureLogs().logger
     )
 
     await expect(
@@ -238,14 +236,14 @@ describe("withVoiceProviders", () => {
     })
     const transcription = transcriber()
     const speech = synthesizer()
-    const log = logger()
+    const log = captureLogs()
     const wrapped = withVoiceProviders(
       runtime,
       {
         transcription: { mode: "override", provider: transcription.provider },
         speech: { mode: "override", provider: speech.provider },
       },
-      log
+      log.logger
     )
 
     await expect(
@@ -270,7 +268,7 @@ describe("withVoiceProviders", () => {
       transcription: PROVIDER_TRANSCRIPTION,
       speech: PROVIDER_SPEECH,
     })
-    expect(log.info).not.toHaveBeenCalled()
+    expect(log.records()).toEqual([])
   })
 
   it("prefers the native runtime in fallback mode", async () => {
@@ -285,14 +283,14 @@ describe("withVoiceProviders", () => {
     })
     const transcription = transcriber()
     const speech = synthesizer()
-    const log = logger()
+    const log = captureLogs()
     const wrapped = withVoiceProviders(
       runtime,
       {
         transcription: { mode: "fallback", provider: transcription.provider },
         speech: { mode: "fallback", provider: speech.provider },
       },
-      log
+      log.logger
     )
 
     await expect(
@@ -311,7 +309,7 @@ describe("withVoiceProviders", () => {
       transcription: NATIVE_TRANSCRIPTION,
       speech: NATIVE_SPEECH,
     })
-    expect(log.info).not.toHaveBeenCalled()
+    expect(log.records()).toEqual([])
   })
 
   it("advertises the provider in fallback mode while the native side is unavailable", async () => {
@@ -324,7 +322,7 @@ describe("withVoiceProviders", () => {
         transcription: { mode: "fallback", provider: transcription.provider },
         speech: { mode: "fallback", provider: speech.provider },
       },
-      logger()
+      captureLogs().logger
     )
 
     expect(await content(wrapped)).toEqual({
@@ -340,71 +338,77 @@ describe("withVoiceProviders", () => {
     const { instance, runtime } = native(() => new NativeFailure("boom"))
     const transcription = transcriber()
     const speech = synthesizer()
-    const log = logger()
+    const log = captureLogs()
     const wrapped = withVoiceProviders(
       runtime,
       {
         transcription: { mode: "fallback", provider: transcription.provider },
         speech: { mode: "fallback", provider: speech.provider },
       },
-      log
+      log.logger
     )
 
     await expect(
       wrapped.transcribe("agent-one", new Uint8Array([1]), "audio/webm")
     ).resolves.toBe("provider transcript")
     expect(instance.transcribeCalls).toEqual(["agent-one:audio/webm"])
-    expect(log.info).toHaveBeenCalledTimes(1)
-    expect(log.info).toHaveBeenCalledWith({
-      event: "voice.fallback",
-      direction: "transcription",
-      nativeCode: "temporarily_unavailable",
-    })
+    expect(log.records()).toEqual([
+      {
+        level: "info",
+        message: "voice.fallback",
+        fields: {
+          direction: "transcription",
+          nativeCode: "temporarily_unavailable",
+        },
+      },
+    ])
 
     await expect(wrapped.speak("agent-one", "read this")).resolves.toEqual({
       bytes: new Uint8Array([2]),
       mimeType: "audio/mpeg",
     })
-    expect(log.info).toHaveBeenCalledTimes(2)
-    expect(log.info).toHaveBeenLastCalledWith({
-      event: "voice.fallback",
-      direction: "speech",
-      nativeCode: "temporarily_unavailable",
+    expect(log.records()).toHaveLength(2)
+    expect(log.records()[1]).toEqual({
+      level: "info",
+      message: "voice.fallback",
+      fields: { direction: "speech", nativeCode: "temporarily_unavailable" },
     })
   })
 
   it("logs an unclassified native failure without its message", async () => {
     const { runtime } = native(() => new Error("private upstream detail"))
     const transcription = transcriber()
-    const log = logger()
+    const log = captureLogs()
     const wrapped = withVoiceProviders(
       runtime,
       { transcription: { mode: "fallback", provider: transcription.provider } },
-      log
+      log.logger
     )
 
     await expect(
       wrapped.transcribe("agent-one", new Uint8Array([1]), "audio/webm")
     ).resolves.toBe("provider transcript")
-    expect(log.info).toHaveBeenCalledWith({
-      event: "voice.fallback",
-      direction: "transcription",
-      nativeCode: "unclassified",
-    })
+    expect(log.records()).toEqual([
+      {
+        level: "info",
+        message: "voice.fallback",
+        fields: { direction: "transcription", nativeCode: "unclassified" },
+      },
+    ])
   })
 
   it("never falls back once the caller has aborted", async () => {
     const { runtime } = native((signal) => signal?.reason)
     const transcription = transcriber()
     const speech = synthesizer()
-    const log = logger()
+    const log = captureLogs()
     const wrapped = withVoiceProviders(
       runtime,
       {
         transcription: { mode: "fallback", provider: transcription.provider },
         speech: { mode: "fallback", provider: speech.provider },
       },
-      log
+      log.logger
     )
     const reason = new Error("caller stopped")
     const controller = new AbortController()
@@ -423,7 +427,7 @@ describe("withVoiceProviders", () => {
     ).rejects.toBe(reason)
     expect(transcription.transcribe).not.toHaveBeenCalled()
     expect(speech.speak).not.toHaveBeenCalled()
-    expect(log.info).not.toHaveBeenCalled()
+    expect(log.records()).toEqual([])
   })
 
   it("returns capabilities it cannot parse untouched", async () => {
@@ -434,7 +438,7 @@ describe("withVoiceProviders", () => {
     const wrapped = withVoiceProviders(
       runtime,
       { transcription: { mode: "override", provider: transcription.provider } },
-      logger()
+      captureLogs().logger
     )
 
     await expect(
@@ -444,15 +448,16 @@ describe("withVoiceProviders", () => {
 
   it("classifies a provider failure and delegates every other cause", () => {
     const { instance, runtime } = native()
-    const wrapped = withVoiceProviders(runtime, {}, logger())
+    const wrapped = withVoiceProviders(runtime, {}, captureLogs().logger)
     const nativeCause = new NativeFailure("boom")
 
     expect(
-      wrapped.publicError(new VoiceProviderError("invalid_request"))
-    ).toEqual({ code: "invalid_request", status: 400 })
+      wrapped.publicError(new VoiceProviderError("invalid_request"))?.kind
+    ).toBe("invalid_request")
     expect(
       wrapped.publicError(new VoiceProviderError("temporarily_unavailable"))
-    ).toEqual({ code: "temporarily_unavailable", status: 503 })
+        ?.kind
+    ).toBe("unavailable")
     expect(wrapped.publicError(nativeCause)).toEqual(
       instance.publicError(nativeCause)
     )

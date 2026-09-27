@@ -85,7 +85,7 @@ describe("AosUiApp fixture composition", () => {
       .listAllSessionMetadata()
       .find(({ agentId }) => agentId === "agent-builder")!
     expect(window.location.pathname).toBe(
-      `/draft%3A${interview.threadId}/${interview.threadId}`
+      `/draft%3A${interview.sessionId}/${interview.sessionId}`
     )
     expect(screen.queryByRole("button", { name: /^Agent Creator/ })).toBeNull()
 
@@ -141,7 +141,7 @@ describe("AosUiApp fixture composition", () => {
     })
     await waitFor(() =>
       expect(window.location.pathname).toBe(
-        `/draft%3A${interview.threadId}/${interview.threadId}`
+        `/draft%3A${interview.sessionId}/${interview.sessionId}`
       )
     )
     expect(
@@ -177,7 +177,7 @@ describe("AosUiApp fixture composition", () => {
       return created!
     })
     await waitFor(() =>
-      expect(rename).toHaveBeenCalledWith(interview.threadId, "New Agent")
+      expect(rename).toHaveBeenCalledWith(interview.sessionId, "New Agent")
     )
     await user.click(screen.getByRole("button", { name: /^New Agent, draft/ }))
     expect(rename).toHaveBeenCalledOnce()
@@ -260,7 +260,7 @@ describe("AosUiApp fixture composition", () => {
     const threads = bundle!.assistantRuntime.threads.getState()
     expect(
       threads.threadIds.map((id) => threads.threadItems[id]?.remoteId)
-    ).not.toContain(interview.threadId)
+    ).not.toContain(interview.sessionId)
   })
 
   it("localizes Session-scoped Todo copy, the interview draft, and its prompt in Hebrew", async () => {
@@ -393,7 +393,7 @@ describe("AosUiApp fixture composition", () => {
       .find(({ agentId }) => agentId === "agent-builder")!
 
     await act(async () =>
-      workspace!.completeAgentCreation(creatorSession.threadId, {
+      workspace!.completeAgentCreation(creatorSession.sessionId, {
         kind: "ready",
         id: "agent-sora",
         name: "Sora",
@@ -445,7 +445,7 @@ describe("AosUiApp fixture composition", () => {
     )
 
     await act(async () =>
-      workspace!.completeAgentCreation(creatorSession.threadId, {
+      workspace!.completeAgentCreation(creatorSession.sessionId, {
         kind: "ready",
         id: "agent-sora",
         name: "Sora",
@@ -482,7 +482,7 @@ describe("AosUiApp fixture composition", () => {
       .find(({ agentId }) => agentId === "agent-builder")!
 
     await act(async () =>
-      handle!.workspace.completeAgentCreation(creatorSession.threadId, {
+      handle!.workspace.completeAgentCreation(creatorSession.sessionId, {
         kind: "ready",
         id: "agent-sora",
         name: "Sora",
@@ -516,7 +516,7 @@ describe("AosUiApp fixture composition", () => {
       .find(({ agentId }) => agentId === "agent-builder")!
 
     await act(async () =>
-      handle!.workspace.completeAgentCreation(creatorSession.threadId, {
+      handle!.workspace.completeAgentCreation(creatorSession.sessionId, {
         kind: "ready",
         id: "agent-sora",
         name: "Sora",
@@ -552,7 +552,7 @@ describe("AosUiApp fixture composition", () => {
         id: "created-2",
         type: "agent-ready",
         agentId: "agent-sora",
-        threadId: creatorSession.threadId,
+        sessionId: creatorSession.sessionId,
         occurredAt: FIXTURE_NOW.toISOString(),
       })
     )
@@ -582,7 +582,7 @@ describe("AosUiApp fixture composition", () => {
       .find(({ agentId }) => agentId === "agent-builder")!
 
     await act(async () =>
-      workspace!.failAgentSetup(creatorSession.threadId, "agent-sora", "Sora")
+      workspace!.failAgentSetup(creatorSession.sessionId, "agent-sora", "Sora")
     )
 
     expect(await screen.findByText(en.creator.createdHidden)).toBeVisible()
@@ -614,7 +614,7 @@ describe("AosUiApp fixture composition", () => {
         id: "created-1",
         type: "agent-ready",
         agentId: "agent-sora",
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         occurredAt: FIXTURE_NOW.toISOString(),
       })
     )
@@ -643,7 +643,7 @@ describe("AosUiApp fixture composition", () => {
       .listAllSessionMetadata()
       .find(({ agentId }) => agentId === "agent-builder")!
     await act(async () =>
-      workspace!.completeAgentCreation(creatorSession.threadId, {
+      workspace!.completeAgentCreation(creatorSession.sessionId, {
         kind: "ready",
         id: "agent-sora",
         name: "Sora",
@@ -661,7 +661,7 @@ describe("AosUiApp fixture composition", () => {
       <CreatorFixtureAosUiApp
         locale="en"
         workspace={workspace}
-        initialThreadId={creatorSession.threadId}
+        initialThreadId={creatorSession.sessionId}
       />
     )
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { createProxyApp } from "./app"
+import { captureLogs } from "../../test/support/log-capture"
+import { createProxyApp, type ProxyAppOptions } from "./app"
 import {
   HermesAuthenticationError,
   HermesHttpError,
@@ -10,11 +11,26 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
+import { HermesTurnPublicError } from "./adapters/hermes/run-failures"
+import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { RuntimeInstance, ServerMcpApps } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 import { McpAppNotFoundError } from "./mcp-apps/fallback"
 
 const origin = "http://127.0.0.1:3000"
+
+/** Idle health readings, for an app whose liveness no case reads. */
+const health = () => ({
+  links: [],
+  gauges: {
+    sockets: 0,
+    memberships: 0,
+    executions: 0,
+    uncertain: 0,
+    deadlinesFired: 0,
+    journalBytes: 0,
+  },
+})
 
 function session(agentId = "researcher", id = "stored") {
   return {
@@ -41,11 +57,9 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
     engine: runtime.turns,
     readings: runtime,
     maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
     maxSubscriberEvents: 32,
     maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: 64,
-    maxReplayBytes: 512 * 1024,
+    logger: captureLogs().logger,
   })
   return {
     id: "hermes-main",
@@ -58,13 +72,20 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
   }
 }
 
-function app(runtime: HermesServerAdapter) {
+function app(
+  runtime: HermesServerAdapter,
+  options: Partial<ProxyAppOptions> = {}
+) {
   return createProxyApp({
     publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
-    logger: { info: vi.fn(), error: vi.fn() },
+    logger: captureLogs().logger,
+    health,
+    ...options,
   })
 }
+
+const stagedDataUrl = "data:text/plain;base64,bm90ZXM="
 
 const stageRequest = {
   method: "POST",
@@ -75,7 +96,7 @@ const stageRequest = {
         type: "file",
         filename: "notes.txt",
         mimeType: "text/plain",
-        dataUrl: "data:text/plain;base64,bm90ZXM=",
+        dataUrl: stagedDataUrl,
       },
     ],
   }),
@@ -99,7 +120,7 @@ describe("AOS V1 proxy", () => {
     })
   })
 
-  it("stages operator attachments for the ACP lane to consume", async () => {
+  it("stages operator attachments for the ACP listener to consume", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(runtime, "getSession").mockResolvedValue(session())
     const cleanup = vi.fn(async () => undefined)
@@ -109,10 +130,17 @@ describe("AOS V1 proxy", () => {
       cleanup,
     })
 
-    const response = await app(runtime).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
-      stageRequest
-    )
+    // Room for exactly one batch's bytes, so a second one is over the cap.
+    const proxy = app(runtime, {
+      attachmentStages: new AttachmentStageRegistry(
+        256,
+        300_000,
+        stagedDataUrl.length
+      ),
+    })
+    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
+
+    const response = await proxy.request(path, stageRequest)
 
     expect(response.status).toBe(201)
     await expect(response.json()).resolves.toMatchObject({
@@ -122,6 +150,9 @@ describe("AOS V1 proxy", () => {
       ],
     })
     expect(cleanup).not.toHaveBeenCalled()
+
+    expect((await proxy.request(path, stageRequest)).status).toBe(503)
+    expect(cleanup).toHaveBeenCalledOnce()
   })
 
   it("requires the exact configured origin for state changes", async () => {
@@ -213,15 +244,16 @@ describe("AOS V1 proxy", () => {
     })
   })
 
-  it("maps a provider failure on the content lane to a friendly error", async () => {
+  it("maps a provider failure on the content routes to a friendly error", async () => {
     const transport: HermesRpcTransport = {
       request: vi.fn(async () => {
         throw new HermesHttpError(503)
       }),
     }
 
+    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
     const response = await app(new HermesServerAdapter(transport)).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+      path,
       stageRequest
     )
 
@@ -231,6 +263,18 @@ describe("AOS V1 proxy", () => {
         code: "temporarily_unavailable",
         description: expect.any(String),
       },
+    })
+
+    // A write that may have landed is no caller error: the route answers it
+    // 503, under the code that says to reconcile first.
+    const uncertain = new HermesServerAdapter({ request: vi.fn() })
+    vi.spyOn(uncertain, "getSession").mockRejectedValue(
+      new HermesTurnPublicError("AOS_STOP_UNCERTAIN", "Stop was not confirmed.")
+    )
+    const reconcile = await app(uncertain).request(path, stageRequest)
+    expect(reconcile.status).toBe(503)
+    expect(await reconcile.json()).toMatchObject({
+      error: { code: "uncertain_mutation" },
     })
   })
 
@@ -273,11 +317,12 @@ describe("AOS V1 proxy", () => {
         throw new HermesHttpError(503)
       }),
     })
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     const proxy = createProxyApp({
       publicOrigin: origin,
       runtimeInstance: runtimeInstance(runtime),
-      logger,
+      logger: logs.logger,
+      health,
     })
 
     // An artifact read is a REST route that reaches the provider, so an outage
@@ -287,21 +332,19 @@ describe("AOS V1 proxy", () => {
       503
     )
 
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "request.failed",
+    expect(logs.records()).toContainEqual({
+      level: "error",
+      message: "request.failed",
+      fields: expect.objectContaining({
         code: "temporarily_unavailable",
         path,
-      })
-    )
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "request.completed",
-        method: "GET",
-        status: 503,
-        path,
-      })
-    )
+      }),
+    })
+    expect(logs.records()).toContainEqual({
+      level: "info",
+      message: "request.completed",
+      fields: expect.objectContaining({ method: "GET", status: 503, path }),
+    })
   })
 
   it("opens an MCP App view only from the Session that holds its call", async () => {
@@ -317,11 +360,11 @@ describe("AOS V1 proxy", () => {
     const mcpApps: ServerMcpApps = {
       describe: vi.fn(async () => true),
       open: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { html: "<p>view</p>" }
       }),
       callTool: vi.fn(async (scope, toolCallId) => {
-        owned(scope.sessionId, toolCallId)
+        owned(scope.providerSessionId, toolCallId)
         return { content: [] }
       }),
       readResource: vi.fn(async () => ({ contents: [] })),

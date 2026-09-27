@@ -9,7 +9,14 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { afterEach, describe, expect, it } from "vitest"
 
-import type { SessionScope } from "../core/runtime"
+import { captureLogs } from "../../../test/support/log-capture"
+import * as ids from "../core/ids"
+import {
+  ServerSessionNotFoundError,
+  type ServerRuntime,
+  type SessionScope,
+} from "../core/runtime"
+import { withMcpApps } from "./annotate"
 import {
   createMcpAppClient,
   McpAppConnectionRefusedError,
@@ -107,8 +114,8 @@ function appServer(authorization?: string) {
 
 const scope: SessionScope = {
   agentId: "agent-1",
+  providerSessionId: "session-1",
   sessionId: "session-1",
-  threadId: "session-1",
 }
 
 const stored: Record<string, StoredMcpToolCall> = {
@@ -146,7 +153,7 @@ function fallback(
     fetch: server.fetch,
     servers: options.servers,
   })
-  const logged: unknown[] = []
+  const logs = captureLogs()
   const apps = createMcpAppsFallback(
     {
       servers: async () => [
@@ -159,9 +166,9 @@ function fallback(
       storedCall: async (_scope, toolCallId) => stored[toolCallId],
     },
     client,
-    (entry) => logged.push(entry)
+    logs.logger
   )
-  return { apps, seen: server.seen, logged }
+  return { apps, seen: server.seen, logs }
 }
 
 describe("MCP Apps fallback host", () => {
@@ -245,7 +252,7 @@ describe("MCP Apps fallback host", () => {
     ])
 
     it("sends them to a server that requires them", async () => {
-      const { apps, logged } = fallback({
+      const { apps, logs } = fallback({
         weatherUrl: "https://weather.test/mcp",
         authorization: SECRET,
         servers,
@@ -260,7 +267,7 @@ describe("MCP Apps fallback host", () => {
       await expect(apps.open(scope, "call-forecast")).resolves.toMatchObject({
         html: "<!doctype html><p>Forecast</p>",
       })
-      expect(JSON.stringify(logged)).not.toContain("s3cret")
+      expect(JSON.stringify(logs.records())).not.toContain("s3cret")
     })
 
     it("refuses to send them over plain HTTP, and falls back to text", async () => {
@@ -277,6 +284,57 @@ describe("MCP Apps fallback host", () => {
       expect(String(refused)).not.toContain("s3cret")
       expect(seen.listTools).toBe(0)
     })
+  })
+
+  it("keeps the newest running calls of the newest Sessions until a Session is gone", async () => {
+    const { apps } = fallback()
+    const runtime = withMcpApps({
+      mcpApps: apps,
+      turns: {
+        start: async () => Promise.reject(new Error("unused")),
+        recover: async () => Promise.reject(new ServerSessionNotFoundError()),
+      },
+      deleteSession: async () => undefined,
+      publicError: () => undefined,
+    } as unknown as ServerRuntime)
+    const session = (n: number): SessionScope => ({
+      agentId: "agent-1",
+      providerSessionId: ids.providerSessionId(`session-${n}`),
+      sessionId: ids.sessionId(`session-${n}`),
+    })
+    const observe = (at: SessionScope, toolCallId: string) =>
+      apps.observe?.(at, {
+        toolCallId,
+        toolName: "mcp__weather__show-forecast",
+      })
+    const view = { html: "<!doctype html><p>Forecast</p>" }
+
+    // A Session keeps its newest 32 running calls.
+    for (let call = 0; call <= 32; call++) observe(scope, `live-${call}`)
+    await expect(apps.open(scope, "live-1")).resolves.toMatchObject(view)
+    await expect(apps.open(scope, "live-0")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    // The fallback keeps the newest 8 Sessions.
+    for (let n = 2; n <= 9; n++) observe(session(n), "live-0")
+    await expect(apps.open(scope, "live-1")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    // A Session deleted, or one a recover finds gone, keeps none.
+    await runtime.deleteSession("agent-1", session(2).providerSessionId)
+    await expect(
+      runtime.turns.recover(session(3), {
+        sessionId: session(3).sessionId,
+        turnId: "turn-1",
+      })
+    ).rejects.toBeInstanceOf(ServerSessionNotFoundError)
+    await expect(apps.open(session(2), "live-0")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    await expect(apps.open(session(3), "live-0")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
+    await expect(apps.open(session(4), "live-0")).resolves.toMatchObject(view)
   })
 
   describe("with an operator-configured URL", () => {

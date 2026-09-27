@@ -42,7 +42,7 @@ the runtime adapter; it never transfers a queue to another Agent.
 
 An Artifact appears only after an Agent explicitly publishes it: by calling the `present_artifact` tool from the AOS UI tools MCP server with an absolute file path, by writing a `MEDIA:/absolute/path` line where the runtime supports it (Hermes and OpenClaw), or through a trusted provider-native delivery receipt, such as a successful Hermes text-to-speech result. Ordinary files and paths mentioned in prose are not exposed. A relative or traversing path, a credential file such as `.env` or `auth.json`, and a file over 25 MiB cannot be published.
 
-AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy and an inspectable Source view. Operators may allow selected HTTPS asset origins through public configuration; see [Configuration](configuration.md#artifact-html-assets). Inline image, audio, and video Artifacts appear directly in the conversation.
+AOS resolves the Artifact through the selected runtime and offers a read-only preview or download. HTML opens in an isolated frame with a fixed content-security policy that loads no external assets, and an inspectable Source view. Inline image, audio, and video Artifacts appear directly in the conversation.
 
 ## Use MCP Apps
 
@@ -64,7 +64,7 @@ Use the conversation search control to find messages in the current Session. Res
 
 ## Use slash-command suggestions
 
-Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. Guests get no slash commands: the guest composer shows none, and the guest lane refuses a guest message that starts with `/`.
+Type `/` in the composer to see available slash commands from the runtime. Suggestions are presentation only; the runtime handles routing. Guests get no slash commands: the guest composer shows none, and the guest listener refuses a guest message that starts with `/`.
 
 ## Answer a question or free-text "Other"
 

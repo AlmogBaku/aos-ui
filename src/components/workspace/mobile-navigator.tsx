@@ -116,9 +116,9 @@ export type MobileNavigatorProps = {
   availability?: SessionActionCapabilities | null
   sessionMenu?: SessionRowMenuHandlers
   onStateChange: (event: MobileNavigatorEvent) => void
-  onOpenSession: (agentId: string, threadId: string) => void
+  onOpenSession: (agentId: string, sessionId: string) => void
   onCreateSession: (agentId: string) => void
-  onRemoveOpenSession?: (agentId: string, threadId: string) => void
+  onRemoveOpenSession?: (agentId: string, sessionId: string) => void
   onNewAgent?: () => void
   onManageAgents?: () => void
   onPreferences?: () => void
@@ -139,13 +139,13 @@ function reconcileIds(
   previous: readonly string[],
   current: readonly WorkspaceSession[]
 ) {
-  const currentIds = new Set(current.map(({ threadId }) => threadId))
+  const currentIds = new Set(current.map(({ sessionId }) => sessionId))
   const stable = previous.filter((id) => currentIds.has(id))
   const known = new Set(stable)
-  for (const { threadId } of current) {
-    if (!known.has(threadId)) {
-      stable.push(threadId)
-      known.add(threadId)
+  for (const { sessionId } of current) {
+    if (!known.has(sessionId)) {
+      stable.push(sessionId)
+      known.add(sessionId)
     }
   }
   return stable
@@ -155,7 +155,7 @@ function orderSessions(
   ids: readonly string[],
   sessions: readonly WorkspaceSession[]
 ) {
-  const byId = new Map(sessions.map((item) => [item.threadId, item]))
+  const byId = new Map(sessions.map((item) => [item.sessionId, item]))
   return ids.flatMap((id) => {
     const item = byId.get(id)
     return item ? [item] : []
@@ -173,7 +173,7 @@ function stableOpenOrder(
 ) {
   return pinnedFirst(
     orderSessions(reconcileIds(previous, current), current)
-  ).map(({ threadId }) => threadId)
+  ).map(({ sessionId }) => sessionId)
 }
 
 function useStableSessionSections(
@@ -193,10 +193,10 @@ function useStableSessionSections(
       return {
         agentId: next.state.agentId,
         openIds: enteringAgent
-          ? next.catalog.openSessions.map(({ threadId }) => threadId)
+          ? next.catalog.openSessions.map(({ sessionId }) => sessionId)
           : stableOpenOrder(previous.openIds, next.catalog.openSessions),
         historyIds: enteringAgent
-          ? next.catalog.historySessions.map(({ threadId }) => threadId)
+          ? next.catalog.historySessions.map(({ sessionId }) => sessionId)
           : reconcileIds(previous.historyIds, next.catalog.historySessions),
       }
     },
@@ -206,10 +206,10 @@ function useStableSessionSections(
         ? {
             agentId: initialState.agentId,
             openIds: initialCatalog.openSessions.map(
-              ({ threadId }) => threadId
+              ({ sessionId }) => sessionId
             ),
             historyIds: initialCatalog.historySessions.map(
-              ({ threadId }) => threadId
+              ({ sessionId }) => sessionId
             ),
           }
         : null
@@ -228,8 +228,8 @@ function useStableSessionSections(
       ? snapshot
       : {
           agentId: state.agentId,
-          openIds: catalog.openSessions.map(({ threadId }) => threadId),
-          historyIds: catalog.historySessions.map(({ threadId }) => threadId),
+          openIds: catalog.openSessions.map(({ sessionId }) => sessionId),
+          historyIds: catalog.historySessions.map(({ sessionId }) => sessionId),
         }
 
   return {
@@ -322,7 +322,7 @@ export function MobileNavigator({
     if (!isDraftAgentId(agentId)) return undefined
     const entry = sessionsByAgentId.find((item) => item.agentId === agentId)
     return (
-      entry?.openSessions[0]?.threadId ?? entry?.historySessions[0]?.threadId
+      entry?.openSessions[0]?.sessionId ?? entry?.historySessions[0]?.sessionId
     )
   }
 
@@ -495,10 +495,10 @@ export function MobileNavigator({
           }
           onBack={() => onStateChange({ type: "BACK_TO_AGENTS" })}
           onDismiss={() => onStateChange({ type: "DISMISS" })}
-          onOpenSession={(threadId) => {
+          onOpenSession={(sessionId) => {
             onStateChange({ type: "DISMISS" })
-            if (threadId !== activeThreadId) {
-              onOpenSession(state.agentId, threadId)
+            if (sessionId !== activeThreadId) {
+              onOpenSession(state.agentId, sessionId)
             }
           }}
           onCreateSession={() => {
@@ -507,9 +507,9 @@ export function MobileNavigator({
           }}
           onRemoveOpenSession={
             onRemoveOpenSession
-              ? (threadId) => {
+              ? (sessionId) => {
                   onStateChange({ type: "DISMISS" })
-                  onRemoveOpenSession(state.agentId, threadId)
+                  onRemoveOpenSession(state.agentId, sessionId)
                 }
               : undefined
           }
@@ -541,9 +541,9 @@ type SessionsViewProps = {
   onQueryChange: (query: string) => void
   onBack: () => void
   onDismiss: () => void
-  onOpenSession: (threadId: string) => void
+  onOpenSession: (sessionId: string) => void
   onCreateSession: () => void
-  onRemoveOpenSession?: (threadId: string) => void
+  onRemoveOpenSession?: (sessionId: string) => void
   onAgentDetails?: () => void
   onActionError?: (error: unknown) => void
 }
@@ -639,11 +639,11 @@ function SessionsView({
         availability={availability}
         sessionMenu={sessionMenu}
         onQueryChange={onQueryChange}
-        onOpenSession={(_agentId, threadId) => onOpenSession(threadId)}
+        onOpenSession={(_agentId, sessionId) => onOpenSession(sessionId)}
         onCreateSession={() => onCreateSession()}
         onRemoveOpenSession={
           onRemoveOpenSession
-            ? (_agentId, threadId) => onRemoveOpenSession(threadId)
+            ? (_agentId, sessionId) => onRemoveOpenSession(sessionId)
             : undefined
         }
         threadListRuntime={threadListRuntime}

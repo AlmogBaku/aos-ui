@@ -1,8 +1,10 @@
+import type { Catalog } from "../../core/catalog"
 import {
   CommandRefusedError,
+  type MemberScope,
   type Middleware,
-  type WorkspaceCapabilities,
 } from "../../core/member"
+import * as ids from "../../core/ids"
 import type { SessionScope } from "../../core/runtime"
 import type { GuestGrant } from "./index"
 
@@ -14,23 +16,19 @@ import type { GuestGrant } from "./index"
 
 export type GuestScopeOptions = {
   grant: GuestGrant
-  /** The invited Session, created on request; `undefined` if there is none. */
-  invited(
-    agentId: string,
-    ref: string,
-    create?: { firstTurnInstruction?: string }
-  ): Promise<{ sessionId: string } | undefined>
-  capabilities(
-    scope: Pick<SessionScope, "agentId" | "threadId">
-  ): Promise<WorkspaceCapabilities>
+  catalog: Pick<Catalog, "invited">
 }
 
 export function createScopeMiddleware({
   grant,
-  invited,
-  capabilities,
+  catalog,
 }: GuestScopeOptions): Middleware {
   const refused = () => new CommandRefusedError("not-found")
+  /** The invitation's Session, which a fresh one names before it exists. */
+  const addressed: MemberScope = {
+    agentId: grant.agentId,
+    sessionId: ids.sessionId(grant.ref),
+  }
 
   /** The invited Session as a scope; `undefined` means it does not exist yet. */
   async function invitedScope(
@@ -38,34 +36,24 @@ export function createScopeMiddleware({
     create?: { firstTurnInstruction?: string }
   ): Promise<SessionScope | undefined> {
     if (sessionId !== grant.ref) throw refused()
-    const resolved = await invited(grant.agentId, grant.ref, create)
+    const resolved = await catalog.invited(grant.agentId, grant.ref, create)
     return resolved
-      ? {
-          agentId: grant.agentId,
-          sessionId: resolved.sessionId,
-          threadId: grant.ref,
-        }
+      ? { ...addressed, providerSessionId: resolved.providerSessionId }
       : undefined
   }
 
   return {
-    // Nothing about another Session reaches a guest, however it was routed.
-    event: (event) => (event.sessionId === grant.ref ? event : undefined),
+    // Nothing about another Session reaches a guest, however it was routed,
+    // and nothing about the workspace.
+    event: (event) =>
+      "sessionId" in event && event.sessionId === grant.ref ? event : undefined,
     commands: {
       // A fresh invitation has no Session yet: resuming it creates nothing and
       // replays nothing, the way the guest history route serves an empty page,
-      // and the first Send resolves it.
+      // and joins it to be shown what it can do. The first Send resolves it.
       resume: async (command, next) => {
         const scope = await invitedScope(command.sessionId)
-        if (scope) return next({ ...command, scope })
-        return {
-          agentId: grant.agentId,
-          capabilities: await capabilities({
-            agentId: grant.agentId,
-            threadId: grant.ref,
-          }),
-          execution: { state: "idle" },
-        }
+        return next({ ...command, scope: scope ?? addressed })
       },
       "older-page": async (command, next) => {
         if (command.sessionId !== grant.ref) throw refused()

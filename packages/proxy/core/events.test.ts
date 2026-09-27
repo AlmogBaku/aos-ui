@@ -216,7 +216,7 @@ const requiredFields: Record<TurnEventKind, readonly string[]> = {
   [TurnEventKind.TurnStarted]: [],
   [TurnEventKind.TurnEnded]: [],
   [TurnEventKind.TurnRequiresAction]: ["requests"],
-  [TurnEventKind.TurnFailed]: ["message"],
+  [TurnEventKind.TurnFailed]: [],
   [TurnEventKind.MessageChunk]: ["messageId", "text"],
   [TurnEventKind.ThoughtChunk]: ["messageId", "text"],
   [TurnEventKind.ToolCallStarted]: ["toolCallId", "title"],
@@ -508,6 +508,7 @@ describe("turn event helpers", () => {
   it("names the failures after which nothing may be retried", () => {
     expect(isUncertainFailure(failed("AOS_SEND_UNCERTAIN"))).toBe(true)
     expect(isUncertainFailure(failed("AOS_RESET_REQUIRED"))).toBe(true)
+    expect(isUncertainFailure(failed("AOS_OUTCOME_UNKNOWN"))).toBe(true)
     expect(isUncertainFailure(failed("AOS_PROVIDER_RUN_FAILED"))).toBe(false)
     expect(isUncertainFailure(failed())).toBe(false)
     expect(isUncertainFailure({ kind: TurnEventKind.TurnEnded })).toBe(false)

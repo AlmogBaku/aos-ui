@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { createCatalog } from "../core/catalog"
 import type { ExecutionEvent } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
+import type { ServerRuntime } from "../core/runtime"
 import { createSessionRows, READ_GUARD_MS } from "../core/session-rows"
 import {
   createReadState,
@@ -11,15 +12,22 @@ import {
 
 const AGENT = "researcher"
 const SESSION = "session-1"
+/** Hermes' translation hint: its watermark moves only on a write. */
+const RELIGHTING: readonly ExecutionEvent["kind"][] = [
+  "turn-finished",
+  "turn-failed",
+  "attention-requested",
+]
 
 function harness(
   options: {
     unread?: boolean
     tracked?: boolean
-    mutate?: () => Promise<void>
+    /** A runtime without the relighting hint. */
+    neutral?: boolean
   } = {}
 ) {
-  const updateSession = vi.fn(options.mutate ?? (async () => undefined))
+  const updateSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(async () => ({
     runtime: { id: "hermes", name: "Hermes" },
     status: "ready",
@@ -30,17 +38,14 @@ function harness(
           : { status: "available" },
     },
   }))
-  // The proxy runtime surface is wide; read state reaches for these three, and
-  // never for the coordinator this connection shares.
-  const runtimeInstance = {
-    id: "hermes-primary",
-    runtime: {
-      runtimeInfo,
-      resolveSessionId: (_agentId: string, publicId: string) =>
-        `stored-${publicId}`,
-      updateSession,
-    },
-  } as unknown as RuntimeInstance
+  // The runtime surface is wide; read state reaches these three through the
+  // catalog.
+  const runtime = {
+    runtimeInfo,
+    resolveProviderSessionId: (_agentId: string, publicId: string) =>
+      `stored-${publicId}`,
+    updateSession,
+  } as unknown as ServerRuntime
   const sessionRows = createSessionRows()
   sessionRows.rememberList([
     {
@@ -55,8 +60,12 @@ function harness(
   ])
   const onUnreadChanged = vi.fn()
   const readState = createReadState({
-    runtimeInstance,
-    sessionRows,
+    catalog: createCatalog({
+      runtime,
+      coordinator: { state: () => "idle" },
+      rows: sessionRows,
+    }),
+    ...(options.neutral ? {} : { relighting: RELIGHTING }),
     onUnreadChanged,
   })
   return { updateSession, onUnreadChanged, readState, runtimeInfo, sessionRows }
@@ -101,7 +110,7 @@ describe("createReadState", () => {
     vi.useRealTimers()
   })
 
-  it("arms the watermark once per exposure even when the row reads read", async () => {
+  it("arms the watermark once per exposure even when the row reads read, only when hinted", async () => {
     const { updateSession, onUnreadChanged, readState } = harness()
 
     readState.focus(AGENT, SESSION)
@@ -119,6 +128,13 @@ describe("createReadState", () => {
     readState.focus(AGENT, SESSION)
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(2)
+
+    // Without the hint a read row stays settled and activity re-lights nothing.
+    const neutral = harness({ neutral: true })
+    neutral.readState.focus(AGENT, SESSION)
+    neutral.readState.onExecution(lifecycle("turn-finished"))
+    await settle(REACK_FLOOR_MS * 2)
+    expect(neutral.updateSession).not.toHaveBeenCalled()
   })
 
   it("defers a re-lit exposure's re-ack to the floor and ignores other Sessions", async () => {
@@ -221,21 +237,6 @@ describe("createReadState", () => {
     expect(second.updateSession).not.toHaveBeenCalled()
   })
 
-  it("keeps the optimistic row when the provider rejects the write", async () => {
-    const { updateSession, onUnreadChanged, readState, sessionRows } = harness({
-      unread: true,
-      mutate: async () => {
-        throw new Error("Session not found")
-      },
-    })
-
-    await expect(readState.markRead(AGENT, SESSION)).resolves.toBeUndefined()
-
-    expect(updateSession).toHaveBeenCalledTimes(1)
-    expect(onUnreadChanged).toHaveBeenCalledWith(AGENT, SESSION, false)
-    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
-  })
-
   it("acknowledges a Session the provider re-lights under the operator's eyes without flashing it", async () => {
     const { updateSession, readState, sessionRows } = harness()
     const published: (boolean | undefined)[] = []
@@ -282,18 +283,21 @@ describe("createReadState", () => {
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
   })
 
-  it("writes nothing when the runtime does not track read state", async () => {
+  it("writes nothing when the runtime does not track read state, and asks again after a failed read", async () => {
     const { updateSession, readState, runtimeInfo } = harness({
       tracked: false,
       unread: true,
     })
+    // The runtime is unreachable for the first write and answers once it is
+    // back, which only an uncached failure lets this connection hear.
+    runtimeInfo.mockRejectedValueOnce(new Error("Upstream unavailable"))
 
-    readState.focus(AGENT, SESSION)
-    await settle(FOCUS_DEBOUNCE_MS)
-    readState.focus(AGENT, SESSION)
-    await settle(FOCUS_DEBOUNCE_MS)
+    for (let exposure = 0; exposure < 3; exposure += 1) {
+      readState.focus(AGENT, SESSION)
+      await settle(FOCUS_DEBOUNCE_MS)
+    }
 
     expect(updateSession).not.toHaveBeenCalled()
-    expect(runtimeInfo).toHaveBeenCalledTimes(1)
+    expect(runtimeInfo).toHaveBeenCalledTimes(2)
   })
 })

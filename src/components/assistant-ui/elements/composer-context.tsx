@@ -2,10 +2,8 @@
 
 import type { ComponentProps } from "react"
 
-import type {
-  ComposerSessionCost,
-  ComposerTurnUsage,
-} from "@/components/assistant-ui/composer-features"
+import type { ComposerSessionCost } from "@/components/assistant-ui/composer-features"
+import type { ComposerTurnUsage } from "@/runtime-adapters/contracts"
 import { cn } from "@/lib/utils"
 import { ghostButton, mono, paper, pct } from "./voice-surfaces"
 

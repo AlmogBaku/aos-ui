@@ -76,7 +76,9 @@ export async function issueInvitationLink(
     const issued = await options.invitations.issue({
       agentId,
       ref,
-      expiresInSeconds: durationSeconds(flags.expiresIn ?? "72h"),
+      ...(flags.expiresIn
+        ? { expiresInSeconds: durationSeconds(flags.expiresIn) }
+        : {}),
       ...(instruction || flags.prefill
         ? {
             firstTurn: {

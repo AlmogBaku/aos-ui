@@ -23,7 +23,7 @@ import type {
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
-import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+import { steerMessageId } from "@/lib/message-parts"
 import {
   setTouchPrimary,
   resetThreadTestEnvironment,

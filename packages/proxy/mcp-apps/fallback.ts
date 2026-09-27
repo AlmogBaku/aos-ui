@@ -1,5 +1,6 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 
+import type { Logger } from "../../lifecycle"
 import type { CallToolResult } from "../../protocol/mcp-apps"
 import { isAosToolName, isAosUiServerName } from "../core/aos-tool-names"
 import type {
@@ -7,7 +8,6 @@ import type {
   ServerMcpApps,
   SessionScope,
 } from "../core/runtime"
-import { redactForLog } from "../redaction"
 import type { McpAppClient, McpAppEndpoint } from "./client"
 import {
   declaredResourceUri,
@@ -67,24 +67,17 @@ export class McpAppRefusedError extends Error {
 
 type Resolved = { endpoint: McpAppEndpoint; server: string; tool: string }
 
-/** What one view request reached upstream; never its arguments. */
-export type McpAppUpstreamLog = (fields: {
-  operation: "open" | "tools/call" | "resources/read"
-  agentId: string
-  sessionId: string
-  toolCallId: string
-  server: string
-  tool?: string
-  uri?: string
-}) => void
+/**
+ * The running calls the fallback remembers: the newest 32 of each of the 8
+ * Sessions it heard from most recently, 256 at most.
+ */
+const MAX_LIVE_SESSIONS = 8
+const MAX_LIVE_CALLS_PER_SESSION = 32
 
-const writeUpstreamLog: McpAppUpstreamLog = (fields) =>
-  console.info(
-    JSON.stringify(redactForLog({ event: "mcp_app.upstream", ...fields }))
-  )
-
-/** Running calls the fallback remembers, across every Session it serves. */
-const MAX_LIVE_CALLS = 256
+/** Drops the entry inserted first once `map` holds more than `limit`. */
+function trim(map: Map<string, unknown>, limit: number) {
+  if (map.size > limit) map.delete(map.keys().next().value!)
+}
 
 /**
  * The server and tool a canonical name refers to. A bare `aos-ui` tool belongs
@@ -103,12 +96,12 @@ function splitToolName(
 export function createMcpAppsFallback(
   source: McpAppsSource,
   client: McpAppClient,
-  log: McpAppUpstreamLog = writeUpstreamLog
+  logger: Logger
 ): ServerMcpApps {
-  /** Flagged calls of running turns, until the runtime stores them. */
-  const live = new Map<string, StoredMcpToolCall>()
-  const liveKey = (scope: SessionScope, toolCallId: string) =>
-    JSON.stringify([scope.agentId, scope.sessionId, toolCallId])
+  /** Flagged calls of running turns, keyed by Session then toolCallId. */
+  const live = new Map<string, Map<string, StoredMcpToolCall>>()
+  const sessionKey = (agentId: string, providerSessionId: string) =>
+    JSON.stringify([agentId, providerSessionId])
 
   async function resolveServer(
     scope: SessionScope,
@@ -155,41 +148,56 @@ export function createMcpAppsFallback(
   async function owned(scope: SessionScope, toolCallId: string) {
     const call =
       (await source.storedCall(scope, toolCallId)) ??
-      live.get(liveKey(scope, toolCallId))
+      live
+        .get(sessionKey(scope.agentId, scope.providerSessionId))
+        ?.get(toolCallId)
     const resolved = call && (await resolveServer(scope, call.toolName))
     if (!call || !resolved) throw new McpAppNotFoundError()
     return { call, resolved }
   }
 
+  /** What one view request reached upstream; never its arguments. */
   function logged(
     scope: SessionScope,
     toolCallId: string,
     resolved: Resolved,
-    fields: Pick<Parameters<McpAppUpstreamLog>[0], "operation" | "tool" | "uri">
+    fields: {
+      operation: "open" | "tools/call" | "resources/read"
+      tool?: string
+      uri?: string
+    }
   ) {
-    log({
-      agentId: scope.agentId,
-      sessionId: scope.threadId,
-      toolCallId,
-      server: resolved.server,
-      ...fields,
-    })
+    logger.info(
+      {
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        toolCallId,
+        server: resolved.server,
+        ...fields,
+      },
+      "mcp_app.upstream"
+    )
   }
 
   return {
     observe(scope, { toolCallId, ...call }: LiveMcpToolCall) {
-      const key = liveKey(scope, toolCallId)
-      const known = live.get(key)
+      const key = sessionKey(scope.agentId, scope.providerSessionId)
+      const session = live.get(key) ?? new Map<string, StoredMcpToolCall>()
+      const known = session.get(toolCallId)
       const input = call.input ?? known?.input
       const result = call.result ?? known?.result
-      // Re-inserted, so the oldest call is the one dropped past the cap.
-      live.delete(key)
-      live.set(key, {
+      // Re-inserted, so the oldest call and the Session heard from least
+      // recently are the ones dropped.
+      session.delete(toolCallId)
+      session.set(toolCallId, {
         toolName: call.toolName,
         ...(input ? { input } : {}),
         ...(result ? { result } : {}),
       })
-      if (live.size > MAX_LIVE_CALLS) live.delete(live.keys().next().value!)
+      trim(session, MAX_LIVE_CALLS_PER_SESSION)
+      live.delete(key)
+      live.set(key, session)
+      trim(live, MAX_LIVE_SESSIONS)
     },
     async describe(scope, call) {
       try {
@@ -230,6 +238,9 @@ export function createMcpAppsFallback(
       if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
       logged(scope, toolCallId, resolved, { operation: "resources/read", uri })
       return client.readResource(resolved.endpoint, uri)
+    },
+    reportSessionGone(agentId, providerSessionId) {
+      live.delete(sessionKey(agentId, providerSessionId))
     },
   }
 }

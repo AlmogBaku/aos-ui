@@ -20,7 +20,7 @@ import {
   type HermesLog,
   type HermesRpcTransport,
 } from "./gateway"
-import type { AttachmentObserver } from "./attachment-registry"
+import { isSessionGone, type AttachmentObserver } from "./attachment-registry"
 import { isRecord, trimmedText } from "./native"
 import { projectHermesHistory } from "./history"
 import { publishedArtifact } from "./media-artifacts"
@@ -49,6 +49,8 @@ export type HermesSubmitPrompt = {
   text: string
   turnId: string
   rewindSourceId?: string
+  /** Staged attachments ride along; command routing takes plain text only. */
+  hasAttachments?: boolean
   /**
    * Re-send exactly the write Hermes refused, as that refusal reported it. Only
    * the single "that live Session is gone" retry sets it, and it repeats the
@@ -125,15 +127,17 @@ export type HermesResumed = {
 
 export interface HermesTurnNative {
   resume(scope: HermesTurnScope): Promise<HermesResumed>
-  observe(
+  subscribeLive(
     liveSessionId: string,
     observer: AttachmentObserver
   ): Promise<() => void>
   cursor(liveSessionId: string): Promise<{ epoch: string; latestSeq: number }>
   replay(liveSessionId: string, after: number): Promise<HermesRecovery>
+  /** `signal` stops the native writes that have not gone out yet. */
   submit(
     liveSessionId: string,
-    prompt: HermesSubmitPrompt
+    prompt: HermesSubmitPrompt,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome>
   interrupt(liveSessionId: string): Promise<"interrupted" | "gone">
   redirect(
@@ -145,7 +149,7 @@ export interface HermesTurnNative {
   inspectExecution(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
@@ -168,7 +172,7 @@ export type HermesNativeAttachments = {
 
 /** The interaction surface `run-native.ts` depends on (`HermesInteractions`). */
 export type HermesNativeInteractions = {
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ): () => void
@@ -196,18 +200,16 @@ export type HermesNativeOptions = {
 const MAX_REPLAY_RESPONSE_BYTES = 6 * 1_048_576
 
 /**
- * Hermes' documented rejection codes for a session-scoped mutation. Anything
- * else is `unknown`: authoritative, but without a public reason of its own.
+ * Hermes' documented rejection codes for a session-scoped mutation, past the
+ * ones saying its live Session is gone. Anything else is `unknown`:
+ * authoritative, but without a public reason of its own.
  */
 const REJECTION_BY_CODE = new Map<number, HermesSubmitRejection>([
-  [4001, "session-gone"],
-  [4007, "session-gone"],
   [4009, "busy"],
   [4091, "busy"],
   [5070, "storage"],
   [5071, "storage"],
   [-32600, "invalid"],
-  [-32602, "invalid"],
 ])
 
 /**
@@ -221,6 +223,7 @@ const REJECTION_BY_SLOT_REASON = new Map<string, HermesSubmitRejection>([
 ])
 
 function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
+  if (isSessionGone(error)) return "session-gone"
   const reason =
     error.code === 4090
       ? REJECTION_BY_SLOT_REASON.get(error.reason ?? "")
@@ -229,9 +232,6 @@ function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
         : REJECTION_BY_CODE.get(error.code)
   return reason ?? "unknown"
 }
-
-/** Hermes has no live Session left to address; the binding must be rebound. */
-const GONE_CODES = new Set([4001, 4007, -32602])
 
 /**
  * Classify the reply to a write Hermes already accepted. An unusable admission
@@ -345,7 +345,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     return this.#attachments.ensure(scope)
   }
 
-  async observe(liveSessionId: string, observer: AttachmentObserver) {
+  async subscribeLive(liveSessionId: string, observer: AttachmentObserver) {
     try {
       // The registry owns the single native subscription and routes frames by
       // live Session; a caller that never attached has nothing to observe.
@@ -372,14 +372,15 @@ export class HermesNativeRuntime implements HermesTurnNative {
 
   async submit(
     liveSessionId: string,
-    prompt: HermesSubmitPrompt
+    prompt: HermesSubmitPrompt,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome> {
     // A re-send repeats the refused write and nothing else: the command that
     // produced this text, if any, already ran, and its params — including a
     // rewind the history read validated moments earlier — are re-sent unchanged
     // rather than derived again against the rebound Session.
     if (prompt.refused)
-      return this.#submitPrompt(liveSessionId, prompt.refused.params)
+      return this.#submitPrompt(liveSessionId, prompt.refused.params, signal)
     let invocation: Awaited<ReturnType<typeof nativeSlashInvocation>>
     if (prompt.text.startsWith("/")) {
       try {
@@ -392,7 +393,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         // A read-only catalog lookup: Hermes never saw the user's text.
         throwUnavailable(error)
       }
-      if (invocation && prompt.scope.hasAttachments)
+      if (invocation && prompt.hasAttachments)
         return {
           acknowledgement: "rejected",
           reason: "command-with-attachments",
@@ -414,11 +415,14 @@ export class HermesNativeRuntime implements HermesTurnNative {
       // A rewind is the one submit that destroys durable rows, so the address it
       // truncates before is reported exactly as Hermes receives it. The prompt
       // replacing those rows is never logged.
-      this.#log?.warn("hermes.rewind.submit", {
-        sessionId: prompt.scope.sessionId,
-        rewindSourceId: prompt.rewindSourceId,
-        ...rewind,
-      })
+      this.#log?.warn(
+        {
+          sessionId: prompt.scope.providerSessionId,
+          rewindSourceId: prompt.rewindSourceId,
+          ...rewind,
+        },
+        "hermes.rewind.submit"
+      )
     }
 
     if (invocation) {
@@ -428,7 +432,8 @@ export class HermesNativeRuntime implements HermesTurnNative {
           this.#transport,
           liveSessionId,
           invocation.name,
-          invocation.args
+          invocation.args,
+          signal
         )
       } catch (error) {
         // One label for the command itself: `slash.exec` and its
@@ -436,21 +441,25 @@ export class HermesNativeRuntime implements HermesTurnNative {
         return this.#writeOutcome("slash.command", liveSessionId, error)
       }
       return execution.kind === "expanded"
-        ? this.#submitPrompt(liveSessionId, { text: execution.text })
+        ? this.#submitPrompt(liveSessionId, { text: execution.text }, signal)
         : completionOutcome(execution)
     }
 
     // A rewind that stages attachments of its own replaces the source row's.
-    const reattached = prompt.scope.hasAttachments ? [] : images
+    const reattached = prompt.hasAttachments ? [] : images
     await this.#attachImages(liveSessionId, reattached)
-    const outcome = await this.#submitPrompt(liveSessionId, {
-      text: prompt.text,
-      ...rewind,
-    })
+    const outcome = await this.#submitPrompt(
+      liveSessionId,
+      { text: prompt.text, ...rewind },
+      signal
+    )
     // A refused write consumed nothing, so the images it would have carried
     // must not ride along with the Session's next prompt.
     if (outcome.acknowledgement === "rejected")
-      await this.#detachImages(liveSessionId, reattached).catch(() => {})
+      await this.#detachImages(liveSessionId, reattached).catch(
+        (err: unknown) =>
+          this.#log?.warn({ err }, "hermes.native.detach_failed")
+      )
     return outcome
   }
 
@@ -471,7 +480,9 @@ export class HermesNativeRuntime implements HermesTurnNative {
         attached.push(path)
       }
     } catch (error) {
-      await this.#detachImages(liveSessionId, attached).catch(() => {})
+      await this.#detachImages(liveSessionId, attached).catch((err: unknown) =>
+        this.#log?.warn({ err }, "hermes.native.detach_failed")
+      )
       throwUnavailable(error)
     }
   }
@@ -492,16 +503,18 @@ export class HermesNativeRuntime implements HermesTurnNative {
    */
   async #submitPrompt(
     liveSessionId: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal
   ): Promise<HermesSubmitOutcome> {
     let result: unknown
     try {
       result = await retryTransient(
         () =>
-          this.#transport.request("prompt.submit", {
-            session_id: liveSessionId,
-            ...params,
-          }),
+          this.#transport.request(
+            "prompt.submit",
+            { session_id: liveSessionId, ...params },
+            { signal }
+          ),
         this.#retry
       )
     } catch (error) {
@@ -523,7 +536,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         this.#logRejection("session.interrupt", error)
         // Hermes stating there is no live Session left is an authoritative
         // answer that nothing remains to stop, not an uncertain mutation.
-        if (error.code !== undefined && GONE_CODES.has(error.code)) {
+        if (isSessionGone(error)) {
           this.#attachments.invalidate(liveSessionId)
           return "gone"
         }
@@ -547,8 +560,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
         throw new ServerTurnSteerUncertainError()
       if (error instanceof HermesRpcRejectedError) {
         this.#logRejection("session.redirect", error)
-        if (error.code !== undefined && GONE_CODES.has(error.code))
-          this.#attachments.invalidate(liveSessionId)
+        if (isSessionGone(error)) this.#attachments.invalidate(liveSessionId)
         throw new HermesUnavailableError()
       }
       throwUnavailable(error)
@@ -557,7 +569,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
     // while it compacts, and leaves the surface to queue it for the next turn.
     // `queued` keeps the submit from interrupting the turn still running.
     if (isRecord(payload) && payload.status === "rejected") {
-      this.#log?.warn("hermes.native.redirect_rejected", {})
+      this.#log?.warn({}, "hermes.native.redirect_rejected")
       const outcome = await this.#submitPrompt(liveSessionId, {
         text,
         queued: true,
@@ -615,11 +627,11 @@ export class HermesNativeRuntime implements HermesTurnNative {
    * Session with a pending request addressable, so a run only asks to be told
    * when one is raised on its Session.
    */
-  onPendingRequest(
+  subscribePendingRequests(
     scope: HermesTurnScope,
     listener: (request: PendingRequest) => void
   ) {
-    return this.#interactions.onPendingRequest(scope, listener)
+    return this.#interactions.subscribePendingRequests(scope, listener)
   }
 
   async respondInteractions(
@@ -647,7 +659,8 @@ export class HermesNativeRuntime implements HermesTurnNative {
   ): HermesSubmitOutcome {
     if (error instanceof HermesRpcRejectedError) {
       this.#logRejection(method, error)
-      if (isTransientRejection(error)) throw new HermesUnavailableError()
+      if (isTransientRejection(error))
+        throw new HermesUnavailableError({ cause: error })
       const reason = rejectionReason(error)
       if (reason === "session-gone") this.#attachments.invalidate(liveSessionId)
       const detail = publicDetail(error.nativeMessage)
@@ -667,11 +680,14 @@ export class HermesNativeRuntime implements HermesTurnNative {
    * reaches only a public failure, and only redaction-checked.
    */
   #logRejection(method: string, error: HermesRpcRejectedError) {
-    this.#log?.warn("hermes.native.rejected", {
-      method,
-      ...(error.code === undefined ? {} : { code: error.code }),
-      ...(error.reason === undefined ? {} : { reason: error.reason }),
-    })
+    this.#log?.warn(
+      {
+        method,
+        ...(error.code === undefined ? {} : { code: error.code }),
+        ...(error.reason === undefined ? {} : { reason: error.reason }),
+      },
+      "hermes.native.rejected"
+    )
   }
 
   async #since(

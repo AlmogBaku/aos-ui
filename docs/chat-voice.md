@@ -64,7 +64,7 @@ Hold the microphone for 450 ms, then choose **Voice turn**. With keyboard focus 
 
 Voice turn requires:
 
-- an attached, connected, idle Session;
+- a resumed, connected, idle Session;
 - no pending approval;
 - an empty draft, attachment list, and queue; and
 - both native STT and TTS.
@@ -94,7 +94,7 @@ Switching browser tabs or windows does not stop active capture; use Finish, Send
 ## Troubleshoot voice
 
 - **Microphone unavailable:** use HTTPS or `localhost`; check device support, browser permission, native login, and profile STT configuration.
-- **Voice turn unavailable:** clear the draft, attachments, and queue; wait for an idle attached Session; resolve approvals; confirm both STT and TTS.
+- **Voice turn unavailable:** clear the draft, attachments, and queue; wait for an idle resumed Session; resolve approvals; confirm both STT and TTS.
 - **Read-aloud unavailable:** check native TTS configuration and authentication, or configure a proxy speech provider. Retry explicitly after generation failure or autoplay rejection.
 - **Upload rejected (400):** the proxy provider returned `invalid_request` for the audio type or size. Check that the audio format is supported by the configured provider and that the request fits within the provider's size limits.
 - **Provider unavailable (503):** the proxy provider returned an error or timed out. Check provider connectivity, `baseUrl`, and `apiKeyFile`. The `timeoutMs` default is 60 seconds; lower values may time out on slow providers.

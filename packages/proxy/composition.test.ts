@@ -5,14 +5,20 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../test/support/log-capture"
 import type { HermesRpcTransport } from "./adapters/hermes/adapter"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import {
   HermesAuthenticationError,
   type HermesGatewayOptions,
 } from "./adapters/hermes/gateway"
+import { CAPABILITIES } from "./acp/test-harness"
 import { createConfiguredProxy } from "./composition"
+import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
+import { SessionCoordinator } from "./core/session-coordinator"
+import { READY_LINK } from "./core/link"
+import { CredentialValues } from "./redaction"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 
 const directories: string[] = []
@@ -63,7 +69,6 @@ async function configuration(withGuest = false) {
             publicOrigin: "https://guest.example.test",
             invitations: {
               keys: [{ id: "guest-current", secretFile: invitationKey! }],
-              ttlSeconds: 300,
               clockSkewSeconds: 0,
             },
           },
@@ -88,9 +93,9 @@ async function pushConfiguration(stateDir?: string) {
   }
 }
 
-/** A runtime whose coordinator only records who observes it. */
+/** A runtime whose coordinator only records who subscribes to it. */
 function observableRuntime() {
-  const observe = vi.fn(() => vi.fn())
+  const subscribeExecutions = vi.fn(() => vi.fn())
   const runtimeInstance = {
     id: "test-runtime",
     runtime: {
@@ -98,10 +103,10 @@ function observableRuntime() {
       publicError: () => undefined,
       turns: {},
     },
-    sessions: { observe },
+    sessions: { subscribeExecutions, bindCapabilities: vi.fn() },
     close: vi.fn(async () => undefined),
   } as unknown as RuntimeInstance
-  return { observe, runtimeInstance }
+  return { subscribeExecutions, runtimeInstance }
 }
 
 function profile() {
@@ -118,8 +123,8 @@ function hermesRuntimeFactory(
     Parameters<typeof createHermesRuntime>[2]
   >["transportFactory"]
 ): RuntimeFactory {
-  return (config, limits) =>
-    createHermesRuntime(config, limits, { transportFactory })
+  return (config, limits, services) =>
+    createHermesRuntime(config, limits, { ...services, transportFactory })
 }
 
 describe("configured proxy composition", () => {
@@ -136,22 +141,25 @@ describe("configured proxy composition", () => {
     const runtimeInstance = {
       id: "test-runtime",
       runtime,
-      sessions: {},
+      sessions: { bindCapabilities: vi.fn() },
       close: vi.fn(async () => undefined),
     } as unknown as RuntimeInstance
     const runtimeFactory = vi.fn(async () => runtimeInstance)
+    const logger = captureLogs().logger
+    const credentials = new CredentialValues()
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger,
+      credentials,
     })
 
     expect(runtimeFactory).toHaveBeenCalledOnce()
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      input.runtime,
-      input.limits,
-      new Map()
-    )
+    expect(runtimeFactory).toHaveBeenCalledWith(input.runtime, input.limits, {
+      logger,
+      credentials,
+      mcpServerOverrides: new Map(),
+    })
     expect(configured.runtimeInstance).toBe(runtimeInstance)
     expect(configured.guest?.runtimeInstance).toBe(runtimeInstance)
     // The guest listener serves ACP beside its HTTP routes.
@@ -175,7 +183,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -189,7 +198,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("loads one server token and shares one runtime and transport across both lanes", async () => {
+  it("loads one server token and shares one runtime and transport across both listeners", async () => {
     const transportClose = vi.fn(async () => undefined)
     const transportFactory = vi.fn(
       (options: HermesGatewayOptions) =>
@@ -203,15 +212,18 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(transportFactory),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
       clock: () => 1_700_000_000_000,
     })
 
     expect(transportFactory).toHaveBeenCalledOnce()
     expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
-    // An operator and a guest on one provider Session meet in one room.
-    expect(configured.acpService.rooms).toBeDefined()
-    expect(configured.guest?.acpService.rooms).toBe(configured.acpService.rooms)
+    // An operator and a guest on one provider Session meet in one channel.
+    expect(configured.acpService.channels).toBeDefined()
+    expect(configured.guest?.acpService.channels).toBe(
+      configured.acpService.channels
+    )
     await expect(
       transportFactory.mock.results[0]?.value.credentials()
     ).resolves.toEqual({ "X-Hermes-Session-Token": "hermes-secret" })
@@ -227,7 +239,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
       clock: () => 1_700_000_000_000,
     })
     const response = await configured.app.request(
@@ -277,7 +290,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -299,7 +313,8 @@ describe("configured proxy composition", () => {
   it("names the rejected field when invitation input is invalid", async () => {
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
     const post = (body: unknown) =>
       configured.app.request(
@@ -342,7 +357,8 @@ describe("configured proxy composition", () => {
     )
     const configured = await createConfiguredProxy(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     const response = await configured.app.request(
@@ -363,8 +379,8 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("wires push delivery to the runtime and the operator lane's own rows", async () => {
-    const { observe, runtimeInstance } = observableRuntime()
+  it("wires push delivery to the runtime and the operator listener's own rows", async () => {
+    const { subscribeExecutions, runtimeInstance } = observableRuntime()
     const input = {
       ...(await configuration()),
       push: await pushConfiguration(),
@@ -372,12 +388,13 @@ describe("configured proxy composition", () => {
 
     const configured = await createConfiguredProxy(input, {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
-    // One cache: the ACP lane keeps it current and the read-state gate reads it.
+    // One cache: the ACP listener keeps it current and the read-state gate reads it.
     expect(configured.acpService.sessionRows).toBe(configured.sessionRows)
-    expect(observe).toHaveBeenCalledOnce()
+    expect(subscribeExecutions).toHaveBeenCalledOnce()
     expect(configured.push?.registrations.list("operator")).toEqual([])
 
     const response = await configured.app.request(
@@ -395,15 +412,16 @@ describe("configured proxy composition", () => {
   })
 
   it("serves no push capability when a deployment configures none", async () => {
-    const { runtimeInstance, observe } = observableRuntime()
+    const { runtimeInstance, subscribeExecutions } = observableRuntime()
 
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
 
     expect(configured.push).toBeUndefined()
-    expect(observe).not.toHaveBeenCalled()
+    expect(subscribeExecutions).not.toHaveBeenCalled()
     await expect(
       (
         await configured.app.request("https://aos.example.test/api/aos/v1/push")
@@ -421,7 +439,8 @@ describe("configured proxy composition", () => {
     await expect(
       createConfiguredProxy(input, {
         runtimeFactory: async () => runtimeInstance,
-        logger: { info: vi.fn(), error: vi.fn() },
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
       })
     ).rejects.toThrow("Push state directory")
   })
@@ -432,15 +451,25 @@ describe("configured proxy composition", () => {
       const speak = vi.fn(async () => {
         throw new Error("native speech unavailable")
       })
+      const runtime = {
+        runtimeInfo: async () => ({ status: "ready" }),
+        publicError: () => undefined,
+        link: READY_LINK,
+        workspaceCapabilities: async () => CAPABILITIES,
+        speak,
+        turns: {},
+      } as unknown as ServerRuntime
       const runtimeInstance = {
         id: "test-runtime",
-        runtime: {
-          runtimeInfo: async () => ({ status: "ready" }),
-          publicError: () => undefined,
-          speak,
-          turns: {},
-        },
-        sessions: {},
+        runtime,
+        sessions: new SessionCoordinator({
+          engine: runtime.turns,
+          readings: runtime,
+          maxActiveExecutions: 1,
+          maxSubscriberEvents: 1,
+          maxSubscriberBytes: 1,
+          logger: captureLogs().logger,
+        }),
         close: vi.fn(async () => undefined),
       } as unknown as RuntimeInstance
       return { speak, runtimeInstance }
@@ -467,13 +496,14 @@ describe("configured proxy composition", () => {
       const fetchImpl = vi.fn(
         async () => new Response(audio, { status: 200 })
       ) as unknown as typeof fetch
-      const logger = { info: vi.fn(), error: vi.fn() }
+      const logs = captureLogs()
 
       const configured = await createConfiguredProxy(
         await voiceConfiguration(await secretFile("voice-key", "tts-secret")),
         {
           runtimeFactory: async () => runtimeInstance,
-          logger,
+          logger: logs.logger,
+          credentials: new CredentialValues(),
           fetch: fetchImpl,
         }
       )
@@ -494,20 +524,31 @@ describe("configured proxy composition", () => {
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(audio)
       // Fallback tried the runtime first, then said so without the text.
       expect(speak).toHaveBeenCalledOnce()
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          event: "voice.fallback",
-          direction: "speech",
-        })
-      )
-      expect(JSON.stringify(logger.info.mock.calls)).not.toContain("Hello")
+      expect(logs.records()).toContainEqual({
+        level: "info",
+        message: "voice.fallback",
+        fields: expect.objectContaining({ direction: "speech" }),
+      })
+      expect(JSON.stringify(logs.records())).not.toContain("Hello")
       const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock
         .calls[0] as [string, RequestInit]
       expect(url).toBe("https://tts.example.test/v1/audio/speech")
       expect(new Headers(init.headers).get("authorization")).toBe(
         "Bearer tts-secret"
       )
-      // Both lanes and readiness still see one runtime instance.
+      // A Session's capabilities offer the provider's speech too.
+      const capabilities = await new Promise<{ content: { speech: unknown } }>(
+        (resolve) =>
+          runtimeInstance.sessions.subscribeCapabilities(
+            { agentId: "researcher", sessionId: sessionId("session-1") },
+            "browser-1",
+            async (value) => resolve(value)
+          )
+      )
+      expect(capabilities.content.speech).toEqual(
+        expect.objectContaining({ status: "available", scope: "agent" })
+      )
+      // Both listeners and readiness still see one runtime instance.
       expect(configured.guest).toBeUndefined()
       expect(
         (
@@ -526,29 +567,43 @@ describe("configured proxy composition", () => {
       await expect(
         createConfiguredProxy(await voiceConfiguration(keyFile), {
           runtimeFactory: async () => runtimeInstance,
-          logger: { info: vi.fn(), error: vi.fn() },
+          logger: captureLogs().logger,
+          credentials: new CredentialValues(),
         })
       ).rejects.toThrow("Secret file permissions are too broad")
     })
   })
 
-  it("keeps liveness up and reports rejected Hermes credentials as not ready", async () => {
+  it("keeps liveness up with a native link down and reports rejected Hermes credentials as not ready", async () => {
     const configured = await createConfiguredProxy(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({
         request: vi.fn(async () => {
           throw new HermesAuthenticationError()
         }),
       })),
-      logger: { info: vi.fn(), error: vi.fn() },
+      logger: captureLogs().logger,
+      credentials: new CredentialValues(),
     })
+    vi.spyOn(configured.runtimeInstance.runtime.link, "state").mockReturnValue(
+      "lost"
+    )
 
-    expect(
-      (
-        await configured.app.request(
-          "https://aos.example.test/api/aos/v1/healthz"
-        )
-      ).status
-    ).toBe(200)
+    const health = await configured.app.request(
+      "https://aos.example.test/api/aos/v1/healthz"
+    )
+    expect(health.status).toBe(200)
+    await expect(health.json()).resolves.toEqual({
+      status: "degraded",
+      links: [{ name: "hermes-main", state: "lost" }],
+      gauges: {
+        sockets: 0,
+        memberships: 0,
+        executions: 0,
+        uncertain: 0,
+        deadlinesFired: 0,
+        journalBytes: 0,
+      },
+    })
     expect(
       (
         await configured.app.request(

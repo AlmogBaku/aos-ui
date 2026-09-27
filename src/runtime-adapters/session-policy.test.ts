@@ -11,12 +11,12 @@ import {
 const now = new Date("2026-09-03T12:00:00.000Z")
 
 function session(
-  threadId: string,
+  sessionId: string,
   agentId: string,
   updatedAt: string,
   status: SessionMetadata["status"] = "idle"
 ): SessionMetadata {
-  return { threadId, agentId, updatedAt, status }
+  return { sessionId, agentId, updatedAt, status }
 }
 
 describe("activeSessionsForAgent", () => {
@@ -46,7 +46,7 @@ describe("activeSessionsForAgent", () => {
 
     expect(
       activeSessionsForAgent(sessions, "aster", now, new Set(["idle-old"])).map(
-        ({ threadId }) => threadId
+        ({ sessionId }) => sessionId
       )
     ).toEqual(["waiting-old", "running-old", "idle-old"])
   })
@@ -62,7 +62,7 @@ describe("activeSessionsForAgent", () => {
 
     expect(
       activeSessionsForAgent(sessions, "aster", now, new Set()).map(
-        ({ threadId }) => threadId
+        ({ sessionId }) => sessionId
       )
     ).toEqual(["pinned-old"])
   })
@@ -77,7 +77,7 @@ describe("activeSessionsForAgent", () => {
 
     expect(
       activeSessionsForAgent(sessions, "aster", now, new Set()).map(
-        ({ threadId, updatedAt }) => [threadId, updatedAt]
+        ({ sessionId, updatedAt }) => [sessionId, updatedAt]
       )
     ).toEqual([
       ["same", "2026-09-03T10:00:00.000Z"],
@@ -133,7 +133,7 @@ describe("joinSessionsToAgents", () => {
       ]
     )
 
-    expect(result.get("aster")?.map(({ threadId }) => threadId)).toEqual([
+    expect(result.get("aster")?.map(({ sessionId }) => sessionId)).toEqual([
       "one",
     ])
     expect(result.get("mica")).toEqual([])

@@ -20,7 +20,7 @@ describe("AOS artifact resolver", () => {
           source: { type: "provider", reference: "artifact-1" },
         },
         agentId: "researcher",
-        threadId: "session-1",
+        sessionId: "session-1",
         signal: new AbortController().signal,
       })
     ).resolves.toBeInstanceOf(Blob)
@@ -43,7 +43,7 @@ describe("AOS artifact resolver", () => {
           source: { type: "provider", reference: "artifact:artifact-1" },
         },
         agentId: "researcher",
-        threadId: "session-1",
+        sessionId: "session-1",
         signal: new AbortController().signal,
       })
     ).rejects.toThrow("AOS artifact reference is invalid")
@@ -64,7 +64,7 @@ describe("AOS artifact resolver", () => {
           source: { type: "provider", reference: "artifact-1" },
         },
         agentId: "researcher",
-        threadId: "session-1",
+        sessionId: "session-1",
         signal: new AbortController().signal,
       })
 
@@ -91,11 +91,11 @@ describe("AOS artifact resolver", () => {
             headers: { "content-type": "text/markdown" },
           })
       )
-    const resolve = (client: AosRemoteClient, threadId: string) =>
+    const resolve = (client: AosRemoteClient, sessionId: string) =>
       new AosArtifactAdapter(client).resolve({
         artifact: linked,
         agentId: "researcher",
-        threadId,
+        sessionId,
         signal: new AbortController().signal,
       })
 

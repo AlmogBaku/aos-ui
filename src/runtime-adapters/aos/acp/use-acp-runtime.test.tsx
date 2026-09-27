@@ -11,14 +11,13 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { ExportedMessageRepository } from "@assistant-ui/core"
 import type { CompleteAttachment } from "@assistant-ui/core"
 
 import {
   AOS_ATTACHMENT_URI_SCHEME,
-  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
@@ -34,33 +33,22 @@ import type {
   AcpConnection,
   AcpPendingRequest,
   AcpHistoryPage,
-  AcpResumeOptions,
   AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
 import {
-  useAcpExecution,
+  acpExtras,
   useAcpRuntime,
-  useAcpTodos,
   type UseAcpRuntimeOptions,
 } from "./use-acp-runtime"
 
 const SESSION_ID = "session-1"
 const TURN_META = { sequence: 0, turnId: "run-1" }
 
-type ResumeReply = Awaited<ReturnType<AcpConnection["resumeSession"]>>
-
-/**
- * The runtime reads nothing from the resume reply — the Session's own
- * `session/update` replay carries its history and state — so the fake settles
- * with an empty body instead of a full capability snapshot.
- */
-const resumeReply = (): ResumeReply => JSON.parse("{}")
-
 /** The handshake of a proxy that does, or does not, serve older pages. */
 const initializeMeta = (historyPages: boolean): AosInitializeMeta => ({
   version: 1,
-  lane: "operator",
+  role: "operator",
   extensions: {
     steer: true,
     rewind: true,
@@ -86,37 +74,48 @@ function createFakeConnection(
   const replays = new Map<string, Set<AcpSessionReplayListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const pendingListeners = new Set<(pending: AcpPendingRequest) => void>()
+  function listen<Listener>(
+    keyed: Map<string, Set<Listener>>,
+    sessionId: string,
+    listener: Listener
+  ) {
+    const listeners = keyed.get(sessionId) ?? new Set()
+    listeners.add(listener)
+    keyed.set(sessionId, listeners)
+    return () => listeners.delete(listener)
+  }
   const unused = (): never => {
     throw new Error("The ACP runtime does not use this connection method")
   }
   let settle = () => {}
-  const resumed = new Promise<ResumeReply>((resolve) => {
-    settle = () => resolve(resumeReply())
+  const resumed = new Promise<void>((resolve) => {
+    settle = resolve
   })
   /** What a from-start replay resends, while the resume is still in flight. */
   let replayedTurns: readonly SessionUpdate[] = []
   const fake = { history: options.history }
   const histories = new Map<string, AosHistoryCursor>()
   /** A from-start replay: announced, recorded, then settled, as the connection does. */
-  const replay = async (sessionId: string, reply: Promise<ResumeReply>) => {
+  const replayFromStart = async (sessionId: string, reply: Promise<void>) => {
     const settles = [...(replays.get(sessionId) ?? [])].map((listener) =>
       listener()
     )
     for (const update of replayedTurns)
       for (const listener of updates.get(sessionId) ?? [])
         listener(update, TURN_META)
+    let replayed = false
     try {
-      const resumed = await reply
+      await reply
       if (fake.history) histories.set(sessionId, { ...fake.history })
-      return resumed
+      replayed = true
     } finally {
-      for (const settle of settles) settle?.()
+      for (const settle of settles) settle?.(replayed)
     }
   }
-  const resumeSession = vi.fn((sessionId: string, resume: AcpResumeOptions) =>
-    // As the connection does: a from-start replay announces itself, so whoever
-    // projects the Session drops what the replay is about to resend.
-    resume.replayFromStart ? replay(sessionId, resumed) : resumed
+  // As the connection does: a from-start replay announces itself, so whoever
+  // projects the Session drops what the replay is about to resend.
+  const replay = vi.fn((sessionId: string) =>
+    replayFromStart(sessionId, resumed)
   )
   const pages: PromiseWithResolvers<AcpHistoryPage>[] = []
   const resumePage = vi.fn<AcpConnection["resumePage"]>(() => {
@@ -136,48 +135,45 @@ function createFakeConnection(
     login: unused,
     newSession: unused,
     listSessions: unused,
-    resumeSession,
+    subscribe: (sessionId, listener) => {
+      const offs = [
+        listener.update && listen(updates, sessionId, listener.update),
+        listener.replay && listen(replays, sessionId, listener.replay),
+      ]
+      return () => {
+        for (const off of offs) off?.()
+      }
+    },
+    joined: unused,
+    replay,
+    sessionState: () => "joined",
     resumePage,
     history: (sessionId) => histories.get(sessionId),
     prompt,
     cancel,
     setConfigOption: unused,
-    closeSession: unused,
     deleteSession: unused,
     updateSession: unused,
     steer: unused,
     focus: unused,
     listAgents: unused,
     updateAgent: unused,
-    onSessionUpdate: (sessionId, listener) => {
-      const listeners = updates.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      updates.set(sessionId, listeners)
-      return () => listeners.delete(listener)
-    },
-    onSessionReplay: (sessionId, listener) => {
-      const listeners = replays.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      replays.set(sessionId, listeners)
-      return () => listeners.delete(listener)
-    },
-    onNotification: (method, listener) => {
+    subscribeNotification: (method, listener) => {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)
       notifications.set(method, listeners)
       return () => listeners.delete(listener)
     },
-    onPendingRequest: (listener) => {
+    subscribePendingRequests: (listener) => {
       pendingListeners.add(listener)
       return () => pendingListeners.delete(listener)
     },
-    lastSequence: () => undefined,
     close: () => {},
   }
 
   return {
     connection,
-    resumeSession,
+    replay,
     resumePage,
     prompt,
     cancel,
@@ -197,8 +193,7 @@ function createFakeConnection(
       pages[index]?.reject(new Error("page read failed"))
     },
     /** A resync the connection runs on its own: a from-start replay. */
-    resync: (reply = Promise.resolve(resumeReply())) =>
-      replay(SESSION_ID, reply),
+    resync: (reply = Promise.resolve()) => replayFromStart(SESSION_ID, reply),
     settleResume: () => {
       settle()
       return resumed
@@ -265,7 +260,7 @@ async function mount(
   options?: Pick<
     UseAcpRuntimeOptions,
     | "approvals"
-    | "attach"
+    | "subscribeSession"
     | "enableMessageQueue"
     | "onComposerPrefill"
     | "stageAttachments"
@@ -299,9 +294,7 @@ describe("useAcpRuntime", () => {
   it("replays the Session on mount and projects its turns", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
-    expect(fake.resumeSession).toHaveBeenCalledWith(SESSION_ID, {
-      replayFromStart: true,
-    })
+    expect(fake.replay).toHaveBeenCalledWith(SESSION_ID)
     act(() => {
       fake.emit(textUpdate("user_message", "u1", "Ship it"))
       fake.emit(textUpdate("agent_message", "a1", "On it"))
@@ -312,7 +305,7 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("tells its observers once for a replay, however many updates it carries", async () => {
+  it("tells its listeners once for a replay, however many updates it carries", async () => {
     const fake = createFakeConnection()
     const onStateChange = vi.fn()
     const { result } = renderHook(() =>
@@ -346,6 +339,55 @@ describe("useAcpRuntime", () => {
       fake.emit(chunkUpdate("a1", " now"))
     })
     expect(onStateChange).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the transcript in view until a resync's replay settles, and after a refused one", async () => {
+    const fake = createFakeConnection()
+    const { result, rerender } = renderHook(
+      ({ isDisabled }: { isDisabled: boolean }) =>
+        useAcpRuntime({
+          connection: fake.connection,
+          sessionId: SESSION_ID,
+          agentId: "agent-1",
+          isDisabled,
+        }),
+      { initialProps: { isDisabled: false } }
+    )
+    await act(async () => {
+      await fake.settleResume()
+    })
+    act(() => {
+      fake.emit(textUpdate("user_message", "u1", "Ship it"))
+      fake.emit(chunkUpdate("a1", "On it"))
+    })
+    const prior = visible(result.current)
+
+    await act(() =>
+      fake.resync(Promise.reject(new Error("refused"))).catch(() => {})
+    )
+    expect(visible(result.current)).toEqual(prior)
+
+    fake.replayOnResume([
+      textUpdate("user_message", "u1", "Ship it"),
+      chunkUpdate("a1", "Shipped"),
+    ])
+    const reply = Promise.withResolvers<void>()
+    let replayed = Promise.resolve()
+    act(() => {
+      replayed = fake.resync(reply.promise)
+    })
+    // A re-render mid-replay reads the transcript the reader was last told.
+    rerender({ isDisabled: true })
+    expect(visible(result.current)).toEqual(prior)
+
+    await act(async () => {
+      reply.resolve()
+      await replayed
+    })
+    expect(visible(result.current)).toEqual([
+      { id: "u1", role: "user", text: "Ship it" },
+      { id: "a1", role: "assistant", text: "Shipped" },
+    ])
   })
 
   it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {
@@ -412,149 +454,51 @@ describe("useAcpRuntime", () => {
     await act(async () => {
       await fake.settleResume()
     })
-    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    expect(fake.replay).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       rerender({ nonce: 1 })
     })
-    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    expect(fake.replay).toHaveBeenCalledTimes(1)
   })
 
   it("resumes again once the thread remounts, so a reopened Session replays", async () => {
     const fake = createFakeConnection()
     const first = await mount(fake)
-    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    expect(fake.replay).toHaveBeenCalledTimes(1)
 
     first.unmount()
     await mount(fake)
-    expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+    expect(fake.replay).toHaveBeenCalledTimes(2)
   })
 
-  it("attaches through the injected attach instead of resuming itself", async () => {
+  it("holds the caller's projection of the Session for as long as the thread binds it", async () => {
     const fake = createFakeConnection()
-    const attach = vi.fn(async () => undefined)
-    const { result } = await mount(fake, { attach })
-    expect(attach).toHaveBeenCalledWith(SESSION_ID)
-    expect(fake.resumeSession).not.toHaveBeenCalled()
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "Attached"))
-    })
-    expect(visible(result.current)).toEqual([
-      { id: "a1", role: "assistant", text: "Attached" },
-    ])
+    const release = vi.fn()
+    const subscribeSession = vi.fn(() => release)
+    const { unmount } = await mount(fake, { subscribeSession })
+    expect(subscribeSession).toHaveBeenCalledWith(SESSION_ID)
+    expect(release).not.toHaveBeenCalled()
+
+    unmount()
+    expect(release).toHaveBeenCalledOnce()
   })
 
-  describe("while the provider is still bringing the Session up", () => {
-    beforeEach(() => {
-      vi.useFakeTimers()
-    })
-    afterEach(() => {
-      vi.useRealTimers()
-    })
-
-    const unavailable = () =>
-      new RequestError(
-        AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-        "temporarily_unavailable"
-      )
-
-    /** Runs a settled resume's handlers without reaching the next retry. */
-    const settleAttempt = () =>
-      act(async () => {
-        await vi.advanceTimersByTimeAsync(0)
+  it("stops waiting for a Session its provider has gone from", async () => {
+    const fake = createFakeConnection()
+    fake.replay.mockRejectedValue(RequestError.resourceNotFound())
+    const { result } = renderHook(() =>
+      useAcpRuntime({
+        connection: fake.connection,
+        sessionId: SESSION_ID,
+        agentId: "agent-1",
       })
-
-    const mountSession = (fake: Fake, session: string) =>
-      renderHook(
-        (props: { session: string }) =>
-          useAcpRuntime({
-            connection: fake.connection,
-            sessionId: props.session,
-            agentId: "agent-1",
-          }),
-        { initialProps: { session } }
-      )
-
-    it("resumes again once a temporarily unavailable Session is up", async () => {
-      const fake = createFakeConnection()
-      fake.resumeSession
-        .mockRejectedValueOnce(unavailable())
-        .mockResolvedValueOnce(resumeReply())
-      const { result } = mountSession(fake, SESSION_ID)
-      await settleAttempt()
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
-      // The thread is still waiting for the history the retry will replay.
-      expect(result.current.thread.getState().isLoading).toBe(true)
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(500)
-      })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-      expect(result.current.thread.getState().isLoading).toBe(false)
-      act(() => {
-        fake.emit(textUpdate("agent_message", "a1", "Resumed"))
-      })
-      expect(visible(result.current)).toEqual([
-        { id: "a1", role: "assistant", text: "Resumed" },
-      ])
-    })
-
-    it("stops at a refusal the provider will not take back", async () => {
-      const fake = createFakeConnection()
-      fake.resumeSession.mockRejectedValue(
-        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
-      )
-      const { result } = mountSession(fake, SESSION_ID)
-      await settleAttempt()
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
-      expect(result.current.thread.getState().isLoading).toBe(false)
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000)
-      })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
-    })
-
-    it("abandons the retry when the thread binds another Session", async () => {
-      const fake = createFakeConnection()
-      fake.resumeSession.mockRejectedValueOnce(unavailable())
-      const { rerender } = mountSession(fake, SESSION_ID)
-      await settleAttempt()
-      expect(fake.resumeSession).toHaveBeenCalledWith(SESSION_ID, {
-        replayFromStart: true,
-      })
-
-      await act(async () => {
-        rerender({ session: "session-2" })
-      })
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_000)
-      })
-      expect(fake.resumeSession).toHaveBeenLastCalledWith("session-2", {
-        replayFromStart: true,
-      })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-    })
-
-    it("gives the Session three retries before it stops waiting", async () => {
-      const fake = createFakeConnection()
-      fake.resumeSession.mockRejectedValue(unavailable())
-      const { result } = mountSession(fake, SESSION_ID)
-      await settleAttempt()
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(3_500)
-      })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(4)
-      expect(result.current.thread.getState().isLoading).toBe(false)
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000)
-      })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(4)
-      expect(vi.getTimerCount()).toBe(0)
-    })
+    )
+    await act(async () => {})
+    expect(result.current.thread.getState().isLoading).toBe(false)
+    // The thread does not retry a refused resume: the connection's per-Session
+    // owner retries unavailable; gone is terminal.
+    expect(fake.replay).toHaveBeenCalledTimes(1)
   })
 
   it("replays the Session again when the proxy invalidates it", async () => {
@@ -569,17 +513,15 @@ describe("useAcpRuntime", () => {
         sessionId: "other-session",
       })
     })
-    expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+    expect(fake.replay).toHaveBeenCalledTimes(1)
 
     await act(async () => {
       fake.notify(AOS_METHODS.notify.sessionInvalidated, {
         sessionId: SESSION_ID,
       })
     })
-    expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-    expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
-      replayFromStart: true,
-    })
+    expect(fake.replay).toHaveBeenCalledTimes(2)
+    expect(fake.replay).toHaveBeenLastCalledWith(SESSION_ID)
     // The replay rebuilds the transcript it dropped, rather than doubling it.
     act(() => {
       fake.emit(chunkUpdate("a1", "On it"))
@@ -587,6 +529,33 @@ describe("useAcpRuntime", () => {
     expect(visible(result.current)).toEqual([
       { id: "a1", role: "assistant", text: "On it" },
     ])
+  })
+
+  it("ends the run of a Session the proxy reports gone", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+      fake.emit(chunkUpdate("a1", "Live"))
+    })
+    const gone = (sessionId: string) =>
+      act(async () => {
+        fake.notify(AOS_METHODS.notify.error, {
+          sessionId,
+          code: "not_found",
+          message: "not_found",
+        })
+      })
+
+    await gone("other-session")
+    expect(result.current.thread.getState().isRunning).toBe(true)
+    await gone(SESSION_ID)
+    expect(result.current.thread.getState().isRunning).toBe(false)
+    expect(result.current.thread.getState().messages[0]?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: { code: "not_found" },
+    })
   })
 
   it("tracks the run state the Session reports", async () => {
@@ -619,7 +588,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        {}
+        expect.objectContaining({})
       )
     })
     expect(visible(result.current)).toEqual([
@@ -647,7 +616,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        { rewindSourceId: "provider-u1" }
+        expect.objectContaining({ rewindSourceId: "provider-u1" })
       )
     })
     expect(visible(result.current)).toEqual([
@@ -677,9 +646,11 @@ describe("useAcpRuntime", () => {
       result.current.thread.startRun({ parentId: "u1" })
     })
     await waitFor(() => {
-      expect(fake.prompt).toHaveBeenCalledWith(SESSION_ID, [], {
-        rewindSourceId: "provider-u1",
-      })
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [],
+        expect.objectContaining({ rewindSourceId: "provider-u1" })
+      )
     })
   })
 
@@ -781,7 +752,7 @@ describe("useAcpRuntime", () => {
       await fail(fake)
       // The provider never saved the prompt, so the reloaded thread drops it.
       await waitFor(() => {
-        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+        expect(fake.replay).toHaveBeenCalledTimes(2)
       })
       await waitFor(() => {
         expect(statusOf(result.current, 1)).toEqual({
@@ -810,7 +781,7 @@ describe("useAcpRuntime", () => {
         expect(fake.prompt).toHaveBeenCalledWith(
           SESSION_ID,
           [{ type: "text", text: "Ship it now" }],
-          { rewindSourceId: "provider-u1" }
+          expect.objectContaining({ rewindSourceId: "provider-u1" })
         )
       })
       await fail(fake)
@@ -840,7 +811,7 @@ describe("useAcpRuntime", () => {
       ])
       await mount(fake)
       await act(async () => {})
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(fake.replay).toHaveBeenCalledTimes(1)
     })
 
     it("does not reload an uncertain state restated after the replay", async () => {
@@ -856,7 +827,7 @@ describe("useAcpRuntime", () => {
         )
       })
       await act(async () => {})
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(fake.replay).toHaveBeenCalledTimes(1)
     })
 
     it("does not reload a failure its reply already shows", async () => {
@@ -873,7 +844,7 @@ describe("useAcpRuntime", () => {
           { ...TURN_META, ...FAILURE }
         )
       })
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(fake.replay).toHaveBeenCalledTimes(1)
       expect(statusOf(result.current, 2)).toEqual({
         type: "incomplete",
         reason: "error",
@@ -884,18 +855,18 @@ describe("useAcpRuntime", () => {
 
   it("creates the Session a draft's first turn needs, then prompts it", async () => {
     const fake = createFakeConnection()
-    const attach = vi.fn(async () => undefined)
+    const subscribeSession = vi.fn(() => () => undefined)
     const resolveSessionId = vi.fn(async () => SESSION_ID)
     const { result } = renderHook(() =>
       useAcpRuntime({
         connection: fake.connection,
         sessionId: undefined,
         agentId: "agent-1",
-        attach,
+        subscribeSession,
         resolveSessionId,
       })
     )
-    expect(attach).not.toHaveBeenCalled()
+    expect(subscribeSession).not.toHaveBeenCalled()
     await act(async () => {
       result.current.thread.append({
         role: "user",
@@ -906,12 +877,15 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Ship it" }],
-        {}
+        expect.objectContaining({})
       )
     })
     expect(resolveSessionId).toHaveBeenCalledTimes(1)
-    // Binding the resolved Session is what attaches and observes it.
-    expect(attach).toHaveBeenCalledWith(SESSION_ID)
+    // Binding the resolved Session is what holds, subscribes to, and replays it.
+    expect(subscribeSession).toHaveBeenCalledWith(SESSION_ID)
+    await act(async () => {
+      await fake.settleResume()
+    })
     act(() => {
       fake.emit(textUpdate("agent_message", "a1", "Shipping it"))
     })
@@ -957,7 +931,7 @@ describe("useAcpRuntime", () => {
             mimeType: "image/png",
           },
         ],
-        { attachmentStageId: "stage-1" }
+        expect.objectContaining({ attachmentStageId: "stage-1" })
       )
     })
     expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [attachment])
@@ -1041,7 +1015,7 @@ describe("useAcpRuntime", () => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
         [{ type: "text", text: "Also check the logs" }],
-        {}
+        expect.objectContaining({})
       )
     })
   })
@@ -1409,17 +1383,10 @@ describe("useAcpRuntime older history", () => {
     expect(ids(result.current)).toEqual([])
   })
 
-  it("keeps the cursor across a reconnect, then takes the one a resync reports", async () => {
+  it("takes the cursor a resync reports", async () => {
     const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
     const { result } = await mount(fake)
     newestPage(fake)
-
-    // A reconnect that replays nothing reports no history.
-    await act(async () => {
-      await fake.connection.resumeSession(SESSION_ID, {
-        replayFromStart: false,
-      })
-    })
     expect(historyOf(result.current)?.hasOlder).toBe(true)
 
     fake.history = { nextCursor: "cursor-fresh" }
@@ -1456,14 +1423,12 @@ describe("useAcpRuntime older history", () => {
       await retry(fake, result.current)
       await waitFor(() => expect(ids(result.current)).toEqual(["u1", "u3"]))
       // The rewind itself sends no resume: the new turn streams as it does.
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(fake.replay).toHaveBeenCalledTimes(1)
 
       fake.history = { nextCursor: "cursor-rebuilt" }
       await loadOlder(result.current)
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-      expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
-        replayFromStart: true,
-      })
+      expect(fake.replay).toHaveBeenCalledTimes(2)
+      expect(fake.replay).toHaveBeenLastCalledWith(SESSION_ID)
       expect(fake.resumePage).toHaveBeenLastCalledWith(
         SESSION_ID,
         "cursor-rebuilt"
@@ -1505,7 +1470,7 @@ describe("useAcpRuntime older history", () => {
       })
 
       expect(ids(result.current)).not.toContain("u1")
-      expect(fake.resumeSession).toHaveBeenCalledTimes(1)
+      expect(fake.replay).toHaveBeenCalledTimes(1)
       expect(historyOf(result.current)).toMatchObject({
         hasOlder: true,
         loading: false,
@@ -1514,15 +1479,13 @@ describe("useAcpRuntime older history", () => {
       // Asked again, it rebuilds first, then pages from the fresh cursor.
       fake.history = { nextCursor: "cursor-rebuilt" }
       await loadOlder(result.current)
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-      expect(fake.resumeSession).toHaveBeenLastCalledWith(SESSION_ID, {
-        replayFromStart: true,
-      })
+      expect(fake.replay).toHaveBeenCalledTimes(2)
+      expect(fake.replay).toHaveBeenLastCalledWith(SESSION_ID)
       expect(fake.resumePage).toHaveBeenLastCalledWith(
         SESSION_ID,
         "cursor-rebuilt"
       )
-      expect(fake.resumeSession.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      expect(fake.replay.mock.invocationCallOrder.at(-1)).toBeLessThan(
         fake.resumePage.mock.invocationCallOrder.at(-1) ?? 0
       )
       act(() => {
@@ -1550,24 +1513,24 @@ describe("useAcpRuntime older history", () => {
       const { result } = await mount(fake)
       newestPage(fake)
 
-      const reply = Promise.withResolvers<ResumeReply>()
+      const reply = Promise.withResolvers<void>()
       let replayed: Promise<unknown> = Promise.resolve()
       act(() => {
         replayed = fake.resync(reply.promise)
       })
       newestPage(fake)
       await retry(fake, result.current)
-      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
       // The replay read the provider's positions before the rewind moved them.
       fake.history = { nextCursor: "cursor-before-rewind" }
       await act(async () => {
-        reply.resolve(resumeReply())
+        reply.resolve()
         await replayed
       })
+      expect(ids(result.current)).toEqual(["u3"])
 
       fake.history = { nextCursor: "cursor-rebuilt" }
       await loadOlder(result.current)
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.replay).toHaveBeenCalledTimes(2)
       expect(fake.resumePage).toHaveBeenCalledTimes(1)
       expect(fake.resumePage).toHaveBeenLastCalledWith(
         SESSION_ID,
@@ -1582,16 +1545,14 @@ describe("useAcpRuntime older history", () => {
       await retry(fake, result.current)
       await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
 
-      fake.resumeSession.mockRejectedValueOnce(
-        new RequestError(AOS_JSONRPC_ERRORS.notFound, "not_found")
-      )
+      fake.replay.mockRejectedValueOnce(RequestError.resourceNotFound())
       let load: Promise<void> | undefined
       await act(async () => {
         load = historyOf(result.current)?.loadOlder()
         await load
       })
       await expect(load).resolves.toBeUndefined()
-      expect(fake.resumeSession).toHaveBeenCalledTimes(2)
+      expect(fake.replay).toHaveBeenCalledTimes(2)
       expect(fake.resumePage).not.toHaveBeenCalled()
       expect(historyOf(result.current)).toMatchObject({
         hasOlder: true,
@@ -1600,46 +1561,12 @@ describe("useAcpRuntime older history", () => {
       })
       expect(ids(result.current)).toEqual(["u3"])
     })
-
-    it("retries a rebuild the provider is still bringing up", async () => {
-      const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
-      const { result } = await mount(fake)
-      newestPage(fake)
-      await retry(fake, result.current)
-      await waitFor(() => expect(ids(result.current)).toEqual(["u3"]))
-
-      vi.useFakeTimers()
-      try {
-        fake.resumeSession.mockRejectedValueOnce(
-          new RequestError(
-            AOS_JSONRPC_ERRORS.temporarilyUnavailable,
-            "temporarily_unavailable"
-          )
-        )
-        fake.history = { nextCursor: "cursor-rebuilt" }
-        await loadOlder(result.current)
-        expect(fake.resumeSession).toHaveBeenCalledTimes(2)
-        expect(fake.resumePage).not.toHaveBeenCalled()
-
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(500)
-        })
-        expect(fake.resumeSession).toHaveBeenCalledTimes(3)
-        expect(fake.resumePage).toHaveBeenLastCalledWith(
-          SESSION_ID,
-          "cursor-rebuilt"
-        )
-        expect(historyOf(result.current)?.failed).toBe(false)
-      } finally {
-        vi.useRealTimers()
-      }
-    })
   })
 })
 
 function Probe() {
-  const execution = useAcpExecution()
-  const todos = useAcpTodos()
+  const execution = acpExtras.use((extras) => extras.execution)
+  const todos = acpExtras.use((extras) => extras.todos)
   return (
     <div>
       <p>{`Run: ${execution.status}`}</p>
@@ -1694,5 +1621,38 @@ describe("useAcpRuntime extras", () => {
     })
     expect(screen.getByText("Run: running")).toBeInTheDocument()
     expect(screen.getByRole("listitem")).toHaveTextContent("Ship it")
+  })
+})
+
+describe("useAcpRuntime clientId", () => {
+  it("includes a clientId in the prompt meta and uses different ids per send", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake)
+    const capturedIds: Array<string | undefined> = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(fake.prompt as any).mockImplementation(
+      async (_sid: string, _blocks: unknown, meta: Record<string, unknown>) => {
+        capturedIds.push(meta.clientId as string | undefined)
+        return { messageId: `u${capturedIds.length}` }
+      }
+    )
+
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Send one" }],
+      })
+    })
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Send two" }],
+      })
+    })
+
+    await waitFor(() => expect(capturedIds).toHaveLength(2))
+    expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(capturedIds[1]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(capturedIds[0]).not.toBe(capturedIds[1])
   })
 })

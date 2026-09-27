@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto"
 import { Hono } from "hono"
 
+import type { Logger } from "../lifecycle"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
 import type { GuestInvitationService } from "./auth/guest-invitation"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
+import { coreFailure, type PublicFailure } from "./core/failures"
+import type { LinkState } from "./core/link"
 import {
-  ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
   type RuntimeInstance,
   type ServerAttachmentStages,
   type ServerRuntime,
 } from "./core/runtime"
+import type { SessionCoordinator } from "./core/session-coordinator"
 import type { PushRegistrations } from "./push/registrations"
-import { redactForLog } from "./redaction"
 import { registerContentRoutes } from "./routes/content"
 import { registerInvitationRoutes } from "./routes/invitations"
 import { registerMcpAppRoutes } from "./routes/mcp-apps"
@@ -20,15 +22,35 @@ import { errorResponse, type ErrorCode } from "./routes/http"
 import { registerPushRoutes } from "./routes/push"
 import { registerRuntimeRoute } from "./routes/runtime"
 
-type Logger = {
-  info(value: unknown): void
-  error(value: unknown): void
+/** The HTTP answer each kind of public failure travels as. */
+const FAILURE_RESPONSES: Readonly<
+  Record<PublicFailure["kind"], readonly [ErrorCode, number]>
+> = {
+  gone: ["not_found", 404],
+  unavailable: ["temporarily_unavailable", 503],
+  uncertain: ["uncertain_mutation", 503],
+  invalid_request: ["invalid_request", 400],
+  revision_conflict: ["revision_conflict", 409],
+  runtime_authentication_required: ["runtime_authentication_required", 401],
+  unsupported: ["unsupported", 400],
+}
+
+/**
+ * What liveness reports, read afresh on every request: each native link's
+ * state, and the gauges a leak would show in.
+ */
+export type HealthReading = {
+  links: readonly { name: string; state: LinkState }[]
+  gauges: { sockets: number; memberships: number } & ReturnType<
+    SessionCoordinator["gauges"]
+  >
 }
 
 export type ProxyAppOptions = {
   publicOrigin: string
   runtimeInstance: RuntimeInstance
   readiness?: () => Promise<"ready" | "not-ready">
+  health: () => HealthReading
   logger: Logger
   clock?: () => number
   guestInvitations?: {
@@ -92,14 +114,14 @@ export function createProxyApp(options: ProxyAppOptions) {
       context.header(name, value)
     context.header("x-request-id", requestId)
     options.logger.info(
-      redactForLog({
-        event: "request.completed",
+      {
         requestId,
         method: context.req.method,
         path: requestPath(context.req.url),
         status: context.res.status,
         durationMs: Math.max(0, clock() - startedAt),
-      })
+      },
+      "request.completed"
     )
   })
 
@@ -112,15 +134,25 @@ export function createProxyApp(options: ProxyAppOptions) {
     agentId: string,
     publicSessionId: string
   ) => {
-    const id = selected.resolveSessionId(agentId, publicSessionId)
-    if (!id) throw new ServerSessionNotFoundError()
-    await selected.getSession(agentId, id)
-    return id
+    const providerSessionId = selected.resolveProviderSessionId(
+      agentId,
+      publicSessionId
+    )
+    if (!providerSessionId) throw new ServerSessionNotFoundError()
+    await selected.getSession(agentId, providerSessionId)
+    return providerSessionId
   }
 
-  app.get("/api/aos/v1/healthz", (context) =>
-    context.json({ status: "live", timestamp: clock() })
-  )
+  // A native link down degrades the process but answers 200 all the same: the
+  // container is not restarted for an upstream outage.
+  app.get("/api/aos/v1/healthz", (context) => {
+    const { links, gauges } = options.health()
+    return context.json({
+      status: links.every(({ state }) => state === "ready") ? "ok" : "degraded",
+      links,
+      gauges,
+    })
+  })
   app.get("/api/aos/v1/readyz", async (context) => {
     if (options.readiness) {
       const status = await options.readiness()
@@ -159,23 +191,18 @@ export function createProxyApp(options: ProxyAppOptions) {
     })
 
   app.onError((cause, context) => {
-    const runtimeError = runtime.publicError(cause)
-    const [code, status]: [ErrorCode, number] =
-      cause instanceof ServerSessionNotFoundError
-        ? ["not_found", 404]
-        : cause instanceof ServerAgentUpdateUnsupportedError
-          ? ["unsupported", 400]
-          : runtimeError
-            ? [runtimeError.code, runtimeError.status]
-            : ["internal_error", 500]
+    const failure = coreFailure(cause) ?? runtime.publicError(cause)
+    const [code, status] = failure
+      ? FAILURE_RESPONSES[failure.kind]
+      : (["internal_error", 500] as const)
     options.logger.error(
-      redactForLog({
-        event: "request.failed",
+      {
         requestId: context.get("requestId"),
         path: requestPath(context.req.url),
         code,
-        error: cause,
-      })
+        err: cause,
+      },
+      "request.failed"
     )
     return errorResponse(code, status)
   })

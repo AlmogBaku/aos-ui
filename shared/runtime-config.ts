@@ -15,11 +15,7 @@ export const DEFAULT_COMPOSER_FEATURE_CONFIG: ComposerFeatureConfig = {
   contextEnabled: true,
 }
 
-type ArtifactHtmlConfiguration = {
-  artifactHtmlAssetOrigins?: string[]
-}
-
-type ReadyRuntimeConfiguration = ArtifactHtmlConfiguration & {
+type ReadyRuntimeConfiguration = {
   status: "ready"
   composerFeatures: ComposerFeatureConfig
 }
@@ -30,18 +26,17 @@ export type RuntimeConfiguration =
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 export type PublicRuntimeConfiguration =
-  | ({
+  | {
       mode: "fixture" | "aos"
       composerModelSelectorEnabled?: boolean
       composerContextEnabled?: boolean
-    } & ArtifactHtmlConfiguration)
+    }
   | { status: "unavailable"; reason: RuntimeUnavailableReason }
 
 export type GuestSurfaceConfiguration = {
   status: "ready"
   surface: "guest"
   basePath: string
-  lane: "guest"
 }
 
 export type ApplicationConfiguration =
@@ -101,9 +96,6 @@ export function serializePublicRuntimeConfiguration(
     ...(config.composerFeatures.contextEnabled === false
       ? { composerContextEnabled: false }
       : {}),
-    ...(config.artifactHtmlAssetOrigins
-      ? { artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins }
-      : {}),
   }
 }
 
@@ -112,30 +104,10 @@ const publicComposerFeatureFields = {
   composerContextEnabled: z.boolean().optional(),
 }
 
-const artifactHtmlAssetOriginsSchema = z
-  .array(
-    z.string().refine((value) => {
-      try {
-        const parsed = new URL(value)
-        return (
-          parsed.protocol === "https:" &&
-          !parsed.username &&
-          !parsed.password &&
-          parsed.href === `${value}/`
-        )
-      } catch {
-        return false
-      }
-    })
-  )
-  .max(16)
-  .optional()
-
 const publicConfigurationSchema = z
   .object({
     mode: z.enum(["aos", "fixture"]),
     ...publicComposerFeatureFields,
-    artifactHtmlAssetOrigins: artifactHtmlAssetOriginsSchema,
   })
   .strict()
 
@@ -147,16 +119,13 @@ export function parsePublicRuntimeConfiguration(
   if (!parsed.success)
     return { status: "unavailable", reason: "invalid-public-config" }
   const config = parsed.data
-  const resolved = resolveRuntimeConfiguration({
+  return resolveRuntimeConfiguration({
     AOS_UI_RUNTIME_MODE: config.mode,
     AOS_UI_COMPOSER_MODEL_SELECTOR_ENABLED:
       config.composerModelSelectorEnabled === false ? "false" : undefined,
     AOS_UI_COMPOSER_CONTEXT_ENABLED:
       config.composerContextEnabled === false ? "false" : undefined,
   })
-  return resolved.status === "ready" && config.artifactHtmlAssetOrigins
-    ? { ...resolved, artifactHtmlAssetOrigins: config.artifactHtmlAssetOrigins }
-    : resolved
 }
 
 const guestSurfaceSchema = z
@@ -166,7 +135,6 @@ const guestSurfaceSchema = z
       .string()
       .regex(/^\/(?!\/)[A-Za-z0-9/_-]+$/u)
       .transform((value) => value.replace(/\/+$/u, "")),
-    lane: z.literal("guest"),
   })
   .strict()
 

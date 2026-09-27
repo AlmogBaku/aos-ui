@@ -86,19 +86,19 @@ const agents: WorkspaceAgent[] = [
 
 const openSessions: WorkspaceSession[] = [
   {
-    threadId: "thread-market",
+    sessionId: "thread-market",
     title: "Market brief",
     status: "running",
     updatedAt: "2026-09-03T11:00:00.000Z",
   },
   {
-    threadId: "thread-launch",
+    sessionId: "thread-launch",
     title: "Launch review",
     status: "idle",
     updatedAt: "2026-09-03T07:00:00.000Z",
   },
   {
-    threadId: "thread-scan",
+    sessionId: "thread-scan",
     title: "Competitive scan",
     status: "waiting-for-input",
     updatedAt: "2026-09-03T01:00:00.000Z",
@@ -130,7 +130,7 @@ function agentRow(name: string | RegExp, agentsLabel = en.workspace.agents) {
 
 const olderSessions: WorkspaceSession[] = [
   {
-    threadId: "thread-pricing",
+    sessionId: "thread-pricing",
     title: "Pricing analysis",
     status: "idle",
     updatedAt: "2026-09-01T11:00:00.000Z",
@@ -163,7 +163,7 @@ function renderShell(
           agentId: "agent-mica",
           openSessions: [
             {
-              threadId: "thread-mica-draft",
+              sessionId: "thread-mica-draft",
               title: "Mica draft",
               status: "idle" as const,
               updatedAt: "2026-09-02T11:00:00.000Z",
@@ -357,7 +357,7 @@ describe("WorkspaceShell", () => {
       act(() =>
         result.current.remember({
           agentId: "agent-aster",
-          threadId: "closed",
+          sessionId: "closed",
           title: "Closed Session",
           selectedThreadId: "thread-market",
         })
@@ -581,7 +581,7 @@ describe("WorkspaceShell", () => {
 
   describe("a selected draft Agent", () => {
     const interview: WorkspaceSession = {
-      threadId: "thread-interview",
+      sessionId: "thread-interview",
       title: "New Agent",
       status: "idle",
       updatedAt: "2026-09-03T11:30:00.000Z",
@@ -978,7 +978,7 @@ describe("WorkspaceShell", () => {
     const onCloseSession = vi.fn()
     renderShell({
       openSessions: openSessions.map((session) =>
-        session.threadId === "thread-launch"
+        session.sessionId === "thread-launch"
           ? { ...session, canClose: true }
           : session
       ),
@@ -1049,19 +1049,19 @@ describe("WorkspaceShell", () => {
     const statusHistory: WorkspaceSession[] = [
       olderSessions[0],
       {
-        threadId: "thread-running-history",
+        sessionId: "thread-running-history",
         title: "Running history",
         status: "running",
         updatedAt: "2026-08-31T11:00:00.000Z",
       },
       {
-        threadId: "thread-waiting-history",
+        sessionId: "thread-waiting-history",
         title: "Waiting history",
         status: "waiting-for-input",
         updatedAt: "2026-08-30T11:00:00.000Z",
       },
       {
-        threadId: "thread-failed-history",
+        sessionId: "thread-failed-history",
         title: "Failed history",
         status: "failed",
         updatedAt: "2026-08-29T11:00:00.000Z",

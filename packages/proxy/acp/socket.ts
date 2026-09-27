@@ -11,13 +11,6 @@ const MAX_FRAME_BYTES = 1_100_000
 const DEFAULT_INPUT_WINDOW_MS = 1_000
 const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
 const DEFAULT_INPUT_BYTES_PER_WINDOW = 256 * 1_024
-/**
- * One outbound frame may carry a history entry, a tool payload, or an inline
- * artifact, so the queue is sized for the largest native event the proxy
- * accepts rather than for small control frames.
- */
-const DEFAULT_OUTPUT_FRAMES = 256
-const DEFAULT_OUTPUT_BYTES = 4 * 1_024 * 1_024
 
 const decoder = new TextDecoder()
 
@@ -25,7 +18,7 @@ const decoder = new TextDecoder()
 export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
 /**
- * How a lane shows its failures: an error reply as a public reply, and an
+ * How a listener shows its failures: an error reply as a public reply, and an
  * `_aos/error` notification's code, whatever it is, as a public code.
  */
 export type PublicErrors = {
@@ -36,8 +29,12 @@ export type PublicErrors = {
 export type AcpSocketOptions = {
   /** Closes the concrete WebSocket. Authorization happens before this shim exists. */
   close(code: number, reason: string): void
-  /** Signals that one or more serialized frames are available through `drain`. */
-  notify?: () => void
+  /**
+   * Delivers one serialized frame to the concrete WebSocket. Called directly
+   * for every outbound SDK frame; backpressure and drops are handled by the
+   * Bun listener's own limits.
+   */
+  send(raw: string): void
   /**
    * Whether the connection's credential has lapsed. From then on no frame
    * passes either way: a request is refused, and the connection closes.
@@ -49,8 +46,6 @@ export type AcpSocketOptions = {
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
   maxInputBytesPerWindow?: number
-  maxOutputFrames?: number
-  maxOutputBytes?: number
 }
 
 export type AcpSocket = {
@@ -58,17 +53,16 @@ export type AcpSocket = {
   socket: AcpWebSocket
   /** Delivers one inbound frame from the concrete WebSocket to the SDK. */
   receive(raw: string | Uint8Array): void
-  /** Removes bounded serialized frames for the concrete WebSocket to send. */
-  drain(maxFrames?: number): string[]
   /** Releases the SDK session after a peer or transport close without closing twice. */
   close(): void
 }
 
 /**
- * Bounded WebSocket shim between Bun's `ServerWebSocket` handlers and the ACP
- * SDK, with an inbound frame cap, an inbound rate window, and a bounded
- * outbound queue. Pure logic: it touches no Bun global and takes its clock
- * from `now`.
+ * Inbound WebSocket shim between Bun's `ServerWebSocket` handlers and the ACP
+ * SDK, with an inbound frame cap and an inbound rate window. Outbound frames
+ * are written directly through `send`; Bun's own backpressure limit and
+ * `closeOnBackpressureLimit` bound the outbound side. Pure logic: it touches
+ * no Bun global and takes its clock from `now`.
  */
 export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
   const now = options.now ?? Date.now
@@ -84,18 +78,8 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     options.maxInputBytesPerWindow,
     DEFAULT_INPUT_BYTES_PER_WINDOW
   )
-  const maxOutputFrames = positiveLimit(
-    options.maxOutputFrames,
-    DEFAULT_OUTPUT_FRAMES
-  )
-  const maxOutputBytes = positiveLimit(
-    options.maxOutputBytes,
-    DEFAULT_OUTPUT_BYTES
-  )
 
   const listeners = new Map<string, Set<(event: unknown) => void>>()
-  const output: Array<{ raw: string; bytes: number }> = []
-  let outputBytes = 0
   let closed = false
   let windowStartedAt = now()
   let windowFrames = 0
@@ -109,27 +93,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
   function closePeer(code: number, reason: string) {
     if (closed) return
     closed = true
-    output.length = 0
-    outputBytes = 0
     options.close(code, reason)
     dispatch("close", { type: "close", code, reason })
     listeners.clear()
-  }
-
-  /** Queues one serialized frame for the concrete WebSocket. */
-  function enqueue(raw: string) {
-    const bytes = Buffer.byteLength(raw, "utf8")
-    if (
-      bytes > maxOutputBytes ||
-      output.length >= maxOutputFrames ||
-      outputBytes + bytes > maxOutputBytes
-    ) {
-      closePeer(1013, "ACP output overloaded")
-      return
-    }
-    output.push({ raw, bytes })
-    outputBytes += bytes
-    options.notify?.()
   }
 
   /**
@@ -140,7 +106,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     const id = requestIdOf(data)
     if (id !== undefined) {
       const { code, message } = authenticationRequired()
-      enqueue(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }))
+      options.send(
+        JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })
+      )
     }
     closePeer(1008, "ACP credential lapsed")
   }
@@ -164,7 +132,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         closePeer(1008, "ACP credential lapsed")
         return
       }
-      enqueue(
+      options.send(
         options.publicErrors ? publicFrame(raw, options.publicErrors) : raw
       )
     },
@@ -201,17 +169,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
       }
       dispatch("message", { type: "message", data })
     },
-    drain(maxFrames = Number.MAX_SAFE_INTEGER) {
-      if (!Number.isSafeInteger(maxFrames) || maxFrames <= 0) return []
-      const drained = output.splice(0, maxFrames)
-      for (const frame of drained) outputBytes -= frame.bytes
-      return drained.map((frame) => frame.raw)
-    },
     close() {
       if (closed) return
       closed = true
-      output.length = 0
-      outputBytes = 0
       dispatch("close", { type: "close" })
       listeners.clear()
     },

@@ -216,6 +216,41 @@ function fixtureToolsServerPlugin(): Plugin {
   }
 }
 
+/**
+ * The build id is the entry chunk's content hash, which changes with every
+ * chunk the page can load. The build writes it to `dist/build-id`, where the
+ * proxy reads it for `initialize`, and compiles it in as `__AOS_BUILD_ID__`;
+ * the dev server has none. The entry is hashed before the value is compiled
+ * in, so the build writes a placeholder and swaps it once the hash is known.
+ */
+function buildIdPlugin(): Plugin {
+  const placeholder = "__AOS_BUILD_ID_PLACEHOLDER__"
+  return {
+    name: "aos-build-id",
+    config: (_config, { command }) => ({
+      define: {
+        __AOS_BUILD_ID__:
+          command === "build" ? JSON.stringify(placeholder) : "null",
+      },
+    }),
+    generateBundle(_options, bundle) {
+      if (this.environment.name !== "client") return
+      const chunks = Object.values(bundle).filter(
+        (output) => output.type === "chunk"
+      )
+      const entry = chunks.find((chunk) => chunk.isEntry)
+      if (!entry) throw new Error("The build has no entry chunk")
+      // `[name]-[hash].js`, Vite's entry file name.
+      const buildId = path
+        .basename(entry.fileName, ".js")
+        .slice(entry.name.length + 1)
+      for (const chunk of chunks)
+        chunk.code = chunk.code.replaceAll(placeholder, buildId)
+      this.emitFile({ type: "asset", fileName: "build-id", source: buildId })
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const environment = {
     ...loadEnv(mode, process.cwd(), ""),
@@ -258,6 +293,7 @@ export default defineConfig(({ mode }) => {
       e2eReadinessPlugin(environment),
       mcpAppSandboxPlugin(),
       fixtureToolsServerPlugin(),
+      buildIdPlugin(),
       titleBarColorPlugin(titleBarColors),
       // Push only: `src/sw/sw.ts` is bundled as-is, with no precache manifest
       // injected, no offline shell, and no registration script in the HTML.
@@ -332,6 +368,10 @@ export default defineConfig(({ mode }) => {
         "@aos/protocol": path.resolve(
           import.meta.dirname,
           "packages/protocol/index.ts"
+        ),
+        "@aos/lifecycle": path.resolve(
+          import.meta.dirname,
+          "packages/lifecycle/index.ts"
         ),
       },
     },

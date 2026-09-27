@@ -8,6 +8,7 @@
  * adapter's redaction rule keeps private. The server log keeps its own shorter,
  * redacted copy.
  */
+import type { TURN_FAILURES as SHARED_TURN_FAILURES } from "../../core/failures"
 import { redactForLog } from "../../redaction"
 import { containsCredentialValue, trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
@@ -20,6 +21,14 @@ const MAX_PUBLIC_DETAIL_CHARS = 500
 export type TurnFailure = {
   readonly code: string
   readonly message: string
+}
+
+/**
+ * A failure that may leave the turn alive in Hermes. Its code is one the shared
+ * turn-failure table names, so core keeps the turn for the browser to redial.
+ */
+export type DetachedTurnFailure = TurnFailure & {
+  readonly code: keyof typeof SHARED_TURN_FAILURES
 }
 
 /**
@@ -41,9 +50,10 @@ export class HermesTurnPublicError extends Error {
 
   constructor(
     code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN",
-    message: string
+    message: string,
+    options?: ErrorOptions
   ) {
-    super(message)
+    super(message, options)
     this.name = "HermesTurnPublicError"
     this.code = code
   }
@@ -153,10 +163,12 @@ export const TURN_FAILURES = {
   },
 } as const satisfies Record<string, TurnFailure>
 
-export function providerUnavailable() {
+/** `cause` is the native failure that kept the turn from starting, if known. */
+export function providerUnavailable(cause?: unknown) {
   return new HermesTurnPublicError(
     "AOS_PROVIDER_UNAVAILABLE",
-    "Hermes is temporarily unavailable."
+    "Hermes is temporarily unavailable.",
+    { cause }
   )
 }
 
@@ -171,7 +183,7 @@ export function stopUncertain() {
  * Hermes' own error text, bounded and only when it carries no credential. The
  * bounded text is what the check reads, because that is all that ever leaves:
  * a value that trips the rule is dropped whole rather than masked. A path or an
- * internal location stays, because the operator acts on it; the guest lane
+ * internal location stays, because the operator acts on it; the guest listener
  * replaces every failure message with its own catalogue's description.
  */
 export function publicDetail(value: unknown) {

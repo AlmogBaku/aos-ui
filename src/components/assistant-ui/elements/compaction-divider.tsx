@@ -2,7 +2,6 @@
 
 import { makeAssistantDataUI } from "@assistant-ui/react"
 import { useState, type ReactNode } from "react"
-import { z } from "zod"
 
 import { useToolUiLocale } from "@/components/tool-ui/locale"
 import {
@@ -13,21 +12,13 @@ import {
 import { SystemNotice } from "@/components/ui/system-notice"
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
+import {
+  COMPACTION_DATA_PART_NAME,
+  compactionSchema,
+} from "@/lib/message-parts"
 import { collapsePanel, ShimmerLabel } from "@/lib/surfaces"
 import { cn } from "@/lib/utils"
 import { DisclosureChevron } from "./disclosure-chevron"
-
-/** The data part a runtime emits while it compacts the Session's context. */
-export const COMPACTION_DATA_PART_NAME = "aos-compaction"
-
-const compactionSchema = z.object({
-  compactionId: z.string(),
-  status: z.enum(["started", "completed", "failed"]),
-  summary: z.string().optional(),
-  error: z.string().optional(),
-})
-
-export type AosCompaction = z.infer<typeof compactionSchema>
 
 const DIVIDER =
   "my-3 flex w-full items-center gap-3 text-xs leading-4 text-muted-foreground"

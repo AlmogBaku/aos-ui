@@ -1,6 +1,7 @@
 import type { SessionMessage } from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { StopReason } from "../../core/events"
+import type { JsonValue } from "../json-value"
 import {
   isRecord as isNativeRecord,
   rowText,
@@ -22,13 +23,15 @@ import {
   projectHermesToolOutcome,
 } from "./tool-data"
 
-type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 type JsonRecord = Record<string, JsonValue>
 function isRecord(value: unknown): value is JsonRecord {
   return isNativeRecord(value)
 }
 
+/**
+ * A strict, unbounded JSON copy of a stored row. Not `publicJsonValue`: its
+ * size limits would drop the image data URLs a row's content carries.
+ */
 function jsonValue(value: unknown): JsonValue | undefined {
   if (value === null || typeof value === "boolean" || typeof value === "string")
     return value
@@ -428,7 +431,7 @@ export function projectHermesHistory(
         // The same turn the journal acknowledges as `aos.steer.accepted`: the
         // flag lets a from-start replay announce it once.
         ...(role === "user" && isRedirectCorrection(value)
-          ? { metadata: { custom: { correction: true } } }
+          ? { correction: true as const }
           : {}),
       })
     }

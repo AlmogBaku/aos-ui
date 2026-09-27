@@ -13,7 +13,7 @@ function harness() {
   const listeners = new Set<(pending: AcpPendingRequest) => void>()
   const approvals = createAcpApprovals({
     connection: {
-      onPendingRequest(listener) {
+      subscribePendingRequests(listener) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
@@ -191,6 +191,7 @@ describe("ACP permission approvals", () => {
     const { approvals, emit } = harness()
     const { pending, respond } = permission({ toolCallId: "call-1" })
     emit(pending)
+    approvals.subscribe("session-1", () => undefined)
 
     await approvals.respond("session-1", "interrupt-1", "session", true)
 
@@ -211,6 +212,7 @@ describe("ACP permission approvals", () => {
       { optionId: "quietly", name: "Skip quietly", kind: "_skip" },
     ]
     emit(pending)
+    approvals.subscribe("session-1", () => undefined)
 
     await approvals.respond("session-1", "interrupt-1", "quietly", false)
 
@@ -276,15 +278,18 @@ describe("ACP permission approvals", () => {
     expect(approvals.list("session-1")).toEqual([])
   })
 
-  it("keeps the chosen option when the answered request is withdrawn", async () => {
+  it("keeps the chosen option while a thread shows the Session, then drops it with the Session", async () => {
     const { approvals, emit } = harness()
     const { pending, withdraw } = permission({ toolCallId: "call-1" })
     emit(pending)
+    const leave = approvals.subscribe("session-1", () => undefined)
     await approvals.respond("session-1", "interrupt-1", "once", true)
 
     withdraw()
-
     expect(approvals.list("session-1")[0]).toMatchObject({ optionId: "once" })
+
+    leave()
+    expect(approvals.list("session-1")).toEqual([])
   })
 
   it("expires a request at its deadline without answering it", async () => {
@@ -326,6 +331,7 @@ describe("ACP permission approvals", () => {
     vi.useFakeTimers({ now: Date.parse("2026-09-23T10:00:00Z") })
     const { approvals, emit } = harness()
     emit(permission({ expiresAt: "2026-09-23T10:01:00Z" }).pending)
+    approvals.subscribe("session-1", () => undefined)
     await approvals.respond("session-1", "interrupt-1", "once", true)
 
     vi.advanceTimersByTime(120_000)
@@ -380,5 +386,11 @@ describe("ACP permission approvals", () => {
     unsubscribe()
     emit(permission({ requestId: "four" }).pending)
     expect(selected).toHaveBeenCalledTimes(2)
+    // The proxy sends a request once, so one still waiting outlives the thread.
+    expect(approvals.list("session-1").map(({ id }) => id)).toEqual([
+      "one",
+      "two",
+      "four",
+    ])
   })
 })

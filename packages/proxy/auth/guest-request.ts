@@ -1,3 +1,4 @@
+import { GUEST_PRINCIPAL_PREFIX } from "../core/principal"
 import type {
   GuestAuthorization,
   GuestInvitationService,
@@ -27,22 +28,8 @@ export function guestAuthorizationActive(
   }
 }
 
-export function sameGuestBinding(
-  first: GuestAuthorization,
-  second: GuestAuthorization
-) {
-  return (
-    first.runtimeId === second.runtimeId &&
-    first.principalId === second.principalId &&
-    first.invitationId === second.invitationId &&
-    first.tokenId === second.tokenId &&
-    first.agentId === second.agentId &&
-    first.sessionId === second.sessionId
-  )
-}
-
-export function guestControllerId(authorization: GuestAuthorization) {
-  return `guest:${authorization.tokenId}`
+export function guestPrincipalId(authorization: GuestAuthorization) {
+  return `${GUEST_PRINCIPAL_PREFIX}${authorization.tokenId}`
 }
 
 export function createGuestRequestAuthorizer(options: {

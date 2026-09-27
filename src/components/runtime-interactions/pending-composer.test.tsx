@@ -37,7 +37,7 @@ it("discovers pending questions and isolates updates to their originating Sessio
   const view = render(
     <PendingInteractionComposer
       locale="en"
-      threadId="a"
+      sessionId="a"
       interactions={interactions}
       fallback={<p>Write a message</p>}
     />
@@ -46,7 +46,7 @@ it("discovers pending questions and isolates updates to their originating Sessio
   view.rerender(
     <PendingInteractionComposer
       locale="en"
-      threadId="b"
+      sessionId="b"
       interactions={interactions}
       fallback={<p>Write a message</p>}
     />

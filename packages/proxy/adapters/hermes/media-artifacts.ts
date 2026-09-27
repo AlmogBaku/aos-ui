@@ -3,17 +3,17 @@ import {
   safeArtifactPath,
   safeRelativeArtifactPath,
 } from "../../core/artifact-path"
-import { MediaLineFilter, mediaReference } from "../../core/media-lines"
+import { MediaLineFilter, mediaReference } from "./media-lines"
 import {
   containsPrivateValue,
   isRecord,
   parseJson,
-  parseJsonOrValue,
   rowText,
   trimmedText,
   unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
+import { parseJsonOrValue } from "../todos"
 
 type HermesMediaArtifact = {
   reference: string

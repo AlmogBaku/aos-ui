@@ -1,18 +1,30 @@
 import { describe, expect, it, vi } from "vitest"
-import {
-  GatewayClientRequestError,
-  GatewayClientRequestTimeoutError,
-} from "@openclaw/gateway-client"
+import { GatewayClientRequestError } from "@openclaw/gateway-client"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+import { captureLogs } from "../../../../test/support/log-capture"
 import {
   OpenClawClient,
   OpenClawClientConnectionError,
-  OpenClawClientRequestError,
   OpenClawClientUnavailableError,
+  type OpenClawClientCredentials,
+  type OpenClawClientOptions,
   type OpenClawGatewayClient,
   type OpenClawGatewayClientOptions,
   type OpenClawRequestOptions,
 } from "./client"
+
+vi.mock("@openclaw/gateway-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@openclaw/gateway-client")>()
+  return {
+    ...actual,
+    // The official client marks every Gateway answer it builds; here a
+    // stub's GatewayClientRequestError stands for one.
+    isGatewayProtocolResponseError: (error: unknown) =>
+      error instanceof actual.GatewayClientRequestError,
+  }
+})
 
 class ControlledGatewayClient implements OpenClawGatewayClient {
   readonly requests: {
@@ -42,76 +54,94 @@ class ControlledGatewayClient implements OpenClawGatewayClient {
   }
 }
 
-function setup(
-  overrides?: Partial<ConstructorParameters<typeof OpenClawClient>[0]>
+const credentials = (
+  deviceToken = "tok-test-1"
+): OpenClawClientCredentials => ({
+  deviceIdentity: {
+    deviceId: "device-a",
+    privateKeyPem: "private-key",
+    publicKeyPem: "public-key",
+  },
+  deviceToken,
+  signDevicePayload: () => "signature",
+  publicKeyRawBase64UrlFromPem: () => "public-key-raw",
+})
+
+/** A client whose link has dialed once: `gateway()` is the latest dial's. */
+async function setup(
+  clock: ReturnType<typeof useFakeClock>,
+  overrides?: Partial<OpenClawClientOptions>
 ) {
-  let gateway: ControlledGatewayClient | undefined
+  const gateways: ControlledGatewayClient[] = []
   const client = new OpenClawClient({
     url: "wss://gateway.example.test",
-    credentials: {
-      deviceIdentity: {
-        deviceId: "device-a",
-        privateKeyPem: "private-key",
-        publicKeyPem: "public-key",
-      },
-      deviceToken: "pre-provisioned-token",
-      signDevicePayload: () => "signature",
-      publicKeyRawBase64UrlFromPem: () => "public-key-raw",
-    },
+    credentials: async () => credentials(),
     role: "aos-operator",
     scopes: ["sessions.read", "sessions.write"],
     caps: ["tool-events"],
-    createGatewayClient: (options) =>
-      (gateway = new ControlledGatewayClient(options)),
+    logger: captureLogs().logger,
+    createGatewayClient: (options) => {
+      const gateway = new ControlledGatewayClient(options)
+      gateways.push(gateway)
+      return gateway
+    },
     ...overrides,
   })
+  await clock.advance(0)
   return {
     client,
+    gateways,
     gateway: () => {
+      const gateway = gateways.at(-1)
       if (!gateway) throw new Error("Gateway client was not created")
       return gateway
     },
   }
 }
 
-describe("OpenClaw client", () => {
-  it("rejects a mutable or non-WebSocket gateway URL before accepting credentials", () => {
-    expect(
-      () =>
-        new OpenClawClient({
-          url: "https://gateway.example.test?token=leaked",
-          credentials: {
-            deviceIdentity: {
-              deviceId: "device-a",
-              privateKeyPem: "private-key",
-              publicKeyPem: "public-key",
-            },
-            deviceToken: "pre-provisioned-token",
-            signDevicePayload: () => "signature",
-            publicKeyRawBase64UrlFromPem: () => "public-key-raw",
-          },
-          role: "aos-operator",
-          scopes: ["sessions.read"],
-          caps: [],
-        })
-    ).toThrow("Invalid OpenClaw Gateway URL")
-  })
+/** A client whose link is up. */
+async function ready(
+  clock: ReturnType<typeof useFakeClock>,
+  overrides?: Partial<OpenClawClientOptions>
+) {
+  const setUp = await setup(clock, overrides)
+  const started = setUp.client.start()
+  setUp.gateway().options.onHelloOk?.({ protocol: 4 } as never)
+  await started
+  return setUp
+}
 
-  it("fails closed when a pre-provisioned device token is missing", () => {
-    expect(() => setup({ credentials: undefined })).toThrow(
-      "Invalid OpenClaw credentials"
+describe("OpenClaw client", () => {
+  it("fails closed without a gateway while a pre-provisioned device token is missing, and at once while the breaker holds its dials", async () => {
+    const clock = useFakeClock()
+    const { client, gateways } = await setup(clock, {
+      credentials: async () => credentials(""),
+    })
+
+    const started = expect(client.start()).rejects.toEqual(
+      new OpenClawClientConnectionError("unavailable")
+    )
+    await clock.advance(250)
+    await started
+    expect(gateways).toHaveLength(0)
+
+    // Five failed dials open the breaker: a start does not wait out its deadline.
+    await clock.advance(5_000)
+    await expect(client.start()).rejects.toEqual(
+      new OpenClawClientConnectionError("unavailable")
     )
   })
 
   it("starts one exact-v4 Gateway connection with the configured server credentials and policy", async () => {
-    const { client, gateway } = setup()
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
     const started = client.start()
     const native = gateway()
 
     expect(native.start).toHaveBeenCalledOnce()
     expect(native.options).toMatchObject({
-      url: "wss://gateway.example.test/",
-      deviceToken: "pre-provisioned-token",
+      url: "wss://gateway.example.test",
+      deviceToken: "tok-test-1",
       minProtocol: 4,
       maxProtocol: 4,
       mode: "backend",
@@ -126,8 +156,9 @@ describe("OpenClaw client", () => {
     await expect(started).resolves.toBeUndefined()
   })
 
-  it("retains only validated negotiated attachment limits from HelloOk", async () => {
-    const { client, gateway } = setup()
+  it("reads validated negotiated attachment limits from the HelloOk", async () => {
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
     const started = client.start()
 
     gateway().options.onHelloOk?.({
@@ -153,11 +184,12 @@ describe("OpenClaw client", () => {
   })
 
   it("does not manufacture attachment policy from missing or malformed HelloOk policy", async () => {
+    const clock = useFakeClock()
     for (const hello of [
       { protocol: 4 },
       { protocol: 4, policy: { maxPayload: -1, attachments: { maxBytes: 1 } } },
     ]) {
-      const { client, gateway } = setup()
+      const { client, gateway } = await setup(clock)
       const started = client.start()
 
       gateway().options.onHelloOk?.(hello as never)
@@ -168,7 +200,8 @@ describe("OpenClaw client", () => {
   })
 
   it("fails closed when a Gateway reports a protocol other than v4", async () => {
-    const { client, gateway } = setup()
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
     const started = client.start()
 
     gateway().options.onHelloOk?.({ protocol: 3 } as never)
@@ -178,47 +211,53 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it("disposes terminal pairing-rejected readiness without exposing the native detail", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
+  it("stops dialing on a pairing refusal, its native detail only a cause, and dials again for the next start", async () => {
+    const clock = useFakeClock()
+    const { client, gateway, gateways } = await setup(clock)
+    const first = client.start()
+    const refusal = new GatewayClientRequestError({
+      message: "pair request pair-123 token=tok-test-1",
+      details: { code: "PAIRING_REQUIRED", requestId: "pair-123" },
+    })
 
-    gateway().options.onConnectError?.(
-      new GatewayClientRequestError({
-        message: "pair request pair-123 token=pre-provisioned-token",
-        details: { code: "PAIRING_REQUIRED", requestId: "pair-123" },
-      })
+    gateway().options.onConnectError?.(refusal)
+
+    await expect(first).rejects.toEqual(
+      new OpenClawClientConnectionError("pairing-required", { cause: refusal })
     )
-
-    await expect(started).rejects.toEqual(
+    await expect(client.request("sessions.list", {})).rejects.toEqual(
       new OpenClawClientConnectionError("pairing-required")
     )
-    await vi.waitFor(() => expect(gateway().stopAndWait).toHaveBeenCalledOnce())
-    await expect(client.request("sessions.list", {})).rejects.toEqual(
-      new OpenClawClientUnavailableError()
-    )
+    await clock.advance(60_000)
+    expect(gateways).toHaveLength(1)
+    expect(client.link.state()).toBe("lost")
+
+    const second = client.start()
+    await clock.advance(0)
+    gateway().options.onHelloOk?.({ protocol: 4 } as never)
+
+    await expect(second).resolves.toBeUndefined()
+    expect(gateways).toHaveLength(2)
+    expect(gateways[0]!.stopAndWait).toHaveBeenCalledOnce()
   })
 
   it("keeps readiness usable through a transient transport failure until the Gateway reconnects", async () => {
-    const onConnectionIssue = vi.fn()
-    const { client, gateway } = setup({ onConnectionIssue })
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
     const started = client.start()
 
     gateway().options.onConnectError?.(
-      new Error("wss://gateway.example.test token=pre-provisioned-token")
+      new Error("wss://gateway.example.test token=tok-test-1")
     )
     expect(gateway().stopAndWait).not.toHaveBeenCalled()
     gateway().options.onHelloOk?.({ protocol: 4 } as never)
 
     await expect(started).resolves.toBeUndefined()
-    expect(onConnectionIssue).toHaveBeenCalledWith({
-      kind: "unavailable",
-      terminal: false,
-    })
   })
 
   it("keeps readiness usable when pairing explicitly asks the client to retry", async () => {
-    const onConnectionIssue = vi.fn()
-    const { client, gateway } = setup({ onConnectionIssue })
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
     const started = client.start()
 
     gateway().options.onConnectError?.(
@@ -234,10 +273,6 @@ describe("OpenClaw client", () => {
 
     await expect(started).resolves.toBeUndefined()
     expect(gateway().stopAndWait).not.toHaveBeenCalled()
-    expect(onConnectionIssue).toHaveBeenCalledWith({
-      kind: "pairing-required",
-      terminal: false,
-    })
   })
 
   it.each([
@@ -248,7 +283,8 @@ describe("OpenClaw client", () => {
   ] as const)(
     "classifies structured %s startup rejection as %s",
     async (code, kind) => {
-      const { client, gateway } = setup()
+      const clock = useFakeClock()
+      const { client, gateway } = await setup(clock)
       const started = client.start()
 
       gateway().options.onConnectError?.(
@@ -258,110 +294,90 @@ describe("OpenClaw client", () => {
       await expect(started).rejects.toEqual(
         new OpenClawClientConnectionError(kind)
       )
-      await vi.waitFor(() =>
-        expect(gateway().stopAndWait).toHaveBeenCalledOnce()
-      )
     }
   )
 
-  it("passes the caller cancellation, acknowledgement hooks, and bounded deadline to a ready Gateway request", async () => {
-    const { client, gateway } = setup({ requestTimeoutMs: 321 })
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
+  it("aborts a ready Gateway read on the caller's cancellation or the 15 s call deadline, never uncertain", async () => {
+    const clock = useFakeClock()
+    const { client, gateway } = await ready(clock)
+    gateway().requestHandler = (options) =>
+      new Promise((_resolve, reject) => {
+        options?.onSent?.()
+        options?.signal?.addEventListener("abort", () =>
+          reject(new Error("native abort detail"))
+        )
+      })
     const controller = new AbortController()
-    const onSent = vi.fn()
-    const onAccepted = vi.fn()
 
-    await expect(
-      client.request(
-        "sessions.list",
-        { limit: 3 },
-        { signal: controller.signal, onSent, onAccepted }
-      )
-    ).resolves.toEqual({ ok: true })
-    expect(gateway().requests).toEqual([
-      {
-        method: "sessions.list",
-        params: { limit: 3 },
-        options: {
-          signal: controller.signal,
-          timeoutMs: 321,
-          onSent: expect.any(Function),
-          onAccepted: expect.any(Function),
-        },
-      },
-    ])
+    const cancelled = client.request(
+      "sessions.list",
+      {},
+      { signal: controller.signal }
+    )
+    controller.abort()
+    await expect(cancelled).rejects.toMatchObject({
+      kind: "cancelled",
+      uncertain: false,
+    })
+    const timedOut = expect(
+      client.request("sessions.list", {})
+    ).rejects.toMatchObject({
+      kind: "timeout",
+      uncertain: false,
+    })
+    await clock.advance(15_000)
+    await timedOut
   })
 
-  it("sanitizes native request failures without preserving native error detail", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
-    gateway().requestError = new Error("native /private/path token=secret")
-
-    await expect(client.request("sessions.list", {})).rejects.toEqual(
-      new OpenClawClientRequestError("unavailable")
-    )
-    await expect(client.request("sessions.list", {})).rejects.not.toThrow(
-      "native /private/path token=secret"
-    )
-  })
-
-  it("sanitizes an official request timeout without exposing its method or timeout", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
-    gateway().requestHandler = (options) => {
-      options?.onSent?.()
-      return Promise.reject(
-        new GatewayClientRequestTimeoutError({
-          method: "sessions.list",
-          timeoutMs: 321,
-          requestSent: true,
-        })
-      )
-    }
+  it("keeps a native request failure's detail out of its message, as its cause", async () => {
+    const clock = useFakeClock()
+    const { client, gateway } = await ready(clock)
+    const native = new Error("native /private/path token=tok-test-1")
+    gateway().requestError = native
 
     await expect(client.request("sessions.list", {})).rejects.toMatchObject({
-      kind: "timeout",
-      requestSent: true,
-      uncertain: true,
+      kind: "unavailable",
+      cause: native,
     })
+    await expect(client.request("sessions.list", {})).rejects.not.toThrow(
+      "native /private/path token=tok-test-1"
+    )
   })
 
-  it("preserves a dispatched cancellation as uncertain without replaying it", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
-    const controller = new AbortController()
-    gateway().requestHandler = (options) => {
-      options?.onSent?.()
-      controller.abort()
-      return Promise.reject(new Error("native cancellation detail"))
+  it.each(["chat.send", "config.patch"])(
+    "leaves a dispatched %s uncertain unless the Gateway refused it",
+    async (method) => {
+      const clock = useFakeClock()
+      const { client, gateway } = await ready(clock)
+      const controller = new AbortController()
+      gateway().requestHandler = (options) => {
+        options?.onSent?.()
+        controller.abort()
+        return Promise.reject(new Error("native cancellation detail"))
+      }
+
+      await expect(
+        client.request(method, { text: "once" }, { signal: controller.signal })
+      ).rejects.toMatchObject({
+        kind: "cancelled",
+        uncertain: true,
+      })
+
+      gateway().requestHandler = (options) => {
+        options?.onSent?.()
+        return Promise.reject(
+          new GatewayClientRequestError({ code: "INVALID_REQUEST" })
+        )
+      }
+      await expect(
+        client.request(method, { text: "once" })
+      ).rejects.toMatchObject({ kind: "rejected", uncertain: false })
     }
-
-    await expect(
-      client.request(
-        "chat.send",
-        { text: "once" },
-        { signal: controller.signal }
-      )
-    ).rejects.toMatchObject({
-      kind: "cancelled",
-      requestSent: true,
-      uncertain: true,
-    })
-  })
+  )
 
   it("preserves official sent and accepted acknowledgement boundaries for a leaf", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
+    const clock = useFakeClock()
+    const { client, gateway } = await ready(clock)
     const onSent = vi.fn()
     const onAccepted = vi.fn()
     gateway().requestHandler = async (options) => {
@@ -377,15 +393,16 @@ describe("OpenClaw client", () => {
     expect(onAccepted).toHaveBeenCalledWith({ id: "native-ack" })
   })
 
-  it("keeps an accepted request pending until its final response when a leaf requires it", async () => {
-    const { client, gateway } = setup()
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
+  it("keeps an accepted request pending past the call deadline until its final response when a leaf requires it", async () => {
+    const clock = useFakeClock()
+    const { client, gateway } = await ready(clock)
     const onAccepted = vi.fn()
     let deliverFinal: ((payload: { status: "final" }) => void) | undefined
     gateway().requestHandler = (options) =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
+        options?.signal?.addEventListener("abort", () =>
+          reject(new Error("aborted"))
+        )
         options?.onSent?.()
         if (options?.expectFinal) {
           options.onAccepted?.({ status: "accepted" })
@@ -400,62 +417,78 @@ describe("OpenClaw client", () => {
       { text: "once" },
       { expectFinal: true, onAccepted }
     )
-    await vi.waitFor(() =>
-      expect(onAccepted).toHaveBeenCalledWith({ status: "accepted" })
-    )
+    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted" })
     let settled = false
     void request.then(() => {
       settled = true
     })
-    await Promise.resolve()
+    await clock.advance(15_000)
     expect(settled).toBe(false)
 
     deliverFinal?.({ status: "final" })
     await expect(request).resolves.toEqual({ status: "final" })
   })
 
-  it("forwards paused and closed transport state without native close detail", async () => {
-    const onReconnectPaused = vi.fn()
-    const onClose = vi.fn()
-    const { client, gateway } = setup({ onReconnectPaused, onClose })
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
+  it.each([
+    ["closes", undefined, "unavailable"],
+    ["pauses its reconnect", "AUTH_RATE_LIMITED", "rate-limited"],
+  ] as const)(
+    "reads lost while a Gateway that %s is down, then redials on a re-read token and new limits",
+    async (_, pausedOn, kind) => {
+      let token = "tok-test-1"
+      const clock = useFakeClock()
+      const { client, gateway, gateways } = await ready(clock, {
+        credentials: async () => credentials(token),
+      })
+      token = "tok-test-2"
 
-    gateway().options.onReconnectPaused?.({
-      code: 1008,
-      reason: "token=pre-provisioned-token",
-      detailCode: "AUTH_RATE_LIMITED",
-    })
-    gateway().options.onClose?.(1008, "token=pre-provisioned-token", {
-      phase: "post-hello",
-    } as never)
+      // The official client reports a pause before the close it follows.
+      if (pausedOn)
+        gateway().options.onReconnectPaused?.({
+          code: 1008,
+          reason: "token=tok-test-1",
+          detailCode: pausedOn,
+        })
+      gateway().options.onClose?.(1006, "token=tok-test-1", {
+        phase: "post-hello",
+      } as never)
 
-    expect(onReconnectPaused).toHaveBeenCalledWith({
-      kind: "rate-limited",
-      terminal: true,
-    })
-    expect(onClose).toHaveBeenCalledWith({
-      phase: "post-hello",
-      recoverable: true,
-    })
-  })
+      expect(client.link.state()).toBe("lost")
+      await expect(client.request("sessions.list", {})).rejects.toEqual(
+        new OpenClawClientConnectionError(kind)
+      )
+      expect(gateways[0]!.stopAndWait).toHaveBeenCalledOnce()
+      await clock.advance(250)
+      expect(gateway().options.deviceToken).toBe("tok-test-2")
+      gateway().options.onHelloOk?.({
+        protocol: 4,
+        policy: { maxPayload: 1024 },
+      } as never)
+      await clock.advance(0)
 
-  it("forwards event and gap notifications to server observers and stops idempotently", async () => {
+      expect(client.link.state()).toBe("ready")
+      expect(client.negotiatedPolicy()).toEqual({ maxPayload: 1024 })
+    }
+  )
+
+  it("forwards the live Gateway's event and gap notifications, drops a released one's, and stops idempotently", async () => {
     const onEvent = vi.fn()
     const onGap = vi.fn()
-    const { client, gateway } = setup({ onEvent, onGap })
-    const started = client.start()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-    await started
+    const clock = useFakeClock()
+    const { client, gateway } = await ready(clock, { onEvent, onGap })
 
     const event = { event: "chat", payload: { sessionKey: "agent:a:main" } }
     gateway().options.onEvent?.(event as never)
     gateway().options.onGap?.({ expected: 4, received: 7 })
     await Promise.all([client.stopAndWait(), client.stopAndWait()])
+    gateway().options.onEvent?.(event as never)
 
+    expect(onEvent).toHaveBeenCalledOnce()
     expect(onEvent).toHaveBeenCalledWith(event)
     expect(onGap).toHaveBeenCalledWith({ expected: 4, received: 7 })
     expect(gateway().stopAndWait).toHaveBeenCalledOnce()
+    await expect(client.start()).rejects.toEqual(
+      new OpenClawClientUnavailableError()
+    )
   })
 })

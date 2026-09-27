@@ -68,7 +68,7 @@ export type SessionStatus =
 export type ActivityBase = {
   id: string
   agentId: string
-  threadId: string
+  sessionId: string
   occurredAt: string
 }
 
@@ -87,7 +87,7 @@ export type WorkspaceActivityEvent =
   | (ActivityBase & { type: "agent-ready" | "agent-activation-failed" })
 
 export type SessionMetadata = {
-  threadId: string
+  sessionId: string
   agentId: string
   updatedAt: string
   status: SessionStatus
@@ -126,14 +126,14 @@ export type WorkspaceAdapter = {
   listAgents(): Promise<AgentSummary[]>
   refreshAgents(): Promise<AgentSummary[]>
   listAgentCatalog?: () => Promise<AgentCatalogEntry[]>
-  getSessionMetadata(threadIds: string[]): Promise<SessionMetadata[]>
+  getSessionMetadata(sessionIds: string[]): Promise<SessionMetadata[]>
   createSession(
     agentId: string,
     options?: SessionCreationOptions
-  ): Promise<{ threadId: string }>
+  ): Promise<{ sessionId: string }>
   updateAgent?: (agentId: string, patch: AgentUpdate) => Promise<void>
   subscribeTodos?: (
-    threadId: string,
+    sessionId: string,
     listener: (todos: TodoItem[]) => void,
     onError?: (error: Error) => void
   ) => () => void
@@ -142,7 +142,7 @@ export type WorkspaceAdapter = {
     onError?: (error: Error) => void
   ) => () => void
   subscribeSessionMetadata?: (
-    threadIds: readonly string[],
+    sessionIds: readonly string[],
     listener: (metadata: SessionMetadata[]) => void,
     onError?: (error: Error) => void
   ) => () => void
@@ -151,9 +151,9 @@ export type WorkspaceAdapter = {
     onError?: (error: Error) => void
   ) => () => void
   /** Idempotent ack that the operator has seen this Session. */
-  markSessionRead?: (threadId: string) => Promise<void>
+  markSessionRead?: (sessionId: string) => Promise<void>
   /** Provider-owned pin; rename, archival, and deletion travel with threads. */
-  setSessionPinned?: (threadId: string, pinned: boolean) => Promise<void>
+  setSessionPinned?: (sessionId: string, pinned: boolean) => Promise<void>
   /**
    * Names the Agent whose History the thread list pages. A runtime whose
    * catalog spans every Agent reads further pages for this Agent alone; the
@@ -168,7 +168,7 @@ export type WorkspaceAdapter = {
    * the provider decides from that whether a device still needs a push.
    */
   reportFocus?: (
-    threadId: string | null,
+    sessionId: string | null,
     presence: { foreground: boolean; idle: boolean }
   ) => void
 }
@@ -213,9 +213,9 @@ export type RuntimeInteractionAdapter = {
   ): Promise<void>
   reject(request: RuntimeQuestionRequest): Promise<void>
   dismiss?(request: RuntimeQuestionRequest): void
-  getPending(threadId: string): RuntimeQuestionRequest | undefined
+  getPending(sessionId: string): RuntimeQuestionRequest | undefined
   subscribe(
-    threadId: string,
+    sessionId: string,
     listener: () => void,
     onError?: (error: Error) => void
   ): () => void
@@ -237,7 +237,7 @@ export type ArtifactDescriptor = {
 export type ArtifactResolveOptions = {
   artifact: ArtifactDescriptor
   agentId: string
-  threadId: string
+  sessionId: string
   signal: AbortSignal
 }
 
@@ -248,7 +248,7 @@ export type ArtifactAdapter = {
 /** The tool call whose MCP App view a request addresses. */
 export type McpAppTarget = {
   agentId: string
-  threadId: string
+  sessionId: string
   toolCallId: string
 }
 
@@ -260,6 +260,36 @@ export type McpAppAdapter = {
   readResource(
     input: McpAppTarget & { uri: string }
   ): Promise<ReadResourceResult>
+}
+
+/**
+ * What the last settled turn used, in raw tokens, as the provider reported it.
+ * Every count is optional: a provider reports only what it measures.
+ */
+export type ComposerTurnUsage = {
+  readonly inputTokens?: number | undefined
+  readonly outputTokens?: number | undefined
+  readonly thoughtTokens?: number | undefined
+  readonly cachedReadTokens?: number | undefined
+  readonly cachedWriteTokens?: number | undefined
+  readonly totalTokens?: number | undefined
+}
+
+/** The model and reasoning effort the provider says the Session is on. */
+export type ComposerModelCurrent = {
+  readonly selectedId: string
+  readonly effortId?: string | undefined
+}
+
+/**
+ * A provider-side model change the composer follows as it happens, for
+ * example after a slash command or another client switched the Session.
+ * `current` returns the same reference until the next change replaces it,
+ * which is what `useSyncExternalStore` requires.
+ */
+export type ComposerModelFeed = {
+  readonly current: () => ComposerModelCurrent | undefined
+  readonly subscribe: (listener: () => void) => () => void
 }
 
 /** The complete provider-neutral browser interface consumed by the workspace. */
@@ -293,6 +323,13 @@ export type HarnessRuntime = {
   /** Present only where the provider can subscribe this device to Web Push. */
   push?: PushSubscriptionManager
   environmentLabel?: string
+  /**
+   * Present only while the provider's server is full; the runtime keeps
+   * retrying the connection on its own.
+   */
+  connectionStatus?: "capacity"
+  /** Present only while the selected Session is gone at its provider. */
+  sessionStatus?: "unavailable"
 }
 
 export type WorkspaceCapabilities = {
@@ -310,7 +347,7 @@ export type WorkspaceCapabilities = {
 
 export type WorkspaceProviderEvent<TPayload = unknown> = {
   agentId: string
-  threadId: string
+  sessionId: string
   sequence: number
   payload: TPayload
 }

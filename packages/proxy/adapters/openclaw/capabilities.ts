@@ -52,7 +52,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
       attachments: policy.attachments
         ? {
             status: "available" as const,
-            scope: "attached-session" as const,
+            scope: "session" as const,
             inputs: ["image", "file"] as const,
             imageMimeTypes: "provider-dependent" as const,
             fileMimeTypes: "provider-dependent" as const,

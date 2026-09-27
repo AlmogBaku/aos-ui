@@ -12,7 +12,6 @@ export type ErrorCode =
   | "registration_limit_exceeded"
   | "runtime_authentication_required"
   | "temporarily_unavailable"
-  | "connection_interrupted"
   | "uncertain_mutation"
   | "internal_error"
 
@@ -31,8 +30,6 @@ const errorDescriptions: Record<ErrorCode, string> = {
     "The configured runtime credentials were rejected. Check the gateway configuration.",
   temporarily_unavailable:
     "The service is temporarily unavailable. Please try again.",
-  connection_interrupted:
-    "The connection was interrupted. AOS will reconcile before continuing.",
   uncertain_mutation:
     "The runtime may have accepted the request. Refresh to reconcile before trying again.",
   internal_error: "Something went wrong. Please try again.",
@@ -60,17 +57,6 @@ export function errorResponse(
   )
 }
 
-export function validIdentifier(value: string) {
-  return (
-    value.length >= 1 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
-}
-
 export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   if (
     request.headers.get("content-type")?.split(";", 1)[0] !== "application/json"
@@ -79,12 +65,12 @@ export async function boundedJson(request: Request, maxBytes = 16 * 1024) {
   const rawLength = request.headers.get("content-length")
   if (rawLength !== null) {
     if (!/^(?:0|[1-9]\d*)$/u.test(rawLength)) {
-      void request.body?.cancel().catch(() => undefined)
+      if (request.body) request.body.cancel().catch(() => undefined)
       return undefined
     }
     const contentLength = Number(rawLength)
     if (!Number.isSafeInteger(contentLength) || contentLength > maxBytes) {
-      void request.body?.cancel().catch(() => undefined)
+      if (request.body) request.body.cancel().catch(() => undefined)
       return undefined
     }
   }

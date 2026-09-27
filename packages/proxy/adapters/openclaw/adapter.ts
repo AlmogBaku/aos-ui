@@ -1,7 +1,6 @@
 import type {
   AgentUpdatePatch,
   AgentUpdateResponse,
-  RuntimeAuthState,
   RuntimeInfo,
   SessionAttachmentStageRequest,
   SessionModelUpdateRequest,
@@ -10,17 +9,18 @@ import {
   SESSION_CATALOG_MAX_WINDOW,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../../protocol"
-import {
-  type ServerAttachmentStage,
-  type ServerMcpApps,
-  type ServerTurnEngine,
-  type ServerRuntime,
-  type SessionPatch,
+import type {
+  ServerAttachmentStage,
+  ServerMcpApps,
+  ServerTurnEngine,
+  ServerRuntime,
+  SessionPatch,
 } from "../../core/runtime"
+import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
+import type { ServerLink } from "../../core/link"
 import {
-  OpenClawClientConnectionError,
+  openClawConnectionFailure,
   OpenClawClientRequestError,
-  OpenClawClientUnavailableError,
   type OpenClawGatewayClient,
 } from "./client"
 import {
@@ -43,6 +43,7 @@ import {
 } from "./history"
 import { OpenClawInteractionPublicError } from "./interactions"
 import { createOpenClawMcpApps } from "./mcp-apps"
+import { OpenClawTurnPublicError } from "./run"
 import {
   createOpenClawMcpToolNames,
   type OpenClawMcpToolNames,
@@ -86,8 +87,51 @@ async function readable(read: () => Promise<unknown>) {
   }
 }
 
+/** Sorts every failure an OpenClaw leaf or its Gateway link raises. */
+export function openClawPublicError(cause: unknown) {
+  const connection = openClawConnectionFailure(cause)
+  if (connection) return connection
+  if (cause instanceof OpenClawClientRequestError && cause.uncertain)
+    return failureOf("uncertain", cause)
+  // A send or Stop that may have landed says so by its code; any other did not.
+  if (cause instanceof OpenClawTurnPublicError)
+    return (
+      publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+    )
+  if (
+    cause instanceof OpenClawWorkspaceOwnershipError ||
+    // The artifact is still authoritative, but OpenClaw cannot read it:
+    // unlike a 503, "not found" never invites a retry that cannot succeed.
+    cause instanceof OpenClawArtifactUnreadableError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_INTERACTION_NOT_FOUND")
+  )
+    return failureOf("gone", cause)
+  if (cause instanceof OpenClawWorkspaceRevisionConflictError)
+    return failureOf("revision_conflict", cause)
+  if (
+    cause instanceof OpenClawContentPublicError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_INVALID_INTERACTION")
+  )
+    return failureOf("invalid_request", cause)
+  if (
+    cause instanceof OpenClawClientRequestError ||
+    cause instanceof OpenClawWorkspaceUnavailableError ||
+    cause instanceof OpenClawHistoryUnavailableError ||
+    cause instanceof OpenClawNativePayloadError ||
+    cause instanceof OpenClawAdapterUnavailableError ||
+    cause instanceof OpenClawArtifactUnavailableError ||
+    (cause instanceof OpenClawInteractionPublicError &&
+      cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
+  )
+    return failureOf("unavailable", cause)
+  return undefined
+}
+
 type OpenClawServerAdapterOptions = Readonly<{
-  client: OpenClawGatewayClient
+  /** The Gateway's calls, and the link they ride on. */
+  client: OpenClawGatewayClient & { readonly link: ServerLink }
   turns: ServerTurnEngine
   hiddenAgentIds?: readonly string[]
   subscribeSession: OpenClawHistorySubscription
@@ -103,21 +147,20 @@ type OpenClawServerAdapterOptions = Readonly<{
  * remain in the OpenClaw leaves; the coordinator retains admission and turns.
  */
 export class OpenClawServerAdapter implements ServerRuntime {
+  readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly mcpApps: ServerMcpApps
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
-  readonly #subscribeSession: OpenClawHistorySubscription
   readonly #gatewayOrigin?: string
   readonly #fetch: typeof fetch
-  #ready?: Promise<void>
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
+    this.link = options.client.link
     this.turns = options.turns
     this.#client = options.client
-    this.#subscribeSession = options.subscribeSession
     this.#gatewayOrigin = options.gatewayOrigin
     this.#fetch = options.fetch ?? fetch
     this.#workspace = createOpenClawWorkspace({
@@ -143,8 +186,8 @@ export class OpenClawServerAdapter implements ServerRuntime {
     })
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
-    return this.#workspace.resolveSessionId(agentId, publicSessionId)
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
+    return this.#workspace.resolveProviderSessionId(agentId, publicSessionId)
   }
 
   async resolveInvitedSession(
@@ -159,60 +202,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
   }
 
   publicError(cause: unknown) {
-    if (
-      cause instanceof OpenClawClientConnectionError &&
-      cause.kind !== "unavailable" &&
-      cause.kind !== "rate-limited"
-    )
-      return { code: "runtime_authentication_required", status: 401 } as const
-    if (cause instanceof OpenClawClientRequestError && cause.uncertain)
-      return { code: "uncertain_mutation", status: 503 } as const
-    if (
-      cause instanceof OpenClawWorkspaceOwnershipError ||
-      // The artifact is still authoritative, but OpenClaw cannot read it:
-      // unlike a 503, "not found" never invites a retry that cannot succeed.
-      cause instanceof OpenClawArtifactUnreadableError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_INTERACTION_NOT_FOUND")
-    )
-      return { code: "not_found", status: 404 } as const
-    if (cause instanceof OpenClawWorkspaceRevisionConflictError)
-      return { code: "revision_conflict", status: 409 } as const
-    if (
-      cause instanceof OpenClawContentPublicError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_INVALID_INTERACTION")
-    )
-      return { code: "invalid_request", status: 400 } as const
-    if (
-      cause instanceof OpenClawClientConnectionError ||
-      cause instanceof OpenClawClientRequestError ||
-      cause instanceof OpenClawClientUnavailableError ||
-      cause instanceof OpenClawWorkspaceUnavailableError ||
-      cause instanceof OpenClawHistoryUnavailableError ||
-      cause instanceof OpenClawNativePayloadError ||
-      cause instanceof OpenClawAdapterUnavailableError ||
-      cause instanceof OpenClawArtifactUnavailableError ||
-      (cause instanceof OpenClawInteractionPublicError &&
-        cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
-    )
-      return { code: "temporarily_unavailable", status: 503 } as const
-    return undefined
-  }
-
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.#start()
-      return { status: "authenticated" }
-    } catch (error) {
-      if (
-        error instanceof OpenClawClientConnectionError &&
-        error.kind !== "unavailable" &&
-        error.kind !== "rate-limited"
-      )
-        return { status: "authentication-required" }
-      return { status: "unavailable", reason: "temporarily-unavailable" }
-    }
+    return openClawPublicError(cause)
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {
@@ -254,17 +244,17 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async history(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: string,
     limit: number,
     offset: number
   ) {
     await this.#start()
-    return this.#history.history(agentId, runtimeSessionId, limit, offset)
+    return this.#history.history(agentId, providerSessionId, limit, offset)
   }
 
-  async getSession(agentId: string, runtimeSessionId: string) {
+  async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#workspace.getSession(agentId, runtimeSessionId)
+    return this.#workspace.getSession(agentId, providerSessionId)
   }
 
   async createSession(agentId: string, _title?: string): Promise<unknown> {
@@ -275,17 +265,17 @@ export class OpenClawServerAdapter implements ServerRuntime {
 
   async updateSession(
     agentId: string,
-    runtimeSessionId: string,
+    providerSessionId: string,
     patch: SessionPatch
   ): Promise<void> {
     await this.#start()
     // The native patch owns each flag's side effects; AOS sends one at a time.
-    await this.#workspace.updateSession(agentId, runtimeSessionId, patch)
+    await this.#workspace.updateSession(agentId, providerSessionId, patch)
   }
 
-  async deleteSession(agentId: string, runtimeSessionId: string) {
+  async deleteSession(agentId: string, providerSessionId: string) {
     await this.#start()
-    await this.#workspace.deleteSession(agentId, runtimeSessionId)
+    await this.#workspace.deleteSession(agentId, providerSessionId)
   }
 
   async workspaceCapabilities(
@@ -305,13 +295,13 @@ export class OpenClawServerAdapter implements ServerRuntime {
         },
         models: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           selection: "native-session",
           choices: "provider-reported",
         },
         context: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },
@@ -325,37 +315,23 @@ export class OpenClawServerAdapter implements ServerRuntime {
     })
   }
 
-  async models(agentId: string, publicSessionId: string) {
+  async models(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#history.models(agentId, publicSessionId)
+    return this.#history.models(agentId, providerSessionId)
   }
 
   async updateModel(
     _agentId: string,
-    _publicSessionId: string,
+    _providerSessionId: string,
     _patch: SessionModelUpdateRequest
   ): Promise<unknown> {
-    void [_agentId, _publicSessionId, _patch]
+    void [_agentId, _providerSessionId, _patch]
     throw new OpenClawAdapterUnavailableError()
   }
 
-  async context(agentId: string, publicSessionId: string) {
+  async context(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#history.context(agentId, publicSessionId)
-  }
-
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    _reset?: () => void
-  ) {
-    void _reset
-    await this.#start()
-    const sessionId = this.resolveSessionId(agentId, publicSessionId)
-    if (!sessionId) throw new OpenClawWorkspaceOwnershipError()
-    await this.#workspace.getSession(agentId, sessionId)
-    return this.#subscribeSession(agentId, sessionId, listener)
+    return this.#history.context(agentId, providerSessionId)
   }
 
   async stageAttachments(
@@ -453,9 +429,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#close
   }
 
+  /** Never cached: a failed start leaves the next call to dial again. */
   #start() {
-    this.#ready ??= Promise.resolve(this.#client.start())
-    return this.#ready
+    return Promise.resolve(this.#client.start())
   }
 
   #runtimeInfo(status: "ready" | "unavailable"): RuntimeInfo {

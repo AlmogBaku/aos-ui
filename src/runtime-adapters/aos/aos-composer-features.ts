@@ -12,12 +12,14 @@ import {
 import {
   composerUsageFromTokens,
   type ComposerFeatureViewModel,
-  type ComposerModelFeed,
   type ComposerModelSelectionState,
   type ComposerModelUpdate,
   type ComposerSessionCost,
-  type ComposerTurnUsage,
 } from "@/components/assistant-ui/composer-features"
+import type {
+  ComposerModelFeed,
+  ComposerTurnUsage,
+} from "@/runtime-adapters/contracts"
 import type { ComposerFeatureConfig } from "@shared/runtime-config"
 import type {
   SessionModelUpdateRequest,
@@ -30,34 +32,35 @@ import type {
   AosWorkspaceCapabilities,
 } from "./aos-client"
 
+/**
+ * The Session's projection as its updates folded it so far. Every read
+ * returns the same reference until what it reads changes, which is what lets
+ * the composer read it without re-rendering forever.
+ */
 type SessionCapabilityClient = {
-  workspaceCapabilities(threadId: string): Promise<AosWorkspaceCapabilities>
+  /** What the Session supports, absent until it reports it. */
+  workspaceCapabilities(sessionId: string): AosWorkspaceCapabilities | undefined
+  /** Told of every change to anything the composer reads for the Session. */
+  subscribeComposer(sessionId: string, listener: () => void): () => void
 }
 
 type ComposerClient = SessionCapabilityClient & {
-  models(threadId: string): Promise<AosModelChoices>
-  /**
-   * The newest usage the provider reported, absent until it reports one. One
-   * reading is one value: the same reference until the next reading replaces
-   * it, which is what lets the composer read it without re-rendering forever.
-   */
-  context(threadId: string): AosContext | undefined
-  subscribeContext(threadId: string, listener: () => void): () => void
-  /**
-   * What the Session's settled turns spent, notified with the context: the
-   * same reference until a settled turn replaces it.
-   */
+  /** The models the Session offers, absent until it reports them. */
+  models(sessionId: string): AosModelChoices | undefined
+  /** The newest usage the provider reported, absent until it reports one. */
+  context(sessionId: string): AosContext | undefined
+  /** What the Session's settled turns spent. */
   turnUsage?(
-    threadId: string
+    sessionId: string
   ): { lastTurn?: ComposerTurnUsage; cost?: ComposerSessionCost } | undefined
   /** The model the provider reports the Session on, one feed per Session. */
-  modelFeed?(threadId: string): ComposerModelFeed
+  modelFeed?(sessionId: string): ComposerModelFeed
   updateModel(
-    threadId: string,
+    sessionId: string,
     patch: SessionModelUpdateRequest
   ): Promise<SessionModelUpdateResponse>
   steerRun(
-    threadId: string,
+    sessionId: string,
     request: { requestId: string; text: string }
   ): Promise<{ status: "steered" | "queued" }>
 }
@@ -65,7 +68,7 @@ type ComposerClient = SessionCapabilityClient & {
 const EMPTY_SLASH_COMMANDS: readonly SlashCommand[] = []
 
 type SelectionRecord = {
-  threadId: string
+  sessionId: string
   state: ComposerModelSelectionState
 }
 
@@ -73,9 +76,11 @@ const IDLE_SELECTION: ComposerModelSelectionState = { status: "idle" }
 
 function selectionFor(
   record: SelectionRecord | undefined,
-  threadId: string | undefined
+  sessionId: string | undefined
 ): ComposerModelSelectionState {
-  return record && record.threadId === threadId ? record.state : IDLE_SELECTION
+  return record && record.sessionId === sessionId
+    ? record.state
+    : IDLE_SELECTION
 }
 
 export function useAosSlashCommands(
@@ -89,153 +94,96 @@ export function useAosSlashCommands(
     : EMPTY_SLASH_COMMANDS
 }
 
+/** One read of the Session's projection, re-read as the Session reports. */
+function useSessionRead<Value>(
+  client: SessionCapabilityClient,
+  sessionId: string | undefined,
+  read: (sessionId: string) => Value | undefined
+) {
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      sessionId
+        ? client.subscribeComposer(sessionId, listener)
+        : () => undefined,
+    [client, sessionId]
+  )
+  return useSyncExternalStore(
+    subscribe,
+    () => (sessionId ? read(sessionId) : undefined),
+    () => undefined
+  )
+}
+
 /** Reads one authoritative capability projection for the selected Session. */
 export function useAosSessionCapabilities(
   client: SessionCapabilityClient,
-  threadId: string | undefined,
-  onError?: (error: Error) => void
+  sessionId: string | undefined
 ) {
-  const [snapshot, setSnapshot] = useState<
-    { threadId: string; capabilities: AosWorkspaceCapabilities } | undefined
-  >()
-
-  useEffect(() => {
-    let active = true
-    if (!threadId)
-      return () => {
-        active = false
-      }
-    void client.workspaceCapabilities(threadId).then(
-      (capabilities) => {
-        if (active) setSnapshot({ threadId, capabilities })
-      },
-      (reason) => {
-        if (active)
-          onError?.(
-            reason instanceof Error ? reason : new Error(String(reason))
-          )
-      }
-    )
-    return () => {
-      active = false
-    }
-  }, [client, onError, threadId])
-
-  return snapshot && snapshot.threadId === threadId
-    ? snapshot.capabilities
-    : undefined
+  return useSessionRead(client, sessionId, (id) =>
+    client.workspaceCapabilities(id)
+  )
 }
 
 /** Reads the normalized Session projection; selection remains provider-authoritative. */
 export function useAosComposerFeatures(
   client: ComposerClient,
   config: ComposerFeatureConfig,
-  threadId: string | undefined,
+  sessionId: string | undefined,
   capabilities: AosWorkspaceCapabilities | undefined,
   onError?: (error: Error) => void
 ): ComposerFeatureViewModel {
   const slashCommands = useAosSlashCommands(capabilities)
-  const [models, setModels] = useState<AosModelChoices>()
-  // Usage is pushed, not polled: the provider restates it on every attach, every
-  // settled turn, and every model change, so the composer reads the newest one
-  // rather than whatever a single read at attach time happened to catch.
-  const subscribeContext = useCallback(
-    (listener: () => void) =>
-      threadId ? client.subscribeContext(threadId, listener) : () => undefined,
-    [client, threadId]
+  // Everything here is pushed, not polled: the provider restates it on every
+  // replay, settled turn, and model change, so the composer reads the newest.
+  const reported = useSessionRead(client, sessionId, (id) => client.models(id))
+  const context = useSessionRead(client, sessionId, (id) => client.context(id))
+  const turnUsage = useSessionRead(client, sessionId, (id) =>
+    client.turnUsage?.(id)
   )
-  const context = useSyncExternalStore(
-    subscribeContext,
-    () => (threadId ? client.context(threadId) : undefined),
-    () => undefined
-  )
-  const turnUsage = useSyncExternalStore(
-    subscribeContext,
-    () => (threadId ? client.turnUsage?.(threadId) : undefined),
-    () => undefined
-  )
-  const follow = threadId ? client.modelFeed?.(threadId) : undefined
+  const follow = sessionId ? client.modelFeed?.(sessionId) : undefined
   // In-flight switch state is tagged with its Session so a switch that settles
   // after the selected Session changed neither shows nor lands in the new one.
   const [selectionRecord, setSelectionRecord] = useState<SelectionRecord>()
-  const selection = selectionFor(selectionRecord, threadId)
-  // Only a Session's newest update may write: two rapid picks would otherwise
-  // let the first one's late answer overwrite what the second settled on. The
+  const selection = selectionFor(selectionRecord, sessionId)
+  // The picked half shows at once; the Session's projection, which the
+  // write's own answer settles, decides what it ends up on.
+  const models = useMemo(
+    () =>
+      reported && selection.status === "pending"
+        ? { ...reported, ...selection.target }
+        : reported,
+    [reported, selection]
+  )
+  // Only a Session's newest update may settle the selection: two rapid picks
+  // would otherwise let the first one's late answer end the second's wait. The
   // keys are provider-opaque Session ids, so the record carries no prototype.
   const updateSerials = useRef<Record<string, number>>(Object.create(null))
-  const currentThreadId = useRef(threadId)
+  const currentThreadId = useRef(sessionId)
   useEffect(() => {
-    currentThreadId.current = threadId
-  }, [threadId])
+    currentThreadId.current = sessionId
+  }, [sessionId])
   const modelsAvailable = capabilities?.workspace.models.status === "available"
   const steeringAvailable =
     capabilities?.interactions.steering.status === "available"
-
-  useEffect(() => {
-    let active = true
-    if (!threadId)
-      return () => {
-        active = false
-      }
-    if (config.modelSelectorEnabled && modelsAvailable)
-      void client.models(threadId).then(
-        (next) => active && setModels(next),
-        (reason) =>
-          active &&
-          onError?.(
-            reason instanceof Error ? reason : new Error(String(reason))
-          )
-      )
-    return () => {
-      active = false
-    }
-  }, [client, config.modelSelectorEnabled, modelsAvailable, onError, threadId])
-
-  // A model the provider switched to brings its own efforts, so the choices
-  // are re-read whenever the followed model changes.
-  useEffect(() => {
-    if (
-      !follow ||
-      !threadId ||
-      !config.modelSelectorEnabled ||
-      !modelsAvailable
-    )
-      return undefined
-    let active = true
-    const unsubscribe = follow.subscribe(() => {
-      void client.models(threadId).then(
-        (next) => active && setModels(next),
-        () => undefined
-      )
-    })
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [client, config.modelSelectorEnabled, follow, modelsAvailable, threadId])
 
   return useMemo(
     () => ({
       slashCommands,
       steer:
-        steeringAvailable && threadId
+        steeringAvailable && sessionId
           ? (request: { requestId: string; text: string }) =>
-              client.steerRun(threadId, request)
+              client.steerRun(sessionId, request)
           : undefined,
       model: (() => {
         if (
           !config.modelSelectorEnabled ||
           !modelsAvailable ||
           !models ||
-          !threadId
+          !sessionId
         )
           return undefined
         const setSelection = (state: ComposerModelSelectionState) =>
-          setSelectionRecord({ threadId, state })
-        const show = (state: { selectedId: string; effortId?: string }) =>
-          setModels((previous) =>
-            previous ? { ...previous, ...state } : previous
-          )
+          setSelectionRecord({ sessionId, state })
         const update = async (patch: ComposerModelUpdate) => {
           const target: ComposerModelUpdate = {
             ...(patch.selectedId === undefined
@@ -245,40 +193,22 @@ export function useAosComposerFeatures(
               ? {}
               : { effortId: patch.effortId }),
           }
-          const previous = {
-            selectedId: models.selectedId,
-            effortId: models.effortId,
-          }
-          const serial = (updateSerials.current[threadId] ?? 0) + 1
-          updateSerials.current[threadId] = serial
-          const latest = () => updateSerials.current[threadId] === serial
-          // The picked half shows at once; the write's own response, not a
-          // re-read of a projection the provider may not have settled yet,
-          // decides what the Session ends up on.
-          show({ ...previous, ...target })
+          const serial = (updateSerials.current[sessionId] ?? 0) + 1
+          updateSerials.current[sessionId] = serial
+          const latest = () => updateSerials.current[sessionId] === serial
           setSelection({ status: "pending", target })
           try {
-            const result = await client.updateModel(threadId, target)
-            // An answer overtaken by a newer pick is dropped, and so is one
-            // that settles after the Session changed: the projection on screen
-            // belongs to the newest pick in the Session now selected.
+            await client.updateModel(sessionId, target)
+            // An answer overtaken by a newer pick leaves that pick pending.
             if (!latest()) return
-            if (currentThreadId.current === threadId)
-              show({
-                selectedId: result.selectedId,
-                effortId: result.effortId,
-              })
             setSelection({ status: "idle" })
           } catch (reason) {
             const error =
               reason instanceof Error ? reason : new Error(String(reason))
-            // A superseded failure reverts nothing: the values on screen are
-            // the newer pick's, not this one's to restore.
+            // A superseded failure reports nothing: the newer pick is still
+            // the one in flight. A failed pick shows the projection again.
             if (!latest()) return
-            if (currentThreadId.current === threadId) {
-              show(previous)
-              onError?.(error)
-            }
+            if (currentThreadId.current === sessionId) onError?.(error)
             setSelection({ status: "error", target, error: error.message })
           }
         }
@@ -328,7 +258,7 @@ export function useAosComposerFeatures(
       selection,
       slashCommands,
       steeringAvailable,
-      threadId,
+      sessionId,
       turnUsage,
     ]
   )

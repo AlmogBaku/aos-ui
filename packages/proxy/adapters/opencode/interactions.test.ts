@@ -7,8 +7,8 @@ import { OpenCodeInteractions } from "./interactions"
 
 const scope = {
   agentId: "research",
-  sessionId: "native-session-1",
-  threadId: "session-public-1",
+  providerSessionId: "native-session-1",
+  sessionId: "session-public-1",
   turnId: "run-1",
 }
 

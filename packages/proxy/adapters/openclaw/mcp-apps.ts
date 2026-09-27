@@ -58,14 +58,18 @@ export function createOpenClawMcpApps(input: {
 }): ServerMcpApps {
   const viewParams = async (scope: SessionScope, toolCallId: string) => {
     await input.start()
-    await input.authority.getSession(scope.agentId, scope.sessionId)
+    await input.authority.getSession(scope.agentId, scope.providerSessionId)
     const viewId = await input.authority.mcpAppViewId(
       scope.agentId,
-      scope.sessionId,
+      scope.providerSessionId,
       toolCallId
     )
     if (!viewId) throw new OpenClawWorkspaceOwnershipError()
-    return { sessionKey: scope.sessionId, agentId: scope.agentId, viewId }
+    return {
+      sessionKey: scope.providerSessionId,
+      agentId: scope.agentId,
+      viewId,
+    }
   }
   const request = async (
     method: string,

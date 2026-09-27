@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { TurnEventKind } from "../../core/events"
+import type { ServerAttachmentStage } from "../../core/runtime"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesTurnEngine } from "./run"
@@ -14,8 +15,8 @@ import { rpcRouter } from "./test-utils/rpc-router"
 
 const scope = {
   agentId: "writer",
+  providerSessionId: "stored",
   sessionId: "stored",
-  threadId: "stored",
 }
 
 /**
@@ -32,7 +33,7 @@ function nativeFor(request: HermesRpcTransport["request"]) {
       invalidate: () => {},
     },
     interactions: {
-      onPendingRequest: () => () => undefined,
+      subscribePendingRequests: () => () => undefined,
       respond: async () => ({ status: "resolved" }),
       resume: async () => ({ running: false, status: "idle" }),
     },
@@ -261,10 +262,11 @@ it.each(["/unknown", "/constructor", " /help", "/helpful", "normal text"])(
         : { status: "streaming" }
     )
     await nativeFor(request).submit("live", { scope, text, turnId: "run" })
-    expect(request).toHaveBeenCalledWith("prompt.submit", {
-      session_id: "live",
-      text,
-    })
+    expect(request).toHaveBeenCalledWith(
+      "prompt.submit",
+      { session_id: "live", text },
+      { signal: undefined }
+    )
     expect(request.mock.calls.some(([method]) => method === "slash.exec")).toBe(
       false
     )
@@ -293,10 +295,11 @@ it.each([-32601, 4018])(
       { session_id: "live", name: "skill", arg: "arguments" },
       { maxResponseBytes: expect.any(Number) }
     )
-    expect(request).toHaveBeenCalledWith("prompt.submit", {
-      session_id: "live",
-      text: "Expanded skill",
-    })
+    expect(request).toHaveBeenCalledWith(
+      "prompt.submit",
+      { session_id: "live", text: "Expanded skill" },
+      { signal: undefined }
+    )
   }
 )
 
@@ -355,39 +358,53 @@ it("follows native aliases and completes outputless synchronous commands", async
   )
 })
 
-it("rejects recognized commands with attachments and sends unknown ones normally", async () => {
-  const request = vi.fn(async (method: string) =>
-    method === "commands.catalog"
-      ? { pairs: [["/help", "Help"]] }
-      : { status: "streaming" }
+it("rejects recognized commands with attachments before any write and sends unknown ones normally", async () => {
+  const router = rpcRouter({
+    "commands.catalog": async () => ({ pairs: [["/help", "Help"]] }),
+    "session.events.since": async () => ({
+      epoch: "epoch-1",
+      last_seen: 0,
+      truncated: false,
+      events: [],
+    }),
+    "session.active_list": async () => ({ sessions: [] }),
+    "prompt.submit": async () => ({ status: "streaming" }),
+  })
+  const adapter = new HermesServerAdapter(router)
+  const stage: ServerAttachmentStage = {
+    public: [{ type: "image", dataUrl: "data:image/png;base64,AA==" }],
+    appendTo: (text) => text,
+    cleanup: async () => {},
+  }
+
+  const refused = await adapter.turns.start(
+    scope,
+    { turnId: "one", messageId: "user-one", prompt: "/help" },
+    stage
   )
-  const native = nativeFor(request)
-  await expect(
-    native.submit("live", {
-      scope: { ...scope, hasAttachments: true },
-      text: "/help",
-      turnId: "one",
-    })
-  ).resolves.toEqual({
-    acknowledgement: "rejected",
-    reason: "command-with-attachments",
+  const events = []
+  for await (const event of refused.events) events.push(event)
+  expect(events.at(-1)).toMatchObject({
+    kind: TurnEventKind.TurnFailed,
+    code: "AOS_COMMAND_WITH_ATTACHMENTS",
   })
-  await native.submit("live", {
-    scope: { ...scope, hasAttachments: true },
-    text: "/unknown",
-    turnId: "two",
-  })
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "commands.catalog",
-    "commands.catalog",
-    "prompt.submit",
+  await adapter.turns.start(
+    scope,
+    { turnId: "two", messageId: "user-two", prompt: "/unknown" },
+    stage
+  )
+
+  // The recognized command never ran; the unknown one is an ordinary prompt.
+  expect(router.calls("slash.exec")).toHaveLength(0)
+  expect(router.calls("prompt.submit").map(({ params }) => params)).toEqual([
+    { session_id: "live-secret", text: "/unknown" },
   ])
 })
 
 it("finishes a synchronous command run without waiting for native conversational events", async () => {
   const native: HermesTurnNative = {
     resume: async () => ({ liveSessionId: "live", running: false }),
-    observe: async () => () => {},
+    subscribeLive: async () => () => {},
     cursor: async () => ({ epoch: "epoch", latestSeq: 0 }),
     replay: async () => ({ epoch: "epoch", lastSeen: 0, events: [] }),
     status: async () => "idle",
@@ -395,7 +412,7 @@ it("finishes a synchronous command run without waiting for native conversational
     redirect: async () => "redirected",
     retain: async () => () => {},
     inspectExecution: async () => ({ running: false, status: "idle" }),
-    onPendingRequest: () => () => undefined,
+    subscribePendingRequests: () => () => undefined,
     respondInteractions: async () => [],
     submit: async () => ({
       acknowledgement: "accepted",
@@ -405,7 +422,7 @@ it("finishes a synchronous command run without waiting for native conversational
   }
   const engine = new HermesTurnEngine(native)
   const handle = await engine.start(
-    { agentId: "writer", sessionId: "stored", threadId: "thread" },
+    { agentId: "writer", providerSessionId: "stored", sessionId: "thread" },
     { turnId: "run", messageId: "user", prompt: "/help" }
   )
   const events = []

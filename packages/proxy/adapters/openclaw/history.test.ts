@@ -93,7 +93,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async (method) => {
+        request: async (method, params) => {
           if (method === "models.list")
             return {
               models: [
@@ -105,6 +105,9 @@ describe("OpenClaw authoritative history", () => {
                 },
               ],
             }
+          // OpenClaw finds the Session by its key, not its place in a page.
+          if ((params as { search?: string }).search !== "agent:analyst:main")
+            return { sessions: [] }
           return {
             sessions: [
               {
@@ -136,6 +139,37 @@ describe("OpenClaw authoritative history", () => {
       usedTokens: 50,
       maxTokens: 200_000,
       source: "provider-usage",
+    })
+  })
+
+  it("lists a Session's model by its id when the catalog no longer has it", async () => {
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: async (method) =>
+          method === "models.list"
+            ? { models: [] }
+            : {
+                sessions: [
+                  {
+                    key: "agent:analyst:main",
+                    agentId: "analyst",
+                    model: "retired",
+                    modelProvider: "anthropic",
+                  },
+                ],
+              },
+      },
+      subscribeSession: async () => () => undefined,
+    })
+
+    await expect(
+      history.models("analyst", "agent:analyst:main")
+    ).resolves.toEqual({
+      selectedId: '["anthropic","retired"]',
+      options: [
+        { id: '["anthropic","retired"]', label: "retired", group: "anthropic" },
+      ],
     })
   })
 
@@ -406,7 +440,22 @@ describe("OpenClaw history AOS tools and artifacts", () => {
   }
 
   it("replays AOS tool calls canonically with the receipt's artifact and no native path", async () => {
-    const result = await historyOf(publishRows()).history(
+    const output = "x".repeat(5000)
+    const rows: unknown[] = publishRows()
+    ;(rows[0] as { content: unknown[] }).content.push({
+      type: "toolCall",
+      id: "read",
+      name: "files__read",
+      arguments: { path: "notes/plan.md" },
+    })
+    rows.push({
+      role: "toolResult",
+      toolCallId: "read",
+      toolName: "files__read",
+      content: [{ type: "text", text: output }],
+      details: { mcpServer: "files", mcpTool: "read" },
+    })
+    const result = await historyOf(rows).history(
       "analyst",
       "agent:analyst:main",
       200,
@@ -438,6 +487,15 @@ describe("OpenClaw history AOS tools and artifacts", () => {
         type: "tool-call",
         toolName: "render_chart",
         args: { title: "Sales" },
+      }),
+      expect.objectContaining({
+        type: "tool-call",
+        toolName: "mcp__files__read",
+        args: { path: "notes/plan.md" },
+        result: {
+          content: [{ type: "text", text: output }],
+          details: { mcpServer: "files", mcpTool: "read" },
+        },
       }),
     ])
     expect(JSON.stringify(result)).not.toContain("/workspace")

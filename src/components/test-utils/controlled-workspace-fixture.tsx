@@ -28,7 +28,7 @@ type ControlledWorkspaceFixtureProps = {
   workspace?: FixtureWorkspaceOptions
   messagesByThread?: Readonly<Record<string, readonly ThreadMessageLike[]>>
   workspaceOverrides?: Partial<WorkspaceAdapter>
-  onThreadIdChange?: (threadId: string | undefined) => void
+  onThreadIdChange?: (sessionId: string | undefined) => void
   children: (bundle: WorkspaceFixtureRuntime) => ReactNode
 }
 
@@ -45,7 +45,7 @@ export function ControlledWorkspaceFixture({
   onThreadIdChange,
   children,
 }: ControlledWorkspaceFixtureProps) {
-  const [threadId, setThreadId] = useState<string | undefined>(initialThreadId)
+  const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
   const [workspace] = useState(() =>
     createFixtureWorkspace({
       clock: () => new Date("2026-09-03T12:00:00.000Z"),
@@ -61,7 +61,7 @@ export function ControlledWorkspaceFixture({
     [onThreadIdChange]
   )
   const fixture = useFixtureRuntimeBundle({
-    threadId,
+    sessionId,
     onThreadIdChange: changeThreadId,
     streamDelayMs: 0,
     testOnly: {

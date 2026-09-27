@@ -876,7 +876,7 @@ describe("server-side Hermes history projection", () => {
       {
         role: "user",
         content: [{ type: "text", text: "Use the second draft" }],
-        metadata: { custom: { correction: true } },
+        correction: true,
       },
     ])
     expect(messages[0]?.metadata).toBeUndefined()

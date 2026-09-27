@@ -1,6 +1,6 @@
-import type { ExecutionEvent } from "../core/events"
-import type { RuntimeInstance } from "../core/runtime"
-import type { SessionRows } from "../core/session-rows"
+import type { Logger } from "../../lifecycle"
+import type { Catalog } from "../core/catalog"
+import type { ServerRuntimeTranslation } from "../core/runtime"
 import type { ReadState } from "./types"
 
 /** Collapses a burst of exposure and activity into one watermark write. */
@@ -13,39 +13,31 @@ type TimerHandle = ReturnType<typeof setTimeout>
 type Target = { agentId: string; sessionId: string }
 
 export type ReadStateOptions = {
-  runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  catalog: Pick<Catalog, "info" | "rows" | "markRead">
+  /** The execution events after which the runtime marks a Session unread. */
+  relighting?: ServerRuntimeTranslation["relighting"]
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => TimerHandle
   cancel?: (handle: TimerHandle) => void
   /** Projects the settled row to this connection. */
   onUnreadChanged: (agentId: string, sessionId: string, unread: boolean) => void
+  logger?: Logger
 }
-
-/**
- * Activity that re-lights a Session the operator is already looking at. Unread
- * is role-blind and running-blind in Hermes, so the operator's own turn and a
- * streaming answer both need another acknowledgement.
- */
-const RELIGHTING: readonly ExecutionEvent["kind"][] = [
-  "turn-finished",
-  "turn-failed",
-  "attention-requested",
-]
 
 function sameTarget(left: Target, right: Target) {
   return left.agentId === right.agentId && left.sessionId === right.sessionId
 }
 
 export function createReadState({
-  runtimeInstance,
-  sessionRows,
+  catalog,
+  relighting,
   now = Date.now,
   schedule = setTimeout,
   cancel = clearTimeout,
   onUnreadChanged,
+  logger,
 }: ReadStateOptions): ReadState {
-  const { runtime } = runtimeInstance
+  const { rows } = catalog
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let releaseFocus: (() => void) | undefined
@@ -62,15 +54,19 @@ export function createReadState({
   const keyOf = ({ agentId, sessionId }: Target) =>
     `${agentId}\u0000${sessionId}`
 
-  /** Cached once per runtime: only some providers keep a read watermark. */
+  /**
+   * Whether the runtime keeps a read watermark, which only some do. Only an
+   * answer is kept: a failed read is asked again on the next write.
+   */
   const tracks = () => {
-    tracked ??= runtime
-      .runtimeInfo()
-      .then(
-        ({ capabilities }) =>
-          capabilities.sessionReadState?.status === "available"
-      )
-      .catch(() => false)
+    tracked ??= catalog.info().then(
+      ({ capabilities }) =>
+        capabilities.sessionReadState?.status === "available",
+      () => {
+        tracked = undefined
+        return false
+      }
+    )
     return tracked
   }
 
@@ -78,19 +74,6 @@ export function createReadState({
     if (!pending) return
     cancel(pending.handle)
     pending = undefined
-  }
-
-  const markRead = async (agentId: string, sessionId: string) => {
-    sessionRows.markRead(agentId, sessionId)
-    onUnreadChanged(agentId, sessionId, false)
-    const providerId = runtime.resolveSessionId(agentId, sessionId)
-    if (!providerId) return
-    try {
-      await runtime.updateSession(agentId, providerId, { unread: false })
-    } catch {
-      // A Session the provider has not created yet rejects the write. Read
-      // state is advisory: the optimistic row stands and a later list corrects.
-    }
   }
 
   const write = async (target: Target, forced: boolean) => {
@@ -107,7 +90,9 @@ export function createReadState({
     }
     if (!(await tracks()) || closed) return
     writtenAt.set(key, now())
-    await markRead(target.agentId, target.sessionId)
+    const written = catalog.markRead(target.agentId, target.sessionId)
+    onUnreadChanged(target.agentId, target.sessionId, false)
+    await written
   }
 
   /**
@@ -124,7 +109,9 @@ export function createReadState({
     clearPending()
     const handle = schedule(() => {
       pending = undefined
-      void write(target, forced)
+      write(target, forced).catch((err: unknown) =>
+        logger?.warn({ err }, "read.state.write_failed")
+      )
     }, delayMs)
     pending = { handle, target, forced }
   }
@@ -148,23 +135,19 @@ export function createReadState({
        * never an operator who wants it kept unread: the row stays read and the
        * provider gets the acknowledgement instead of the browser a flash.
        */
-      releaseFocus = sessionRows.holdRead(agentId, sessionId, () =>
-        arm(target, false)
-      )
-      // Hermes arms its watermark only on a write, so an already-read Session
-      // still needs one acknowledgement per exposure.
-      arm(target, true)
+      releaseFocus = rows.holdRead(agentId, sessionId, () => arm(target, false))
+      // A watermark that moves only on a write needs one acknowledgement per
+      // exposure, even for a row that already reads read.
+      if (relighting || rows.get(agentId, sessionId)?.unread) arm(target, true)
     },
 
     blur: unfocus,
 
     onExecution(event) {
       if (!focused || !sameTarget(focused, event)) return
-      if (!RELIGHTING.includes(event.kind)) return
+      if (!relighting?.includes(event.kind)) return
       arm(focused, false)
     },
-
-    markRead,
 
     close() {
       closed = true

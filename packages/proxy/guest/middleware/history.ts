@@ -25,15 +25,6 @@ import type { GuestGrant } from "./index"
  * user messages an Edit or Retry of its may name.
  */
 
-/** The normalized turn failure code a restored failed turn carries, if any. */
-function restoredTurnErrorCode(metadata: SessionMessage["metadata"]) {
-  const aos = metadata?.custom.aos
-  if (typeof aos !== "object" || aos === null || Array.isArray(aos))
-    return undefined
-  const code = (aos as Record<string, unknown>).turnErrorCode
-  return typeof code === "string" ? code : undefined
-}
-
 /**
  * A replay from the start may join every page of the Session, each already
  * bounded as it was read, so only the page's own size limit is lifted.
@@ -82,7 +73,7 @@ export function projectGuestHistory(
     // status carries the guest catalogue's description of the mapped failure.
     const failure =
       message.role === "assistant" && message.status?.type === "incomplete"
-        ? publicTurnError(restoredTurnErrorCode(message.metadata))
+        ? publicTurnError(message.turnErrorCode)
         : undefined
     if (
       content.length === 0 &&
@@ -183,6 +174,8 @@ export function createHistoryMiddleware({
         case "commands":
         case "invalidated":
         case "error":
+        case "catalog-invalidated":
+        case "activity":
           return event
       }
       return unhandledKind(event)

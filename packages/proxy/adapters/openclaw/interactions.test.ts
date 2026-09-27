@@ -7,8 +7,8 @@ import {
 } from "./interactions"
 const scope = {
   agentId: "agent-a",
-  sessionId: "session-a",
-  threadId: "thread-a",
+  providerSessionId: "session-a",
+  sessionId: "thread-a",
   runId: "run-a",
 }
 const question = {
@@ -68,8 +68,8 @@ const approvalReplay = {
 }
 const repliesScope = {
   agentId: scope.agentId,
+  providerSessionId: scope.providerSessionId,
   sessionId: scope.sessionId,
-  threadId: scope.threadId,
 }
 const resolvedQuestion = [
   {
@@ -502,7 +502,7 @@ describe("OpenClaw interactions", () => {
     )
     await expect(
       interactions.validate(
-        { ...repliesScope, threadId: "foreign" },
+        { ...repliesScope, sessionId: "foreign" },
         resolvedQuestion
       )
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
@@ -572,7 +572,7 @@ describe("OpenClaw interactions", () => {
     const { OpenClawClientRequestError } = await import("./client")
     const request = vi.fn(async (method: string) => {
       if (method === "question.get") return { question }
-      throw new OpenClawClientRequestError("timeout", true, false)
+      throw new OpenClawClientRequestError("timeout", true)
     })
     const interactions = new OpenClawInteractions({ request })
     interactions.acceptQuestion(scope, question)

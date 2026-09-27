@@ -9,14 +9,16 @@ import {
 import { hermesRowMessageId, projectHermesHistory } from "./history"
 import { persistedTurnRows } from "./run-frames"
 import { HermesNativeRuntime } from "./run-native"
+import { HermesTurnEngine } from "./run"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
 import type { PendingRequest } from "../../core/events"
+import type { ServerAttachmentStage } from "../../core/runtime"
 
 const scope: HermesTurnScope = {
   agentId: "researcher",
+  providerSessionId: "stored",
   sessionId: "stored",
-  threadId: "stored",
 }
 
 const MAX_REPLAY_RESPONSE_BYTES = 6_291_456
@@ -24,7 +26,7 @@ const MAX_REPLAY_RESPONSE_BYTES = 6_291_456
 function stubInteractions() {
   const listeners = new Set<(request: PendingRequest) => void>()
   return {
-    onPendingRequest: vi.fn(
+    subscribePendingRequests: vi.fn(
       (
         _scope: HermesTurnScope,
         listener: (request: PendingRequest) => void
@@ -90,6 +92,8 @@ describe("Hermes native submit outcomes", () => {
 
   it.each([
     [4001, "session-gone"],
+    [4007, "session-gone"],
+    [-32602, "session-gone"],
     [4009, "busy"],
     [4090, "unknown"],
     [5070, "storage"],
@@ -262,10 +266,13 @@ describe("Hermes native submit outcomes", () => {
       turnId: "run-1",
     })
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.native.rejected", {
-      method: "prompt.submit",
-      code: 4090,
-    })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        method: "prompt.submit",
+        code: 4090,
+      },
+      "hermes.native.rejected"
+    )
   })
 
   it("reports a lost transport acknowledgement as uncertain", async () => {
@@ -341,12 +348,15 @@ describe("Hermes native submit outcomes", () => {
       rewindSourceId: "hermes-row-12",
     })
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith("hermes.rewind.submit", {
-      sessionId: "stored",
-      rewindSourceId: "hermes-row-12",
-      confirm_truncate: true,
-      truncate_before_row_id: 12,
-    })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      {
+        sessionId: "stored",
+        rewindSourceId: "hermes-row-12",
+        confirm_truncate: true,
+        truncate_before_row_id: 12,
+      },
+      "hermes.rewind.submit"
+    )
   })
 
   it("rewinds a just-sent prompt by the id its completion receipt saved it under", async () => {
@@ -435,17 +445,37 @@ describe("Hermes native submit outcomes", () => {
 
   it("leaves the source images alone when a rewind stages its own", async () => {
     const { native, router } = runtime(
-      { "prompt.submit": async () => ({ status: "streaming" }) },
+      {
+        "session.events.since": async () => ({
+          epoch: "epoch-1",
+          last_seen: 0,
+          truncated: false,
+          events: [],
+        }),
+        "session.active_list": async () => ({ sessions: [] }),
+        "image.attach": async () => ({ attached: true }),
+        "prompt.submit": async () => ({ status: "streaming" }),
+      },
       [{ row_id: 12, role: "user", content: "@image:/uploads/one.png" }]
     )
+    const stage: ServerAttachmentStage = {
+      public: [{ type: "image", dataUrl: "data:image/png;base64,AA==" }],
+      appendTo: (text) => text,
+      cleanup: async () => {},
+    }
 
-    await native.submit("live-secret", {
-      scope: { ...scope, hasAttachments: true },
-      text: "Edited",
-      turnId: "edit-run",
-      rewindSourceId: "hermes-row-12",
-    })
+    await new HermesTurnEngine(native).start(
+      scope,
+      {
+        turnId: "edit-run",
+        messageId: "user",
+        prompt: "Edited",
+        rewindSourceId: "hermes-row-12",
+      },
+      stage
+    )
 
+    expect(router.calls("prompt.submit")).toHaveLength(1)
     expect(router.calls("image.attach")).toHaveLength(0)
   })
 
@@ -579,25 +609,6 @@ describe("Hermes native submit outcomes", () => {
     await expect(
       native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
     ).rejects.toBeInstanceOf(HermesAuthenticationError)
-  })
-
-  it("refuses a recognized command that carries attachments before any write", async () => {
-    const { native, router } = runtime({
-      "commands.catalog": async () => ({ pairs: [["/help", "Help"]] }),
-    })
-
-    await expect(
-      native.submit("live-secret", {
-        scope: { ...scope, hasAttachments: true },
-        text: "/help",
-        turnId: "run-1",
-      })
-    ).resolves.toEqual({
-      acknowledgement: "rejected",
-      reason: "command-with-attachments",
-    })
-    expect(router.calls("slash.exec")).toHaveLength(0)
-    expect(router.calls("prompt.submit")).toHaveLength(0)
   })
 })
 
@@ -792,7 +803,7 @@ describe("Hermes native retention", () => {
     })
 
     await expect(
-      native.observe("live-secret", () => {})
+      native.subscribeLive("live-secret", () => {})
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 })

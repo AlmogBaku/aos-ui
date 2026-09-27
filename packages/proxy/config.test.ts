@@ -37,6 +37,7 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
       subscriberEvents: 512,
       subscriberBytes: 2_097_152,
     },
+    log: { level: "info" as const },
     shutdownGraceMs: 5_000,
   }
 }
@@ -55,6 +56,9 @@ function validPush() {
 describe("proxy configuration and secret boundary", () => {
   it("accepts the minimal server-token-only V1 configuration", () => {
     expect(parseProxyConfig(validConfig())).toEqual(validConfig())
+    expect(parseProxyConfig({ ...validConfig(), log: {} })).toEqual(
+      validConfig()
+    )
   })
 
   it("accepts the exact private OpenCode runtime configuration", () => {
@@ -118,6 +122,13 @@ describe("proxy configuration and secret boundary", () => {
         deviceIdentityFile: "/run/secrets/openclaw-device",
         deviceTokenFile: "/run/secrets/openclaw-token",
       },
+      {
+        id: "openclaw-main",
+        kind: "openclaw",
+        baseUrl: "wss://gateway.example.test/?token=synthetic",
+        deviceIdentityFile: "/run/secrets/openclaw-device",
+        deviceTokenFile: "/run/secrets/openclaw-token",
+      },
     ])
       expect(() => parseProxyConfig({ ...validConfig(), runtime })).toThrow(
         "Invalid proxy configuration"
@@ -149,7 +160,7 @@ describe("proxy configuration and secret boundary", () => {
       )
   })
 
-  it("accepts a guest lane without a second runtime or token", () => {
+  it("accepts a guest listener without a second runtime or token", () => {
     const configured = parseProxyConfig({
       ...validConfig(),
       guest: {
@@ -157,7 +168,6 @@ describe("proxy configuration and secret boundary", () => {
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-          ttlSeconds: 300,
           clockSkewSeconds: 0,
         },
       },
@@ -167,7 +177,6 @@ describe("proxy configuration and secret boundary", () => {
       publicOrigin: "https://guest.example.test",
       invitations: {
         keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-        ttlSeconds: 300,
         clockSkewSeconds: 0,
       },
     })
@@ -191,7 +200,6 @@ describe("proxy configuration and secret boundary", () => {
             ...guest,
             invitations: {
               keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-              ttlSeconds: 300,
               clockSkewSeconds: 0,
             },
           },

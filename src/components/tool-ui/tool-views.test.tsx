@@ -14,7 +14,7 @@ import {
   useToolTerminalLabels,
 } from "./locale"
 import { Terminal } from "./terminal"
-import type { AosDiff, AosTerminal } from "./tool-artifact"
+import type { AosDiff, AosTerminal } from "@/lib/tool-artifact"
 import { ToolDiff } from "./tool-diff"
 import { DiffTextFallback } from "./tool-diff-text"
 

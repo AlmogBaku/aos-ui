@@ -61,7 +61,13 @@ Secret files must be regular non-symlinked files, owner-only (`chmod 600`), non-
 
 ## `/api/aos/v1/readyz` returns 503
 
-`readyz` returns 503 when the proxy cannot reach the configured runtime. `healthz` is liveness only and always returns 200. Resolve the runtime connectivity problem first; `readyz` becomes 200 once the runtime reports ready.
+`readyz` returns 503 when the proxy cannot reach the configured runtime.
+`healthz` is liveness only and always returns 200, with body
+`{status: "ok"|"degraded", links: [{name, state}], gauges: {sockets,
+memberships, executions, uncertain, deadlinesFired, journalBytes}}`.
+`status: "degraded"` means the native link is `lost`; the proxy is still
+running and serving. Resolve the runtime connectivity problem first; `readyz`
+becomes 200 once the runtime reports ready.
 
 ## Hermes authentication fails
 
@@ -100,7 +106,7 @@ same-origin `/api/aos/v1` path.
 - Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
   A missing rename/archive/delete, Todo, Activity, edit/regenerate, steering,
   voice, or read-state control is an explicit capability limit.
-- Confirm Session records include matching `threadId` and `agentId` values.
+- Confirm Session records include matching `sessionId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Ensure history responses contain valid message data and resumable state when advertised.
 
@@ -174,12 +180,29 @@ Voice requires either the relevant native runtime STT/TTS configuration or a pro
 - OpenCode reads only files inside the configured project directory; a path outside it reads as unavailable. OpenClaw reads only the Session's workspace files, at most 256 KiB and only text or common images; OpenClaw's native media appears after a reload.
 - Artifacts larger than 25 MiB are not read back.
 - Confirm the Artifact still exists in provider-owned storage and belongs to the selected Agent and Session.
-- For HTML dependencies, add only the required credential-free HTTPS origins to `artifactHtmlAssetOrigins`.
+- HTML preview loads no external assets; an Artifact that needs one must inline it.
 - Inspect the Source or textual fallback when preview rendering is unavailable.
 
 ## A route points to missing work
 
 AOS validates Agent and Session ownership before selecting a route. Refresh the provider catalog. If the native record was deleted, hidden, renamed, or archived, choose a current Session instead; AOS does not create a browser-owned replacement.
+
+## Debug an ACP connection
+
+To trace a live ACP connection in any build, add `?debug=acp` to the page URL once for the tab. The tab then logs one line per owner state change and one per wire frame to the browser console. The flag is stored in `sessionStorage` for the rest of the tab session; opening a new tab clears it.
+
+Match browser log lines to proxy log lines by the `sessionId`, `turnId`, and `requestId` fields that appear in both. Raise the proxy log level to `debug` with `AOS_UI_PROXY_LOG_LEVEL=debug` or `log.level: debug` in the private proxy configuration to see owner state changes on the server side. `debug` is never the production default.
+
+## Renamed proxy log fields
+
+If you have log queries that filter on these field values, update them:
+
+| Old value             | New value             | Where                                         |
+| --------------------- | --------------------- | --------------------------------------------- |
+| `lane`                | `role`                | membership role field                         |
+| `subscriberId`        | `membershipId`        | membership id on turn and subscription events |
+| `acp.room.failed`     | `channel.failed`      | channel setup failure                         |
+| `acp.fanout.detached` | `membership.detached` | subscriber fell behind its queue bounds       |
 
 ## Collect useful diagnostics
 

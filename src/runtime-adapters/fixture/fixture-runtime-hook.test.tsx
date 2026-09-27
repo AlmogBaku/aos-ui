@@ -16,7 +16,7 @@ describe("useFixtureRuntimeBundle", () => {
     let runtime: AssistantRuntime | undefined
     const Harness = () => {
       const bundle = useFixtureRuntimeBundle({
-        threadId: "thread-aster-launch",
+        sessionId: "thread-aster-launch",
         streamDelayMs: 0,
       })
       runtime = bundle.assistantRuntime
@@ -93,7 +93,7 @@ describe("useFixtureRuntimeBundle", () => {
     let runtime: AssistantRuntime | undefined
     const Harness = () => {
       const bundle = useFixtureRuntimeBundle({
-        threadId: "thread-aster-launch",
+        sessionId: "thread-aster-launch",
         onThreadIdChange: undefined,
         streamDelayMs: 1_000,
       })
@@ -138,9 +138,9 @@ describe("useFixtureRuntimeBundle", () => {
   it("controls the canonical Assistant UI thread from a provider Session id", async () => {
     const onThreadIdChange = vi.fn()
     let runtime: AssistantRuntime | undefined
-    const Harness = ({ threadId }: { threadId: string }) => {
+    const Harness = ({ sessionId }: { sessionId: string }) => {
       const bundle = useFixtureRuntimeBundle({
-        threadId,
+        sessionId,
         onThreadIdChange,
         streamDelayMs: 0,
       })
@@ -151,7 +151,7 @@ describe("useFixtureRuntimeBundle", () => {
         </AssistantRuntimeProvider>
       )
     }
-    const { rerender } = render(<Harness threadId="thread-aster-market" />)
+    const { rerender } = render(<Harness sessionId="thread-aster-market" />)
 
     await waitFor(() => {
       expect(runtime?.threads.mainItem.getState().remoteId).toBe(
@@ -159,7 +159,7 @@ describe("useFixtureRuntimeBundle", () => {
       )
     })
 
-    rerender(<Harness threadId="thread-mica-quarterly" />)
+    rerender(<Harness sessionId="thread-mica-quarterly" />)
     await waitFor(() => {
       expect(runtime?.threads.mainItem.getState().remoteId).toBe(
         "thread-mica-quarterly"
@@ -170,17 +170,18 @@ describe("useFixtureRuntimeBundle", () => {
 
   it("keeps one workspace instance across renders", () => {
     const { result, rerender } = renderHook(
-      ({ threadId }) => useFixtureRuntimeBundle({ threadId, streamDelayMs: 0 }),
-      { initialProps: { threadId: "thread-aster-market" } }
+      ({ sessionId }) =>
+        useFixtureRuntimeBundle({ sessionId, streamDelayMs: 0 }),
+      { initialProps: { sessionId: "thread-aster-market" } }
     )
     const workspace = result.current.workspace
-    rerender({ threadId: "thread-aster-launch" })
+    rerender({ sessionId: "thread-aster-launch" })
     expect(result.current.workspace).toBe(workspace)
   })
 
   it("exposes the deterministic artifact resolver", async () => {
     const { result } = renderHook(() =>
-      useFixtureRuntimeBundle({ threadId: "thread-aster-market" })
+      useFixtureRuntimeBundle({ sessionId: "thread-aster-market" })
     )
 
     const blob = await result.current.artifacts.resolve({
@@ -190,7 +191,7 @@ describe("useFixtureRuntimeBundle", () => {
         source: { type: "inline", encoding: "utf8", data: "fixture" },
       },
       agentId: "agent-aster",
-      threadId: "thread-aster-market",
+      sessionId: "thread-aster-market",
       signal: new AbortController().signal,
     })
 
@@ -201,7 +202,7 @@ describe("useFixtureRuntimeBundle", () => {
     let bundle: ReturnType<typeof useFixtureRuntimeBundle> | undefined
     const Harness = () => {
       bundle = useFixtureRuntimeBundle({
-        threadId: "thread-lumen-roadmap",
+        sessionId: "thread-lumen-roadmap",
         streamDelayMs: 0,
       })
       return (
@@ -218,8 +219,8 @@ describe("useFixtureRuntimeBundle", () => {
     )
     const store = new ActivityStore({
       now: () => FIXTURE_NOW.getTime(),
-      getThreadOwner: (threadId) =>
-        threadId === "thread-lumen-roadmap" ? "agent-lumen" : undefined,
+      getThreadOwner: (sessionId) =>
+        sessionId === "thread-lumen-roadmap" ? "agent-lumen" : undefined,
       getSessions: () => bundle!.workspace.listAllSessionMetadata(),
     })
     bundle!.workspace.subscribeActivity?.((event) => store.ingest(event))

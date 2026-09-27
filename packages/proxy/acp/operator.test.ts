@@ -14,7 +14,6 @@ import {
   AosElicitationMetaSchema,
   AosPlanMetaSchema,
   AosPromptResponseMetaSchema,
-  AosSessionResumeResponseMetaSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -41,7 +40,7 @@ import {
 import * as translators from "./translate"
 
 /**
- * The operator lane end to end in process: the real translators, the real ACP
+ * The operator listener end to end in process: the real translators, the real ACP
  * agent, and the real Session coordinator, read state, Session rows, and
  * activity feed, composed exactly as `createOperatorAcpService` composes one
  * accepted connection, against a fake provider engine and an SDK client.
@@ -129,7 +128,7 @@ function createClock(startMs: number) {
 
 type HarnessOptions = Pick<
   AcpHarnessOptions,
-  "rows" | "maxSubscriberEvents" | "permission" | "question"
+  "rows" | "maxSubscriberEvents" | "permission" | "question" | "translation"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -141,21 +140,20 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
     translators,
     now: clock.now,
     pagesHistory: false,
-    // An operator who never answers declines, which the lane cancels.
+    // An operator who never answers declines, which the listener cancels.
     question: options.question ?? (async () => ({ action: "decline" })),
-    compose: ({ runtimeInstance, sessionRows }) => ({
+    compose: ({ runtimeInstance, catalog }) => ({
       readState: createReadState({
-        runtimeInstance,
-        sessionRows,
-        lane: "operator",
+        catalog,
+        relighting: runtimeInstance.runtime.translation?.relighting,
         now: clock.now,
         schedule: clock.schedule,
         cancel: clock.cancel,
         onUnreadChanged: () => undefined,
       }),
       activityFeed: createActivityFeed({
-        runtimeInstance,
-        sessionRows,
+        catalog,
+        coordinator: runtimeInstance.sessions,
         now: clock.now,
       }),
     }),
@@ -253,7 +251,7 @@ function unreadChanges(recorder: Recorder) {
 }
 
 /** The Session the seeded row names, as the coordinator and the routes see it. */
-const SCOPE = { agentId: AGENT, sessionId: SESSION, threadId: SESSION }
+const SCOPE = { agentId: AGENT, providerSessionId: SESSION, sessionId: SESSION }
 
 /**
  * A steered run this connection does not own: the coordinator holds it for a
@@ -269,10 +267,8 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
       prompt: "Summarize the notes",
     },
     {
-      subscriberId: "rest",
-      controllerId: "operator",
-      lane: "operator",
-      canControl: true,
+      membershipId: "rest",
+      principalId: "operator",
     }
   )
   const source = test.sources[0]
@@ -280,11 +276,11 @@ async function steeredRun(test: Harness, corrections: readonly string[]) {
   source.emit(turnStarted())
   await vi.waitFor(() => expect(test.coordinator.state(SCOPE)).toBe("running"))
   for (const [index, text] of corrections.entries())
-    await test.coordinator.steer(
-      SCOPE,
-      { requestId: `steer-${index + 1}`, expectedTurnId: "run-live", text },
-      "operator"
-    )
+    await test.coordinator.steer(SCOPE, {
+      requestId: `steer-${index + 1}`,
+      expectedTurnId: "run-live",
+      text,
+    })
   return source
 }
 
@@ -299,7 +295,7 @@ function correctedHistory(text: string): SessionHistoryResponse {
         role: "user",
         content: [{ type: "text", text }],
         createdAt: NOW,
-        metadata: { custom: { correction: true } },
+        correction: true as const,
       },
     ],
   }
@@ -367,7 +363,7 @@ function turnQuestioned(toolCallId?: string): TurnEvent {
   }
 }
 
-describe("operator ACP lane", () => {
+describe("operator ACP listener", () => {
   it("restates the model options when the provider switches the model mid-turn", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Summarize")
@@ -375,9 +371,10 @@ describe("operator ACP lane", () => {
     source.emit(turnStarted())
     source.emit({ kind: TurnEventKind.ModelChanged, modelId: "opus" })
 
+    // The options the Session opened with come first; the switch restates them.
     const reported = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("config_option_update"),
-      "an update carrying config_option_update"
+      (entry) => JSON.stringify(entry.params).includes('"currentValue":"opus"'),
+      "the model options the switch restated"
     )
     expect(reported.params).toMatchObject({
       sessionId: CREATED,
@@ -604,7 +601,7 @@ describe("operator ACP lane", () => {
     )
     expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
 
-    await test.agent.notify(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
     await vi.waitFor(() => expect(test.clock.pending()).toBe(1))
     test.clock.advance(500)
 
@@ -627,10 +624,10 @@ describe("operator ACP lane", () => {
     test.close()
   })
 
-  it("replays history before answering a resume that reports an idle execution", async () => {
+  it("replays history before answering the resume of an idle Session", async () => {
     const test = await harness()
 
-    const resumed = await test.agent.request(methods.agent.session.resume, {
+    await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
@@ -669,15 +666,14 @@ describe("operator ACP lane", () => {
         },
       },
     ])
-    expect(
-      AosSessionResumeResponseMetaSchema.parse(aosMetaOf(resumed)).execution
-        .status
-    ).toBe("idle")
     test.close()
   })
 
   it("announces a persisted correction once on a from-start resume", async () => {
-    const test = await harness({ history: correctedHistory("Use the tables") })
+    const test = await harness({
+      history: correctedHistory("Use the tables"),
+      translation: { steerAck: "in-history" },
+    })
     const source = await steeredRun(test, ["Use the tables"])
 
     await test.agent.request(methods.agent.session.resume, {
@@ -707,7 +703,10 @@ describe("operator ACP lane", () => {
   })
 
   it("announces the correction history could not carry yet", async () => {
-    const test = await harness({ history: correctedHistory("Use the tables") })
+    const test = await harness({
+      history: correctedHistory("Use the tables"),
+      translation: { steerAck: "in-history" },
+    })
     const source = await steeredRun(test, ["Use the tables", "And the totals"])
 
     await test.agent.request(methods.agent.session.resume, {

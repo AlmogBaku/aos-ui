@@ -10,36 +10,28 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
+import type { Clock, Logger } from "../../lifecycle"
 import type {
   SessionHistoryResponse,
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { AosActivityNotification, AosExtensions } from "../../protocol/acp"
+import type { AosExtensions } from "../../protocol/acp"
+import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
   PendingRequest,
   RequestReply,
   TurnEvent,
 } from "../core/events"
-import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import type { SessionRows } from "../core/session-rows"
+import type { PublicFailure } from "../core/failures"
+import type {
+  ServerAttachmentStages,
+  ServerRuntimeTranslation,
+} from "../core/runtime"
 import type { PresenceRegistry } from "../push/presence"
-import type { Channel } from "../core/channel"
-import type { Feed, Member } from "../core/member"
-
-export type Lane = "operator" | "guest"
-
-/**
- * Where the ACP lanes write their structured lines, in the shape the proxy
- * composition already receives. Every value passes through `redactForLog`
- * first. A context built without one logs nothing, which is what a harness
- * asserting only protocol behavior wants.
- */
-export type AcpLogger = {
-  info(value: unknown): void
-  error(value: unknown): void
-}
+import type { Channels } from "../core/channel"
+import type { Activity, Member } from "../core/member"
 
 export type WorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
@@ -49,29 +41,49 @@ export type WorkspaceCapabilities = z.infer<
 type AcpConnectionBase = {
   connectionId: string
   principalId: string
-  runtimeInstance: RuntimeInstance
-  sessionRows: SessionRows
+  /**
+   * The runtime's classifier of a failure's kind, a function of the failure
+   * alone. The connection reaches a provider only through the catalog and the
+   * channels.
+   */
+  publicError(cause: unknown): PublicFailure | undefined
+  /** The runtime's `ServerRuntimeTranslation.steerAck`, a static hint. */
+  steerAck?: ServerRuntimeTranslation["steerAck"]
+  /** The one workspace catalog per proxy process, which both listeners share. */
+  catalog: Catalog
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
   /**
-   * The one room registry per proxy process, shared by both lanes so an
-   * operator and a guest on the same provider Session land in one room.
+   * The one set of channels per proxy process, shared by both listeners so an
+   * operator and a guest on the same provider Session land in one channel.
    */
-  rooms: Channel
+  channels: Channels
   /**
    * Where this connection reports the workspace it shows, shared across the
    * principal's connections. Absent means nothing observes presence, which is
    * every guest connection and any deployment without push.
    */
   presence?: PresenceRegistry
-  logger?: AcpLogger
-  /** The feeds this connection's member is given, chosen at join. */
-  feeds: ReadonlySet<Feed>
+  /** This connection's log, bound to its `connectionId` and `role`. */
+  logger: Logger
+  /**
+   * The browser build the static root carries, which `initialize` answers as
+   * its version so a tab running another build reloads; absent without one.
+   */
+  buildId?: string
+  /** The clock injected by the service; defaults to performance.now when absent. */
+  clock?: Clock
+  /**
+   * Called by the agent once the handshake completes, which clears its
+   * deadline: at initialize, or at a successful login on a connection that
+   * authenticates over ACP.
+   */
+  handshakeComplete?: () => void
 }
 
 /**
- * One connection's context, typed by its lane: only an operator reads the
+ * One connection's context, typed by its role: only an operator reads the
  * activity feed and owns read state, since a guest learns nothing about the
  * rest of the Agent, and only a guest authenticates over ACP rather than at
  * its upgrade.
@@ -79,13 +91,13 @@ type AcpConnectionBase = {
 export type AcpConnectionContext = AcpConnectionBase &
   (
     | {
-        lane: "operator"
+        role: "operator"
         activityFeed: ActivityFeed
         readState: ReadState
         authentication?: never
       }
     | {
-        lane: "guest"
+        role: "guest"
         authentication: ConnectionAuthentication
         activityFeed?: never
         readState?: never
@@ -128,6 +140,8 @@ export type TranslateContext = {
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */
   now?: () => number
+  /** The runtime's `ServerRuntimeTranslation.steerAck`. */
+  steerAck?: ServerRuntimeTranslation["steerAck"]
 }
 
 /**
@@ -201,18 +215,17 @@ export interface ReadState {
   focus(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
-  markRead(agentId: string, sessionId: string): Promise<void>
   close(): void
 }
 
 /**
- * Per-connection, bounded, in-memory activity feed hydrated from coordinator
- * snapshots and the session list. Implemented in `activity-feed.ts`.
+ * The workspace's activity, hydrated from coordinator snapshots and the
+ * session list for each connection that opens it. Implemented in
+ * `activity-feed.ts`.
  */
 export interface ActivityFeed {
-  snapshot(): readonly AosActivityNotification[]
-  subscribe(listener: (event: AosActivityNotification) => void): () => void
-  close(): void
+  /** Shows `listener` what needs a badge now, then each change, until the stop. */
+  open(listener: (activity: Activity) => void): () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +278,10 @@ export type ConfigWriteOf = (
   value: unknown
 ) => { selectedId: string } | { effortId: string } | undefined
 
-/** All translators, injected into the agent so lanes and tests stay decoupled. */
+/**
+ * All translators, injected into the agent so listeners and tests stay
+ * decoupled.
+ */
 export type Translators = {
   translateTurnEvent: TranslateTurnEvent
   translateHistory: TranslateHistory

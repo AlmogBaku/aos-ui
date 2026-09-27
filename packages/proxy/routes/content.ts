@@ -16,9 +16,12 @@ export async function loadSessionArtifact(
   publicSessionId: string,
   artifactId: string
 ) {
-  const storedId = runtime.resolveSessionId(agentId, publicSessionId)
-  if (!storedId) return undefined
-  await runtime.getSession(agentId, storedId)
+  const providerSessionId = runtime.resolveProviderSessionId(
+    agentId,
+    publicSessionId
+  )
+  if (!providerSessionId) return undefined
+  await runtime.getSession(agentId, providerSessionId)
   return runtime.artifact(agentId, publicSessionId, artifactId)
 }
 
@@ -70,7 +73,16 @@ export function registerContentRoutes(
       sessionId,
       body.data.attachments
     )
-    const stageId = attachmentStages.create(agentId, sessionId, stage)
+    const sizeBytes = body.data.attachments.reduce(
+      (total, attachment) => total + attachment.dataUrl.length,
+      0
+    )
+    const stageId = attachmentStages.create(
+      agentId,
+      sessionId,
+      stage,
+      sizeBytes
+    )
     if (!stageId) {
       await stage.cleanup().catch(() => undefined)
       return errorResponse("turn_capacity_exceeded", 503)

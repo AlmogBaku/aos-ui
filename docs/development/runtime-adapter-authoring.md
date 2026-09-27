@@ -40,8 +40,8 @@ browser presentation and drafts
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                                                                                  |
 | Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                                                                                |
-| Member middleware    | Lane rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
-| Channel              | Per-member delivery for one Session room: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                                  |
+| Member middleware    | Role rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
+| Channel              | Per-member delivery for one Session's channel: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                             |
 | `SessionCoordinator` | One logical execution per Session, admission, idempotency, Stop and steering serialization, turn segment identities, subscriber fanout, bounded replay, per-conversation answer collection, usage and model readings, and authoritative settlement. |
 | Runtime adapter      | Native authentication, stable/native identity mapping, connection topology, Session attachment, native payload validation, capability mapping, event conversion, recovery, and retention.                                                           |
 | Native runtime       | Durable Agents, Sessions, history, executions, interactions, tools, and content.                                                                                                                                                                    |
@@ -72,6 +72,24 @@ Connection and retention topology remains provider-private. Hermes uses a
 multiplexed JSON-RPC connection and durable-to-live Session attachments;
 OpenClaw and OpenCode have different native observation and recovery models.
 They share coordinator semantics, not a generic socket manager.
+
+## Own the native link
+
+Each adapter keeps one connection owner per native link, built with
+`createLink` (`packages/proxy/core/link.ts`). The owner dials the link,
+reconnects on backoff with full jitter (`LINK_BACKOFF`: base 250 ms, cap 5 s),
+and applies a circuit breaker (`LINK_BREAKER`: open after 5 consecutive failed
+dials, half-open after 10 s). It stops retrying when the failure kind is
+`gone` or `runtime_authentication_required`; both are terminal until the upstream
+turns ready.
+
+`Link.held()` returns `true` while the breaker holds the dials: a caller that
+wants to wait for the link to come up may check it before queuing. The adapter
+must call `link.dispose()` on every exit path — normal close, error, and
+cancellation — so the owner stops dialing and releases any open connection.
+
+Keep the reconnect budget (`RETRY_BUDGET`) shared across all owners of one
+runtime so that N owners do not retry in lockstep after a runtime restart.
 
 ## Map native output to the proxy-owned turn vocabulary
 
@@ -248,6 +266,30 @@ opaque `{ epoch, lastSeen }` an adapter reports, never a provider cursor. Replay
 overflow or an epoch change falls back to authoritative reads without
 resubmitting user intent.
 
+## Classify every failure
+
+Every failure crossing the adapter boundary is one of three kinds, or a caller error
+(`packages/proxy/core/failures.ts`):
+
+| Kind                              | Meaning                                                                |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| `gone`                            | What the request named no longer exists; nothing brings it back.       |
+| `unavailable`                     | Nothing happened; the same request may succeed later.                  |
+| `uncertain`                       | A write may have landed; reconcile before trying it again.             |
+| `invalid_request`                 | The caller supplied a bad input; a retry would meet it again.          |
+| `revision_conflict`               | A concurrent write changed the state the request assumed.              |
+| `runtime_authentication_required` | The credential is absent or rejected; re-authenticate before retrying. |
+
+A read is never uncertain: an adapter call past `ADAPTER_CALL_MS`
+(`packages/proxy/core/limits.ts`, 15 s) is `unavailable` for a read and
+`uncertain` for a write. The native error travels as `cause` on every failure,
+so the coordinator and the proxy log can include the chain without the adapter
+deciding what to reveal.
+
+Use `failureOf(kind, cause)` to construct a `PublicFailure` with the
+canonical machine code for that kind. Use `publicFailure(cause, table)` when
+the native error carries a code the adapter maps to a kind.
+
 ## Normalize capabilities, state, and content
 
 Capabilities are structured values. Preserve native choices, limits, scopes,
@@ -280,7 +322,7 @@ Guest output is projected by the guest middleware
 (`packages/proxy/acp/member-encoder.ts`) writes it to the guest connection.
 This keeps reasoning, raw tools, permission requests, privileged roles, native
 metadata, paths, live IDs, and provider positions out of memory that an authorized guest
-connection can drain. Adapters stay lane-blind: they never see which member
+connection can drain. Adapters stay role-blind: they never see which member
 asked. A slow or expired guest may lose its own subscriber without delaying or
 stopping operator delivery.
 
@@ -313,7 +355,10 @@ An adapter is ready when:
 - lost mutation acknowledgements are uncertain and never replayed;
 - reconnect restores observation and state without resending prompts;
 - provider payloads and paths cannot enter normalized or guest output;
-- focused adapter tests and provider-neutral conformance tests pass.
+- focused adapter tests and provider-neutral conformance tests pass;
+- `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) passes
+  in the adapter's own `contract.test.ts` — this suite is the gate for the
+  adapter's failure taxonomy, recovery token, and link contract.
 
 When a runtime's native client is open source and the AOS server-side
 requirements (bounded decoding, credential isolation, uncertain-mutation
@@ -340,28 +385,28 @@ the activity feed on connect; adapters that omit it simply receive no wake.
 
 ### Turns the runtime starts by itself
 
-Implement the optional `watch(scope, { onTurn, onError })` method on
+Implement the optional `subscribeTurns(scope, { onTurn, onError })` method on
 `ServerTurnEngine` when the native runtime can start a turn in a Session
 without the proxy: a subagent result, a loop tick, a heartbeat, cron, or
-another native client. A Session's room watches it while any browser has it
-open. The adapter only signals; the shared core adopts the turn through
+another native client. A Session's channel subscribes while any browser has
+it resumed. The adapter only signals; the shared core adopts the turn through
 `discover` and streams it to every member, who can Stop it like any other.
 
 - Fire `onTurn` when a turn this adapter did not start begins, and again
-  whenever the watch (re)subscribes, at setup or after a reconnect or rebind,
+  whenever the subscription is remade, at setup or after a reconnect or rebind,
   while such a turn is running.
 - Stay silent for the adapter's own turns. A foreign turn that starts during
-  one is found by the `discover` the room runs after every turn's end.
+  one is found by the `discover` the channel runs after every turn's end.
 - Fire at most once per native turn, however often the runtime announces it.
 - Own reconnect retries and report failures through `onError`; never throw.
   The returned stop function may be called more than once and ends retries.
 
-Because the room calls `discover` after every turn's end, `discover` must
+Because the channel calls `discover` after every turn's end, `discover` must
 return `undefined` for a turn the adapter admitted, including one still
 settling. It returns a running foreign turn with its events, and sets
 `fromStart` only when those events begin at the native turn's first event, so
 a browser following it replays the whole turn instead of receiving a reset.
-Adapters that omit `watch` behave as before: only turns the proxy started
+Adapters that omit `subscribeTurns` behave as before: only turns the proxy started
 reach other browsers.
 
 ### Agent updates: `updateAgent(agentId, patch, observedRevision)`
@@ -423,9 +468,11 @@ Emit a descriptor only from an authoritative source: a `present_artifact`
 receipt from the `aos-ui` tools MCP server
 (`{ok: true, type: "aos.artifact", artifact: {path, filename, mimeType?}}`),
 a harness's own `MEDIA:` delivery convention, or a trusted native delivery
-tool such as Hermes text-to-speech. `packages/proxy/core/media-lines.ts`
-(`MediaLineFilter`) strips `MEDIA:` lines from streamed prose across deltas
-and replaces an unclaimed one with `[Media unavailable]`.
+tool such as Hermes text-to-speech.
+`packages/proxy/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
+`MEDIA:` lines from streamed prose across deltas and replaces an unclaimed one
+with `[Media unavailable]`. It is private to the Hermes adapter and parses
+Hermes's own `MEDIA:` convention; it is not a general helper.
 
 Validate every path with `packages/proxy/core/artifact-path.ts` before keeping
 it: `safeArtifactPath` accepts only absolute POSIX paths with no `..`
@@ -439,7 +486,7 @@ Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
 Session and return `{bytes, mimeType?, filename}`, read through the harness's
 own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
-(`packages/proxy/routes/content.ts:87`) serves it on both lanes.
+(`packages/proxy/routes/content.ts:87`) serves it on both listeners.
 
 ### MCP tool names
 

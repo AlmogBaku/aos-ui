@@ -21,7 +21,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Attempt to JSON.parse a string value; non-strings are returned unchanged.
  * On parse failure returns `undefined`.  Callers that need the raw string on
- * failure should use `parseJsonOrValue` instead.
+ * failure use the shared `parseJsonOrValue` (`../todos`) instead.
  */
 export function parseJson(value: unknown): unknown {
   if (typeof value !== "string") return value
@@ -29,22 +29,6 @@ export function parseJson(value: unknown): unknown {
     return JSON.parse(value) as unknown
   } catch {
     return undefined
-  }
-}
-
-/**
- * Attempt to JSON.parse a string value; non-strings are returned unchanged.
- * On parse failure returns the original string unchanged.  Use instead of
- * `parseJson` when the raw string is a valid fallback (e.g. tool-data rows,
- * workspace context fields).  Callers that need `undefined` on failure should
- * use `parseJson` instead.
- */
-export function parseJsonOrValue(value: unknown): unknown {
-  if (typeof value !== "string") return value
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
   }
 }
 
@@ -87,8 +71,8 @@ export function containsCredentialValue(value: string) {
 
 /**
  * True when a native string looks like a credential or a private filesystem or
- * internal-network location. It guards what the guest lane may receive from the
- * adapter: published artifact identities. Operator-only data (tool calls,
+ * internal-network location. It guards what the guest listener may receive from
+ * the adapter: published artifact identities. Operator-only data (tool calls,
  * diffs, locations, failure details) is held to `containsCredentialValue`
  * alone, because the guest projection never forwards it.
  */
@@ -393,8 +377,11 @@ export function rowText(row: Record<string, unknown>, content: unknown) {
  * The one map key for a durable Agent/Session pair. The separator cannot occur
  * in a native identifier, so two distinct pairs never collide.
  */
-export function sessionKey(scope: { agentId: string; sessionId: string }) {
-  return `${scope.agentId}\u0000${scope.sessionId}`
+export function sessionKey(scope: {
+  agentId: string
+  providerSessionId: string
+}) {
+  return `${scope.agentId}\u0000${scope.providerSessionId}`
 }
 
 // ---------------------------------------------------------------------------

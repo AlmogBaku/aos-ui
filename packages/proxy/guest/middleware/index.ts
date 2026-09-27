@@ -1,15 +1,16 @@
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
+import { createFeedsMiddleware } from "./feeds"
 import { createHistoryMiddleware } from "./history"
 import { createPermissionsMiddleware } from "./permissions"
+import { createQuotaMiddleware } from "./quota"
 import { createScopeMiddleware, type GuestScopeOptions } from "./scope"
 import { createTurnsMiddleware } from "./turns"
 
 /**
  * One redeemed invitation, shaped after the claims `GuestInvitationService`
  * verifies: the single Agent and conversation reference it grants, the
- * controller identity the coordinator already knows this guest by, and the
- * moment the connection must close.
+ * principal this guest acts as, and the moment the connection must close.
  */
 export type GuestGrant = {
   agentId: string
@@ -21,12 +22,15 @@ export type GuestGrant = {
   firstTurnInstruction?: string
 }
 
-export type GuestMiddlewareOptions = GuestScopeOptions
+export type GuestMiddlewareOptions = GuestScopeOptions & {
+  /** How many turns every guest together may hold at once. */
+  guestActiveExecutions: number
+}
 
 /**
  * A guest member's stack, outermost first. A refused command never reaches
  * scope, so a refused first Send never creates the conversation, and the
- * commands layer projects what a resume answers last on the way out.
+ * commands layer projects the commands event last on the way out.
  */
 export function createGuestMiddleware(
   options: GuestMiddlewareOptions
@@ -37,5 +41,7 @@ export function createGuestMiddleware(
     createHistoryMiddleware(options),
     createTurnsMiddleware(),
     createPermissionsMiddleware({ principalId: options.grant.principalId }),
+    createFeedsMiddleware(),
+    createQuotaMiddleware({ limit: options.guestActiveExecutions }),
   ]
 }

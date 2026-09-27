@@ -1,12 +1,10 @@
 import {
-  RuntimeAuthStateSchema,
   RuntimeInfoSchema,
   SessionHistoryResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type AgentCatalogResponse,
   type AgentUpdatePatch,
   type AgentUpdateResponse,
-  type RuntimeAuthState,
   type RuntimeInfo,
   type Session,
   type SessionAttachmentStageRequest,
@@ -23,16 +21,16 @@ import {
   type ServerRuntime,
   type SessionPatch,
 } from "../../core/runtime"
+import { READY_LINK, type ServerLink } from "../../core/link"
+import * as ids from "../../core/ids"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
-import { projectTodos } from "../todos"
+import { validIdentifier } from "../../core/identifier"
+import { projectTodos, TODO_STATUS_ALIASES } from "../todos"
 import {
-  OpenCodeClientAbortError,
   OpenCodeClientError,
-  OpenCodeMutationUncertainError,
   type OpenCodeClient,
   type OpenCodeFileContent,
   type OpenCodePageOptions,
-  type OpenCodeSessionEvents,
 } from "./client"
 import { openCodeCapabilities } from "./capabilities"
 import {
@@ -51,21 +49,14 @@ import {
   storedOpenCodeToolCall,
   type OpenCodeMcpCatalog,
 } from "./mcp-apps"
-import { OPENCODE_TODO_STATUS_ALIASES } from "./todos"
-import {
-  OpenCodeInteractionPublicError,
-  OpenCodeInteractions,
-} from "./interactions"
+import { OpenCodeInteractions } from "./interactions"
+import { openCodeFailure } from "./failures"
 import {
   openCodeModelOptionId,
   parseOpenCodeMessageCatalog,
   parseOpenCodeModelCatalog,
   parseOpenCodeSession,
 } from "./native-schemas"
-import {
-  OpenCodeEventValidationError,
-  validateOpenCodeLiveEvent,
-} from "./events"
 import {
   createOpenCodeWorkspaceOperations,
   OpenCodeWorkspaceScopeError,
@@ -101,6 +92,7 @@ export type OpenCodeAdapterClient = Readonly<{
     | "permissions"
   >
   files: Pick<OpenCodeClient["files"], "read">
+  credentialRefused: OpenCodeClient["credentialRefused"]
   close(): Promise<void>
 }>
 
@@ -113,18 +105,9 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   creatorAgentId?: string
   /** The project's MCP servers; without them, no tool opens a view. */
   mcp?: OpenCodeMcpCatalog
+  /** The turn engine's watches' link; without one, the runtime is always up. */
+  link?: ServerLink
 }>
-
-function identifier(value: string) {
-  return (
-    value.length > 0 &&
-    value.length <= 256 &&
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
-}
 
 /**
  * The bytes one native file read answered with. OpenCode answers a missing file
@@ -255,16 +238,17 @@ function readyRuntimeInfo(): RuntimeInfo {
 }
 
 export class OpenCodeServerAdapter implements ServerRuntime {
+  readonly link: ServerLink
   readonly turns: ServerTurnEngine
   readonly interactions: OpenCodeInteractions
   readonly mcpApps?: ServerMcpApps
   readonly #workspace: OpenCodeWorkspaceOperations
   readonly #content = new OpenCodeContent()
-  readonly #invalidations = new Set<() => void>()
   #closePromise: Promise<void> | undefined
 
   constructor(private readonly options: OpenCodeServerAdapterOptions) {
     this.turns = options.turns
+    this.link = options.link ?? READY_LINK
     this.#workspace = createOpenCodeWorkspaceOperations({
       client: options.client,
       creatorAgentId: options.creatorAgentId,
@@ -290,9 +274,9 @@ export class OpenCodeServerAdapter implements ServerRuntime {
       )
   }
 
-  resolveSessionId(agentId: string, publicSessionId: string) {
-    return identifier(agentId) && identifier(publicSessionId)
-      ? publicSessionId
+  resolveProviderSessionId(agentId: string, publicSessionId: string) {
+    return validIdentifier(agentId) && validIdentifier(publicSessionId)
+      ? ids.providerSessionId(publicSessionId)
       : undefined
   }
 
@@ -305,65 +289,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
   }
 
   publicError(cause: unknown) {
-    if (cause instanceof OpenCodeMutationUncertainError)
-      return { code: "uncertain_mutation", status: 503 } as const
-    if (
-      cause instanceof OpenCodeClientAbortError ||
-      (cause instanceof OpenCodeClientError &&
-        cause.code === "connection_interrupted")
-    )
-      return { code: "connection_interrupted", status: 503 } as const
-    if (cause instanceof OpenCodeClientError) {
-      if (cause.code === "authentication")
-        return { code: "runtime_authentication_required", status: 401 } as const
-      if (cause.code === "invalid_request")
-        return { code: "invalid_request", status: 400 } as const
-      if (cause.code === "not_found")
-        return { code: "not_found", status: 404 } as const
-      if (cause.code === "conflict")
-        return { code: "revision_conflict", status: 409 } as const
-      return { code: "temporarily_unavailable", status: 503 } as const
-    }
-    if (
-      cause instanceof OpenCodeWorkspaceScopeError ||
-      // The receipt is still authoritative, but OpenCode cannot read its file:
-      // unlike a 503, "not found" never invites a retry that cannot succeed.
-      cause instanceof OpenCodeContentUnreadableError
-    )
-      return { code: "not_found", status: 404 } as const
-    if (cause instanceof OpenCodeWorkspaceUnavailableError)
-      return { code: "temporarily_unavailable", status: 503 } as const
-    if (cause instanceof OpenCodeContentUnavailableError)
-      return { code: "temporarily_unavailable", status: 503 } as const
-    if (cause instanceof OpenCodeInteractionPublicError) {
-      if (cause.code === "AOS_INTERACTION_NOT_FOUND")
-        return { code: "not_found", status: 404 } as const
-      if (cause.code === "AOS_MUTATION_UNCERTAIN")
-        return { code: "uncertain_mutation", status: 503 } as const
-      if (
-        cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-        cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
-      )
-        return { code: "temporarily_unavailable", status: 503 } as const
-      return { code: "invalid_request", status: 400 } as const
-    }
-    return undefined
-  }
-
-  async authState(): Promise<RuntimeAuthState> {
-    try {
-      await this.listAgents()
-      return RuntimeAuthStateSchema.parse({ status: "authenticated" })
-    } catch (error) {
-      if (this.publicError(error)?.code === "runtime_authentication_required")
-        return RuntimeAuthStateSchema.parse({
-          status: "authentication-required",
-        })
-      return RuntimeAuthStateSchema.parse({
-        status: "unavailable",
-        reason: "temporarily-unavailable",
-      })
-    }
+    return openCodeFailure(cause)
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {
@@ -477,7 +403,7 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     try {
       return projectTodos(
         { todos: await this.options.client.sessions.todos(sessionId) },
-        OPENCODE_TODO_STATUS_ALIASES
+        TODO_STATUS_ALIASES
       )
     } catch {
       return undefined
@@ -511,82 +437,36 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     })
   }
 
-  async models(agentId: string, publicSessionId: string) {
-    const { selectedId, options } = await this.#models(agentId, publicSessionId)
+  async models(agentId: string, providerSessionId: string) {
+    const { selectedId, options } = await this.#models(
+      agentId,
+      providerSessionId
+    )
     return { selectedId, options }
   }
 
   async updateModel(
     agentId: string,
-    publicSessionId: string,
+    providerSessionId: string,
     patch: SessionModelUpdateRequest
   ) {
     // OpenCode reports no reasoning ladder, so it can never settle an effort.
     if (patch.effortId !== undefined || patch.selectedId === undefined)
       throw new OpenCodeWorkspaceUnavailableError()
     const selectedId = patch.selectedId
-    const options = await this.#models(agentId, publicSessionId)
+    const options = await this.#models(agentId, providerSessionId)
     const selected = options.native.get(selectedId)
-    if (!selected) throw new OpenCodeWorkspaceUnavailableError()
-    await this.options.client.sessions.switchModel(publicSessionId, selected)
+    // A model the Session cannot run is the caller's mistake, not an outage.
+    if (!selected) throw new OpenCodeClientError("invalid_request")
+    await this.options.client.sessions.switchModel(providerSessionId, selected)
     return { selectedId }
   }
 
-  async context(agentId: string, publicSessionId: string) {
-    await this.getSession(agentId, publicSessionId)
+  async context(agentId: string, providerSessionId: string) {
+    await this.getSession(agentId, providerSessionId)
     // The pinned SDK's session.context response is `data: SessionMessage[]`,
     // not a provider token/accounting metric. Do not invent an estimate.
     throw new OpenCodeWorkspaceUnavailableError()
-  }
-
-  async subscribeSessionInvalidation(
-    agentId: string,
-    publicSessionId: string,
-    listener: () => void,
-    reset?: () => void
-  ): Promise<() => void> {
-    await this.getSession(agentId, publicSessionId)
-    const controller = new AbortController()
-    let source: OpenCodeSessionEvents | undefined
-    let released = false
-    let lastSeen: number | undefined
-    const release = () => {
-      if (released) return
-      released = true
-      this.#invalidations.delete(release)
-      controller.abort()
-      source?.abort()
-    }
-    const fail = () => {
-      if (released) return
-      release()
-      reset?.()
-    }
-    try {
-      source = await this.options.client.sessions.events(publicSessionId, {
-        signal: controller.signal,
-      })
-    } catch (error) {
-      release()
-      throw error
-    }
-    this.#invalidations.add(release)
-    void (async () => {
-      try {
-        for await (const envelope of source!) {
-          if (released) return
-          const event = validateOpenCodeLiveEvent(envelope, publicSessionId)
-          if (lastSeen !== undefined && event.seq !== lastSeen + 1)
-            throw new OpenCodeEventValidationError()
-          lastSeen = event.seq
-          listener()
-        }
-        fail()
-      } catch {
-        fail()
-      }
-    })()
-    return release
   }
 
   async stageAttachments(
@@ -651,7 +531,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   close() {
     this.#closePromise ??= Promise.resolve().then(async () => {
-      for (const release of [...this.#invalidations]) release()
       await this.options.client.close()
     })
     return this.#closePromise
@@ -731,14 +610,28 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const options = catalog.data.data.flatMap((model) => {
       if (!model.enabled) return []
       const id = openCodeModelOptionId(model)
-      if (!identifier(id) || native.has(id))
+      if (!validIdentifier(id) || native.has(id))
         throw new OpenCodeWorkspaceUnavailableError()
       native.set(id, { providerID: model.providerID, id: model.id })
       return [{ id, label: model.name, group: model.providerID }]
     })
-    const selectedId = openCodeModelOptionId(session.data.model)
-    if (!identifier(selectedId) || !native.has(selectedId))
+    const selected = session.data.model
+    const selectedId = openCodeModelOptionId(selected)
+    if (!validIdentifier(selectedId))
       throw new OpenCodeWorkspaceUnavailableError()
+    // A Session may run a model the catalog no longer lists; it stays listed
+    // by its own id so the selector still shows what the Session runs.
+    if (!native.has(selectedId)) {
+      native.set(selectedId, {
+        providerID: selected.providerID,
+        id: selected.id,
+      })
+      options.push({
+        id: selectedId,
+        label: selected.id,
+        group: selected.providerID,
+      })
+    }
     return { selectedId, options, native }
   }
 }

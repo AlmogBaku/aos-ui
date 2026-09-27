@@ -5,7 +5,6 @@ import { request } from "node:http"
 import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext, ActivityFeed, ReadState } from "./acp/types"
-import { EVERY_FEED } from "./core/member"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import { startProxyServer } from "./server"
 
@@ -27,15 +26,15 @@ function connectionContext(
   return {
     connectionId,
     principalId,
-    lane: "operator",
-    feeds: EVERY_FEED,
-    runtimeInstance: {} as AcpConnectionContext["runtimeInstance"],
-    sessionRows: {} as AcpConnectionContext["sessionRows"],
+    role: "operator",
+    publicError: () => undefined,
+    catalog: {} as AcpConnectionContext["catalog"],
     readState: {} as ReadState,
     activityFeed: {} as ActivityFeed,
     translators: {} as AcpConnectionContext["translators"],
-    rooms: {} as AcpConnectionContext["rooms"],
+    channels: {} as AcpConnectionContext["channels"],
     attachmentStages: {} as AcpConnectionContext["attachmentStages"],
+    logger: {} as AcpConnectionContext["logger"],
   }
 }
 
@@ -47,7 +46,7 @@ function initializeOnlyAgent() {
   }))
 }
 
-function acpProxy() {
+function acpProxy(handshakeDeadlineMs?: number) {
   const lifecycle = startProxyServer({
     app: { fetch: () => new Response("not found", { status: 404 }) },
     sockets: [
@@ -55,10 +54,11 @@ function acpProxy() {
         path: AOS_ACP_OPERATOR_PATH,
         service: createAcpService({
           publicOrigin: ORIGIN,
-          lane: "operator",
+          role: "operator",
           principalId: OPERATOR_PRINCIPAL,
           agent: initializeOnlyAgent,
           connection: connectionContext,
+          handshakeDeadlineMs,
         }),
       },
     ],
@@ -225,5 +225,17 @@ describe("real Bun WebSocket upgrade", () => {
 
     expect(switching.status).toBe(101)
     expect(switching.headers["acp-connection-id"]).toMatch(/^[0-9a-f-]{36}$/u)
+  })
+  it("closes a socket that never sends initialize with 4408 at the handshake deadline", async () => {
+    const port = portOf(acpProxy(100))
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      { headers: { Origin: ORIGIN } }
+    )
+    const code = await new Promise<number>((resolve, reject) => {
+      socket.addEventListener("close", (event) => resolve(event.code))
+      socket.addEventListener("error", reject)
+    })
+    expect(code).toBe(4408)
   })
 })

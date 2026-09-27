@@ -40,9 +40,9 @@ function deduplicateNewest(sessions: SessionMetadata[]) {
   const byThread = new Map<string, SessionMetadata>()
 
   for (const session of sessions) {
-    const existing = byThread.get(session.threadId)
+    const existing = byThread.get(session.sessionId)
     if (!existing || newestFirst(session, existing) < 0) {
-      byThread.set(session.threadId, session)
+      byThread.set(session.sessionId, session)
     }
   }
 
@@ -73,7 +73,7 @@ export function activeSessionsForAgent(
         isPinned ||
         isRecent ||
         isLive ||
-        manuallyOpenedThreadIds.has(session.threadId)
+        manuallyOpenedThreadIds.has(session.sessionId)
       )
     })
   )
@@ -115,10 +115,10 @@ export function resolveSessionSelection({
 
   if (
     lastSelectedThreadId &&
-    history.some(({ threadId }) => threadId === lastSelectedThreadId)
+    history.some(({ sessionId }) => sessionId === lastSelectedThreadId)
   ) {
     return lastSelectedThreadId
   }
 
-  return activeSessions[0]?.threadId ?? history[0]?.threadId ?? null
+  return activeSessions[0]?.sessionId ?? history[0]?.sessionId ?? null
 }

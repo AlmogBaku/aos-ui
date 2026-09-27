@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+import type { Logger } from "../../../lifecycle"
 import type { SessionMessage } from "../../../protocol"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
 import type { ServerMcpApps } from "../../core/runtime"
@@ -9,6 +10,7 @@ import {
   type McpAppServer,
   type StoredMcpToolCall,
 } from "../../mcp-apps/fallback"
+import { mcpServersFromNative } from "../../mcp-apps/discovery"
 import { createMcpToolNames, mcpToolCatalog } from "../../mcp-apps/tool-names"
 import { OPENCODE_MCP_TOOL_NAMES } from "./tool-names"
 
@@ -28,41 +30,31 @@ const OpenCodeMcpEntrySchema = z.object({
 })
 
 /**
- * A remote server that is on and sends no credentials of its own, or whose
- * credentials the operator configured for the proxy.
+ * The `mcp` map of `GET /config`, one server per key. A remote server that is
+ * on is dialable; headers or OAuth of its own are credentials.
  */
-function reachableUrl(
-  entry: z.infer<typeof OpenCodeMcpEntrySchema>,
-  credentialed: boolean
-) {
-  if (entry.type !== "remote" || !entry.url || entry.enabled === false) return
-  if (!credentialed) {
-    if (entry.headers && Object.keys(entry.headers).length > 0) return
-    if (entry.oauth !== undefined && entry.oauth !== false) return
-  }
-  try {
-    const url = new URL(entry.url)
-    return url.protocol === "http:" || url.protocol === "https:"
-      ? url.href
-      : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** The `mcp` map of `GET /config`, one server per key. */
 export function openCodeMcpServers(
   config: Record<string, unknown>,
-  credentialed: (name: string) => boolean = () => false
+  credentialed?: (name: string) => boolean
 ): McpAppServer[] {
   const mcp = z.record(z.string(), z.unknown()).safeParse(config.mcp ?? {})
   if (!mcp.success) return []
-  return Object.entries(mcp.data).flatMap(([name, value]) => {
+  const servers = Object.entries(mcp.data).flatMap(([name, value]) => {
     const entry = OpenCodeMcpEntrySchema.safeParse(value)
     if (!name || !entry.success) return []
-    const url = reachableUrl(entry.data, credentialed(name))
-    return [{ name, ...(url ? { url } : {}) }]
+    const { type, url, enabled, headers, oauth } = entry.data
+    return [
+      {
+        name,
+        dialable: type === "remote" && enabled !== false,
+        url,
+        credentials:
+          (headers !== undefined && Object.keys(headers).length > 0) ||
+          (oauth !== undefined && oauth !== false),
+      },
+    ]
   })
+  return mcpServersFromNative(servers, credentialed)
 }
 
 /**
@@ -104,7 +96,8 @@ export function storedOpenCodeToolCall(
 /** The project's MCP servers and tool names, shared by the run engine and the adapter. */
 export function createOpenCodeMcpCatalog(
   config: () => Promise<Record<string, unknown>>,
-  client: McpAppClient
+  client: McpAppClient,
+  logger: Logger
 ) {
   const servers = createMcpServerCache<McpAppServer>(async () =>
     openCodeMcpServers(await config(), client.credentialed)
@@ -113,7 +106,7 @@ export function createOpenCodeMcpCatalog(
     OPENCODE_MCP_TOOL_NAMES,
     mcpToolCatalog(servers, client)
   )
-  return { servers, names, client }
+  return { servers, names, client, logger }
 }
 
 export type OpenCodeMcpCatalog = ReturnType<typeof createOpenCodeMcpCatalog>
@@ -130,8 +123,9 @@ export function createOpenCodeMcpApps(
     {
       servers: (scope) => catalog.servers.get(scope.agentId),
       storedCall: (scope, toolCallId) =>
-        storedCall(scope.agentId, scope.sessionId, toolCallId),
+        storedCall(scope.agentId, scope.providerSessionId, toolCallId),
     },
-    catalog.client
+    catalog.client,
+    catalog.logger
   )
 }

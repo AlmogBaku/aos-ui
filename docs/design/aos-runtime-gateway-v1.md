@@ -29,7 +29,7 @@ V1 delivered one working Hermes-backed AOS workspace:
 - Guest invitations: HS256 JWT (`aos-guest-invitation+jwt`), scoped to one
   Agent and conversation reference, with expiry-driven connection close.
 - `SessionCoordinator`: process-local admission, journal, replay, stop, steer
-  dedup, and per-lane capacity.
+  dedup, and per-role capacity.
 - Redaction, security headers, Origin checks, secret-file loading.
 - Provider-neutral conformance runtime in tests, proving the adapter seam.
 
@@ -67,7 +67,7 @@ The following test files exist and cover the V1 acceptance criteria:
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | System shape and module layout                | [Architecture §2](aos-runtime-gateway-architecture.md#2-system-shape), [§15](aos-runtime-gateway-architecture.md#15-adapter-kinds-and-selection)                            |
 | Trust model, Origin checks, redaction         | [Architecture §3](aos-runtime-gateway-architecture.md#3-trust-boundaries)                                                                                                   |
-| Operator and guest listeners, JWT, extensions | [Architecture §4](aos-runtime-gateway-architecture.md#4-listeners-and-lanes)                                                                                                |
+| Operator and guest listeners, JWT, extensions | [Architecture §4](aos-runtime-gateway-architecture.md#4-listeners-and-roles)                                                                                                |
 | ACP handshake, socket, methods                | [Architecture §5](aos-runtime-gateway-architecture.md#5-the-single-acp-socket)                                                                                              |
 | Turn vocabulary, translation, `_meta.aos`     | [Architecture §6](aos-runtime-gateway-architecture.md#6-turn-vocabulary-and-acp-translation)                                                                                |
 | Coordinator, engine, steer                    | [Architecture §7](aos-runtime-gateway-architecture.md#7-sessioncoordinator-and-adapter-ownership-split)                                                                     |

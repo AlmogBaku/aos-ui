@@ -5,11 +5,12 @@ import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   projectGuestCapabilities,
   projectGuestError,
+  publicTurnError,
 } from "./guest-runtime-projection"
 
 const authorization: VerifiedGuestAuthorization = {
   version: 1,
-  lane: "guest",
+  role: "guest",
   issuer: "aos-invite",
   audience: "aos-guest",
   deploymentId: "deployment",
@@ -52,18 +53,25 @@ describe("guest runtime projection", () => {
     })
   })
 
+  it("keeps a turn whose outcome is unknown distinct from a failed one, and final", () => {
+    expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
+      code: "AOS_OUTCOME_UNKNOWN",
+      retryable: false,
+    })
+  })
+
   it("removes Agent-wide approval grants from guest capabilities", () => {
     const projected = projectGuestCapabilities({
       workspace: {
         models: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           selection: "native-session",
           choices: "provider-reported",
         },
         context: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           source: "provider-usage-or-estimate",
           breakdown: "provider-categories",
         },
@@ -106,7 +114,7 @@ describe("guest runtime projection", () => {
       content: {
         attachments: {
           status: "available",
-          scope: "attached-session",
+          scope: "session",
           inputs: ["image", "file"],
           imageMimeTypes: ["image/png"],
           fileMimeTypes: "valid-type/subtype",

@@ -1,17 +1,9 @@
 import { z } from "zod"
 
 import { AgentAvatarSchema, StopReason } from "../../../protocol"
+import { validIdentifier } from "../../core/identifier"
 
-const IdentifierSchema = z
-  .string()
-  .min(1)
-  .max(256)
-  .refine((value) =>
-    [...value].every((character) => {
-      const code = character.charCodeAt(0)
-      return code >= 32 && code !== 127
-    })
-  )
+const IdentifierSchema = z.string().refine(validIdentifier)
 
 const NativeTimeSchema = z.object({
   created: z.number().finite().nonnegative(),

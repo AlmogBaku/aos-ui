@@ -205,7 +205,7 @@ describe("OpenCode workspace operations", () => {
     expect(operations.capabilities()).toMatchObject({
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },

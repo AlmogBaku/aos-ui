@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
 import {
   HermesAttachmentRegistry,
+  HermesSessionGoneError,
+  REBIND_BACKOFF,
   type AttachmentSignal,
 } from "./attachment-registry"
-import {
-  HermesRpcRejectedError,
-  HermesUnavailableError,
-  type HermesConnectionHandler,
-} from "./gateway"
+import { HermesUnavailableError, type HermesConnectionHandler } from "./gateway"
 import { nativeTurn } from "./test-utils/native-events"
 
-const scope = { agentId: "research", sessionId: "stored", threadId: "thread" }
+const scope = {
+  agentId: "research",
+  providerSessionId: "stored",
+  sessionId: "thread",
+}
 
 /**
  * The registry only needs the gateway's observation hooks. This fake records
@@ -23,11 +26,11 @@ function fakeGateway() {
   const handlers = new Set<HermesConnectionHandler>()
   return {
     transport: {
-      onEvent(listener: (event: unknown) => void) {
+      subscribeEvents(listener: (event: unknown) => void) {
         listeners.add(listener)
         return () => listeners.delete(listener)
       },
-      onConnection(handler: HermesConnectionHandler) {
+      subscribeConnection(handler: HermesConnectionHandler) {
         handlers.add(handler)
         return () => handlers.delete(handler)
       },
@@ -81,7 +84,9 @@ describe("HermesAttachmentRegistry", () => {
     const gateway = fakeGateway()
     const registry = new HermesAttachmentRegistry(
       {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
+        resume: async (value) => ({
+          liveSessionId: `live-${value.providerSessionId}`,
+        }),
         close: async () => undefined,
       },
       gateway.transport
@@ -102,13 +107,13 @@ describe("HermesAttachmentRegistry", () => {
   it("single-flights session resume and routes events by live Session", async () => {
     const gateway = fakeGateway()
     const resume = vi.fn(async (value: typeof scope) => ({
-      liveSessionId: `live-${value.sessionId}`,
+      liveSessionId: `live-${value.providerSessionId}`,
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
       gateway.transport
     )
-    const second = { ...scope, sessionId: "other" }
+    const second = { ...scope, providerSessionId: "other" }
     const [firstAttachment] = await Promise.all([
       registry.ensure(scope),
       registry.ensure(scope),
@@ -208,12 +213,12 @@ describe("HermesAttachmentRegistry", () => {
     ).rejects.toThrow()
   })
 
-  it("invalidates a stale binding and re-resumes when a heal is rejected as gone", async () => {
+  it("drops a binding whose heal finds the durable Session gone", async () => {
     const gateway = fakeGateway()
     const resume = vi
       .fn<() => Promise<{ liveSessionId: string }>>()
       .mockResolvedValueOnce({ liveSessionId: "live-first" })
-      .mockRejectedValueOnce(new HermesRpcRejectedError(4001))
+      .mockRejectedValueOnce(new HermesSessionGoneError())
       .mockResolvedValueOnce({ liveSessionId: "live-second" })
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
@@ -232,7 +237,8 @@ describe("HermesAttachmentRegistry", () => {
     expect(resume).toHaveBeenCalledTimes(3)
   })
 
-  it("resumes again on the next ensure after a heal it could not rebind", async () => {
+  it("retries a heal it could not rebind until the binding is rebound", async () => {
+    const clock = useFakeClock()
     const gateway = fakeGateway()
     const resume = vi
       .fn<() => Promise<{ liveSessionId: string }>>()
@@ -251,11 +257,17 @@ describe("HermesAttachmentRegistry", () => {
     await gateway.restored()
     expect(observer).not.toHaveBeenCalled()
 
+    // The first retry fires within its full-jitter ceiling.
+    await clock.advance(REBIND_BACKOFF.baseMs)
+    expect(resume).toHaveBeenCalledTimes(3)
+    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+
+    // Rebound on this socket: the next caller takes the binding as it stands.
     await expect(registry.ensure(scope)).resolves.toMatchObject({
       liveSessionId: "live-healed",
     })
     expect(resume).toHaveBeenCalledTimes(3)
-    expect(observer.mock.calls).toEqual([[{ kind: "lost", reason: "rebound" }]])
+    await registry.close()
   })
 
   it("resumes again on the next ensure for a binding the heal skipped", async () => {
@@ -303,13 +315,13 @@ describe("HermesAttachmentRegistry", () => {
   it("clears every binding and signals a restart loss when Hermes restarts", async () => {
     const gateway = fakeGateway()
     const resume = vi.fn(async (value: typeof scope) => ({
-      liveSessionId: `live-${value.sessionId}`,
+      liveSessionId: `live-${value.providerSessionId}`,
     }))
     const registry = new HermesAttachmentRegistry(
       { resume, close: async () => undefined },
       gateway.transport
     )
-    const second = { ...scope, sessionId: "other" }
+    const second = { ...scope, providerSessionId: "other" }
     const first = vi.fn()
     const other = vi.fn()
     await registry.subscribe(scope, first)
@@ -426,23 +438,37 @@ describe("HermesAttachmentRegistry", () => {
     }
   })
 
-  it("closes only an idle exact native Session", async () => {
+  it("closes only an idle exact native Session and drops an unsaved draft", async () => {
     vi.useFakeTimers()
     const gateway = fakeGateway()
     const close = vi.fn(async () => undefined)
+    const resume = vi.fn(async (value: typeof scope) => ({
+      liveSessionId: `live-${value.providerSessionId}`,
+      saved: !value.providerSessionId.startsWith("draft"),
+    }))
     const registry = new HermesAttachmentRegistry(
-      {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
-        close,
-      },
+      { resume, close },
       gateway.transport,
       { idleMs: 300_000 }
     )
     await registry.ensure(scope)
-    await registry.ensure({ ...scope, sessionId: "other" })
+    await vi.advanceTimersByTimeAsync(200_000)
+    // Using the cached binding restarts its idle window rather than ending it.
+    await registry.ensure(scope)
+    await registry.ensure({ ...scope, providerSessionId: "other" })
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
+    await registry.ensure({ ...scope, providerSessionId: "draft-sent" })
+    // Hermes commits a turn before completing it, so the draft is now stored.
+    gateway.publish(nativeTurn("live-draft-sent").complete("msg-1", "done"))
     await vi.advanceTimersByTimeAsync(300_000)
+    expect(close).toHaveBeenCalledTimes(3)
     expect(close).toHaveBeenCalledWith("live-stored")
     expect(close).toHaveBeenCalledWith("live-other")
+    expect(close).toHaveBeenCalledWith("live-draft-sent")
+    // Closing a draft natively would delete it; it is only unbound.
+    expect(close).not.toHaveBeenCalledWith("live-draft")
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
+    expect(resume).toHaveBeenCalledTimes(5)
     vi.useRealTimers()
   })
 
@@ -531,6 +557,49 @@ describe("HermesAttachmentRegistry", () => {
     vi.useRealTimers()
   })
 
+  it("keeps no record of a Session whose turns settled, however its binding ended", async () => {
+    const clock = useFakeClock()
+    const gateway = fakeGateway()
+    const forget = vi.fn()
+    const registry = new HermesAttachmentRegistry(
+      {
+        resume: async (value) => {
+          if (value.providerSessionId === "refused")
+            throw new HermesUnavailableError()
+          return {
+            liveSessionId: `live-${value.providerSessionId}`,
+            saved: value.providerSessionId !== "draft",
+          }
+        },
+        close: async () => undefined,
+        forget,
+      },
+      gateway.transport,
+      { idleMs: 1_000 }
+    )
+    const [stored, draft, restarted] = await Promise.all(
+      ["stored", "draft", "restarted"].map((id) =>
+        registry.subscribe({ ...scope, providerSessionId: id }, vi.fn())
+      )
+    )
+
+    // Two turns settle and go idle: one is closed, the draft only unbound.
+    stored!()
+    draft!()
+    await clock.advance(1_000)
+    // Hermes restarts under a running turn, which then settles.
+    gateway.epochChanged()
+    restarted!()
+    await expect(
+      registry.ensure({ ...scope, providerSessionId: "refused" })
+    ).rejects.toThrow(HermesUnavailableError)
+
+    expect(registry.size).toBe(0)
+    expect(
+      forget.mock.calls.map(([value]) => value.providerSessionId).sort()
+    ).toEqual(["draft", "refused", "restarted", "stored"])
+  })
+
   it("registers no observer when a subscription cannot be retained", async () => {
     const gateway = fakeGateway()
     let resumes = 0
@@ -561,19 +630,23 @@ describe("HermesAttachmentRegistry", () => {
     await registry.close()
   })
 
-  it("shutdown detaches retained and running Sessions and closes only idle attachments", async () => {
+  it("shutdown detaches retained, running, and draft Sessions and closes only idle attachments", async () => {
     const gateway = fakeGateway()
     const close = vi.fn(async () => undefined)
     const registry = new HermesAttachmentRegistry(
       {
-        resume: async (value) => ({ liveSessionId: `live-${value.sessionId}` }),
+        resume: async (value) => ({
+          liveSessionId: `live-${value.providerSessionId}`,
+          saved: value.providerSessionId !== "draft",
+        }),
         close,
       },
       gateway.transport
     )
     const release = await registry.retain(scope, "waiting-for-input")
-    await registry.ensure({ ...scope, sessionId: "running" })
-    await registry.ensure({ ...scope, sessionId: "idle" })
+    await registry.ensure({ ...scope, providerSessionId: "running" })
+    await registry.ensure({ ...scope, providerSessionId: "idle" })
+    await registry.ensure({ ...scope, providerSessionId: "draft" })
     gateway.publish(nativeTurn("live-running").messageStart("msg-1"))
 
     await registry.close()
@@ -581,6 +654,7 @@ describe("HermesAttachmentRegistry", () => {
     expect(close).toHaveBeenCalledWith("live-idle")
     expect(close).not.toHaveBeenCalledWith("live-stored")
     expect(close).not.toHaveBeenCalledWith("live-running")
+    expect(close).not.toHaveBeenCalledWith("live-draft")
     release()
   })
 })

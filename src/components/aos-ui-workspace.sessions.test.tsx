@@ -68,8 +68,8 @@ it("renders pending provider interactions through the unified runtime and submit
   }
   const respond = vi.fn(async () => {})
   const interactions: RuntimeInteractionAdapter = {
-    getPending: (threadId) =>
-      threadId === request.sessionId ? request : undefined,
+    getPending: (sessionId) =>
+      sessionId === request.sessionId ? request : undefined,
     subscribe: () => () => {},
     respond,
     reject: async () => {},
@@ -408,10 +408,10 @@ describe("artifact Session scope", () => {
     // published it, so a read carrying another Session's id is refused
     // outright. Switching Sessions must not be able to pair one Session's id
     // with the artifacts still on screen from the one before it.
-    const reads: { artifact: string; threadId: string }[] = []
+    const reads: { artifact: string; sessionId: string }[] = []
     const artifacts: ArtifactAdapter = {
-      resolve: ({ artifact, threadId }) => {
-        reads.push({ artifact: artifact.id, threadId })
+      resolve: ({ artifact, sessionId }) => {
+        reads.push({ artifact: artifact.id, sessionId })
         return Promise.resolve(new Blob(["bytes"], { type: "image/png" }))
       },
     }
@@ -462,17 +462,17 @@ describe("artifact Session scope", () => {
 
     // The switch a tab performs, driven through the runtime that owns it.
     const threads = bundle!.assistantRuntime.threads
-    for (const threadId of ["thread-aster-launch", "thread-aster-market"]) {
+    for (const sessionId of ["thread-aster-launch", "thread-aster-market"]) {
       await act(async () => {
-        await threads.switchToThread(threadId)
+        await threads.switchToThread(sessionId)
       })
       await waitFor(() =>
-        expect(threads.getState().mainThreadId).toBe(threadId)
+        expect(threads.getState().mainThreadId).toBe(sessionId)
       )
     }
 
     expect(
-      reads.filter(({ threadId }) => threadId !== "thread-aster-market")
+      reads.filter(({ sessionId }) => sessionId !== "thread-aster-market")
     ).toEqual([])
   })
 })
@@ -482,13 +482,13 @@ describe("paged Session History", () => {
   // Ten Aster Sessions, newest first, and an old pinned one.
   const pagedSessions = [
     ...Array.from({ length: 10 }, (_, index) => ({
-      threadId: `thread-aster-${index}`,
+      sessionId: `thread-aster-${index}`,
       agentId: "agent-aster",
       updatedAt: new Date(Date.UTC(2026, 8, 3, 11 - index)).toISOString(),
       status: "idle" as const,
     })),
     {
-      threadId: pinnedId,
+      sessionId: pinnedId,
       agentId: "agent-aster",
       updatedAt: "2026-08-01T12:00:00.000Z",
       status: "idle" as const,
@@ -496,7 +496,10 @@ describe("paged Session History", () => {
     },
   ]
   const sessionTitles = Object.fromEntries([
-    ...pagedSessions.map(({ threadId }) => [threadId, `Session ${threadId}`]),
+    ...pagedSessions.map(({ sessionId }) => [
+      sessionId,
+      `Session ${sessionId}`,
+    ]),
     [pinnedId, "Pinned plan"],
   ])
   let observed: IntersectionObserverCallback[] = []

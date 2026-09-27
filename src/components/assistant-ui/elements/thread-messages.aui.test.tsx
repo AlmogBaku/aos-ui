@@ -102,7 +102,7 @@ describe("settled turn fold", () => {
       readResource: vi.fn(),
     } satisfies McpAppAdapter
     render(
-      <McpAppHostProvider adapter={apps} agentId="agent" threadId="thread">
+      <McpAppHostProvider adapter={apps} agentId="agent" sessionId="thread">
         <LocalThread
           toolFallback={AosToolPresentation}
           initialMessages={[

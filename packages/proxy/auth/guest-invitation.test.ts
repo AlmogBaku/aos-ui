@@ -18,7 +18,6 @@ function service(overrides?: {
   audience?: "aos-guest"
   keys?: readonly { id: string; secret: Uint8Array }[]
   now?: () => number
-  ttlSeconds?: number
   clockSkewSeconds?: number
 }) {
   return createGuestInvitationService({
@@ -28,7 +27,6 @@ function service(overrides?: {
     audience: overrides?.audience ?? "aos-guest",
     keys: overrides?.keys ?? [{ id: "2026-09", secret: currentKey }],
     now: overrides?.now ?? (() => 1_700_000_000_000),
-    ttlSeconds: overrides?.ttlSeconds ?? 300,
     clockSkewSeconds: overrides?.clockSkewSeconds ?? 10,
   })
 }
@@ -67,7 +65,7 @@ describe("guest invitation", () => {
       dep: "aos-prod-il1",
       runtime: "hermes-primary",
       iat: 1_700_000_000,
-      exp: 1_700_000_300,
+      exp: 1_700_259_200,
       agent: "agent_planner",
       ref: "conversation_ref",
     })
@@ -81,8 +79,8 @@ describe("guest invitation", () => {
     })
   })
 
-  it("preserves first-turn presentation and a requested shorter lifetime", async () => {
-    const issued = await service({ ttlSeconds: 86_400 }).issue({
+  it("preserves first-turn presentation and a requested lifetime", async () => {
+    const issued = await service().issue({
       ...invitation,
       expiresInSeconds: 3_600,
       firstTurn: {
@@ -158,17 +156,8 @@ describe("guest invitation", () => {
     })
   })
 
-  it("defaults invitation lifetime to 72 hours", async () => {
-    const invitations = createGuestInvitationService({
-      deploymentId: "aos-prod-il1",
-      runtimeId: "hermes-primary",
-      issuer: "aos-invite",
-      audience: "aos-guest",
-      keys: [{ id: "2026-09", secret: currentKey }],
-      now: () => 1_700_000_000_000,
-    })
-
-    const issued = await invitations.issue(invitation)
+  it("lasts 72 hours when the invitation names no lifetime", async () => {
+    const issued = await service().issue(invitation)
 
     expect(decodeJwt(issued.token).exp).toBe(1_700_259_200)
   })
@@ -190,8 +179,11 @@ describe("guest invitation", () => {
     ).resolves.toBeUndefined()
   })
 
-  it("enforces issue time, expiry, configured maximum lifetime, and clock skew", async () => {
-    const issued = await service().issue(invitation)
+  it("enforces issue time, expiry, and clock skew", async () => {
+    const issued = await service().issue({
+      ...invitation,
+      expiresInSeconds: 300,
+    })
 
     await expect(
       service({ now: () => 1_699_999_989_000 }).verify(issued.token)
@@ -202,9 +194,6 @@ describe("guest invitation", () => {
     await expect(
       service({ now: () => 1_700_000_311_000 }).verify(issued.token)
     ).resolves.toBeUndefined()
-    await expect(
-      service().issue({ ...invitation, expiresInSeconds: 301 })
-    ).rejects.toBeInstanceOf(GuestInvitationError)
   })
 
   it("supports verification-only key rotation and stable token identity", async () => {
@@ -232,6 +221,9 @@ describe("guest invitation", () => {
     ).rejects.toBeInstanceOf(GuestInvitationError)
     await expect(
       service().issue({ ...invitation, ui: { lang: "fr" } as never })
+    ).rejects.toBeInstanceOf(GuestInvitationError)
+    await expect(
+      service().issue({ ...invitation, expiresInSeconds: 3_000_000_000 })
     ).rejects.toBeInstanceOf(GuestInvitationError)
     await expect(service().verify("not-a-jwt")).resolves.toBeUndefined()
     await expect(

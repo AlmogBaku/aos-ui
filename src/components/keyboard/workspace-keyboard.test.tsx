@@ -24,8 +24,8 @@ const agents: WorkspaceAgent[] = [
   { id: "two", name: "Two", status: "idle" },
 ]
 const sessions: WorkspaceSession[] = [
-  { threadId: "a", title: "A", status: "idle", updatedAt: "2026-09-06" },
-  { threadId: "b", title: "B", status: "idle", updatedAt: "2026-09-06" },
+  { sessionId: "a", title: "A", status: "idle", updatedAt: "2026-09-06" },
+  { sessionId: "b", title: "B", status: "idle", updatedAt: "2026-09-06" },
 ]
 
 function renderShell() {

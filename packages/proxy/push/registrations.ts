@@ -10,6 +10,7 @@ import {
 import { join } from "node:path"
 import { z } from "zod"
 
+import type { Logger } from "../../lifecycle"
 import {
   PushRegistrationSchema,
   type PushRegistration,
@@ -40,13 +41,11 @@ export class PushRegistrationLimitError extends Error {
   }
 }
 
-type RegistrationLogger = { error(value: unknown): void }
-
 export type PushRegistrationsOptions = {
   /** Must already exist and be writable; push state is never kept in memory. */
   stateDir: string
   maxPerPrincipal?: number
-  logger?: RegistrationLogger
+  logger?: Logger
   now?: () => number
 }
 
@@ -106,7 +105,7 @@ function parsedJson(contents: string): unknown {
 }
 
 /** The stored file, or nothing when it is absent, unreadable, or invalid. */
-async function readRegistrationFile(path: string, logger?: RegistrationLogger) {
+async function readRegistrationFile(path: string, logger?: Logger) {
   let contents: string
   try {
     contents = await readFile(path, "utf8")
@@ -117,7 +116,7 @@ async function readRegistrationFile(path: string, logger?: RegistrationLogger) {
   if (parsed.success) return parsed.data
   // The contents are subscription endpoints and device keys: report only that
   // the file could not be used.
-  logger?.error({ event: "push.registrations.invalid" })
+  logger?.error({}, "push.registrations.invalid")
   return undefined
 }
 

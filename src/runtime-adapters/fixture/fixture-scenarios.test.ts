@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { buildFixtureScenario, fixtureScenarioNames } from "./fixture-scenarios"
-import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 
 describe("deterministic fixture scenarios", () => {
   it("routes representative prompts to every supported scenario", () => {

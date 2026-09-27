@@ -10,6 +10,7 @@ import {
 } from "./acp-workspace-client-composer"
 import type {
   AcpConnection,
+  AcpSessionListener,
   AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
@@ -45,32 +46,36 @@ function configOptions(model: string, effort: string): SessionConfigOption[] {
 }
 
 /** The three connection seams the store uses; the rest is never reached. */
-function createStore({ attached = true } = {}) {
+function createStore({ reported = true, deferred = false } = {}) {
+  /** Each deferred write's answer, sent when the test calls it. */
+  const answers: (() => void)[] = []
   let onUpdate: AcpSessionUpdateListener = () => undefined
   let onReplay: AcpSessionReplayListener = () => undefined
   const connection = {
-    onSessionUpdate: (_: string, listener: AcpSessionUpdateListener) => {
-      onUpdate = listener
+    subscribe: (_: string, listener: AcpSessionListener) => {
+      if (listener.update) onUpdate = listener.update
+      if (listener.replay) onReplay = listener.replay
       return () => undefined
     },
-    onSessionReplay: (_: string, listener: AcpSessionReplayListener) => {
-      onReplay = listener
-      return () => undefined
+    setConfigOption: (_: string, configId: string, value: string) => {
+      const answer =
+        configId === "session-model"
+          ? configOptions(value, "low")
+          : configOptions("sonnet", value)
+      return deferred
+        ? new Promise((resolve) => answers.push(() => resolve(answer)))
+        : Promise.resolve(answer)
     },
-    setConfigOption: async (_: string, configId: string, value: string) =>
-      configId === "session-model"
-        ? configOptions(value, "low")
-        : configOptions("sonnet", value),
   } as unknown as AcpConnection
   const store = createAcpComposerStore(connection)
-  const attach = () =>
-    store.attach(SESSION_ID, {
-      configOptions: configOptions("sonnet", "low"),
-      capabilities: {} as never,
-    })
-  if (attached) attach()
+  const release = store.subscribe(SESSION_ID)
   const emit = (update: SessionUpdate, meta?: Record<string, unknown>) =>
     onUpdate(update, meta)
+  if (reported)
+    emit({
+      sessionUpdate: "config_option_update",
+      configOptions: configOptions("sonnet", "low"),
+    })
   const idle = (usage?: unknown, cost?: unknown) =>
     emit(
       {
@@ -84,7 +89,7 @@ function createStore({ attached = true } = {}) {
         ...(cost ? { cost } : {}),
       }
     )
-  return { store, emit, idle, attach, replay: () => onReplay() }
+  return { store, emit, idle, release, answers, replay: () => onReplay() }
 }
 
 const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 }
@@ -112,7 +117,7 @@ describe("createAcpComposerStore turn usage", () => {
   it("reads the last turn's usage and the Session's cost from idle updates", () => {
     const { store, idle } = createStore()
     const listener = vi.fn()
-    store.subscribeContext(SESSION_ID, listener)
+    store.listen(SESSION_ID, listener)
     idle(
       { ...USAGE, thoughtTokens: 5, cachedReadTokens: null },
       {
@@ -126,17 +131,6 @@ describe("createAcpComposerStore turn usage", () => {
       cost: { amount: 0.1 + 0.2, currency: "USD" },
     })
     expect(listener).toHaveBeenCalledTimes(2)
-  })
-
-  it("keeps a reading that arrives before its resume answer settles", () => {
-    const { store, emit, attach } = createStore({ attached: false })
-    store.observe(SESSION_ID)
-    emit({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
-    attach()
-    expect(store.context(SESSION_ID)).toMatchObject({
-      usedTokens: 120,
-      maxTokens: 1_000,
-    })
   })
 
   it("ignores a usage missing a count ACP requires", () => {
@@ -158,6 +152,25 @@ describe("createAcpComposerStore turn usage", () => {
 })
 
 describe("createAcpComposerStore model feed", () => {
+  it("offers the models a config option update reports, with no attach, until released", () => {
+    const { store, emit, release } = createStore({ reported: false })
+    const listener = vi.fn()
+    store.listen(SESSION_ID, listener)
+
+    emit({
+      sessionUpdate: "config_option_update",
+      configOptions: configOptions("opus", "high"),
+    })
+
+    expect(store.models(SESSION_ID)).toMatchObject({
+      selectedId: "opus",
+      effortId: "high",
+    })
+    expect(listener).toHaveBeenCalledTimes(1)
+    release()
+    expect(store.models(SESSION_ID)).toBeUndefined()
+  })
+
   it("keeps one feed and one reading until the model changes", () => {
     const { store, emit } = createStore()
     const feed = store.modelFeed(SESSION_ID)
@@ -182,12 +195,20 @@ describe("createAcpComposerStore model feed", () => {
     expect(listener).toHaveBeenCalledTimes(1)
   })
 
-  it("follows the Session onto what a write settled", async () => {
-    const { store } = createStore()
-    await store.selectModel(SESSION_ID, "opus")
+  it("follows the Session onto what its newest write settled", async () => {
+    const { store, answers } = createStore({ deferred: true })
+    const first = store.selectModel(SESSION_ID, "opus")
+    const second = store.selectEffort(SESSION_ID, "high")
+
+    // The newer write answers first; the older one's answer arrives late.
+    answers[1]?.()
+    await second
+    answers[0]?.()
+    await first
+
     expect(store.modelFeed(SESSION_ID).current()).toEqual({
-      selectedId: "opus",
-      effortId: "low",
+      selectedId: "sonnet",
+      effortId: "high",
     })
   })
 })

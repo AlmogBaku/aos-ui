@@ -20,7 +20,7 @@ import { useInsideTurnFold } from "./turn-working-fold"
 import { useRememberedDisclosure } from "./disclosure-memory"
 import { useToolUiLocale } from "@/components/tool-ui"
 import { toolResultSignalsFailure } from "@/components/tool-ui/lifecycle"
-import { readAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+import { readAosToolArtifact } from "@/lib/tool-artifact"
 import {
   DEFAULT_TOOL_ACTIONS,
   toolActionKind,

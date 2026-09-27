@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { MCP_APP_TOOL_ARTIFACT } from "@/components/mcp-apps/tool-part"
-import { withAosToolArtifact } from "@/components/tool-ui/tool-artifact"
+import { withAosToolArtifact } from "@/lib/tool-artifact"
 
 import {
   createToolPartSelector,

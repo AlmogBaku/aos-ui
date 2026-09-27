@@ -1,5 +1,5 @@
 import type { ToolTerminalLabels } from "../locale"
-import type { AosTerminal } from "../tool-artifact"
+import type { AosTerminal } from "@/lib/tool-artifact"
 
 /** The terminal's state in words: running, or how it ended. */
 export function terminalStatus(

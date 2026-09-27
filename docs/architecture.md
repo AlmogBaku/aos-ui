@@ -115,7 +115,7 @@ operator-managed authenticated ingress. Nginx is optional TLS/reverse-proxy
 infrastructure, not part of the runtime boundary.
 
 The optional guest listener uses a distinct port and scoped, expiring JWTs.
-Operator and guest lanes share the same configured runtime adapter, transport,
+Operator and guest listeners share the same configured runtime adapter, transport,
 and Session coordinator. Authorization and outbound projection are the guest
 middleware stack's (`packages/proxy/guest/middleware`), so a guest token grants
 only its declared runtime, Agent, and conversation. Within it a guest sends,

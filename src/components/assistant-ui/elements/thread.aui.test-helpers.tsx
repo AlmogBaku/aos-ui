@@ -311,8 +311,8 @@ const multiSessionAdapter = {
     remoteId,
     status: "regular" as const,
   }),
-  initialize: async (threadId: string) => ({
-    remoteId: threadId,
+  initialize: async (sessionId: string) => ({
+    remoteId: sessionId,
   }),
   rename: async () => undefined,
   updateCustom: async () => undefined,
@@ -351,10 +351,10 @@ export function MultiSessionThread({
  * scope, where threadListItem.remoteId is available.
  */
 function useMultiSessionRuntime() {
-  const threadId = useAuiState((state) => state.threadListItem.remoteId)
+  const sessionId = useAuiState((state) => state.threadListItem.remoteId)
   return useLocalRuntime(
     { run: async () => ({ content: [] }) },
-    { initialMessages: MULTI_SESSION_MESSAGES[threadId ?? "session-one"] }
+    { initialMessages: MULTI_SESSION_MESSAGES[sessionId ?? "session-one"] }
   )
 }
 

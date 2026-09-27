@@ -1,21 +1,25 @@
 import { describe, expect, it } from "vitest"
 
-import { redactForLog } from "./redaction"
+import { createProxyLogger } from "./cli/logger"
+import { CredentialValues, redactForLog } from "./redaction"
 
 describe("log redaction", () => {
-  it("keeps a classification code while stripping a credential-bearing URL query", () => {
+  it("keeps a classification code while stripping the credentials of a URL of any scheme", () => {
     expect(
       redactForLog({
         event: "hermes.turn.failed",
         publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
         code: "validation_exception",
         url: "https://example.test/oauth/callback?code=native-secret",
+        detail:
+          "dial wss://aos:tok-test-1@hermes.example.test/api/ws?token=tok-test-1#frame refused",
       })
     ).toEqual({
       event: "hermes.turn.failed",
       publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
       code: "validation_exception",
       url: "https://example.test/oauth/callback",
+      detail: "dial wss://hermes.example.test/api/ws refused",
     })
   })
 
@@ -30,6 +34,9 @@ describe("log redaction", () => {
         refreshToken: "secret",
         secret: "secret",
         clientSecret: "secret",
+        deviceToken: "secret",
+        password: "secret",
+        apiKey: "secret",
         safe: "kept",
       })
     ).toEqual({
@@ -41,6 +48,9 @@ describe("log redaction", () => {
       refreshToken: "[REDACTED]",
       secret: "[REDACTED]",
       clientSecret: "[REDACTED]",
+      deviceToken: "[REDACTED]",
+      password: "[REDACTED]",
+      apiKey: "[REDACTED]",
       safe: "kept",
     })
   })
@@ -65,30 +75,66 @@ describe("log redaction", () => {
     })
   })
 
-  it("keeps every thrown Error opaque, however it is described", () => {
-    class ConfigurationLikeError extends Error {}
+  it("logs an error by its redacted message, its classification, and its cause chain", () => {
+    const refused = Object.assign(new Error("handshake refused"), {
+      code: 4401,
+      reason: "authentication_rejected",
+    })
+    const error = new Error(
+      "dial wss://hermes.example.test/api/ws?token=tok-test-1 failed",
+      { cause: refused }
+    )
+
     expect(
-      redactForLog(new ConfigurationLikeError("listen.port: Too big"))
-    ).toEqual({ name: "Error", message: "Upstream request failed" })
+      redactForLog({ event: "hermes.gateway.dial_failed", error })
+    ).toEqual({
+      event: "hermes.gateway.dial_failed",
+      error: {
+        name: "Error",
+        message: "dial wss://hermes.example.test/api/ws failed",
+        cause: {
+          name: "Error",
+          message: "handshake refused",
+          code: 4401,
+          reason: "authentication_rejected",
+        },
+      },
+    })
   })
 
-  it("passes a reported failure description through as written", () => {
-    expect(
-      redactForLog({
-        event: "proxy.start_failed",
-        error: {
-          name: "ProxyConfigurationError",
-          message:
-            "Invalid proxy configuration in /etc/aos-ui/proxy.yaml:\n  listen.port: Too big",
-        },
-      })
-    ).toEqual({
-      event: "proxy.start_failed",
-      error: {
-        name: "ProxyConfigurationError",
-        message:
-          "Invalid proxy configuration in /etc/aos-ui/proxy.yaml:\n  listen.port: Too big",
+  it("writes no credential value the proxy has read, its rotated successor and Basic form included", async () => {
+    const credentials = new CredentialValues()
+    const basic = (password: string) =>
+      Buffer.from(`aos:${password}`).toString("base64")
+    let stored = "tok-test-1"
+    const readPassword = credentials.register(
+      async () => stored,
+      (password) => [password, basic(password)]
+    )
+    await readPassword()
+    stored = "tok-test-2"
+    await readPassword()
+    const lines: string[] = []
+    const logger = createProxyLogger({
+      level: "info",
+      credentials,
+      destination: { write: (line) => void lines.push(line) },
+    })
+
+    logger.child({ peer: "tok-test-1" }).error(
+      {
+        event: "opencode.request.failed",
+        error: new Error(`Basic ${basic("tok-test-2")} refused`),
       },
+      "tok-test-2 rejected at wss://opencode.example.test/ws?token=abc"
+    )
+
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      peer: "[REDACTED]",
+      event: "opencode.request.failed",
+      error: { name: "Error", message: "Basic [REDACTED] refused" },
+      msg: "[REDACTED] rejected at wss://opencode.example.test/ws",
     })
   })
 })

@@ -9,18 +9,21 @@ import {
   canonicalToolName,
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
+import { validIdentifier } from "../../core/identifier"
+import type { JsonValue } from "../json-value"
 import {
   openClawArtifactReceipt,
   openClawMediaArtifact,
   publicArtifactArgs,
   type OpenClawArtifactDescriptor,
 } from "./artifacts"
+import { safeClone } from "./json-copy"
 import { mcpAppViewId } from "./mcp-apps"
 import { mayBeMcpToolName, type OpenClawMcpToolNames } from "./mcp-tool-names"
 import {
   openClawHistoryParams,
   openClawModelsParams,
-  openClawSessionsParams,
+  openClawSessionSearchParams,
   parseOpenClawHistory,
   parseOpenClawModels,
   parseOpenClawSessions,
@@ -64,15 +67,7 @@ function boundedString(value: unknown, max = 1_000_000) {
 }
 
 function identifier(value: unknown) {
-  return typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= 256 &&
-    ![...value].some((character) => {
-      const code = character.charCodeAt(0)
-      return code < 32 || code === 127
-    })
-    ? value
-    : undefined
+  return typeof value === "string" && validIdentifier(value) ? value : undefined
 }
 
 function timestamp(row: Record<string, unknown>, index: number) {
@@ -99,9 +94,6 @@ function nativeSequence(row: Record<string, unknown>, index: number) {
     : index
 }
 
-type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
-
 /** One native tool outcome, from the `toolResult` row that answers a call. */
 type ToolOutcome = Readonly<{
   result?: JsonValue
@@ -110,18 +102,6 @@ type ToolOutcome = Readonly<{
   /** The MCP server and tool OpenClaw records on an MCP tool's result. */
   mcp?: Readonly<{ server: string; tool: string }>
 }>
-
-/** A bounded JSON copy of a native value, or `undefined` when it has none. */
-function publicJson(value: unknown): JsonValue | undefined {
-  try {
-    const json = JSON.stringify(value)
-    return json === undefined || json.length > 262_144
-      ? undefined
-      : (JSON.parse(json) as JsonValue)
-  } catch {
-    return undefined
-  }
-}
 
 /** The AOS tool a native tool name refers to. */
 function aosToolName(value: unknown) {
@@ -170,7 +150,7 @@ function toolOutcomes(rows: readonly unknown[]) {
     const mcp = mcpTool(row.details)
     const result = artifact
       ? artifact.result
-      : publicJson({
+      : safeClone({
           content: row.content,
           ...(row.details === undefined ? {} : { details: row.details }),
         })
@@ -196,7 +176,7 @@ function toolCallParts(
   const toolCallId = identifier(block.id)
   const outcome = toolCallId ? outcomes.get(toolCallId) : undefined
   const name = historyToolName(block.name, outcome, resolve)
-  const args = publicJson(
+  const args = safeClone(
     name === "present_artifact"
       ? publicArtifactArgs(block.arguments)
       : block.arguments
@@ -402,7 +382,7 @@ export function createOpenClawHistory(input: {
     const rows = parseOpenClawSessions(
       await input.client.request(
         "sessions.list",
-        openClawSessionsParams(agentId, 100, 0)
+        openClawSessionSearchParams(agentId, sessionKey)
       ),
       100
     )
@@ -519,12 +499,13 @@ export function createOpenClawHistory(input: {
         label: model.name,
         group: model.provider,
       }))
-      const selectedId = JSON.stringify([
-        selected.modelProvider ?? "",
-        selected.model ?? "",
-      ])
+      if (!selected.model) throw new OpenClawHistoryUnavailableError()
+      const provider = selected.modelProvider ?? ""
+      const selectedId = JSON.stringify([provider, selected.model])
+      // A Session may run a model the catalog no longer lists; it stays listed
+      // by its own id so the selector still shows what the Session runs.
       if (!options.some((option) => option.id === selectedId))
-        throw new OpenClawHistoryUnavailableError()
+        options.push({ id: selectedId, label: selected.model, group: provider })
       return { selectedId, options }
     },
     async context(agentId, sessionKey) {

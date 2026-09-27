@@ -8,28 +8,28 @@ const noop = () => {}
 /** Reads only the selected Session; provider subscriptions own reconciliation. */
 export function PendingInteractionComposer({
   locale,
-  threadId,
+  sessionId,
   interactions,
   fallback,
 }: {
   locale: Locale
-  threadId: string
+  sessionId: string
   interactions: RuntimeInteractionAdapter
   fallback: ReactNode
 }) {
   const subscribe = useCallback(
-    (listener: () => void) => interactions.subscribe(threadId, listener),
-    [interactions, threadId]
+    (listener: () => void) => interactions.subscribe(sessionId, listener),
+    [interactions, sessionId]
   )
   const getSnapshot = useCallback(
-    () => interactions.getPending(threadId),
-    [interactions, threadId]
+    () => interactions.getPending(sessionId),
+    [interactions, sessionId]
   )
   const request = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  if (!request || request.sessionId !== threadId) return fallback
+  if (!request || request.sessionId !== sessionId) return fallback
   const composer = (
     <RuntimeQuestionComposer
-      key={`${threadId}:${request.requestId}`}
+      key={`${sessionId}:${request.requestId}`}
       locale={locale}
       request={request}
       interactions={interactions}

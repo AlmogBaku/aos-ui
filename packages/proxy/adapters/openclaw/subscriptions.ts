@@ -15,12 +15,13 @@ import {
 import { isGatewayEventFrame } from "@openclaw/gateway-protocol/frame-guards"
 import { Check } from "typebox/value"
 
+import { Deadline, type Logger } from "../../../lifecycle"
+
+/** How long a replaced generation may hold delivery while it re-subscribes and reconciles. */
+const PAUSE_DEADLINE_MS = 30_000
+
 export interface OpenClawSubscriptionRequestClient {
-  request<T>(
-    method: string,
-    params: Record<string, unknown>,
-    options?: { timeoutMs?: number | null }
-  ): Promise<T>
+  request<T>(method: string, params: Record<string, unknown>): Promise<T>
 }
 
 export type OpenClawSubscriptionScope = Readonly<{
@@ -49,6 +50,7 @@ type LogicalLease = {
     reason: "gap" | "reconnect",
     fence: OpenClawReconciliationFence
   ) => void | Promise<void>
+  lost?: (cause: unknown) => void
   native?: GatewaySessionMessageSubscription
   nativeGeneration: number
   approvalReplayKey?: string
@@ -139,17 +141,21 @@ function eventMatchesScope(
   return presentation.agentId === scope.agentId
 }
 
+type Reason = "gap" | "reconnect"
+
 export class OpenClawSessionSubscriptions {
   readonly #client: OpenClawSubscriptionRequestClient
+  readonly #logger: Logger
   #coordinator: GatewaySessionMessageSubscriptionCoordinator
   readonly #leases = new Set<LogicalLease>()
   #generation = 1
   #transition: Promise<void> = Promise.resolve()
-  #paused = false
-  readonly #buffer: EventFrame[] = []
+  /** The generation that holds delivery; only that generation resumes it. */
+  #paused: number | undefined
 
-  constructor(client: OpenClawSubscriptionRequestClient) {
+  constructor(client: OpenClawSubscriptionRequestClient, logger: Logger) {
     this.#client = client
+    this.#logger = logger
     this.#coordinator = this.#createCoordinator()
   }
 
@@ -157,13 +163,19 @@ export class OpenClawSessionSubscriptions {
     return this.#generation
   }
 
+  /**
+   * Leases `scope`'s native subscription. After a reconnect, `reconcile`
+   * hears that the subscription was renewed and `lost` that it could not be;
+   * a lost lease's holder decides whether to acquire again.
+   */
   async acquire(
     scope: OpenClawSubscriptionScope,
     listener: (event: EventFrame) => void,
     reconcile?: (
       reason: "gap" | "reconnect",
       fence: OpenClawReconciliationFence
-    ) => void | Promise<void>
+    ) => void | Promise<void>,
+    lost?: (cause: unknown) => void
   ): Promise<OpenClawSessionLease> {
     if (!validIdentity(scope.agentId) || !validIdentity(scope.sessionKey))
       throw new Error("Invalid OpenClaw Session subscription scope")
@@ -173,6 +185,7 @@ export class OpenClawSessionSubscriptions {
         scope,
         listener,
         ...(reconcile ? { reconcile } : {}),
+        ...(lost ? { lost } : {}),
         nativeGeneration: generation,
         approvalDirty: false,
         released: false,
@@ -220,9 +233,8 @@ export class OpenClawSessionSubscriptions {
           lease.approvalReplayKey === sessionKey) &&
         eventMatchesScope(candidate, lease.scope)
     )
-    if (this.#paused) {
+    if (this.#paused !== undefined) {
       for (const lease of matching) lease.dirty = true
-      if (this.#buffer.length < 4_096) this.#buffer.push(candidate)
       return
     }
     for (const lease of matching) {
@@ -234,42 +246,113 @@ export class OpenClawSessionSubscriptions {
     }
   }
 
-  replaceGeneration(reason: "gap" | "reconnect") {
+  /**
+   * Holds delivery once the link drops: a new generation refuses the old
+   * one's work, and every lease is marked for reconciliation.
+   */
+  pause() {
     this.#generation += 1
-    const generation = this.#generation
-    this.#paused = true
-    this.#buffer.splice(0)
+    this.#paused = this.#generation
     for (const lease of this.#leases) lease.dirty = true
+    return this.#generation
+  }
+
+  /**
+   * Re-subscribes every lease on a new generation and reconciles each,
+   * holding delivery until then or until the paused deadline passes. A lease
+   * that fails to re-subscribe is told it is lost while the others deliver.
+   */
+  replaceGeneration(reason: Reason) {
+    const generation = this.pause()
+    const deadline = new Deadline(PAUSE_DEADLINE_MS)
+    deadline.signal.addEventListener("abort", () => this.#resume(generation))
     return this.#enqueue(async () => {
+      if (generation !== this.#generation) return
       this.#coordinator.reset()
       this.#coordinator = this.#createCoordinator()
-      for (const lease of this.#leases) {
-        if (lease.released) continue
-        lease.native = await this.#coordinator.acquire(lease.scope.sessionKey, {
+      const leases = [...this.#leases]
+      const failed = await this.#resubscribe(leases, generation)
+      if (generation !== this.#generation) return
+      for (const [lease, cause] of failed) {
+        try {
+          lease.lost?.(cause)
+        } catch (err) {
+          this.#logger.warn({ err }, "openclaw.subscription.lost_failed")
+        }
+      }
+      await this.#reconcile(
+        leases.filter((lease) => !failed.has(lease)),
+        reason,
+        generation,
+        deadline.signal
+      )
+    }).finally(() => {
+      deadline.clear()
+      this.#resume(generation)
+    })
+  }
+
+  /** Refuses every generation's pending work; the client's own stop ends the native subscriptions. */
+  close() {
+    this.#generation += 1
+  }
+
+  #resume(generation: number) {
+    if (this.#paused === generation) this.#paused = undefined
+  }
+
+  /** Re-acquires each live lease on `generation` and returns the ones that failed, with why. */
+  async #resubscribe(leases: readonly LogicalLease[], generation: number) {
+    const failed = new Map<LogicalLease, unknown>()
+    for (const lease of leases) {
+      if (generation !== this.#generation) break
+      if (lease.released) continue
+      try {
+        const native = await this.#coordinator.acquire(lease.scope.sessionKey, {
           agentId: lease.scope.agentId,
           includeApprovals: true,
         })
+        if (generation !== this.#generation) break
+        lease.native = native
         lease.nativeGeneration = generation
         lease.approvalReplayKey = Check(
           SessionApprovalReplaySchema,
-          lease.native.approvalReplay
+          native.approvalReplay
         )
-          ? lease.native.approvalReplay.sessionKey
+          ? native.approvalReplay.sessionKey
           : undefined
+      } catch (err) {
+        this.#logger.warn({ err }, "openclaw.subscription.resubscribe_failed")
+        failed.set(lease, err)
       }
-      let dirty: boolean
-      do {
-        const leases = [...this.#leases].filter((lease) => !lease.released)
-        for (const lease of leases) lease.dirty = false
-        for (const lease of leases)
+    }
+    return failed
+  }
+
+  /**
+   * Reconciles `leases` until none is dirty, the generation moves on, or
+   * `signal` aborts. A failed reconcile is its lease's own to report.
+   */
+  async #reconcile(
+    leases: readonly LogicalLease[],
+    reason: Reason,
+    generation: number,
+    signal?: AbortSignal
+  ) {
+    let dirty: boolean
+    do {
+      const live = leases.filter((lease) => !lease.released)
+      for (const lease of live) lease.dirty = false
+      for (const lease of live) {
+        if (generation !== this.#generation) return
+        try {
           await lease.reconcile?.(reason, { dirty: () => lease.dirty })
-        dirty = leases.some((lease) => !lease.released && lease.dirty)
-      } while (generation === this.#generation && dirty)
-      if (generation === this.#generation) {
-        this.#buffer.splice(0)
-        this.#paused = false
+        } catch (err) {
+          this.#logger.warn({ err }, "openclaw.subscription.reconcile_failed")
+        }
       }
-    })
+      dirty = live.some((lease) => !lease.released && lease.dirty)
+    } while (dirty && generation === this.#generation && !signal?.aborted)
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -283,11 +366,7 @@ export class OpenClawSessionSubscriptions {
 
   #createCoordinator() {
     return new GatewaySessionMessageSubscriptionCoordinator({
-      request: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-        options?: { timeoutMs?: number | null }
-      ) => {
+      request: async <T>(method: string, params: Record<string, unknown>) => {
         const valid =
           method === "sessions.messages.subscribe"
             ? validateSessionsMessagesSubscribeParams(params)
@@ -295,7 +374,7 @@ export class OpenClawSessionSubscriptions {
               ? validateSessionsMessagesUnsubscribeParams(params)
               : false
         if (!valid) throw new Error("Invalid OpenClaw subscription request")
-        const result = await this.#client.request<T>(method, params, options)
+        const result = await this.#client.request<T>(method, params)
         if (method === "sessions.messages.subscribe") {
           if (
             !result ||

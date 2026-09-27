@@ -9,6 +9,7 @@ import {
   TurnSteerResponseSchema,
   SessionTodosResponseSchema,
 } from "../../protocol"
+import { publicFailure, TURN_FAILURES } from "./failures"
 
 // The facts a stored Session message also carries live in the protocol, so a
 // reload replays them; adapters keep reaching them through this vocabulary.
@@ -307,7 +308,7 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
   }),
   turnEvent(TurnEventKind.TurnFailed, {
     code: z.string().optional(),
-    message: z.string(),
+    message: z.string().optional(),
     /**
      * The failure is final, but the provider's turn outlives it and ends only
      * when stopped: the turn stays active and stoppable, and its settlement,
@@ -437,20 +438,11 @@ export function isTurnEvent(candidate: unknown): candidate is TurnEvent {
   return TurnEventSchema.safeParse(candidate).success
 }
 
-/** Error codes after which Send, Stop, steer, and replies must not be retried. */
-export const UNCERTAIN_ERROR_CODES = [
-  "AOS_SEND_UNCERTAIN",
-  "AOS_INTERACTION_UNCERTAIN",
-  "AOS_STOP_UNCERTAIN",
-  "AOS_CONNECTION_INTERRUPTED",
-  "AOS_RESET_REQUIRED",
-] as const
-export type UncertainErrorCode = (typeof UNCERTAIN_ERROR_CODES)[number]
-
+/** A failure after which Send, Stop, steer, and replies must not be retried. */
 export function isUncertainFailure(event: TurnEvent): boolean {
   return (
     event.kind === TurnEventKind.TurnFailed &&
-    UNCERTAIN_ERROR_CODES.some((code) => code === event.code)
+    publicFailure(event, TURN_FAILURES)?.kind === "uncertain"
   )
 }
 
@@ -486,7 +478,7 @@ export function pendingRequestsOf(event: TurnEvent): PendingRequest[] {
 }
 
 /**
- * Workspace-wide execution events published by the coordinator observer for
+ * Workspace-wide execution events published by the coordinator's execution feed for
  * every Session it drives, independent of turn-stream subscribers. Timestamps
  * are RFC 3339 strings.
  */
@@ -500,7 +492,7 @@ export type ExecutionEvent = {
   | {
       kind: "attention-requested"
       request: PendingRequest
-      /** The controller that admitted the turn, when this proxy admitted it. */
+      /** The principal that admitted the turn, when this proxy admitted it. */
       startedBy?: string
     }
   | { kind: "attention-resolved"; requestId: string }

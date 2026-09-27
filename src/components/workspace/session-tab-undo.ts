@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react"
 
 export type ClosedSessionTab = {
   agentId: string
-  threadId: string
+  sessionId: string
   title: string
   selectedThreadId: string | null
   selectionChanged?: boolean

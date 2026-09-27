@@ -235,6 +235,10 @@ export function openClawConfigGetParams() {
 /**
  * Writes one Agent's avatar and nothing else. The gateway merges
  * `agents.list` by id and deep-merges the entry, and `null` deletes the key.
+ * OpenClaw 2026.9.4 (`src/config/merge-patch.ts`, `config.patch` in
+ * `src/gateway/server-methods/config.ts`) also refuses a patch that would drop
+ * an array entry unless `replacePaths` names it, which this never sends, and
+ * applies an `agents` change without a restart.
  */
 export function openClawAgentAvatarPatchParams(
   agentId: string,
@@ -285,7 +289,8 @@ export function openClawDeleteSessionParams(
   return official(SessionsDeleteParamsSchema, { agentId, key: sessionKey })
 }
 
-export function openClawInvitedSessionsParams(
+/** A search for one Session by key; the caller keeps only the exact match. */
+export function openClawSessionSearchParams(
   agentId: string,
   sessionKey: string
 ) {

@@ -20,17 +20,17 @@ describe("fixture composer features", () => {
   it("updates authoritative context from messages and the selected Session model", async () => {
     let runtime: AssistantRuntime | undefined
     let features: ComposerFeatureViewModel = {}
-    const Harness = ({ threadId }: { threadId: string }) => {
-      const bundle = useFixtureRuntimeBundle({ threadId, streamDelayMs: 0 })
+    const Harness = ({ sessionId }: { sessionId: string }) => {
+      const bundle = useFixtureRuntimeBundle({ sessionId, streamDelayMs: 0 })
       runtime = bundle.assistantRuntime
       features = useFixtureComposerFeatures({
-        threadId,
+        sessionId,
         config: allEnabled,
         runtime,
       })
       return <AssistantRuntimeProvider runtime={runtime} />
     }
-    const view = render(<Harness threadId="thread-aster-market" />)
+    const view = render(<Harness sessionId="thread-aster-market" />)
 
     await waitFor(() =>
       expect(runtime?.threads.mainItem.getState().remoteId).toBe(
@@ -81,7 +81,7 @@ describe("fixture composer features", () => {
       usage: { system: 2, tools: 1, messages: 10, total: 33 },
     })
 
-    view.rerender(<Harness threadId="thread-mica-quarterly" />)
+    view.rerender(<Harness sessionId="thread-mica-quarterly" />)
     await waitFor(() =>
       expect(runtime?.threads.mainItem.getState().remoteId).toBe(
         "thread-mica-quarterly"
@@ -92,7 +92,7 @@ describe("fixture composer features", () => {
       usage: { system: 2, tools: 1, messages: 1, total: 66 },
     })
 
-    view.rerender(<Harness threadId="thread-aster-market" />)
+    view.rerender(<Harness sessionId="thread-aster-market" />)
     await waitFor(() =>
       expect(runtime?.threads.mainItem.getState().remoteId).toBe(
         "thread-aster-market"
@@ -107,11 +107,11 @@ describe("fixture composer features", () => {
   it("reports each pick through the model feed the composer follows", async () => {
     const { result } = renderHook(() => {
       const bundle = useFixtureRuntimeBundle({
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         streamDelayMs: 0,
       })
       return useFixtureComposerFeatures({
-        threadId: "thread-aster-market",
+        sessionId: "thread-aster-market",
         config: allEnabled,
         runtime: bundle.assistantRuntime,
       })
@@ -143,11 +143,11 @@ describe("fixture composer features", () => {
     const { result, rerender } = renderHook(
       ({ config }) => {
         const bundle = useFixtureRuntimeBundle({
-          threadId: "thread-aster-market",
+          sessionId: "thread-aster-market",
           streamDelayMs: 0,
         })
         return useFixtureComposerFeatures({
-          threadId: "thread-aster-market",
+          sessionId: "thread-aster-market",
           config,
           runtime: bundle.assistantRuntime,
         })

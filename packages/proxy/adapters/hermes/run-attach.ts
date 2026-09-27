@@ -9,6 +9,7 @@
  */
 import type { PendingRequest } from "../../core/events"
 
+import { HermesSessionGoneError } from "./attachment-registry"
 import { boundedNativeBytes, sessionKey } from "./native"
 import { providerUnavailable, TURN_FAILURES } from "./run-failures"
 import {
@@ -92,16 +93,19 @@ export async function attachTurn(
   safelyUnsubscribe(active.unsubscribe)
   // Hermes asks the user through server→client requests, not through the
   // event stream: a request ends this segment wherever it landed.
-  const stopRequests = host.native.onPendingRequest(active.scope, (request) => {
-    if (accepting) host.requireAction(active, [request])
-    else asked = request
-  })
+  const stopRequests = host.native.subscribePendingRequests(
+    active.scope,
+    (request) => {
+      if (accepting) host.requireAction(active, [request])
+      else asked = request
+    }
+  )
   try {
     const resumed = await host.native.resume(active.scope)
     liveSessionId = resumed.liveSessionId
     // The model the turn starts on; a change the run observes is reported.
     active.model ??= sessionModelChoice(resumed.info)
-    unsubscribe = await host.native.observe(liveSessionId, (signal) => {
+    unsubscribe = await host.native.subscribeLive(liveSessionId, (signal) => {
       if (signal.kind === "event") {
         if (nativeEventSessionId(signal.event) !== liveSessionId) return
         if (!accepting) bufferNativeEvent(buffered, signal.event)
@@ -120,13 +124,16 @@ export async function attachTurn(
       if (accepting) lostTurn(host, active, signal.reason)
     })
     cursor = await attachCursor(host, liveSessionId, mode)
-  } catch {
+  } catch (error) {
     safelyUnsubscribe(unsubscribe)
     stopRequests()
     active.uncertain = true
     active.detached = true
     active.queue.close()
-    throw providerUnavailable()
+    // A Session Hermes holds no record of is gone, not out of reach.
+    throw error instanceof HermesSessionGoneError
+      ? error
+      : providerUnavailable(error)
   }
   active.liveSessionId = liveSessionId
   active.unsubscribe = () => {
@@ -317,7 +324,10 @@ export function scheduleCatchUp(
   const running = active.catchUp !== undefined
   const buffer = (active.catchUp ??= nativeEventBuffer())
   if (value !== undefined) bufferNativeEvent(buffer, value)
-  if (!running) void catchUp(host, active)
+  if (!running)
+    catchUp(host, active).catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.catch_up_failed")
+    )
 }
 
 /**

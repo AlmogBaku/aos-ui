@@ -13,13 +13,8 @@ and model identifiers never belong in this public file.
 }
 ```
 
-Unknown fields are rejected.
-
-### Artifact HTML assets {#artifact-html-assets}
-
-Optional `artifactHtmlAssetOrigins` is an array of at most 16
-credential-free HTTPS origins allowed as external asset sources inside
-published HTML Artifacts. Omit it to block external HTML preview assets.
+Unknown fields are rejected. Published HTML Artifacts load no external assets
+in preview.
 
 ## Local development
 
@@ -94,6 +89,7 @@ the load.
 | `voice`           | Optional proxy speech provider for transcription and/or read-aloud (see [Voice providers](#voice-providers) below).                           |
 | `guest`           | Optional distinct guest listener/origin and invitation signing keys (see below).                                                              |
 | `mcpApps`         | Optional per-server URL override and headers for the MCP Apps fallback (see [MCP Apps fallback](#mcp-apps-fallback) below).                   |
+| `log`             | Proxy log. `level` is `debug`, `info`, `warn`, or `error`; `debug` adds every owner state change and is never a production setting.           |
 | `shutdownGraceMs` | Whole shutdown budget after SIGTERM: drain, close the runtime, exit non-zero if forced.                                                       |
 
 V1 selects one of the supported adapter kinds per deployment; unknown kinds are
@@ -116,13 +112,15 @@ When `guest` is configured, its `invitations` block accepts:
 | Field              | Default  | Meaning                                                       |
 | ------------------ | -------- | ------------------------------------------------------------- |
 | `keys`             | required | Array of up to 3 `{id, secretFile}` objects for key rotation. |
-| `ttlSeconds`       | `259200` | Invitation lifetime in seconds (60–2 592 000).                |
 | `clockSkewSeconds` | `0`      | Accepted clock skew when validating tokens (0–60 s).          |
+
+Each invitation carries its own lifetime: the `expiresIn` it was issued with, or
+72 hours when it names none.
 
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private
 network, or put it behind an authenticated ingress. If `guest` is configured,
-its listener and public origin must differ from the operator lane; guest access
+its listener and public origin must differ from the operator's; guest access
 requires a scoped, expiring JWT.
 
 Every provider secret file (`runtime.tokenFile`, `runtime.passwordFile`, or
@@ -160,9 +158,9 @@ default; a minimal local file contains only those three fields.
 | `limits.operatorEventPeers`          | `256`       |
 | `limits.subscriberEvents`            | `512`       |
 | `limits.subscriberBytes`             | `2097152`   |
+| `log.level`                          | `info`      |
 | `shutdownGraceMs`                    | `5000`      |
 | `runtime.sessionIdleMs` (Hermes)     | `300000`    |
-| `guest.invitations.ttlSeconds`       | `259200`    |
 | `guest.invitations.clockSkewSeconds` | `0`         |
 | `voice.*.mode`                       | `fallback`  |
 | `voice.*.timeoutMs`                  | `60000`     |
@@ -215,7 +213,6 @@ schema validation.
 | `AOS_UI_PROXY_GUEST_LISTEN_PORT`                    | `guest.listen.port`                  | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_LISTEN_EXPOSURE`                | `guest.listen.exposure`              | string | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_PUBLIC_ORIGIN`                  | `guest.publicOrigin`                 | string | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_INVITATIONS_TTL_SECONDS`        | `guest.invitations.ttlSeconds`       | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_INVITATIONS_CLOCK_SKEW_SECONDS` | `guest.invitations.clockSkewSeconds` | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_PUSH_STATE_DIR`                       | `push.stateDir`                      | string | may create `push` block          |
 | `AOS_UI_PROXY_PUSH_VAPID_SUBJECT`                   | `push.vapid.subject`                 | string | may create `push` block          |
@@ -235,14 +232,13 @@ schema validation.
 | `AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS`              | `voice.speech.timeoutMs`             | int    | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_VOICE`                   | `voice.speech.voice`                 | string | may create `voice` block         |
 | `AOS_UI_PROXY_VOICE_SPEECH_FORMAT`                  | `voice.speech.format`                | string | may create `voice` block         |
+| `AOS_UI_PROXY_LOG_LEVEL`                            | `log.level`                          | string | always                           |
 | `AOS_UI_PROXY_SHUTDOWN_GRACE_MS`                    | `shutdownGraceMs`                    | int    | always                           |
 
 ### Errors {#config-errors}
 
-When the configuration is invalid, the proxy logs a structured start-failure
-event with name `ProxyConfigurationError`. The startup log entry
-(`proxy.start_failed`) is the readable form; `redactForLog`'s every-error-is-opaque
-rule applies to all other errors. The message begins with
+When the configuration is invalid, the proxy logs a `proxy.start_failed` event
+whose `error` is named `ProxyConfigurationError`. Its message begins with
 `Invalid proxy configuration in <path>:` followed by one indented line per
 field:
 
@@ -253,13 +249,23 @@ Invalid proxy configuration in /etc/aos-ui/proxy.yaml:
 ```
 
 Field paths are reported; values are never included. Unrecognized keys are
-reported as a count, not by name. When a variable set the failing field, its
+reported as a count, not by name. A stale key, one an earlier release accepted
+and this one no longer does, is an unrecognized key: the proxy refuses to start
+and names the field path that holds it. When a variable set the failing field, its
 name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
 
+Fields removed in recent releases that are now stale keys in an upgraded deployment: `guest.lane`, `guest.invitations.ttlSeconds`, `artifactHtmlAssetOrigins`, and any separate replay-limit fields under `limits`. Replay bounds use `limits.subscriberEvents` and `limits.subscriberBytes` with no separate keys. Remove them from your configuration file before starting the upgraded proxy.
+
+Every logged error carries its name, message, native `code` or `reason`, and
+cause chain, never its stack. Before a line is written, the log masks every
+credential-named field, strips each URL's userinfo, query, and fragment, and
+replaces each voice key, MCP header value, guest invitation key, and VAPID
+private key the proxy has read with `[REDACTED]`.
+
 Runtime slash-command suggestions are enabled on the operator surface only.
-The guest lane advertises none and refuses any guest message or steer whose
+The guest listener advertises none and refuses any guest message or steer whose
 text starts with `/`.
 
 ### Voice providers {#voice-providers}

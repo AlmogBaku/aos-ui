@@ -27,7 +27,6 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
-  type AosActivityNotification,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -40,16 +39,27 @@ import type {
   ServerTurnEngine,
   ServerTurnHandle,
   ServerRuntime,
+  ServerRuntimeTranslation,
   SessionPatch,
   SessionScope,
 } from "../core/runtime"
+import { READY_LINK } from "../core/link"
+import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
+import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { createCatalog, type Catalog } from "../core/catalog"
+import type { Activity } from "../core/member"
 import { SessionCoordinator } from "../core/session-coordinator"
-import { EVERY_FEED } from "../core/member"
-import { createSessionRows, type SessionRows } from "../core/session-rows"
+import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import { createChannel } from "../core/channel"
-import type { AcpConnectionContext, AcpOutbound, Translators } from "./types"
+import { createChannels } from "../core/channel"
+import { withFaults, type Faults } from "./test-faults"
+import type {
+  AcpConnectionContext,
+  AcpOutbound,
+  ActivityFeed,
+  Translators,
+} from "./types"
 
 export const AGENT = "researcher"
 export const PRINCIPAL = "operator"
@@ -119,18 +129,18 @@ export const CAPABILITIES = {
   workspace: {
     slashCommands: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       commands: [{ name: "plan", description: "Draft a plan" }],
     },
     models: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       selection: "native-session",
       choices: "provider-reported",
     },
     context: {
       status: "available",
-      scope: "attached-session",
+      scope: "session",
       source: "provider-usage-or-estimate",
       breakdown: "provider-categories",
     },
@@ -227,8 +237,8 @@ export class EventSource implements ServerTurnHandle {
     this.#resolveSettled()
   }
 
-  recoveryPosition() {
-    return { epoch: "epoch-1", lastSeen: 0 }
+  recoveryPosition(): string {
+    return "token-1"
   }
 }
 
@@ -266,7 +276,7 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
     ? questionOutbound(request)
     : permissionOutbound(request)
 
-/** Deterministic stand-ins for the translator lane's pure projections. */
+/** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
   translateTurnEvent(state, event, context) {
     const meta = {
@@ -559,7 +569,7 @@ export function connectClient(
 export type HarnessOptions = {
   rows?: Session[]
   total?: number
-  activity?: AosActivityNotification[]
+  activity?: Activity[]
   /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
   permission?: (
     params: unknown,
@@ -572,15 +582,13 @@ export type HarnessOptions = {
   ) => Promise<CreateElicitationResponse>
   discover?: ServerTurnEngine["discover"]
   /** Stands for a runtime that reports the turns it starts by itself. */
-  watch?: ServerTurnEngine["watch"]
+  subscribeTurns?: ServerTurnEngine["subscribeTurns"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
   beforeModels?: () => Promise<void>
   /** Runs before each history read; a held one stands for a slow page. */
   beforeHistory?: () => Promise<void>
-  /** Bounds each turn's journal; a small one stands for a long turn. */
-  maxReplayEvents?: number
   /** Runs as a resume translates the page it read, before it follows the turn. */
   onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
@@ -604,24 +612,35 @@ export type HarnessOptions = {
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
   providerIds?: boolean
+  /** The runtime's translation hints; absent stands for the neutral reading. */
+  translation?: ServerRuntimeTranslation
   /** Whether the client pages older history, as the AOS browser does. */
   pagesHistory?: boolean
   /** What the provider reports it supports; defaults to `CAPABILITIES`. */
   capabilities?: unknown
-  /** Queue depth one browser's run stream is allowed, before it is dropped. */
+  /**
+   * Queue depth one browser's run stream is allowed, before it is dropped, and
+   * so each turn's journal; a small one stands for a long turn.
+   */
   maxSubscriberEvents?: number
-  /** The translator lane; defaults to the deterministic stand-ins above. */
+  /** The translators, defaulting to the deterministic stand-ins above. */
   translators?: Translators
   /** The clock Session rows read; wall time by default. */
   now?: () => number
   /**
-   * Composes the operator lane's own read state and activity feed, as
+   * Composes the operator listener's own read state and activity feed, as
    * `createOperatorAcpService` does; observable fakes stand in by default.
    */
   compose?: (parts: {
     runtimeInstance: RuntimeInstance
-    sessionRows: SessionRows
+    catalog: Catalog
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
+  /** Where lifecycle owners log; a fresh capture by default. */
+  logs?: LogCapture
+  /** The browser build the static root carries; absent stands for none. */
+  buildId?: string
+  /** Arms faults before the first browser connects, for one its handshake meets. */
+  arm?: (faults: Faults) => void
 }
 
 export async function harness(options: HarnessOptions = {}) {
@@ -634,7 +653,14 @@ export async function harness(options: HarnessOptions = {}) {
   })
   const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
   const discover = vi.fn(options.discover ?? (async () => undefined))
-  const engine: ServerTurnEngine = { start, recover, discover }
+  const engine: ServerTurnEngine = {
+    start,
+    recover,
+    discover,
+    ...(options.subscribeTurns
+      ? { subscribeTurns: options.subscribeTurns }
+      : {}),
+  }
 
   const rows = new Map(
     (options.rows ?? [sessionRow()]).map((row) => [row.id, row])
@@ -644,7 +670,9 @@ export async function harness(options: HarnessOptions = {}) {
   )
   // A provider id is the public one behind a prefix, so either maps to the other.
   const providerId = (publicId: string) =>
-    options.providerIds ? `provider-${publicId}` : publicId
+    ids.providerSessionId(
+      options.providerIds ? `provider-${publicId}` : publicId
+    )
   const publicId = (sessionId: string) =>
     options.providerIds ? sessionId.replace(/^provider-/u, "") : sessionId
   let models: SessionModelsResponse = MODELS
@@ -669,6 +697,13 @@ export async function harness(options: HarnessOptions = {}) {
   )
   const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
     rows.delete(sessionId)
+  })
+  const createSession = vi.fn(async (agentId: string, title?: string) => {
+    rows.set(
+      CREATED,
+      sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
+    )
+    return { session: { id: CREATED, agentId } }
   })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
@@ -721,15 +756,16 @@ export async function harness(options: HarnessOptions = {}) {
 
   const runtime: ServerRuntime = {
     turns: engine,
+    ...(options.translation ? { translation: options.translation } : {}),
     // Every invitation in this harness addresses the seeded Session.
     resolveInvitedSession: async () => ({
-      sessionId: providerId(SESSION),
+      providerSessionId: providerId(SESSION),
       created: false,
     }),
-    resolveSessionId: (_agentId, publicSessionId) =>
+    resolveProviderSessionId: (_agentId, publicSessionId) =>
       providerId(publicSessionId),
     publicError: () => undefined,
-    authState: unsupported,
+    link: READY_LINK,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
     updateAgent,
@@ -738,13 +774,7 @@ export async function harness(options: HarnessOptions = {}) {
       listAllSessions(limit, offset),
     history,
     getSession,
-    createSession: async (agentId, title) => {
-      rows.set(
-        CREATED,
-        sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
-      )
-      return { session: { id: CREATED, agentId } }
-    },
+    createSession,
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
@@ -754,7 +784,6 @@ export async function harness(options: HarnessOptions = {}) {
     },
     updateModel,
     context: options.context ?? (async () => USAGE),
-    subscribeSessionInvalidation: unsupported,
     ...(options.withoutCatalogChanges
       ? {}
       : { subscribeCatalogChanges: async () => () => undefined }),
@@ -764,28 +793,15 @@ export async function harness(options: HarnessOptions = {}) {
     speak: unsupported,
   }
 
-  const coordinator = new SessionCoordinator({
-    engine,
-    readings: runtime,
-    maxActiveExecutions: 8,
-    maxGuestActiveExecutions: 2,
-    maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
-    maxSubscriberBytes: 256 * 1024,
-    maxReplayEvents: options.maxReplayEvents ?? 64,
-    maxReplayBytes: 256 * 1024,
-  })
-  const runtimeInstance: RuntimeInstance = {
-    id: "test",
-    runtime,
-    sessions: coordinator,
-    close: async () => undefined,
-  }
-
+  // Everything reads the runtime through its faults, which forward every
+  // call until a test arms one.
+  const faults = withFaults(runtime)
+  options.arm?.(faults)
+  const logs = options.logs ?? captureLogs()
   const readState = {
     focus: vi.fn(),
     blur: vi.fn(),
     onExecution: vi.fn(),
-    markRead: vi.fn(async () => undefined),
     close: vi.fn(),
   }
   const presence = {
@@ -796,130 +812,196 @@ export async function harness(options: HarnessOptions = {}) {
     lastPresentAt: vi.fn(() => undefined),
     connected: vi.fn(() => false),
   }
-  const activityListeners = new Set<(event: AosActivityNotification) => void>()
-  const activityFeed = {
-    snapshot: () => options.activity ?? [],
-    subscribe: (listener: (event: AosActivityNotification) => void) => {
+  const activityListeners = new Set<(event: Activity) => void>()
+  const activityFeed: ActivityFeed = {
+    open(listener) {
+      for (const activity of options.activity ?? []) listener(activity)
       activityListeners.add(listener)
-      return () => activityListeners.delete(listener)
+      return () => {
+        activityListeners.delete(listener)
+      }
     },
-    close: vi.fn(),
   }
-
-  const logger = { info: vi.fn(), error: vi.fn() }
-  // One lane's connections share its row cache, as the operator lane's do.
-  const sessionRows = createSessionRows(
-    options.now ? { now: options.now } : undefined
-  )
-  const composed = options.compose?.({ runtimeInstance, sessionRows })
-  const { watch } = options
-  const rooms = createChannel({
-    snapshot: (roomScope) => coordinator.snapshot(roomScope),
-    ...(watch
-      ? {
-          adoption: {
-            watch,
-            discover: (roomScope, lane) =>
-              coordinator.discover(roomScope, lane),
-            observe: (roomScope, listener) =>
-              coordinator.observeScope(roomScope, listener),
-          },
-        }
-      : {}),
-  })
+  const invalidationListeners = new Set<() => void>()
+  let browsers = 0
 
   /**
-   * One browser connection to the proxy. Every connection shares the one
-   * coordinator, engine, and room registry, as one deployment's lanes do.
+   * One proxy process: its own coordinator, catalog, and channels over the
+   * runtime, which a restart builds again while the provider stays up.
    */
-  async function connect(
-    connectionId: string,
-    lane: {
-      /** This browser's answer to a permission request, if not the harness's. */
-      permission?: HarnessOptions["permission"]
-      /** This browser's answer to a question, if not the harness's. */
-      question?: HarnessOptions["question"]
-    } = {}
-  ) {
-    const attachmentStages = new AttachmentStageRegistry()
-    const base = options.translators ?? translators
-    const permission = lane.permission ?? options.permission
-    const question = lane.question ?? options.question
-    const context: AcpConnectionContext = {
-      connectionId,
-      principalId: PRINCIPAL,
-      runtimeInstance,
-      sessionRows,
-      readState: composed?.readState ?? readState,
-      translators: {
-        ...base,
-        translateHistory: (history) => {
-          options.onReplay?.()
-          return (options.translateHistory ?? base.translateHistory)(history)
-        },
-      },
-      attachmentStages,
-      rooms,
-      presence,
-      logger,
-      lane: "operator",
-      feeds: EVERY_FEED,
-      activityFeed: composed?.activityFeed ?? activityFeed,
+  function serve() {
+    const coordinator = new SessionCoordinator({
+      engine: faults.runtime.turns,
+      readings: faults.runtime,
+      maxActiveExecutions: 8,
+      maxSubscriberEvents: options.maxSubscriberEvents ?? 64,
+      maxSubscriberBytes: 256 * 1024,
+      logger: logs.logger,
+    })
+    coordinator.bindCapabilities(faults.runtime)
+    const runtimeInstance: RuntimeInstance = {
+      id: "test",
+      runtime: faults.runtime,
+      sessions: coordinator,
+      close: async () => undefined,
     }
 
-    const { connection, recorder } = connectClient(context, {
-      name: "aos-browser",
-      permission,
-      question,
+    // Every connection shares the process's one catalog, as both listeners do.
+    const shared = createCatalog({
+      runtime: faults.runtime,
+      coordinator,
+      rows: createSessionRows(options.now ? { now: options.now } : undefined),
+      logger: logs.logger,
     })
-    const initialize = await connection.agent.request(
-      methods.agent.initialize,
-      {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        info: { name: "aos-browser", version: "1" },
-        capabilities: {
-          _meta: {
-            [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+    const catalog: Catalog = {
+      ...shared,
+      invalidation: {
+        signaled: shared.invalidation.signaled,
+        subscribe(listener) {
+          invalidationListeners.add(listener)
+          const stop = shared.invalidation.subscribe(listener)
+          return () => {
+            invalidationListeners.delete(listener)
+            stop()
+          }
+        },
+      },
+    }
+    const composed = options.compose?.({ runtimeInstance, catalog })
+    const { subscribeTurns } = faults.runtime.turns
+    const channels = createChannels({
+      logger: logs.logger,
+      coordinator,
+      runtime: faults.runtime,
+      ...(subscribeTurns
+        ? {
+            adoption: {
+              subscribeTurns,
+              discover: (channelScope) => coordinator.discover(channelScope),
+              subscribeExecutions: (channelScope, listener) =>
+                coordinator.subscribeScope(channelScope, listener),
+            },
+          }
+        : {}),
+    })
+
+    /**
+     * One browser connection's side of the proxy. Every connection shares the
+     * one coordinator, engine, and channels, as one deployment's listeners do.
+     */
+    function contextFor(connectionId: string): AcpConnectionContext {
+      const base = options.translators ?? translators
+      return {
+        connectionId,
+        principalId: PRINCIPAL,
+        publicError: (cause) => faults.runtime.publicError(cause),
+        steerAck: faults.runtime.translation?.steerAck,
+        catalog,
+        readState: composed?.readState ?? readState,
+        translators: {
+          ...base,
+          translateHistory: (history) => {
+            options.onReplay?.()
+            return (options.translateHistory ?? base.translateHistory)(history)
           },
         },
+        attachmentStages: new AttachmentStageRegistry(),
+        channels,
+        presence,
+        logger: logs.logger.child({ connectionId, role: "operator" }),
+        buildId: options.buildId,
+        role: "operator",
+        activityFeed: composed?.activityFeed ?? activityFeed,
       }
-    )
-    return {
-      agent: connection.agent,
-      close: () => connection.close(),
-      initialize,
-      recorder,
-      attachmentStages,
-      /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
-      list: () => connection.agent.request(methods.agent.session.list, {}),
-      create: () =>
-        connection.agent.request(methods.agent.session.new, {
-          cwd: "/",
-          _meta: {
-            [AOS_META_KEY]: { agentId: AGENT },
+    }
+
+    /** One in-process browser connection to the proxy. */
+    async function connect(
+      connectionId: string,
+      answers: {
+        /** This browser's answer to a permission request, if not the harness's. */
+        permission?: HarnessOptions["permission"]
+        /** This browser's answer to a question, if not the harness's. */
+        question?: HarnessOptions["question"]
+      } = {}
+    ) {
+      const context = contextFor(connectionId)
+      const { connection, recorder } = connectClient(context, {
+        name: "aos-browser",
+        permission: answers.permission ?? options.permission,
+        question: answers.question ?? options.question,
+      })
+      const initialize = await connection.agent.request(
+        methods.agent.initialize,
+        {
+          protocolVersion: ACP_PROTOCOL_VERSION,
+          info: { name: "aos-browser", version: "1" },
+          capabilities: {
+            _meta: {
+              [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+            },
           },
-        }),
+        }
+      )
+      return {
+        agent: connection.agent,
+        close: () => connection.close(),
+        initialize,
+        recorder,
+        attachmentStages: context.attachmentStages,
+        /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
+        list: () => connection.agent.request(methods.agent.session.list, {}),
+        create: (meta: { title?: string; clientId?: string } = {}) =>
+          connection.agent.request(methods.agent.session.new, {
+            cwd: "/",
+            _meta: {
+              [AOS_META_KEY]: { agentId: AGENT, ...meta },
+            },
+          }),
+      }
+    }
+
+    return {
+      connect,
+      /**
+       * A fresh agent app on a connection of its own, for each socket a real
+       * browser connection opens, so every reconnection is a new connection.
+       */
+      agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
+      coordinator,
+      runtimeInstance,
+      channels,
+      catalog,
+      logs,
+      /** The feeds the open connections observe; a closed one leaves none. */
+      observers: () => activityListeners.size + invalidationListeners.size,
     }
   }
 
-  const primary = await connect(CONNECTION)
+  const proxy = serve()
+  const primary = await proxy.connect(CONNECTION)
 
   const scope: SessionScope = {
     agentId: AGENT,
-    sessionId: providerId(SESSION),
-    threadId: SESSION,
+    providerSessionId: providerId(SESSION),
+    sessionId: ids.sessionId(SESSION),
   }
 
   return {
     ...primary,
-    connect,
-    coordinator,
-    runtimeInstance,
-    rooms,
+    ...proxy,
+    /**
+     * A new proxy process over the same runtime, as a restart starts one: the
+     * provider and its turns carry on, and nothing of the old process is kept.
+     */
+    restart: serve,
+    faults,
     scope,
     sources,
     start,
+    recover,
     discover,
+    createSession,
     updateSession,
     deleteSession,
     updateModel,
@@ -929,13 +1011,12 @@ export async function harness(options: HarnessOptions = {}) {
     readState,
     presence,
     rows,
-    logger,
-    /** Every structured line the connection wrote, whatever its level. */
+    /** Every structured line the proxy wrote, whatever its level. */
     logged: () =>
-      [...logger.info.mock.calls, ...logger.error.mock.calls].map(
-        ([value]) => value
-      ),
-    publishActivity(event: AosActivityNotification) {
+      logs
+        .records()
+        .map(({ message, fields }) => ({ event: message, ...fields })),
+    publishActivity(event: Activity) {
       for (const listener of activityListeners) listener(event)
     },
   }
@@ -965,20 +1046,28 @@ export function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
       sessionId: string
       update: Record<string, unknown>
     }
-    if (target !== sessionId) return []
-    switch (update.sessionUpdate) {
-      case "agent_message":
-        return [`history ${String(update.messageId)}`]
-      case "user_message":
-        return [`prompt ${String(update.messageId)}`]
-      case "state_update":
-        return [`state ${String(update.state)}`]
-      case "agent_message_chunk":
-        return [`chunk ${(update.content as { text: string }).text}`]
-      default:
-        return []
-    }
+    return target === sessionId ? shown(update) : []
   })
+}
+
+/** What one Session update shows, as `flow` lists it. */
+export function shown(update: object): string[] {
+  const { sessionUpdate, messageId, state, content } = update as Record<
+    string,
+    unknown
+  >
+  switch (sessionUpdate) {
+    case "agent_message":
+      return [`history ${String(messageId)}`]
+    case "user_message":
+      return [`prompt ${String(messageId)}`]
+    case "state_update":
+      return [`state ${String(state)}`]
+    case "agent_message_chunk":
+      return [`chunk ${(content as { text: string }).text}`]
+    default:
+      return []
+  }
 }
 
 /** The content of every `user_message` one browser received for a Session. */
@@ -1046,8 +1135,8 @@ export function reply(source: EventSource | undefined, text: string) {
 export const settled = () => new Promise((resolve) => setTimeout(resolve, 10))
 
 /**
- * Streams one reply, ending its turn only once every watcher saw it live: a
- * browser the room brings in late must still find the turn running.
+ * Streams one reply, ending its turn only once every member saw it live: a
+ * browser the channel brings in late must still find the turn running.
  */
 export async function replyWhileWatched(
   source: EventSource | undefined,
@@ -1090,7 +1179,7 @@ export function chunk(
 }
 
 /**
- * Starts one turn and streams its first chunk, `Live`, until every watcher
+ * Starts one turn and streams its first chunk, `Live`, until every member
  * has seen it. Returns the prompt's message id.
  */
 export async function liveTurn(
@@ -1129,7 +1218,7 @@ export function storedLiveTurn(
             role: "user" as const,
             content: [{ type: "text" as const, text: correction }],
             createdAt,
-            metadata: { custom: { correction: true } },
+            correction: true as const,
           },
         ]),
     {

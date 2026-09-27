@@ -75,7 +75,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
             materialized =
               await routes.options.runtime.runtime.stageAttachments(
                 agentId,
-                resolved.sessionId,
+                resolved.providerSessionId,
                 body.data.attachments
               )
             return materialized.appendTo(text)
@@ -140,7 +140,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         return emptyError(401)
       const release = routes.audioBudget.acquire(identity.ref)
       if (!release) {
-        void context.req.raw.body?.cancel().catch(() => undefined)
+        if (context.req.raw.body)
+          context.req.raw.body.cancel().catch(() => undefined)
         return routes.projectedError(
           identity,
           agentId,
@@ -192,7 +193,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
       return emptyError(401)
     const release = routes.audioBudget.acquire(identity.ref)
     if (!release) {
-      void context.req.raw.body?.cancel().catch(() => undefined)
+      if (context.req.raw.body)
+        context.req.raw.body.cancel().catch(() => undefined)
       return routes.projectedError(
         identity,
         agentId,
@@ -249,7 +251,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
       try {
         const artifact = await routes.options.runtime.runtime.artifact(
           agentId,
-          resolved.sessionId,
+          resolved.providerSessionId,
           context.req.param("artifactId")
         )
         const projected = projectGuestOutbound(
@@ -280,8 +282,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         // failure is an outage worth retrying. The projected body carries a
         // fixed description, so neither answer names a native path.
         const gone =
-          routes.options.runtime.runtime.publicError(error)?.code ===
-          "not_found"
+          routes.options.runtime.runtime.publicError(error)?.kind === "gone"
         return routes.projectedError(
           identity,
           agentId,

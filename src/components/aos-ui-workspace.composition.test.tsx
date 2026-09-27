@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useEffect, useState } from "react"
 
 import { en } from "@/lib/i18n/dictionaries/en"
-import type { WorkspaceAdapter } from "@/runtime-adapters/contracts"
+import { he } from "@/lib/i18n/dictionaries/he"
+import type {
+  HarnessRuntime,
+  WorkspaceAdapter,
+} from "@/runtime-adapters/contracts"
 
 import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
 import { AosUiWorkspace } from "./aos-ui-workspace"
@@ -52,11 +56,11 @@ describe("AosUiApp fixture composition", () => {
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true)
     let provider: FixtureWorkspace | undefined
     function ActivityFixture() {
-      const [threadId, setThreadId] = useState<string | undefined>(
+      const [sessionId, setThreadId] = useState<string | undefined>(
         "thread-aster-market"
       )
       const bundle = useFixtureRuntimeBundle({
-        threadId,
+        sessionId,
         onThreadIdChange: setThreadId,
       })
       useEffect(() => {
@@ -116,6 +120,50 @@ describe("AosUiApp fixture composition", () => {
     }
   })
 
+  it.each([
+    [
+      "en",
+      { connectionStatus: "capacity" },
+      "The AOS server is full. Reconnecting shortly.",
+    ],
+    [
+      "he",
+      { connectionStatus: "capacity" },
+      "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
+    ],
+    [
+      "en",
+      { sessionStatus: "unavailable" },
+      "This Session is no longer available.",
+    ],
+    ["he", { sessionStatus: "unavailable" }, "השיחה הזו כבר אינה זמינה."],
+  ] as const)(
+    "tells the %s reader %o until it clears",
+    async (locale, status, statusText) => {
+      function StatusFixture(
+        props: Pick<HarnessRuntime, "connectionStatus" | "sessionStatus">
+      ) {
+        const bundle = useFixtureRuntimeBundle()
+        return (
+          <AosUiWorkspace
+            runtime={{ ...asHarnessRuntime(bundle), ...props }}
+            locale={locale}
+            dictionary={locale === "he" ? he : en}
+            now={FIXTURE_NOW}
+          />
+        )
+      }
+      const { rerender } = render(<StatusFixture {...status} />)
+
+      expect(await screen.findByText(statusText)).toHaveAttribute(
+        "role",
+        "status"
+      )
+      rerender(<StatusFixture />)
+      expect(screen.queryByText(statusText)).toBeNull()
+    }
+  )
+
   it("removes an idle Session tab when it reaches the exact 12-hour boundary", async () => {
     vi.useFakeTimers()
     let clock = new Date("2026-09-03T18:59:59.000Z")
@@ -166,13 +214,13 @@ describe("AosUiApp fixture composition", () => {
           ],
           sessions: [
             {
-              threadId: "session-primary",
+              sessionId: "session-primary",
               agentId: "agent-primary",
               updatedAt: FIXTURE_NOW.toISOString(),
               status: "running",
             },
             {
-              threadId: "session-secondary",
+              sessionId: "session-secondary",
               agentId: "agent-secondary",
               updatedAt: FIXTURE_NOW.toISOString(),
               status: "idle",
@@ -465,7 +513,7 @@ describe("AosUiApp fixture composition", () => {
     ).not.toBeInTheDocument()
 
     const waiting = fixtureSessions.map((session) =>
-      session.threadId === "thread-aster-pricing"
+      session.sessionId === "thread-aster-pricing"
         ? { ...session, status: "waiting-for-input" as const }
         : session
     )
@@ -501,7 +549,7 @@ describe("AosUiApp fixture composition", () => {
     await waitFor(() => expect(subscribed).toBe(true))
 
     const waiting = fixtureSessions.map((session) =>
-      session.threadId === "thread-aster-pricing"
+      session.sessionId === "thread-aster-pricing"
         ? { ...session, status: "waiting-for-input" as const }
         : session
     )

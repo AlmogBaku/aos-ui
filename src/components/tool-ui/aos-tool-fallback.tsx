@@ -24,7 +24,7 @@ import {
   safeToolPresentation,
   safeToolText,
 } from "./safe-presentation"
-import { diffStats, readAosToolArtifact } from "./tool-artifact"
+import { diffStats, readAosToolArtifact } from "@/lib/tool-artifact"
 import {
   formatToolLocation,
   toolActionKind,

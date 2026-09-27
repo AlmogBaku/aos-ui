@@ -2,17 +2,13 @@ import {
   agent,
   methods,
   RequestError,
-  type AgentApp,
   type AgentContext,
-  type AnyWireMessage,
   type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, onTestFinished, vi } from "vitest"
 import { z } from "zod"
 
-import { INTERACTION_PROTOCOL } from "@aos/protocol"
 import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
@@ -22,85 +18,21 @@ import {
   AOS_STOP_REASONS,
   AosReplayBeforeSchema,
   type AosHistoryCursor,
-  type AosSessionNewResponseMetaSchema,
 } from "@aos/protocol/acp"
 
 import { AgentUpdateError } from "@/runtime-adapters/contracts"
 
+import { useFakeClock } from "../../../../test/support/fake-clock"
+import { captureLogs } from "../../../../test/support/log-capture"
+
 import { createAcpConnection } from "./connection"
+import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
 const SESSION_ID = "session-1"
 const AGENT_ID = "agent-1"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const CLIENT_INFO = { name: "aos-ui", version: "1.2.3" }
-
-type AcpCapabilities = z.infer<
-  typeof AosSessionNewResponseMetaSchema
->["capabilities"]
-
-const unavailable = { status: "unavailable", reason: "not-supported" } as const
-
-function capabilities(): AcpCapabilities {
-  return {
-    workspace: {
-      slashCommands: {
-        status: "available",
-        scope: "attached-session",
-        commands: [{ name: "help" }],
-      },
-      models: {
-        status: "available",
-        scope: "attached-session",
-        selection: "native-session",
-        choices: "provider-reported",
-      },
-      context: {
-        status: "available",
-        scope: "attached-session",
-        source: "provider-usage-or-estimate",
-        breakdown: "provider-categories",
-      },
-      todos: unavailable,
-      activity: unavailable,
-    },
-    interactions: {
-      steering: {
-        status: "available",
-        scope: "active-turn",
-        semantics: "visible-user-message",
-        input: "text",
-        fallback: "provider-queue",
-      },
-      approvals: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        choices: [{ value: "once", scope: "request" }],
-        maxPending: 8,
-      },
-      questions: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-empty-answer",
-        maxQuestions: 8,
-        maxChoicesPerQuestion: 8,
-        maxAnswerValuesPerQuestion: 8,
-        maxStringBytes: 4_096,
-      },
-      reactions: unavailable,
-    },
-    content: {
-      attachments: unavailable,
-      artifacts: unavailable,
-      mcpApps: unavailable,
-      transcription: unavailable,
-      speech: unavailable,
-    },
-  }
-}
 
 function sessionInfoMeta() {
   return { agentId: AGENT_ID, status: "idle", archived: false, unread: true }
@@ -148,8 +80,10 @@ function createProxyAgent(
       updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
       history?: AosHistoryCursor
     }
-    /** Holds each plain resume open briefly, as a real reattach takes time. */
+    /** Holds each plain resume open briefly, as a real rejoin takes time. */
     slowResume?: boolean
+    /** The build id the proxy answers `initialize` with. */
+    buildId?: string
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
   } = {}
@@ -166,11 +100,11 @@ function createProxyAgent(
       record("initialize", params)
       return {
         protocolVersion: 2,
-        info: { name: "aos-proxy", version: "9.9.9" },
+        info: { name: "aos-proxy", version: options.buildId ?? "9.9.9" },
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
-            lane: "operator",
+            role: "operator",
             extensions: {
               steer: true,
               rewind: true,
@@ -193,24 +127,12 @@ function createProxyAgent(
         options.refuseLoginAfter !== undefined &&
         logins > options.refuseLoginAfter
       )
-        throw new RequestError(
-          AOS_JSONRPC_ERRORS.authenticationRequired,
-          "authentication_required"
-        )
+        throw RequestError.authRequired()
       return {}
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       record(methods.agent.session.new, params)
-      return {
-        sessionId: SESSION_ID,
-        configOptions: [modelOption("sonnet")],
-        _meta: {
-          [AOS_META_KEY]: {
-            session: sessionInfoMeta(),
-            capabilities: capabilities(),
-          },
-        },
-      }
+      return { sessionId: SESSION_ID }
     })
     .onRequest(methods.agent.session.list, ({ params }) => {
       record(methods.agent.session.list, params)
@@ -252,12 +174,8 @@ function createProxyAgent(
       record(RESUME_REPLIED, params)
       const replayed = replayFrom?.type === "start"
       return {
-        configOptions: [modelOption("opus")],
         _meta: {
           [AOS_META_KEY]: {
-            session: sessionInfoMeta(),
-            execution: { status: "running", turnId: "run-1" },
-            capabilities: capabilities(),
             ...(resumes === options.resyncOnResume ? { resync: true } : {}),
             ...(replayed && options.history
               ? { history: options.history }
@@ -307,8 +225,9 @@ function createProxyAgent(
         throw new RequestError(options.refuseAgentUpdate, "refused")
       return { revision: "revision-2", agent: catalogEntry() }
     })
-    .onNotification(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
+    .onRequest(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(AOS_METHODS.session.focus, params)
+      return {}
     })
     .onConnect((connection) => {
       peer = connection.client
@@ -365,49 +284,6 @@ function createProxyAgent(
   }
 }
 
-/** A WebSocket-shaped pipe to an in-process agent app. */
-function pipedSocketConstructor(app: AgentApp): WebSocketConstructor {
-  return class PipedSocket extends EventTarget {
-    readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
-
-    constructor() {
-      super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      app.connect({
-        readable: this.#inbound.readable,
-        writable: outbound.writable,
-      })
-      this.#writer = this.#inbound.writable.getWriter()
-      void this.#pump(outbound.readable.getReader())
-      queueMicrotask(() => {
-        this.readyState = 1
-        this.dispatchEvent(new Event("open"))
-      })
-    }
-
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) return
-        this.dispatchEvent(
-          new MessageEvent("message", { data: JSON.stringify(value) })
-        )
-      }
-    }
-
-    send(data: string) {
-      void this.#writer.write(JSON.parse(data))
-    }
-
-    close() {
-      this.readyState = 3
-      this.dispatchEvent(new Event("close"))
-    }
-  }
-}
-
 function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
   const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
@@ -420,26 +296,20 @@ function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
 describe("ACP connection", () => {
   it("constructs no transport until it is started, and only one", async () => {
     const proxy = createProxyAgent()
-    const sockets: unknown[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
     })
 
-    expect(sockets).toHaveLength(0)
+    expect(pipe.sockets).toHaveLength(0)
 
     connection.start()
     connection.start()
     await connection.initialized
 
-    expect(sockets).toHaveLength(1)
+    expect(pipe.sockets).toHaveLength(1)
     connection.close()
     connection.close()
     expect(connection.status).toBe("closed")
@@ -447,25 +317,35 @@ describe("ACP connection", () => {
 
   it("stays closed when a connection is closed before it starts", async () => {
     const proxy = createProxyAgent()
-    const sockets: unknown[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
+      socketConstructor: pipe.WebSocket,
     })
 
     connection.close()
     connection.start()
 
-    expect(sockets).toHaveLength(0)
+    expect(pipe.sockets).toHaveLength(0)
     expect(connection.status).toBe("closed")
     await expect(connection.initialized).rejects.toThrow()
+  })
+
+  it("holds a first request until the debug inspector settles, and runs without one that cannot load", async () => {
+    vi.doMock("@statelyai/inspect", () => {
+      throw new Error("The inspector is unavailable")
+    })
+    globalThis.history.replaceState(null, "", "?debug=acp")
+    onTestFinished(() => {
+      vi.doUnmock("@statelyai/inspect")
+      globalThis.history.replaceState(null, "", "/")
+      globalThis.sessionStorage.clear()
+    })
+    const connection = connectInProcess(createProxyAgent())
+
+    await expect(connection.listAgents()).resolves.toBeDefined()
+    connection.close()
   })
 
   it("initializes with the negotiated AOS extension metadata", async () => {
@@ -474,7 +354,7 @@ describe("ACP connection", () => {
 
     await expect(connection.initialized).resolves.toEqual({
       version: 1,
-      lane: "operator",
+      role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
     expect(proxy.paramsOf("initialize")).toMatchObject({
@@ -486,10 +366,16 @@ describe("ACP connection", () => {
     expect(connection.status).toBe("closed")
   })
 
-  it("redeems an invitation with the AOS login metadata", async () => {
+  it("redeems an invitation with the AOS login metadata, never logging it", async () => {
     const proxy = createProxyAgent()
-    const connection = connectInProcess(proxy)
-    await connection.initialized
+    const logs = captureLogs()
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://guest.test/api/guest/v1/acp",
+      socketConstructor: pipedSockets(() => proxy.app).WebSocket,
+      logger: logs.logger,
+    })
+    connection.start()
 
     await connection.login("invitation-token")
 
@@ -497,6 +383,16 @@ describe("ACP connection", () => {
       methodId: AOS_AUTH_METHOD_INVITE,
       _meta: { [AOS_META_KEY]: { token: "invitation-token" } },
     })
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        message: "acp.frame",
+        fields: expect.objectContaining({
+          method: methods.agent.auth.login,
+          requestId: expect.anything(),
+        }),
+      })
+    )
+    expect(JSON.stringify(logs.records())).not.toContain("invitation-token")
     connection.close()
   })
 
@@ -508,9 +404,7 @@ describe("ACP connection", () => {
       agentId: AGENT_ID,
       title: "Weekly report",
     })
-    expect(created.sessionId).toBe(SESSION_ID)
-    expect(created.configOptions).toHaveLength(1)
-    expect(created.meta.session).toMatchObject({ agentId: AGENT_ID })
+    expect(created).toEqual({ sessionId: SESSION_ID })
     expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
       cwd: "/",
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
@@ -527,25 +421,16 @@ describe("ACP connection", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
 
-    const resumed = await connection.resumeSession(SESSION_ID, {
-      replayFromStart: false,
-      after: 12,
-      turnId: "run-1",
-    })
-    expect(resumed.meta.execution).toEqual({
-      status: "running",
-      turnId: "run-1",
-    })
-    // The owner reported by `session/new` travels on every later resume.
+    // `session/new` joined the Session, so opening it resumes nothing; the
+    // Agent it was created in travels on every later resume.
+    connection.subscribe(SESSION_ID, {})
+    await connection.replay(SESSION_ID)
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
-      _meta: {
-        [AOS_META_KEY]: { agentId: AGENT_ID, after: 12, turnId: "run-1" },
-      },
+      replayFrom: { type: "start" },
+      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
-    expect(proxy.paramsOf(methods.agent.session.resume)).not.toHaveProperty(
-      "replayFrom"
-    )
 
     await expect(
       connection.prompt(SESSION_ID, [{ type: "text", text: "Hello" }], {
@@ -565,26 +450,24 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     const replaySettled = vi.fn()
     const dropTranscript = vi.fn(() => replaySettled)
-    connection.onSessionReplay(SESSION_ID, dropTranscript)
-
-    const resumed = connection.resumeSession(SESSION_ID, {
-      replayFromStart: true,
+    connection.subscribe(SESSION_ID, {
       agentId: AGENT_ID,
+      replay: dropTranscript,
     })
+
+    // The opening join is the replay asked for, not a second one.
+    const replayed = connection.replay(SESSION_ID)
     expect(replaySettled).not.toHaveBeenCalled()
-    await resumed
+    await replayed
     expect(replaySettled).toHaveBeenCalledTimes(1)
 
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       replayFrom: { type: "start" },
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
     })
     // The whole Session is on its way, so whoever projects it is told to drop
     // what this replay resends.
-    expect(dropTranscript).toHaveBeenCalledTimes(1)
-
-    await connection.resumeSession(SESSION_ID, { replayFromStart: false })
-    // An incremental resume replaces nothing already projected.
     expect(dropTranscript).toHaveBeenCalledTimes(1)
     connection.close()
   })
@@ -608,7 +491,6 @@ describe("ACP connection", () => {
       }
     )
 
-    await connection.closeSession(SESSION_ID)
     await connection.deleteSession(SESSION_ID)
     await connection.updateSession({ sessionId: SESSION_ID, unread: false })
     expect(proxy.paramsOf(AOS_METHODS.session.update)).toEqual({
@@ -680,7 +562,7 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("sends cancel and focus as notifications", async () => {
+  it("sends cancel as a notification and focus as a request", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
@@ -701,14 +583,14 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("dispatches Session updates with their AOS metadata and tracks the run position", async () => {
+  it("dispatches Session updates with their AOS metadata to the Session's listeners", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const seen: { update: SessionUpdate; meta?: Record<string, unknown> }[] = []
-    const unsubscribe = connection.onSessionUpdate(SESSION_ID, (update, meta) =>
-      seen.push({ update, meta })
-    )
+    const unsubscribe = connection.subscribe(SESSION_ID, {
+      update: (update, meta) => seen.push({ update, meta }),
+    })
 
     await proxy.pushUpdate(
       {
@@ -722,22 +604,15 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     expect(seen[0]?.update).toMatchObject({ sessionUpdate: "state_update" })
     expect(seen[0]?.meta).toMatchObject({ sequence: 7, turnId: "run-1" })
-    expect(connection.lastSequence(SESSION_ID)).toEqual({
-      turnId: "run-1",
-      after: 7,
-    })
 
     unsubscribe()
+    const stayed = vi.fn()
+    connection.subscribe(SESSION_ID, { update: stayed })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 8, turnId: "run-1" }
     )
-    await vi.waitFor(() =>
-      expect(connection.lastSequence(SESSION_ID)).toEqual({
-        turnId: "run-1",
-        after: 8,
-      })
-    )
+    await vi.waitFor(() => expect(stayed).toHaveBeenCalledTimes(1))
     expect(seen).toHaveLength(1)
     connection.close()
   })
@@ -748,12 +623,15 @@ describe("ACP connection", () => {
     await connection.initialized
     const activity: unknown[] = []
     let catalogInvalidations = 0
-    connection.onNotification(AOS_METHODS.notify.activity, (params) =>
+    connection.subscribeNotification(AOS_METHODS.notify.activity, (params) =>
       activity.push(params)
     )
-    connection.onNotification(AOS_METHODS.notify.catalogInvalidated, () => {
-      catalogInvalidations += 1
-    })
+    connection.subscribeNotification(
+      AOS_METHODS.notify.catalogInvalidated,
+      () => {
+        catalogInvalidations += 1
+      }
+    )
 
     await proxy.notify(AOS_METHODS.notify.activity, {
       agentId: AGENT_ID,
@@ -777,7 +655,7 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
-    connection.onPendingRequest((request) => pending.push(request))
+    connection.subscribePendingRequests((request) => pending.push(request))
 
     const answered = proxy.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
@@ -801,7 +679,7 @@ describe("ACP connection", () => {
       const connection = connectInProcess(proxy)
       await connection.initialized
       const pending: AcpPendingRequest[] = []
-      connection.onPendingRequest((request) => pending.push(request))
+      connection.subscribePendingRequests((request) => pending.push(request))
       const withdrawal = new AbortController()
 
       const answered = proxy[ask](withdrawal.signal)
@@ -819,10 +697,10 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
-    connection.onPendingRequest(() => {
+    connection.subscribePendingRequests(() => {
       throw new Error("this consumer cannot project the request")
     })
-    connection.onPendingRequest((request) => pending.push(request))
+    connection.subscribePendingRequests((request) => pending.push(request))
 
     const answered = proxy.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
@@ -862,16 +740,26 @@ describe("ACP connection", () => {
       history: { nextCursor: "cursor-older" },
     }
 
-    it("keeps the latest history a resume reports, and an attach without one leaves it", async () => {
+    it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
+      const clock = useFakeClock()
       const proxy = createProxyAgent({ history: { nextCursor: "cursor-1" } })
-      const connection = connectInProcess(proxy)
+      const pipe = pipedSockets(() => proxy.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://proxy.test/api/aos/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
 
       expect(connection.history(SESSION_ID)).toBeUndefined()
-      await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+      connection.subscribe(SESSION_ID, {})
+      await connection.joined(SESSION_ID)
       expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
 
-      // A resume that replays nothing reports no history: the cursor stands.
-      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+      // A rejoin replays nothing and reports no history: the cursor stands.
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
       expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
       connection.close()
     })
@@ -881,7 +769,10 @@ describe("ACP connection", () => {
       const connection = connectInProcess(proxy)
       await connection.initialized
       const live: SessionUpdate[] = []
-      connection.onSessionUpdate(SESSION_ID, (update) => live.push(update))
+      connection.subscribe(SESSION_ID, {
+        update: (update) => live.push(update),
+      })
+      await connection.joined(SESSION_ID)
       await proxy.pushUpdate(
         { sessionUpdate: "state_update", state: "running" },
         { sequence: 4, turnId: "run-1" }
@@ -890,13 +781,11 @@ describe("ACP connection", () => {
 
       const page = await connection.resumePage(SESSION_ID, "cursor-1")
 
-      expect(proxy.callsOf(methods.agent.session.resume)).toEqual([
-        {
-          sessionId: SESSION_ID,
-          cwd: "/",
-          replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
-        },
-      ])
+      expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
+        sessionId: SESSION_ID,
+        cwd: "/",
+        replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
+      })
       expect(page.history).toEqual({ nextCursor: "cursor-older" })
       expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
         "user_message",
@@ -907,13 +796,9 @@ describe("ACP connection", () => {
         turnId: "run-0",
       })
       // The page's idle marker belongs to an old turn: the running turn's
-      // listeners never see it, and a reconnect still resumes the live turn.
+      // listeners never see it.
       expect(live).toHaveLength(1)
-      expect(connection.lastSequence(SESSION_ID)).toEqual({
-        turnId: "run-1",
-        after: 4,
-      })
-      // A page read is not an attach, so the attach cursor is untouched.
+      // A page read is not a resume, so the resume cursor is untouched.
       expect(connection.history(SESSION_ID)).toBeUndefined()
 
       // The live stream is unaffected once the page is in.
@@ -935,90 +820,95 @@ describe("ACP connection", () => {
       connection.close()
     })
 
-    it("waits for a recovering transport to reattach before reading a page", async () => {
+    it("waits for a recovering transport to rejoin before reading a page", async () => {
+      const clock = useFakeClock()
       const proxy = createProxyAgent({ page: olderPage, slowResume: true })
-      const sockets: { close: () => void }[] = []
-      const socketConstructor = pipedSocketConstructor(proxy.app)
+      const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
         url: "ws://proxy.test/api/aos/v1/acp",
-        socketConstructor: class extends socketConstructor {
-          constructor(url: string) {
-            super(url)
-            sockets.push(this)
-          }
-        },
-        schedule: (_delayMs, task) => task(),
+        socketConstructor: pipe.WebSocket,
       })
       connection.start()
       await connection.initialized
-      connection.onSessionUpdate(SESSION_ID, () => {})
-      await connection.resumeSession(SESSION_ID, { replayFromStart: false })
+      connection.subscribe(SESSION_ID, {})
+      const joined = connection.joined(SESSION_ID)
+      await clock.advance(20)
+      await joined
 
       const recovering = new Promise<void>((resolve) =>
         connection.subscribeStatus((status) => {
           if (status === "reconnecting") resolve()
         })
       )
-      sockets[0]?.close()
+      pipe.sockets[0]?.drop()
       await recovering
-      await connection.resumePage(SESSION_ID, "cursor-1")
+      const page = connection.resumePage(SESSION_ID, "cursor-1")
+      await clock.advance(300)
+      await page
 
       const order = proxy.calls.flatMap(({ method, params }) =>
         method === RESUME_REPLIED
-          ? ["reattached"]
+          ? ["rejoined"]
           : method === methods.agent.session.resume &&
               z.object({ replayFrom: AosReplayBeforeSchema }).safeParse(params)
                 .success
             ? ["page"]
             : []
       )
-      expect(order).toEqual(["reattached", "reattached", "page"])
+      expect(order).toEqual(["rejoined", "rejoined", "page"])
       connection.close()
     })
   })
 
-  it("reconnects a dropped transport and resumes every attached Session", async () => {
-    const proxy = createProxyAgent({ resyncOnResume: 2 })
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
-    const delays: number[] = []
+  it("delivers no request over a half-open transport", async () => {
+    const clock = useFakeClock()
+    const proxy = createProxyAgent()
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://proxy.test/api/aos/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
-      schedule: (delayMs, task) => {
-        delays.push(delayMs)
-        task()
-      },
+      socketConstructor: pipe.WebSocket,
     })
     connection.start()
     await connection.initialized
-    connection.onSessionUpdate(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, {
-      replayFromStart: false,
-      agentId: AGENT_ID,
+
+    pipe.sockets[0]?.halfOpen()
+    void connection.listAgents().catch(() => {})
+    await clock.advance(1_000)
+
+    expect(proxy.callsOf(AOS_METHODS.agents.list)).toEqual([])
+    connection.close()
+  })
+
+  it("reconnects a dropped transport and rejoins every resumed Session", async () => {
+    const clock = useFakeClock()
+    const proxy = createProxyAgent({ resyncOnResume: 2 })
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/aos/v1/acp",
+      socketConstructor: pipe.WebSocket,
     })
+    connection.start()
+    await connection.initialized
+    const seen = vi.fn()
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID, update: seen })
+    await connection.joined(SESSION_ID)
     connection.focus(SESSION_ID, { foreground: true, idle: true })
     await proxy.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 4, turnId: "run-1" }
     )
-    await vi.waitFor(() =>
-      expect(connection.lastSequence(SESSION_ID)).toBeDefined()
-    )
+    // A drop loses whatever is still in flight, so the first report lands first.
+    await clock.advance(0)
+    expect(seen).toHaveBeenCalledTimes(1)
+    expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() =>
-      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
-    )
-    expect(delays).toEqual([250])
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
     expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
         [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
@@ -1042,37 +932,30 @@ describe("ACP connection", () => {
       call.method === methods.agent.session.resume ? [index] : []
     )
     expect(reports[1]!.index).toBeLessThan(replays[1]!)
-    await vi.waitFor(() => expect(connection.status).toBe("ready"))
-    expect(sockets).toHaveLength(2)
+    expect(connection.status).toBe("ready")
+    expect(pipe.sockets).toHaveLength(2)
     connection.close()
   })
 
   it("redeems the invitation again before replaying a recovered transport", async () => {
+    const clock = useFakeClock()
     const proxy = createProxyAgent()
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
-      schedule: (_delayMs, task) => task(),
+      socketConstructor: pipe.WebSocket,
     })
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.onSessionUpdate(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+    connection.subscribe(SESSION_ID, {})
+    await connection.joined(SESSION_ID)
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() =>
-      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
-    )
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
     expect(
       proxy.calls
         .map(({ method }) => method)
@@ -1091,32 +974,84 @@ describe("ACP connection", () => {
   })
 
   it("ends the connection when the invitation can no longer be redeemed", async () => {
+    const clock = useFakeClock()
     const proxy = createProxyAgent({ refuseLoginAfter: 1 })
-    const sockets: { close: () => void }[] = []
-    const socketConstructor = pipedSocketConstructor(proxy.app)
+    const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/guest/v1/acp",
-      socketConstructor: class extends socketConstructor {
-        constructor(url: string) {
-          super(url)
-          sockets.push(this)
-        }
-      },
-      schedule: (_delayMs, task) => task(),
+      socketConstructor: pipe.WebSocket,
     })
     connection.start()
     await connection.initialized
     await connection.login("invitation-token")
-    connection.onSessionUpdate(SESSION_ID, () => {})
-    await connection.resumeSession(SESSION_ID, { replayFromStart: true })
+    connection.subscribe(SESSION_ID, {})
+    await connection.joined(SESSION_ID)
 
-    sockets[0]?.close()
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
 
-    await vi.waitFor(() => expect(connection.status).toBe("closed"))
+    expect(connection.status).toBe("closed")
     // A refused invitation stops the reconnect loop instead of replaying.
     expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
-    expect(sockets).toHaveLength(2)
+    expect(pipe.sockets).toHaveLength(2)
+  })
+})
+
+describe("build id handshake", () => {
+  /** One tab's storage, which outlives the reloads it triggers. */
+  function tabStorage() {
+    const stored = new Map<string, string>()
+    return {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => void stored.set(key, value),
+    }
+  }
+
+  async function handshake(options: {
+    buildId: string | null
+    proxyBuildId: string
+    reload: () => void
+    storage: ReturnType<typeof tabStorage>
+  }) {
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      connectAgent: createProxyAgent({ buildId: options.proxyBuildId }).app,
+      buildId: options.buildId,
+      reload: options.reload,
+      storage: options.storage,
+    })
+    connection.start()
+    await connection.initialized
+    connection.close()
+  }
+
+  it("reloads once for each proxy build that differs from the tab's", async () => {
+    const reload = vi.fn()
+    const storage = tabStorage()
+    const tab = { buildId: "build-a", reload, storage }
+
+    await handshake({ ...tab, proxyBuildId: "build-b" })
+    // The reload still loaded the old bundle: no second reload, so no loop.
+    await handshake({ ...tab, proxyBuildId: "build-b" })
+    expect(reload).toHaveBeenCalledTimes(1)
+
+    // A later deployment reloads the same long-lived tab again.
+    await handshake({ ...tab, proxyBuildId: "build-c" })
+    expect(reload).toHaveBeenCalledTimes(2)
+  })
+
+  it("skips the check when the browser has no build id", async () => {
+    const reload = vi.fn()
+
+    await handshake({
+      buildId: null,
+      proxyBuildId: "build-b",
+      reload,
+      storage: tabStorage(),
+    })
+
+    expect(reload).not.toHaveBeenCalled()
   })
 })

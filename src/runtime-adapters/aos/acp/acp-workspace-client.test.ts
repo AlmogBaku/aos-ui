@@ -16,13 +16,16 @@ import {
   AOS_META_KEY,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
-  type AosSessionNewResponseMetaSchema,
+  type AosAvailableCommandsMetaSchema,
 } from "@aos/protocol/acp"
+
+import { useFakeClock } from "../../../../test/support/fake-clock"
 
 import type { SessionMetadata } from "../../contracts"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,
+  AcpConnectionStatus,
   AcpSessionReplayListener,
   AcpSessionUpdateListener,
 } from "./types"
@@ -34,7 +37,7 @@ const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const UNLISTED_SESSION_ID = "session-2"
 
 type AcpCapabilities = z.infer<
-  typeof AosSessionNewResponseMetaSchema
+  typeof AosAvailableCommandsMetaSchema
 >["capabilities"]
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
@@ -46,13 +49,13 @@ function capabilities(): AcpCapabilities {
       slashCommands: unavailable,
       models: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         selection: "native-session",
         choices: "provider-reported",
       },
       context: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
@@ -216,14 +219,57 @@ function createFakeConnection() {
   const updates = new Map<string, Set<AcpSessionUpdateListener>>()
   const notifications = new Map<string, Set<(params: unknown) => void>>()
   const replays = new Map<string, Set<AcpSessionReplayListener>>()
+  const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
   const record = (method: string, ...args: unknown[]) => {
     calls.push({ method, args })
+  }
+  function listen<Listener>(
+    keyed: Map<string, Set<Listener>>,
+    sessionId: string,
+    listener: Listener
+  ) {
+    const listeners = keyed.get(sessionId) ?? new Set()
+    listeners.add(listener)
+    keyed.set(sessionId, listeners)
+    return () => listeners.delete(listener)
   }
   let model = "sonnet"
   let effort = "low"
   let listed = listEntry()
   let agents: AgentCatalogEntry[] = [catalogEntry()]
   let updateFailure: Error | undefined
+  let listSessionsFailure: Error | undefined
+  const emit = (
+    sessionId: string,
+    update: SessionUpdate,
+    meta?: Record<string, unknown>
+  ) => {
+    for (const listener of updates.get(sessionId) ?? []) listener(update, meta)
+  }
+  /** What the proxy sends right behind its `session/new` or `session/resume` answer. */
+  const follow = (
+    sessionId: string,
+    agentId: string,
+    status: "idle" | "running"
+  ) =>
+    queueMicrotask(() => {
+      if (status === "running")
+        emit(sessionId, { sessionUpdate: "state_update", state: "running" })
+      emit(sessionId, {
+        sessionUpdate: "config_option_update",
+        configOptions: configOptions(model, effort),
+      })
+      emit(
+        sessionId,
+        { sessionUpdate: "available_commands_update", availableCommands: [] },
+        { capabilities: capabilities() }
+      )
+      emit(
+        sessionId,
+        { sessionUpdate: "session_info_update" },
+        { ...sessionInfoMeta(), agentId, status }
+      )
+    })
 
   const connection: AcpConnection = {
     status: "ready",
@@ -231,41 +277,43 @@ function createFakeConnection() {
     start: () => {},
     // The workspace client never awaits the handshake; the runtime does.
     initialized: new Promise<never>(() => {}),
-    subscribeStatus: () => () => {},
-    onSessionReplay(sessionId, listener) {
-      const listeners = replays.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      replays.set(sessionId, listeners)
-      return () => listeners.delete(listener)
+    subscribeStatus(listener) {
+      statusListeners.add(listener)
+      return () => statusListeners.delete(listener)
     },
+    subscribe(sessionId, listener) {
+      record("subscribe", sessionId, listener.agentId)
+      const offs = [
+        listener.update && listen(updates, sessionId, listener.update),
+        listener.replay && listen(replays, sessionId, listener.replay),
+      ]
+      return () => {
+        for (const off of offs) off?.()
+      }
+    },
+    joined: () => Promise.resolve(),
+    async replay(sessionId) {
+      record("replay", sessionId)
+      follow(sessionId, AGENT_ID, "running")
+    },
+    sessionState: () => "joined",
     async login(token) {
       record("login", token)
     },
     async newSession(meta) {
       record("newSession", meta)
-      return {
-        sessionId: SESSION_ID,
-        configOptions: configOptions(model, effort),
-        meta: {
-          session: { ...sessionInfoMeta(), agentId: meta.agentId },
-          capabilities: capabilities(),
-        },
-      }
+      // Its updates follow the answer that names the Session.
+      queueMicrotask(() => follow(SESSION_ID, meta.agentId, "idle"))
+      return { sessionId: SESSION_ID }
     },
     async listSessions(meta, cursor) {
       record("listSessions", meta, cursor)
-      return { sessions: [listed], nextCursor: "cursor-2" }
-    },
-    async resumeSession(sessionId, resume) {
-      record("resumeSession", sessionId, resume)
-      return {
-        configOptions: configOptions(model, effort),
-        meta: {
-          session: sessionInfoMeta(),
-          execution: { status: "running", turnId: "run-1" },
-          capabilities: capabilities(),
-        },
+      if (listSessionsFailure) {
+        const err = listSessionsFailure
+        listSessionsFailure = undefined
+        throw err
       }
+      return { sessions: [listed], nextCursor: "cursor-2" }
     },
     // Older pages belong to the thread's runtime, never the workspace client.
     resumePage: () => Promise.reject(new Error("unused")),
@@ -280,9 +328,6 @@ function createFakeConnection() {
       if (configId === "session-model") model = value
       else effort = value
       return configOptions(model, effort)
-    },
-    async closeSession(sessionId) {
-      record("closeSession", sessionId)
     },
     async deleteSession(sessionId) {
       record("deleteSession", sessionId)
@@ -307,20 +352,13 @@ function createFakeConnection() {
         agent: { ...catalogEntry(), revision: "revision-3" },
       }
     },
-    onSessionUpdate(sessionId, listener) {
-      const listeners = updates.get(sessionId) ?? new Set()
-      listeners.add(listener)
-      updates.set(sessionId, listeners)
-      return () => listeners.delete(listener)
-    },
-    onNotification(method, listener) {
+    subscribeNotification(method, listener) {
       const listeners = notifications.get(method) ?? new Set()
       listeners.add(listener)
       notifications.set(method, listeners)
       return () => listeners.delete(listener)
     },
-    onPendingRequest: () => () => {},
-    lastSequence: () => ({ turnId: "run-1", after: 9 }),
+    subscribePendingRequests: () => () => {},
     close: () => record("close"),
   }
 
@@ -341,13 +379,23 @@ function createFakeConnection() {
     },
     argsOf: (method: string) =>
       calls.find((call) => call.method === method)?.args,
+    /** Simulates the connection becoming ready (or re-ready after reconnect). */
+    emitStatus(status: AcpConnectionStatus) {
+      for (const listener of statusListeners) listener(status)
+    },
+    /** Makes the next listSessions call throw, then clear. */
+    failListOnce(reason = new Error("list failed")) {
+      listSessionsFailure = reason
+    },
+    clearListFailure() {
+      listSessionsFailure = undefined
+    },
     emitUpdate(
       update: SessionUpdate,
       meta?: Record<string, unknown>,
       sessionId = SESSION_ID
     ) {
-      for (const listener of updates.get(sessionId) ?? [])
-        listener(update, meta)
+      emit(sessionId, update, meta)
     },
     emitNotification(method: string, params: unknown) {
       for (const listener of notifications.get(method) ?? []) listener(params)
@@ -358,7 +406,7 @@ function createFakeConnection() {
         listener()
       )
       return () => {
-        for (const settle of settles) settle?.()
+        for (const settle of settles) settle?.(true)
       }
     },
   }
@@ -388,7 +436,13 @@ function createClient() {
     rest,
     now: () => Date.parse(UPDATED_AT),
   })
-  return { client, rest, ...proxy }
+  /** Holds the Session as a bound thread does, then replays it as its runtime does. */
+  const join = async (sessionId = SESSION_ID) => {
+    const release = client.subscribeSession(sessionId)
+    await proxy.connection.replay(sessionId)
+    return release
+  }
+  return { client, rest, join, ...proxy }
 }
 
 async function settle() {
@@ -404,7 +458,7 @@ describe("ACP workspace client", () => {
 
     expect(metadata).toEqual([
       {
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         agentId: AGENT_ID,
         updatedAt: UPDATED_AT,
         status: "idle",
@@ -423,39 +477,35 @@ describe("ACP workspace client", () => {
   })
 
   it("shares one in-flight read of a page across a refresh storm", async () => {
-    vi.useFakeTimers()
-    try {
-      const { client, connection, emitNotification } = createClient()
-      let inFlight = 0
-      let mostInFlight = 0
-      let answer = () => {}
-      connection.listSessions = vi.fn(async () => {
-        inFlight += 1
-        mostInFlight = Math.max(mostInFlight, inFlight)
-        await new Promise<void>((resolve) => {
-          answer = resolve
-        })
-        inFlight -= 1
-        return { sessions: [listEntry()] }
+    const clock = useFakeClock()
+    const { client, connection, emitNotification } = createClient()
+    let inFlight = 0
+    let mostInFlight = 0
+    let answer = () => {}
+    connection.listSessions = vi.fn(async () => {
+      inFlight += 1
+      mostInFlight = Math.max(mostInFlight, inFlight)
+      await new Promise<void>((resolve) => {
+        answer = resolve
       })
+      inFlight -= 1
+      return { sessions: [listEntry()] }
+    })
 
-      const reads = Promise.all([
-        client.readSessionPage({}),
-        client.readSessionPage({}),
-        client.getSessionMetadata([SESSION_ID]),
-        client.getSessionMetadata([UNLISTED_SESSION_ID]),
-      ])
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-      await vi.advanceTimersByTimeAsync(300)
-      answer()
-      await reads
+    const reads = Promise.all([
+      client.readSessionPage({}),
+      client.readSessionPage({}),
+      client.getSessionMetadata([SESSION_ID]),
+      client.getSessionMetadata([UNLISTED_SESSION_ID]),
+    ])
+    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    await clock.advance(300)
+    answer()
+    await reads
 
-      expect(mostInFlight).toBe(1)
-      expect(connection.listSessions).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(mostInFlight).toBe(1)
+    expect(connection.listSessions).toHaveBeenCalledTimes(1)
   })
 
   it("answers for Sessions of a page the thread list read without reading it again", async () => {
@@ -464,7 +514,7 @@ describe("ACP workspace client", () => {
     await client.readSessionPage({ agentId: AGENT_ID }, "cursor-2")
     const metadata = await client.getSessionMetadata([SESSION_ID])
 
-    expect(metadata.map(({ threadId }) => threadId)).toEqual([SESSION_ID])
+    expect(metadata.map(({ sessionId }) => sessionId)).toEqual([SESSION_ID])
     expect(calls.filter((call) => call.method === "listSessions")).toEqual([
       { method: "listSessions", args: [{ agentId: AGENT_ID }, "cursor-2"] },
     ])
@@ -483,14 +533,14 @@ describe("ACP workspace client", () => {
   })
 
   it("publishes row changes and never clobbers unread with an update that omits it", async () => {
-    const { client, emitUpdate } = createClient()
+    const { client, join, emitUpdate } = createClient()
     await client.getSessionMetadata([SESSION_ID])
     const published: SessionMetadata[][] = []
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       published.push(metadata)
     )
     await settle()
-    await client.attachSession(SESSION_ID)
+    await join()
 
     emitUpdate(
       { sessionUpdate: "session_info_update", title: "Renamed" },
@@ -507,7 +557,7 @@ describe("ACP workspace client", () => {
   })
 
   it("publishes no snapshot until every named Session has a row", async () => {
-    const { client } = createClient()
+    const { client, join } = createClient()
     await client.getSessionMetadata([SESSION_ID])
     const published: SessionMetadata[][] = []
     client.subscribeSessionMetadata(
@@ -521,9 +571,9 @@ describe("ACP workspace client", () => {
     // have, which is how a reloaded deep link loses its Session.
     expect(published).toEqual([])
 
-    await client.attachSession(UNLISTED_SESSION_ID)
+    await join(UNLISTED_SESSION_ID)
 
-    expect(published.at(-1)?.map(({ threadId }) => threadId)).toEqual([
+    expect(published.at(-1)?.map(({ sessionId }) => sessionId)).toEqual([
       SESSION_ID,
       UNLISTED_SESSION_ID,
     ])
@@ -590,14 +640,14 @@ describe("ACP workspace client", () => {
   })
 
   it("publishes a row whose pin or archival the provider changed", async () => {
-    const { client, emitUpdate } = createClient()
+    const { client, join, emitUpdate } = createClient()
     await client.getSessionMetadata([SESSION_ID])
     const published: SessionMetadata[][] = []
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       published.push(metadata)
     )
     await settle()
-    await client.attachSession(SESSION_ID)
+    await join()
     const before = published.length
 
     emitUpdate(
@@ -618,14 +668,14 @@ describe("ACP workspace client", () => {
   })
 
   it("keeps a Session's known creation time when a later read omits it", async () => {
-    const { client, emitUpdate } = createClient()
+    const { client, join, emitUpdate } = createClient()
     await client.getSessionMetadata([SESSION_ID])
     const published: SessionMetadata[][] = []
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       published.push(metadata)
     )
     await settle()
-    await client.attachSession(SESSION_ID)
+    await join()
 
     emitUpdate(
       { sessionUpdate: "session_info_update", title: "Renamed" },
@@ -676,8 +726,8 @@ describe("ACP workspace client", () => {
   })
 
   it("derives Session status from the run stream", async () => {
-    const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    const { client, join, emitUpdate } = createClient()
+    await join()
     expect(client.sessionStatus(SESSION_ID)).toBe("running")
 
     emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
@@ -699,9 +749,9 @@ describe("ACP workspace client", () => {
   })
 
   it("publishes only the status a replay ends on", async () => {
-    const { client, emitUpdate, startReplay } = createClient()
+    const { client, join, emitUpdate, startReplay } = createClient()
     await client.getSessionMetadata([SESSION_ID])
-    await client.attachSession(SESSION_ID)
+    await join()
     const statuses: (string | undefined)[] = []
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       statuses.push(metadata[0]?.status)
@@ -728,8 +778,8 @@ describe("ACP workspace client", () => {
   })
 
   it("publishes Session Todos from the plan update", async () => {
-    const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    const { client, join, emitUpdate } = createClient()
+    await join()
     const seen: unknown[] = []
     client.subscribeTodos(SESSION_ID, (todos) => seen.push(todos))
     await settle()
@@ -777,7 +827,7 @@ describe("ACP workspace client", () => {
       {
         id: `${SESSION_ID}:request-1:attention-requested`,
         agentId: AGENT_ID,
-        threadId: SESSION_ID,
+        sessionId: SESSION_ID,
         occurredAt: UPDATED_AT,
         type: "attention-requested",
         requestId: "request-1",
@@ -787,12 +837,15 @@ describe("ACP workspace client", () => {
   })
 
   it("reports an Agent the catalog gained once a creator run stops", async () => {
-    const { client, emitUpdate, setAgents } = createClient()
+    const clock = useFakeClock()
+    const { client, join, emitUpdate, setAgents } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry()])
     await client.listAgents()
-    const { threadId } = await client.createSession(CREATOR_ID)
+    const { sessionId } = await client.createSession(CREATOR_ID)
+    // The thread binds the new Session and replays it.
+    await join(sessionId)
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     setAgents([creatorEntry(), catalogEntry()])
@@ -801,14 +854,14 @@ describe("ACP workspace client", () => {
       state: "idle",
       stopReason: "end_turn",
     })
-    await vi.waitFor(() => expect(events).toHaveLength(1))
+    await clock.advance(0)
 
     expect(events).toEqual([
       {
-        id: `${threadId}:${AGENT_ID}`,
+        id: `${sessionId}:${AGENT_ID}`,
         type: "agent-ready",
         agentId: AGENT_ID,
-        threadId,
+        sessionId,
         occurredAt: UPDATED_AT,
       },
     ])
@@ -846,12 +899,15 @@ describe("ACP workspace client", () => {
   })
 
   it("reports nothing when a creator run stops without a new Agent", async () => {
-    const { client, emitUpdate, setAgents, calls } = createClient()
+    const clock = useFakeClock()
+    const { client, join, emitUpdate, setAgents, calls } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry(), catalogEntry()])
     await client.listAgents()
-    await client.createSession(CREATOR_ID)
+    const { sessionId } = await client.createSession(CREATOR_ID)
+    // The thread binds the new Session and replays it.
+    await join(sessionId)
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     emitUpdate({
@@ -859,21 +915,19 @@ describe("ACP workspace client", () => {
       state: "idle",
       stopReason: "end_turn",
     })
-    await vi.waitFor(() =>
-      expect(
-        calls.filter(({ method }) => method === "listAgents")
-      ).toHaveLength(2)
-    )
-    await settle()
+    await clock.advance(0)
 
+    expect(calls.filter(({ method }) => method === "listAgents")).toHaveLength(
+      2
+    )
     expect(events).toEqual([])
   })
 
   it("projects models and writes one config option per half", async () => {
-    const { client, argsOf, calls } = createClient()
-    await client.attachSession(SESSION_ID)
+    const { client, join, argsOf, calls } = createClient()
+    await join()
 
-    await expect(client.models(SESSION_ID)).resolves.toEqual({
+    expect(client.models(SESSION_ID)).toEqual({
       selectedId: "sonnet",
       effortId: "low",
       options: [
@@ -902,8 +956,7 @@ describe("ACP workspace client", () => {
       calls.filter((call) => call.method === "setConfigOption").at(-1)?.args
     ).toEqual([SESSION_ID, "session-effort", "high"])
 
-    const models = await client.models(SESSION_ID)
-    expect(models.options[1]).toEqual({
+    expect(client.models(SESSION_ID)?.options[1]).toEqual({
       id: "opus",
       label: "Opus",
       group: "Anthropic",
@@ -914,43 +967,34 @@ describe("ACP workspace client", () => {
     })
   })
 
-  it("resumes an attached Session by owner and last sequence", async () => {
+  it("holds a Session under its owner", async () => {
     const { client, argsOf } = createClient()
     await client.getSessionMetadata([SESSION_ID])
 
-    await client.attachSession(SESSION_ID)
+    client.subscribeSession(SESSION_ID)
 
-    expect(argsOf("resumeSession")).toEqual([
-      SESSION_ID,
-      {
-        replayFromStart: false,
-        agentId: AGENT_ID,
-        turnId: "run-1",
-        after: 9,
-      },
-    ])
+    expect(argsOf("subscribe")).toEqual([SESSION_ID, AGENT_ID])
   })
 
-  it("reads capabilities, commands, and context from the attached Session", async () => {
-    const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+  it("reads capabilities, commands, and context from the resumed Session's updates", async () => {
+    const { client, join, emitUpdate } = createClient()
+    await join()
 
-    await expect(
-      client.workspaceCapabilities(SESSION_ID)
-    ).resolves.toMatchObject({
-      workspace: { slashCommands: { status: "unavailable" } },
+    expect(client.workspaceCapabilities(SESSION_ID)).toMatchObject({
+      workspace: { models: { status: "available" } },
     })
     expect(client.context(SESSION_ID)).toBeUndefined()
 
-    emitUpdate({
-      sessionUpdate: "available_commands_update",
-      availableCommands: [{ name: "plan", description: "Plan the work" }],
-    })
+    emitUpdate(
+      {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "plan", description: "Plan the work" }],
+      },
+      { capabilities: capabilities() }
+    )
     emitUpdate({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
 
-    await expect(
-      client.workspaceCapabilities(SESSION_ID)
-    ).resolves.toMatchObject({
+    expect(client.workspaceCapabilities(SESSION_ID)).toMatchObject({
       workspace: {
         slashCommands: {
           status: "available",
@@ -966,10 +1010,10 @@ describe("ACP workspace client", () => {
   })
 
   it("keeps the provider's own attribution and provenance on a usage reading", async () => {
-    const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    const { client, join, emitUpdate } = createClient()
+    await join()
     const announced: ReturnType<typeof client.context>[] = []
-    client.subscribeContext(SESSION_ID, () =>
+    client.subscribeComposer(SESSION_ID, () =>
       announced.push(client.context(SESSION_ID))
     )
 
@@ -1011,8 +1055,8 @@ describe("ACP workspace client", () => {
   })
 
   it("ignores a usage reading that names no window", async () => {
-    const { client, emitUpdate } = createClient()
-    await client.attachSession(SESSION_ID)
+    const { client, join, emitUpdate } = createClient()
+    await join()
 
     emitUpdate({ sessionUpdate: "usage_update", used: 0, size: 0 })
 
@@ -1024,9 +1068,9 @@ describe("ACP workspace client", () => {
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
-    ).resolves.toEqual({ threadId: SESSION_ID })
+    ).resolves.toEqual({ sessionId: SESSION_ID })
     expect(argsOf("newSession")).toEqual([
-      { agentId: AGENT_ID, title: "Weekly report" },
+      expect.objectContaining({ agentId: AGENT_ID, title: "Weekly report" }),
     ])
 
     client.reportFocus(SESSION_ID, { foreground: true, idle: false })
@@ -1092,41 +1136,37 @@ describe("ACP workspace client", () => {
   })
 
   it("re-lists Session rows once for a burst of catalog invalidations", async () => {
-    vi.useFakeTimers()
-    try {
-      const { client, calls, emitNotification, setListed } = createClient()
-      await client.getSessionMetadata([SESSION_ID])
-      const published: SessionMetadata[][] = []
-      client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-        published.push(metadata)
-      )
-      await vi.advanceTimersByTimeAsync(0)
-      await client.markSessionRead(SESSION_ID)
-      published.length = 0
+    const clock = useFakeClock()
+    const { client, calls, emitNotification, setListed } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
+      published.push(metadata)
+    )
+    await clock.advance(0)
+    await client.markSessionRead(SESSION_ID)
+    published.length = 0
 
-      setListed(listEntry(true, "Renamed by the provider"))
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-      await vi.advanceTimersByTimeAsync(300)
+    setListed(listEntry(true, "Renamed by the provider"))
+    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    await clock.advance(300)
 
-      expect(
-        calls.filter((call) => call.method === "listSessions")
-      ).toHaveLength(2)
-      expect(published.at(-1)).toEqual([
-        {
-          threadId: SESSION_ID,
-          agentId: AGENT_ID,
-          updatedAt: UPDATED_AT,
-          status: "idle",
-          archived: false,
-          unread: true,
-        },
-      ])
-      expect(client.sessionTitle(SESSION_ID)).toBe("Renamed by the provider")
-    } finally {
-      vi.useRealTimers()
-    }
+    expect(calls.filter((call) => call.method === "listSessions")).toHaveLength(
+      2
+    )
+    expect(published.at(-1)).toEqual([
+      {
+        sessionId: SESSION_ID,
+        agentId: AGENT_ID,
+        updatedAt: UPDATED_AT,
+        status: "idle",
+        archived: false,
+        unread: true,
+      },
+    ])
+    expect(client.sessionTitle(SESSION_ID)).toBe("Renamed by the provider")
   })
 
   it("delegates byte and runtime reads to the REST client", async () => {
@@ -1153,5 +1193,102 @@ describe("ACP workspace client", () => {
       runtime: { id: "hermes" },
     })
     expect(rest.readArtifact).toHaveBeenCalledWith(SESSION_ID, "artifact-1")
+  })
+
+  describe("session list refresh", () => {
+    it("never overwrites a newer row with a stale list entry", async () => {
+      // Half a second after the stale entry below, which is written without
+      // milliseconds and so sorts after this one as a string.
+      const newerAt = "2026-09-19T10:00:00.500Z"
+      const { client, setListed } = createClient()
+
+      // First list with the newer updatedAt — the row cache now holds newerAt.
+      setListed({
+        ...listEntry(),
+        updatedAt: newerAt,
+      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      const [first] = await client.getSessionMetadata([SESSION_ID])
+      expect(first?.updatedAt).toBe(newerAt)
+
+      // A second list with an older timestamp must not overwrite.
+      setListed({
+        ...listEntry(),
+        updatedAt: "2026-09-19T10:00:00Z",
+      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      await client.listSessions()
+
+      const [after] = await client.getSessionMetadata([SESSION_ID])
+      expect(after?.updatedAt).toBe(newerAt)
+    })
+
+    it("retries a failed first load until it succeeds", async () => {
+      const clock = useFakeClock()
+      const { client, calls, failListOnce } = createClient()
+      failListOnce()
+      const load = client.getSessionMetadata([SESSION_ID])
+      // The failure auto-clears after one use; advance past the backoff.
+      await clock.advance(5_000)
+      await load
+      expect(calls.filter((c) => c.method === "listSessions").length).toBe(2)
+    })
+
+    it("re-reads page one after a reconnect and retries on failure", async () => {
+      const clock = useFakeClock()
+      const { client, calls, emitStatus, failListOnce } = createClient()
+      await client.getSessionMetadata([SESSION_ID])
+      const readsBefore = calls.filter(
+        (c) => c.method === "listSessions"
+      ).length
+
+      // The connection was already ready when the client was made, so the
+      // first interruption is a reconnect.
+      emitStatus("reconnecting")
+      // Mark the next list attempt to fail so we can test retry.
+      failListOnce()
+      emitStatus("ready")
+      // Advance past the debounce; the first (failing) attempt fires.
+      await clock.advance(300)
+
+      // Allow the failure to happen; it auto-clears after one use.
+      // Advance past the backoff; the retry attempt fires.
+      await clock.advance(5_000)
+
+      const readsAfter = calls.filter((c) => c.method === "listSessions").length
+      // Two new reads: one failed attempt + one retry.
+      expect(readsAfter).toBe(readsBefore + 2)
+    })
+
+    it("stops relisting and folding Session updates once disposed", async () => {
+      const clock = useFakeClock()
+      const {
+        client,
+        calls,
+        emitNotification,
+        emitStatus,
+        emitUpdate,
+        failListOnce,
+      } = createClient()
+      await client.getSessionMetadata([SESSION_ID])
+      client.subscribeSession(SESSION_ID)
+      const reads = () =>
+        calls.filter(({ method }) => method === "listSessions").length
+
+      // One read fails and waits out its backoff while a burst debounces.
+      failListOnce()
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      await clock.advance(300)
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      const readsBefore = reads()
+      client.dispose()
+
+      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitStatus("reconnecting")
+      emitStatus("ready")
+      emitUpdate({ sessionUpdate: "state_update", state: "running" })
+      await clock.advance(10_000)
+
+      expect(reads()).toBe(readsBefore)
+      expect(client.sessionStatus(SESSION_ID)).toBe("idle")
+    })
   })
 })

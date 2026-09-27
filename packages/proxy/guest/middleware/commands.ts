@@ -11,9 +11,9 @@ import {
 } from "../../core/member"
 
 /**
- * What a guest may ask at all. The guest lane holds one invited conversation
- * and manages no workspace: it owns no roster, no read state, no catalog, and
- * no model or effort.
+ * What a guest may ask at all. The guest listener holds one invited
+ * conversation and manages no workspace: it owns no roster, no read state, no
+ * catalog, and no model or effort.
  */
 const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   resume: true,
@@ -56,17 +56,17 @@ function refusedText(text: string) {
 }
 
 /**
- * The invited Session's capabilities, projected to what the guest lane serves.
- * The member contract carries the workspace shape, so the fields the REST
- * projection drops outright are reported unavailable here instead. A guest
- * steers the conversation as an operator does, and runs no slash command.
+ * The invited Session's capabilities, projected to what the guest listener
+ * serves, or `undefined` when they are unusable. The member contract carries
+ * the workspace shape, so the fields the REST projection drops outright are
+ * reported unavailable here instead. A guest steers the conversation as an
+ * operator does, and runs no slash command.
  */
 function projectCapabilities(
   value: WorkspaceCapabilities
-): WorkspaceCapabilities {
+): WorkspaceCapabilities | undefined {
   const projected = projectGuestCapabilities(value)
-  if (!projected)
-    throw new Error("The invited Session reported unusable capabilities")
+  if (!projected) return undefined
   return SessionWorkspaceCapabilitiesResponseSchema.parse({
     workspace: {
       slashCommands: OPERATOR_ONLY,
@@ -87,18 +87,17 @@ export function createCommandsMiddleware(): Middleware {
   return {
     admits: (kind) => GUEST_COMMANDS[kind],
     commands: {
-      resume: async (command, next) => {
-        const resumed = await next(command)
-        return {
-          ...resumed,
-          capabilities: projectCapabilities(resumed.capabilities),
-        }
-      },
       // Rebuilt from the fields a guest may set; the history layer decides
       // which message an Edit or Retry may name.
       send: async (command, next) => {
-        const { sessionId, content, text, rewindSourceId, attachmentStageId } =
-          command
+        const {
+          sessionId,
+          content,
+          text,
+          rewindSourceId,
+          attachmentStageId,
+          clientId,
+        } = command
         if (
           [
             text,
@@ -114,6 +113,7 @@ export function createCommandsMiddleware(): Middleware {
           text,
           ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
           ...(attachmentStageId === undefined ? {} : { attachmentStageId }),
+          ...(clientId === undefined ? {} : { clientId }),
         })
       },
       steer: async ({ sessionId, requestId, text }, next) => {
@@ -122,6 +122,13 @@ export function createCommandsMiddleware(): Middleware {
       },
       // Read state belongs to the operator; a guest's exposure moves nothing.
       focus: async () => undefined,
+    },
+    // A command list reaches a guest as what it may use, and one it cannot
+    // read not at all.
+    event(event) {
+      if (event.kind !== "commands") return event
+      const capabilities = projectCapabilities(event.capabilities)
+      return capabilities && { ...event, capabilities }
     },
   }
 }

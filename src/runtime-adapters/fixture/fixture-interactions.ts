@@ -6,7 +6,7 @@ import type {
 
 /** Called when the operator answers a question; receives the thread and the answers matrix. */
 export type FixtureAnswerAppender = (
-  threadId: string,
+  sessionId: string,
   answers: string[][]
 ) => void
 
@@ -23,8 +23,8 @@ export function createFixtureInteractions(
   const pending = new Map<string, RuntimeQuestionRequest>()
   const listeners = new Map<string, Set<() => void>>()
 
-  function notify(threadId: string) {
-    listeners.get(threadId)?.forEach((l) => l())
+  function notify(sessionId: string) {
+    listeners.get(sessionId)?.forEach((l) => l())
   }
 
   function take(request: RuntimeQuestionRequest): boolean {
@@ -53,17 +53,17 @@ export function createFixtureInteractions(
       take(request)
     },
 
-    getPending(threadId: string) {
-      return pending.get(threadId)
+    getPending(sessionId: string) {
+      return pending.get(sessionId)
     },
 
-    subscribe(threadId: string, listener: () => void) {
-      const existing = listeners.get(threadId) ?? new Set<() => void>()
+    subscribe(sessionId: string, listener: () => void) {
+      const existing = listeners.get(sessionId) ?? new Set<() => void>()
       existing.add(listener)
-      listeners.set(threadId, existing)
+      listeners.set(sessionId, existing)
       return () => {
         existing.delete(listener)
-        if (existing.size === 0) listeners.delete(threadId)
+        if (existing.size === 0) listeners.delete(sessionId)
       }
     },
   }

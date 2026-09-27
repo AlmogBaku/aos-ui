@@ -134,7 +134,7 @@ async function post(
     throw new VoiceProviderError("temporarily_unavailable")
   }
   if (!response.ok) {
-    void response.body?.cancel().catch(() => undefined)
+    if (response.body) response.body.cancel().catch(() => undefined)
     throw new VoiceProviderError("temporarily_unavailable")
   }
   return response

@@ -9,6 +9,7 @@ import {
 } from "../../protocol/mcp-apps"
 import { isAosToolName } from "../core/aos-tool-names"
 import { TurnEventKind, type TurnEvent } from "../core/events"
+import { coreFailure } from "../core/failures"
 import type {
   ServerMcpApps,
   ServerTurnEngine,
@@ -16,6 +17,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
+import * as ids from "../core/ids"
 import { MAX_MCP_APP_HTML_BYTES } from "./client"
 
 /** How long a tool call waits to learn whether it opens a view. */
@@ -167,21 +169,34 @@ function annotatedHandle(
 
 function annotatedTurns(
   turns: ServerTurnEngine,
-  apps: ServerMcpApps
+  apps: ServerMcpApps,
+  gone: (cause: unknown) => boolean
 ): ServerTurnEngine {
   return {
-    start: async (scope, input, attachments) =>
+    start: async (scope, input, attachments, signal) =>
       annotatedHandle(
-        await turns.start(scope, input, attachments),
+        await turns.start(scope, input, attachments, signal),
         apps,
         scope
       ),
-    recover: async (scope, request) =>
-      annotatedHandle(await turns.recover(scope, request), apps, scope),
+    recover: async (scope, request, signal) => {
+      const handle = await turns
+        .recover(scope, request, signal)
+        .catch((err: unknown) => {
+          if (gone(err))
+            apps.reportSessionGone?.(scope.agentId, scope.providerSessionId)
+          throw err
+        })
+      return annotatedHandle(handle, apps, scope)
+    },
     ...(turns.discover
       ? {
-          discover: async (scope: SessionScope, turnId: string) => {
-            const found = await turns.discover!(scope, turnId)
+          discover: async (
+            scope: SessionScope,
+            turnId: string,
+            signal?: AbortSignal
+          ) => {
+            const found = await turns.discover!(scope, turnId, signal)
             return (
               found && {
                 ...found,
@@ -191,8 +206,11 @@ function annotatedTurns(
           },
         }
       : {}),
-    // A watch only signals; the turn it reports is read through `discover`.
-    ...(turns.watch ? { watch: turns.watch.bind(turns) } : {}),
+    // A turn subscription only signals; the turn it reports is read
+    // through `discover`.
+    ...(turns.subscribeTurns
+      ? { subscribeTurns: turns.subscribeTurns.bind(turns) }
+      : {}),
   }
 }
 
@@ -224,28 +242,38 @@ async function annotatedHistory(
  * Adds MCP Apps to one server runtime without touching the adapter: a tool
  * call whose tool declares a view carries the `app` flag from its start, live
  * and in history, and the Session's capabilities advertise the view API. A
- * runtime without `mcpApps` is returned as it is.
+ * Session deleted, or one a recover finds gone, frees what `observe` kept for
+ * it. A runtime without `mcpApps` is returned as it is.
  */
 export function withMcpApps<Runtime extends ServerRuntime>(
   native: Runtime
 ): Runtime {
   const apps = native.mcpApps
   if (!apps) return native
-  const turns = annotatedTurns(native.turns, apps)
+  const turns = annotatedTurns(
+    native.turns,
+    apps,
+    (cause) =>
+      (coreFailure(cause) ?? native.publicError(cause))?.kind === "gone"
+  )
 
   const overrides: Pick<
     ServerRuntime,
-    "turns" | "history" | "workspaceCapabilities"
+    "turns" | "history" | "deleteSession" | "workspaceCapabilities"
   > = {
     turns,
-    async history(agentId, runtimeSessionId, limit, offset) {
+    async deleteSession(agentId, providerSessionId) {
+      await native.deleteSession(agentId, providerSessionId)
+      apps.reportSessionGone?.(agentId, providerSessionId)
+    },
+    async history(agentId, providerSessionId, limit, offset) {
       const history = SessionHistoryResponseSchema.parse(
-        await native.history(agentId, runtimeSessionId, limit, offset)
+        await native.history(agentId, providerSessionId, limit, offset)
       )
       return annotatedHistory(history, apps, {
         agentId,
-        sessionId: runtimeSessionId,
-        threadId: history.sessionId,
+        providerSessionId,
+        sessionId: ids.sessionId(history.sessionId),
       })
     },
     async workspaceCapabilities(agentId, publicSessionId) {

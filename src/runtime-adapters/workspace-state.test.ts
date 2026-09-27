@@ -11,7 +11,7 @@ const minimumAdapter: WorkspaceAdapter = {
   listAgents: async () => [],
   refreshAgents: async () => [],
   getSessionMetadata: async () => [],
-  createSession: async () => ({ threadId: "thread" }),
+  createSession: async () => ({ sessionId: "thread" }),
 }
 
 describe("workspace capabilities", () => {
@@ -90,11 +90,11 @@ describe("Session-scoped Todos", () => {
 describe("stale-event isolation", () => {
   it("updates the originating thread cache but never the visible thread", () => {
     const cache = new WorkspaceEventCache()
-    cache.select({ agentId: "aster", threadId: "aster-current" })
+    cache.select({ agentId: "aster", sessionId: "aster-current" })
 
     cache.apply({
       agentId: "mica",
-      threadId: "mica-delayed",
+      sessionId: "mica-delayed",
       sequence: 2,
       payload: "delayed provider event",
     })
@@ -104,7 +104,7 @@ describe("stale-event isolation", () => {
 
     cache.apply({
       agentId: "aster",
-      threadId: "aster-current",
+      sessionId: "aster-current",
       sequence: 1,
       payload: "visible event",
     })
@@ -115,10 +115,10 @@ describe("stale-event isolation", () => {
 
   it("rejects an event whose Agent does not own the selected thread", () => {
     const cache = new WorkspaceEventCache()
-    cache.select({ agentId: "aster", threadId: "same-thread" })
+    cache.select({ agentId: "aster", sessionId: "same-thread" })
     cache.apply({
       agentId: "mica",
-      threadId: "same-thread",
+      sessionId: "same-thread",
       sequence: 1,
       payload: "wrong owner",
     })
@@ -130,13 +130,13 @@ describe("stale-event isolation", () => {
     const cache = new WorkspaceEventCache()
     cache.apply({
       agentId: "aster",
-      threadId: "shared-session",
+      sessionId: "shared-session",
       sequence: 1,
       payload: "Aster event",
     })
     cache.apply({
       agentId: "mica",
-      threadId: "shared-session",
+      sessionId: "shared-session",
       sequence: 1,
       payload: "Mica event",
     })
@@ -151,22 +151,22 @@ describe("stale-event isolation", () => {
 
   it("ignores duplicate or out-of-order event sequences per thread", () => {
     const cache = new WorkspaceEventCache()
-    cache.select({ agentId: "aster", threadId: "thread-1" })
+    cache.select({ agentId: "aster", sessionId: "thread-1" })
     cache.apply({
       agentId: "aster",
-      threadId: "thread-1",
+      sessionId: "thread-1",
       sequence: 2,
       payload: "new",
     })
     cache.apply({
       agentId: "aster",
-      threadId: "thread-1",
+      sessionId: "thread-1",
       sequence: 2,
       payload: "duplicate",
     })
     cache.apply({
       agentId: "aster",
-      threadId: "thread-1",
+      sessionId: "thread-1",
       sequence: 1,
       payload: "old",
     })

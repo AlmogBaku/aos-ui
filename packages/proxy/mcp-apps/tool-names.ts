@@ -1,3 +1,4 @@
+import type { Logger } from "../../lifecycle"
 import {
   canonicalAosToolName,
   type McpToolNameResolver,
@@ -75,7 +76,8 @@ export function createMcpToolNames(
   catalog: (
     key: string,
     fresh: boolean
-  ) => Promise<readonly McpToolCatalogEntry[]>
+  ) => Promise<readonly McpToolCatalogEntry[]>,
+  logger?: Logger
 ): McpToolNames {
   const lookups = new Map<string, Lookup>()
 
@@ -115,7 +117,9 @@ export function createMcpToolNames(
       return (rawName) => {
         const lookup = lookups.get(key)
         if (unknown(lookup, rawName))
-          void load(key, [rawName]).catch(() => undefined)
+          load(key, [rawName]).catch((err: unknown) =>
+            logger?.warn({ err }, "mcp_tool.names.load_failed")
+          )
         return resolverOf(lookup)(rawName)
       }
     },

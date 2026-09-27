@@ -25,9 +25,9 @@ import {
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
   COMPACTION_DATA_PART_NAME,
+  steerMessageId,
   type AosCompaction,
-} from "@/components/assistant-ui/elements/compaction-divider"
-import { steerMessageId } from "@/components/assistant-ui/elements/message-queue"
+} from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
 import { isSettledApproval, type AcpApproval } from "./acp-approvals"
@@ -136,8 +136,6 @@ export const initialProjectorState: ProjectorState = {
   execution: { status: "idle" },
   todos: [],
 }
-
-type StateMeta = z.infer<typeof AosStateMetaSchema>
 
 const text = (value: unknown) => (typeof value === "string" ? value : undefined)
 
@@ -512,7 +510,7 @@ function withoutCompaction(
 }
 
 /** The vendor stop reasons carry the failure the run reported. */
-function errorFrom(aos: StateMeta | undefined): TurnFailure | undefined {
+function errorFrom(aos: TurnFailure | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
     ...(aos?.code === undefined ? {} : { code: aos.code }),
     ...(aos?.message === undefined ? {} : { message: aos.message }),
@@ -575,7 +573,7 @@ function applyIdle(
   state: ProjectorState,
   carried: { turnId?: string },
   stopReason: string | undefined,
-  aos: StateMeta | undefined
+  aos: (TurnFailure & { at?: string }) | undefined
 ): ProjectorState {
   const reported = reportedFailure(state, carried.turnId)
   const failed =
@@ -803,7 +801,7 @@ function applyWhole(
 /**
  * The artifact a published link names, or `undefined` for an ordinary link. The
  * id is all the link carries: the artifact resolver reads it through the Session
- * and lane this client already holds, never from a location on the wire.
+ * and listener this client already holds, never from a location on the wire.
  */
 function linkedArtifact(block: ContentBlock) {
   if (block.type !== "resource_link" || typeof block.uri !== "string")
@@ -1035,20 +1033,30 @@ export function renameMessage(
 }
 
 /**
- * Drops the transcript ahead of a replay that resends the whole Session. The
- * replay's parts arrive as chunks, so the ones already projected would be
- * doubled rather than replaced; the Session's own state stays, because the
- * replay restates that itself.
- *
+ * The turns a replay that resends the whole Session replaces, as it starts.
  * A prompt the provider has not echoed yet is the browser's alone: a draft's
  * first turn binds and resumes while its own prompt is in flight, and the reply
  * re-keys it onto the id the proxy assigned, which drops it if the replay
  * already carried that turn.
  */
-export function clearTranscript(state: ProjectorState): ProjectorState {
-  const kept = state.messages.filter((message) =>
-    message.id.startsWith(LOCAL_PROMPT_PREFIX)
+export function replacedTurns(state: ProjectorState): ReadonlySet<string> {
+  return new Set(
+    state.messages.flatMap((message) =>
+      message.id.startsWith(LOCAL_PROMPT_PREFIX) ? [] : [message.id]
+    )
   )
+}
+
+/**
+ * Drops the turns a replay replaces. The replay's parts arrive as chunks, so
+ * the ones already projected would be doubled rather than replaced; the
+ * Session's own state stays, because the replay restates that itself.
+ */
+export function clearTranscript(
+  state: ProjectorState,
+  replaced = replacedTurns(state)
+): ProjectorState {
+  const kept = state.messages.filter((message) => !replaced.has(message.id))
   const bare = !state.terminals && !state.early
   if (kept.length === state.messages.length && bare) return state
   return {
@@ -1115,6 +1123,20 @@ export function failLatestTurn(
 }
 
 /**
+ * Ends a Session the provider no longer holds: the run it had open fails
+ * there, and a Session with none shows the failure on its latest turn.
+ */
+export function failSession(
+  state: ProjectorState,
+  error: TurnFailure
+): ProjectorState {
+  const ended = applyIdle(state, {}, AOS_STOP_REASONS.error, error)
+  return activeAssistantId(state) === undefined
+    ? failLatestTurn(ended, error)
+    : ended
+}
+
+/**
  * Whether the update between the two states ended a live run in a failure
  * before it wrote a reply, so no turn of its own shows the failure. A settled
  * state the proxy restates, such as an uncertain one, ends no run.
@@ -1130,15 +1152,6 @@ export function failedWithoutReply(
     after.execution.status === "failed" &&
     activeAssistantId(before) === undefined
   )
-}
-
-/** Drops the turn a rewind replaces, and everything after it. */
-export function retainBefore(
-  state: ProjectorState,
-  messageId: string
-): ProjectorState {
-  const at = state.messages.findIndex((message) => message.id === messageId)
-  return at < 0 ? state : withMessages(state, state.messages.slice(0, at))
 }
 
 /** The blocks a turn was sent with, so a retry can re-send them verbatim. */

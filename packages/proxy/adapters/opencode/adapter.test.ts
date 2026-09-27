@@ -141,11 +141,31 @@ describe("OpenCode server adapter", () => {
     await expect(
       adapter.updateModel("research", "session-1", { effortId: "high" })
     ).rejects.toMatchObject({ name: "OpenCodeWorkspaceUnavailableError" })
+    const unknown = await adapter
+      .updateModel("research", "session-1", {
+        selectedId: '["openai","unknown"]',
+      })
+      .catch((error: unknown) => error)
+    expect(adapter.publicError(unknown)?.kind).toBe("invalid_request")
     expect(native.sessions.switchModel).toHaveBeenCalledTimes(1)
     await expect(
       adapter.context("research", "session-1")
     ).rejects.toMatchObject({
       name: "OpenCodeWorkspaceUnavailableError",
+    })
+  })
+
+  it("lists a Session's model by its id when the catalog no longer has it", async () => {
+    const native = client()
+    native.catalog.models = async () => ({ data: [] })
+    const adapter = new OpenCodeServerAdapter({
+      client: native,
+      turns: turnEngine,
+    })
+
+    await expect(adapter.models("research", "session-1")).resolves.toEqual({
+      selectedId: '["openai","gpt-5"]',
+      options: [{ id: '["openai","gpt-5"]', label: "gpt-5", group: "openai" }],
     })
   })
 
@@ -525,91 +545,6 @@ describe("OpenCode server adapter", () => {
     ).toBe(true)
   })
 
-  it("observes validated exact-Session invalidations and releases the SSE lease once", async () => {
-    const native = client()
-    let releaseStream!: () => void
-    const abort = vi.fn(() => releaseStream())
-    native.sessions.events = vi.fn(async () => ({
-      abort,
-      async *[Symbol.asyncIterator]() {
-        yield {
-          event: "session",
-          id: "0",
-          data: {
-            id: "event-1",
-            type: "session.next.prompt.admitted",
-            durable: { aggregateID: "session-1", seq: 0, version: 1 },
-            data: {
-              sessionID: "session-1",
-              timestamp: 1,
-              messageID: "prompt-1",
-              prompt: { text: "Hello" },
-              delivery: "queue",
-            },
-          },
-        }
-        await new Promise<void>((resolve) => {
-          releaseStream = resolve
-        })
-      },
-    }))
-    const listener = vi.fn()
-    const adapter = new OpenCodeServerAdapter({
-      client: native,
-      turns: turnEngine,
-    })
-
-    const unsubscribe = await adapter.subscribeSessionInvalidation(
-      "research",
-      "session-1",
-      listener
-    )
-    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce())
-    unsubscribe()
-    unsubscribe()
-    expect(abort).toHaveBeenCalledOnce()
-  })
-
-  it("resets an invalidation observer on a durable SSE sequence gap", async () => {
-    const native = client()
-    native.sessions.events = vi.fn(async () => ({
-      abort: vi.fn(),
-      async *[Symbol.asyncIterator]() {
-        for (const seq of [0, 2]) {
-          yield {
-            event: "session",
-            id: String(seq),
-            data: {
-              id: `event-${seq}`,
-              type: "session.next.prompt.admitted",
-              durable: { aggregateID: "session-1", seq, version: 1 },
-              data: {
-                sessionID: "session-1",
-                timestamp: seq + 1,
-                messageID: `prompt-${seq}`,
-                prompt: { text: "Hello" },
-                delivery: "queue",
-              },
-            },
-          }
-        }
-      },
-    }))
-    const reset = vi.fn()
-    const adapter = new OpenCodeServerAdapter({
-      client: native,
-      turns: turnEngine,
-    })
-
-    await adapter.subscribeSessionInvalidation(
-      "research",
-      "session-1",
-      vi.fn(),
-      reset
-    )
-    await vi.waitFor(() => expect(reset).toHaveBeenCalledOnce())
-  })
-
   it("refuses attachment staging for a foreign Agent before accepting file data", async () => {
     const adapter = new OpenCodeServerAdapter({
       client: client(),
@@ -763,8 +698,8 @@ describe("OpenCode server adapter", () => {
           name: "OpenCodeContentUnreadableError",
         })
         expect(
-          adapter.publicError(await failure.catch((error) => error))
-        ).toEqual({ code: "not_found", status: 404 })
+          adapter.publicError(await failure.catch((error) => error))?.kind
+        ).toBe("gone")
       }
     })
 

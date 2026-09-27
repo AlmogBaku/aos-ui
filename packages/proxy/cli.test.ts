@@ -4,12 +4,13 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { stringify } from "yaml"
 
+import { captureLogs, type LogCapture } from "../../test/support/log-capture"
 import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
-import { describeStartFailure } from "./config-file"
-import { redactForLog } from "./redaction"
+import { installProcessHandlers } from "./cli/process-handlers"
+import { CredentialValues, redactForLog } from "./redaction"
 import type { startProxyServer } from "./server"
 
 const temporaryDirectories: string[] = []
@@ -72,7 +73,6 @@ async function proxyConfig() {
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "current", secretFile: invitationKey }],
-          ttlSeconds: 259_200,
           clockSkewSeconds: 0,
         },
       },
@@ -83,12 +83,17 @@ async function proxyConfig() {
   return { configFile, configHome }
 }
 
+/** The lines a start wrote at `error`, which a clean one writes none of. */
+const errors = (logs: LogCapture) =>
+  logs.records().filter(({ level }) => level === "error")
+
 /** A Hermes runtime that answers without a provider socket. */
 function stubbedHermesRuntime(): RuntimeFactory {
-  return (config, limits) => {
+  return (config, limits, services) => {
     if (config.kind !== "hermes")
       throw new Error("the configuration fixture selects Hermes")
     return createHermesRuntime(config, limits, {
+      ...services,
       transportFactory: () => ({
         request: vi.fn(),
         close: vi.fn(async () => undefined),
@@ -110,18 +115,19 @@ function stubbedStart() {
 
 describe("proxy executable", () => {
   it("prints CLI help without reporting a startup failure", async () => {
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     const start = vi.fn()
 
     await expect(
       runProxyCli(["bun", "proxy", "--help"], {
-        logger,
+        createLogger: () => logs.logger,
+        credentials: new CredentialValues(),
         start,
         getenv: () => undefined,
       })
     ).resolves.toBeUndefined()
     expect(start).not.toHaveBeenCalled()
-    expect(logger.error).not.toHaveBeenCalled()
+    expect(errors(logs)).toEqual([])
   })
 
   it("starts both listeners and closes the runtime exactly once", async () => {
@@ -129,7 +135,7 @@ describe("proxy executable", () => {
     const transportClose = vi.fn(async () => undefined)
     const staticHandler = vi.fn(async () => new Response("shell"))
     const exit = vi.fn()
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
     /** Models one listener: shutdown announces, closes resources, settles. */
     const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
       const shutdown = vi.fn(async () => {
@@ -143,14 +149,16 @@ describe("proxy executable", () => {
     const lifecycle = await runProxyCli(
       ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
       {
-        runtimeFactory: (config, limits) =>
+        runtimeFactory: (config, limits, services) =>
           createHermesRuntime(config, limits, {
+            ...services,
             transportFactory: () => ({
               request: vi.fn(),
               close: transportClose,
             }),
           }),
-        logger,
+        createLogger: () => logs.logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         start,
         staticHandler,
@@ -193,7 +201,6 @@ describe("proxy executable", () => {
     ).toEqual({
       surface: "guest",
       basePath: "/api/guest/v1",
-      lane: "guest",
     })
     const guestDocument = await guestApp.fetch(
       new Request("https://guest.example.test/")
@@ -254,23 +261,22 @@ describe("proxy executable", () => {
     expect(shutdowns[0]).toHaveBeenCalledOnce()
     expect(shutdowns[1]).toHaveBeenCalledOnce()
     expect(transportClose).toHaveBeenCalledOnce()
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "proxy.shutdown.started",
-        graceMs: 5_000,
-      })
-    )
-    expect(logger.info).toHaveBeenCalledWith({
-      event: "proxy.shutdown.completed",
-      forced: false,
-    })
-    expect(
-      logger.info.mock.calls.filter(
-        ([entry]) =>
-          (entry as { event: string }).event === "proxy.shutdown.started"
-      )
-    ).toHaveLength(1)
-    expect(logger.error).not.toHaveBeenCalled()
+    const shutdownLines = logs
+      .records()
+      .filter(({ message }) => message.startsWith("proxy.shutdown."))
+    expect(shutdownLines).toEqual([
+      {
+        level: "info",
+        message: "proxy.shutdown.started",
+        fields: { graceMs: 5_000 },
+      },
+      {
+        level: "info",
+        message: "proxy.shutdown.completed",
+        fields: { forced: false },
+      },
+    ])
+    expect(errors(logs)).toEqual([])
     expect(exit).toHaveBeenCalledExactlyOnceWith(0)
   })
 
@@ -279,7 +285,8 @@ describe("proxy executable", () => {
 
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--help"], {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         writeOut: (value) => {
           output += value
@@ -334,7 +341,8 @@ describe("proxy executable", () => {
           "en",
         ],
         {
-          logger: { info: vi.fn(), error: vi.fn() },
+          createLogger: () => captureLogs().logger,
+          credentials: new CredentialValues(),
           getenv: (name) =>
             name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
@@ -400,7 +408,8 @@ describe("proxy executable", () => {
           "Continue.",
         ],
         {
-          logger: { info: vi.fn(), error: vi.fn() },
+          createLogger: () => captureLogs().logger,
+          credentials: new CredentialValues(),
           getenv: () => undefined,
           randomBytes: () => {
             throw new Error("reference randomness was read")
@@ -426,7 +435,8 @@ describe("proxy executable", () => {
     const { configFile } = await proxyConfig()
     let output = ""
     await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-      logger: { info: vi.fn(), error: vi.fn() },
+      createLogger: () => captureLogs().logger,
+      credentials: new CredentialValues(),
       getenv: (name) =>
         name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
       randomBytes: (size) => Buffer.alloc(size, 1),
@@ -449,11 +459,12 @@ describe("proxy executable", () => {
   it("serves the discovered configuration file when no flag is given", async () => {
     const { configHome } = await proxyConfig()
     const start = stubbedStart()
-    const logger = { info: vi.fn(), error: vi.fn() }
+    const logs = captureLogs()
 
     const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
-      logger,
+      createLogger: () => logs.logger,
+      credentials: new CredentialValues(),
       getenv: (name) => (name === "XDG_CONFIG_HOME" ? configHome : undefined),
       start,
       exit: vi.fn(),
@@ -463,14 +474,15 @@ describe("proxy executable", () => {
       1,
       expect.objectContaining({ host: "0.0.0.0", port: 4_100 })
     )
-    expect(logger.error).not.toHaveBeenCalled()
+    expect(errors(logs)).toEqual([])
     await lifecycle!.shutdown()
   })
 
   it("requires an explicit configuration file to mint an invitation", async () => {
     await expect(
       runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
       })
     ).rejects.toThrow(/--config/u)
@@ -483,24 +495,67 @@ describe("proxy executable", () => {
     const failure = await runProxyCli(
       ["bun", "proxy", "serve", "--config", missing],
       {
-        logger: { info: vi.fn(), error: vi.fn() },
+        createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
         getenv: () => undefined,
         start,
       }
     ).catch((error: unknown) => error)
 
     expect(start).not.toHaveBeenCalled()
-    expect(
-      redactForLog({
-        event: "proxy.start_failed",
-        error: describeStartFailure(failure),
-      })
-    ).toEqual({
-      event: "proxy.start_failed",
-      error: {
-        name: "ProxyConfigurationError",
-        message: expect.stringContaining(missing),
-      },
+    expect(redactForLog(failure)).toEqual({
+      name: "ProxyConfigurationError",
+      message: expect.stringContaining(missing),
     })
+  })
+})
+
+describe("process handlers", () => {
+  it("unhandledRejection logs one warn line and does not exit", () => {
+    const logs = captureLogs()
+    const exit = vi.fn()
+    const handlers = new Map<string, (arg: unknown) => void>()
+    const fakeProcess = {
+      on(event: string, handler: (arg: unknown) => void) {
+        handlers.set(event, handler)
+      },
+      exit,
+    }
+
+    installProcessHandlers(logs.logger, fakeProcess)
+
+    const reason = new Error("something went wrong")
+    handlers.get("unhandledRejection")!(reason)
+
+    expect(exit).not.toHaveBeenCalled()
+    const warns = logs.records().filter(({ level }) => level === "warn")
+    expect(warns).toHaveLength(1)
+    expect(warns[0]!.message).toBe("proxy.unhandled_rejection")
+    expect(warns[0]!.fields.err).toMatchObject({
+      message: "something went wrong",
+    })
+  })
+
+  it("uncaughtException logs one error line and exits 1", () => {
+    const logs = captureLogs()
+    const exit = vi.fn()
+    const handlers = new Map<string, (arg: unknown) => void>()
+    const fakeProcess = {
+      on(event: string, handler: (arg: unknown) => void) {
+        handlers.set(event, handler)
+      },
+      exit,
+    }
+
+    installProcessHandlers(logs.logger, fakeProcess)
+
+    const error = new Error("fatal error")
+    handlers.get("uncaughtException")!(error)
+
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1)
+    const errorLines = logs.records().filter(({ level }) => level === "error")
+    expect(errorLines).toHaveLength(1)
+    expect(errorLines[0]!.message).toBe("proxy.uncaught_exception")
+    expect(errorLines[0]!.fields.err).toMatchObject({ message: "fatal error" })
   })
 })

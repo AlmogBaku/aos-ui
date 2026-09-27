@@ -5,19 +5,19 @@ import { buildWorkspaceNavigationCatalog } from "./workspace-navigation-catalog"
 
 const sessions: SessionMetadata[] = [
   {
-    threadId: "a-current",
+    sessionId: "a-current",
     agentId: "agent-a",
     updatedAt: "2026-09-08T09:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "a-old",
+    sessionId: "a-old",
     agentId: "agent-a",
     updatedAt: "2026-09-01T09:00:00.000Z",
     status: "idle",
   },
   {
-    threadId: "b-running",
+    sessionId: "b-running",
     agentId: "agent-b",
     updatedAt: "2026-08-01T09:00:00.000Z",
     status: "running",
@@ -48,11 +48,11 @@ describe("buildWorkspaceNavigationCatalog", () => {
     expect(catalog.get("agent-a")).toMatchObject({
       agentId: "agent-a",
       lastSelectedThreadId: "a-current",
-      openSessions: [{ threadId: "a-current", title: "Current" }],
-      historySessions: [{ threadId: "a-old", title: "History" }],
+      openSessions: [{ sessionId: "a-current", title: "Current" }],
+      historySessions: [{ sessionId: "a-old", title: "History" }],
     })
     expect(catalog.get("agent-b")?.openSessions).toEqual([
-      expect.objectContaining({ threadId: "b-running" }),
+      expect.objectContaining({ sessionId: "b-running" }),
     ])
   })
 
@@ -70,62 +70,62 @@ describe("buildWorkspaceNavigationCatalog", () => {
     })
 
     expect(
-      catalog.get("agent-a")?.openSessions.map((item) => item.threadId)
+      catalog.get("agent-a")?.openSessions.map((item) => item.sessionId)
     ).toEqual(["a-current"])
     expect(
-      catalog.get("agent-a")?.historySessions.map((item) => item.threadId)
+      catalog.get("agent-a")?.historySessions.map((item) => item.sessionId)
     ).toEqual(["a-old"])
   })
 
   const pinNow = new Date("2026-09-08T10:00:00.000Z")
   const pinned: SessionMetadata[] = [
     {
-      threadId: "open-new",
+      sessionId: "open-new",
       agentId: "agent-p",
       updatedAt: "2026-09-08T09:30:00.000Z",
       status: "idle",
     },
     {
-      threadId: "open-pinned",
+      sessionId: "open-pinned",
       agentId: "agent-p",
       updatedAt: "2026-09-08T09:00:00.000Z",
       status: "idle",
       pinned: true,
     },
     {
-      threadId: "open-old",
+      sessionId: "open-old",
       agentId: "agent-p",
       updatedAt: "2026-09-08T08:30:00.000Z",
       status: "idle",
     },
     {
-      threadId: "open-pinned-old",
+      sessionId: "open-pinned-old",
       agentId: "agent-p",
       updatedAt: "2026-09-08T08:00:00.000Z",
       status: "idle",
       pinned: true,
     },
     {
-      threadId: "history-new",
+      sessionId: "history-new",
       agentId: "agent-p",
       updatedAt: "2026-09-01T09:30:00.000Z",
       status: "idle",
     },
     {
-      threadId: "history-pinned",
+      sessionId: "history-pinned",
       agentId: "agent-p",
       updatedAt: "2026-09-01T09:00:00.000Z",
       status: "idle",
       pinned: true,
     },
     {
-      threadId: "history-old",
+      sessionId: "history-old",
       agentId: "agent-p",
       updatedAt: "2026-09-01T08:30:00.000Z",
       status: "idle",
     },
     {
-      threadId: "archived-pinned",
+      sessionId: "archived-pinned",
       agentId: "agent-p",
       updatedAt: "2026-09-08T09:15:00.000Z",
       status: "idle",
@@ -148,14 +148,14 @@ describe("buildWorkspaceNavigationCatalog", () => {
     }).get("agent-p")
 
     // A pin outranks age, so even a week-old pinned Session is open.
-    expect(navigation?.openSessions.map((item) => item.threadId)).toEqual([
+    expect(navigation?.openSessions.map((item) => item.sessionId)).toEqual([
       "open-pinned",
       "open-pinned-old",
       "history-pinned",
       "open-new",
       "open-old",
     ])
-    expect(navigation?.historySessions.map((item) => item.threadId)).toEqual([
+    expect(navigation?.historySessions.map((item) => item.sessionId)).toEqual([
       "history-new",
       "history-old",
     ])
@@ -174,7 +174,7 @@ describe("buildWorkspaceNavigationCatalog", () => {
       visibleThreadId: null,
     }).get("agent-p")
 
-    expect(navigation?.openSessions.map((item) => item.threadId)).toEqual([
+    expect(navigation?.openSessions.map((item) => item.sessionId)).toEqual([
       "open-pinned",
       "open-pinned-old",
       "history-pinned",
@@ -182,7 +182,7 @@ describe("buildWorkspaceNavigationCatalog", () => {
     ])
     // Dismissing an ordinary tab sends its Session to History; a pinned one has
     // nowhere else to be listed.
-    expect(navigation?.historySessions.map((item) => item.threadId)).toEqual([
+    expect(navigation?.historySessions.map((item) => item.sessionId)).toEqual([
       "open-new",
       "history-new",
       "history-old",
@@ -203,24 +203,24 @@ describe("buildWorkspaceNavigationCatalog", () => {
     }).get("agent-p")
 
     expect(
-      navigation?.archivedSessions.map(({ threadId, title }) => ({
-        threadId,
+      navigation?.archivedSessions.map(({ sessionId, title }) => ({
+        sessionId,
         title,
       }))
     ).toEqual([
-      { threadId: "archived-pinned", title: "Campaign retrospective" },
+      { sessionId: "archived-pinned", title: "Campaign retrospective" },
     ])
     expect(
       navigation?.archivedSessions.every((item) => item.canClose === undefined)
     ).toBe(true)
     expect(
       navigation?.openSessions.some(
-        (item) => item.threadId === "archived-pinned"
+        (item) => item.sessionId === "archived-pinned"
       )
     ).toBe(false)
     expect(
       navigation?.historySessions.some(
-        (item) => item.threadId === "archived-pinned"
+        (item) => item.sessionId === "archived-pinned"
       )
     ).toBe(false)
   })

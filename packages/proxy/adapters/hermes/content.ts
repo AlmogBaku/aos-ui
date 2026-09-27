@@ -39,10 +39,10 @@ const FILE_REFERENCE = /^@file:(?:`[^`\r\n]+`|"[^"\r\n]+"|'[^'\r\n]+'|[^\s]+)$/u
 
 export type HermesContentSession = {
   agentId: string
-  sessionId: string
-  /** Server-only identifier for a currently attached native Session. */
+  providerSessionId: string
+  /** Server-only identifier for a currently resumed native Session. */
   liveSessionId: string
-  attached: boolean
+  resumed: boolean
 }
 
 export type HermesAudioScope = { agentId: string }
@@ -362,10 +362,10 @@ export function createHermesContentOperations(input: {
   authority: HermesContentAuthority
   transport: HermesContentTransport
 }) {
-  const requireScope = async (agentId: string, sessionId: string) => {
+  const requireScope = async (agentId: string, providerSessionId: string) => {
     let scope: unknown
     try {
-      scope = await input.authority.requireSession(agentId, sessionId)
+      scope = await input.authority.requireSession(agentId, providerSessionId)
     } catch {
       throw new HermesContentScopeError()
     }
@@ -375,17 +375,17 @@ export function createHermesContentOperations(input: {
     if (
       !isRecord(scope) ||
       scope.agentId !== agentId ||
-      scope.sessionId !== sessionId ||
+      scope.providerSessionId !== providerSessionId ||
       !liveSessionId ||
-      typeof scope.attached !== "boolean"
+      typeof scope.resumed !== "boolean"
     )
       throw new HermesContentScopeError()
-    if (!scope.attached) throw new HermesContentUnavailableError()
+    if (!scope.resumed) throw new HermesContentUnavailableError()
     return {
       agentId,
-      sessionId,
+      providerSessionId,
       liveSessionId,
-      attached: scope.attached,
+      resumed: scope.resumed,
     }
   }
   const nativeRequest = async (
@@ -469,7 +469,7 @@ export function createHermesContentOperations(input: {
       return {
         attachments: {
           status: "available" as const,
-          scope: "attached-session" as const,
+          scope: "session" as const,
           inputs: ["image", "file"] as const,
           imageMimeTypes: [...IMAGE_MIME],
           fileMimeTypes: "valid-type/subtype" as const,

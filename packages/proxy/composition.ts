@@ -1,6 +1,7 @@
+import type { Logger } from "../lifecycle"
 import { createOperatorAcpService } from "./acp/operator"
-import { createChannel } from "./core/channel"
-import type { AcpLogger } from "./acp/types"
+import { createCatalog } from "./core/catalog"
+import { createChannels } from "./core/channel"
 import {
   createRuntimeInstance,
   type RuntimeFactory,
@@ -30,6 +31,7 @@ import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
+import type { CredentialValues } from "./redaction"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -39,19 +41,30 @@ import { withVoiceProviders, type VoiceProviders } from "./voice/runtime"
 
 export type ConfiguredProxyDependencies = {
   runtimeFactory?: RuntimeFactory
-  logger: AcpLogger
+  logger: Logger
+  /** The credential values the log masks; every secret read here joins it. */
+  credentials: CredentialValues
   clock?: () => number
+  /** The browser build the static root carries, read once at start. */
+  buildId?: string
   /** Reaches the configured speech providers; tests hand in a stub. */
   fetch?: typeof fetch
+}
+
+/** The composition's secret readers, each recording what it reads. */
+type SecretReaders = {
+  secret: (path: string) => Promise<string>
+  key: (path: string) => Promise<Uint8Array>
 }
 
 /** One provider per configured direction, each key read once at startup. */
 async function createVoiceProviders(
   voice: VoiceConfig,
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  readers: SecretReaders
 ): Promise<VoiceProviders> {
   const apiKey = (file: string | undefined) =>
-    file === undefined ? undefined : readSecretFile(file)
+    file === undefined ? undefined : readers.secret(file)
   const [transcriptionKey, speechKey] = await Promise.all([
     apiKey(voice.transcription?.apiKeyFile),
     apiKey(voice.speech?.apiKeyFile),
@@ -85,12 +98,15 @@ async function createVoiceProviders(
 }
 
 /** Header values, each read once at startup from its own file. */
-async function readHeaderFiles(headers: Record<string, { file: string }>) {
+async function readHeaderFiles(
+  headers: Record<string, { file: string }>,
+  readers: SecretReaders
+) {
   return Object.fromEntries(
     await Promise.all(
       Object.entries(headers).map(
         async ([header, { file }]) =>
-          [header, await readSecretFile(file)] as const
+          [header, await readers.secret(file)] as const
       )
     )
   )
@@ -98,7 +114,8 @@ async function readHeaderFiles(headers: Record<string, { file: string }>) {
 
 /** Each configured fallback server: its URL override and its headers. */
 async function readMcpServerOverrides(
-  mcpApps: McpAppsConfig | undefined
+  mcpApps: McpAppsConfig | undefined,
+  readers: SecretReaders
 ): Promise<McpServerOverrides> {
   const servers = Object.entries(mcpApps?.fallback.servers ?? {})
   return new Map(
@@ -109,7 +126,9 @@ async function readMcpServerOverrides(
             name,
             {
               ...(url ? { url } : {}),
-              ...(headers ? { headers: await readHeaderFiles(headers) } : {}),
+              ...(headers
+                ? { headers: await readHeaderFiles(headers, readers) }
+                : {}),
             },
           ] as const
       )
@@ -119,18 +138,20 @@ async function readMcpServerOverrides(
 
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
- * configured private one, the stored devices, the presence the ACP lane reports
- * into, and the dispatcher that observes the runtime. A state directory the
- * proxy cannot write fails startup here rather than at the first notification.
+ * configured private one, the stored devices, the presence the ACP listener
+ * reports into, and the dispatcher that subscribes to the runtime. A state directory
+ * the proxy cannot write fails startup here rather than at the first
+ * notification.
  */
-async function createPushLane(
+async function createPushDelivery(
   push: NonNullable<ProxyConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
   dependencies: ConfiguredProxyDependencies,
-  clock: { now?: () => number }
+  clock: { now?: () => number },
+  readers: SecretReaders
 ) {
-  const privateKey = await readSecretKeyFile(push.vapid.privateKeyFile)
+  const privateKey = await readers.key(push.vapid.privateKeyFile)
   const registrations = await openPushRegistrations({
     stateDir: push.stateDir,
     logger: dependencies.logger,
@@ -162,28 +183,39 @@ export async function createConfiguredProxy(
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
-  const mcpServerOverrides = await readMcpServerOverrides(config.mcpApps)
+  const { credentials } = dependencies
+  const readers: SecretReaders = {
+    secret: credentials.register(readSecretFile, (value) => [value]),
+    // A key file holds the key's base64url spelling, which is what could leak.
+    key: credentials.register(readSecretKeyFile, (key) => [
+      Buffer.from(key).toString("base64url"),
+    ]),
+  }
+  const mcpServerOverrides = await readMcpServerOverrides(
+    config.mcpApps,
+    readers
+  )
   const [nativeInstance, invitationKeys, voiceProviders] = await Promise.all([
     (dependencies.runtimeFactory ?? createRuntimeInstance)(
       config.runtime,
       config.limits,
-      mcpServerOverrides
+      { logger: dependencies.logger, credentials, mcpServerOverrides }
     ),
     config.guest
       ? Promise.all(
           config.guest.invitations.keys.map(
             async ({ id, secretFile }): Promise<GuestInvitationKey> => ({
               id,
-              secret: await readSecretKeyFile(secretFile),
+              secret: await readers.key(secretFile),
             })
           )
         )
       : Promise.resolve(undefined),
     config.voice
-      ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch)
+      ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch, readers)
       : Promise.resolve(undefined),
   ])
-  // Proxy speech sits in front of the adapter for every lane at once, so the
+  // Proxy speech sits in front of the adapter for every listener at once, so the
   // wrapped runtime is the only one any listener or ACP service ever sees.
   const runtimeInstance: RuntimeInstance = voiceProviders
     ? {
@@ -195,6 +227,9 @@ export async function createConfiguredProxy(
         ),
       }
     : nativeInstance
+  // The coordinator was built on the adapter's runtime; its capabilities read
+  // through the wrapped one, so a provider's speech reaches every subscriber.
+  runtimeInstance.sessions.bindCapabilities(runtimeInstance.runtime)
   const invitations =
     config.guest && invitationKeys
       ? createGuestInvitationService({
@@ -203,32 +238,52 @@ export async function createConfiguredProxy(
           deploymentId: config.deploymentId,
           runtimeId: config.runtime.id,
           keys: invitationKeys,
-          ttlSeconds: config.guest.invitations.ttlSeconds,
           clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
           ...clock,
         })
       : undefined
   /**
-   * One room registry per process, like the runtime both lanes share: a room is
-   * one provider Session, whichever lane each of its members arrived on.
+   * One set of channels per process, like the runtime both listeners share: a
+   * channel is one provider Session, whichever listener each of its members arrived
+   * on.
    */
   const { sessions } = runtimeInstance
   const { turns } = runtimeInstance.runtime
-  const rooms = createChannel({
-    snapshot: (scope) => sessions.snapshot(scope),
-    // A room adopts what the runtime starts only where the runtime reports it.
-    ...(turns.watch
+  /**
+   * One row cache per process: the catalog keeps it current and push delivery
+   * reads the same rows to gate a notification on read state.
+   */
+  const sessionRows = createSessionRows(clock)
+  /** One workspace catalog per process, which both listeners share. */
+  const catalog = createCatalog({
+    runtime: runtimeInstance.runtime,
+    coordinator: sessions,
+    rows: sessionRows,
+    logger: dependencies.logger,
+  })
+  const channels = createChannels({
+    coordinator: sessions,
+    runtime: runtimeInstance.runtime,
+    logger: dependencies.logger,
+    // A channel adopts what the runtime starts only where the runtime
+    // reports it.
+    ...(turns.subscribeTurns
       ? {
           adoption: {
-            watch: (scope, watcher) => turns.watch!(scope, watcher),
-            discover: (scope, lane) => sessions.discover(scope, lane),
-            observe: (scope, listener) => sessions.observeScope(scope, listener),
+            subscribeTurns: (scope, listener) =>
+              turns.subscribeTurns!(scope, listener),
+            discover: (scope) => sessions.discover(scope),
+            subscribeExecutions: (scope, listener) =>
+              sessions.subscribeScope(scope, listener),
           },
         }
       : {}),
   })
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
-  const guestLane = (publicOrigin: string, service: GuestInvitationService) => {
+  const guestListener = (
+    publicOrigin: string,
+    service: GuestInvitationService
+  ) => {
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
@@ -245,38 +300,38 @@ export async function createConfiguredProxy(
         runtimeInstance,
         invitations: service,
         attachmentStages,
-        rooms,
+        channels,
+        catalog,
+        guestActiveExecutions: config.limits.guestActiveExecutions,
         logger: dependencies.logger,
+        buildId: dependencies.buildId,
         ...clock,
       }),
     }
   }
   const guest =
     config.guest && invitations
-      ? guestLane(config.guest.publicOrigin, invitations)
+      ? guestListener(config.guest.publicOrigin, invitations)
       : undefined
   const attachmentStages = new AttachmentStageRegistry()
-  /**
-   * One row cache for the operator surface: the ACP lane keeps it current and
-   * push delivery reads the same rows to gate a notification on read state.
-   */
-  const sessionRows = createSessionRows(clock)
   const push = config.push
-    ? await createPushLane(
+    ? await createPushDelivery(
         config.push,
         runtimeInstance,
         sessionRows,
         dependencies,
-        clock
+        clock,
+        readers
       )
     : undefined
   const acpService = createOperatorAcpService({
     publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
-    rooms,
-    sessionRows,
+    channels,
+    catalog,
     logger: dependencies.logger,
+    buildId: dependencies.buildId,
     ...(push ? { presence: push.presence } : {}),
     ...clock,
   })
@@ -300,6 +355,19 @@ export async function createConfiguredProxy(
           },
         }
       : {}),
+    health: () => ({
+      links: [
+        {
+          name: runtimeInstance.id,
+          state: runtimeInstance.runtime.link.state(),
+        },
+      ],
+      gauges: {
+        sockets: acpService.sockets() + (guest?.acpService.sockets() ?? 0),
+        memberships: channels.memberships(),
+        ...sessions.gauges(),
+      },
+    }),
     readiness: async () => {
       try {
         return (await runtimeInstance.runtime.runtimeInfo()).status ===

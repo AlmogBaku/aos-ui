@@ -133,6 +133,7 @@ const guestTurnErrors: Readonly<
   },
   AOS_SESSION_BUSY: { code: "rate_limited", retryable: true },
   AOS_SESSION_LIMIT: { code: "rate_limited", retryable: true },
+  AOS_OUTCOME_UNKNOWN: { code: "AOS_OUTCOME_UNKNOWN", retryable: false },
 }
 
 export function publicTurnError(code: string | undefined) {

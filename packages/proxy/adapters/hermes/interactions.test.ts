@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { PendingRequestKind } from "../../core/events"
+import type { HermesLog } from "./gateway"
 import { HermesInteractions, type HermesInteractionScope } from "./interactions"
 import { serverRequests } from "./test-utils/server-requests"
 
 const scope: HermesInteractionScope = {
   agentId: "research",
+  providerSessionId: "session-1",
   sessionId: "session-1",
-  threadId: "session-1",
 }
 
 const LIVE = "live-private"
@@ -23,7 +24,7 @@ function harness(
     running?: boolean
     /** Result whose `open_requests` a resume re-delivers before it resolves. */
     resumeResult?: unknown
-    log?: { warn: (event: string, fields: Record<string, unknown>) => void }
+    log?: HermesLog
   } = {}
 ) {
   const requests = serverRequests()
@@ -433,8 +434,8 @@ describe("HermesInteractions server requests", () => {
       })
 
     expect(warn.mock.calls).toEqual([
-      ["hermes.interactions.request_declined", { method: "clarify" }],
-      ["hermes.interactions.request_unanswered", { method: "clarify" }],
+      [{ method: "clarify" }, "hermes.interactions.request_declined"],
+      [{ method: "clarify" }, "hermes.interactions.request_unanswered"],
     ])
   })
 
@@ -493,7 +494,7 @@ describe("HermesInteractions server requests", () => {
   it("ignores a cancellation addressed to another live Session", () => {
     const { requests, interactions, bind } = harness()
     bind()
-    bind("live-other", { ...scope, sessionId: "session-2" })
+    bind("live-other", { ...scope, providerSessionId: "session-2" })
     const id = requests.deliver("clarify", {
       session_id: LIVE,
       question: "Which region?",
@@ -529,7 +530,7 @@ describe("HermesInteractions server requests", () => {
       resumeResult,
     })
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     const snapshot = await interactions.resume(scope)
 
@@ -561,7 +562,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
+    interactions.subscribePendingRequests(scope, notified)
 
     // A `clarify` frame written while the socket was detached reaches AOS only
     // as an `open_requests` re-delivery of the heal that rebound the Session.
@@ -590,7 +591,7 @@ describe("HermesInteractions server requests", () => {
     const { requests, interactions, bind } = harness()
     bind()
     const notified = vi.fn()
-    const stop = interactions.onPendingRequest(scope, notified)
+    const stop = interactions.subscribePendingRequests(scope, notified)
 
     const id = requests.deliver("clarify", {
       session_id: LIVE,
@@ -610,13 +611,17 @@ describe("HermesInteractions server requests", () => {
 
   it("notifies only the run bound to the addressed Session", () => {
     const { requests, interactions, bind } = harness()
-    const other = { ...scope, sessionId: "session-2", threadId: "session-2" }
+    const other = {
+      ...scope,
+      providerSessionId: "session-2",
+      sessionId: "session-2",
+    }
     bind()
     bind("live-other", other)
     const notified = vi.fn()
     const otherNotified = vi.fn()
-    interactions.onPendingRequest(scope, notified)
-    interactions.onPendingRequest(other, otherNotified)
+    interactions.subscribePendingRequests(scope, notified)
+    interactions.subscribePendingRequests(other, otherNotified)
 
     requests.deliver("clarify", { session_id: "live-other", question: "?" })
 
@@ -720,7 +725,7 @@ describe("HermesInteractions server requests", () => {
     // two dimensions an answer may not cross.
     for (const foreign of [
       { ...scope, agentId: "other" },
-      { ...scope, sessionId: "session-2" },
+      { ...scope, providerSessionId: "session-2" },
     ])
       await expect(
         interactions.respond(foreign, {
@@ -796,18 +801,19 @@ describe("HermesInteractions server requests", () => {
 
   it("redacts credentials and keeps the operator's URLs and paths", async () => {
     // A credential is nobody's to read. A location is the operator's own
-    // machine: what a guest may see of it is the ACP lane projection's call.
+    // machine: what a guest may see of it is the guest listener's projection to decide.
     const { requests, interactions, bind } = harness()
     bind()
     const id = requests.deliver("clarify", {
       session_id: LIVE,
-      question: "Use https://hermes.internal with token=secret?",
+      question:
+        "Use https://hermes.internal with token=secret or passphrase=synthetic?",
       choices: ["/home/operator/run.sh", "skip"],
     })
 
     const interrupt = interactions.pending(scope)[0]
     expect(interrupt?.message).toBe(
-      "Use https://hermes.internal with [credential redacted]"
+      "Use https://hermes.internal with [credential redacted] or [credential redacted]"
     )
     const choices = interrupt?.questions?.[0]?.choices ?? []
     expect(choices).toEqual(["/home/operator/run.sh", "skip"])
@@ -1041,7 +1047,7 @@ describe("HermesInteractions server requests", () => {
     ).resolves.toEqual({ status: "expired" })
   })
 
-  it("answers on the request frame when Hermes has no answer method", async () => {
+  it("reports a Hermes without an answer method as unavailable", async () => {
     const { requests, interactions, bind } = harness()
     bind()
     requests.withoutAnswerMethod()
@@ -1057,9 +1063,10 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
-    ).resolves.toEqual({ status: "resolved" })
+    ).rejects.toMatchObject({ code: "AOS_PROVIDER_UNAVAILABLE" })
 
-    expect(requests.answer(id)).toEqual({ answer: "eu" })
+    expect(requests.answer(id)).toBeUndefined()
+    expect(interactions.pending(scope)).toHaveLength(1)
   })
 
   it("keeps the card when the answer acknowledgement is lost", async () => {
@@ -1159,8 +1166,8 @@ describe("HermesInteractions server requests", () => {
     const long = `sudo.${"x".repeat(200)}`
     requests.deliver(long, { session_id: LIVE })
     expect(warn).toHaveBeenCalledWith(
-      "hermes.interactions.request_unanswered",
-      { method: long.slice(0, 64) }
+      { method: long.slice(0, 64) },
+      "hermes.interactions.request_unanswered"
     )
     // Hermes owns the method text and the volume: one line per distinct method,
     // truncated, and the remembered set is capped.

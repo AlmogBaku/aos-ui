@@ -169,7 +169,6 @@ export function failTurn(
   const failure = override ?? active.failure ?? {}
   const { code, message } = publicTurnFailure(failure)
   host.log.warn(
-    TURN_FAILED_LOG,
     loggedFields({
       publicCode: code,
       code: failure.code,
@@ -177,7 +176,8 @@ export function failTurn(
       retryable: failure.retryable,
       failureReason: failure.failureReason,
       nativeMessage: loggedNativeMessage(failure),
-    })
+    }),
+    TURN_FAILED_LOG
   )
   host.fail(active, { code, message })
 }
@@ -192,10 +192,11 @@ function recheckSettlement(
   delayMs: number,
   rereads = QUEUED_START_REREADS
 ) {
-  const timer = setTimeout(
-    () => void settleIfIdle(host, active, rereads),
-    delayMs
-  )
+  const timer = setTimeout(() => {
+    settleIfIdle(host, active, rereads).catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.settle_if_idle_failed")
+    )
+  }, delayMs)
   // A re-read is reconciliation, never a reason to keep the process alive.
   if (typeof timer !== "number") timer.unref()
 }
@@ -241,12 +242,12 @@ export async function reconcileNativeError(
         ? "terminal"
         : "advisory"
   host.log.warn(
-    TURN_NATIVE_ERROR_LOG,
     loggedFields({
       verdict,
       status,
       nativeMessage: loggedNativeMessage(failure),
-    })
+    }),
+    TURN_NATIVE_ERROR_LOG
   )
   if (active.terminal || verdict === "unconfirmed") return
   if (verdict === "advisory") {
@@ -354,7 +355,9 @@ export function watchSettling(host: TurnEngineHost, active: ActiveTurn) {
   host.settling.get(key)?.settle()
   const watcher = settlingWatcher(active)
   host.settling.set(key, watcher)
-  void awaitSettled(host, key, watcher)
+  awaitSettled(host, key, watcher).catch((err: unknown) =>
+    host.log.warn({ err }, "hermes.run.await_settled_failed")
+  )
 }
 
 async function awaitSettled(
@@ -380,7 +383,11 @@ async function awaitSettled(
     if (await resolvedWithin(watcher.done, SETTLING_POLL_MS)) break
   }
   watcher.settle()
-  void retainer.then((release) => release?.())
+  retainer
+    .then((release) => release?.())
+    .catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.retainer_release_failed")
+    )
   if (host.settling.get(key) === watcher) host.settling.delete(key)
   safelyUnsubscribe(active.unsubscribe)
 }

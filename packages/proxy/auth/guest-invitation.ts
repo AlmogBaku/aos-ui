@@ -9,6 +9,8 @@ const TOKEN_ISSUER = "aos-invite"
 const TOKEN_AUDIENCE = "aos-guest"
 const MAX_TOKEN_BYTES = 3 * 1_024
 const MAX_UNIX_SECONDS = 4_102_444_800
+/** An invitation's lifetime when its request names none: 72 hours. */
+const DEFAULT_EXPIRES_IN_SECONDS = 259_200
 
 export const guestOperations = [
   "audio:speak",
@@ -102,7 +104,6 @@ export type GuestInvitationOptions = {
   runtimeId: string
   keys: readonly GuestInvitationKey[]
   now?: () => number
-  ttlSeconds?: number
   clockSkewSeconds?: number
 }
 export type GuestInvitationRequest = {
@@ -115,7 +116,7 @@ export type GuestInvitationRequest = {
 
 export type GuestIdentity = {
   version: 1
-  lane: "guest"
+  role: "guest"
   issuer: "aos-invite"
   audience: "aos-guest"
   deploymentId: string
@@ -232,7 +233,7 @@ function identity(
 ): GuestIdentity {
   return {
     version: 1,
-    lane: "guest",
+    role: "guest",
     issuer: TOKEN_ISSUER,
     audience: TOKEN_AUDIENCE,
     deploymentId,
@@ -255,7 +256,6 @@ function identity(
 export function createGuestInvitationService(
   raw: GuestInvitationOptions
 ): GuestInvitationService {
-  const ttlSeconds = raw.ttlSeconds ?? 259_200
   const clockSkewSeconds = raw.clockSkewSeconds ?? 0
   const validOptions =
     raw.issuer === TOKEN_ISSUER &&
@@ -271,9 +271,6 @@ export function createGuestInvitationService(
         secret.byteLength === 32
     ) &&
     new Set(raw.keys.map(({ id }) => id)).size === raw.keys.length &&
-    Number.isInteger(ttlSeconds) &&
-    ttlSeconds >= 60 &&
-    ttlSeconds <= 2_592_000 &&
     Number.isInteger(clockSkewSeconds) &&
     clockSkewSeconds >= 0 &&
     clockSkewSeconds <= 60
@@ -290,11 +287,11 @@ export function createGuestInvitationService(
       if (!parsed.success)
         throw new GuestInvitationError(describeIssues(parsed.error.issues))
       const issuedAt = nowSeconds(clock)
-      const expiresInSeconds = parsed.data.expiresInSeconds ?? ttlSeconds
-      if (expiresInSeconds > ttlSeconds)
-        throw new GuestInvitationError(
-          `expiresIn: exceeds the ${ttlSeconds}s maximum`
-        )
+      const expiresAt =
+        issuedAt +
+        (parsed.data.expiresInSeconds ?? DEFAULT_EXPIRES_IN_SECONDS)
+      if (expiresAt > MAX_UNIX_SECONDS)
+        throw new GuestInvitationError("expiresIn: ends after the year 2100")
       const claims = ClaimsSchema.parse({
         v: 1,
         iss: TOKEN_ISSUER,
@@ -302,7 +299,7 @@ export function createGuestInvitationService(
         dep: raw.deploymentId,
         runtime: raw.runtimeId,
         iat: issuedAt,
-        exp: issuedAt + expiresInSeconds,
+        exp: expiresAt,
         agent: parsed.data.agentId,
         ref: parsed.data.ref,
         ...(parsed.data.firstTurn ? { firstTurn: parsed.data.firstTurn } : {}),
@@ -361,7 +358,6 @@ export function createGuestInvitationService(
           parsed.data.dep !== raw.deploymentId ||
           parsed.data.runtime !== raw.runtimeId ||
           parsed.data.exp <= parsed.data.iat ||
-          parsed.data.exp - parsed.data.iat > ttlSeconds ||
           current < parsed.data.iat - clockSkewSeconds ||
           current > parsed.data.exp + clockSkewSeconds
         )

@@ -202,11 +202,11 @@ function steerStep(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.SteerAccepted>
 ): Step {
-  // The replayed history already carried this correction as the user turn
-  // Hermes persisted the moment it accepted the redirect, so announcing it
-  // again would show the same words twice. Acceptances arrive in the order
-  // history recorded them, so counting them down is enough.
-  if (state.replayedCorrections > 0)
+  // A provider that stores an accepted correction as a user turn at once
+  // already showed it in the replayed history, so announcing it again would
+  // show the same words twice. Acceptances arrive in the order history
+  // recorded them, so counting them down is enough.
+  if (context.steerAck === "in-history" && state.replayedCorrections > 0)
     return {
       state: { ...state, replayedCorrections: state.replayedCorrections - 1 },
       outbound: [],
@@ -301,7 +301,9 @@ function failedOutbound(
 ): AcpOutbound[] {
   const failure = {
     ...(event.code ? { code: event.code } : {}),
-    message: event.message.slice(0, 4_096),
+    ...(event.message !== undefined
+      ? { message: event.message.slice(0, 4_096) }
+      : {}),
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.model ? { model: event.model } : {}),
   }

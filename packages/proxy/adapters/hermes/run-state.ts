@@ -16,12 +16,14 @@ import type {
 } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
+import type { Todo } from "../todos"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
 import { EventQueue, startedTurnQueue } from "./event-queue"
 import {
   TURN_FAILURES,
   TURN_RESET_LOG,
+  type DetachedTurnFailure,
   type NativeFailure,
   type TurnFailure,
 } from "./run-failures"
@@ -110,6 +112,8 @@ export type ActiveTurn = {
   cost?: Cost
   /** The model the Session last reported; a change is published. */
   model?: SessionModelChoice
+  /** The Todo list this run last published; an unchanged one is not sent again. */
+  plan?: Todo[]
   /** The call each background process Hermes streams output for belongs to. */
   terminals: Map<string, { toolCallId: string; terminalId: string }>
   /** The call that spawned each subagent Hermes reports on. */
@@ -144,7 +148,7 @@ export type TurnEngineHost = {
   finish(active: ActiveTurn, ending?: TurnEnding, confirmedIdle?: boolean): void
   requireAction(active: ActiveTurn, requests: PendingRequest[]): void
   fail(active: ActiveTurn, failure: TurnFailure): void
-  detach(active: ActiveTurn, failure: TurnFailure): void
+  detach(active: ActiveTurn, failure: DetachedTurnFailure): void
   settle(active: ActiveTurn): void
 }
 
@@ -158,7 +162,13 @@ export function failReset(
   reason: string
 ) {
   if (active.terminal) return
-  host.log.warn(TURN_RESET_LOG, { sessionId: active.scope.sessionId, reason })
+  host.log.warn(
+    {
+      sessionId: active.scope.providerSessionId,
+      reason,
+    },
+    TURN_RESET_LOG
+  )
   host.fail(active, TURN_FAILURES.resetRequired)
 }
 

@@ -57,7 +57,7 @@ describe("OpenClaw capabilities", () => {
     ).toEqual({
       attachments: {
         status: "available",
-        scope: "attached-session",
+        scope: "session",
         inputs: ["image", "file"],
         imageMimeTypes: "provider-dependent",
         fileMimeTypes: "provider-dependent",

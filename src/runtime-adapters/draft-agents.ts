@@ -14,24 +14,24 @@ const DRAFT_PREFIX = "draft:"
 /** Resolved drafts are content-free thread ids, safe to keep in the browser. */
 const RESOLVED_DRAFTS_KEY = "aos-ui.resolved-drafts"
 
-export const draftAgentId = (threadId: string) => `${DRAFT_PREFIX}${threadId}`
+export const draftAgentId = (sessionId: string) => `${DRAFT_PREFIX}${sessionId}`
 
 /**
  * The one interview that is still a local thread. A provider creates the
  * creator Session on the first turn, so this row precedes any Session and
- * therefore names no thread of its own. It sits outside the `draft:<threadId>`
+ * therefore names no thread of its own. It sits outside the `draft:<sessionId>`
  * space so that a Session whose id happens to read like this can never be
  * mistaken for it.
  */
 export const PENDING_DRAFT_AGENT_ID = "draft-pending"
 
-export const draftThreadId = (agentId: string) =>
+export const draftSessionId = (agentId: string) =>
   agentId.startsWith(DRAFT_PREFIX)
     ? agentId.slice(DRAFT_PREFIX.length)
     : undefined
 
 export const isDraftAgentId = (agentId: string) =>
-  agentId === PENDING_DRAFT_AGENT_ID || draftThreadId(agentId) !== undefined
+  agentId === PENDING_DRAFT_AGENT_ID || draftSessionId(agentId) !== undefined
 
 function isEligible(
   session: SessionMetadata,
@@ -40,7 +40,7 @@ function isEligible(
   now: number
 ) {
   if (session.agentId !== creatorId) return false
-  if (resolvedThreadIds.has(session.threadId)) return false
+  if (resolvedThreadIds.has(session.sessionId)) return false
   return now - Date.parse(session.updatedAt) < DRAFT_AGENT_WINDOW_MS
 }
 
@@ -56,7 +56,7 @@ type ProjectDraftAgentsInput = {
   draftLabel: string
   /** Formats the start time for the active locale. */
   locale: string
-  /** Session titles by thread id, as the thread list reports them. */
+  /** Session titles by Session id, as the thread list reports them. */
   titles: ReadonlyMap<string, string | undefined>
   /**
    * Row id for a creator interview the provider has not listed yet: the
@@ -111,11 +111,11 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   if (!creator) return { agents: [...agents], sessions: [...sessions] }
 
   const draftAgent = (id: string, createdAt?: string): AgentSummary => {
-    const threadId = draftThreadId(id)
+    const sessionId = draftSessionId(id)
     return {
       kind: "ready",
       id,
-      name: draftName(threadId && titles.get(threadId), name),
+      name: draftName(sessionId && titles.get(sessionId), name),
       description: draftDescription(createdAt, input),
       visibility: "visible",
     }
@@ -123,7 +123,7 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   const drafts: AgentSummary[] = []
   const projected = sessions.map((session) => {
     if (!isEligible(session, creator.id, resolvedThreadIds, now)) return session
-    const id = draftAgentId(session.threadId)
+    const id = draftAgentId(session.sessionId)
     drafts.push(draftAgent(id, session.createdAt))
     return { ...session, agentId: id }
   })

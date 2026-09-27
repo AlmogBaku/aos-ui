@@ -475,7 +475,7 @@ const user = (id: string, text: string, correction = false) => ({
   role: "user" as const,
   content: [{ type: "text" as const, text }],
   createdAt: PROMPTED_AT,
-  ...(correction ? { metadata: { custom: { correction: true } } } : {}),
+  ...(correction ? { correction: true as const } : {}),
 })
 
 const agent = {

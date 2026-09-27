@@ -13,7 +13,7 @@ describe("an unattended foreground tab", () => {
     const target = new EventTarget()
     const tracker = createIdleTracker({ target })
     const seen: boolean[] = []
-    tracker.onChange((idle) => seen.push(idle))
+    tracker.subscribe((idle) => seen.push(idle))
 
     vi.advanceTimersByTime(PRESENCE_IDLE_MS - 1)
     expect(tracker.idle()).toBe(false)
@@ -77,7 +77,7 @@ describe("an unattended foreground tab", () => {
     const target = new EventTarget()
     const tracker = createIdleTracker({ target })
     const seen: boolean[] = []
-    tracker.onChange((idle) => seen.push(idle))
+    tracker.subscribe((idle) => seen.push(idle))
 
     tracker.stop()
     vi.advanceTimersByTime(PRESENCE_IDLE_MS * 2)
@@ -91,7 +91,7 @@ describe("an unattended foreground tab", () => {
     vi.useFakeTimers()
     const tracker = createIdleTracker({ target: new EventTarget() })
     const listener = vi.fn()
-    tracker.onChange(listener)()
+    tracker.subscribe(listener)()
 
     vi.advanceTimersByTime(PRESENCE_IDLE_MS)
 
