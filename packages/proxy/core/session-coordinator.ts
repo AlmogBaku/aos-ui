@@ -1573,7 +1573,8 @@ export class SessionCoordinator {
    * Asks the provider how an uncertain turn stands. A recovery that lands
    * confirms the turn running, and its stream reports how the turn ends; one
    * that meets its Session gone ends the turn, since no later recover can
-   * confirm it; any other failure leaves it uncertain for the next reconcile.
+   * confirm it, and then the Session; any other failure leaves it uncertain
+   * for the next reconcile.
    */
   async #reconcile(scope: SessionScope, turn: Turn, generation: number) {
     const { value, context } = turn.owner.actor.getSnapshot()
@@ -1604,6 +1605,8 @@ export class SessionCoordinator {
         kind: TurnEventKind.TurnFailed,
         code: failure.code,
       })
+      // Journaled first, so the turn's end is written before the Session goes.
+      this.endIfGone(scope, err)
     }
   }
 

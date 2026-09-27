@@ -3007,15 +3007,18 @@ describe("SessionCoordinator", () => {
     const recover = vi
       .fn<ServerTurnEngine["recover"]>()
       .mockRejectedValue(new ServerSessionNotFoundError())
+    const logs = captureLogs()
     const gone = coordinator(
       {
         start: vi.fn<ServerTurnEngine["start"]>().mockResolvedValue(lost),
         recover,
       },
-      { maxActiveExecutions: 1 }
+      { maxActiveExecutions: 1, logger: logs.logger }
     )
     const ended: ExecutionEvent[] = []
     gone.subscribeExecutions((event) => ended.push(event))
+    const heard = vi.fn()
+    gone.subscribeReadings(scope, "member-1", { gone: heard })
     const onTerminal = vi.fn(async () => undefined)
     await gone.start(scope, input("run-4"), { ...access("one"), onTerminal })
     lost.emit(interruptedError)
@@ -3029,9 +3032,12 @@ describe("SessionCoordinator", () => {
     ])
     const goneFailure = { kind: TurnEventKind.TurnFailed, code: "not_found" }
     expect(onTerminal).toHaveBeenLastCalledWith(goneFailure)
-    await expect(reloadedHead(gone, scope, "run-4")).resolves.toMatchObject({
-      event: goneFailure,
-    })
+    // The Session ends for every member once, and nothing serves it again.
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(gone.gauges().executions).toBe(0)
+    expect(
+      logs.records().filter(({ message }) => message === "session.gone")
+    ).toHaveLength(1)
     await advance(UNCERTAINTY_DEADLINE_MS)
     expect(recover).toHaveBeenCalledTimes(1)
     await expect(
