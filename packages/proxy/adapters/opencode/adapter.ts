@@ -434,30 +434,33 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     })
   }
 
-  async models(agentId: string, publicSessionId: string) {
-    const { selectedId, options } = await this.#models(agentId, publicSessionId)
+  async models(agentId: string, providerSessionId: string) {
+    const { selectedId, options } = await this.#models(
+      agentId,
+      providerSessionId
+    )
     return { selectedId, options }
   }
 
   async updateModel(
     agentId: string,
-    publicSessionId: string,
+    providerSessionId: string,
     patch: SessionModelUpdateRequest
   ) {
     // OpenCode reports no reasoning ladder, so it can never settle an effort.
     if (patch.effortId !== undefined || patch.selectedId === undefined)
       throw new OpenCodeWorkspaceUnavailableError()
     const selectedId = patch.selectedId
-    const options = await this.#models(agentId, publicSessionId)
+    const options = await this.#models(agentId, providerSessionId)
     const selected = options.native.get(selectedId)
     // A model the Session cannot run is the caller's mistake, not an outage.
     if (!selected) throw new OpenCodeClientError("invalid_request")
-    await this.options.client.sessions.switchModel(publicSessionId, selected)
+    await this.options.client.sessions.switchModel(providerSessionId, selected)
     return { selectedId }
   }
 
-  async context(agentId: string, publicSessionId: string) {
-    await this.getSession(agentId, publicSessionId)
+  async context(agentId: string, providerSessionId: string) {
+    await this.getSession(agentId, providerSessionId)
     // The pinned SDK's session.context response is `data: SessionMessage[]`,
     // not a provider token/accounting metric. Do not invent an estimate.
     throw new OpenCodeWorkspaceUnavailableError()

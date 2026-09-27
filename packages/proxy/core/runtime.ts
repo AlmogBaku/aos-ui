@@ -311,7 +311,14 @@ export interface ServerRuntime {
     agentId: string,
     publicSessionId: string
   ): Promise<unknown>
-  models(agentId: string, publicSessionId: string): Promise<unknown>
+  /**
+   * A Session's readings are read by the Session the provider knows: an
+   * invited Session's own `sessionId` is its invitation's reference.
+   */
+  models(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<unknown>
   /**
    * Updates the model, its reasoning effort, or both in one write. A provider
    * may resolve the request to a different model, so the response carries the
@@ -319,10 +326,13 @@ export interface ServerRuntime {
    */
   updateModel(
     agentId: string,
-    publicSessionId: string,
+    providerSessionId: ProviderSessionId,
     patch: SessionModelUpdateRequest
   ): Promise<unknown>
-  context(agentId: string, publicSessionId: string): Promise<unknown>
+  context(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<unknown>
   /**
    * Payload-less wake when the provider's Session catalog changed (Hermes
    * `sessions.changed`). Absent when the provider has no such signal.

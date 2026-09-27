@@ -966,7 +966,7 @@ export class SessionCoordinator {
       name: "usage",
       read: async (scope) =>
         SessionContextResponseSchema.parse(
-          await readings.context(scope.agentId, scope.sessionId)
+          await readings.context(scope.agentId, scope.providerSessionId)
         ),
       gone,
       ...cell,
@@ -976,7 +976,7 @@ export class SessionCoordinator {
       name: "models",
       read: async (scope, selectedId) => ({
         ...SessionModelsResponseSchema.parse(
-          await readings.models(scope.agentId, scope.sessionId)
+          await readings.models(scope.agentId, scope.providerSessionId)
         ),
         ...(selectedId === undefined ? {} : { selectedId }),
       }),
@@ -1081,9 +1081,9 @@ export class SessionCoordinator {
   ): Promise<SessionModelsResponse> {
     return this.#command(scope, async () => {
       const { readings } = this.options
-      await readings.updateModel(scope.agentId, scope.sessionId, write)
+      await readings.updateModel(scope.agentId, scope.providerSessionId, write)
       const models = SessionModelsResponseSchema.parse(
-        await readings.models(scope.agentId, scope.sessionId)
+        await readings.models(scope.agentId, scope.providerSessionId)
       )
       const key = scopeKey(scope)
       deliver(() => {

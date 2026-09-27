@@ -311,23 +311,23 @@ export class OpenClawServerAdapter implements ServerRuntime {
     })
   }
 
-  async models(agentId: string, publicSessionId: string) {
+  async models(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#history.models(agentId, publicSessionId)
+    return this.#history.models(agentId, providerSessionId)
   }
 
   async updateModel(
     _agentId: string,
-    _publicSessionId: string,
+    _providerSessionId: string,
     _patch: SessionModelUpdateRequest
   ): Promise<unknown> {
-    void [_agentId, _publicSessionId, _patch]
+    void [_agentId, _providerSessionId, _patch]
     throw new OpenClawAdapterUnavailableError()
   }
 
-  async context(agentId: string, publicSessionId: string) {
+  async context(agentId: string, providerSessionId: string) {
     await this.#start()
-    return this.#history.context(agentId, publicSessionId)
+    return this.#history.context(agentId, providerSessionId)
   }
 
   async stageAttachments(

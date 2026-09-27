@@ -3644,6 +3644,48 @@ describe("SessionCoordinator", () => {
     expect(observed).toHaveLength(2)
   })
 
+  it("reads an invited Session by the Session its provider knows", async () => {
+    const { advance } = useFakeClock()
+    const listed = {
+      selectedId: "model-1",
+      options: [{ id: "model-1", label: "Model 1", group: "Models" }],
+    }
+    // The provider knows the Session, never the invitation reference a guest
+    // addresses it by.
+    const models = vi.fn(
+      async (_agentId: string, providerSessionId: string) => {
+        if (providerSessionId !== scope.providerSessionId)
+          throw new Error("Unknown Session")
+        return listed
+      }
+    )
+    const sessions = coordinator(
+      { start: vi.fn(), recover: vi.fn() },
+      {
+        readings: {
+          context: vi.fn(),
+          models,
+          publicError: () => undefined,
+          link: READY_LINK,
+        },
+      }
+    )
+    const guest: unknown[] = []
+    const operator: unknown[] = []
+
+    // The guest joins first, so the Session's one cell reads for its scope.
+    sessions.subscribeReadings({ ...scope, sessionId: "invite-1" }, "guest", {
+      model: async (reading) => void guest.push(reading),
+    })
+    sessions.subscribeReadings(scope, "operator", {
+      model: async (reading) => void operator.push(reading),
+    })
+    await advance(0)
+
+    expect(guest).toEqual([listed])
+    expect(operator).toEqual([listed])
+  })
+
   describe("eviction and gauges", () => {
     it("evicts an idle execution and its journal when its last reading subscriber leaves", async () => {
       const { advance } = useFakeClock()
