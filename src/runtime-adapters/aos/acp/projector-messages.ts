@@ -308,6 +308,18 @@ export function completeTiming(
     : { ...message, timing: { ...timing, completedAt } }
 }
 
+/** A settled turn running again: its span reopens from where it started. */
+export function reopened(message: ProjectedMessage): ProjectedMessage {
+  const { timing } = message
+  const running = withStatus(message, { type: "running" })
+  return timing === undefined
+    ? running
+    : {
+        ...running,
+        timing: { startedAt: timing.startedAt, chunks: timing.chunks },
+      }
+}
+
 /** One more streamed chunk of a timed turn. */
 export function countChunk(message: ProjectedMessage): ProjectedMessage {
   const { timing } = message

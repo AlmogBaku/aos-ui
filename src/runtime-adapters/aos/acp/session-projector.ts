@@ -44,6 +44,7 @@ import {
   latestAssistantId,
   mapCalls,
   patchToolCall,
+  reopened,
   replaceBlocks,
   replaceData,
   startTiming,
@@ -199,8 +200,20 @@ function onMessage(
   const host = fresh ? emptyRequestHostId(state) : undefined
   // Re-keying the host keeps its place and the pending status it carries; the
   // run's own state settles it under the id the provider streamed.
-  const source = host === undefined ? state : renameMessage(state, host, id)
+  const renamed = host === undefined ? state : renameMessage(state, host, id)
   const opened = fresh && state.execution.status === "running"
+  // A run moves on from the turn it had open only when that turn was one a
+  // resume reopened, so that turn has written all it will.
+  const prior = opened ? activeAssistantId(renamed) : undefined
+  const source =
+    prior === undefined
+      ? renamed
+      : withMessages(
+          renamed,
+          withMessage(renamed.messages, prior, "assistant", (message) =>
+            withStatus(message, { type: "complete", reason: "stop" })
+          )
+        )
   const next = withMessages(
     source,
     withMessage(source.messages, id, role, (message) =>
@@ -633,6 +646,25 @@ function ongoingStart(
   return ongoing && state.execution.turnId === turnId ? startedAt : undefined
 }
 
+/**
+ * A run restated as running, with no moment of its own, after this projection
+ * saw it settle: a view rebuilt from history mid-turn, where the replay closes
+ * the live turn's stored part like any other. A live run shows its prompt
+ * first, so a transcript that still ends on an assistant turn ends on this
+ * run's, and that turn reopens as the one the run's state settles.
+ */
+function resumed(before: ProjectorState, running: ProjectorState) {
+  const { status } = before.execution
+  const ongoing = status === "running" || status === "waiting-for-input"
+  const last = before.messages.at(-1)
+  if (ongoing || activeAssistantId(before) !== undefined) return running
+  if (last?.role !== "assistant") return running
+  return {
+    ...onMessage(running, last.id, "assistant", reopened),
+    activeAssistantId: last.id,
+  }
+}
+
 function applyState(
   state: ProjectorState,
   update: UpdatePayload,
@@ -651,7 +683,7 @@ function applyState(
     if (failure) return applyRunningFailure(state, carried, failure)
     const startedAt = epochOf(aos?.at) ?? ongoingStart(state, turnId)
     const reported = reportedFailure(state, turnId)
-    return {
+    const running: ProjectorState = {
       ...state,
       execution: {
         status: "running",
@@ -660,6 +692,7 @@ function applyState(
         ...(reported === undefined ? {} : { error: reported }),
       },
     }
+    return aos?.at === undefined ? resumed(state, running) : running
   }
   if (next === "requires_action") {
     const startedAt = ongoingStart(state, turnId)

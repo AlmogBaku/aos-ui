@@ -685,6 +685,12 @@ describe("applyUpdate tool calls", () => {
 })
 
 describe("applyUpdate execution", () => {
+  /** A live run starting: the live stream always reports its moment. */
+  const STARTED_AT = "2026-09-22T10:00:00.000Z"
+  const liveStart = stateUpdate(
+    { state: "running" },
+    { ...TURN_META, at: STARTED_AT }
+  )
   /** One finished turn, exactly as a replay from the start projects it. */
   const replayed = fold([
     userChunk("u1", "Hi"),
@@ -694,21 +700,19 @@ describe("applyUpdate execution", () => {
   ])
   const COMPLETE = { status: { type: "complete", reason: "stop" } }
   /** The next run, with the turn its first chunk opened. */
-  const answering = fold(
-    [stateUpdate({ state: "running" }), agentChunk("a2", "Sure")],
-    replayed
-  )
+  const answering = fold([liveStart, agentChunk("a2", "Sure")], replayed)
   /** A run blocked before it wrote anything, and the turn hosting its ask. */
   const interrupted = fold(
-    [
-      stateUpdate({ state: "running" }),
-      stateUpdate({ state: "requires_action" }),
-    ],
+    [liveStart, stateUpdate({ state: "requires_action" })],
     replayed
   )
 
   it("opens the turn the running run streams into", () => {
-    expect(answering.execution).toEqual({ status: "running", turnId: "run-1" })
+    expect(answering.execution).toEqual({
+      status: "running",
+      turnId: "run-1",
+      startedAt: Date.parse(STARTED_AT),
+    })
     expect(toThreadMessages(answering)[2]).toMatchObject({
       id: "a2",
       status: { type: "running" },
@@ -718,7 +722,7 @@ describe("applyUpdate execution", () => {
   it("opens the turn a running run's first tool call belongs to", () => {
     const working = fold(
       [
-        stateUpdate({ state: "running" }),
+        liveStart,
         toolCall({ title: "grep" }, { ...TURN_META, messageId: "a2" }),
       ],
       replayed
@@ -730,10 +734,51 @@ describe("applyUpdate execution", () => {
   })
 
   it("leaves the finished turn behind a starting run finished", () => {
-    const started = fold([stateUpdate({ state: "running" })], replayed)
-    expect(started.execution).toEqual({ status: "running", turnId: "run-1" })
+    const started = fold([liveStart], replayed)
+    expect(started.execution).toEqual({
+      status: "running",
+      turnId: "run-1",
+      startedAt: Date.parse(STARTED_AT),
+    })
     expect(started.messages).toBe(replayed.messages)
     expect(toThreadMessages(started)[1]).toMatchObject(COMPLETE)
+  })
+
+  it("reopens the stored part of a turn a mid-turn replay settled", () => {
+    // The replay closes the live turn's stored part like any other, and the
+    // resume restates the run with no moment of its own.
+    const replayedAt = (moment: string) => ({ ...TURN_META, at: moment })
+    const rebuilt = fold([
+      userChunk("u1", "Long task"),
+      stateUpdate({ state: "running" }, replayedAt(STARTED_AT)),
+      agentChunk("a1", "Step one"),
+      stateUpdate(
+        { state: "idle", stopReason: "end_turn" },
+        replayedAt("2026-09-22T10:04:00.000Z")
+      ),
+    ])
+    const resumed = fold([stateUpdate({ state: "running" })], rebuilt)
+    expect(toThreadMessages(resumed)[1]).toMatchObject({
+      id: "a1",
+      status: { type: "running" },
+      metadata: { timing: { streamStartTime: Date.parse(STARTED_AT) } },
+    })
+    expect(toThreadMessages(resumed)[1]?.metadata?.timing).not.toHaveProperty(
+      "totalStreamTime"
+    )
+
+    // The run goes on in the stored turn, or in one of its own below it.
+    const ended = fold(
+      [stateUpdate({ state: "idle", stopReason: "end_turn" })],
+      resumed
+    )
+    expect(toThreadMessages(ended)[1]).toMatchObject(COMPLETE)
+    const moved = fold([agentChunk("a2", "Step two")], resumed)
+    expect(toThreadMessages(moved)[1]).toMatchObject(COMPLETE)
+    expect(toThreadMessages(moved)[2]).toMatchObject({
+      id: "a2",
+      status: { type: "running" },
+    })
   })
 
   it("reports a blocked run as waiting for input", () => {
@@ -741,6 +786,7 @@ describe("applyUpdate execution", () => {
     expect(blocked.execution).toEqual({
       status: "waiting-for-input",
       turnId: "run-1",
+      startedAt: Date.parse(STARTED_AT),
     })
     expect(toThreadMessages(blocked)[2]).toMatchObject({
       status: { type: "requires-action", reason: "interrupt" },
@@ -851,7 +897,7 @@ describe("applyUpdate execution", () => {
   })
 
   it("leaves the history alone when a run ends without a turn", () => {
-    const started = fold([stateUpdate({ state: "running" })], replayed)
+    const started = fold([liveStart], replayed)
     const ended = fold(
       [stateUpdate({ state: "idle", stopReason: "cancelled" })],
       started
