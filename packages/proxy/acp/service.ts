@@ -118,8 +118,9 @@ export function createAcpService(options: AcpServiceOptions) {
       lapsed: () => context.authentication?.lapsed() ?? false,
       ...(options.publicErrors ? { publicErrors: options.publicErrors } : {}),
     })
-    // Arm the handshake deadline: a peer that has not completed initialize
-    // within the deadline is closed with 4408.
+    // Arm the handshake deadline: a peer that has not completed its handshake
+    // within the deadline, initialize and any login its connection needs, is
+    // closed with 4408.
     const deadlineMs = options.handshakeDeadlineMs ?? HANDSHAKE_DEADLINE_MS
     const handshakeDeadline = new Deadline(deadlineMs, clock)
     context.handshakeComplete = () => handshakeDeadline.clear()

@@ -74,7 +74,11 @@ type AcpConnectionBase = {
   buildId?: string
   /** The clock injected by the service; defaults to performance.now when absent. */
   clock?: Clock
-  /** Called by the agent once initialize succeeds; clears the handshake deadline. */
+  /**
+   * Called by the agent once the handshake completes, which clears its
+   * deadline: at initialize, or at a successful login on a connection that
+   * authenticates over ACP.
+   */
   handshakeComplete?: () => void
 }
 

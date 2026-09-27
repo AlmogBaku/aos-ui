@@ -417,6 +417,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const { token } = parseMeta(AosLoginMetaSchema, params._meta)
     if (!(await authentication.authenticate(token)))
       throw authenticationRequired()
+    context.handshakeComplete?.()
     return {}
   })
 
@@ -769,7 +770,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       owner.actor.send({ type: "closed" })
       return
     }
-    context.handshakeComplete?.()
+    // A connection that authenticates over ACP completes it at its login.
+    if (!context.authentication) context.handshakeComplete?.()
     owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.
