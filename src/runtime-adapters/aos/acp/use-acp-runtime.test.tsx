@@ -341,7 +341,7 @@ describe("useAcpRuntime", () => {
     expect(onStateChange).toHaveBeenCalledTimes(2)
   })
 
-  it("keeps the transcript in view until a resync's replay settles, and after a refused or dropped one", async () => {
+  it("keeps the transcript in view until a resync's replay settles, and after a refused or dropped one, gone if reported so", async () => {
     const fake = createFakeConnection()
     const { result, rerender } = renderHook(
       ({ isDisabled }: { isDisabled: boolean }) =>
@@ -394,6 +394,31 @@ describe("useAcpRuntime", () => {
       { id: "u1", role: "user", text: "Ship it" },
       { id: "a1", role: "assistant", text: "Shipped" },
     ])
+
+    // The proxy reports the Session gone before a replay's drop: the restored
+    // transcript still reads as gone.
+    const shipped = visible(result.current)
+    fake.replayOnResume([textUpdate("user_message", "u1", "Ship it")])
+    const dropped = Promise.withResolvers<void>()
+    let partway = Promise.resolve()
+    act(() => {
+      partway = fake.resync(dropped.promise).catch(() => {})
+    })
+    await act(async () => {
+      fake.notify(AOS_METHODS.notify.error, {
+        sessionId: SESSION_ID,
+        code: "not_found",
+        message: "not_found",
+      })
+      dropped.reject(new Error("dropped"))
+      await partway
+    })
+    expect(visible(result.current)).toEqual(shipped)
+    expect(result.current.thread.getState().messages.at(-1)?.status).toEqual({
+      type: "incomplete",
+      reason: "error",
+      error: { code: "not_found" },
+    })
   })
 
   it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {

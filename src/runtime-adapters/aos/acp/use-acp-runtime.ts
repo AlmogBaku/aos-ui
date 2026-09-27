@@ -412,6 +412,8 @@ function createAcpController({
     olderLoading = false
     olderFailed = false
     const generation = bindings
+    /** The provider reported the Session gone, so a restored transcript is. */
+    let gone = false
     const { steerAccepted, composerPrefill, sessionInvalidated } =
       AOS_METHODS.notify
     // What is already pending was sent before this thread bound the Session.
@@ -449,8 +451,9 @@ function createAcpController({
               if (replayed) commit(clearTranscript(state, replaced))
             } else if (!replayed && isBound(next, generation)) {
               // Only part of the Session arrived. The approvals the replay
-              // outlived lay over the transcript it began from.
-              commit(prior)
+              // outlived, and a report that the Session is gone, lay over the
+              // transcript it began from.
+              commit(gone ? failSession(prior, { code: "not_found" }) : prior)
               takeApprovals()
             }
             transcripts += 1
@@ -487,8 +490,9 @@ function createAcpController({
         AOS_METHODS.notify.error,
         AosErrorNotificationSchema,
         ({ sessionId, code }) => {
-          if (sessionId === bound && code === "not_found")
-            commit(failSession(state, { code }))
+          if (sessionId !== bound || code !== "not_found") return
+          gone = true
+          commit(failSession(state, { code }))
         }
       ),
     ]
