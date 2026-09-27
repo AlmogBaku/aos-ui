@@ -205,7 +205,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <p
       dir="auto"
       className={cn(
-        "aui-md-p my-3 max-w-prose text-start leading-7 first:mt-0 last:mb-0 @min-[64rem]/workspace:my-2 @min-[64rem]/workspace:leading-6",
+        "aui-md-p my-3 text-start leading-7 first:mt-0 last:mb-0 @min-[64rem]/workspace:my-2 @min-[64rem]/workspace:leading-6",
         className
       )}
       {...props}
@@ -228,7 +228,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <blockquote
       dir="auto"
       className={cn(
-        "aui-md-blockquote my-3 max-w-prose border-s-2 border-muted-foreground/30 ps-4 text-start text-muted-foreground @min-[64rem]/workspace:my-2",
+        "aui-md-blockquote my-3 border-s-2 border-muted-foreground/30 ps-4 text-start text-muted-foreground @min-[64rem]/workspace:my-2",
         className
       )}
       {...props}
@@ -238,7 +238,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <ul
       dir="auto"
       className={cn(
-        "aui-md-ul my-3 ms-5 max-w-prose list-disc text-start marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
+        "aui-md-ul my-3 ms-5 list-disc text-start marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
         className
       )}
       {...props}
@@ -248,7 +248,7 @@ const defaultComponents = memoizeMarkdownComponents({
     <ol
       dir="auto"
       className={cn(
-        "aui-md-ol my-3 ms-5 max-w-prose list-decimal text-start marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
+        "aui-md-ol my-3 ms-5 list-decimal text-start marker:text-muted-foreground @min-[64rem]/workspace:my-2 [&>li]:mt-1",
         className
       )}
       {...props}
