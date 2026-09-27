@@ -15,6 +15,13 @@ vi.mock("@openclaw/gateway-client", async (importOriginal) => {
     await importOriginal<typeof import("@openclaw/gateway-client")>()
   return {
     ...actual,
+    // The official client dials through the `ws` package, out of reach of the
+    // contract's global WebSocket stub, so it refuses here: only the fake dials.
+    GatewayClient: function GatewayClient() {
+      throw new Error(
+        "The runtime contract reached the official Gateway client"
+      )
+    },
     // The official client marks every Gateway answer it builds; here the
     // fake's GatewayClientRequestError stands for one.
     isGatewayProtocolResponseError: (error: unknown) =>
