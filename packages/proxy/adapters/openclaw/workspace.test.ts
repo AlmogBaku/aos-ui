@@ -722,6 +722,30 @@ describe("OpenClaw Agent avatars", () => {
       agents: { list: [{ id: "agent-a", identity: { avatar: null } }] },
     })
     expect(cleared.agent.summary).not.toHaveProperty("avatar")
+
+    // Clearing when the agent vanishes after the patch must throw unavailable,
+    // not a schema validation error.
+    let vanishPatchSent = false
+    const vanishBase = configuredGateway({
+      agents: [{ id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } }],
+      configured: ["agent-a"],
+    })
+    const vanishClient = {
+      request: async (method: string, params: unknown) => {
+        if (method === "agents.list" && vanishPatchSent)
+          return { defaultId: "agent-a", mainKey: "main", scope: "global", agents: [] }
+        if (method === "config.patch") {
+          vanishPatchSent = true
+          return vanishBase.request(method, params)
+        }
+        return vanishBase.request(method, params)
+      },
+    }
+    const vanishWs = createOpenClawWorkspace({ client: vanishClient })
+    const vanishRevision = (await vanishWs.listAgents()).agents[0]!.revision
+    await expect(
+      vanishWs.updateAgent("agent-a", { avatar: null }, vanishRevision)
+    ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
   })
 
   it("[CL1-WORKSPACE-018] refuses an update outside the avatar rule and writes nothing", async () => {
