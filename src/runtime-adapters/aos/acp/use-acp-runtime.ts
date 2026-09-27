@@ -206,6 +206,10 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [AOS_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
 }
 
+/** A refusal because the proxy still holds the Session for an earlier turn. */
+const isBusyRefusal = (error: unknown) =>
+  isRecord(error) && error.code === AOS_JSONRPC_ERRORS.turnInProgress
+
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
 type ResumeOutcome = "replayed" | "refused" | "abandoned"
 
@@ -541,7 +545,8 @@ function createAcpController({
     sessionId: string,
     blocks: readonly ContentBlock[],
     meta: PromptMeta,
-    rewoundFrom?: string
+    rewoundFrom?: string,
+    holdBusy = false
   ) => {
     locals += 1
     const localId = `${LOCAL_PROMPT_PREFIX}${locals}`
@@ -574,6 +579,8 @@ function createAcpController({
         .filter((message) => message.id !== localId)
         .map((message) => message.id)
       commit(retainMessages(state, kept))
+      // A caller that sends again later is handed the busy refusal unshown.
+      if (holdBusy && isBusyRefusal(error)) throw error
       throw refuse(error)
     }
   }
@@ -683,7 +690,8 @@ function createAcpController({
       unsubscribe = undefined
       bound = undefined
     },
-    send: async (message: AppendMessage) => {
+    /** `holdBusy` hands a busy refusal back unshown, for a caller that retries. */
+    send: async (message: AppendMessage, { holdBusy = false } = {}) => {
       // A Session the provider could not create, or bytes it could not stage,
       // sent nothing either.
       let sessionId: string
@@ -708,7 +716,8 @@ function createAcpController({
             : { attachmentStageId: staged.stageId }),
           clientId,
         },
-        rewound?.sourceId
+        rewound?.sourceId,
+        holdBusy
       )
     },
     reload: async (parentId: string | null) => {
@@ -777,10 +786,19 @@ type Dispatch = {
 }
 
 /**
+ * How long a queued send keeps asking a Session the proxy still holds. The
+ * browser can read a turn over before the proxy does, and the proxy never
+ * queues, so the send waits here instead of being lost to the refusal.
+ */
+const BUSY_RETRY_MS = 60_000
+const busyRetryDelay = (tries: number) => Math.min(250 * 2 ** tries, 2_000)
+
+/**
  * Holds the queue while a turn owns the Session. The proxy answers a prompt
  * as it accepts the turn, before the turn reports running, so a dispatched
  * send holds the queue until it is accepted and its turn has settled, in
- * whichever order the two arrive. Only a refused send releases it at once.
+ * whichever order the two arrive. A busy refusal sends again on backoff;
+ * any other refusal, or one past the retry window, releases it at once.
  * The queue follows the controller directly: a render would see the turn
  * start only after the next send had already gone out.
  */
@@ -788,6 +806,7 @@ function createQueue(controller: AcpController) {
   const execution = () => controller.getState().execution
   let busy = false
   let dispatch: Dispatch | undefined
+  let retry: ReturnType<typeof setTimeout> | undefined
   // A turn that failed before it ran, or ran while a replay held the telling,
   // settles under a turn the Session had not reported before.
   const settle = () => {
@@ -798,22 +817,33 @@ function createQueue(controller: AcpController) {
   }
   const queue: MessageQueueController = createMessageQueue({
     run: (message) => {
-      const sent: Dispatch = {
-        before: execution().turnId,
-        ran: false,
-        accepted: false,
-      }
-      dispatch = sent
-      controller.send(message).then(
-        () => {
-          sent.accepted = true
-          settle()
-        },
-        () => {
-          dispatch = undefined
-          if (!busy) queue.notifyIdle()
+      const until = Date.now() + BUSY_RETRY_MS
+      const attempt = (tries: number) => {
+        const again = () => {
+          retry = setTimeout(() => attempt(tries + 1), busyRetryDelay(tries))
         }
-      )
+        // A turn running meanwhile owns the Session: wait it out first.
+        if (busy) return again()
+        const sent: Dispatch = {
+          before: execution().turnId,
+          ran: false,
+          accepted: false,
+        }
+        dispatch = sent
+        const holdBusy = Date.now() < until
+        controller.send(message, { holdBusy }).then(
+          () => {
+            sent.accepted = true
+            settle()
+          },
+          (error: unknown) => {
+            if (holdBusy && isBusyRefusal(error)) return again()
+            dispatch = undefined
+            if (!busy) queue.notifyIdle()
+          }
+        )
+      }
+      attempt(0)
     },
   })
   const observe = () => {
@@ -828,7 +858,11 @@ function createQueue(controller: AcpController) {
   /** Follows the Session's execution until the returned call stops it. */
   const watch = () => {
     observe()
-    return controller.subscribe(observe)
+    const unsubscribe = controller.subscribe(observe)
+    return () => {
+      unsubscribe()
+      clearTimeout(retry)
+    }
   }
   return { queue, watch }
 }

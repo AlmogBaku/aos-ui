@@ -18,6 +18,7 @@ import type { CompleteAttachment } from "@assistant-ui/core"
 
 import {
   AOS_ATTACHMENT_URI_SCHEME,
+  AOS_JSONRPC_ERRORS,
   AOS_METHODS,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
@@ -1100,6 +1101,44 @@ describe("useAcpRuntime", () => {
       )
     })
     expect(fake.prompt).toHaveBeenCalledTimes(2)
+  })
+
+  it("sends a queued turn again, unshown, while the proxy still holds the Session", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake, { enableMessageQueue: true })
+    fake.prompt.mockRejectedValueOnce(
+      Object.assign(new Error("busy"), {
+        code: AOS_JSONRPC_ERRORS.turnInProgress,
+      })
+    )
+    act(() => {
+      fake.emit(textUpdate("agent_message", "a1", "Working"))
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+    await act(async () => {
+      result.current.thread.append({
+        role: "user",
+        content: [{ type: "text", text: "Queued" }],
+      })
+    })
+    await act(async () => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      })
+    })
+
+    await waitFor(() => expect(fake.prompt).toHaveBeenCalledTimes(2))
+    expect(fake.prompt).toHaveBeenLastCalledWith(
+      SESSION_ID,
+      [{ type: "text", text: "Queued" }],
+      expect.objectContaining({})
+    )
+    // The refusal never reached the thread.
+    expect(result.current.thread.getState().messages[0]?.status).toMatchObject({
+      type: "complete",
+    })
   })
 
   it("sends the next queued turn once the accepted one fails before it runs, even ahead of the reply", async () => {
