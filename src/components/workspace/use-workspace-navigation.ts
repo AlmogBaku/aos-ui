@@ -194,7 +194,10 @@ export function useWorkspaceNavigation({
   // null until the runtime has answered; every action stays hidden meanwhile.
   const [sessionActions, setSessionActions] =
     useState<SessionActionCapabilities | null>(null)
-  const reconciledArchival = useRef<string | null>(null)
+  const reconciledDisagreement = useRef<string | null>(null)
+  const [catalogSessionIds, setCatalogSessionIds] = useState<readonly string[]>(
+    []
+  )
   const [todoSnapshot, setTodoSnapshot] = useState<TodoSnapshot>({
     key: "",
     todos: [],
@@ -1013,29 +1016,48 @@ export function useWorkspaceNavigation({
     }
   }, [refreshKey, workspace])
 
-  // Archival can change outside this browser. When provider metadata and the
-  // thread list disagree, one reload settles which of them is stale.
   useEffect(() => {
-    const disagreeing = runtimeThreads
-      .filter(({ sessionId, status }) => {
-        if (status !== "regular" && status !== "archived") return false
-        const archived = sessions.find(
-          (session) => session.sessionId === sessionId
-        )?.archived
-        return archived !== undefined && archived !== (status === "archived")
-      })
-      .map(({ sessionId }) => sessionId)
+    if (!workspace.subscribeSessionCatalog) return
+    return workspace.subscribeSessionCatalog(setCatalogSessionIds)
+  }, [workspace])
+
+  // Archival can change, and Sessions can appear, outside this browser. When
+  // provider metadata or its catalog page disagrees with the loaded thread
+  // list, one reload settles which of them is stale.
+  useEffect(() => {
+    if (threadState.isLoading) return
+    const disagreeing = [
+      ...runtimeThreads
+        .filter(({ sessionId, status }) => {
+          if (status !== "regular" && status !== "archived") return false
+          const archived = sessions.find(
+            (session) => session.sessionId === sessionId
+          )?.archived
+          return archived !== undefined && archived !== (status === "archived")
+        })
+        .map(({ sessionId }) => sessionId),
+      ...catalogSessionIds.filter(
+        (sessionId) => !runtimeThreadIds.includes(sessionId)
+      ),
+    ]
     if (disagreeing.length === 0) {
-      reconciledArchival.current = null
+      reconciledDisagreement.current = null
       return
     }
     const key = disagreeing.join("\u001f")
-    if (reconciledArchival.current === key) return
-    reconciledArchival.current = key
+    if (reconciledDisagreement.current === key) return
+    reconciledDisagreement.current = key
     void runtime.threads.reload().catch((reason: unknown) => {
       setActionError(toError(reason))
     })
-  }, [runtime, runtimeThreads, sessions])
+  }, [
+    catalogSessionIds,
+    runtime,
+    runtimeThreadIds,
+    runtimeThreads,
+    sessions,
+    threadState.isLoading,
+  ])
 
   const todoQueryKey = `${visibleThreadId ?? ""}:${todoSubscriptionKey}`
   const todoSnapshotIsCurrent = todoSnapshot.key === todoQueryKey

@@ -1143,6 +1143,8 @@ describe("ACP workspace client", () => {
     client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
       published.push(metadata)
     )
+    const heard: (readonly string[])[] = []
+    client.subscribeSessionCatalog((sessionIds) => heard.push(sessionIds))
     await clock.advance(0)
     await client.markSessionRead(SESSION_ID)
     published.length = 0
@@ -1156,6 +1158,7 @@ describe("ACP workspace client", () => {
     expect(calls.filter((call) => call.method === "listSessions")).toHaveLength(
       2
     )
+    expect(heard).toEqual([[SESSION_ID]])
     expect(published.at(-1)).toEqual([
       {
         sessionId: SESSION_ID,

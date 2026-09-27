@@ -141,6 +141,13 @@ export type WorkspaceAdapter = {
     listener: () => void,
     onError?: (error: Error) => void
   ) => () => void
+  /**
+   * Hears the Session ids on page one of every Agent's catalog each time the
+   * runtime re-reads it.
+   */
+  subscribeSessionCatalog?: (
+    listener: (sessionIds: readonly string[]) => void
+  ) => () => void
   subscribeSessionMetadata?: (
     sessionIds: readonly string[],
     listener: (metadata: SessionMetadata[]) => void,

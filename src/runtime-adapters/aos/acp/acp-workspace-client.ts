@@ -225,6 +225,8 @@ export function createAcpWorkspaceClient({
   let relists = 0
   let disposed = false
   const stale = (generation: number) => disposed || generation !== relists
+  /** Told page one's Session ids each time a relist reads it. */
+  const catalogListeners = new Set<(sessionIds: readonly string[]) => void>()
 
   function stopRetry() {
     if (!retry) return
@@ -252,14 +254,19 @@ export function createAcpWorkspaceClient({
     const generation = ++relists
     let attempt = 0
     while (!stale(generation)) {
+      let page
       try {
-        await listSessions()
-        return
+        page = await listSessions()
       } catch {
         if (stale(generation)) return
         attempt += 1
         await backOff(backoffDelay(attempt, RELIST_BACKOFF))
+        continue
       }
+      // A listener that throws has not failed the read, so it is not retried.
+      const sessionIds = page.sessions.map(({ sessionId }) => sessionId)
+      for (const listener of catalogListeners) listener(sessionIds)
+      return
     }
   }
 
@@ -381,6 +388,10 @@ export function createAcpWorkspaceClient({
     },
     /** The Agent the thread list pages History for, once one is selected. */
     sessionCatalogScope: () => catalogScope,
+    subscribeSessionCatalog(listener: (sessionIds: readonly string[]) => void) {
+      catalogListeners.add(listener)
+      return () => catalogListeners.delete(listener)
+    },
     async getSessionMetadata(sessionIds: string[]) {
       await readRows(sessionIds)
       return store.rowsFor(sessionIds)
@@ -498,6 +509,7 @@ export function createAcpWorkspaceClient({
       stopRetry()
       leaveCatalog()
       leaveStatus()
+      catalogListeners.clear()
       store.dispose()
       for (const hold of holds.values()) hold.release()
       holds.clear()

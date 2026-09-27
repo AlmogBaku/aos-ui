@@ -292,6 +292,52 @@ describe("reversible local Session tabs", () => {
     list.mockRestore()
   })
 
+  it("reloads the thread list only when the catalog names a Session it lacks", async () => {
+    let bundle: WorkspaceFixtureRuntime | undefined
+    let hearCatalog: (sessionIds: readonly string[]) => void = () => {}
+    render(
+      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
+        {(value) => {
+          bundle = value
+          // The fixture has no catalog feed, so the test plays one, in place
+          // before the workspace subscribes to it.
+          value.workspace.subscribeSessionCatalog ??= (listener) => {
+            hearCatalog = listener
+            return () => {}
+          }
+          return (
+            <AosUiWorkspace
+              runtime={asHarnessRuntime(value)}
+              locale="en"
+              dictionary={en}
+              now={FIXTURE_NOW}
+            />
+          )
+        }}
+      </ControlledWorkspaceFixture>
+    )
+    await screen.findByRole("tab", { name: "Market brief" })
+    const list = vi.spyOn(FixtureThreadListAdapter.prototype, "list")
+
+    act(() => hearCatalog(["thread-aster-market", "thread-aster-launch"]))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(list).not.toHaveBeenCalled()
+
+    // Another tab creates a Session this one has never listed.
+    const { sessionId } = await bundle!.workspace.createSession("agent-aster", {
+      title: "Created elsewhere",
+    })
+    act(() => hearCatalog(["thread-aster-market", sessionId]))
+
+    expect(
+      await screen.findAllByRole("button", {
+        name: "Open session: Created elsewhere",
+      })
+    ).not.toHaveLength(0)
+    expect(list).toHaveBeenCalledOnce()
+    list.mockRestore()
+  })
+
   it("opens an older Session encoded in a direct URL", async () => {
     window.history.replaceState({}, "", "/agent-aster/thread-aster-pricing")
 
