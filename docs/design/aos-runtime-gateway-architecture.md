@@ -84,6 +84,35 @@ ServerRuntime / ServerTurnEngine  (core/runtime.ts:67-100, 192-280)
 Hermes | OpenClaw | OpenCode  (native transport)
 ```
 
+
+```mermaid
+flowchart TB
+  OC["Operator client (browser tab)<br/>Assistant UI · ACP client · one connection per browser tab · one owner per resumed Session"]
+  GC["Guest client (browser tab)<br/>same client · guest origin"]
+  OL["Operator listener<br/>operator member · empty stack · Bun socket limits · handshake deadline"]
+  GL["Guest listener (own origin)<br/>auth/login → guest member · guest stack · closed with 1008 at expiry"]
+  REST["REST routes<br/>bytes · discovery · healthz {links, gauges}"]
+  ASC["Agent-side connection (one per socket)<br/>translation only: ACP ⇄ member commands and events · wire checks · error codes"]
+  MW["Member middleware stack (policy only)<br/>guest: commands → scope → history → turns → permissions · operator: empty"]
+  CH["Channels<br/>one channel per Session · one membership per member"]
+  CO["SessionCoordinator: the only home of Session state<br/>turn actor per Session · admission and uncertainty deadlines · cells · dedupe · eviction · gauges"]
+  RT["ServerRuntime<br/>errors as kinds · opaque recovery token · link state"]
+  AD["One adapter → Hermes | OpenClaw | OpenCode<br/>a connection owner per native link (core/link.ts) · every failure gone | unavailable | uncertain"]
+  LC["packages/lifecycle<br/>XState v5 + cockatiel + DisposableStack: owner machines, deadlines, generations, release"]
+  OC -- "ACP socket + REST" --> OL
+  GC -- "ACP socket + REST" --> GL
+  OL --> ASC
+  GL --> ASC
+  OL -.-> REST
+  GL -.-> REST
+  REST -.-> RT
+  ASC --> MW --> CH --> CO --> RT --> AD
+  LC -.- ASC
+  LC -.- CO
+  LC -.- AD
+  LC -.- OC
+```
+
 `createConfiguredProxy` (`composition.ts:26-36`) loads secrets once and
 constructs one `RuntimeInstance` shared by every listener.
 
@@ -112,7 +141,9 @@ invitation endpoint (`routes/invitations.ts:19-21`).
 
 All log values pass through `redactForLog` (`redaction.ts`), which replaces
 credential-bearing field values with `"[REDACTED]"`, strips query strings and
-credentials from URLs, and reports every `Error` as `"Upstream request failed"`.
+credentials from URLs, and serializes every `Error` as an object carrying its
+`name`, redacted `message`, and — when the native failure provides them —
+`code`, `reason`, and the full `cause` chain. Stack traces are omitted.
 Secret files are absolute paths read once at startup (`secrets.ts:6-23`); the
 secret bytes never appear in config, logs, or responses.
 
@@ -255,7 +286,7 @@ For adapter obligations and the five lifetimes see
 | Idempotent re-admission (duplicate `turnId` replays from journal)       | `:511-528`                              |
 | Conflict (different turn on non-idle scope → `ServerTurnConflictError`) | `:543-549`                              |
 | Single-flight (`#admissions` set blocks concurrent starts)              | `:551-552,578-580`                      |
-| Per-role capacity: `maxActiveExecutions` / `maxGuestActiveExecutions`   | `:1193-1206`; limits `config.ts:95-105` |
+| Per-role capacity: coordinator `maxActiveExecutions`; guest quota `guestActiveExecutions` (config key, guest middleware) | `config.ts:95-105` |
 | Controllers set; `#withControl` serialises stop+steer                   | `:514,565,746,797`                      |
 | Steer dedup: 256 per execution, oldest evicted                          | `:216,821-824`                          |
 | Stop states: `running` → `stopping` → terminal                          | `:740-769`                              |
@@ -315,7 +346,30 @@ cap 16 KiB (`routes/http.ts:61`). Stage registry: 256 entries, 300 s TTL
 | `POST …/audio/speak`                 | 40 KB (`:131`)                   |
 | `GET /api/aos/v1/runtime`            | —                                |
 | `POST /api/aos/v1/guest-invitations` | 16 KiB JSON                      |
-| `GET /api/aos/v1/healthz`, `/readyz` | —                                |
+| `GET /api/aos/v1/healthz`            | —                                |
+| `GET /api/aos/v1/readyz`             | —                                |
+
+`GET /api/aos/v1/healthz` always returns HTTP 200 and a JSON body:
+
+```json
+{
+  "status": "ok" | "degraded",
+  "links": [{ "name": "<runtime-id>", "state": "ready" | "lost" }],
+  "gauges": {
+    "sockets": <number>,
+    "memberships": <number>,
+    "executions": <number>,
+    "uncertain": <number>,
+    "deadlinesFired": <number>,
+    "journalBytes": <number>
+  }
+}
+```
+
+`status` is `"degraded"` when at least one native link is `lost`; the proxy
+always answers 200 — a link down degrades it, not restarts it. The `links`
+array has one entry per configured runtime; `gauges` are current process
+counters (`composition.ts`, `session-coordinator.ts`).
 
 Guest mirrors the same routes under `/api/guest/v1/` with authorization and
 smaller staging limits (`guest/context.ts:37-40`).
@@ -338,10 +392,11 @@ capability is checked once and cached. Guest connections carry no read state
 A write guard of 10 s (`READ_GUARD_MS`) prevents a list read that races the
 mark-read write from clearing an optimistic `unread: false`.
 
-**Activity feed** (`acp/activity-feed.ts:7-10`): per-connection buffer, max
-200 events, max age 30 days. Hydration reads one catalog page (100 entries,
-`HYDRATION_PAGE_SIZE`). Events are sent as `_aos/activity` notifications on
-connect and as live feed items thereafter.
+**Activity feed** (`acp/activity-feed.ts`): no buffer. On connect, the feed
+hydrates by reading one catalog page (100 entries, `HYDRATION_PAGE_SIZE`),
+publishing the current `unread` state and any attention-needing execution per
+row; live execution events from the coordinator fill the feed thereafter. Events
+reach the browser as `_aos/activity` notifications.
 
 Guest connections carry no activity feed (`acp/types.ts:85-90`).
 
@@ -482,11 +537,12 @@ The fixture adapter is browser-only and has no server-side counterpart.
 except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 `acp/validation.ts:60-92`.
 
-**JSON-RPC extension codes** (`protocol/acp.ts:69-79`): `-32001`
-authRequired, `-32002` turnInProgress, `-32003` staleRequest, `-32004`
-notFound, `-32005` revisionConflict, `-32006` temporarilyUnavailable,
-`-32007` connectionInterrupted, `-32008` uncertainMutation, `-32602`
-invalidRequest.
+**JSON-RPC extension codes** (`protocol/acp.ts:69-85`, `AOS_JSONRPC_ERRORS`):
+ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
+(method not found), `-32602` (invalid request), `-32800` (request cancelled);
+AOS block `-32010` turnInProgress, `-32011` staleRequest, `-32012`
+revisionConflict, `-32013` temporarilyUnavailable, `-32014` uncertainMutation.
+Codes `-32001` through `-32009` are no longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
 `_aos_uncertain` (`protocol/acp.ts:53-57`).
