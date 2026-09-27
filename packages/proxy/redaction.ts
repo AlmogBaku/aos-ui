@@ -55,13 +55,14 @@ function isSecretKey(key: string) {
 }
 
 /**
- * A URL of any scheme inside text. It stops only where a URL cannot go on: at
+ * A URL inside text, from its `://` on, so any scheme matches and a long run of
+ * letters costs one pass. It stops only where a URL cannot go on: at
  * whitespace, a double quote, or an angle bracket, which every part of a URL
  * percent-encodes, and at a backslash, so inside a serialized JSON line it
  * never reaches past its own string. A single quote stays in, since a password
  * or a query carries one unencoded.
  */
-const URL_IN_TEXT = /\b[a-z][a-z\d+.-]*:\/\/[^\s"<>\\]+/giu
+const URL_IN_TEXT = /:\/\/[^\s"<>\\]+/gu
 
 /**
  * `text` with every URL's userinfo, query, and fragment removed, whatever its
@@ -71,9 +72,7 @@ const URL_IN_TEXT = /\b[a-z][a-z\d+.-]*:\/\/[^\s"<>\\]+/giu
  */
 export function redactText(text: string) {
   return text.replace(URL_IN_TEXT, (url) =>
-    url
-      .replace(/([a-z][a-z\d+.-]*:\/\/)[^/?#]*@/giu, "$1")
-      .replace(/[?#].*$/u, "")
+    url.replace(/:\/\/[^/?#]*@/gu, "://").replace(/[?#].*$/u, "")
   )
 }
 
