@@ -376,16 +376,16 @@ function QueueRow({
       {isEditing ? null : (
         <Menu.Root>
           <Menu.Trigger
-          ref={moreRef}
-          render={
-            <TooltipIconButton
-              type="button"
-              tooltip={labels.actions}
-              aria-label={labels.actions}
-              className="size-8 shrink-0 [@media(pointer:coarse)]:size-11"
-            />
-          }
-        >
+            ref={moreRef}
+            render={
+              <TooltipIconButton
+                type="button"
+                tooltip={labels.actions}
+                aria-label={labels.actions}
+                className="size-8 shrink-0 [@media(pointer:coarse)]:size-11"
+              />
+            }
+          >
             <EllipsisIcon aria-hidden="true" />
           </Menu.Trigger>
           <MenuPopup
