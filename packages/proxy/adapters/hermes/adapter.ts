@@ -401,6 +401,16 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #retry: HermesRetrySchedule
   readonly mcpApps?: ServerMcpApps
   readonly #mcpToolNames?: McpToolNames
+  /**
+   * Hermes broadcasts a debounced, payload-less `sessions.changed` on the same
+   * multiplexed socket whenever its Session store moves. The frame carries no
+   * Session id, so it is observed on the gateway's own event fan-out rather than
+   * through the per-Session attachment routing. Absent when the transport
+   * cannot subscribe, so the catalog never dials a feed that cannot open.
+   */
+  readonly subscribeCatalogChanges?: (
+    listener: () => void
+  ) => Promise<() => void>
 
   constructor(
     private readonly transport: HermesRpcTransport,
@@ -431,6 +441,13 @@ export class HermesServerAdapter implements ServerRuntime {
       this.mcpApps = apps.mcpApps
       this.#mcpToolNames = apps.names
     }
+    if (transport.subscribeEvents)
+      this.subscribeCatalogChanges = async (listener) =>
+        // A lost connection is not a catalog change, and this listener survives
+        // it: the next authoritative read reconciles whatever was missed.
+        transport.subscribeEvents!((event) => {
+          if (isRecord(event) && event.type === "sessions.changed") listener()
+        })
     const requireSession = (agentId: string, publicSessionId: string) =>
       this.#requireResumedSession(agentId, publicSessionId)
     this.#workspace = createHermesWorkspaceOperations({
@@ -1279,21 +1296,6 @@ export class HermesServerAdapter implements ServerRuntime {
     } catch {
       // Idle retention is best-effort; it must never close the shared socket.
     }
-  }
-
-  /**
-   * Hermes broadcasts a debounced, payload-less `sessions.changed` on the same
-   * multiplexed socket whenever its Session store moves. The frame carries no
-   * Session id, so it is observed on the gateway's own event fan-out rather than
-   * through the per-Session attachment routing.
-   */
-  async subscribeCatalogChanges(listener: () => void) {
-    if (!this.transport.subscribeEvents) throw new HermesUnavailableError()
-    // A lost connection is not a catalog change, and this listener survives it:
-    // the next authoritative read reconciles whatever was missed.
-    return this.transport.subscribeEvents((event) => {
-      if (isRecord(event) && event.type === "sessions.changed") listener()
-    })
   }
 
   async slashCommands(agentId: string, publicSessionId: string) {

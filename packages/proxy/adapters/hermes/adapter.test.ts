@@ -1733,7 +1733,7 @@ describe("Hermes server adapter", () => {
       }),
     })
 
-    const unsubscribe = await adapter.subscribeCatalogChanges(listener)
+    const unsubscribe = await adapter.subscribeCatalogChanges!(listener)
     deliver({
       type: "message",
       session_id: "live-session",
@@ -1747,6 +1747,11 @@ describe("Hermes server adapter", () => {
     unsubscribe()
     deliver({ type: "sessions.changed", session_id: "", payload: {} })
     expect(listener).toHaveBeenCalledOnce()
+
+    // A transport that cannot subscribe offers no feed for the catalog to dial.
+    expect(
+      new HermesServerAdapter({ request: vi.fn() }).subscribeCatalogChanges
+    ).toBeUndefined()
   })
 
   it("rejects duplicate stored Session IDs and projects owned compacted chronological history", async () => {
