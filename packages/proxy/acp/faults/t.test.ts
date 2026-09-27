@@ -678,6 +678,27 @@ const ROWS: Row[] = [
   // --- hangs until aborted: each call ends at its own deadline.
   nestedDeadlines(),
   {
+    operation: "discover",
+    fault: "fails once",
+    stage: "joined",
+    foreign: true,
+    async meet(t) {
+      t.test.faults.failOnce("discover", unavailable())
+      const source = t.foreign.start()
+      await t.clock.advance(0)
+      chunk(source, "Early")
+      await t.clock.advance(0)
+    },
+    bound: READING_BACKOFF.baseMs,
+    async recovered(t) {
+      t.foreign.end()
+      await t.clock.advance(0)
+      bothShown(t, ["chunk Early"])
+    },
+    // The failed ask, its retry, and the one more ask its end makes.
+    calls: { discover: 3 },
+  },
+  {
     operation: "native link",
     fault: "native link drop",
     stage: "live",

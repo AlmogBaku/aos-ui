@@ -1,4 +1,5 @@
 import {
+  backoffDelay,
   createOwner,
   defaultClock,
   ownerSetup,
@@ -12,7 +13,12 @@ import type {
   SessionModelsResponse,
   SessionModelUpdateRequest,
 } from "../../protocol"
-import { JOIN_DEADLINE_MS, PAUSED_DEADLINE_MS } from "./limits"
+import {
+  JOIN_DEADLINE_MS,
+  PAUSED_DEADLINE_MS,
+  READING_BACKOFF,
+  READING_RETRIES,
+} from "./limits"
 import {
   beforeLiveTurn,
   lastPromptIndex,
@@ -125,6 +131,12 @@ type Channel = {
   again?: boolean
   /** The turn this channel adopted, whose prompt no member has seen. */
   adopted?: string
+  /** Failed discovers in a row, which the next retry backs off on. */
+  failures: number
+  /** The pending retry of a failed discover. */
+  retry?: unknown
+  /** Bumped when the channel closes: a discover answered since changes nothing. */
+  generation: number
 }
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
@@ -342,21 +354,56 @@ function createChannelTable({
   }
 
   async function adoptOnce(channel: Channel) {
+    // This ask replaces a retry still pending.
+    clock.clearTimeout(channel.retry)
+    channel.retry = undefined
     const joined = adopter(channel)
     if (!adoption || !joined) return
     const [member, { scope }] = joined
+    const { generation } = channel
     const before = snapshot(scope).turnId
     try {
       await adoption.discover(scope)
     } catch (cause) {
+      if (channel.generation !== generation) return
       // A proxy turn still starting refuses it; that turn's end asks again.
-      if (!(cause instanceof ServerTurnConflictError)) member.report(cause)
+      if (cause instanceof ServerTurnConflictError) return
+      retryAdoption(channel)
+      member.report(cause)
       return
     }
+    if (channel.generation !== generation) return
+    channel.failures = 0
     const { state, turnId } = snapshot(scope)
     if (state === "idle" || turnId === undefined || turnId === before) return
     channel.adopted = turnId
     await syncChannel(scope, channel)
+  }
+
+  /**
+   * Asks again on backoff after a failed discover, so a turn the runtime
+   * started is not missed until the next turn's end; past the budget, that
+   * end asks.
+   */
+  function retryAdoption(channel: Channel) {
+    if (channel.failures >= READING_RETRIES) {
+      channel.failures = 0
+      return
+    }
+    const delay = backoffDelay(channel.failures, READING_BACKOFF)
+    channel.failures += 1
+    channel.retry = clock.setTimeout(() => {
+      channel.retry = undefined
+      void adopt(channel)
+    }, delay)
+  }
+
+  /** Ends a memberless channel's feeds and its pending retry. */
+  function close(channel: Channel) {
+    channel.generation += 1
+    clock.clearTimeout(channel.retry)
+    channel.retry = undefined
+    channel.unsubscribe?.()
   }
 
   /**
@@ -399,7 +446,7 @@ function createChannelTable({
       let channel = channels.get(key)
       const created = !channel
       if (!channel) {
-        channel = { memberships: new Map() }
+        channel = { memberships: new Map(), failures: 0, generation: 0 }
         channels.set(key, channel)
       }
       const joined = channel
@@ -407,7 +454,7 @@ function createChannelTable({
         joined.memberships.delete(member)
         if (joined.memberships.size === 0 && channels.get(key) === joined) {
           channels.delete(key)
-          joined.unsubscribe?.()
+          close(joined)
         }
       }
       if (joined.memberships.has(member)) return remove
