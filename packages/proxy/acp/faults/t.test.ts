@@ -678,6 +678,27 @@ const ROWS: Row[] = [
   // --- hangs until aborted: each call ends at its own deadline.
   nestedDeadlines(),
   {
+    operation: "native link",
+    fault: "native link drop",
+    stage: "live",
+    async meet(t) {
+      await interrupt(t)
+    },
+    bound: 0,
+    async recovered(t) {
+      await finish(t, t.source())
+      bothShown(t, ["chunk  reply"])
+    },
+    calls: { recover: 1 },
+    transitions: {
+      turn: [
+        ["running", "uncertain"],
+        ["uncertain", "admitting"],
+        ["admitting", "running"],
+      ],
+    },
+  },
+  {
     operation: "recover",
     fault: "hangs until aborted",
     stage: "live",

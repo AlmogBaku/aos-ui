@@ -19,6 +19,7 @@ import {
   persistedCorrections,
 } from "./replay-page"
 import {
+  isRedialableFailure,
   ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
@@ -802,6 +803,11 @@ class Membership {
   /** The turn this member last asked its client to rebuild the view for. */
   #reloadedTurn: string | undefined
   /**
+   * The turn whose stream an interrupt ended, which this member follows again
+   * once its coordinator settles whether it still runs.
+   */
+  #interrupted: string | undefined
+  /**
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
   #rebuilding = false
@@ -1374,6 +1380,7 @@ class Membership {
           await this.#restate(turn.turnId).catch((cause: unknown) =>
             this.report(cause)
           )
+        await this.#followInterrupted()
       },
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
@@ -1402,6 +1409,29 @@ class Membership {
       await this.reportExecution()
     if (this.#coordinator.state(this.#scope) === "waiting-for-input")
       this.reissuePending()
+  }
+
+  /**
+   * Follows the turn an interrupt cut this member's stream of again, from
+   * where the member stopped, once the coordinator's reconcile confirmed it
+   * running: every member keeps following a turn whose native link dropped,
+   * and none has to redial. Asked as the stream ends and at each move of the
+   * Session's execution, so a reconcile that lands first is not missed.
+   */
+  async #followInterrupted() {
+    const turnId = this.#interrupted
+    if (turnId === undefined) return
+    const current = this.#coordinator.snapshot(this.#scope)
+    // Still reconciling: the move that settles it asks again.
+    if (current.state === "uncertain") return
+    this.#interrupted = undefined
+    if (current.turnId !== turnId) return
+    await this.#follow(true, this.#sequence).catch((cause: unknown) =>
+      // A cursor the journal no longer holds leaves history the only way on.
+      cause instanceof ReplayCursorLostError
+        ? this.#invalidate()
+        : this.report(cause)
+    )
   }
 
   #releaseCells() {
@@ -1639,6 +1669,7 @@ class Membership {
       return
     }
     this.#subscription = subscription
+    this.#interrupted = undefined
     // A restarted stream is the same segment, whose Stop stays acknowledged.
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
@@ -1670,11 +1701,13 @@ class Membership {
       },
     }
     let overflow: FanoutOverflowError | undefined
+    let interrupted = false
     try {
       await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
         this.#sequence = sequence
+        interrupted = isRedialableFailure(event)
         await this.emit({
           kind: "turn",
           stream,
@@ -1694,6 +1727,11 @@ class Membership {
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
     if (overflow) return this.#resync(subscription.turnId, overflow)
+    // An interrupt ends the stream, not the turn: its reconcile decides that.
+    if (interrupted && !this.#owner.stale(generation)) {
+      this.#interrupted = subscription.turnId
+      await this.#followInterrupted()
+    }
   }
 
   /**
