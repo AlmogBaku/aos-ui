@@ -268,23 +268,12 @@ export default defineConfig([
   },
   {
     // Type-aware promise rules for the proxy, lifecycle, and browser ACP adapter.
-    // part b removes the per-rule ignores for the six files other lanes own.
     files: [
       "packages/proxy/**/*.{ts,tsx}",
       "packages/lifecycle/**/*.{ts,tsx}",
       "src/runtime-adapters/**/*.{ts,tsx}",
     ],
-    ignores: [
-      "**/*.test.{ts,tsx}",
-      "**/*.bun-spec.ts",
-      // part b removes this
-      "packages/proxy/adapters/**",
-      "packages/proxy/core/link.ts",
-      "packages/proxy/core/limits.ts",
-      "packages/proxy/core/channel.ts",
-      "packages/proxy/core/session-coordinator.ts",
-      "packages/proxy/core/session-reporter.ts",
-    ],
+    ignores: ["**/*.test.{ts,tsx}", "**/*.bun-spec.ts"],
     languageOptions: {
       parserOptions: {
         projectService: {
