@@ -5,7 +5,6 @@ import type {
   SessionConfigOption,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import {
-  createMessageQueue,
   ExportedMessageRepository,
   isMessageNotSentError,
   MessageNotSentError,
@@ -19,7 +18,6 @@ import type {
   ExternalStoreAdapter,
   ExternalThreadQueueAdapter,
   FeedbackAdapter,
-  MessageQueueController,
   RealtimeVoiceAdapter,
   SpeechSynthesisAdapter,
   ThreadMessage,
@@ -43,6 +41,10 @@ import {
 
 import type { TodoItem } from "@/runtime-adapters/contracts"
 import {
+  queueControlsExtras,
+  type QueueControlsExtras,
+} from "@/runtime-adapters/queue-controls"
+import {
   threadHistoryExtras,
   type ThreadHistoryState,
 } from "@/runtime-adapters/thread-history"
@@ -50,6 +52,7 @@ import {
 import type { Logger } from "@aos/lifecycle"
 import { tabAcpLogger } from "./log"
 import type { AcpApprovals } from "./acp-approvals"
+import { createQueue, isBusyRefusal } from "./acp-message-queue"
 
 // Lazy logger for background error reporting.
 let _runtimeLog: Logger | undefined
@@ -205,10 +208,6 @@ const REFUSAL_CODES: Readonly<Record<number, string>> = {
   [AOS_JSONRPC_ERRORS.turnInProgress]: "AOS_SESSION_BUSY",
   [AOS_JSONRPC_ERRORS.temporarilyUnavailable]: "AOS_PROVIDER_UNAVAILABLE",
 }
-
-/** A refusal because the proxy still holds the Session for an earlier turn. */
-const isBusyRefusal = (error: unknown) =>
-  isRecord(error) && error.code === AOS_JSONRPC_ERRORS.turnInProgress
 
 /** How a resume ended: replayed, refused for good, or left behind by a rebinding. */
 type ResumeOutcome = "replayed" | "refused" | "abandoned"
@@ -769,104 +768,6 @@ function createAcpController({
   }
 }
 
-type AcpController = ReturnType<typeof createAcpController>
-
-const isBusy = ({ status }: ProjectorExecution) =>
-  status === "running" || status === "waiting-for-input"
-
-/**
- * The send the queue dispatched and waits on: the turn the Session last
- * reported as it went out, whether a turn has run since, and whether the
- * provider has accepted it yet.
- */
-type Dispatch = {
-  readonly before: string | undefined
-  ran: boolean
-  accepted: boolean
-}
-
-/**
- * How long a queued send keeps asking a Session the proxy still holds. The
- * browser can read a turn over before the proxy does, and the proxy never
- * queues, so the send waits here instead of being lost to the refusal.
- */
-const BUSY_RETRY_MS = 60_000
-const busyRetryDelay = (tries: number) => Math.min(250 * 2 ** tries, 2_000)
-
-/**
- * Holds the queue while a turn owns the Session. The proxy answers a prompt
- * as it accepts the turn, before the turn reports running, so a dispatched
- * send holds the queue until it is accepted and its turn has settled, in
- * whichever order the two arrive. A busy refusal sends again on backoff;
- * any other refusal, or one past the retry window, releases it at once.
- * The queue follows the controller directly: a render would see the turn
- * start only after the next send had already gone out.
- */
-function createQueue(controller: AcpController) {
-  const execution = () => controller.getState().execution
-  let busy = false
-  let dispatch: Dispatch | undefined
-  let retry: ReturnType<typeof setTimeout> | undefined
-  // A turn that failed before it ran, or ran while a replay held the telling,
-  // settles under a turn the Session had not reported before.
-  const settle = () => {
-    if (!dispatch?.accepted || busy) return
-    if (!dispatch.ran && execution().turnId === dispatch.before) return
-    dispatch = undefined
-    queue.notifyIdle()
-  }
-  const queue: MessageQueueController = createMessageQueue({
-    run: (message) => {
-      const until = Date.now() + BUSY_RETRY_MS
-      const attempt = (tries: number) => {
-        const again = () => {
-          retry = setTimeout(() => attempt(tries + 1), busyRetryDelay(tries))
-        }
-        // A turn running meanwhile owns the Session: wait it out first.
-        if (busy) return again()
-        const sent: Dispatch = {
-          before: execution().turnId,
-          ran: false,
-          accepted: false,
-        }
-        dispatch = sent
-        const holdBusy = Date.now() < until
-        controller.send(message, { holdBusy }).then(
-          () => {
-            sent.accepted = true
-            settle()
-          },
-          (error: unknown) => {
-            if (holdBusy && isBusyRefusal(error)) return again()
-            dispatch = undefined
-            if (!busy) queue.notifyIdle()
-          }
-        )
-      }
-      attempt(0)
-    },
-  })
-  const observe = () => {
-    const wasBusy = busy
-    busy = isBusy(execution())
-    if (busy) {
-      if (!wasBusy) queue.notifyBusy()
-      if (dispatch) dispatch.ran = true
-    } else if (dispatch) settle()
-    else if (wasBusy) queue.notifyIdle()
-  }
-  /** Follows the Session's execution until the returned call stops it. */
-  const watch = () => {
-    observe()
-    const unsubscribe = controller.subscribe(observe)
-    return () => {
-      unsubscribe()
-      clearTimeout(retry)
-    }
-  }
-  return { queue, watch }
-}
-
 const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage>()
 
 /**
@@ -955,23 +856,26 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     void steerItems
     const state = controller.getState()
     const history = controller.getHistory()
+    const extras: AcpRuntimeExtras & QueueControlsExtras = {
+      execution: state.execution,
+      todos: state.todos,
+      ...(state.configOptions === undefined
+        ? {}
+        : { configOptions: state.configOptions }),
+      ...(state.commands === undefined ? {} : { commands: state.commands }),
+      ...(history === undefined ? {} : { history }),
+      ...(binding && { queueControls: binding.controls }),
+    }
+    // The thread reads older history and queue controls through their
+    // provider-neutral channels, stamped on the same object.
+    threadHistoryExtras.provide(extras)
+    queueControlsExtras.provide(extras)
     return {
       messageRepository: controller.getRepository(),
       isRunning: state.execution.status === "running",
       isLoading: controller.isLoading(),
       isDisabled: isDisabled ?? false,
-      // The thread reads older history through the provider-neutral channel.
-      extras: threadHistoryExtras.provide(
-        acpExtras.provide({
-          execution: state.execution,
-          todos: state.todos,
-          ...(state.configOptions === undefined
-            ? {}
-            : { configOptions: state.configOptions }),
-          ...(state.commands === undefined ? {} : { commands: state.commands }),
-          ...(history === undefined ? {} : { history }),
-        })
-      ),
+      extras: acpExtras.provide(extras),
       onNew: (message) => controller.send(message),
       onEdit: (message) => {
         queue?.clear()
@@ -997,7 +901,16 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
       ...(adapters && { adapters }),
       ...(queue && { queue: queue.adapter }),
     }
-  }, [adapters, controller, isDisabled, queue, queueItems, steerItems, version])
+  }, [
+    adapters,
+    binding,
+    controller,
+    isDisabled,
+    queue,
+    queueItems,
+    steerItems,
+    version,
+  ])
 
   return useExternalStoreRuntime(store)
 }

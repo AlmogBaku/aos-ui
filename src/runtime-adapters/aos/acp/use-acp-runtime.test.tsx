@@ -27,6 +27,7 @@ import {
 } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
+import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
 import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
 import { createAcpApprovals } from "./acp-approvals"
@@ -1051,6 +1052,188 @@ describe("useAcpRuntime", () => {
         [{ type: "text", text: "Also check the logs" }],
         expect.objectContaining({})
       )
+    })
+  })
+
+  describe("a queued message under edit", () => {
+    const controlsOf = (runtime: ReturnType<typeof useAcpRuntime>) =>
+      queueControlsExtras.tryGet(runtime.thread.getState().extras)
+        ?.queueControls
+    const queuedIds = (runtime: ReturnType<typeof useAcpRuntime>) =>
+      runtime.thread.composer.getState().queue.map((item) => item.id)
+    const running = (fake: Fake, meta = TURN_META) => {
+      act(() => {
+        fake.emit({ sessionUpdate: "state_update", state: "running" }, meta)
+      })
+    }
+    const ends = async (fake: Fake, meta = TURN_META) => {
+      await act(async () => {
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "end_turn",
+          },
+          meta
+        )
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+    const queue = async (
+      runtime: ReturnType<typeof useAcpRuntime>,
+      ...texts: string[]
+    ) => {
+      await act(async () => {
+        for (const text of texts)
+          runtime.thread.append({
+            role: "user",
+            content: [{ type: "text", text }],
+          })
+      })
+    }
+    const sentText = (fake: Fake) =>
+      fake.prompt.mock.calls.map((call) =>
+        (call as unknown as [string, { type: string }[]])[1]
+          .map(messageText)
+          .join("")
+      )
+
+    it("sends the edited text with the image it was queued with", async () => {
+      const fake = createFakeConnection()
+      const stageAttachments = vi.fn(async () => ({
+        stageId: "stage-1",
+        attachments: [
+          { id: "att-1", name: "chart.png", contentType: "image/png" },
+        ],
+      }))
+      const { result } = await mount(fake, {
+        enableMessageQueue: true,
+        stageAttachments,
+      })
+      running(fake)
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Read tihs" }],
+          attachments: [
+            {
+              id: "att-1",
+              type: "image",
+              name: "chart.png",
+              contentType: "image/png",
+              status: { type: "complete" },
+              content: [{ type: "image", image: "data:image/png;base64,AAA" }],
+            },
+          ],
+        })
+      })
+      const [id] = queuedIds(result.current)
+      let edited: boolean | undefined
+      act(() => {
+        edited = controlsOf(result.current)?.editText(id!, "Read this")
+      })
+      expect(edited).toBe(true)
+      await ends(fake)
+      await waitFor(() => {
+        expect(fake.prompt).toHaveBeenCalledWith(
+          SESSION_ID,
+          [
+            { type: "text", text: "Read this" },
+            {
+              type: "resource_link",
+              uri: `${AOS_ATTACHMENT_URI_SCHEME}stage-1/att-1`,
+              name: "chart.png",
+              mimeType: "image/png",
+            },
+          ],
+          expect.objectContaining({ attachmentStageId: "stage-1" })
+        )
+      })
+      expect(controlsOf(result.current)?.editText(id!, "Gone")).toBe(false)
+    })
+
+    it("keeps the next message waiting past the turn's end until the hold is released", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await queue(result.current, "Next")
+      const release = controlsOf(result.current)!.hold()
+      await ends(fake)
+      expect(fake.prompt).not.toHaveBeenCalled()
+      await act(async () => {
+        release()
+        release()
+      })
+      await waitFor(() => expect(sentText(fake)).toEqual(["Next"]))
+    })
+
+    it("stays paused after Stop, even when a message is queued while held", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await queue(result.current, "First")
+      await act(async () => {
+        result.current.thread.cancelRun()
+      })
+      await act(async () => {
+        fake.emit({
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "cancelled",
+        })
+      })
+      await act(async () => {
+        controlsOf(result.current)!.hold()()
+      })
+      expect(fake.prompt).not.toHaveBeenCalled()
+
+      const release = controlsOf(result.current)!.hold()
+      await queue(result.current, "Second")
+      expect(fake.prompt).not.toHaveBeenCalled()
+      await act(async () => release())
+      await waitFor(() => expect(sentText(fake)).toEqual(["First"]))
+    })
+
+    it("sends nothing more for a hold released while a send waits on the proxy", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      let accept!: (reply: { messageId: string }) => void
+      fake.prompt.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            accept = resolve
+          })
+      )
+      running(fake)
+      await queue(result.current, "First", "Second")
+      await ends(fake)
+      expect(sentText(fake)).toEqual(["First"])
+      await act(async () => {
+        controlsOf(result.current)!.hold()()
+      })
+      expect(fake.prompt).toHaveBeenCalledTimes(1)
+
+      const accepted = { sequence: 0, turnId: "run-2" }
+      await act(async () => accept({ messageId: "u1" }))
+      running(fake, accepted)
+      await ends(fake, accepted)
+      await waitFor(() => expect(sentText(fake)).toEqual(["First", "Second"]))
+    })
+
+    it("sends nothing into a turn that started while held", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await queue(result.current, "Queued")
+      const release = controlsOf(result.current)!.hold()
+      await ends(fake)
+      // Another tab starts a turn before the editor closes.
+      const elsewhere = { sequence: 0, turnId: "run-2" }
+      running(fake, elsewhere)
+      await act(async () => release())
+      expect(fake.prompt).not.toHaveBeenCalled()
+      await ends(fake, elsewhere)
+      await waitFor(() => expect(sentText(fake)).toEqual(["Queued"]))
     })
   })
 
