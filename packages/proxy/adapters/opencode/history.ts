@@ -115,10 +115,11 @@ function projectMessage(
           part.state.status === "pending"
             ? parseToolInput(part.state.input)
             : publicJsonValue(part.state.input)
-        const safeArgs: { [key: string]: JsonValue } =
+        const objectArgs =
           args !== null && typeof args === "object" && !Array.isArray(args)
-            ? (args as { [key: string]: JsonValue })
-            : {}
+        const safeArgs: { [key: string]: JsonValue } = objectArgs
+          ? (args as { [key: string]: JsonValue })
+          : {}
         const call = canonicalOpenCodeToolCall(
           part.name,
           safeArgs,
@@ -141,8 +142,10 @@ function projectMessage(
             ? {}
             : { completedAt: openCodeTimestamp(completed) }),
           args: call.args,
+          // A pending call's raw input stands for its arguments only when it
+          // parsed as the object the arguments were taken from.
           argsText:
-            part.state.status === "pending"
+            part.state.status === "pending" && objectArgs
               ? part.state.input
               : JSON.stringify(call.args),
           ...(result === undefined ? {} : { result }),

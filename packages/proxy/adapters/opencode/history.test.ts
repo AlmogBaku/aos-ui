@@ -69,7 +69,7 @@ describe("OpenCode history projection", () => {
               type: "tool",
               name: "echo",
               time: { created: 2_000 },
-              // Pending input whose JSON value is a scalar (not an object): kept with {} args.
+              // Pending input whose JSON value is a scalar (not an object): {} args, shown as {}.
               state: { status: "pending", input: '"hello"' },
             },
           ],
@@ -157,7 +157,7 @@ describe("OpenCode history projection", () => {
             toolName: "echo",
             startedAt: "1970-01-01T00:33:20.000Z",
             args: {},
-            argsText: '"hello"',
+            argsText: "{}",
           },
         ],
       },
