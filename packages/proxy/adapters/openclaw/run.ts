@@ -929,7 +929,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (waiting) {
         this.#waiting.delete(key)
         waiting.terminal = true
-        waiting.lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+        waiting.lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       }
 
       if (replies) {
@@ -1009,16 +1013,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             resolveAdmission()
           }
           if (active && !active.terminal)
-            this.#reconcile(active).catch(() =>
-              this.#markStreamLost(active)
-            )
+            this.#reconcile(active).catch(() => this.#markStreamLost(active))
         })
         .catch((error: unknown) => {
           if (!admitted) rejectAdmission(error)
           else if (active && !active.terminal)
-            this.#reconcile(active).catch(() =>
-              this.#markStreamLost(active)
-            )
+            this.#reconcile(active).catch(() => this.#markStreamLost(active))
         })
 
       try {
@@ -1034,14 +1034,23 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           return this.#handle(active)
         }
         this.#active.delete(key)
-        await lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+        await lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
         active.queue.close()
         active.resolveSettled()
         throw providerUnavailable(error)
       }
       return this.#handle(active)
     } catch (error) {
-      if (lease && !this.#active.has(key)) await lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+      if (lease && !this.#active.has(key))
+        await lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       if (error instanceof ServerTurnConflictError) throw error
       if (error instanceof ServerSessionNotFoundError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
@@ -1127,7 +1136,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       return this.#handle(active)
     } catch (error) {
       this.#active.delete(key)
-      await lease?.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+      await lease
+        ?.release()
+        .catch((err: unknown) =>
+          this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+        )
       if (error instanceof ServerTurnConflictError) throw error
       throw providerUnavailable(error)
     }
@@ -1159,10 +1172,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         existingWaiting.terminal = true
         if (this.#waiting.get(key) === existingWaiting)
           this.#waiting.delete(key)
-        await existingWaiting.lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+        await existingWaiting.lease
+          .release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
       }
       const notDiscovered = async () => {
-        await lease?.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+        await lease
+          ?.release()
+          .catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+          )
         lease = undefined
         await retireExisting()
         return undefined
@@ -1286,7 +1307,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         }
       }
     } catch (error) {
-      await lease?.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+      await lease
+        ?.release()
+        .catch((err: unknown) =>
+          this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+        )
       if (error instanceof OpenClawTurnPublicError) throw error
       throw providerUnavailable(error)
     }
@@ -1428,7 +1453,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     this.#active.set(key, active)
     active.settled
       .then(() =>
-        this.#mcpToolNames?.forget(active.scope.agentId, active.nativeSessionKey)
+        this.#mcpToolNames?.forget(
+          active.scope.agentId,
+          active.nativeSessionKey
+        )
       )
       .catch((err: unknown) =>
         this.#watch.logger.warn({ err }, "openclaw.run.settled_cleanup_failed")
@@ -1567,7 +1595,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     waiting.terminal = true
     if (this.#waiting.get(scopeKey(waiting.scope)) === waiting)
       this.#waiting.delete(scopeKey(waiting.scope))
-    waiting.lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+    waiting.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
   }
 
   async #waitingStatus(waiting: WaitingRun): Promise<"stopping" | "idle"> {
@@ -2079,7 +2111,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         "OpenClaw may have accepted the Stop request."
       )
     if (active.stopping) {
-      await this.#reconcile(active).catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed"))
+      await this.#reconcile(active).catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed")
+      )
       return active.terminal ? "idle" : "stopping"
     }
     active.stopping = true
@@ -2136,7 +2170,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       this.#finish(active)
       return "idle"
     }
-    await this.#reconcile(active).catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed"))
+    await this.#reconcile(active).catch((err: unknown) =>
+      this.#watch.logger.warn({ err }, "openclaw.stop.reconcile_failed")
+    )
     return active.terminal ? "idle" : "stopping"
   }
 
@@ -2172,7 +2208,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ...(active.cost ? { cost: active.cost } : {}),
     })
     this.#active.delete(scopeKey(active.scope))
-    active.lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+    active.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
     active.resolveSettled()
   }
 
@@ -2192,7 +2232,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ...origin,
     })
     this.#active.delete(scopeKey(active.scope))
-    active.lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
+    active.lease
+      .release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
     active.resolveSettled()
   }
 }
