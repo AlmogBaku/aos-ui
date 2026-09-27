@@ -22,10 +22,6 @@ import {
 import { stageOpenClawChatAttachments } from "./content"
 import { createOpenClawHistory } from "./history"
 import { OpenClawInteractions } from "./interactions"
-import {
-  createOpenClawMcpToolNames,
-  type OpenClawMcpToolNames,
-} from "./mcp-tool-names"
 import { OpenClawTurnEngine, type OpenClawRunRequestClient } from "./run"
 import { OpenClawSessionSubscriptions } from "./subscriptions"
 import { OpenClawWorkspaceOwnershipError } from "./workspace"
@@ -2655,8 +2651,7 @@ describe("OpenClaw run engine AOS tools", () => {
   /** One run's events after the given native tool events and a terminal. */
   async function runEvents(
     native: ControlledNative,
-    tools: ReadonlyArray<Record<string, unknown>>,
-    mcpToolNames?: OpenClawMcpToolNames
+    tools: ReadonlyArray<Record<string, unknown>>
   ) {
     const subscriptions = new OpenClawSessionSubscriptions(native, logger)
     const engine = new OpenClawTurnEngine({
@@ -2664,7 +2659,6 @@ describe("OpenClaw run engine AOS tools", () => {
       client: native,
       subscriptions,
       toolEvents: true,
-      mcpToolNames,
     })
     const handle = await engine.start(scope, input())
     let seq = 0
@@ -2743,19 +2737,6 @@ describe("OpenClaw run engine AOS tools", () => {
     expect(native.calls.some(({ method }) => method === "chat.send")).toBe(
       false
     )
-  })
-
-  it("frees a Session's MCP tool names once each turn settles", async () => {
-    const native = new ControlledNative()
-    const mcpToolNames = createOpenClawMcpToolNames(native)
-
-    for (let turn = 0; turn < 3; turn += 1)
-      await runEvents(native, [], mcpToolNames)
-
-    expect(
-      native.calls.filter(({ method }) => method === "tools.effective")
-    ).toHaveLength(3)
-    expect(mcpToolNames.size).toBe(0)
   })
 
   it("names prefixed AOS tools canonically and keeps unknown MCP tools raw", async () => {

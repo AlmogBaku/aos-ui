@@ -1843,38 +1843,23 @@ describe("OpenCodeRunEngine foreign turns", () => {
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
-  it("frees every per-Session record once each turn settles", async () => {
-    const log = nativeLog()
+  // A turn AOS starts is the runtime contract's settledTurnsFreeRecords row.
+  it("frees an adopted foreign turn's records once it settles", async () => {
+    // A turn the TUI started, adopted while it runs.
+    const log = nativeLog([
+      admitted(0, "msg-tui"),
+      textEnded(1, "From the TUI"),
+    ])
     const state = client({
       history: log.history,
       events: vi.fn(async () => controlledStream().source),
-      prompt: vi.fn(
-        async (_id: string, request: { id: string; prompt: unknown }) => {
-          const seq = log.events.length
-          log.events.push(admitted(seq, request.id), textEnded(seq + 1, "Done"))
-          return {
-            data: {
-              admittedSeq: seq,
-              id: request.id,
-              sessionID: scope.providerSessionId,
-              prompt: request.prompt,
-              delivery: "queue",
-              timeCreated: 1,
-            },
-          }
-        }
-      ),
     })
-    const engine = new OpenCodeTurnEngine(state.native, { logger })
-
-    await collect(await engine.start(scope, input()))
-    // A turn the TUI started, adopted while it runs.
-    log.events.push(admitted(2, "msg-tui"), textEnded(3, "From the TUI"))
     state.sessions.active.mockResolvedValueOnce({
       data: { [scope.providerSessionId]: { type: "running" } },
     })
+    const engine = new OpenCodeTurnEngine(state.native, { logger })
+
     await collect((await engine.discover(scope, "aos-recovered-1"))!.handle)
-    await collect(await engine.start(scope, input({ turnId: "run-2" })))
 
     expect(engine.retainedRecords).toBe(0)
   })
