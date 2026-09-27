@@ -140,7 +140,8 @@ export function createAcpService(options: AcpServiceOptions) {
         handshakeDeadline.clear()
         socket.close()
         withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS).catch(
-          (err: unknown) => context.logger.warn({ err }, "acp.socket.close_failed")
+          (err: unknown) =>
+            context.logger.warn({ err }, "acp.socket.close_failed")
         )
       },
     }

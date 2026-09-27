@@ -344,9 +344,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
               if (stage) prompt = await stage.appendTo(text)
             } catch (cause) {
               // The coordinator never took the stage, so it is released here.
-              await stage?.cleanup().catch((err: unknown) =>
-                context.logger.warn({ err }, "turn.stage.cleanup_failed")
-              )
+              await stage
+                ?.cleanup()
+                .catch((err: unknown) =>
+                  context.logger.warn({ err }, "turn.stage.cleanup_failed")
+                )
               throw cause
             }
             return {
@@ -752,11 +754,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onConnect(async (connection) => {
     const { logger } = context
     // The connection's logger already carries its `connectionId` and `role`.
-    const owner = createOwner(connectionMachine(logger, context.clock ?? defaultClock), {
-      logger,
-      clock: context.clock ?? defaultClock,
-      bindings: {},
-    })
+    const owner = createOwner(
+      connectionMachine(logger, context.clock ?? defaultClock),
+      {
+        logger,
+        clock: context.clock ?? defaultClock,
+        bindings: {},
+      }
+    )
     const { stack } = owner
     stack.defer(() => {
       sessions.close()
