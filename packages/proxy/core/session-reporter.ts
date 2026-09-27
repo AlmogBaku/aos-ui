@@ -102,7 +102,7 @@ function defer<T>(cell: AnyCell<T>) {
  * fresh backoff. A read that finds its Session gone is owed to nobody, and no
  * retry takes it again.
  */
-function readingMachine<T, C, S extends ReadingScope>(
+export function readingMachine<T, C, S extends ReadingScope>(
   cell: CellState<T, C, S>,
   {
     read,

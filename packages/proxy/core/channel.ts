@@ -1,4 +1,5 @@
 import {
+  backoffDelay,
   createOwner,
   defaultClock,
   ownerSetup,
@@ -12,13 +13,19 @@ import type {
   SessionModelsResponse,
   SessionModelUpdateRequest,
 } from "../../protocol"
-import { JOIN_DEADLINE_MS, PAUSED_DEADLINE_MS } from "./limits"
+import {
+  JOIN_DEADLINE_MS,
+  PAUSED_DEADLINE_MS,
+  READING_BACKOFF,
+  READING_RETRIES,
+} from "./limits"
 import {
   beforeLiveTurn,
   lastPromptIndex,
   persistedCorrections,
 } from "./replay-page"
 import {
+  isRedialableFailure,
   ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
@@ -124,6 +131,12 @@ type Channel = {
   again?: boolean
   /** The turn this channel adopted, whose prompt no member has seen. */
   adopted?: string
+  /** Failed discovers in a row, which the next retry backs off on. */
+  failures: number
+  /** The pending retry of a failed discover. */
+  retry?: unknown
+  /** Bumped when the channel closes: a discover answered since changes nothing. */
+  generation: number
 }
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
@@ -226,6 +239,7 @@ function createChannelTable({
   snapshot,
   adoption,
   clock,
+  logger,
   backstopMs = DEFAULT_BACKSTOP_MS,
 }: {
   /** Coordinator view of a Session: state and the live segment's turnId. */
@@ -234,6 +248,11 @@ function createChannelTable({
   adoption?: ChannelAdoption
   /** The monotonic clock a turn's admission and the backstop read. */
   clock: Clock
+  /**
+   * Where the channels write, and the logger the membership machine is set
+   * up on; each membership writes on its own.
+   */
+  logger: Logger
   backstopMs?: number
 }) {
   const channels = new Map<string, Channel>()
@@ -316,7 +335,10 @@ function createChannelTable({
     const turn = currentTurn(delivery.scope, channel)
     if (!turn) return
     if (hasPrompt) delivery.delivered = turn.turnId
-    else void send(member, delivery, turn)
+    else
+      send(member, delivery, turn).catch((err: unknown) =>
+        logger.error({ err }, "channel.send.failed")
+      )
   }
 
   /**
@@ -340,22 +362,64 @@ function createChannelTable({
     }
   }
 
+  /** Asks in the background: nothing awaits the ask, so a failure is logged. */
+  function adoptLater(channel: Channel) {
+    adopt(channel).catch((err: unknown) =>
+      logger.error({ err }, "channel.adopt.failed")
+    )
+  }
+
   async function adoptOnce(channel: Channel) {
+    // This ask replaces a retry still pending.
+    clock.clearTimeout(channel.retry)
+    channel.retry = undefined
     const joined = adopter(channel)
     if (!adoption || !joined) return
     const [member, { scope }] = joined
+    const { generation } = channel
     const before = snapshot(scope).turnId
     try {
       await adoption.discover(scope)
     } catch (cause) {
+      if (channel.generation !== generation) return
       // A proxy turn still starting refuses it; that turn's end asks again.
-      if (!(cause instanceof ServerTurnConflictError)) member.report(cause)
+      if (cause instanceof ServerTurnConflictError) return
+      retryAdoption(channel)
+      member.report(cause)
       return
     }
+    if (channel.generation !== generation) return
+    channel.failures = 0
     const { state, turnId } = snapshot(scope)
     if (state === "idle" || turnId === undefined || turnId === before) return
     channel.adopted = turnId
     await syncChannel(scope, channel)
+  }
+
+  /**
+   * Asks again on backoff after a failed discover, so a turn the runtime
+   * started is not missed until the next turn's end; past the budget, that
+   * end asks.
+   */
+  function retryAdoption(channel: Channel) {
+    if (channel.failures >= READING_RETRIES) {
+      channel.failures = 0
+      return
+    }
+    const delay = backoffDelay(channel.failures, READING_BACKOFF)
+    channel.failures += 1
+    channel.retry = clock.setTimeout(() => {
+      channel.retry = undefined
+      adoptLater(channel)
+    }, delay)
+  }
+
+  /** Ends a memberless channel's feeds and its pending retry. */
+  function close(channel: Channel) {
+    channel.generation += 1
+    clock.clearTimeout(channel.retry)
+    channel.retry = undefined
+    channel.unsubscribe?.()
   }
 
   /**
@@ -368,9 +432,11 @@ function createChannelTable({
     if (event.turnId === channel.adopted) {
       channel.adopted = undefined
       for (const member of channel.memberships.keys())
-        void attempt(member, () => member.invalidate())
+        attempt(member, () => member.invalidate()).catch((err: unknown) =>
+          logger.error({ err }, "channel.invalidate.failed")
+        )
     }
-    void adopt(channel)
+    adoptLater(channel)
   }
 
   function subscribe(scope: SessionScope, channel: Channel) {
@@ -379,7 +445,7 @@ function createChannelTable({
       onExecution(channel, event)
     )
     const unsubscribeTurns = adoption.subscribeTurns(scope, {
-      onTurn: () => void adopt(channel),
+      onTurn: () => adoptLater(channel),
       onError: (cause) => adopter(channel)?.[0].report(cause),
     })
     channel.unsubscribe = () => {
@@ -398,7 +464,7 @@ function createChannelTable({
       let channel = channels.get(key)
       const created = !channel
       if (!channel) {
-        channel = { memberships: new Map() }
+        channel = { memberships: new Map(), failures: 0, generation: 0 }
         channels.set(key, channel)
       }
       const joined = channel
@@ -406,7 +472,7 @@ function createChannelTable({
         joined.memberships.delete(member)
         if (joined.memberships.size === 0 && channels.get(key) === joined) {
           channels.delete(key)
-          joined.unsubscribe?.()
+          close(joined)
         }
       }
       if (joined.memberships.has(member)) return remove
@@ -518,11 +584,6 @@ type CreateChannelsOptions = Omit<
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
   runtime: Pick<ServerRuntime, "history">
-  /**
-   * The logger the membership machine is set up on; each membership writes
-   * on its own.
-   */
-  logger: Logger
   clock?: Clock
 }
 
@@ -562,7 +623,7 @@ type MembershipSignal =
  * Each stream it follows is a generation of its own, so a stream another one
  * replaced settles nothing.
  */
-function membershipMachine(logger: Logger, clock: Clock) {
+export function membershipMachine(logger: Logger, clock: Clock) {
   return ownerSetup<OwnerContext, MembershipSignal>(
     "membership",
     logger,
@@ -611,9 +672,9 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
     const abort = () => reject(signal.reason)
     signal.addEventListener("abort", abort, { once: true })
     if (signal.aborted) abort()
-    void work
-      .then(resolve, reject)
+    work
       .finally(() => signal.removeEventListener("abort", abort))
+      .then(resolve, reject)
   })
 }
 
@@ -714,7 +775,12 @@ export function createChannels(options: CreateChannelsOptions) {
       const { scope } = membership
       const { state, turnId } = coordinator.snapshot(scope)
       membership.joined({ turnId })
-      if (state === "waiting-for-input") void channels.recheck(scope)
+      if (state === "waiting-for-input")
+        channels
+          .recheck(scope)
+          .catch((err: unknown) =>
+            logger.error({ err }, "channel.adopt.failed")
+          )
       return resumed
     },
 
@@ -801,6 +867,11 @@ class Membership {
   #followedTurn: string | undefined
   /** The turn this member last asked its client to rebuild the view for. */
   #reloadedTurn: string | undefined
+  /**
+   * The turn whose stream an interrupt ended, which this member follows again
+   * once its coordinator settles whether it still runs.
+   */
+  #interrupted: string | undefined
   /**
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
@@ -908,10 +979,19 @@ class Membership {
     if (shown?.kind === "request-asked")
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
+    // The caller learns whether the event was sent; the declines run either
+    // way.
+    const decline = () =>
+      Promise.all([...declines].map((id) => this.#decline(id)))
     if (declines.size > 0)
-      void sent
-        .catch(() => undefined)
-        .then(() => Promise.all([...declines].map((id) => this.#decline(id))))
+      sent
+        .then(decline, decline)
+        .catch((err: unknown) =>
+          this.#options.logger.warn(
+            { err },
+            "membership.request.decline.failed"
+          )
+        )
     return sent
   }
 
@@ -991,7 +1071,7 @@ class Membership {
    */
   afterResponse(task: () => Promise<void>) {
     setTimeout(() => {
-      void task().catch((cause: unknown) => this.report(cause))
+      task().catch((cause: unknown) => this.report(cause))
     }, 0)
   }
 
@@ -1095,7 +1175,9 @@ class Membership {
     this.#rebuilding = false
     if (restarted ? !(await this.#reloadOnce(restarted)) : held) {
       this.joinChannel(false, true)
-      await this.#follow(true).catch(() => undefined)
+      await this.#follow(true).catch((err: unknown) =>
+        this.#options.logger.warn({ err }, "membership.follow.failed")
+      )
     }
   }
 
@@ -1235,12 +1317,20 @@ class Membership {
         options
       )
     } catch (cause) {
-      void entered?.then((release) => release())
+      entered
+        ?.then((release) => release())
+        .catch((err: unknown) =>
+          this.#options.logger.error({ err }, "membership.release.failed")
+        )
       // A Session the start found gone is over: nothing asks after it again.
       if (this.endIfGone(cause)) throw cause
       // No turn started, so no turn end asks the runtime for one it started
       // meanwhile, which may be what refused this one.
-      void this.#channels.recheck(this.#scope)
+      this.#channels
+        .recheck(this.#scope)
+        .catch((err: unknown) =>
+          this.#options.logger.error({ err }, "channel.adopt.failed")
+        )
       if (cause instanceof ServerTurnConflictError)
         this.afterResponse(() => this.catchUp())
       // A start the provider may have taken is shown to every member as the
@@ -1374,15 +1464,18 @@ class Membership {
           await this.#restate(turn.turnId).catch((cause: unknown) =>
             this.report(cause)
           )
+        await this.#followInterrupted()
       },
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
       gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
-    const row = this.#options.subscribeRow(
-      (row) => void this.#deliver({ kind: "session-info", row })
-    )
+    const row = this.#options.subscribeRow((row) => {
+      this.#deliver({ kind: "session-info", row }).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.row.failed")
+      )
+    })
     return () => {
       readings()
       capabilities()
@@ -1404,6 +1497,29 @@ class Membership {
       this.reissuePending()
   }
 
+  /**
+   * Follows the turn an interrupt cut this member's stream of again, from
+   * where the member stopped, once the coordinator's reconcile confirmed it
+   * running: every member keeps following a turn whose native link dropped,
+   * and none has to redial. Asked as the stream ends and at each move of the
+   * Session's execution, so a reconcile that lands first is not missed.
+   */
+  async #followInterrupted() {
+    const turnId = this.#interrupted
+    if (turnId === undefined) return
+    const current = this.#coordinator.snapshot(this.#scope)
+    // Still reconciling: the move that settles it asks again.
+    if (current.state === "uncertain") return
+    this.#interrupted = undefined
+    if (current.turnId !== turnId) return
+    await this.#follow(true, this.#sequence).catch((cause: unknown) =>
+      // A cursor the journal no longer holds leaves history the only way on.
+      cause instanceof ReplayCursorLostError
+        ? this.#invalidate()
+        : this.report(cause)
+    )
+  }
+
   #releaseCells() {
     this.#cells?.()
     this.#cells = undefined
@@ -1420,9 +1536,15 @@ class Membership {
       this.#offer(request)
   }
 
-  /** Reports a failure that has no request to answer. */
+  /**
+   * Reports a failure that has no request to answer. One the member cannot
+   * be shown is logged, so a report never fails in turn.
+   */
   async report(cause: unknown) {
-    if (!this.endIfGone(cause)) await this.emit({ kind: "error", cause })
+    if (this.endIfGone(cause)) return
+    await this.emit({ kind: "error", cause }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.report.failed")
+    )
   }
 
   /**
@@ -1440,7 +1562,9 @@ class Membership {
 
   /** Tells this member its Session is gone, and parts. */
   #end(cause: unknown) {
-    void this.emit({ kind: "error", cause }).catch(() => undefined)
+    this.emit({ kind: "error", cause }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.gone.failed")
+    )
     this.part()
   }
 
@@ -1583,15 +1707,19 @@ class Membership {
   /** Enters one subscribing task that holds until the returned release. */
   #enter() {
     return new Promise<() => void>((entered) => {
-      void this.#exclusive(
+      this.#exclusive(
         () => new Promise<void>((release) => entered(() => release()))
+      ).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.enter.failed")
       )
     })
   }
 
   /** Asks the member to reload the Session from history. */
   async #invalidate() {
-    await this.emit({ kind: "invalidated" }).catch(() => undefined)
+    await this.emit({ kind: "invalidated" }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.invalidate.failed")
+    )
   }
 
   /**
@@ -1639,15 +1767,18 @@ class Membership {
       return
     }
     this.#subscription = subscription
+    this.#interrupted = undefined
     // A restarted stream is the same segment, whose Stop stays acknowledged.
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
     this.#send({ type: "followed" })
-    void this.#pump(
+    this.#pump(
       subscription,
       this.#owner.generation,
       replayedCorrections,
       shown
+    ).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.stream.failed")
     )
   }
 
@@ -1670,11 +1801,13 @@ class Membership {
       },
     }
     let overflow: FanoutOverflowError | undefined
+    let interrupted = false
     try {
       await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
         this.#sequence = sequence
+        interrupted = isRedialableFailure(event)
         await this.emit({
           kind: "turn",
           stream,
@@ -1694,6 +1827,11 @@ class Membership {
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
     if (overflow) return this.#resync(subscription.turnId, overflow)
+    // An interrupt ends the stream, not the turn: its reconcile decides that.
+    if (interrupted && !this.#owner.stale(generation)) {
+      this.#interrupted = subscription.turnId
+      await this.#followInterrupted()
+    }
   }
 
   /**
@@ -1731,11 +1869,13 @@ class Membership {
     if (!open.requests.some(({ requestId }) => requestId === request.requestId))
       return
     this.#offered.add(request.requestId)
-    void this.emit({
+    this.emit({
       kind: "request-asked",
       request,
       ...(open.startedBy === undefined ? {} : { startedBy: open.startedBy }),
-    })
+    }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.offer.failed")
+    )
   }
 
   /**
@@ -1745,7 +1885,9 @@ class Membership {
   #withdraw(requestId: string) {
     this.#offered.delete(requestId)
     if (!this.#delivered.delete(requestId)) return
-    void this.emit({ kind: "request-withdrawn", requestId })
+    this.emit({ kind: "request-withdrawn", requestId }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.withdraw.failed")
+    )
   }
 
   #openRequest(requestId: string) {

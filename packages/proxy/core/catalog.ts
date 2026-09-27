@@ -125,10 +125,25 @@ export function createCatalog({
     return state === "idle" ? row : { ...row, status: EXECUTION_STATUS[state] }
   }
 
+  /**
+   * Runs one call on a Session: one that finds it gone ends it for every
+   * member, not only for whoever asked.
+   */
+  async function onSession<T>(target: SessionScope, call: () => Promise<T>) {
+    try {
+      return await call()
+    } catch (cause) {
+      coordinator.endIfGone(target, cause)
+      throw cause
+    }
+  }
+
   /** Reads one Session's row, which reaches each of its members. */
   async function read(target: SessionScope) {
     rows.rememberDetail(
-      await runtime.getSession(target.agentId, target.providerSessionId)
+      await onSession(target, () =>
+        runtime.getSession(target.agentId, target.providerSessionId)
+      )
     )
   }
 
@@ -180,21 +195,15 @@ export function createCatalog({
         (row) => listener(overlaid(row))
       )
       // The provider may have changed a listed row while nobody followed it.
-      if (hasSession(target))
-        void read(target).catch((cause: unknown) => {
-          failed(cause)
-          coordinator.endIfGone(target, cause)
-        })
+      if (hasSession(target)) void read(target).catch(failed)
       return unsubscribe
     },
 
     async update(target, patch) {
       if ("unread" in patch && !patch.unread)
         return markRead(target.agentId, target.sessionId)
-      await runtime.updateSession(
-        target.agentId,
-        target.providerSessionId,
-        patch
+      await onSession(target, () =>
+        runtime.updateSession(target.agentId, target.providerSessionId, patch)
       )
       await read(target)
       // Archiving and pinning move the Session's membership and order in the
@@ -206,7 +215,9 @@ export function createCatalog({
     markRead,
 
     async delete(target) {
-      await runtime.deleteSession(target.agentId, target.providerSessionId)
+      await onSession(target, () =>
+        runtime.deleteSession(target.agentId, target.providerSessionId)
+      )
       rows.forget(target.agentId, target.sessionId)
       invalidate()
     },

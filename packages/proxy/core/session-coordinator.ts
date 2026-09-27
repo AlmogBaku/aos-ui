@@ -313,7 +313,7 @@ type TurnHooks = {
  * to where the stream left the turn. An uncertain turn asks `hooks` to
  * reconcile it, and ends at its deadline with its outcome unknown.
  */
-function turnMachine(logger: Logger, clock: Clock, hooks: TurnHooks) {
+export function turnMachine(logger: Logger, clock: Clock, hooks: TurnHooks) {
   const turn = ownerSetup<TurnContext, TurnSignal>(
     "turn",
     logger,
@@ -838,7 +838,6 @@ class ClientAdmissions<T> {
     void result.catch(() => {
       if (this.#entries.get(key) === entry) this.#entries.delete(key)
     })
-    return result
   }
 }
 
@@ -1223,12 +1222,12 @@ export class SessionCoordinator {
       state === "waiting-for-input" ? existing : undefined
     )
     this.#discoveries.set(key, discovery)
-    void discovery
-      .finally(() => {
-        if (this.#discoveries.get(key) === discovery)
-          this.#discoveries.delete(key)
-      })
-      .catch(() => undefined)
+    // Its caller reports a failed discovery; this only forgets it.
+    const forget = () => {
+      if (this.#discoveries.get(key) === discovery)
+        this.#discoveries.delete(key)
+    }
+    discovery.then(forget, forget)
     return discovery
   }
 
@@ -1308,10 +1307,11 @@ export class SessionCoordinator {
     if (input.clientId === undefined) return create()
     const key = clientKey(principalId, agentId, input.clientId)
     const fingerprint = admissionFingerprint({ title: input.title })
-    return (
-      this.#creates.repeated(key, fingerprint) ??
-      this.#creates.remember(key, fingerprint, create())
-    )
+    const repeated = this.#creates.repeated(key, fingerprint)
+    if (repeated) return repeated
+    const created = create()
+    this.#creates.remember(key, fingerprint, created)
+    return created
   }
 
   start(
@@ -1371,9 +1371,27 @@ export class SessionCoordinator {
       return await this.#startTurn(scope, input, access, options, stage)
     } catch (error) {
       if (!(error instanceof ServerTurnUncertainError))
-        await stage?.cleanup().catch(() => undefined)
+        await this.#releaseStage(scope, stage)
       throw error
     }
+  }
+
+  /**
+   * Releases what a start staged. A release that fails is logged: the turn's
+   * outcome stands.
+   */
+  async #releaseStage(
+    scope: SessionScope,
+    stage: ServerAttachmentStage | undefined
+  ) {
+    await stage
+      ?.cleanup()
+      .catch((err: unknown) =>
+        this.#logger.warn(
+          { err, agentId: scope.agentId, sessionId: scope.sessionId },
+          "turn.stage.release.failed"
+        )
+      )
   }
 
   async #startTurn(
@@ -1538,11 +1556,11 @@ export class SessionCoordinator {
       this.#admit(scope, request.turnId)
     )
     this.#recoveries.set(key, recovery)
-    void recovery
-      .finally(() => {
-        if (this.#recoveries.get(key) === recovery) this.#recoveries.delete(key)
-      })
-      .catch(() => undefined)
+    // Its caller reports a failed recovery; this only forgets it.
+    const forget = () => {
+      if (this.#recoveries.get(key) === recovery) this.#recoveries.delete(key)
+    }
+    recovery.then(forget, forget)
     return recovery
   }
 
@@ -1626,7 +1644,7 @@ export class SessionCoordinator {
       kind: "turn-failed",
     })
     await owned?.onTerminal?.(failure)
-    await stage?.cleanup().catch(() => undefined)
+    await this.#releaseStage(scope, stage)
   }
 
   async #recoverExecution(
@@ -2173,7 +2191,8 @@ export class SessionCoordinator {
         kind: "turn-started",
       })
     }
-    void (async () => {
+    const { agentId, sessionId } = execution.scope
+    const readStream = async () => {
       try {
         for await (const raw of segment.handle.events) {
           // A turn whose outcome went unknown takes no more of its stream.
@@ -2195,8 +2214,12 @@ export class SessionCoordinator {
           )
             try {
               await segment.onTerminal?.(event)
-            } catch {
+            } catch (err) {
               // Resource cleanup must not rewrite the provider outcome.
+              this.#logger.warn(
+                { err, agentId, sessionId },
+                "turn.terminal.failed"
+              )
             }
           const sequenced = {
             sequence: ++segment.nextSequence,
@@ -2257,7 +2280,10 @@ export class SessionCoordinator {
         if (!segment.terminal && !turn.owner.stale(segment.generation))
           outcome((await settledNow(segment.handle.settled)) ? "ended" : "lost")
       }
-    })()
+    }
+    readStream().catch((err: unknown) =>
+      this.#logger.error({ err, agentId, sessionId }, "turn.stream.failed")
+    )
   }
 
   /**

@@ -145,7 +145,7 @@ type ConnectionSignal = { type: "initialized" } | { type: "closed" }
  * while it serves its browser, and closed once its socket closes or its
  * handshake fails. What it holds is on its stack, so every exit releases it.
  */
-function connectionMachine(logger: Logger, clock: Clock) {
+export function connectionMachine(logger: Logger, clock: Clock) {
   return ownerSetup<OwnerContext, ConnectionSignal>(
     "connection",
     logger,
