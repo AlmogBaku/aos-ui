@@ -93,7 +93,6 @@ describe("Hermes native submit outcomes", () => {
   it.each([
     [4001, "session-gone"],
     [4007, "session-gone"],
-    [-32602, "session-gone"],
     [4009, "busy"],
     [4090, "unknown"],
     [5070, "storage"],
@@ -624,7 +623,7 @@ describe("Hermes native interrupt", () => {
     })
   })
 
-  it.each([4001, 4007, -32602])(
+  it.each([4001, 4007])(
     "reports an authoritative %s rejection as a gone live Session",
     async (code) => {
       const { native, attachments } = runtime({

@@ -98,8 +98,12 @@ type Entry = {
 /** The full-jitter backoff a failed rebind is retried on. */
 export const REBIND_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 
-/** The codes Hermes rejects a call with when the Session it names is gone. */
-const SESSION_GONE_CODES = new Set([4001, 4007, -32602])
+/**
+ * The codes Hermes rejects a call with when the Session it names is gone. Its
+ * -32602 is not one: `_normalize_request` (tui_gateway/server.py) sends it for
+ * malformed params, never for a Session it does not hold.
+ */
+const SESSION_GONE_CODES = new Set([4001, 4007])
 
 /**
  * Hermes rejected a call because the Session it named is gone. On a live id

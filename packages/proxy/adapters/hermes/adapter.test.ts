@@ -2787,12 +2787,14 @@ describe("Hermes server adapter", () => {
   })
 
   it.each([
-    [4009, "session disconnect interrupt settling"],
+    [4009, "session disconnect interrupt settling", 3],
     // A live record reaped between lookup and recheck: the Session still exists.
-    [4007, "session no longer live; retry resume"],
+    [4007, "session no longer live; retry resume", 3],
+    // Hermes' answer to malformed params, never to a missing Session.
+    [-32602, "invalid params: expected an object", 1],
   ] as const)(
-    "reports a transient resume refusal %s Hermes never lifts as unavailable",
-    async (code, message) => {
+    "reports a resume refusal %s that is not a gone Session as unavailable",
+    async (code, message, attempts) => {
       const router = rpcRouter({
         "session.resume": async () => {
           throw new HermesRpcRejectedError(code, message)
@@ -2809,7 +2811,7 @@ describe("Hermes server adapter", () => {
           sessionId: "stored",
         })
       ).rejects.toBeInstanceOf(HermesUnavailableError)
-      expect(router.calls("session.resume")).toHaveLength(3)
+      expect(router.calls("session.resume")).toHaveLength(attempts)
     }
   )
 
