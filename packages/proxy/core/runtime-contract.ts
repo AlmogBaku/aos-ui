@@ -2,12 +2,12 @@
  * The failure contract every server runtime meets (ADR D3), proven once over
  * each adapter's own native fake (ADR D14). An adapter's `contract.test.ts`
  * calls `runServerRuntimeContract` with a harness that builds its runtime and
- * drives that fake. A row the adapter cannot express, or one a known bug still
- * fails, is named in `gaps` with its reason and left out.
+ * drives that fake. A row the native server has no concept for is named in
+ * `gaps` with its reason, and every run lists it as skipped with that reason.
  *
  * Test-only: the architecture guard keeps production code from importing it.
  */
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import {
@@ -65,7 +65,7 @@ export type RuntimeContractHarness = {
 export type RuntimeContractOptions = {
   /** The caller errors this runtime can report for a refused read. */
   callerErrors: readonly CallerError[]
-  /** Rows left out, each with why: a capability it lacks or the bug it has. */
+  /** Rows skipped, each with the concept its native server lacks. */
   gaps?: Partial<Record<RuntimeContractRow, string>>
 }
 
@@ -119,6 +119,16 @@ async function until<T>(clock: Clock, promise: Promise<T>): Promise<T> {
   return promise
 }
 
+/**
+ * A global transport that throws, so a harness that lost its fake's transport
+ * fails its rows instead of reaching a real server on a default address.
+ */
+function unreachable(name: string) {
+  return function unreachableTransport() {
+    throw new Error(`The runtime contract reached the global ${name}`)
+  }
+}
+
 /** Every event the handle streams, gathered as it arrives. */
 function collect(handle: ServerTurnHandle) {
   const events: TurnEvent[] = []
@@ -166,7 +176,10 @@ export function runServerRuntimeContract(
       close: () => Promise<void>
     ) => Promise<void>
   ) {
-    if (gaps[id] !== undefined) return
+    if (gaps[id] !== undefined) {
+      it.skip(`${title} (gap: ${gaps[id]})`)
+      return
+    }
     it(title, async () => {
       const clock = useFakeClock()
       const harness = await until(clock, Promise.resolve(createHarness()))
@@ -181,6 +194,24 @@ export function runServerRuntimeContract(
   }
 
   describe(`${name} server runtime contract`, () => {
+    beforeEach(() => {
+      // A vendored client reads the ready states off the global class.
+      const { CONNECTING, OPEN, CLOSING, CLOSED } = WebSocket
+      vi.stubGlobal("fetch", unreachable("fetch"))
+      vi.stubGlobal(
+        "WebSocket",
+        Object.assign(unreachable("WebSocket"), {
+          CONNECTING,
+          OPEN,
+          CLOSING,
+          CLOSED,
+        })
+      )
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
     row(
       "deletedSessionIsGone",
       "fails a turn on a natively deleted Session as gone",

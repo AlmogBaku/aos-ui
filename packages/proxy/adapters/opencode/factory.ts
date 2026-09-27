@@ -1,4 +1,4 @@
-import { createCoordinator } from "../create-coordinator"
+import { coordinatedRuntime } from "../create-coordinator"
 import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance, ServerTurnEngine } from "../../core/runtime"
 import type { RuntimeLimits } from "../../config"
@@ -24,13 +24,75 @@ export type OpenCodeRuntimeConfig = Readonly<{
   passwordFile: string
 }>
 
-export type OpenCodeRuntimeFactoryDependencies = RuntimeServices &
+/** What the OpenCode runtime is composed from, once config and files are read. */
+export type OpenCodeRuntimeParts = Pick<
+  RuntimeServices,
+  "logger" | "mcpServerOverrides"
+> &
   Readonly<{
-    clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
+    client: OpenCodeAdapterClient
+    creatorAgentId?: string
     /** Test-only override; production builds exactly one native turn engine. */
     turns?: ServerTurnEngine
-    creatorAgentId?: string
   }>
+
+export type OpenCodeRuntimeFactoryDependencies = RuntimeServices &
+  Pick<OpenCodeRuntimeParts, "creatorAgentId" | "turns"> &
+  Readonly<{
+    clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
+  }>
+
+/**
+ * The OpenCode runtime over a resolved client: what the factory serves and the
+ * runtime contract proves. `engine` is the native turn engine it built.
+ */
+export function composeOpenCodeRuntime({
+  client,
+  logger,
+  mcpServerOverrides,
+  creatorAgentId,
+  turns: turnsOverride,
+}: OpenCodeRuntimeParts) {
+  const interactions = new OpenCodeInteractions({
+    questions: client.sessions.questions,
+    permissions: client.sessions.permissions,
+  })
+  const { catalog } = client
+  const mcpAppClient = catalog.config
+    ? createMcpAppClient({ servers: mcpServerOverrides })
+    : undefined
+  const mcp =
+    mcpAppClient &&
+    createOpenCodeMcpCatalog(() => catalog.config!(), mcpAppClient, logger)
+  const turns =
+    turnsOverride ??
+    new OpenCodeTurnEngine(client, {
+      logger,
+      replies: interactions,
+      ...(mcp ? { mcpToolNames: mcp.names } : {}),
+    })
+  const engine = turns instanceof OpenCodeTurnEngine ? turns : undefined
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  const runtime = withMcpApps(
+    new OpenCodeServerAdapter({
+      client,
+      turns,
+      interactions,
+      creatorAgentId,
+      ...(engine ? { link: engine.link } : {}),
+      ...(mcp ? { mcp } : {}),
+    })
+  )
+  return {
+    runtime,
+    engine,
+    async close() {
+      engine?.close()
+      await runtime.close()
+      await mcpAppClient?.close()
+    },
+  }
+}
 
 export async function createOpenCodeRuntime(
   config: OpenCodeRuntimeConfig,
@@ -54,50 +116,16 @@ export async function createOpenCodeRuntime(
     username: config.username,
     password,
   })
-  const interactions = new OpenCodeInteractions({
-    questions: client.sessions.questions,
-    permissions: client.sessions.permissions,
-  })
-  const { catalog } = client
-  const mcpAppClient = catalog.config
-    ? createMcpAppClient({ servers: dependencies.mcpServerOverrides })
-    : undefined
-  const mcp =
-    mcpAppClient &&
-    createOpenCodeMcpCatalog(() => catalog.config!(), mcpAppClient, logger)
-  const turns =
-    dependencies.turns ??
-    new OpenCodeTurnEngine(client, {
-      logger,
-      replies: interactions,
-      ...(mcp ? { mcpToolNames: mcp.names } : {}),
-    })
-  const engine = turns instanceof OpenCodeTurnEngine ? turns : undefined
-  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
-  const runtime = withMcpApps(
-    new OpenCodeServerAdapter({
+  return coordinatedRuntime(
+    config.id,
+    composeOpenCodeRuntime({
       client,
-      turns,
-      interactions,
+      logger,
+      mcpServerOverrides: dependencies.mcpServerOverrides,
       creatorAgentId: dependencies.creatorAgentId,
-      ...(engine ? { link: engine.link } : {}),
-      ...(mcp ? { mcp } : {}),
-    })
+      turns: dependencies.turns,
+    }),
+    limits,
+    logger
   )
-  const sessions = createCoordinator(runtime, limits, logger)
-  let closePromise: Promise<void> | undefined
-  return {
-    id: config.id,
-    runtime,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        engine?.close()
-        await runtime.close()
-        await mcpAppClient?.close()
-      })
-      return closePromise
-    },
-  }
 }

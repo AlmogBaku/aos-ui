@@ -1,4 +1,4 @@
-import { createCoordinator } from "../create-coordinator"
+import { coordinatedRuntime } from "../create-coordinator"
 import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance } from "../../core/runtime"
 import type { RuntimeConfig, RuntimeLimits } from "../../config"
@@ -16,6 +16,50 @@ type HermesRuntimeConfig = RuntimeConfig & { kind: "hermes" }
 
 export type HermesRuntimeFactoryDependencies = RuntimeServices & {
   transportFactory?: (options: HermesGatewayOptions) => HermesRpcTransport
+}
+
+/** What the Hermes runtime is composed from, once config and files are read. */
+export type HermesRuntimeParts = Pick<
+  RuntimeServices,
+  "logger" | "mcpServerOverrides"
+> &
+  Readonly<{ transport: HermesRpcTransport; sessionIdleMs: number }>
+
+/**
+ * The Hermes runtime over a resolved transport: what the factory serves and
+ * the runtime contract proves.
+ */
+export function composeHermesRuntime({
+  transport,
+  logger,
+  sessionIdleMs,
+  mcpServerOverrides,
+}: HermesRuntimeParts) {
+  // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
+  // is not up yet is retried in the background instead of failing whichever
+  // request happens to arrive first.
+  if (transport instanceof HermesGateway)
+    transport
+      .connect()
+      .catch((err: unknown) =>
+        logger.warn({ err }, "hermes.transport.connect_failed")
+      )
+  const mcpAppClient = createMcpAppClient({ servers: mcpServerOverrides })
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  const runtime = withMcpApps(
+    new HermesServerAdapter(transport, {
+      sessionIdleMs,
+      log: logger,
+      mcp: { client: mcpAppClient, logger },
+    })
+  )
+  return {
+    runtime,
+    async close() {
+      await runtime.close()
+      await mcpAppClient.close()
+    },
+  }
 }
 
 export async function createHermesRuntime(
@@ -42,39 +86,15 @@ export async function createHermesRuntime(
     }),
     log: logger,
   })
-  // Eager dial: the gateway owns its redial ladder from here, so a Hermes that
-  // is not up yet is retried in the background instead of failing whichever
-  // request happens to arrive first.
-  if (transport instanceof HermesGateway)
-    transport
-      .connect()
-      .catch((err: unknown) =>
-        logger.warn({ err }, "hermes.transport.connect_failed")
-      )
-  const mcpAppClient = createMcpAppClient({
-    servers: dependencies.mcpServerOverrides,
-  })
-  // Wrapped before the coordinator, which runs turns through `runtime.runs`.
-  const runtime = withMcpApps(
-    new HermesServerAdapter(transport, {
+  return coordinatedRuntime(
+    config.id,
+    composeHermesRuntime({
+      transport,
+      logger,
       sessionIdleMs: config.sessionIdleMs,
-      log: logger,
-      mcp: { client: mcpAppClient, logger },
-    })
+      mcpServerOverrides: dependencies.mcpServerOverrides,
+    }),
+    limits,
+    logger
   )
-  const sessions = createCoordinator(runtime, limits, logger)
-  let closePromise: Promise<void> | undefined
-  return {
-    id: config.id,
-    runtime,
-    sessions,
-    close() {
-      closePromise ??= Promise.resolve().then(async () => {
-        sessions.close()
-        await runtime.close()
-        await mcpAppClient.close()
-      })
-      return closePromise
-    },
-  }
 }
