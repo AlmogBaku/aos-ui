@@ -68,6 +68,7 @@ import {
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
+import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
 import {
   matchLocalCommand,
   menuSlashCommands,
@@ -852,6 +853,10 @@ const Composer: FC<{
     selectHistoryEntries(s.thread.messages)
   )
   const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
+  const queueControls = queueControlsExtras.use(
+    (extras) => extras.queueControls,
+    undefined
+  )
 
   useAuiEvent("threads.selectionChanged", () => {
     submissionLockRef.current = false
@@ -1054,6 +1059,27 @@ const Composer: FC<{
 
       if (clearUndoRef.current) clearUndoRef.current = null
 
+      // Up from an empty composer edits the last queued message first; sent
+      // prompts come back once the queue is empty.
+      if (
+        event.key === "ArrowUp" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !(triggerPopover && triggerPopover.getActiveAria() !== null) &&
+        queueControls
+      ) {
+        const { text, attachments, queue } = aui.composer.getState()
+        const last = queue.at(-1)
+        if (!text && attachments.length === 0 && last) {
+          event.preventDefault()
+          historyBrowseRef.current = null
+          setQueueEditing({ id: last.id, returnTo: "composer" })
+          return
+        }
+      }
+
       if (
         (event.key === "ArrowUp" || event.key === "ArrowDown") &&
         !event.shiftKey &&
@@ -1239,6 +1265,7 @@ const Composer: FC<{
       features,
       hasPendingInteraction,
       labels.steeringFailed,
+      queueControls,
       rememberUnconfirmed,
       restoreDraft,
       submitOrdinary,

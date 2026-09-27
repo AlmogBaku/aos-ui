@@ -2071,6 +2071,31 @@ describe("the queue row editor", () => {
     ).toHaveFocus()
     expect(fake.cancel).not.toHaveBeenCalled()
   })
+
+  it("opens the last queued message with Up from an empty composer, and returns there after", async () => {
+    const { user, input, region } = await queued("First")
+    await user.type(input, "Second{Enter}")
+    await user.keyboard("{ArrowUp}")
+    const editor = within(region).getByRole("textbox", {
+      name: "Edit queued message",
+    })
+    expect(editor).toHaveValue("Second")
+    expect(editor).toHaveFocus()
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveFocus())
+  })
+
+  it("restores a just-cleared draft on Up before opening the queue", async () => {
+    const { user, input, region } = await queued("Queued")
+    await user.type(input, "Draft")
+    await user.keyboard("{Escape}{Escape}")
+    await waitFor(() => expect(input).toHaveValue(""))
+    await user.keyboard("{ArrowUp}")
+    await waitFor(() => expect(input).toHaveValue("Draft"))
+    expect(
+      within(region).queryByRole("textbox", { name: "Edit queued message" })
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe("useAcpRuntime clientId", () => {
