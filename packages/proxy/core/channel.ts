@@ -1236,7 +1236,12 @@ class Membership {
       true,
       replay?.reset ? "reset" : positioned ? position.after : undefined,
       replay?.corrections
-    ).catch(() => null)
+    ).catch((cause: unknown) => {
+      // Only a cursor the journal lost is resynced; a Session gone or
+      // unavailable answers so.
+      if (!(cause instanceof ReplayCursorLostError)) throw cause
+      return null
+    })
     if (restarted !== undefined && followed !== restarted) {
       // A view rebuilt from the start does not act on `resync`, and this one
       // lacks the rest of its turn: have it rebuild again once this response

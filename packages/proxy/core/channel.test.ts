@@ -11,6 +11,7 @@ import {
 import type { MemberAct, MemberConnection, Middleware } from "./member"
 import {
   ServerRequestStaleError,
+  ServerSessionNotFoundError,
   ServerTurnConflictError,
   type ServerTurnListener,
   type SessionScope,
@@ -854,5 +855,40 @@ describe("a membership's declines", () => {
       "answered:approval-1:cancelled:undefined",
       "withdrawn:approval-1",
     ])
+  })
+})
+
+describe("a membership's resume", () => {
+  it("answers a Session its follow finds gone as gone, not resync", async () => {
+    const gone = new ServerSessionNotFoundError()
+    const coordinator = {
+      snapshot: () => ({ state: "running", turnId: "turn-1" }),
+      subscribeScope: () => () => undefined,
+      recover: () => Promise.reject(gone),
+      endIfGone: (_scope: SessionScope, cause: unknown) => cause === gone,
+    } as unknown as SessionCoordinator
+    const { logger } = captureLogs()
+    const membership = createChannels({
+      coordinator,
+      runtime: NO_HISTORY,
+      logger,
+    }).join(
+      {
+        principal: { id: GUEST, role: "guest" },
+        middleware: [],
+        connection: { send: async () => undefined, live: () => true },
+      },
+      SCOPE,
+      {
+        membershipId: "subscriber-1",
+        logger,
+        describe: () => ({ code: "failed", message: "failed" }),
+        subscribeRow: () => () => undefined,
+      }
+    )
+
+    await expect(
+      membership.resume({ turnId: "turn-1", after: 2 })
+    ).rejects.toBe(gone)
   })
 })
