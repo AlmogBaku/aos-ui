@@ -73,6 +73,27 @@ describe("createLink", () => {
     link.dispose()
   })
 
+  it("reports the first dial's own failure when a drop is heard as that dial starts", async () => {
+    const clock = useFakeClock()
+    const refused = new Error("refused")
+    const onError = vi.fn()
+    const link = createLink({
+      dial: async (_signal, lost) => {
+        lost(new Error("socket closed"))
+        throw refused
+      },
+      publicError: () => undefined,
+      onError,
+      logger: captureLogs().logger,
+      clock: defaultClock,
+      bindings: { link: "native" },
+    })
+
+    await clock.advance(0)
+    expect(onError.mock.calls).toEqual([[refused]])
+    link.dispose()
+  })
+
   it("stays lost on refused credentials until its upstream turns ready, warning once per kind", async () => {
     const clock = useFakeClock()
     vi.spyOn(Math, "random").mockReturnValue(0.5)
