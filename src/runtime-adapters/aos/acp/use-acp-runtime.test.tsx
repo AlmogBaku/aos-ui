@@ -1050,6 +1050,109 @@ describe("useAcpRuntime", () => {
       )
     })
   })
+
+  it("holds the next queued send until the accepted turn ends", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake, { enableMessageQueue: true })
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+    await act(async () => {
+      for (const text of ["First", "Second"])
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text }],
+        })
+    })
+    // The proxy accepts the first send before its turn reports running.
+    await act(async () => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
+
+    const accepted = { sequence: 0, turnId: "run-2" }
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" }, accepted)
+    })
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      fake.emit(
+        {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: "end_turn",
+        },
+        accepted
+      )
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "Second" }],
+        expect.objectContaining({})
+      )
+    })
+    expect(fake.prompt).toHaveBeenCalledTimes(2)
+  })
+
+  it("sends the next queued turn once the accepted one fails before it runs, even ahead of the reply", async () => {
+    const fake = createFakeConnection()
+    const { result } = await mount(fake, { enableMessageQueue: true })
+    let accept!: (reply: { messageId: string }) => void
+    fake.prompt.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve
+        })
+    )
+    act(() => {
+      fake.emit({ sessionUpdate: "state_update", state: "running" })
+    })
+    await act(async () => {
+      for (const text of ["First", "Second"])
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text }],
+        })
+    })
+    await act(async () => {
+      fake.emit({
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      fake.emit(
+        {
+          sessionUpdate: "state_update",
+          state: "idle",
+          stopReason: AOS_STOP_REASONS.error,
+        },
+        { sequence: 0, turnId: "run-2" }
+      )
+    })
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      accept({ messageId: "u1" })
+    })
+    await waitFor(() => {
+      expect(fake.prompt).toHaveBeenLastCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "Second" }],
+        expect.objectContaining({})
+      )
+    })
+  })
 })
 
 describe("useAcpRuntime approvals", () => {

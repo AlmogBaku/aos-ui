@@ -655,7 +655,9 @@ function createAcpController({
     },
     subscribe: (listener: () => void) => {
       listeners.add(listener)
-      return () => listeners.delete(listener)
+      return () => {
+        listeners.delete(listener)
+      }
     },
     getVersion: () => version,
     getState: () => shown,
@@ -760,22 +762,75 @@ function createAcpController({
 
 type AcpController = ReturnType<typeof createAcpController>
 
-/** Holds the queue while a turn owns the Session. */
+const isBusy = ({ status }: ProjectorExecution) =>
+  status === "running" || status === "waiting-for-input"
+
+/**
+ * The send the queue dispatched and waits on: the turn the Session last
+ * reported as it went out, whether a turn has run since, and whether the
+ * provider has accepted it yet.
+ */
+type Dispatch = {
+  readonly before: string | undefined
+  ran: boolean
+  accepted: boolean
+}
+
+/**
+ * Holds the queue while a turn owns the Session. The proxy answers a prompt
+ * as it accepts the turn, before the turn reports running, so a dispatched
+ * send holds the queue until it is accepted and its turn has settled, in
+ * whichever order the two arrive. Only a refused send releases it at once.
+ * The queue follows the controller directly: a render would see the turn
+ * start only after the next send had already gone out.
+ */
 function createQueue(controller: AcpController) {
-  let busyEdges = 0
+  const execution = () => controller.getState().execution
+  let busy = false
+  let dispatch: Dispatch | undefined
+  // A turn that failed before it ran, or ran while a replay held the telling,
+  // settles under a turn the Session had not reported before.
+  const settle = () => {
+    if (!dispatch?.accepted || busy) return
+    if (!dispatch.ran && execution().turnId === dispatch.before) return
+    dispatch = undefined
+    queue.notifyIdle()
+  }
   const queue: MessageQueueController = createMessageQueue({
     run: (message) => {
-      const edgesAtDispatch = busyEdges
-      // The queue drops the item before dispatching and stays busy until an
-      // idle edge releases it. A send that never becomes busy — a rejection,
-      // or a run the provider refused — has to be released here instead.
-      const releaseIfNoRun = () => {
-        if (busyEdges === edgesAtDispatch) queue.notifyIdle()
+      const sent: Dispatch = {
+        before: execution().turnId,
+        ran: false,
+        accepted: false,
       }
-      controller.send(message).then(releaseIfNoRun, releaseIfNoRun)
+      dispatch = sent
+      controller.send(message).then(
+        () => {
+          sent.accepted = true
+          settle()
+        },
+        () => {
+          dispatch = undefined
+          if (!busy) queue.notifyIdle()
+        }
+      )
     },
   })
-  return { queue, markBusy: () => (busyEdges += 1) }
+  const observe = () => {
+    const wasBusy = busy
+    busy = isBusy(execution())
+    if (busy) {
+      if (!wasBusy) queue.notifyBusy()
+      if (dispatch) dispatch.ran = true
+    } else if (dispatch) settle()
+    else if (wasBusy) queue.notifyIdle()
+  }
+  /** Follows the Session's execution until the returned call stops it. */
+  const watch = () => {
+    observe()
+    return controller.subscribe(observe)
+  }
+  return { queue, watch }
 }
 
 const threadMessages = new WeakMap<ThreadMessageLike, ThreadMessage>()
@@ -857,17 +912,7 @@ export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
     () => EMPTY_QUEUE_ITEMS
   )
 
-  const status = controller.getState().execution.status
-  const busy = status === "running" || status === "waiting-for-input"
-  useEffect(() => {
-    if (!binding) return
-    if (busy) {
-      binding.markBusy()
-      binding.queue.notifyBusy()
-    } else {
-      binding.queue.notifyIdle()
-    }
-  }, [binding, busy])
+  useEffect(() => binding?.watch(), [binding])
 
   const adapters = options.adapters
   const store = useMemo<ExternalStoreAdapter<ThreadMessage>>(() => {
