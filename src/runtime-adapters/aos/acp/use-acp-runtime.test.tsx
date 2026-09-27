@@ -341,7 +341,7 @@ describe("useAcpRuntime", () => {
     expect(onStateChange).toHaveBeenCalledTimes(2)
   })
 
-  it("keeps the transcript in view until a resync's replay settles, and after a refused one", async () => {
+  it("keeps the transcript in view until a resync's replay settles, and after a refused or dropped one", async () => {
     const fake = createFakeConnection()
     const { result, rerender } = renderHook(
       ({ isDisabled }: { isDisabled: boolean }) =>
@@ -364,6 +364,12 @@ describe("useAcpRuntime", () => {
 
     await act(() =>
       fake.resync(Promise.reject(new Error("refused"))).catch(() => {})
+    )
+    expect(visible(result.current)).toEqual(prior)
+    // The socket drops after the replay resent only its first turn.
+    fake.replayOnResume([textUpdate("user_message", "u1", "Ship it")])
+    await act(() =>
+      fake.resync(Promise.reject(new Error("dropped"))).catch(() => {})
     )
     expect(visible(result.current)).toEqual(prior)
 

@@ -308,7 +308,8 @@ function createAcpController({
   /**
    * The turns the latest replay replaces, until it drops them: at its first
    * update, or as it completes if it carried none. A refused replay drops
-   * nothing, so the transcript stays as the provider last replayed it.
+   * nothing, and one that fails partway is discarded, so the transcript stays
+   * as the provider last replayed it until a later replay settles.
    */
   let replacing: ReadonlySet<string> | undefined
 
@@ -435,6 +436,7 @@ function createAcpController({
         // The replay carries the Session whole: it replaces the transcript,
         // and a fresh cursor comes with it.
         replay: () => {
+          const prior = state
           const replaced = replacedTurns(state)
           replacing = replaced
           replaying += 1
@@ -445,6 +447,11 @@ function createAcpController({
             if (replacing === replaced) {
               replacing = undefined
               if (replayed) commit(clearTranscript(state, replaced))
+            } else if (!replayed && isBound(next, generation)) {
+              // Only part of the Session arrived. The approvals the replay
+              // outlived lay over the transcript it began from.
+              commit(prior)
+              takeApprovals()
             }
             transcripts += 1
             const after = connection.history(next)
