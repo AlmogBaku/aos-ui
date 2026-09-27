@@ -9,7 +9,7 @@
  */
 
 import { boundedQueue, Deadline, defaultClock } from "../../../lifecycle"
-import { ADAPTER_CALL_MS } from "../../core/limits"
+import { ADAPTER_CALL_MS, LINK_WAIT_MS } from "../../core/limits"
 import type { LinkState, ServerLink } from "../../core/link"
 import {
   isGatewayWebSocketUrl,
@@ -180,7 +180,7 @@ const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
  * an open socket, and the call's own deadline starts only at its write, so a
  * request stays well inside the admission deadline it serves.
  */
-const REQUEST_QUEUE = { limit: 256, queue: 1024, waitMs: 10_000 }
+const REQUEST_QUEUE = { limit: 256, queue: 1024, waitMs: LINK_WAIT_MS }
 /** Hermes' close for a refused credential (`hermes_cli/web_routers/chat_ws.py`). */
 const AUTH_CLOSE_CODE = 4401
 /** Hermes' close for a host or origin denial, or chat not allowed: an outage. */

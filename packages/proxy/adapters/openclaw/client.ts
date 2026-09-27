@@ -20,16 +20,13 @@ import {
 
 import { Deadline, defaultClock, type Logger } from "../../../lifecycle"
 import { failureOf } from "../../core/failures"
-import { ADAPTER_CALL_MS } from "../../core/limits"
+import { ADAPTER_CALL_MS, LINK_WAIT_MS } from "../../core/limits"
 import {
   createLink,
   type Link,
   type LinkState,
   type ServerLink,
 } from "../../core/link"
-
-/** The bound on a caller waiting for the link, so its call after it ends inside a 30 s admission. */
-const START_MS = 10_000
 
 /**
  * The calls that change native state: one sent and never answered may have
@@ -382,7 +379,7 @@ export class OpenClawClient {
       return Promise.reject(
         this.#failure ?? new OpenClawClientUnavailableError()
       )
-    const deadline = new Deadline(START_MS)
+    const deadline = new Deadline(LINK_WAIT_MS)
     const ready = new Promise<void>((resolve, reject) => {
       const waiter = { resolve, reject }
       this.#waiters.add(waiter)
