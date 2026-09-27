@@ -79,8 +79,11 @@ export function createAcpService(options: AcpServiceOptions) {
   const clock = options.clock ?? defaultClock
   /** The connections open on this listener, which the health gauges count. */
   const connections = new Set<string>()
-  /** The connections still in their handshake, at most HANDSHAKE_BUDGET. */
-  const handshaking = new Set<string>()
+  /**
+   * The connections still in their handshake, at most HANDSHAKE_BUDGET, oldest
+   * first, each with the close its deadline would give it.
+   */
+  const handshaking = new Map<string, () => void>()
 
   async function authorizeUpgrade(
     request: Request
@@ -96,11 +99,13 @@ export function createAcpService(options: AcpServiceOptions) {
   }
 
   function open(upgrade: AcpUpgrade, peer: AcpPeer) {
-    // A socket past the handshake budget is refused before anything is built
-    // for it, so sockets that never sign in cannot fill the listener.
+    // Past the handshake budget the oldest socket still in its handshake is
+    // closed early, so sockets that never sign in shorten only their own life
+    // and a new socket always gets in.
     if (handshaking.size >= HANDSHAKE_BUDGET) {
-      peer.close(1013, "Handshake capacity exceeded")
-      return { receive: () => undefined, close: () => undefined }
+      const [[oldest, expire]] = handshaking
+      handshaking.delete(oldest)
+      expire()
     }
     const context = options.connection(
       upgrade.connectionId,
@@ -138,16 +143,11 @@ export function createAcpService(options: AcpServiceOptions) {
       handshakeDeadline.clear()
     }
     context.handshakeComplete = handshakeEnded
-    handshakeDeadline.signal.addEventListener(
-      "abort",
-      () => {
-        socket.socket.close(4408, "Handshake deadline")
-      },
-      { once: true }
-    )
+    const expire = () => socket.socket.close(4408, "Handshake deadline")
+    handshakeDeadline.signal.addEventListener("abort", expire, { once: true })
     prepared.accept(socket.socket)
     connections.add(upgrade.connectionId)
-    handshaking.add(upgrade.connectionId)
+    handshaking.set(upgrade.connectionId, expire)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {

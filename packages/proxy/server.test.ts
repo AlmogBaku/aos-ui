@@ -343,7 +343,7 @@ describe("Bun proxy server lifecycle", () => {
     expect(guestSocket.receive).not.toHaveBeenCalled()
   })
 
-  it("refuses a socket past the handshake budget without taking a peer a signed-in member needs", async () => {
+  it("evicts the oldest unsigned socket past the handshake budget, so a member always gets a peer", async () => {
     useFakeClock()
     const origin = "https://aos.example.test"
     const contexts: AcpConnectionContext[] = []
@@ -394,6 +394,7 @@ describe("Bun proxy server lifecycle", () => {
     ) => Promise<Response | undefined>
     const websocket = served!.websocket as {
       open(peer: unknown): void
+      message(peer: unknown, raw: string): void
       close(peer: unknown): void
     }
     const connect = async () => {
@@ -408,26 +409,50 @@ describe("Bun proxy server lifecycle", () => {
         }
       )
       const closed: number[] = []
+      let answer!: (raw: string) => void
+      const answered = new Promise<string>((resolve) => (answer = resolve))
       // Bun runs a peer's close handler inside its close call.
       const peer = {
         data,
-        send: vi.fn(),
+        send: vi.fn((raw: string) => {
+          answer(raw)
+          return raw.length
+        }),
         close: vi.fn((code: number) => {
           closed.push(code)
           websocket.close(peer)
         }),
       }
       websocket.open(peer)
-      return closed
+      return { closed, peer, answered }
     }
 
+    const flood = []
+    for (let socket = 0; socket < HANDSHAKE_BUDGET; socket += 1)
+      flood.push(await connect())
     const member = await connect()
-    for (let flood = 1; flood < HANDSHAKE_BUDGET; flood += 1) await connect()
-    expect(await connect()).toEqual([1013])
-    // The member signs in, which completes its handshake.
-    contexts[0]!.handshakeComplete!()
-    expect(await connect()).toEqual([])
-    expect(member).toEqual([])
+    expect(flood.map((socket) => socket.closed)).toEqual([
+      [4408],
+      ...flood.slice(1).map(() => []),
+    ])
+    websocket.message(
+      member.peer,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: 2, info: { name: "guest", version: "0" } },
+      })
+    )
+    expect(JSON.parse(await member.answered)).toMatchObject({
+      id: 1,
+      result: { protocolVersion: 2 },
+    })
+    // The member signs in, which frees its handshake slot without an eviction.
+    contexts[HANDSHAKE_BUDGET]!.handshakeComplete!()
+    expect((await connect()).closed).toEqual([])
+    expect(flood[1]!.closed).toEqual([])
+    expect(member.closed).toEqual([])
   })
 
   it("contains socket handler failures and closes the peer only once", async () => {

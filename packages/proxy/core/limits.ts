@@ -68,8 +68,8 @@ export const HANDSHAKE_DEADLINE_MS = 15_000
 
 /**
  * The sockets one listener holds in their handshake at once, whatever its peer
- * cap: past it a new socket is closed with 1013, so sockets that never sign in
- * hold at most this many of the peers signed-in members use.
+ * cap: past it the oldest is closed with 4408 and the new one gets in, so
+ * sockets that never sign in hold at most this many of the peers members use.
  */
 export const HANDSHAKE_BUDGET = 32
 
