@@ -540,7 +540,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         release()
         throw error
       }
-      void (async () => {
+      ;(async () => {
         for await (const value of source) {
           if (released) return
           consider(validateOpenCodeLiveEvent(value, sessionId))
@@ -641,7 +641,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     const { input, replies, text } = validateInput(scope, candidate)
     // Warm the MCP tool names while the turn is admitted, so its first tool
     // call already reads under its canonical name.
-    void this.#options.mcpToolNames
+    this.#options.mcpToolNames
       ?.load(scope.agentId)
       .catch((err: unknown) =>
         this.#logger.warn(
@@ -921,7 +921,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   #pump(run: ActiveTurn) {
-    void (async () => {
+    ;(async () => {
       try {
         for await (const value of run.source!) {
           if (run.abandoned || run.nativeTerminal) return
@@ -968,7 +968,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       run.reconcileAgain = true
       return
     }
-    void this.#reconcile(run).catch((error) =>
+    this.#reconcile(run).catch((error) =>
       this.#reconciliationFailed(run, error)
     )
   }
