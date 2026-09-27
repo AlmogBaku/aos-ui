@@ -6,6 +6,7 @@ import {
   SessionTranscriptionResponseSchema,
 } from "../../protocol"
 import type { ProxyAppOptions } from "../app"
+import { MAXIMUM_STAGE_REQUEST_BYTES } from "../core/attachment-stages"
 import type { ServerAttachmentStages, ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
@@ -62,7 +63,7 @@ export function registerContentRoutes(
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
     const body = SessionAttachmentStageRequestSchema.safeParse(
-      await boundedJson(context.req.raw, 35_500_000)
+      await boundedJson(context.req.raw, MAXIMUM_STAGE_REQUEST_BYTES)
     )
     if (!body.success) return errorResponse("invalid_request", 400)
     const agentId = context.req.param("agentId")
