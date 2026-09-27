@@ -1671,13 +1671,15 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(order()).toEqual(["B", "A", "C"]))
     expect(within(region).getByText("Moved to 2 of 3")).toBeInTheDocument()
 
-    const remove = within(rowC!).getByRole("button", {
-      name: "Remove queued message",
+    // The More button opens its menu on a plain arrow key, not on Alt+Arrow.
+    const more = within(rowC!).getByRole("button", {
+      name: "Queued message actions",
     })
-    remove.focus()
+    more.focus()
     await user.keyboard("{Alt>}{ArrowUp}{/Alt}")
     await waitFor(() => expect(order()).toEqual(["B", "C", "A"]))
-    expect(remove).toHaveFocus()
+    expect(more).toHaveFocus()
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
 
     // A message leaving is no move, so the last announcement goes quiet.
     await user.click(

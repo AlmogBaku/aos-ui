@@ -377,6 +377,10 @@ function QueueRow({
         <Menu.Root>
           <Menu.Trigger
             ref={moreRef}
+            // An arrow key opens the menu; Alt+Arrow belongs to the row's move.
+            onKeyDown={(event) => {
+              if (event.altKey) event.preventBaseUIHandler()
+            }}
             render={
               <TooltipIconButton
                 type="button"
