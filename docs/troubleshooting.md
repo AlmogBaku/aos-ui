@@ -197,12 +197,12 @@ Match browser log lines to proxy log lines by the `sessionId`, `turnId`, and `re
 
 If you have log queries that filter on these field values, update them:
 
-| Old value | New value | Where |
-|---|---|---|
-| `lane` | `role` | membership role field |
-| `subscriberId` | `membershipId` | membership id on turn and subscription events |
-| `acp.room.failed` | `channel.failed` | channel setup failure |
-| `acp.fanout.detached` | `membership.detached` | subscriber fell behind its queue bounds |
+| Old value             | New value             | Where                                         |
+| --------------------- | --------------------- | --------------------------------------------- |
+| `lane`                | `role`                | membership role field                         |
+| `subscriberId`        | `membershipId`        | membership id on turn and subscription events |
+| `acp.room.failed`     | `channel.failed`      | channel setup failure                         |
+| `acp.fanout.detached` | `membership.detached` | subscriber fell behind its queue bounds       |
 
 ## Collect useful diagnostics
 

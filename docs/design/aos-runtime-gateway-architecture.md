@@ -84,7 +84,6 @@ ServerRuntime / ServerTurnEngine  (core/runtime.ts:67-100, 192-280)
 Hermes | OpenClaw | OpenCode  (native transport)
 ```
 
-
 ```mermaid
 flowchart TB
   OC["Operator client (browser tab)<br/>Assistant UI · ACP client · one connection per browser tab · one owner per resumed Session"]
@@ -280,16 +279,16 @@ For adapter obligations and the five lifetimes see
 
 **Coordinator key facts** (`core/session-coordinator.ts`):
 
-| Fact                                                                    | Location                                |
-| ----------------------------------------------------------------------- | --------------------------------------- |
-| Scope key: `agentId + "\0" + sessionId`                                 | `:218`                                  |
-| Idempotent re-admission (duplicate `turnId` replays from journal)       | `:511-528`                              |
-| Conflict (different turn on non-idle scope → `ServerTurnConflictError`) | `:543-549`                              |
-| Single-flight (`#admissions` set blocks concurrent starts)              | `:551-552,578-580`                      |
+| Fact                                                                                                                     | Location           |
+| ------------------------------------------------------------------------------------------------------------------------ | ------------------ |
+| Scope key: `agentId + "\0" + sessionId`                                                                                  | `:218`             |
+| Idempotent re-admission (duplicate `turnId` replays from journal)                                                        | `:511-528`         |
+| Conflict (different turn on non-idle scope → `ServerTurnConflictError`)                                                  | `:543-549`         |
+| Single-flight (`#admissions` set blocks concurrent starts)                                                               | `:551-552,578-580` |
 | Per-role capacity: coordinator `maxActiveExecutions`; guest quota `guestActiveExecutions` (config key, guest middleware) | `config.ts:95-105` |
-| Controllers set; `#withControl` serialises stop+steer                   | `:514,565,746,797`                      |
-| Steer dedup: 256 per execution, oldest evicted                          | `:216,821-824`                          |
-| Stop states: `running` → `stopping` → terminal                          | `:740-769`                              |
+| Controllers set; `#withControl` serialises stop+steer                                                                    | `:514,565,746,797` |
+| Steer dedup: 256 per execution, oldest evicted                                                                           | `:216,821-824`     |
+| Stop states: `running` → `stopping` → terminal                                                                           | `:740-769`         |
 
 **Adapter engine** (`core/runtime.ts:67-100`): `start`, `recover`, `discover?`
 (post-process-loss), `stop`/`steer?` on handle, and adapter-private

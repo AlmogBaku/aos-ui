@@ -271,14 +271,14 @@ resubmitting user intent.
 Every failure crossing the adapter boundary is one of three kinds, or a caller error
 (`packages/proxy/core/failures.ts`):
 
-| Kind                              | Meaning                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| `gone`                            | What the request named no longer exists; nothing brings it back.                 |
-| `unavailable`                     | Nothing happened; the same request may succeed later.                            |
-| `uncertain`                       | A write may have landed; reconcile before trying it again.                       |
-| `invalid_request`                 | The caller supplied a bad input; a retry would meet it again.                    |
-| `revision_conflict`               | A concurrent write changed the state the request assumed.                        |
-| `runtime_authentication_required` | The credential is absent or rejected; re-authenticate before retrying.           |
+| Kind                              | Meaning                                                                |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| `gone`                            | What the request named no longer exists; nothing brings it back.       |
+| `unavailable`                     | Nothing happened; the same request may succeed later.                  |
+| `uncertain`                       | A write may have landed; reconcile before trying it again.             |
+| `invalid_request`                 | The caller supplied a bad input; a retry would meet it again.          |
+| `revision_conflict`               | A concurrent write changed the state the request assumed.              |
+| `runtime_authentication_required` | The credential is absent or rejected; re-authenticate before retrying. |
 
 A read is never uncertain: an adapter call past `ADAPTER_CALL_MS`
 (`packages/proxy/core/limits.ts`, 15 s) is `unavailable` for a read and

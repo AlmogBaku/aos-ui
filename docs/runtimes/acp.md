@@ -31,10 +31,10 @@ recovery before resuming sessions.
 
 Close codes the proxy sends and the browser handles:
 
-| Code   | Meaning                                                      | Browser action                |
-| ------ | ------------------------------------------------------------ | ----------------------------- |
-| `1008` | Policy violation (expired credential, rate or size exceeded) | No reconnect; ends connection |
-| `1013` | Proxy at capacity                                            | Backs off 30–60 s with jitter |
+| Code   | Meaning                                                         | Browser action                |
+| ------ | --------------------------------------------------------------- | ----------------------------- |
+| `1008` | Policy violation (expired credential, rate or size exceeded)    | No reconnect; ends connection |
+| `1013` | Proxy at capacity                                               | Backs off 30–60 s with jitter |
 | `4408` | Proxy handshake deadline: `initialize` not received within 15 s | No reconnect; ends connection |
 
 Any other code triggers a normal reconnect.
@@ -254,17 +254,17 @@ still carries `truncated: true` when the reading stopped at a reach bound.
 
 ## Run stream
 
-| ACP event             | Meaning                            |
-| --------------------- | ---------------------------------- |
-| `agent_message_chunk` | Streaming assistant prose          |
-| `agent_thought_chunk` | Streaming reasoning                |
-| `tool_call_update`    | Tool lifecycle and argument deltas |
-| `state_update`        | Run state transitions              |
-| `plan_update`         | Session Todos in `_meta.aos.todos` |
-| `usage_update`        | Context window usage               |
-| `session_info_update`       | Session metadata changes                                      |
+| ACP event                   | Meaning                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `agent_message_chunk`       | Streaming assistant prose                                                                                |
+| `agent_thought_chunk`       | Streaming reasoning                                                                                      |
+| `tool_call_update`          | Tool lifecycle and argument deltas                                                                       |
+| `state_update`              | Run state transitions                                                                                    |
+| `plan_update`               | Session Todos in `_meta.aos.todos`                                                                       |
+| `usage_update`              | Context window usage                                                                                     |
+| `session_info_update`       | Session metadata changes                                                                                 |
 | `available_commands_update` | Slash commands and capabilities in `_meta.aos.capabilities` (`AosAvailableCommandsMetaSchema`, `acp.ts`) |
-| `config_option_update`      | Current model and effort-level selection                      |
+| `config_option_update`      | Current model and effort-level selection                                                                 |
 
 `usage_update` carries the used and total token counts in its own fields, and
 the provider's attribution and provenance in `_meta.aos` (`source`,
@@ -300,13 +300,13 @@ as a `running` update followed by an `_aos_error` idle update for the same
 
 ### Requests (client → server, expect a response)
 
-| Method                       | Purpose                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------ |
-| `_aos/session/update`        | Set title, archived, or unread (exactly one intent per call; `acp.ts`)         |
-| `_aos/session/steer`         | Deliver a text correction to the active run                                    |
+| Method                       | Purpose                                                                                                                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_aos/session/update`        | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
+| `_aos/session/steer`         | Deliver a text correction to the active run                                                                                                                                                    |
 | `_aos/session/focus`         | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
-| `_aos/agents/list`           | Fetch the agent catalog                                                        |
-| `_aos/agents/set_visibility` | Mutate agent visibility                                                        |
+| `_aos/agents/list`           | Fetch the agent catalog                                                                                                                                                                        |
+| `_aos/agents/set_visibility` | Mutate agent visibility                                                                                                                                                                        |
 
 ### Notifications (no response expected)
 
@@ -438,16 +438,16 @@ The machine name an error travels as — the `message` of a public reply, and th
 
 ## REST remains for bytes and discovery
 
-| Method | Path                                                                    | Purpose                  |
-| ------ | ----------------------------------------------------------------------- | ------------------------ |
+| Method | Path                                                                    | Purpose                                                     |
+| ------ | ----------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `GET`  | `/api/aos/v1/healthz`                                                   | Liveness probe (always 200; body `{status, links, gauges}`) |
-| `GET`  | `/api/aos/v1/readyz`                                                    | Readiness probe          |
-| `GET`  | `/api/aos/v1/runtime`                                                   | Runtime discovery        |
-| `POST` | `/api/aos/v1/agents/:agentId/sessions/:sessionId/attachments/stage`     | Stage an attachment      |
-| `GET`  | `/api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` | Download an Artifact     |
-| `POST` | `/api/aos/v1/agents/:agentId/audio/transcribe`                          | Audio → text             |
-| `POST` | `/api/aos/v1/agents/:agentId/audio/speak`                               | Text → audio             |
-| `POST` | `/api/aos/v1/guest-invitations`                                         | Issue a guest invitation |
+| `GET`  | `/api/aos/v1/readyz`                                                    | Readiness probe                                             |
+| `GET`  | `/api/aos/v1/runtime`                                                   | Runtime discovery                                           |
+| `POST` | `/api/aos/v1/agents/:agentId/sessions/:sessionId/attachments/stage`     | Stage an attachment                                         |
+| `GET`  | `/api/aos/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId` | Download an Artifact                                        |
+| `POST` | `/api/aos/v1/agents/:agentId/audio/transcribe`                          | Audio → text                                                |
+| `POST` | `/api/aos/v1/agents/:agentId/audio/speak`                               | Text → audio                                                |
+| `POST` | `/api/aos/v1/guest-invitations`                                         | Issue a guest invitation                                    |
 
 Guest-listener mirrors under `/api/guest/v1/` (authenticated with the invitation
 token, scoped to the invited Agent and Session):
