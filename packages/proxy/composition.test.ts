@@ -69,7 +69,6 @@ async function configuration(withGuest = false) {
             publicOrigin: "https://guest.example.test",
             invitations: {
               keys: [{ id: "guest-current", secretFile: invitationKey! }],
-              ttlSeconds: 300,
               clockSkewSeconds: 0,
             },
           },

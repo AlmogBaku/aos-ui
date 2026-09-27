@@ -28,7 +28,6 @@ guest:
     keys:
       - id: current
         secretFile: /run/secrets/guest-invite-signing-key
-    ttlSeconds: 259200
     clockSkewSeconds: 0
 limits:
   activeExecutions: 256

@@ -269,7 +269,7 @@ const HISTORY = {
 /** The longest delay one timer holds; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1
 
-function invitationService(ttlSeconds = 259_200) {
+function invitationService() {
   return createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
@@ -277,15 +277,19 @@ function invitationService(ttlSeconds = 259_200) {
     runtimeId: RUNTIME_ID,
     keys: [{ id: "current", secret: KEY }],
     now: () => NOW,
-    ttlSeconds,
   })
 }
 
-async function invite(service: GuestInvitationService, ref = REF) {
+async function invite(
+  service: GuestInvitationService,
+  ref = REF,
+  expiresInSeconds?: number
+) {
   return (
     await service.issue({
       agentId: AGENT,
       ref,
+      ...(expiresInSeconds ? { expiresInSeconds } : {}),
       firstTurn: { instruction: INSTRUCTION },
     })
   ).token
@@ -423,8 +427,6 @@ type HarnessOptions = {
   ) => Promise<CreateElicitationResponse>
   /** The Session's usage and model readings are readable, as an operator's are. */
   readings?: boolean
-  /** The longest invitation the service issues; three days by default. */
-  ttlSeconds?: number
   /** Whether a first send creates the invited Session; it does by default. */
   creates?: boolean
   /** How the runtime resolves a public Session id; none resolves by default. */
@@ -533,7 +535,7 @@ function harness(options: HarnessOptions = {}) {
   }
   const scheduled: Array<{ delayMs: number; task: () => void }> = []
   const clock = { now: NOW }
-  const invitations = invitationService(options.ttlSeconds)
+  const invitations = invitationService()
   const logs = captureLogs()
   const listener: GuestAcpServiceOptions = {
     logger: logs.logger,
@@ -1760,9 +1762,9 @@ describe("guest ACP listener", () => {
   )
 
   it("keeps an invitation longer than one timer open until it expires", async () => {
-    const test = harness({ existing: true, ttlSeconds: 2_592_000 })
+    const test = harness({ existing: true })
     await test.initialize()
-    await test.login(await invite(test.invitations))
+    await test.login(await invite(test.invitations, REF, 2_592_000))
     await test.resume(REF)
     let closed = false
     void test.closed.then(() => {

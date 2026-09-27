@@ -238,7 +238,6 @@ export async function createConfiguredProxy(
           deploymentId: config.deploymentId,
           runtimeId: config.runtime.id,
           keys: invitationKeys,
-          ttlSeconds: config.guest.invitations.ttlSeconds,
           clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
           ...clock,
         })

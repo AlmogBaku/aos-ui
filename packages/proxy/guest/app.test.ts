@@ -36,7 +36,6 @@ function invitations() {
     runtimeId: "hermes-primary",
     keys: [{ id: "current", secret: KEY }],
     now: () => NOW,
-    ttlSeconds: 259_200,
   })
 }
 

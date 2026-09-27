@@ -379,12 +379,6 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
     appliesWhen: "guest",
   },
   {
-    path: ["guest", "invitations", "ttlSeconds"],
-    suffix: "GUEST_INVITATIONS_TTL_SECONDS",
-    type: "int",
-    appliesWhen: "guest",
-  },
-  {
     path: ["guest", "invitations", "clockSkewSeconds"],
     suffix: "GUEST_INVITATIONS_CLOCK_SKEW_SECONDS",
     type: "int",

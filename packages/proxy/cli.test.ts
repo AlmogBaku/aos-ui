@@ -73,7 +73,6 @@ async function proxyConfig() {
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "current", secretFile: invitationKey }],
-          ttlSeconds: 259_200,
           clockSkewSeconds: 0,
         },
       },

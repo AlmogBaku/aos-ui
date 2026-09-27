@@ -301,7 +301,6 @@ export const ProxyConfigSchema = z
         publicOrigin: PublicOriginSchema,
         invitations: z.strictObject({
           keys: UniqueSecretKeysSchema,
-          ttlSeconds: z.number().int().min(60).max(2_592_000).default(259_200),
           clockSkewSeconds: z.number().int().min(0).max(60).default(0),
         }),
       })

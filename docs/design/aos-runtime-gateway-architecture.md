@@ -483,8 +483,7 @@ global cap (`config.ts:166-172`).
 - port; wide hosts require `exposure: "private-container"`, `:72-82`);
   `publicOrigin` (HTTPS or loopback HTTP); `keys` (1–3 HS256 secret keys,
   `:84-93`); `limits` (`:95-105`); `runtime` (discriminated union `kind ∈
-{hermes,openclaw,opencode}`, `:107-143`); `guest.invitations.ttlSeconds`
-  (default 259 200 s, `:159`); `guest` must use a separate origin and listener
+{hermes,openclaw,opencode}`, `:107-143`); `guest` must use a separate origin and listener
   (`:166-184`); `shutdownGraceMs`.
 
 `parseProxyConfig` stays opaque for library callers: it rejects the whole

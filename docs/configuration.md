@@ -112,8 +112,10 @@ When `guest` is configured, its `invitations` block accepts:
 | Field              | Default  | Meaning                                                       |
 | ------------------ | -------- | ------------------------------------------------------------- |
 | `keys`             | required | Array of up to 3 `{id, secretFile}` objects for key rotation. |
-| `ttlSeconds`       | `259200` | Invitation lifetime in seconds (60–2 592 000).                |
 | `clockSkewSeconds` | `0`      | Accepted clock skew when validating tokens (0–60 s).          |
+
+Each invitation carries its own lifetime: the `expiresIn` it was issued with, or
+72 hours when it names none.
 
 The operator listener intentionally has no application authentication. Network
 access grants full operator access. Keep it on loopback or a trusted private
@@ -159,7 +161,6 @@ default; a minimal local file contains only those three fields.
 | `log.level`                          | `info`      |
 | `shutdownGraceMs`                    | `5000`      |
 | `runtime.sessionIdleMs` (Hermes)     | `300000`    |
-| `guest.invitations.ttlSeconds`       | `259200`    |
 | `guest.invitations.clockSkewSeconds` | `0`         |
 | `voice.*.mode`                       | `fallback`  |
 | `voice.*.timeoutMs`                  | `60000`     |
@@ -212,7 +213,6 @@ schema validation.
 | `AOS_UI_PROXY_GUEST_LISTEN_PORT`                    | `guest.listen.port`                  | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_LISTEN_EXPOSURE`                | `guest.listen.exposure`              | string | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_PUBLIC_ORIGIN`                  | `guest.publicOrigin`                 | string | only when file has `guest` block |
-| `AOS_UI_PROXY_GUEST_INVITATIONS_TTL_SECONDS`        | `guest.invitations.ttlSeconds`       | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_GUEST_INVITATIONS_CLOCK_SKEW_SECONDS` | `guest.invitations.clockSkewSeconds` | int    | only when file has `guest` block |
 | `AOS_UI_PROXY_PUSH_STATE_DIR`                       | `push.stateDir`                      | string | may create `push` block          |
 | `AOS_UI_PROXY_PUSH_VAPID_SUBJECT`                   | `push.vapid.subject`                 | string | may create `push` block          |
@@ -256,7 +256,7 @@ name appears in parentheses after the message. File-check failures (not a
 regular file, group- or world-writable, owned by another user, too large) name
 the path and the constraint that failed.
 
-Fields removed in recent releases that are now stale keys in an upgraded deployment: `guest.lane`, `artifactHtmlAssetOrigins`, and any separate replay-limit fields under `limits`. Replay bounds use `limits.subscriberEvents` and `limits.subscriberBytes` with no separate keys. Remove them from your configuration file before starting the upgraded proxy.
+Fields removed in recent releases that are now stale keys in an upgraded deployment: `guest.lane`, `guest.invitations.ttlSeconds`, `artifactHtmlAssetOrigins`, and any separate replay-limit fields under `limits`. Replay bounds use `limits.subscriberEvents` and `limits.subscriberBytes` with no separate keys. Remove them from your configuration file before starting the upgraded proxy.
 
 Every logged error carries its name, message, native `code` or `reason`, and
 cause chain, never its stack. Before a line is written, the log masks every

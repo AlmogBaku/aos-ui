@@ -560,7 +560,6 @@ const EVERY_OVERRIDE: Record<string, string> = {
   GUEST_LISTEN_PORT: "4101",
   GUEST_LISTEN_EXPOSURE: "private-container",
   GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
-  GUEST_INVITATIONS_TTL_SECONDS: "259200",
   GUEST_INVITATIONS_CLOCK_SKEW_SECONDS: "0",
   PUSH_STATE_DIR: "/var/lib/aos-ui/push",
   PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
@@ -858,7 +857,6 @@ runtime:
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "current", secretFile: "/run/secrets/invitation-key" }],
-          ttlSeconds: 259_200,
           clockSkewSeconds: 0,
         },
       },

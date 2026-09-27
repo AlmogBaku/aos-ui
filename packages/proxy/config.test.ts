@@ -168,7 +168,6 @@ describe("proxy configuration and secret boundary", () => {
         publicOrigin: "https://guest.example.test",
         invitations: {
           keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-          ttlSeconds: 300,
           clockSkewSeconds: 0,
         },
       },
@@ -178,7 +177,6 @@ describe("proxy configuration and secret boundary", () => {
       publicOrigin: "https://guest.example.test",
       invitations: {
         keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-        ttlSeconds: 300,
         clockSkewSeconds: 0,
       },
     })
@@ -202,7 +200,6 @@ describe("proxy configuration and secret boundary", () => {
             ...guest,
             invitations: {
               keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
-              ttlSeconds: 300,
               clockSkewSeconds: 0,
             },
           },

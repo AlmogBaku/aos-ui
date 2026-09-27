@@ -41,7 +41,6 @@ export async function createInvitationLink(
     deploymentId: config.deploymentId,
     runtimeId: config.runtime.id,
     keys,
-    ttlSeconds: config.guest.invitations.ttlSeconds,
     clockSkewSeconds: config.guest.invitations.clockSkewSeconds,
     ...(dependencies.clock ? { now: dependencies.clock } : {}),
   } satisfies GuestInvitationOptions

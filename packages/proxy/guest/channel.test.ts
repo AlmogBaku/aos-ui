@@ -72,7 +72,6 @@ async function invite(test: Operator) {
     deploymentId: "deployment-a",
     runtimeId: test.runtimeInstance.id,
     keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
-    ttlSeconds: 259_200,
   })
   const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   return { invitations, token }

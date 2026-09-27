@@ -104,7 +104,6 @@ async function connectGuest(proxy: Proxy): Promise<Member> {
     deploymentId: "deployment-a",
     runtimeId: proxy.runtimeInstance.id,
     keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
-    ttlSeconds: 259_200,
   })
   const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   const context = createGuestConnection(
