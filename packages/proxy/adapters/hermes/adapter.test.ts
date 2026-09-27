@@ -1259,6 +1259,7 @@ describe("Hermes server adapter", () => {
           title: "aos-invite:guest_ref",
           source: "aos-ui",
           close_on_disconnect: false,
+          follow_profile_config: true,
           messages: [
             {
               role: "user",

@@ -711,6 +711,9 @@ export class HermesServerAdapter implements ServerRuntime {
         title,
         source: HERMES_SESSION_SOURCE,
         close_on_disconnect: false,
+        // Hermes writes a seeded row at create time with the launch profile's
+        // model, not this Agent's; following the profile keeps the Agent's.
+        follow_profile_config: true,
         ...(create.firstTurnInstruction === undefined
           ? {}
           : {
