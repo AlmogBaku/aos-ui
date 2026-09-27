@@ -115,10 +115,13 @@ function projectMessage(
           part.state.status === "pending"
             ? parseToolInput(part.state.input)
             : publicJsonValue(part.state.input)
-        if (!args || typeof args !== "object" || Array.isArray(args)) continue
+        const safeArgs: { [key: string]: JsonValue } =
+          args !== null && typeof args === "object" && !Array.isArray(args)
+            ? (args as { [key: string]: JsonValue })
+            : {}
         const call = canonicalOpenCodeToolCall(
           part.name,
-          args as { [key: string]: JsonValue },
+          safeArgs,
           part.state.status === "completed"
             ? publicJsonValue(part.state.result)
             : undefined,

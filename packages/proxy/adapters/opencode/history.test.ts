@@ -64,6 +64,14 @@ describe("OpenCode history projection", () => {
                 error: { name: "PermissionDenied" },
               },
             },
+            {
+              id: "scalar-tool",
+              type: "tool",
+              name: "echo",
+              time: { created: 2_000 },
+              // Pending input whose JSON value is a scalar (not an object): kept with {} args.
+              state: { status: "pending", input: '"hello"' },
+            },
           ],
         },
         {
@@ -142,6 +150,14 @@ describe("OpenCode history projection", () => {
             args: { safe: false },
             argsText: '{"safe":false}',
             isError: true,
+          },
+          {
+            type: "tool-call",
+            toolCallId: "scalar-tool",
+            toolName: "echo",
+            startedAt: "1970-01-01T00:33:20.000Z",
+            args: {},
+            argsText: '"hello"',
           },
         ],
       },
