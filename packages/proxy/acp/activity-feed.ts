@@ -130,7 +130,9 @@ export function createActivityFeed({
     const unsubscribe = coordinator.subscribeExecutions((event) =>
       push(activityOf(event))
     )
-    hydrate().catch((err: unknown) => logger?.warn({ err }, "activity.feed.hydrate_failed"))
+    hydrate().catch((err: unknown) =>
+      logger?.warn({ err }, "activity.feed.hydrate_failed")
+    )
 
     return () => {
       closed = true

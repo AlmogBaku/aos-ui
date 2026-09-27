@@ -772,7 +772,11 @@ export class HermesInteractions {
     this.#deferred.clear()
     this.#listeners.clear()
     for (const held of [...this.#retainers.values()])
-      held.then((release) => release()).catch((err: unknown) => this.#log?.warn({ err }, "hermes.interactions.release_failed"))
+      held
+        .then((release) => release())
+        .catch((err: unknown) =>
+          this.#log?.warn({ err }, "hermes.interactions.release_failed")
+        )
     this.#retainers.clear()
   }
 
@@ -1153,7 +1157,11 @@ export class HermesInteractions {
     )
       return
     this.#retainers.delete(key)
-    held.then((release) => release()).catch((err: unknown) => this.#log?.warn({ err }, "hermes.interactions.release_failed"))
+    held
+      .then((release) => release())
+      .catch((err: unknown) =>
+        this.#log?.warn({ err }, "hermes.interactions.release_failed")
+      )
   }
 
   #notify(scope: HermesInteractionScope, request: PendingRequest) {

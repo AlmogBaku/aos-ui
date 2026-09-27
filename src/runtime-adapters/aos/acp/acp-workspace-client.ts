@@ -1,4 +1,9 @@
-import { backoffDelay, defaultClock, type Clock, type Logger } from "@aos/lifecycle"
+import {
+  backoffDelay,
+  defaultClock,
+  type Clock,
+  type Logger,
+} from "@aos/lifecycle"
 import { tabAcpLogger } from "./log"
 
 // Lazy logger for background error reporting.
@@ -266,7 +271,9 @@ export function createAcpWorkspaceClient({
     if (relistTimer !== undefined) clock.clearTimeout(relistTimer)
     relistTimer = clock.setTimeout(() => {
       relistTimer = undefined
-      reliableListSessions().catch((err: unknown) => clientLog().warn({ err }, "sessions.relist_failed"))
+      reliableListSessions().catch((err: unknown) =>
+        clientLog().warn({ err }, "sessions.relist_failed")
+      )
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }
 

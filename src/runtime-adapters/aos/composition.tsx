@@ -346,7 +346,9 @@ function ReadyAosRuntimeProvider({
       if (timer !== undefined) clearTimeout(timer)
       timer = setTimeout(() => {
         timer = undefined
-        refreshTitle().catch((err: unknown) => compositionLog().warn({ err }, "session.title_refresh_failed"))
+        refreshTitle().catch((err: unknown) =>
+          compositionLog().warn({ err }, "session.title_refresh_failed")
+        )
       }, SESSION_TITLE_REFRESH_DEBOUNCE_MS)
     }
     const unsubscribe = client.subscribeSessionInvalidation(

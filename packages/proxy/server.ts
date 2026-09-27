@@ -312,7 +312,9 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
 
   if (options.installSignalHandlers !== false) {
     onSignal = () => {
-      shutdown().catch((err: unknown) => logger?.warn({ err }, "server.shutdown.failed"))
+      shutdown().catch((err: unknown) =>
+        logger?.warn({ err }, "server.shutdown.failed")
+      )
     }
     process.once("SIGINT", onSignal)
     process.once("SIGTERM", onSignal)

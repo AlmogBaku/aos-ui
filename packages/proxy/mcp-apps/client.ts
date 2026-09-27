@@ -86,7 +86,11 @@ function endpointOf(key: string): McpAppEndpoint {
 }
 
 export function createMcpAppClient(
-  options: { fetch?: typeof fetch; servers?: McpServerOverrides; logger?: Logger } = {}
+  options: {
+    fetch?: typeof fetch
+    servers?: McpServerOverrides
+    logger?: Logger
+  } = {}
 ): McpAppClient {
   const { logger } = options
   const overrides: McpServerOverrides = options.servers ?? new Map()
@@ -98,7 +102,9 @@ export function createMcpAppClient(
     clearTimeout(pooled.timer)
     pooled.client
       .then((client) => client.close())
-      .catch((err: unknown) => logger?.warn({ err }, "mcp_app.client.close_failed"))
+      .catch((err: unknown) =>
+        logger?.warn({ err }, "mcp_app.client.close_failed")
+      )
   }
 
   async function open({ name, url }: McpAppEndpoint) {

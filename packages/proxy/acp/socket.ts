@@ -106,7 +106,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     const id = requestIdOf(data)
     if (id !== undefined) {
       const { code, message } = authenticationRequired()
-      options.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } }))
+      options.send(
+        JSON.stringify({ jsonrpc: "2.0", id, error: { code, message } })
+      )
     }
     closePeer(1008, "ACP credential lapsed")
   }

@@ -66,7 +66,9 @@ export class PipedSocket extends EventTarget {
     else if (this.#inbound)
       this.#inbound
         .write(JSON.parse(data) as AnyWireMessage)
-        .catch((err: unknown) => socketLog().warn({ err }, "socket.write_failed"))
+        .catch((err: unknown) =>
+          socketLog().warn({ err }, "socket.write_failed")
+        )
   }
 
   close(code = 1000, reason = "") {
@@ -106,11 +108,15 @@ export class PipedSocket extends EventTarget {
     if (this.#inbound)
       this.#inbound
         .close()
-        .catch((err: unknown) => socketLog().warn({ err }, "socket.close_failed"))
+        .catch((err: unknown) =>
+          socketLog().warn({ err }, "socket.close_failed")
+        )
     if (this.#outbound)
       this.#outbound
         .cancel()
-        .catch((err: unknown) => socketLog().warn({ err }, "socket.cancel_failed"))
+        .catch((err: unknown) =>
+          socketLog().warn({ err }, "socket.cancel_failed")
+        )
     this.dispatchEvent(new CloseEvent("close", { code, reason, wasClean }))
   }
 }

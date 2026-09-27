@@ -109,7 +109,9 @@ export function createReadState({
     clearPending()
     const handle = schedule(() => {
       pending = undefined
-      write(target, forced).catch((err: unknown) => logger?.warn({ err }, "read.state.write_failed"))
+      write(target, forced).catch((err: unknown) =>
+        logger?.warn({ err }, "read.state.write_failed")
+      )
     }, delayMs)
     pending = { handle, target, forced }
   }

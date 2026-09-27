@@ -140,7 +140,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         return emptyError(401)
       const release = routes.audioBudget.acquire(identity.ref)
       if (!release) {
-        if (context.req.raw.body) context.req.raw.body.cancel().catch(() => undefined)
+        if (context.req.raw.body)
+          context.req.raw.body.cancel().catch(() => undefined)
         return routes.projectedError(
           identity,
           agentId,
@@ -192,7 +193,8 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
       return emptyError(401)
     const release = routes.audioBudget.acquire(identity.ref)
     if (!release) {
-      if (context.req.raw.body) context.req.raw.body.cancel().catch(() => undefined)
+      if (context.req.raw.body)
+        context.req.raw.body.cancel().catch(() => undefined)
       return routes.projectedError(
         identity,
         agentId,

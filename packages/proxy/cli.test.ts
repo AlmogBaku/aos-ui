@@ -532,7 +532,9 @@ describe("process handlers", () => {
     const warns = logs.records().filter(({ level }) => level === "warn")
     expect(warns).toHaveLength(1)
     expect(warns[0]!.message).toBe("proxy.unhandled_rejection")
-    expect(warns[0]!.fields.err).toMatchObject({ message: "something went wrong" })
+    expect(warns[0]!.fields.err).toMatchObject({
+      message: "something went wrong",
+    })
   })
 
   it("uncaughtException logs one error line and exits 1", () => {

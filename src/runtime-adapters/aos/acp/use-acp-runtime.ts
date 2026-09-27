@@ -470,7 +470,9 @@ function createAcpController({
       // say what the Session holds now.
       connection.subscribeNotification(sessionInvalidated, (params) => {
         if (isRecord(params) && params.sessionId === bound)
-          replaySession(next, generation).catch((err: unknown) => runtimeLog().warn({ err }, "session.replay_failed"))
+          replaySession(next, generation).catch((err: unknown) =>
+            runtimeLog().warn({ err }, "session.replay_failed")
+          )
       }),
       // The provider no longer holds the Session, so nothing runs in it again.
       subscribeAosNotification(
@@ -486,7 +488,9 @@ function createAcpController({
     unsubscribe = () => {
       for (const off of subscriptions) off()
     }
-    replaySession(next, generation).catch((err: unknown) => runtimeLog().warn({ err }, "session.replay_failed"))
+    replaySession(next, generation).catch((err: unknown) =>
+      runtimeLog().warn({ err }, "session.replay_failed")
+    )
   }
 
   /** The bound Session, creating one for a local draft's first turn. */
@@ -620,7 +624,8 @@ function createAcpController({
       notify()
     },
     // A failed handshake surfaces through the connection's status.
-    (err: unknown) => runtimeLog().warn({ err }, "acp.connection.initialized_failed")
+    (err: unknown) =>
+      runtimeLog().warn({ err }, "acp.connection.initialized_failed")
   )
 
   return {

@@ -192,10 +192,11 @@ function recheckSettlement(
   delayMs: number,
   rereads = QUEUED_START_REREADS
 ) {
-  const timer = setTimeout(
-    () => { settleIfIdle(host, active, rereads).catch((err: unknown) => host.log.warn({ err }, "hermes.run.settle_if_idle_failed")) },
-    delayMs
-  )
+  const timer = setTimeout(() => {
+    settleIfIdle(host, active, rereads).catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.settle_if_idle_failed")
+    )
+  }, delayMs)
   // A re-read is reconciliation, never a reason to keep the process alive.
   if (typeof timer !== "number") timer.unref()
 }
@@ -354,7 +355,9 @@ export function watchSettling(host: TurnEngineHost, active: ActiveTurn) {
   host.settling.get(key)?.settle()
   const watcher = settlingWatcher(active)
   host.settling.set(key, watcher)
-  awaitSettled(host, key, watcher).catch((err: unknown) => host.log.warn({ err }, "hermes.run.await_settled_failed"))
+  awaitSettled(host, key, watcher).catch((err: unknown) =>
+    host.log.warn({ err }, "hermes.run.await_settled_failed")
+  )
 }
 
 async function awaitSettled(
@@ -380,7 +383,11 @@ async function awaitSettled(
     if (await resolvedWithin(watcher.done, SETTLING_POLL_MS)) break
   }
   watcher.settle()
-  retainer.then((release) => release?.()).catch((err: unknown) => host.log.warn({ err }, "hermes.run.retainer_release_failed"))
+  retainer
+    .then((release) => release?.())
+    .catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.retainer_release_failed")
+    )
   if (host.settling.get(key) === watcher) host.settling.delete(key)
   safelyUnsubscribe(active.unsubscribe)
 }
