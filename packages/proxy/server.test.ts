@@ -343,6 +343,67 @@ describe("Bun proxy server lifecycle", () => {
     expect(guestSocket.receive).not.toHaveBeenCalled()
   })
 
+  it("holds no peer slot for a socket its service closed while opening it", async () => {
+    const socket = { receive: vi.fn(), close: vi.fn() }
+    let refuse = true
+    let served: Record<string, unknown> | undefined
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/aos/v1/acp",
+          service: {
+            authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
+            open: vi.fn((_upgrade, peer) => {
+              if (refuse) peer.close(1008, "Refused")
+              return socket
+            }),
+          },
+          maxPeers: 1,
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: unknown
+    ) => Promise<Response | undefined>
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      close(peer: unknown): void
+    }
+    const connect = async () => {
+      let data: unknown
+      await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+        upgrade(_request: Request, options: { data: unknown }) {
+          data = options.data
+          return true
+        },
+      })
+      // Bun runs a peer's close handler inside its close call.
+      const peer = {
+        data,
+        send: vi.fn(),
+        close: vi.fn(() => websocket.close(peer)),
+      }
+      websocket.open(peer)
+      return peer
+    }
+
+    await connect()
+    expect(socket.close).toHaveBeenCalledTimes(1)
+    refuse = false
+    const next = await connect()
+    expect(next.close).not.toHaveBeenCalled()
+  })
+
   it("evicts the oldest unsigned socket past the handshake budget, so a member always gets a peer", async () => {
     useFakeClock()
     const origin = "https://aos.example.test"
@@ -370,6 +431,7 @@ describe("Bun proxy server lifecycle", () => {
                 connectionId,
                 principalId,
                 role: "guest",
+                logger: { warn: () => undefined },
               } as unknown as AcpConnectionContext
               contexts.push(context)
               return context

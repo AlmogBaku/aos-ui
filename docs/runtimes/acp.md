@@ -31,11 +31,11 @@ recovery before resuming sessions.
 
 Close codes the proxy sends and the browser handles:
 
-| Code   | Meaning                                                         | Browser action                |
-| ------ | --------------------------------------------------------------- | ----------------------------- |
-| `1008` | Policy violation (expired credential, rate or size exceeded)    | No reconnect; ends connection |
-| `1013` | Proxy at capacity                                               | Backs off 30–60 s with jitter |
-| `4408` | Proxy handshake deadline: `initialize` not received within 15 s | No reconnect; ends connection |
+| Code   | Meaning                                                                                                                                            | Browser action                |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `1008` | Policy violation (expired credential, rate or size exceeded)                                                                                       | No reconnect; ends connection |
+| `1013` | Proxy at capacity                                                                                                                                  | Backs off 30–60 s with jitter |
+| `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
 
 Any other code triggers a normal reconnect.
 

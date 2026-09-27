@@ -81,7 +81,7 @@ export function createAcpService(options: AcpServiceOptions) {
   const connections = new Set<string>()
   /**
    * The connections still in their handshake, at most HANDSHAKE_BUDGET, oldest
-   * first, each with the close its deadline would give it.
+   * first, each with the close that evicts it.
    */
   const handshaking = new Map<string, () => void>()
 
@@ -103,9 +103,9 @@ export function createAcpService(options: AcpServiceOptions) {
     // closed early, so sockets that never sign in shorten only their own life
     // and a new socket always gets in.
     if (handshaking.size >= HANDSHAKE_BUDGET) {
-      const [[oldest, expire]] = handshaking
+      const [[oldest, evict]] = handshaking
       handshaking.delete(oldest)
-      expire()
+      evict()
     }
     const context = options.connection(
       upgrade.connectionId,
@@ -147,7 +147,11 @@ export function createAcpService(options: AcpServiceOptions) {
     handshakeDeadline.signal.addEventListener("abort", expire, { once: true })
     prepared.accept(socket.socket)
     connections.add(upgrade.connectionId)
-    handshaking.set(upgrade.connectionId, expire)
+    handshaking.set(upgrade.connectionId, () => {
+      // One line per eviction, so an operator can see a flood.
+      context.logger.warn({}, "acp.handshake.evicted")
+      socket.socket.close(4408, "Handshake budget")
+    })
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
