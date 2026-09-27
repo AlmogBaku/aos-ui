@@ -74,6 +74,7 @@ type SocketData<Upgrade extends SocketUpgrade> = {
   socket?: ProxySocket
   failed?: boolean
   overloaded?: boolean
+  closed?: boolean
 }
 type SocketPeer<Upgrade extends SocketUpgrade> = {
   data: SocketData<Upgrade>
@@ -197,11 +198,18 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
               return
             }
             try {
-              peer.data.socket = mount.service.open(peer.data.authorization, {
+              const socket = mount.service.open(peer.data.authorization, {
                 send: (raw) => peer.send(raw),
                 isOpen: () => peer.readyState === WS_OPEN,
                 close: (code, reason) => peer.close(code, reason),
               })
+              // A service that refuses its peer closes it while opening it, and
+              // Bun runs the close before `open` returns: nothing is left to hold.
+              if (peer.data.closed) {
+                socket.close()
+                return
+              }
+              peer.data.socket = socket
               mount.peers.add(peer)
             } catch (cause) {
               failPeer(peer, cause)
@@ -217,6 +225,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
               .catch((cause: unknown) => failPeer(peer, cause))
           },
           close(peer: SocketPeer<Upgrade>) {
+            peer.data.closed = true
             peer.data.mount.peers.delete(peer)
             try {
               peer.data.socket?.close()

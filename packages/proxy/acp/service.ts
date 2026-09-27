@@ -4,7 +4,7 @@ import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 
 import { Deadline, defaultClock, type Clock } from "../../lifecycle"
 import { withinGrace } from "../grace"
-import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
+import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { createAcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
 import type { Role } from "../core/member"
@@ -79,6 +79,8 @@ export function createAcpService(options: AcpServiceOptions) {
   const clock = options.clock ?? defaultClock
   /** The connections open on this listener, which the health gauges count. */
   const connections = new Set<string>()
+  /** The connections still in their handshake, at most HANDSHAKE_BUDGET. */
+  const handshaking = new Set<string>()
 
   async function authorizeUpgrade(
     request: Request
@@ -94,6 +96,12 @@ export function createAcpService(options: AcpServiceOptions) {
   }
 
   function open(upgrade: AcpUpgrade, peer: AcpPeer) {
+    // A socket past the handshake budget is refused before anything is built
+    // for it, so sockets that never sign in cannot fill the listener.
+    if (handshaking.size >= HANDSHAKE_BUDGET) {
+      peer.close(1013, "Handshake capacity exceeded")
+      return { receive: () => undefined, close: () => undefined }
+    }
     const context = options.connection(
       upgrade.connectionId,
       upgrade.principalId
@@ -123,7 +131,13 @@ export function createAcpService(options: AcpServiceOptions) {
     // closed with 4408.
     const deadlineMs = options.handshakeDeadlineMs ?? HANDSHAKE_DEADLINE_MS
     const handshakeDeadline = new Deadline(deadlineMs, clock)
-    context.handshakeComplete = () => handshakeDeadline.clear()
+    // Its sign-in or its close frees the socket's handshake slot, not the
+    // deadline: a socket still closing holds its peer.
+    const handshakeEnded = () => {
+      handshaking.delete(upgrade.connectionId)
+      handshakeDeadline.clear()
+    }
+    context.handshakeComplete = handshakeEnded
     handshakeDeadline.signal.addEventListener(
       "abort",
       () => {
@@ -133,11 +147,12 @@ export function createAcpService(options: AcpServiceOptions) {
     )
     prepared.accept(socket.socket)
     connections.add(upgrade.connectionId)
+    handshaking.add(upgrade.connectionId)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {
         connections.delete(upgrade.connectionId)
-        handshakeDeadline.clear()
+        handshakeEnded()
         socket.close()
         withinGrace(() => server.close(), SERVER_CLOSE_GRACE_MS).catch(
           (err: unknown) =>

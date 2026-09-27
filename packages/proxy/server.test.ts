@@ -1,5 +1,10 @@
+import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../test/support/fake-clock"
+import { createAcpService } from "./acp/service"
+import type { AcpConnectionContext } from "./acp/types"
+import { HANDSHAKE_BUDGET } from "./core/limits"
 import { startProxyServer, type ShutdownSettlement } from "./server"
 
 describe("Bun proxy server lifecycle", () => {
@@ -336,6 +341,93 @@ describe("Bun proxy server lifecycle", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(operatorSocket.receive).toHaveBeenCalledWith("frame")
     expect(guestSocket.receive).not.toHaveBeenCalled()
+  })
+
+  it("refuses a socket past the handshake budget without taking a peer a signed-in member needs", async () => {
+    useFakeClock()
+    const origin = "https://aos.example.test"
+    const contexts: AcpConnectionContext[] = []
+    let served: Record<string, unknown> | undefined
+    startProxyServer({
+      app: { fetch: vi.fn() },
+      sockets: [
+        {
+          path: "/api/guest/v1/acp",
+          service: createAcpService({
+            publicOrigin: origin,
+            role: "guest",
+            principalId: "guest",
+            agent: () =>
+              agent({ name: "spec" }).onRequest(
+                AGENT_METHODS.initialize,
+                () => ({
+                  protocolVersion: 2,
+                  info: { name: "spec", version: "0" },
+                })
+              ),
+            connection(connectionId, principalId) {
+              const context = {
+                connectionId,
+                principalId,
+                role: "guest",
+              } as unknown as AcpConnectionContext
+              contexts.push(context)
+              return context
+            },
+          }),
+          // Room for a full handshake budget and one signed-in member.
+          maxPeers: HANDSHAKE_BUDGET + 1,
+        },
+      ],
+      host: "127.0.0.1",
+      port: 4100,
+      shutdownGraceMs: 1_000,
+      serve: vi.fn((options: Record<string, unknown>) => {
+        served = options
+        return { stop: vi.fn() }
+      }),
+      installSignalHandlers: false,
+    })
+    const fetch = served!.fetch as (
+      request: Request,
+      server: unknown
+    ) => Promise<Response | undefined>
+    const websocket = served!.websocket as {
+      open(peer: unknown): void
+      close(peer: unknown): void
+    }
+    const connect = async () => {
+      let data: unknown
+      await fetch(
+        new Request(`${origin}/api/guest/v1/acp`, { headers: { origin } }),
+        {
+          upgrade(_request: Request, options: { data: unknown }) {
+            data = options.data
+            return true
+          },
+        }
+      )
+      const closed: number[] = []
+      // Bun runs a peer's close handler inside its close call.
+      const peer = {
+        data,
+        send: vi.fn(),
+        close: vi.fn((code: number) => {
+          closed.push(code)
+          websocket.close(peer)
+        }),
+      }
+      websocket.open(peer)
+      return closed
+    }
+
+    const member = await connect()
+    for (let flood = 1; flood < HANDSHAKE_BUDGET; flood += 1) await connect()
+    expect(await connect()).toEqual([1013])
+    // The member signs in, which completes its handshake.
+    contexts[0]!.handshakeComplete!()
+    expect(await connect()).toEqual([])
+    expect(member).toEqual([])
   })
 
   it("contains socket handler failures and closes the peer only once", async () => {

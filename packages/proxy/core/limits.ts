@@ -67,6 +67,13 @@ export const PAUSED_DEADLINE_MS = 30_000
 export const HANDSHAKE_DEADLINE_MS = 15_000
 
 /**
+ * The sockets one listener holds in their handshake at once, whatever its peer
+ * cap: past it a new socket is closed with 1013, so sockets that never sign in
+ * hold at most this many of the peers signed-in members use.
+ */
+export const HANDSHAKE_BUDGET = 32
+
+/**
  * How long one native call an adapter makes may take, from its credential
  * read on, and one dial: the innermost deadline, well inside the admission
  * deadline.
