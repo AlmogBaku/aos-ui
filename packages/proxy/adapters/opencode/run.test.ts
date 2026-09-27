@@ -143,7 +143,8 @@ function client(overrides: Record<string, unknown> = {}) {
   const observation = controlledStream()
   const sessions = {
     get: vi.fn(async () => ({
-      data: { id: scope.providerSessionId, agent: scope.agentId },
+      id: scope.providerSessionId,
+      agent: scope.agentId,
     })),
     active: vi.fn(async () => ({ data: {} })),
     prompt: vi.fn(
@@ -274,7 +275,8 @@ describe("OpenCodeRunEngine", () => {
   it("rejects a wrong native Agent owner before observation or mutation", async () => {
     const state = client({
       get: vi.fn(async () => ({
-        data: { id: scope.providerSessionId, agent: "other-agent" },
+        id: scope.providerSessionId,
+        agent: "other-agent",
       })),
     })
 
@@ -312,7 +314,7 @@ describe("OpenCodeRunEngine", () => {
     const state = client({
       get: vi.fn(async () => {
         order.push("ownership")
-        return { data: { id: scope.providerSessionId, agent: scope.agentId } }
+        return { id: scope.providerSessionId, agent: scope.agentId }
       }),
       history: vi.fn(async () => {
         order.push("history")

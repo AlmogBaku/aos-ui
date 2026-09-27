@@ -98,7 +98,9 @@ export type OpenCodeClient = Readonly<{
   }>
   sessions: Readonly<{
     list(options?: OpenCodePageOptions): Promise<unknown>
+    /** The Session itself, out of the SDK's `{ data }` envelope. */
     get(sessionId: string, signal?: AbortSignal): Promise<unknown>
+    /** The created Session itself, out of the SDK's `{ data }` envelope. */
     create(
       input?: Readonly<{
         id?: string
@@ -228,11 +230,17 @@ function configRecord(value: unknown) {
   return config
 }
 
+/** A v2 body, which carries its payload as `data` beside any page fields. */
 function providerEnvelope(value: unknown) {
   const envelope = record(value)
   if (!envelope || !Object.hasOwn(envelope, "data"))
     throw new OpenCodeClientError("invalid_response")
-  return value
+  return envelope
+}
+
+/** The payload of a v2 body the pinned SDK types as `{ data: T }` alone. */
+function providerData(value: unknown) {
+  return providerEnvelope(value).data
 }
 
 /**
@@ -533,7 +541,7 @@ class Facade implements OpenCodeClient {
             { sessionID: identifier(sessionId, "session") },
             request
           ),
-        providerEnvelope,
+        providerData,
         signal
       ),
     create: (input, signal) =>
@@ -551,7 +559,7 @@ class Facade implements OpenCodeClient {
               : undefined,
             request
           ),
-        providerEnvelope,
+        providerData,
         signal
       ),
     update: (sessionId, input, signal) =>
