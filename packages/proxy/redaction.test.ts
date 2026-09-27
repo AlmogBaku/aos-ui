@@ -10,9 +10,9 @@ describe("log redaction", () => {
         event: "hermes.turn.failed",
         publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
         code: "validation_exception",
-        url: "https://example.test/oauth/callback?code=native-secret",
+        url: "https://example.test/oauth/callback?code=native'secret",
         detail:
-          "dial wss://aos:tok-test-1@hermes.example.test/api/ws?token=tok-test-1#frame refused",
+          "dial wss://aos:tok'test-1@hermes.example.test/api/ws?token=tok-test-1#frame refused",
       })
     ).toEqual({
       event: "hermes.turn.failed",

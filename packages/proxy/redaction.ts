@@ -55,11 +55,13 @@ function isSecretKey(key: string) {
 }
 
 /**
- * A URL of any scheme inside text. It stops at whitespace, a quote, an angle
- * bracket, or a backslash, so inside a serialized JSON line it never reaches
- * past its own string.
+ * A URL of any scheme inside text. It stops only where a URL cannot go on: at
+ * whitespace, a double quote, or an angle bracket, which every part of a URL
+ * percent-encodes, and at a backslash, so inside a serialized JSON line it
+ * never reaches past its own string. A single quote stays in, since a password
+ * or a query carries one unencoded.
  */
-const URL_IN_TEXT = /\b[a-z][a-z\d+.-]*:\/\/[^\s"'<>\\]+/giu
+const URL_IN_TEXT = /\b[a-z][a-z\d+.-]*:\/\/[^\s"<>\\]+/giu
 
 /**
  * `text` with every URL's userinfo, query, and fragment removed, whatever its
