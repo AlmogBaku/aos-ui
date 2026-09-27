@@ -98,10 +98,6 @@ runServerRuntimeContract(
   {
     callerErrors: ["runtime_authentication_required"],
     gaps: {
-      deletedSessionIsGone:
-        "bug: a turn on a deleted Session fails as an unclassified OpenClawTurnPublicError over a plain 'did not list this Session' Error, not gone",
-      rejectionsKeepTheirNativeCause:
-        "bug: openClawPublicError has no kind for OpenClawTurnPublicError, so a refused turns.start travels unclassified",
       typedMessageFields:
         "capability: OpenClaw history carries no correction or turn error code",
     },

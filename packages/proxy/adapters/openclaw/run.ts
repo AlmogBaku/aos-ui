@@ -26,6 +26,7 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import {
+  ServerSessionNotFoundError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type RecoveryRequest,
@@ -1042,6 +1043,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     } catch (error) {
       if (lease && !this.#active.has(key)) await lease.release().catch((err: unknown) => this.#watch.logger.warn({ err }, "openclaw.lease.release_failed"))
       if (error instanceof ServerTurnConflictError) throw error
+      if (error instanceof ServerSessionNotFoundError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
       throw providerUnavailable(error)
@@ -1404,7 +1406,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ),
       MAX_SESSION_LOOKUP_ROWS
     ).filter((row) => row.key === sessionKey)
-    if (rows.length !== 1) throw new Error("OpenClaw did not list this Session")
+    // A Session OpenClaw no longer lists was deleted natively: it is gone.
+    if (rows.length !== 1) throw new ServerSessionNotFoundError()
     const current = rows[0]!.toolOverrides
     if (enablesAosTools(current)) return
     await this.#client.request(
