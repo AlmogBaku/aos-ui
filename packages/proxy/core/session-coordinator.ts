@@ -1104,16 +1104,27 @@ export class SessionCoordinator {
    * its execution, journal and readings are dropped, so no later resume is
    * served from them and nothing reads it again. One failure ends it once,
    * however many layers report it. Returns whether it was gone.
+   *
+   * A turn not at rest shows its Session is there, and dropping it would
+   * orphan the runtime's turn, so the Session stays; the read its turn's end
+   * owes finds it again if it did go.
    */
   endIfGone(scope: SessionScope, cause: unknown) {
     if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
     const key = scopeKey(scope)
+    const { agentId, sessionId } = scope
+    if (!this.#atRest(key)) {
+      this.#logger.warn(
+        { err: cause, agentId, sessionId },
+        "session.gone.turn-live"
+      )
+      return false
+    }
     if (typeof cause === "object" && cause !== null) {
       const ended = this.#ended.get(cause) ?? new Set<string>()
       if (ended.has(key)) return true
       this.#ended.set(cause, ended.add(key))
     }
-    const { agentId, sessionId } = scope
     this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
     // All taken first, so a listener that finds the Session gone again tells
     // nobody twice.
@@ -1850,20 +1861,24 @@ export class SessionCoordinator {
     this.#evictIfSettled(key)
   }
 
-  /**
-   * Evicts a Session its last subscriber left once its turn rests idle with no
-   * admission in flight; an admitting turn reads as idle but is not at rest.
-   */
+  /** Evicts a Session its last subscriber left once its turn is at rest. */
   #evictIfSettled(key: string) {
-    if (this.#closed || !this.#pendingEvictions.has(key)) return
-    const turn = this.#turns.get(key)
-    if (
-      turn &&
-      (turn.admission !== undefined ||
-        turn.owner.actor.getSnapshot().value !== "idle")
-    )
+    if (this.#closed || !this.#pendingEvictions.has(key) || !this.#atRest(key))
       return
     this.#evict(key)
+  }
+
+  /**
+   * Whether a Session's turn rests idle with no admission in flight; an
+   * admitting turn reads as idle but is not at rest.
+   */
+  #atRest(key: string) {
+    const turn = this.#turns.get(key)
+    return (
+      !turn ||
+      (turn.admission === undefined &&
+        turn.owner.actor.getSnapshot().value === "idle")
+    )
   }
 
   /** Releases a resting Session's turn owner, journal, and reporter cells. */
