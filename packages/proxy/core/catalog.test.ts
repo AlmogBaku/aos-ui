@@ -88,6 +88,7 @@ describe("createCatalog", () => {
   )
 
   it("shows a member of a listed Session its listed row at once, then the one the provider holds now", async () => {
+    const clock = useFakeClock()
     const { catalog } = harness({ held: row({ title: "Renamed elsewhere" }) })
     await catalog.list(undefined, 0)
     const titles: string[] = []
@@ -101,7 +102,7 @@ describe("createCatalog", () => {
       ({ title }) => titles.push(title),
       () => undefined
     )
-    await Promise.resolve()
+    await clock.advance(0)
 
     expect(titles).toEqual(["Weekly digest", "Renamed elsewhere"])
   })

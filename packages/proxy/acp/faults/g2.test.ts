@@ -120,6 +120,35 @@ const COMMANDS: {
       ).rejects.toMatchObject({ code: -32002 })
     },
   },
+  ...(
+    [
+      ["rename", { title: "Renamed" }],
+      ["archive", { archived: true }],
+      ["pin", { pinned: true }],
+    ] as const
+  ).map(([command, patch]) => ({
+    command,
+    async fail(test: Test) {
+      test.faults.failOnce("updateSession", gone())
+      await expect(
+        test.agent.request(AOS_METHODS.session.update, {
+          sessionId: SESSION,
+          ...patch,
+        })
+      ).rejects.toMatchObject({ code: -32002 })
+    },
+  })),
+  {
+    command: "delete",
+    async fail(test) {
+      test.faults.failOnce("deleteSession", gone())
+      await expect(
+        test.agent.request(methods.agent.session.delete, {
+          sessionId: SESSION,
+        })
+      ).rejects.toMatchObject({ code: -32002 })
+    },
+  },
 ]
 
 describe("gone Session commands", () => {
