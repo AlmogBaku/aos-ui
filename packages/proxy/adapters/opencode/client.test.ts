@@ -364,7 +364,19 @@ describe("OpenCodeClient", () => {
   })
 
   it("replays and validates durable Session events from the supplied aggregate position", async () => {
-    const completedText = "finished ".repeat(100)
+    // The durable event the v2 route streams, as the pinned SDK types it.
+    const durableEvent = {
+      id: "native-42",
+      type: "session.next.text.ended",
+      durable: { aggregateID: "session-1", seq: 42, version: 1 },
+      data: {
+        timestamp: 1_042,
+        sessionID: "session-1",
+        assistantMessageID: "assistant-1",
+        textID: "text-1",
+        text: "finished ".repeat(100),
+      },
+    }
     const server = await nativeServer((request) => {
       expect(request.url.pathname).toBe("/api/session/session-1/event")
       expect(request.url.searchParams.get("after")).toBe("41")
@@ -373,10 +385,7 @@ describe("OpenCodeClient", () => {
           `data: ${JSON.stringify({
             id: "42",
             event: "session",
-            data: JSON.stringify({
-              type: "session.next.text.ended",
-              properties: { sessionID: "session-1", text: completedText },
-            }),
+            data: JSON.stringify(durableEvent),
           })}`,
           "",
           "",
@@ -390,14 +399,7 @@ describe("OpenCodeClient", () => {
       const stream = await subject.sessions.events("session-1", { after: "41" })
       await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
         done: false,
-        value: {
-          id: "42",
-          event: "session",
-          data: {
-            type: "session.next.text.ended",
-            properties: { sessionID: "session-1", text: completedText },
-          },
-        },
+        value: { id: "42", event: "session", data: durableEvent },
       })
     } finally {
       await subject.close()

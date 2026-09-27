@@ -50,9 +50,10 @@ export class HermesTurnPublicError extends Error {
 
   constructor(
     code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN",
-    message: string
+    message: string,
+    options?: ErrorOptions
   ) {
-    super(message)
+    super(message, options)
     this.name = "HermesTurnPublicError"
     this.code = code
   }
@@ -162,10 +163,12 @@ export const TURN_FAILURES = {
   },
 } as const satisfies Record<string, TurnFailure>
 
-export function providerUnavailable() {
+/** `cause` is the native failure that kept the turn from starting, if known. */
+export function providerUnavailable(cause?: unknown) {
   return new HermesTurnPublicError(
     "AOS_PROVIDER_UNAVAILABLE",
-    "Hermes is temporarily unavailable."
+    "Hermes is temporarily unavailable.",
+    { cause }
   )
 }
 

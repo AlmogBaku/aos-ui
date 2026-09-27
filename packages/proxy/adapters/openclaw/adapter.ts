@@ -15,7 +15,7 @@ import type {
   ServerRuntime,
   SessionPatch,
 } from "../../core/runtime"
-import { failureOf } from "../../core/failures"
+import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
 import type { ServerLink } from "../../core/link"
 import {
   openClawConnectionFailure,
@@ -42,6 +42,7 @@ import {
 } from "./history"
 import { OpenClawInteractionPublicError } from "./interactions"
 import { createOpenClawMcpApps } from "./mcp-apps"
+import { OpenClawTurnPublicError } from "./run"
 import {
   createOpenClawMcpToolNames,
   type OpenClawMcpToolNames,
@@ -90,6 +91,11 @@ export function openClawPublicError(cause: unknown) {
   if (connection) return connection
   if (cause instanceof OpenClawClientRequestError && cause.uncertain)
     return failureOf("uncertain", cause)
+  // A send or Stop that may have landed says so by its code; any other did not.
+  if (cause instanceof OpenClawTurnPublicError)
+    return (
+      publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+    )
   if (
     cause instanceof OpenClawWorkspaceOwnershipError ||
     // The artifact is still authoritative, but OpenClaw cannot read it:

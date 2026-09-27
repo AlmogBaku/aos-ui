@@ -20,8 +20,6 @@ runServerRuntimeContract(
   {
     callerErrors: ["runtime_authentication_required"],
     gaps: {
-      rejectionsKeepTheirNativeCause:
-        "bug: HermesUnavailableError drops the native error, so every refused read and turns.start is unavailable with no native cause",
       settledTurnsFreeRecords:
         "no seam: the adapter exposes no count of its per-Session records",
     },

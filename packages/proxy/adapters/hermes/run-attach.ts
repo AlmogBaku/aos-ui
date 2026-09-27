@@ -133,7 +133,7 @@ export async function attachTurn(
     // A Session Hermes holds no record of is gone, not out of reach.
     throw error instanceof HermesSessionGoneError
       ? error
-      : providerUnavailable()
+      : providerUnavailable(error)
   }
   active.liveSessionId = liveSessionId
   active.unsubscribe = () => {
@@ -324,7 +324,10 @@ export function scheduleCatchUp(
   const running = active.catchUp !== undefined
   const buffer = (active.catchUp ??= nativeEventBuffer())
   if (value !== undefined) bufferNativeEvent(buffer, value)
-  if (!running) catchUp(host, active).catch((err: unknown) => host.log.warn({ err }, "hermes.run.catch_up_failed"))
+  if (!running)
+    catchUp(host, active).catch((err: unknown) =>
+      host.log.warn({ err }, "hermes.run.catch_up_failed")
+    )
 }
 
 /**

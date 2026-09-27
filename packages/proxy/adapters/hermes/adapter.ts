@@ -982,8 +982,7 @@ export class HermesServerAdapter implements ServerRuntime {
         throw new HermesUnavailableError()
       return profiles
     } catch (error) {
-      if (error instanceof HermesAuthenticationError) throw error
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
   }
 
@@ -995,8 +994,7 @@ export class HermesServerAdapter implements ServerRuntime {
         agents,
       })
     } catch (error) {
-      if (error instanceof HermesAuthenticationError) throw error
-      throw new HermesUnavailableError()
+      throwUnavailable(error)
     }
   }
 

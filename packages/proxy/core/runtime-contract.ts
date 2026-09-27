@@ -185,6 +185,11 @@ export function runServerRuntimeContract(
       "deletedSessionIsGone",
       "fails a turn on a natively deleted Session as gone",
       async (harness, clock) => {
+        const { agentId, providerSessionId } = harness.scope
+        // The Session reads before it is deleted, so gone means deleted.
+        await expect(
+          until(clock, harness.runtime.getSession(agentId, providerSessionId))
+        ).resolves.toMatchObject({ agentId })
         harness.deleteSession()
 
         const error = await until(

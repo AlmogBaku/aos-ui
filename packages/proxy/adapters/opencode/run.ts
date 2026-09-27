@@ -293,8 +293,7 @@ function admissionId(scope: SessionScope, turnId: string) {
 }
 
 function validateSessionOwner(value: unknown, scope: SessionScope) {
-  const envelope = record(value)
-  const session = record(envelope?.data)
+  const session = record(value)
   if (!session || typeof session.id !== "string")
     throw new OpenCodeClientError("invalid_response")
   if (session.id !== scope.providerSessionId || session.agent !== scope.agentId)

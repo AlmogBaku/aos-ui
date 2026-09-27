@@ -72,3 +72,9 @@ export const HANDSHAKE_DEADLINE_MS = 15_000
  * deadline.
  */
 export const ADAPTER_CALL_MS = 15_000
+
+/**
+ * How long a native call waits for its link before its own deadline starts:
+ * LINK_WAIT_MS + ADAPTER_CALL_MS ends inside ADMISSION_DEADLINE_MS.
+ */
+export const LINK_WAIT_MS = 10_000

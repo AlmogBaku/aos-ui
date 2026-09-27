@@ -246,7 +246,11 @@ export class HermesTurnEngine {
 
     // Warm the profile's MCP tool names while the turn is admitted, so its
     // first tool call already reads under its canonical name.
-    this.#mcpToolNames?.load(scope.agentId).catch((err: unknown) => this.#log.warn({ err }, "hermes.run.mcp_tool_names_load_failed"))
+    this.#mcpToolNames
+      ?.load(scope.agentId)
+      .catch((err: unknown) =>
+        this.#log.warn({ err }, "hermes.run.mcp_tool_names_load_failed")
+      )
     const key = sessionKey(scope)
     const stale = this.#active.get(key)
     if (this.#admissions.has(key) || (stale && !stale.uncertain))
@@ -543,14 +547,11 @@ export class HermesTurnEngine {
         awaitingStop: true,
       })
     }
-    const timer = setTimeout(
-      () => {
-        checkLost().catch((err: unknown) =>
-          this.#log.warn({ err }, "hermes.run.interaction_lost_check_failed")
-        )
-      },
-      this.#lostInteractionGraceMs
-    )
+    const timer = setTimeout(() => {
+      checkLost().catch((err: unknown) =>
+        this.#log.warn({ err }, "hermes.run.interaction_lost_check_failed")
+      )
+    }, this.#lostInteractionGraceMs)
     // Detection is reconciliation, never a reason to keep the process alive.
     if (typeof timer !== "number") timer.unref()
   }
@@ -596,7 +597,7 @@ export class HermesTurnEngine {
       // Nothing was written, so this run never began: it settles silently and
       // the caller learns Hermes is unavailable.
       this.#settle(active)
-      throw providerUnavailable()
+      throw providerUnavailable(error)
     }
     if (active.terminal) return
     if (outcome.acknowledgement === "uncertain") {
@@ -809,7 +810,10 @@ export class HermesTurnEngine {
         active.errorObserved = true
         const failure = nativeFailure(payload)
         active.failure ??= failure
-        reconcileNativeError(this.#host, active, failure).catch((err: unknown) => this.#log.warn({ err }, "hermes.run.reconcile_error_failed"))
+        reconcileNativeError(this.#host, active, failure).catch(
+          (err: unknown) =>
+            this.#log.warn({ err }, "hermes.run.reconcile_error_failed")
+        )
         return
       }
       case "message.complete":

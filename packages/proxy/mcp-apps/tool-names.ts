@@ -117,7 +117,9 @@ export function createMcpToolNames(
       return (rawName) => {
         const lookup = lookups.get(key)
         if (unknown(lookup, rawName))
-          load(key, [rawName]).catch((err: unknown) => logger?.warn({ err }, "mcp_tool.names.load_failed"))
+          load(key, [rawName]).catch((err: unknown) =>
+            logger?.warn({ err }, "mcp_tool.names.load_failed")
+          )
         return resolverOf(lookup)(rawName)
       }
     },

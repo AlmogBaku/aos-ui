@@ -8,8 +8,13 @@
  * link it reports and `close()`.
  */
 
-import { boundedQueue, Deadline, defaultClock } from "../../../lifecycle"
-import { ADAPTER_CALL_MS } from "../../core/limits"
+import {
+  boundedQueue,
+  Deadline,
+  defaultClock,
+  type Logger,
+} from "../../../lifecycle"
+import { ADAPTER_CALL_MS, LINK_WAIT_MS } from "../../core/limits"
 import type { LinkState, ServerLink } from "../../core/link"
 import {
   isGatewayWebSocketUrl,
@@ -76,10 +81,13 @@ export class HermesRpcUncertainError extends Error {
   }
 }
 
-/** Nothing was written: no open socket, a failed dial, or an unusable reply. */
+/**
+ * Nothing was written: no open socket, a failed dial, or an unusable reply.
+ * The native failure behind it, when there is one, stays as `cause`.
+ */
 export class HermesUnavailableError extends Error {
-  constructor() {
-    super("Hermes is temporarily unavailable")
+  constructor(options?: ErrorOptions) {
+    super("Hermes is temporarily unavailable", options)
     this.name = "HermesUnavailableError"
   }
 }
@@ -100,8 +108,12 @@ export class HermesRequestAbortedError extends Error {
  * native failure is an outage the caller must not present as a refusal.
  */
 export function throwUnavailable(error: unknown): never {
-  if (error instanceof HermesAuthenticationError) throw error
-  throw new HermesUnavailableError()
+  if (
+    error instanceof HermesAuthenticationError ||
+    error instanceof HermesUnavailableError
+  )
+    throw error
+  throw new HermesUnavailableError({ cause: error })
 }
 
 export type HermesRpcOptions = {
@@ -148,8 +160,11 @@ export type HermesGatewayOptions = {
   /** Grace before a socket loss is reported as lost (default 20 s). */
   healGraceMs?: number
   backoff?: ReconnectBackoffOptions
-  log?: HermesLog
+  log?: HermesGatewayLog
 }
+
+/** The gateway's log: an outage warns once, each redial rung in it is debug. */
+export type HermesGatewayLog = HermesLog & Pick<Logger, "debug">
 
 /** A caller parked in `#awaitOpen` until a socket is open. */
 type OpenWaiter = { resolve(): void; reject(error: Error): void }
@@ -173,7 +188,7 @@ const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
  * an open socket, and the call's own deadline starts only at its write, so a
  * request stays well inside the admission deadline it serves.
  */
-const REQUEST_QUEUE = { limit: 256, queue: 1024, waitMs: 10_000 }
+const REQUEST_QUEUE = { limit: 256, queue: 1024, waitMs: LINK_WAIT_MS }
 /** Hermes' close for a refused credential (`hermes_cli/web_routers/chat_ws.py`). */
 const AUTH_CLOSE_CODE = 4401
 /** Hermes' close for a host or origin denial, or chat not allowed: an outage. */
@@ -240,7 +255,7 @@ export class HermesGateway implements HermesRpcTransport {
   readonly #socketFactory: (url: string) => HermesSocket
   readonly #client: JsonRpcGatewayClient
   readonly #httpClient: HermesHttp
-  readonly #log: HermesLog | undefined
+  readonly #log: HermesGatewayLog | undefined
   readonly #requestTimeoutMs: number
   readonly #connectTimeoutMs: number
   readonly #healGraceMs: number
@@ -353,7 +368,7 @@ export class HermesGateway implements HermesRpcTransport {
     } catch (error) {
       if (this.#refusal) throw new HermesAuthenticationError()
       this.#logDialFailure("handshake_failed", { error })
-      throw new HermesUnavailableError()
+      throw new HermesUnavailableError({ cause: error })
     }
     if (this.#closed) {
       // close() landed mid-handshake: a late open must publish nothing.
@@ -365,7 +380,9 @@ export class HermesGateway implements HermesRpcTransport {
     // arm the redial ladder.
     if (this.#client.connectionState !== "open")
       throw new HermesUnavailableError()
-    this.#advertiseCapabilities().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.capabilities_failed"))
+    this.#advertiseCapabilities().catch((err: unknown) =>
+      this.#log?.warn({ err }, "hermes.gateway.capabilities_failed")
+    )
   }
 
   /**
@@ -512,7 +529,9 @@ export class HermesGateway implements HermesRpcTransport {
       this.#redialTimer = undefined
       if (this.#closed || this.#dial) return
       if (this.#client.connectionState === "open") return
-      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
+      this.connect().catch((err: unknown) =>
+        this.#log?.debug({ err }, "hermes.gateway.redial_failed")
+      )
     }, delay)
   }
 
@@ -627,7 +646,9 @@ export class HermesGateway implements HermesRpcTransport {
     if (this.#client.connectionState === "open") return Promise.resolve()
     if (this.#refusal) return Promise.reject(new HermesAuthenticationError())
     if (!this.#dial && this.#redialTimer === undefined)
-      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
+      this.connect().catch((err: unknown) =>
+        this.#log?.debug({ err }, "hermes.gateway.redial_failed")
+      )
     return new Promise<void>((resolve, reject) => {
       // Membership in `#openWaiters` is what settles a waiter exactly once.
       const finish = (complete: () => void) => {
@@ -734,7 +755,7 @@ export class HermesGateway implements HermesRpcTransport {
     if (error instanceof HermesAuthenticationError) return error
     return options.signal?.aborted
       ? new HermesRequestAbortedError()
-      : new HermesUnavailableError()
+      : new HermesUnavailableError({ cause: error })
   }
 
   /** Mint the correlation id and bind the dispatching request's byte bound. */
@@ -771,7 +792,7 @@ export class HermesGateway implements HermesRpcTransport {
       )
     // Nothing was written: the generation was gone before the send.
     if (error instanceof Error && error.message === NOT_CONNECTED)
-      return new HermesUnavailableError()
+      return new HermesUnavailableError({ cause: error })
     // Written, outcome unknown: timeout, dropped generation, send failure, or
     // the caller giving up on a frame Hermes may already be running.
     return new HermesRpcUncertainError()
