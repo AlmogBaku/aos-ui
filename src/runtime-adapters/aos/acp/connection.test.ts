@@ -26,6 +26,7 @@ import { useFakeClock } from "../../../../test/support/fake-clock"
 import { captureLogs } from "../../../../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
+import { PART_GRACE_MS } from "./limits"
 import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
@@ -614,6 +615,21 @@ describe("ACP connection", () => {
     )
     await vi.waitFor(() => expect(stayed).toHaveBeenCalledTimes(1))
     expect(seen).toHaveLength(1)
+    connection.close()
+  })
+
+  it("keeps a Session joined while any subscription of a listener stays", async () => {
+    const clock = useFakeClock()
+    const proxy = createProxyAgent()
+    const connection = connectInProcess(proxy)
+    const listener = { agentId: AGENT_ID }
+    const leave = connection.subscribe(SESSION_ID, listener)
+    connection.subscribe(SESSION_ID, listener)
+    await connection.joined(SESSION_ID)
+
+    leave()
+    await clock.advance(PART_GRACE_MS)
+    expect(proxy.callsOf(methods.agent.session.close)).toHaveLength(0)
     connection.close()
   })
 

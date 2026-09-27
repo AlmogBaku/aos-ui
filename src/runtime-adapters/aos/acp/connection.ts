@@ -583,11 +583,16 @@ export function createAcpConnection(
   const pendingListeners = new Set<(request: AcpPendingRequest) => void>()
   const statusListeners = new Set<(status: AcpConnectionStatus) => void>()
   /**
+   * One `subscribe` call: a listener subscribed twice holds the Session until
+   * each of its subscriptions leaves.
+   */
+  type Subscription = { readonly listener: AcpSessionListener }
+  /**
    * One opened Session: whoever listens, the owner that joins it, and what a
    * rejoin and a page read need, all dropped once it parts.
    */
   type OpenSession = {
-    readonly listeners: Set<AcpSessionListener>
+    readonly listeners: Set<Subscription>
     owner?: Owner<ReturnType<typeof sessionMachine>>
     state: AcpSessionState
     /** Where the live turn was last seen, which a rejoin resumes from. */
@@ -774,7 +779,7 @@ export function createAcpConnection(
           after: position.data.sequence,
         }
       if (open.replaying) open.replaying.delivered = true
-      for (const listener of open.listeners)
+      for (const { listener } of open.listeners)
         listener.update?.(params.update, meta)
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
@@ -968,9 +973,8 @@ export function createAcpConnection(
     if (signal.aborted) return
     const fromStart = !open.replayed || open.replayOwed
     open.replayOwed = false
-    const agentId =
-      [...open.listeners].find((listener) => listener.agentId)?.agentId ??
-      owners.get(sessionId)
+    const named = [...open.listeners].find(({ listener }) => listener.agentId)
+    const agentId = named?.listener.agentId ?? owners.get(sessionId)
     // A from-start replay resends the whole Session, and its turns arrive as
     // chunks: whoever projects this one drops what the replay replaces first,
     // or every part it already holds is appended to a second time.
@@ -1024,7 +1028,7 @@ export function createAcpConnection(
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
-  function settleOf(listener: AcpSessionListener) {
+  function settleOf({ listener }: Subscription) {
     const settle = listener.replay?.()
     return settle ? [settle] : []
   }
@@ -1078,26 +1082,27 @@ export function createAcpConnection(
     if (next === "joined") open.waiters?.resolve()
     if (failure !== undefined) open.waiters?.reject(failure)
     if (next === "joined" || failure !== undefined) open.waiters = undefined
-    for (const listener of open.listeners) listener.state?.(next)
+    for (const { listener } of open.listeners) listener.state?.(next)
   }
 
   function subscribe(sessionId: string, listener: AcpSessionListener) {
     if (ended) return () => {}
     // A Session opened before the transport joins once it is ready.
     start()
+    const subscription = { listener }
     const known = sessions.get(sessionId)
     if (known) {
       clock.clearTimeout(known.grace)
       known.grace = undefined
-      known.listeners.add(listener)
+      known.listeners.add(subscription)
       // Nothing of the replay under way has arrived, so it carries the
       // Session whole to this listener too.
       if (known.replaying && !known.replaying.delivered)
-        known.replaying.settles.push(...settleOf(listener))
-      return () => leave(sessionId, known, listener)
+        known.replaying.settles.push(...settleOf(subscription))
+      return () => leave(sessionId, known, subscription)
     }
-    const open = openSession(sessionId, [listener], false)
-    return () => leave(sessionId, open, listener)
+    const open = openSession(sessionId, [subscription], false)
+    return () => leave(sessionId, open, subscription)
   }
 
   /**
@@ -1107,7 +1112,7 @@ export function createAcpConnection(
    */
   function openSession(
     sessionId: string,
-    listeners: AcpSessionListener[],
+    listeners: Subscription[],
     created: boolean
   ) {
     const open: OpenSession = {
@@ -1132,9 +1137,9 @@ export function createAcpConnection(
   function leave(
     sessionId: string,
     open: OpenSession,
-    listener: AcpSessionListener
+    subscription: Subscription
   ) {
-    if (!open.listeners.delete(listener) || open.listeners.size > 0) return
+    if (!open.listeners.delete(subscription) || open.listeners.size > 0) return
     if (sessions.get(sessionId) !== open) return
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
   }
