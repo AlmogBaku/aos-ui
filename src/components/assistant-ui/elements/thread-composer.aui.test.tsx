@@ -1624,6 +1624,61 @@ describe("Thread accessibility", () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  it("reorders queued messages from the row menu and with Alt+Arrow keys, and sends them in that order", async () => {
+    const user = userEvent.setup()
+    const sent: string[] = []
+    let finish!: () => void
+    const firstRunDone = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const model: ChatModelAdapter = {
+      async run({ messages }) {
+        sent.push(messageText(messages.at(-1)!))
+        if (sent.length === 1) await firstRunDone
+        return { content: [{ type: "text", text: `Reply ${sent.length}` }] }
+      },
+    }
+    render(
+      <LocalThread model={model} enableMessageQueue initialMessages={[]} />
+    )
+    const input = await screen.findByRole("textbox", { name: "Message input" })
+    for (const text of ["first", "A", "B", "C"]) {
+      await user.type(input, text)
+      await user.keyboard("{Control>}{Enter}{/Control}")
+    }
+    const region = await screen.findByRole("region", {
+      name: "Queued messages",
+    })
+    const rows = () => within(region).getAllByRole("listitem")
+    const order = () =>
+      rows().map((row) =>
+        ["A", "B", "C"].find((text) => within(row).queryByText(text))
+      )
+    await waitFor(() => expect(order()).toEqual(["A", "B", "C"]))
+
+    const [rowA, , rowC] = rows()
+    await user.click(
+      within(rowA!).getByRole("button", { name: "Queued message actions" })
+    )
+    expect(
+      await screen.findByRole("menuitem", { name: "Move up" })
+    ).toHaveAttribute("aria-disabled", "true")
+    await user.click(screen.getByRole("menuitem", { name: "Move down" }))
+    await waitFor(() => expect(order()).toEqual(["B", "A", "C"]))
+    expect(within(region).getByText("Moved to 2 of 3")).toBeInTheDocument()
+
+    const remove = within(rowC!).getByRole("button", {
+      name: "Remove queued message",
+    })
+    remove.focus()
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}")
+    await waitFor(() => expect(order()).toEqual(["B", "C", "A"]))
+    expect(remove).toHaveFocus()
+
+    finish()
+    await waitFor(() => expect(sent).toEqual(["first", "B", "C", "A"]))
+  })
+
   it("clears a draft only after two idle Escape presses and restores it with ArrowUp", async () => {
     const user = userEvent.setup()
     render(<LocalThread />)

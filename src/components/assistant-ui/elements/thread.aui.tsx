@@ -232,6 +232,11 @@ export type ThreadLabels = {
   removeQueuedMessage?: string | undefined
   steeringQueuedMessage?: string | undefined
   steeringFailed?: string | undefined
+  queuedMessageActions: string
+  moveQueuedMessageUp: string
+  moveQueuedMessageDown: string
+  /** Announces where a moved message now waits, counted from one. */
+  queuedMessageMoved: (position: number, count: number) => string
   deliveryUnconfirmed?: string | undefined
   previous: string
   next: string
@@ -329,6 +334,10 @@ const DEFAULT_LABELS: ThreadLabels = {
   removeQueuedMessage: "Remove queued message",
   steeringQueuedMessage: "Steering queued message",
   steeringFailed: "Could not steer",
+  queuedMessageActions: "Queued message actions",
+  moveQueuedMessageUp: "Move up",
+  moveQueuedMessageDown: "Move down",
+  queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
   deliveryUnconfirmed: "Delivery unconfirmed",
   previous: "Previous",
   next: "Next",
@@ -1318,9 +1327,14 @@ const Composer: FC<{
             removeLabel: labels.removeQueuedMessage ?? "Remove queued message",
             steering: labels.steeringQueuedMessage ?? "Steering queued message",
             failed: labels.steeringFailed ?? "Could not steer",
+            actions: labels.queuedMessageActions,
+            moveUp: labels.moveQueuedMessageUp,
+            moveDown: labels.moveQueuedMessageDown,
+            moved: labels.queuedMessageMoved,
           }}
           steer={hasPendingInteraction ? undefined : features.steer}
           onUnconfirmed={rememberUnconfirmed}
+          direction={direction}
         />
       </AuiIf>
       {visibleUnconfirmedDeliveries.map((delivery) => (

@@ -1,17 +1,33 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react"
+import { Menu } from "@base-ui/react/menu"
 import {
   ComposerPrimitive,
   QueueItemPrimitive,
   useAui,
   useAuiState,
 } from "@assistant-ui/react"
-import { CornerDownRightIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react"
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CornerDownRightIcon,
+  EllipsisIcon,
+  LoaderCircleIcon,
+  Trash2Icon,
+} from "lucide-react"
 
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
 import { Button } from "@/components/ui/button"
+import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
 import { steerMessageId } from "@/lib/message-parts"
 
 export type MessageQueueLabels = {
@@ -21,6 +37,10 @@ export type MessageQueueLabels = {
   readonly removeLabel: string
   readonly steering: string
   readonly failed: string
+  readonly actions: string
+  readonly moveUp: string
+  readonly moveDown: string
+  readonly moved: (position: number, count: number) => string
 }
 
 export type UnconfirmedDelivery = {
@@ -47,14 +67,27 @@ export function isUncertainDelivery(error: unknown) {
   )
 }
 
+/** Where a row sits in the queue, and its neighbours to move around. */
+type QueuePlace = {
+  readonly position: number
+  readonly previousId: string | undefined
+  readonly nextId: string | undefined
+}
+
 function QueueRow({
   labels,
   steer,
   onUnconfirmed,
+  direction,
+  placeOf,
+  onMoved,
 }: {
   labels: MessageQueueLabels
   steer: NonNullable<ComposerFeatureViewModel["steer"]> | undefined
   onUnconfirmed(delivery: UnconfirmedDelivery): void
+  direction: "ltr" | "rtl"
+  placeOf(id: string): QueuePlace
+  onMoved(position: number): void
 }) {
   const aui = useAui()
   const originThreadId = useAuiState((state) => state.threads.mainThreadId)
@@ -97,12 +130,66 @@ function QueueRow({
     }
   }, [aui, onUnconfirmed, originThreadId, requestId, status, steer, text])
 
+  const { position, previousId, nextId } = placeOf(requestId)
+  // React moves a keyed row's node, which drops focus: whatever held focus
+  // in the row takes it back once the row lands.
+  const refocusRef = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    refocusRef.current?.focus()
+    refocusRef.current = null
+  }, [position])
+  const move = (by: -1 | 1, focused: HTMLElement | null) => {
+    const anchor = by < 0 ? previousId : nextId
+    if (anchor === undefined) return
+    refocusRef.current = focused
+    aui.queueItem.move(
+      by < 0 ? { insertBefore: anchor } : { insertAfter: anchor }
+    )
+    onMoved(position + by)
+  }
+  const moveOnKey = (event: KeyboardEvent<HTMLLIElement>) => {
+    if (
+      !event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      (event.key !== "ArrowUp" && event.key !== "ArrowDown")
+    )
+      return
+    event.preventDefault()
+    const focused = document.activeElement
+    move(
+      event.key === "ArrowUp" ? -1 : 1,
+      focused instanceof HTMLElement && event.currentTarget.contains(focused)
+        ? focused
+        : null
+    )
+  }
+  const moreRef = useRef<HTMLButtonElement>(null)
+  const menuEntries: MenuPopupEntry[] = [
+    {
+      id: "move-up",
+      label: labels.moveUp,
+      icon: <ArrowUpIcon aria-hidden="true" />,
+      disabled: previousId === undefined,
+      onSelect: () => move(-1, moreRef.current),
+    },
+    {
+      id: "move-down",
+      label: labels.moveDown,
+      icon: <ArrowDownIcon aria-hidden="true" />,
+      disabled: nextId === undefined,
+      onSelect: () => move(1, moreRef.current),
+    },
+  ]
+
   const canSteer = running && steer !== undefined
   const pending = status === "pending"
   return (
     <li
       data-slot="aui_message-queue-item"
       className="flex min-h-10 min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background px-2.5 py-1.5 text-sm shadow-xs motion-reduce:transition-none"
+      onKeyDown={moveOnKey}
     >
       <CornerDownRightIcon
         aria-hidden="true"
@@ -137,6 +224,22 @@ function QueueRow({
           {labels.steer}
         </Button>
       ) : null}
+      <Menu.Root>
+        <Menu.Trigger
+          ref={moreRef}
+          render={
+            <TooltipIconButton
+              type="button"
+              tooltip={labels.actions}
+              aria-label={labels.actions}
+              className="size-8 shrink-0 [@media(pointer:coarse)]:size-11"
+            />
+          }
+        >
+          <EllipsisIcon aria-hidden="true" />
+        </Menu.Trigger>
+        <MenuPopup entries={{ items: menuEntries }} dir={direction} />
+      </Menu.Root>
       <QueueItemPrimitive.Remove
         render={
           <TooltipIconButton
@@ -161,11 +264,26 @@ export function MessageQueue({
   labels,
   steer,
   onUnconfirmed,
+  direction,
 }: {
   labels: MessageQueueLabels
   steer: ComposerFeatureViewModel["steer"]
   onUnconfirmed(delivery: UnconfirmedDelivery): void
+  direction: "ltr" | "rtl"
 }) {
+  const items = useAuiState((state) => state.composer.queue)
+  const placeOf = useCallback(
+    (id: string): QueuePlace => {
+      const index = items.findIndex((item) => item.id === id)
+      return {
+        position: index + 1,
+        previousId: items[index - 1]?.id,
+        nextId: items[index + 1]?.id,
+      }
+    },
+    [items]
+  )
+  const [moved, setMoved] = useState<number>()
   return (
     <div
       data-slot="aui_message-queue"
@@ -180,10 +298,16 @@ export function MessageQueue({
               labels={labels}
               steer={steer}
               onUnconfirmed={onUnconfirmed}
+              direction={direction}
+              placeOf={placeOf}
+              onMoved={setMoved}
             />
           )}
         </ComposerPrimitive.Queue>
       </ul>
+      <span className="sr-only" role="status" aria-live="polite">
+        {moved === undefined ? "" : labels.moved(moved, items.length)}
+      </span>
     </div>
   )
 }
