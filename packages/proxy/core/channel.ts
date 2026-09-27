@@ -610,7 +610,7 @@ type MembershipSignal =
  * Each stream it follows is a generation of its own, so a stream another one
  * replaced settles nothing.
  */
-function membershipMachine(logger: Logger, clock: Clock) {
+export function membershipMachine(logger: Logger, clock: Clock) {
   return ownerSetup<OwnerContext, MembershipSignal>(
     "membership",
     logger,

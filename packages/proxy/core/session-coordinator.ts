@@ -313,7 +313,7 @@ type TurnHooks = {
  * to where the stream left the turn. An uncertain turn asks `hooks` to
  * reconcile it, and ends at its deadline with its outcome unknown.
  */
-function turnMachine(logger: Logger, clock: Clock, hooks: TurnHooks) {
+export function turnMachine(logger: Logger, clock: Clock, hooks: TurnHooks) {
   const turn = ownerSetup<TurnContext, TurnSignal>(
     "turn",
     logger,

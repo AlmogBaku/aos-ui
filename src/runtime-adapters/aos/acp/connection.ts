@@ -303,6 +303,246 @@ function observedSocket(
   }
 }
 
+/** What the connection's machine calls out to, as its connection wires it. */
+export type ConnectionMachineDeps = {
+  /** Opens a transport as the live one; settles once its socket is open. */
+  open(): Promise<void>
+  /** Settles once the live transport's handshake is answered. */
+  handshake(): Promise<unknown>
+  /** Rejoins every opened Session over the transport now ready. */
+  recover(): Promise<void>
+  /** In-process pairing, which has no transport to reopen. */
+  inProcess: boolean
+  /** Closes the live transport, which recovers as a dropped one does. */
+  closeTransport(): void
+  markReady(): void
+  /** The transport is gone: every Session loses it, and the status says why. */
+  lose(status: "reconnecting" | "capacity"): void
+  logger: Logger
+  clock: Clock
+}
+
+/**
+ * One connection's lifecycle: opening a transport, its handshake, ready while
+ * it serves, and after a close, reconnecting on backoff, waiting out a full
+ * proxy, or closed for good.
+ */
+export function connectionMachine({
+  open,
+  handshake,
+  recover,
+  inProcess,
+  closeTransport,
+  markReady,
+  lose,
+  logger,
+  clock,
+}: ConnectionMachineDeps) {
+  const actors = {
+    open: fromAbortable(() => open()),
+    handshake: fromAbortable(() => handshake()),
+    recover: fromAbortable(() => recover()),
+  }
+  const connectionSetup = ownerSetup<
+    { generation: number; attempt: number },
+    ConnectionEvent,
+    typeof actors
+  >("connection", logger, clock, actors)
+  /** Where a closed transport leaves the connection, by its close code. */
+  const onTransportClosed = [
+    { guard: "inProcess", target: "closed" },
+    { guard: "policyViolation", target: "closed" },
+    { guard: "tryAgainLater", target: "capacity" },
+    { target: "reconnecting" },
+  ] as const
+  return connectionSetup
+    .extend({
+      delays: {
+        handshake: HANDSHAKE_DEADLINE_MS,
+        stable: STABLE_AFTER_MS,
+        reconnect: ({ context }) =>
+          backoffDelay(context.attempt, RECONNECT_BACKOFF),
+        capacity: () =>
+          CAPACITY_BACKOFF.minMs +
+          Math.floor(
+            Math.random() * (CAPACITY_BACKOFF.maxMs - CAPACITY_BACKOFF.minMs)
+          ),
+      },
+      guards: {
+        inProcess: () => inProcess,
+        policyViolation: ({ event }) =>
+          event.type === "closed" && event.code === POLICY_VIOLATION,
+        tryAgainLater: ({ event }) =>
+          event.type === "closed" && event.code === TRY_AGAIN_LATER,
+      },
+      actions: {
+        // A handshake or replay that cannot complete leaves an unusable
+        // transport; closing it recovers as a dropped one does.
+        closeTransport: () => closeTransport(),
+        markReady: () => markReady(),
+        lose: (_, { status }: { status: "reconnecting" | "capacity" }) =>
+          lose(status),
+        countAttempt: connectionSetup.assign({
+          attempt: ({ context }) => context.attempt + 1,
+        }),
+        resetAttempts: connectionSetup.assign({ attempt: 0 }),
+      },
+    })
+    .createMachine({
+      context: { generation: 0, attempt: 0 },
+      initial: "connecting",
+      on: { close: ".closed" },
+      states: {
+        connecting: {
+          entry: "bumpGeneration",
+          invoke: { src: "open", onDone: "handshaking" },
+          on: { closed: onTransportClosed },
+          after: { handshake: { actions: "closeTransport" } },
+        },
+        handshaking: {
+          invoke: {
+            src: "handshake",
+            onDone: "ready",
+            onError: { actions: "closeTransport" },
+          },
+          on: { closed: onTransportClosed },
+          after: { handshake: { actions: "closeTransport" } },
+        },
+        ready: {
+          entry: "markReady",
+          // Every Session rejoined, or a transport up long enough, starts the
+          // backoff over.
+          invoke: {
+            src: "recover",
+            onDone: { actions: "resetAttempts" },
+            onError: { actions: "closeTransport" },
+          },
+          on: { closed: onTransportClosed },
+          after: { stable: { actions: "resetAttempts" } },
+        },
+        reconnecting: {
+          meta: { log: "info" },
+          entry: { type: "lose", params: { status: "reconnecting" } },
+          after: {
+            reconnect: { target: "connecting", actions: "countAttempt" },
+          },
+        },
+        // The proxy is full: the wait is long, and the status says why.
+        capacity: {
+          meta: { log: "info" },
+          entry: { type: "lose", params: { status: "capacity" } },
+          after: { capacity: "connecting" },
+        },
+        closed: { type: "final", meta: { log: "info" } },
+      },
+    })
+}
+
+/** What one Session owner's machine calls out to, as its connection wires it. */
+export type SessionMachineDeps = {
+  join(sessionId: string, signal: AbortSignal): Promise<unknown>
+  /** Whether the Session owes a from-start replay its join has not given. */
+  replayOwed(sessionId: string): boolean
+  oweReplay(sessionId: string): void
+  /** Whether the connection's transport is not ready. */
+  transportLost(): boolean
+  /** Holds a join the transport refused, and tells the Session why. */
+  refuse(sessionId: string, error: unknown): void
+  logger: Logger
+  clock: Clock
+}
+
+/**
+ * One opened Session's owner. It joins while the transport is ready, waits
+ * out a failed join on its own backoff, holds one the transport refuses
+ * until the next transport, rejoins after a reconnect, and ends for good
+ * once the provider reports the Session gone.
+ */
+export function sessionMachine(
+  {
+    join,
+    replayOwed,
+    oweReplay,
+    transportLost,
+    refuse,
+    logger,
+    clock,
+  }: SessionMachineDeps,
+  sessionId: string,
+  initial: "joining" | "joined" | "detached"
+) {
+  const sessionActors = {
+    join: fromAbortable((signal, sessionId: string) => join(sessionId, signal)),
+  }
+  const sessionOwnerSetup = ownerSetup<
+    { generation: number; attempt: number; sessionId: string },
+    SessionEvent,
+    typeof sessionActors
+  >("session-owner", logger, clock, sessionActors)
+  return sessionOwnerSetup
+    .extend({
+      delays: {
+        retry: ({ context }) =>
+          backoffDelay(context.attempt, RECONNECT_BACKOFF),
+      },
+      guards: {
+        replayOwed: ({ context }) => replayOwed(context.sessionId),
+        transportLost: () => transportLost(),
+      },
+      actions: {
+        oweReplay: ({ context }) => oweReplay(context.sessionId),
+        countAttempt: sessionOwnerSetup.assign({
+          attempt: ({ context }) => context.attempt + 1,
+        }),
+        resetAttempts: sessionOwnerSetup.assign({ attempt: 0 }),
+      },
+    })
+    .createMachine({
+      context: { generation: 0, attempt: 0, sessionId },
+      initial,
+      on: { replay: { actions: "oweReplay" }, gone: ".gone" },
+      states: {
+        joining: {
+          entry: "bumpGeneration",
+          invoke: {
+            src: "join",
+            input: ({ context }) => context.sessionId,
+            onDone: [
+              { guard: "replayOwed", target: "joining", reenter: true },
+              { target: "joined", actions: "resetAttempts" },
+            ],
+            onError: [
+              { guard: ({ event }) => isGone(event.error), target: "gone" },
+              { guard: "transportLost", target: "detached" },
+              {
+                guard: ({ event }) => isRefused(event.error),
+                target: "refused",
+                actions: ({ context, event }) =>
+                  refuse(context.sessionId, event.error),
+              },
+              { target: "unavailable" },
+            ],
+          },
+          on: { lost: "detached" },
+        },
+        joined: {
+          on: {
+            lost: "detached",
+            replay: { target: "joining", actions: "oweReplay" },
+          },
+        },
+        unavailable: {
+          meta: { log: "info" },
+          after: { retry: { target: "joining", actions: "countAttempt" } },
+          on: { lost: "detached" },
+        },
+        refused: { meta: { log: "info" }, on: { lost: "detached" } },
+        detached: { on: { ready: "joining" } },
+        gone: { type: "final", meta: { log: "info" } },
+      },
+    })
+}
+
 export function createAcpConnection(
   options: AcpConnectionOptions
 ): AcpConnection {
@@ -864,7 +1104,7 @@ export function createAcpConnection(
     }
     sessions.set(sessionId, open)
     const initial = !joinable ? "detached" : created ? "joined" : "joining"
-    const owner = createOwner(sessionMachine(sessionId, initial), {
+    const owner = createOwner(sessionMachine(sessionDeps, sessionId, initial), {
       logger,
       clock,
       bindings: { sessionId },
@@ -1005,199 +1245,34 @@ export function createAcpConnection(
     return opened.promise
   }
 
-  const actors = {
-    open: fromAbortable(() => openTransport()),
-    handshake: fromAbortable(() => readyTransport()),
-    recover: fromAbortable(() => recover()),
-  }
-  const connectionSetup = ownerSetup<
-    { generation: number; attempt: number },
-    ConnectionEvent,
-    typeof actors
-  >("connection", logger, clock, actors)
-  /** Where a closed transport leaves the connection, by its close code. */
-  const onTransportClosed = [
-    { guard: "inProcess", target: "closed" },
-    { guard: "policyViolation", target: "closed" },
-    { guard: "tryAgainLater", target: "capacity" },
-    { target: "reconnecting" },
-  ] as const
-  const machine = connectionSetup
-    .extend({
-      delays: {
-        handshake: HANDSHAKE_DEADLINE_MS,
-        stable: STABLE_AFTER_MS,
-        reconnect: ({ context }) =>
-          backoffDelay(context.attempt, RECONNECT_BACKOFF),
-        capacity: () =>
-          CAPACITY_BACKOFF.minMs +
-          Math.floor(
-            Math.random() * (CAPACITY_BACKOFF.maxMs - CAPACITY_BACKOFF.minMs)
-          ),
-      },
-      guards: {
-        // In-process pairing has no transport to reopen.
-        inProcess: () => connectAgent !== undefined,
-        policyViolation: ({ event }) =>
-          event.type === "closed" && event.code === POLICY_VIOLATION,
-        tryAgainLater: ({ event }) =>
-          event.type === "closed" && event.code === TRY_AGAIN_LATER,
-      },
-      actions: {
-        // A handshake or replay that cannot complete leaves an unusable
-        // transport; closing it recovers as a dropped one does.
-        closeTransport: () => live?.connection.close(),
-        markReady: () => setStatus("ready"),
-        lose: (
-          _,
-          { status: next }: { status: "reconnecting" | "capacity" }
-        ) => {
-          recovering = true
-          joinable = false
-          setStatus(next)
-          for (const open of sessions.values())
-            open.owner?.actor.send({ type: "lost" })
-        },
-        countAttempt: connectionSetup.assign({
-          attempt: ({ context }) => context.attempt + 1,
-        }),
-        resetAttempts: connectionSetup.assign({ attempt: 0 }),
-      },
-    })
-    .createMachine({
-      context: { generation: 0, attempt: 0 },
-      initial: "connecting",
-      on: { close: ".closed" },
-      states: {
-        connecting: {
-          entry: "bumpGeneration",
-          invoke: { src: "open", onDone: "handshaking" },
-          on: { closed: onTransportClosed },
-          after: { handshake: { actions: "closeTransport" } },
-        },
-        handshaking: {
-          invoke: {
-            src: "handshake",
-            onDone: "ready",
-            onError: { actions: "closeTransport" },
-          },
-          on: { closed: onTransportClosed },
-          after: { handshake: { actions: "closeTransport" } },
-        },
-        ready: {
-          entry: "markReady",
-          // Every Session rejoined, or a transport up long enough, starts the
-          // backoff over.
-          invoke: {
-            src: "recover",
-            onDone: { actions: "resetAttempts" },
-            onError: { actions: "closeTransport" },
-          },
-          on: { closed: onTransportClosed },
-          after: { stable: { actions: "resetAttempts" } },
-        },
-        reconnecting: {
-          meta: { log: "info" },
-          entry: { type: "lose", params: { status: "reconnecting" } },
-          after: {
-            reconnect: { target: "connecting", actions: "countAttempt" },
-          },
-        },
-        // The proxy is full: the wait is long, and the status says why.
-        capacity: {
-          meta: { log: "info" },
-          entry: { type: "lose", params: { status: "capacity" } },
-          after: { capacity: "connecting" },
-        },
-        closed: { type: "final", meta: { log: "info" } },
-      },
-    })
-
-  const sessionActors = {
-    join: fromAbortable((signal, sessionId: string) =>
-      joinOnce(sessionId, signal)
-    ),
-  }
-  const sessionOwnerSetup = ownerSetup<
-    { generation: number; attempt: number; sessionId: string },
-    SessionEvent,
-    typeof sessionActors
-  >("session-owner", logger, clock, sessionActors)
-  const sessionSetup = sessionOwnerSetup.extend({
-    delays: {
-      retry: ({ context }) => backoffDelay(context.attempt, RECONNECT_BACKOFF),
+  const machine = connectionMachine({
+    open: openTransport,
+    handshake: readyTransport,
+    recover,
+    inProcess: connectAgent !== undefined,
+    closeTransport: () => live?.connection.close(),
+    markReady: () => setStatus("ready"),
+    lose(next) {
+      recovering = true
+      joinable = false
+      setStatus(next)
+      for (const open of sessions.values())
+        open.owner?.actor.send({ type: "lost" })
     },
-    guards: {
-      replayOwed: ({ context }) =>
-        sessions.get(context.sessionId)?.replayOwed === true,
-      transportLost: () => status !== "ready",
-    },
-    actions: {
-      oweReplay: ({ context }) => {
-        const open = sessions.get(context.sessionId)
-        if (open) open.replayOwed = true
-      },
-      countAttempt: sessionOwnerSetup.assign({
-        attempt: ({ context }) => context.attempt + 1,
-      }),
-      resetAttempts: sessionOwnerSetup.assign({ attempt: 0 }),
-    },
+    logger,
+    clock,
   })
-
-  /**
-   * One opened Session's owner. It joins while the transport is ready, waits
-   * out a failed join on its own backoff, holds one the transport refuses
-   * until the next transport, rejoins after a reconnect, and ends for good
-   * once the provider reports the Session gone.
-   */
-  function sessionMachine(
-    sessionId: string,
-    initial: "joining" | "joined" | "detached"
-  ) {
-    return sessionSetup.createMachine({
-      context: { generation: 0, attempt: 0, sessionId },
-      initial,
-      on: { replay: { actions: "oweReplay" }, gone: ".gone" },
-      states: {
-        joining: {
-          entry: "bumpGeneration",
-          invoke: {
-            src: "join",
-            input: ({ context }) => context.sessionId,
-            onDone: [
-              { guard: "replayOwed", target: "joining", reenter: true },
-              { target: "joined", actions: "resetAttempts" },
-            ],
-            onError: [
-              { guard: ({ event }) => isGone(event.error), target: "gone" },
-              { guard: "transportLost", target: "detached" },
-              {
-                guard: ({ event }) => isRefused(event.error),
-                target: "refused",
-                actions: ({ context, event }) =>
-                  refuse(context.sessionId, event.error),
-              },
-              { target: "unavailable" },
-            ],
-          },
-          on: { lost: "detached" },
-        },
-        joined: {
-          on: {
-            lost: "detached",
-            replay: { target: "joining", actions: "oweReplay" },
-          },
-        },
-        unavailable: {
-          meta: { log: "info" },
-          after: { retry: { target: "joining", actions: "countAttempt" } },
-          on: { lost: "detached" },
-        },
-        refused: { meta: { log: "info" }, on: { lost: "detached" } },
-        detached: { on: { ready: "joining" } },
-        gone: { type: "final", meta: { log: "info" } },
-      },
-    })
+  const sessionDeps: SessionMachineDeps = {
+    join: joinOnce,
+    replayOwed: (sessionId) => sessions.get(sessionId)?.replayOwed === true,
+    oweReplay(sessionId) {
+      const open = sessions.get(sessionId)
+      if (open) open.replayOwed = true
+    },
+    transportLost: () => status !== "ready",
+    refuse,
+    logger,
+    clock,
   }
 
   /**

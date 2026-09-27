@@ -97,6 +97,97 @@ const ENDS: ReadonlySet<PublicFailure["kind"]> = new Set([
   "runtime_authentication_required",
 ])
 
+/** What one link's machine calls out to, as `createLink` wires it. */
+export type LinkMachineDeps = {
+  /** Brings the link up for the dial `generation` numbers. */
+  dial(signal: AbortSignal, generation: number): Promise<void>
+  /** Failed dials and drops since the link was last up. */
+  failures(): number
+  /** Whether a failure is one a redial would meet again. */
+  ends(cause: unknown): boolean
+  /** Takes down whatever the dial brought up, and records why. */
+  fail(cause: unknown): void
+  /** The link came up. */
+  up(): void
+  /** Whether an at-once redial is within its budget. */
+  takes(): boolean
+  logger: Logger
+  clock: Clock
+}
+
+/**
+ * One link's lifecycle: dialing, up, backing off after a failure, and lost
+ * after one a redial would meet again, until its upstream turns ready.
+ */
+export function linkMachine({
+  dial,
+  failures,
+  ends,
+  fail,
+  up,
+  takes,
+  logger,
+  clock,
+}: LinkMachineDeps) {
+  const actors = { dial: fromAbortable(dial) }
+  const link = ownerSetup<OwnerContext, LinkSignal, typeof actors>(
+    "link",
+    logger,
+    clock,
+    actors
+  ).extend({
+    delays: { redial: () => backoffDelay(failures() - 1, LINK_BACKOFF) },
+  })
+  /**
+   * Where a failed dial or a drop leaves the link, whether it was up or still
+   * dialing.
+   */
+  const settle = <E>(causeOf: (event: E) => unknown) => {
+    const actions = ({ event }: { event: E }) => fail(causeOf(event))
+    return [
+      {
+        guard: ({ event }: { event: E }) => ends(causeOf(event)),
+        target: "lost" as const,
+        actions,
+      },
+      { target: "backing-off" as const, actions },
+    ]
+  }
+  const dropped = settle(({ cause }: { cause: unknown }) => cause)
+  return link.createMachine({
+    context: { generation: 0 },
+    initial: "connecting",
+    states: {
+      connecting: {
+        entry: "bumpGeneration",
+        invoke: {
+          src: "dial",
+          input: ({ context }) => context.generation,
+          onDone: { target: "ready", actions: up },
+          onError: settle(({ error }: { error: unknown }) => error),
+        },
+        // A drop heard before the link is up, during the dial or once it
+        // landed, is a failed dial.
+        on: { lost: dropped },
+      },
+      ready: {
+        meta: { log: "info" },
+        on: { lost: dropped },
+      },
+      "backing-off": {
+        after: { redial: "connecting" },
+        on: { retry: { guard: takes, target: "connecting" } },
+      },
+      lost: {
+        meta: { log: "info" },
+        on: {
+          retry: [{ guard: takes, target: "connecting" }, "backing-off"],
+        },
+      },
+    },
+  })
+}
+
 /**
  * One native link, dialed until it is up and redialed on backoff with full
  * jitter whenever it fails or drops. A circuit breaker around the dials fails
@@ -142,10 +233,8 @@ export function createLink({
     log.warn({ kind }, "link.failed")
     onError?.(cause)
   }
-  const takes = () => budget?.take() ?? true
-
-  const actors = {
-    dial: fromAbortable(async (signal, generation: number) => {
+  const machine = linkMachine({
+    async dial(signal, generation) {
       const stop = await circuit.execute(
         () =>
           dial(signal, (cause) => {
@@ -158,72 +247,20 @@ export function createLink({
       // that lands in it is taken down when the link next settles.
       if (signal.aborted) stop?.()
       else release = stop ?? undefined
-    }),
-  }
-  const link = ownerSetup<OwnerContext, LinkSignal, typeof actors>(
-    "link",
+    },
+    failures: () => failures,
+    ends,
+    fail(cause) {
+      down()
+      failed(cause)
+    },
+    up() {
+      failures = 0
+      reported = undefined
+    },
+    takes: () => budget?.take() ?? true,
     logger,
     clock,
-    actors
-  ).extend({
-    delays: { redial: () => backoffDelay(failures - 1, LINK_BACKOFF) },
-  })
-  /**
-   * Where a failed dial or a drop leaves the link, whether it was up or still
-   * dialing, taking down whatever the dial brought up.
-   */
-  const settle = <E>(causeOf: (event: E) => unknown) => {
-    const actions = ({ event }: { event: E }) => {
-      down()
-      failed(causeOf(event))
-    }
-    return [
-      {
-        guard: ({ event }: { event: E }) => ends(causeOf(event)),
-        target: "lost" as const,
-        actions,
-      },
-      { target: "backing-off" as const, actions },
-    ]
-  }
-  const dropped = settle(({ cause }: { cause: unknown }) => cause)
-  const machine = link.createMachine({
-    context: { generation: 0 },
-    initial: "connecting",
-    states: {
-      connecting: {
-        entry: "bumpGeneration",
-        invoke: {
-          src: "dial",
-          input: ({ context }) => context.generation,
-          onDone: {
-            target: "ready",
-            actions: () => {
-              failures = 0
-              reported = undefined
-            },
-          },
-          onError: settle(({ error }: { error: unknown }) => error),
-        },
-        // A drop heard before the link is up, during the dial or once it
-        // landed, is a failed dial.
-        on: { lost: dropped },
-      },
-      ready: {
-        meta: { log: "info" },
-        on: { lost: dropped },
-      },
-      "backing-off": {
-        after: { redial: "connecting" },
-        on: { retry: { guard: takes, target: "connecting" } },
-      },
-      lost: {
-        meta: { log: "info" },
-        on: {
-          retry: [{ guard: takes, target: "connecting" }, "backing-off"],
-        },
-      },
-    },
   })
   const owner = createOwner(machine, { logger, clock, bindings })
   owner.stack.defer(down)
