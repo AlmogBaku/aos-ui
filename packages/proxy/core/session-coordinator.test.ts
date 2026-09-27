@@ -2440,6 +2440,30 @@ describe("SessionCoordinator", () => {
     expect(engine.start).not.toHaveBeenCalled()
   })
 
+  it("holds a send that lands while a discovery asks the provider, rather than refusing it", async () => {
+    // Every turn's end asks the runtime for a turn of its own; the Session
+    // still reads idle meanwhile, which is when a browser queue sends.
+    const source = new EventSource()
+    let answer!: (found: undefined) => void
+    const engine: ServerTurnEngine = {
+      start: vi.fn(async () => source),
+      recover: vi.fn(async () => source),
+      discover: vi.fn(
+        () => new Promise<undefined>((resolve) => (answer = resolve))
+      ),
+    }
+    const sessions = coordinator(engine)
+
+    const discovery = sessions.discover(scope)
+    expect(sessions.state(scope)).toBe("idle")
+    const sent = sessions.start(scope, input("run-2"), access("one"))
+    await vi.waitFor(() => expect(engine.discover).toHaveBeenCalledOnce())
+    answer(undefined)
+
+    await discovery
+    await expect(sent).resolves.toMatchObject({ turnId: "run-2" })
+  })
+
   it("refreshes a discovered waiting execution from provider authority", async () => {
     const source = new EventSource()
     const request = {

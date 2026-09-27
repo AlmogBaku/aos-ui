@@ -1430,6 +1430,17 @@ export class SessionCoordinator {
   ): Promise<CoordinatedTurnSubscription> {
     signal?.throwIfAborted()
     const key = scopeKey(scope)
+    // A discovery holds the admission while it asks the provider, and every
+    // turn's end starts one: a send waits for its answer, and is refused only
+    // if the runtime did start a turn of its own.
+    for (
+      let discovery = this.#discoveries.get(key);
+      discovery;
+      discovery = this.#discoveries.get(key)
+    ) {
+      await discovery.catch(() => undefined)
+      signal?.throwIfAborted()
+    }
     const existing = this.#executions.get(key)
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
