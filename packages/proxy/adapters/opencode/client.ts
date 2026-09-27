@@ -354,9 +354,10 @@ function validEvent(value: unknown): value is OpenCodeRawDurableEvent {
       MAX_DURABLE_EVENT_DATA_BYTES
   )
     return false
+  // The v2 Session stream carries durable events, whose payload is `data`.
   try {
     const payload = record(JSON.parse(envelope.data))
-    return !!payload && text(payload.type) && !!record(payload.properties)
+    return !!payload && text(payload.type) && !!record(payload.data)
   } catch {
     return false
   }
