@@ -2155,12 +2155,17 @@ export class SessionCoordinator {
 
   #announce(scope: SessionScope, event: ExecutionEvent) {
     const key = scopeKey(scope)
+    const { agentId, sessionId } = scope
     for (const { key: observed, listener } of [...this.#listeners])
       if (observed === undefined || observed === key)
         try {
           listener(event)
-        } catch {
+        } catch (err) {
           // A listener must not rewrite the provider outcome.
+          this.#logger.warn(
+            { err, agentId, sessionId },
+            "execution.listener.failed"
+          )
         }
   }
 
