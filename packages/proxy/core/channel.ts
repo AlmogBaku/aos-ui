@@ -1842,7 +1842,12 @@ class Membership {
     if (interrupted && !this.#owner.stale(generation)) {
       this.#interrupted = subscription.turnId
       await this.#followInterrupted()
+      return
     }
+    // A stream that could not carry the wait it ended on, such as the reset of
+    // a discovered turn no journal replays, still leaves its requests open.
+    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+      this.reissuePending()
   }
 
   /**

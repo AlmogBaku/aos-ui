@@ -1814,6 +1814,49 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  // Incident 2026-09-27: a question Hermes still held across a proxy restart
+  // was discovered, and each open browser followed a turn whose journal could
+  // not replay the wait, so none of them was asked it.
+  it("asks every open browser a question the runtime was already waiting on", async () => {
+    let watcher: ServerTurnListener | undefined
+    const discovered = new EventSource()
+    const test = await harness({
+      providerIds: true,
+      subscribeTurns: (_scope, listener) => {
+        watcher = listener
+        return () => undefined
+      },
+      discover: async () => ({
+        handle: discovered,
+        state: "waiting-for-input",
+        requests: [QUESTION],
+      }),
+      question: (_params, signal) => heldUntilWithdrawn(signal),
+    })
+    await test.list()
+    const other = await test.connect("connection-2", {
+      question: (_params, signal) => heldUntilWithdrawn(signal),
+    })
+    await other.list()
+    await open(test)
+    await open(other)
+
+    watcher?.onTurn()
+    discovered.emit(turnStarted())
+    discovered.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [QUESTION],
+    })
+    discovered.finish()
+
+    const asked = (entry: Recorded) =>
+      entry.method === methods.client.elicitation.create
+    await test.recorder.wait(asked, "the request every browser is asked")
+    await other.recorder.wait(asked, "the request every browser is asked")
+    test.close()
+    other.close()
+  })
+
   it("continues a two-question turn once two browsers each answer one", async () => {
     const SECOND: PendingRequest = { ...QUESTION, requestId: "question-2" }
     const withdrawn: AbortSignal[] = []
