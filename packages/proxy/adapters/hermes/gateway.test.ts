@@ -23,7 +23,7 @@ type Harness = {
   gateway: HermesGateway
   sockets: FakeSocket[]
   factory: ReturnType<typeof vi.fn>
-  log: { warn: ReturnType<typeof vi.fn> }
+  log: { warn: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> }
   control: { autoOpen: boolean; autoReply: boolean; autoReady: boolean }
 }
 
@@ -53,7 +53,7 @@ function harness(
       })
     return socket
   })
-  const log = { warn: vi.fn() }
+  const log = { warn: vi.fn(), debug: vi.fn() }
   const gateway = new HermesGateway({
     baseUrl: BASE_URL,
     credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
@@ -693,9 +693,10 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("logs one dial failure per outage rather than one per redial", async () => {
+  it("warns once per outage rather than once per redial", async () => {
     vi.useFakeTimers()
     const { gateway, sockets, log, control } = harness({
+      autoReply: true,
       backoff: { jitter: false },
       connectTimeoutMs: 1_000,
     })
@@ -704,11 +705,13 @@ describe("Hermes gateway heartbeat and redial", () => {
 
     sockets[0]!.close(1006)
     await vi.advanceTimersByTimeAsync(30_000)
+    expect(log.warn.mock.calls.map(([, event]) => event)).toEqual([
+      "hermes.gateway.dial_failed",
+    ])
     const dialFailures = () =>
       log.warn.mock.calls.filter(
         ([, event]) => event === "hermes.gateway.dial_failed"
       )
-    expect(dialFailures()).toHaveLength(1)
 
     control.autoOpen = true
     await vi.advanceTimersByTimeAsync(30_000)

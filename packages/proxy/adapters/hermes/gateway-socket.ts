@@ -40,7 +40,7 @@ export interface HermesSocket {
   close(): void
 }
 
-/** The one level the Hermes adapter logs at, on the proxy's logger. */
+/** The level Hermes modules log at, on the proxy's logger; the gateway adds debug. */
 export type HermesLog = Pick<Logger, "warn">
 
 export type GuardedSocketOptions = {

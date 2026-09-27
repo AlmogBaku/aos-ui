@@ -8,7 +8,12 @@
  * link it reports and `close()`.
  */
 
-import { boundedQueue, Deadline, defaultClock } from "../../../lifecycle"
+import {
+  boundedQueue,
+  Deadline,
+  defaultClock,
+  type Logger,
+} from "../../../lifecycle"
 import { ADAPTER_CALL_MS, LINK_WAIT_MS } from "../../core/limits"
 import type { LinkState, ServerLink } from "../../core/link"
 import {
@@ -155,8 +160,11 @@ export type HermesGatewayOptions = {
   /** Grace before a socket loss is reported as lost (default 20 s). */
   healGraceMs?: number
   backoff?: ReconnectBackoffOptions
-  log?: HermesLog
+  log?: HermesGatewayLog
 }
+
+/** The gateway's log: an outage warns once, each redial rung in it is debug. */
+export type HermesGatewayLog = HermesLog & Pick<Logger, "debug">
 
 /** A caller parked in `#awaitOpen` until a socket is open. */
 type OpenWaiter = { resolve(): void; reject(error: Error): void }
@@ -247,7 +255,7 @@ export class HermesGateway implements HermesRpcTransport {
   readonly #socketFactory: (url: string) => HermesSocket
   readonly #client: JsonRpcGatewayClient
   readonly #httpClient: HermesHttp
-  readonly #log: HermesLog | undefined
+  readonly #log: HermesGatewayLog | undefined
   readonly #requestTimeoutMs: number
   readonly #connectTimeoutMs: number
   readonly #healGraceMs: number
@@ -519,7 +527,7 @@ export class HermesGateway implements HermesRpcTransport {
       this.#redialTimer = undefined
       if (this.#closed || this.#dial) return
       if (this.#client.connectionState === "open") return
-      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
+      this.connect().catch((err: unknown) => this.#log?.debug({ err }, "hermes.gateway.redial_failed"))
     }, delay)
   }
 
@@ -634,7 +642,7 @@ export class HermesGateway implements HermesRpcTransport {
     if (this.#client.connectionState === "open") return Promise.resolve()
     if (this.#refusal) return Promise.reject(new HermesAuthenticationError())
     if (!this.#dial && this.#redialTimer === undefined)
-      this.connect().catch((err: unknown) => this.#log?.warn({ err }, "hermes.gateway.redial_failed"))
+      this.connect().catch((err: unknown) => this.#log?.debug({ err }, "hermes.gateway.redial_failed"))
     return new Promise<void>((resolve, reject) => {
       // Membership in `#openWaiters` is what settles a waiter exactly once.
       const finish = (complete: () => void) => {
