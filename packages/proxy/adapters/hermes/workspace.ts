@@ -4,6 +4,7 @@ import type {
 } from "../../../protocol"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
+import { HermesRpcUncertainError } from "./gateway"
 import { isRecord, parseJson } from "./native"
 import {
   nativeModelName,
@@ -460,13 +461,18 @@ export function createHermesWorkspaceOperations(input: {
       throw new HermesWorkspaceScopeError()
     return scope
   }
+  // A failed read changed nothing, but a write whose frame went out with no
+  // known result may have landed, so it stays uncertain.
   const request = async (
     method: string,
-    params: Readonly<Record<string, unknown>>
+    params: Readonly<Record<string, unknown>>,
+    kind: "read" | "write" = "read"
   ) => {
     try {
       return await input.transport.request(method, params)
-    } catch {
+    } catch (error) {
+      if (kind === "write" && error instanceof HermesRpcUncertainError)
+        throw error
       throw new HermesWorkspaceUnavailableError()
     }
   }
@@ -553,12 +559,16 @@ export function createHermesWorkspaceOperations(input: {
       let applied: { provider: string; model: string } | undefined
       if (requested) {
         const apply = (confirmed: boolean) =>
-          request("config.set", {
-            session_id: session.liveSessionId,
-            key: "model",
-            value: `${requested.model} --provider ${requested.provider} --session`,
-            ...(confirmed ? { confirm_expensive_model: true } : {}),
-          })
+          request(
+            "config.set",
+            {
+              session_id: session.liveSessionId,
+              key: "model",
+              value: `${requested.model} --provider ${requested.provider} --session`,
+              ...(confirmed ? { confirm_expensive_model: true } : {}),
+            },
+            "write"
+          )
         let answer = await apply(false)
         // Hermes guards some picks — priced models, data-training tiers, leaving
         // a large cached context — with a confirm round-trip written for its own
@@ -585,11 +595,15 @@ export function createHermesWorkspaceOperations(input: {
       }
       if (effortId) {
         // Hermes scopes the `reasoning` key to the given Session by default.
-        const answer = await request("config.set", {
-          session_id: session.liveSessionId,
-          key: "reasoning",
-          value: effortId,
-        })
+        const answer = await request(
+          "config.set",
+          {
+            session_id: session.liveSessionId,
+            key: "reasoning",
+            value: effortId,
+          },
+          "write"
+        )
         if (
           !isRecord(answer) ||
           answer.key !== "reasoning" ||

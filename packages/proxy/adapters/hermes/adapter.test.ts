@@ -16,6 +16,7 @@ import {
   HermesRpcRejectedError,
   HermesRpcUncertainError,
 } from "./gateway"
+import { createHermesHttp } from "./http"
 import { rpcRouter } from "./test-utils/rpc-router"
 import { useFakeClock } from "../../../../test/support/fake-clock"
 import { captureLogs } from "../../../../test/support/log-capture"
@@ -2972,6 +2973,70 @@ describe("Hermes server adapter", () => {
     ).toBe("invalid_request")
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
+
+  it.each([
+    [
+      "a model switch",
+      "uncertain",
+      (adapter: HermesServerAdapter) =>
+        adapter.updateModel("researcher", "stored", {
+          selectedId: '["native","large"]',
+        }),
+    ],
+    [
+      "an Agent update",
+      "uncertain",
+      (adapter: HermesServerAdapter) =>
+        adapter.updateAgent(
+          "researcher",
+          { visibility: "hidden" },
+          "hermes-bots:7,aos:0"
+        ),
+    ],
+    [
+      "a Session archive",
+      "uncertain",
+      (adapter: HermesServerAdapter) =>
+        adapter.updateSession("researcher", "stored", { archived: true }),
+    ],
+    // A read changed nothing, so the same lost answer is only an outage.
+    [
+      "a model catalog read",
+      "unavailable",
+      (adapter: HermesServerAdapter) => adapter.models("researcher", "stored"),
+    ],
+  ] as const)(
+    "classifies %s that lost its answer as %s",
+    async (_case, kind, attempt) => {
+      const adapter = new HermesServerAdapter({
+        request: vi.fn(async (method: string) => {
+          if (method === "session.resume")
+            return { session_id: "live-secret", running: false }
+          if (method === "profiles.list") return { profiles: [profile()] }
+          // The frame went out and its outcome was lost.
+          throw new HermesRpcUncertainError()
+        }),
+        // The real client, so the write reaches the fetcher before it fails.
+        http: createHermesHttp({
+          baseUrl: "http://hermes.test",
+          credentials: async () => ({}),
+          fetcher: vi.fn(
+            async (_url: RequestInfo | URL, init?: RequestInit) => {
+              if (init?.method === "PATCH") throw new TypeError("fetch failed")
+              return Response.json({
+                id: "stored",
+                profile: "researcher",
+                title: "Owned",
+              })
+            }
+          ),
+        }).http,
+      })
+
+      const failure = await attempt(adapter).catch((cause: unknown) => cause)
+      expect(adapter.publicError(failure)?.kind).toBe(kind)
+    }
+  )
 
   it("closes an idle Session once no pending request retains it, but never an unsent draft", async () => {
     vi.useFakeTimers()

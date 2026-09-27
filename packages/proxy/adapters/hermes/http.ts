@@ -8,7 +8,8 @@
  *
  * Every response is read through a byte budget with a declared-length pre-check
  * and a JSON depth/node bound, and no native body, path or header ever reaches
- * a thrown error: callers see `HermesHttpError(status)` or a fixed
+ * a thrown error: callers see `HermesHttpError(status)`, a
+ * `HermesRpcUncertainError` for a write already sent, or a fixed
  * "Hermes request failed" message.
  */
 
@@ -53,6 +54,17 @@ export class HermesHttpError extends Error {
   constructor(readonly status: number) {
     super("Hermes request failed")
     this.name = "HermesHttpError"
+  }
+}
+
+/**
+ * A mutation went out, as a JSON-RPC frame or an HTTP write, but no result was
+ * known: Hermes may have applied it.
+ */
+export class HermesRpcUncertainError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Hermes connection failed", options)
+    this.name = "HermesRpcUncertainError"
   }
 }
 
@@ -142,6 +154,10 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
   const timeoutMs = options.timeoutMs ?? ADAPTER_CALL_MS
   return {
     async http(path: string, init: HermesHttpInit = {}) {
+      // Once a write reaches the fetcher, a failure no longer proves that
+      // Hermes never applied it.
+      const write = (init.method ?? "GET") !== "GET"
+      let sent = false
       try {
         return await new Deadline(timeoutMs).run(async (signal) => {
           const maxResponseBytes = responseLimit(
@@ -151,6 +167,7 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
           const credentials = await options.credentials(signal)
           // A late credential read must not start the request it was late for.
           signal.throwIfAborted()
+          sent = true
           const response = await fetcher(`${baseUrl}${path}`, {
             method: init.method,
             signal,
@@ -189,6 +206,7 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
           error instanceof HermesHttpError
         )
           throw error
+        if (write && sent) throw new HermesRpcUncertainError({ cause: error })
         throw new Error("Hermes request failed")
       }
     },

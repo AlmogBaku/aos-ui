@@ -34,6 +34,7 @@ import {
 import {
   createHermesHttp,
   HermesAuthenticationError,
+  HermesRpcUncertainError,
   responseLimit,
   type HermesCredentials,
   type HermesHttp,
@@ -50,6 +51,7 @@ import { isRecord, nativeId, publicReason, trimmedText } from "./native"
 export {
   HermesAuthenticationError,
   HermesHttpError,
+  HermesRpcUncertainError,
   type HermesCredentials,
 } from "./http"
 export type { HermesLog, HermesSocket } from "./gateway-socket"
@@ -70,14 +72,6 @@ export class HermesRpcRejectedError extends Error {
   ) {
     super("Hermes RPC request was rejected")
     this.name = "HermesRpcRejectedError"
-  }
-}
-
-/** The JSON-RPC mutation was written to the socket but no result was known. */
-export class HermesRpcUncertainError extends Error {
-  constructor() {
-    super("Hermes connection failed")
-    this.name = "HermesRpcUncertainError"
   }
 }
 

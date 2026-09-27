@@ -24,6 +24,7 @@ import {
 import {
   HermesAuthenticationError,
   HermesHttpError,
+  HermesRpcUncertainError,
   HermesUnavailableError,
   throwUnavailable,
   type HermesRpcTransport,
@@ -777,6 +778,11 @@ export class HermesServerAdapter implements ServerRuntime {
       cause instanceof HermesSessionConflictError
     )
       return failureOf("revision_conflict", cause)
+    // A write that went out with no known result may have landed, so the
+    // browser reconciles before trying it again. A read never reaches here:
+    // each read path reports the same lost answer as an outage.
+    if (cause instanceof HermesRpcUncertainError)
+      return failureOf("uncertain", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (cause instanceof HermesTurnPublicError)
@@ -1214,6 +1220,7 @@ export class HermesServerAdapter implements ServerRuntime {
         ),
       })
     } catch (error) {
+      if (error instanceof HermesRpcUncertainError) throw error
       throwUnavailable(error)
     }
     const applied =
@@ -1741,6 +1748,7 @@ export class HermesServerAdapter implements ServerRuntime {
         throw new HermesSessionNotFoundError()
       if (error instanceof HermesHttpError && error.status === 409)
         throw new HermesSessionConflictError()
+      if (error instanceof HermesRpcUncertainError) throw error
       throw new HermesUnavailableError()
     }
   }
