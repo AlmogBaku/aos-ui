@@ -1657,8 +1657,8 @@ describe("SessionCoordinator", () => {
           link: READY_LINK,
         },
       })
-      const create = (clientId: string) =>
-        sessions.createSession("researcher", { clientId }, "operator")
+      const create = (clientId: string, principalId = "operator") =>
+        sessions.createSession("researcher", { clientId }, principalId)
 
       await create("client-1")
       await clock.advance(CLIENT_ADMISSIONS.ttlMs - 1)
@@ -1675,6 +1675,15 @@ describe("SessionCoordinator", () => {
       await create("other-last")
       await create("client-1")
       expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 3)
+
+      // The bound is each principal's own: another's admissions, however
+      // many, never push this one's retry out.
+      await create("client-2")
+      for (let index = 0; index <= CLIENT_ADMISSIONS.entries; index++)
+        await create(`guest-${index}`, "guest:invite-1")
+      const admitted = createSession.mock.calls.length
+      await create("client-2")
+      expect(createSession).toHaveBeenCalledTimes(admitted)
     })
   })
 
