@@ -801,42 +801,62 @@ type ClientAdmission<T> = {
 }
 
 /**
- * The admissions clients may repeat, keyed by what each client id derives: a
- * repeat answers the first one's result, and one asking for something else is
- * refused. Bounded and expiring on the coordinator's clock, apart from any
- * Execution, so a repeat still finds its admission once the turn is gone. A
- * failed admission is forgotten, so its repeat admits afresh.
+ * The admissions clients may repeat, each principal's apart, keyed by what
+ * each client id derives: a repeat answers the first one's result, and one
+ * asking for something else is refused. Bounded per principal, so no
+ * principal's admissions push out another's, and expiring on the
+ * coordinator's clock, apart from any Execution, so a repeat still finds its
+ * admission once the turn is gone. A failed admission is forgotten, so its
+ * repeat admits afresh.
  */
 class ClientAdmissions<T> {
-  readonly #entries = new Map<string, ClientAdmission<T>>()
+  /** Each principal's admissions, oldest first; an emptied one is dropped. */
+  readonly #principals = new Map<string, Map<string, ClientAdmission<T>>>()
 
   constructor(private readonly clock: Clock) {}
 
-  /** The first result `key` names while it is remembered. */
-  repeated(key: string, fingerprint: string): Promise<T> | undefined {
+  /** The first result `key` names while its principal remembers it. */
+  repeated(
+    principalId: string,
+    key: string,
+    fingerprint: string
+  ): Promise<T> | undefined {
     const now = this.clock.now()
-    // Entries expire in the order they were admitted.
-    for (const [oldest, entry] of this.#entries) {
-      if (entry.expiresAt > now) break
-      this.#entries.delete(oldest)
+    for (const [principal, entries] of this.#principals) {
+      // Entries expire in the order they were admitted.
+      for (const [oldest, entry] of entries) {
+        if (entry.expiresAt > now) break
+        entries.delete(oldest)
+      }
+      if (entries.size === 0) this.#principals.delete(principal)
     }
-    const first = this.#entries.get(key)
+    const first = this.#principals.get(principalId)?.get(key)
     if (first && first.fingerprint !== fingerprint)
       throw new ServerClientIdReusedError()
     return first?.result
   }
 
-  remember(key: string, fingerprint: string, result: Promise<T>) {
+  remember(
+    principalId: string,
+    key: string,
+    fingerprint: string,
+    result: Promise<T>
+  ) {
+    const entries =
+      this.#principals.get(principalId) ?? new Map<string, ClientAdmission<T>>()
+    this.#principals.set(principalId, entries)
     const expiresAt = this.clock.now() + CLIENT_ADMISSIONS.ttlMs
     const entry = { fingerprint, expiresAt, result }
-    this.#entries.set(key, entry)
-    if (this.#entries.size > CLIENT_ADMISSIONS.entries) {
-      const oldest = this.#entries.keys().next().value
-      if (oldest !== undefined) this.#entries.delete(oldest)
+    entries.set(key, entry)
+    if (entries.size > CLIENT_ADMISSIONS.entries) {
+      const oldest = entries.keys().next().value
+      if (oldest !== undefined) entries.delete(oldest)
     }
     // The admission's own caller reports its failure; this only forgets it.
     void result.catch(() => {
-      if (this.#entries.get(key) === entry) this.#entries.delete(key)
+      if (entries.get(key) !== entry) return
+      entries.delete(key)
+      if (entries.size === 0) this.#principals.delete(principalId)
     })
   }
 }
@@ -1307,10 +1327,10 @@ export class SessionCoordinator {
     if (input.clientId === undefined) return create()
     const key = clientKey(principalId, agentId, input.clientId)
     const fingerprint = admissionFingerprint({ title: input.title })
-    const repeated = this.#creates.repeated(key, fingerprint)
+    const repeated = this.#creates.repeated(principalId, key, fingerprint)
     if (repeated) return repeated
     const created = create()
-    this.#creates.remember(key, fingerprint, created)
+    this.#creates.remember(principalId, key, fingerprint, created)
     return created
   }
 
@@ -1325,9 +1345,14 @@ export class SessionCoordinator {
       if (!("clientId" in input))
         return this.#startTurn(scope, input, access, options)
       const { clientId, sent, prepare } = input
-      const ids = clientTurnIds(access.principalId, scope.sessionId, clientId)
+      const { principalId } = access
+      const ids = clientTurnIds(principalId, scope.sessionId, clientId)
       const fingerprint = admissionFingerprint(sent)
-      const repeated = this.#sends.repeated(ids.turnId, fingerprint)
+      const repeated = this.#sends.repeated(
+        principalId,
+        ids.turnId,
+        fingerprint
+      )
       if (!repeated) {
         const started = prepare().then(({ stage, ...prompt }) =>
           this.#startStaged(
@@ -1339,6 +1364,7 @@ export class SessionCoordinator {
           )
         )
         this.#sends.remember(
+          principalId,
           ids.turnId,
           fingerprint,
           started.then(() => undefined)
@@ -1573,7 +1599,8 @@ export class SessionCoordinator {
    * Asks the provider how an uncertain turn stands. A recovery that lands
    * confirms the turn running, and its stream reports how the turn ends; one
    * that meets its Session gone ends the turn, since no later recover can
-   * confirm it; any other failure leaves it uncertain for the next reconcile.
+   * confirm it, and then the Session; any other failure leaves it uncertain
+   * for the next reconcile.
    */
   async #reconcile(scope: SessionScope, turn: Turn, generation: number) {
     const { value, context } = turn.owner.actor.getSnapshot()
@@ -1604,6 +1631,8 @@ export class SessionCoordinator {
         kind: TurnEventKind.TurnFailed,
         code: failure.code,
       })
+      // Journaled first, so the turn's end is written before the Session goes.
+      this.endIfGone(scope, err)
     }
   }
 
@@ -2126,12 +2155,17 @@ export class SessionCoordinator {
 
   #announce(scope: SessionScope, event: ExecutionEvent) {
     const key = scopeKey(scope)
+    const { agentId, sessionId } = scope
     for (const { key: observed, listener } of [...this.#listeners])
       if (observed === undefined || observed === key)
         try {
           listener(event)
-        } catch {
+        } catch (err) {
           // A listener must not rewrite the provider outcome.
+          this.#logger.warn(
+            { err, agentId, sessionId },
+            "execution.listener.failed"
+          )
         }
   }
 

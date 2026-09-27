@@ -344,9 +344,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
               if (stage) prompt = await stage.appendTo(text)
             } catch (cause) {
               // The coordinator never took the stage, so it is released here.
-              await stage?.cleanup().catch((err: unknown) =>
-                context.logger.warn({ err }, "turn.stage.cleanup_failed")
-              )
+              await stage
+                ?.cleanup()
+                .catch((err: unknown) =>
+                  context.logger.warn({ err }, "turn.stage.cleanup_failed")
+                )
               throw cause
             }
             return {
@@ -417,6 +419,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const { token } = parseMeta(AosLoginMetaSchema, params._meta)
     if (!(await authentication.authenticate(token)))
       throw authenticationRequired()
+    context.handshakeComplete?.()
     return {}
   })
 
@@ -751,11 +754,14 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onConnect(async (connection) => {
     const { logger } = context
     // The connection's logger already carries its `connectionId` and `role`.
-    const owner = createOwner(connectionMachine(logger, context.clock ?? defaultClock), {
-      logger,
-      clock: context.clock ?? defaultClock,
-      bindings: {},
-    })
+    const owner = createOwner(
+      connectionMachine(logger, context.clock ?? defaultClock),
+      {
+        logger,
+        clock: context.clock ?? defaultClock,
+        bindings: {},
+      }
+    )
     const { stack } = owner
     stack.defer(() => {
       sessions.close()
@@ -769,7 +775,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       owner.actor.send({ type: "closed" })
       return
     }
-    context.handshakeComplete?.()
+    // A connection that authenticates over ACP completes it at its login.
+    if (!context.authentication) context.handshakeComplete?.()
     owner.actor.send({ type: "initialized" })
     // A connection that never finished its handshake is not an open ACP
     // connection, so the opened and closed lines always pair.

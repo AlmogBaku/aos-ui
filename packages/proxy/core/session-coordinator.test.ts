@@ -1657,8 +1657,8 @@ describe("SessionCoordinator", () => {
           link: READY_LINK,
         },
       })
-      const create = (clientId: string) =>
-        sessions.createSession("researcher", { clientId }, "operator")
+      const create = (clientId: string, principalId = "operator") =>
+        sessions.createSession("researcher", { clientId }, principalId)
 
       await create("client-1")
       await clock.advance(CLIENT_ADMISSIONS.ttlMs - 1)
@@ -1675,6 +1675,15 @@ describe("SessionCoordinator", () => {
       await create("other-last")
       await create("client-1")
       expect(createSession).toHaveBeenCalledTimes(CLIENT_ADMISSIONS.entries + 3)
+
+      // The bound is each principal's own: another's admissions, however
+      // many, never push this one's retry out.
+      await create("client-2")
+      for (let index = 0; index <= CLIENT_ADMISSIONS.entries; index++)
+        await create(`guest-${index}`, "guest:invite-1")
+      const admitted = createSession.mock.calls.length
+      await create("client-2")
+      expect(createSession).toHaveBeenCalledTimes(admitted)
     })
   })
 
@@ -3007,15 +3016,18 @@ describe("SessionCoordinator", () => {
     const recover = vi
       .fn<ServerTurnEngine["recover"]>()
       .mockRejectedValue(new ServerSessionNotFoundError())
+    const logs = captureLogs()
     const gone = coordinator(
       {
         start: vi.fn<ServerTurnEngine["start"]>().mockResolvedValue(lost),
         recover,
       },
-      { maxActiveExecutions: 1 }
+      { maxActiveExecutions: 1, logger: logs.logger }
     )
     const ended: ExecutionEvent[] = []
     gone.subscribeExecutions((event) => ended.push(event))
+    const heard = vi.fn()
+    gone.subscribeReadings(scope, "member-1", { gone: heard })
     const onTerminal = vi.fn(async () => undefined)
     await gone.start(scope, input("run-4"), { ...access("one"), onTerminal })
     lost.emit(interruptedError)
@@ -3029,9 +3041,12 @@ describe("SessionCoordinator", () => {
     ])
     const goneFailure = { kind: TurnEventKind.TurnFailed, code: "not_found" }
     expect(onTerminal).toHaveBeenLastCalledWith(goneFailure)
-    await expect(reloadedHead(gone, scope, "run-4")).resolves.toMatchObject({
-      event: goneFailure,
-    })
+    // The Session ends for every member once, and nothing serves it again.
+    expect(heard).toHaveBeenCalledTimes(1)
+    expect(gone.gauges().executions).toBe(0)
+    expect(
+      logs.records().filter(({ message }) => message === "session.gone")
+    ).toHaveLength(1)
     await advance(UNCERTAINTY_DEADLINE_MS)
     expect(recover).toHaveBeenCalledTimes(1)
     await expect(

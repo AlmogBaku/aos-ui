@@ -1499,10 +1499,12 @@ class Membership {
 
   /**
    * Follows the turn an interrupt cut this member's stream of again, from
-   * where the member stopped, once the coordinator's reconcile confirmed it
-   * running: every member keeps following a turn whose native link dropped,
-   * and none has to redial. Asked as the stream ends and at each move of the
-   * Session's execution, so a reconcile that lands first is not missed.
+   * where the member stopped, once the coordinator settled it: every member
+   * keeps following a turn whose native link dropped, and none has to redial.
+   * A turn a reconcile confirmed running streams on; one that ended meanwhile
+   * replays how it ended from its journal. Asked as the stream ends and at
+   * each move of the Session's execution, so a settle that lands first is not
+   * missed.
    */
   async #followInterrupted() {
     const turnId = this.#interrupted
@@ -1512,11 +1514,12 @@ class Membership {
     if (current.state === "uncertain") return
     this.#interrupted = undefined
     if (current.turnId !== turnId) return
-    await this.#follow(true, this.#sequence).catch((cause: unknown) =>
-      // A cursor the journal no longer holds leaves history the only way on.
-      cause instanceof ReplayCursorLostError
-        ? this.#invalidate()
-        : this.report(cause)
+    await this.#follow(true, this.#sequence, 0, turnId).catch(
+      (cause: unknown) =>
+        // A cursor the journal no longer holds leaves history the only way on.
+        cause instanceof ReplayCursorLostError
+          ? this.#invalidate()
+          : this.report(cause)
     )
   }
 
@@ -1658,18 +1661,21 @@ class Membership {
    * Subscribes to the live turn unless this member already carries it. A
    * resume asks whether its current subscription does, so it can re-follow a
    * turn whose stream it lost; the channel asks whether any subscription
-   * ever did, so a member is never streamed one turn twice. Returns the
-   * turnId it streams, or `undefined` when no turn is live.
+   * ever did, so a member is never streamed one turn twice. `ended` names a
+   * turn followed even once it ended, whose end the member is still owed.
+   * Returns the turnId it streams, or `undefined` when no turn is live.
    */
   #follow(
     refollow: boolean,
     after?: number | "reset",
-    replayedCorrections = 0
+    replayedCorrections = 0,
+    ended?: string
   ) {
     return this.#exclusive(async (): Promise<string | undefined> => {
       if (this.detached) return undefined
       const { state, turnId } = this.#coordinator.snapshot(this.#scope)
-      if (state === "idle" || turnId === undefined) return undefined
+      if (turnId === undefined || (state === "idle" && turnId !== ended))
+        return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
       if (carried === turnId) return turnId
       this.#consume(

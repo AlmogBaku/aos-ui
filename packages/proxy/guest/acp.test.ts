@@ -55,9 +55,11 @@ import type {
   ServerTurnHandle,
   ServerRuntime,
 } from "../core/runtime"
+import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
   createGuestAcpService,
@@ -646,8 +648,14 @@ async function wire(listener: GuestAcpServiceOptions) {
   if (!upgrade) throw new Error("The guest upgrade was refused")
   const frames: Frame[] = []
   const closed: Array<{ code: number; reason: string }> = []
+  const replies = new Map<Frame["id"], (reply: Frame) => void>()
   const socket = service.open(upgrade, {
-    send: (raw) => frames.push(JSON.parse(raw) as Frame),
+    send: (raw) => {
+      const frame = JSON.parse(raw) as Frame
+      const sent = frames.push(frame)
+      if (frame.method === undefined) replies.get(frame.id)?.(frame)
+      return sent
+    },
     close: (code, reason) => closed.push({ code, reason }),
   })
   let nextId = 0
@@ -656,12 +664,9 @@ async function wire(listener: GuestAcpServiceOptions) {
   const request = (method: string, params: unknown) => {
     nextId += 1
     const id = nextId
+    const reply = new Promise<Frame>((resolve) => replies.set(id, resolve))
     send({ id, method, params })
-    return vi.waitFor(() => {
-      const reply = frames.find((frame) => frame.id === id)
-      if (!reply) throw new Error(`No reply to ${method}`)
-      return reply
-    })
+    return reply
   }
   return { frames, closed, send, request, close: () => socket.close() }
 }
@@ -848,6 +853,29 @@ describe("guest ACP listener", () => {
     // No activity, usage, Session row or catalog signal reaches it either.
     expect(socket.frames.slice(before)).toEqual([])
     socket.close()
+  })
+
+  it("closes a guest socket that has not logged in by the handshake deadline", async () => {
+    const clock = useFakeClock()
+    const test = harness({ existing: true })
+    const waiting = await wire(test.listener)
+    await waiting.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+    })
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+
+    await clock.advance(HANDSHAKE_DEADLINE_MS - 1)
+    expect(waiting.closed).toEqual([])
+    await clock.advance(1)
+
+    expect(waiting.closed).toEqual([expect.objectContaining({ code: 4408 })])
+    expect(guest.closed).toEqual([])
+    guest.close()
+    waiting.close()
   })
 
   it("logs neither a token nor the setup instruction as a guest logs in", async () => {
