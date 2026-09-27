@@ -2,8 +2,8 @@
  * The failure contract every server runtime meets (ADR D3), proven once over
  * each adapter's own native fake (ADR D14). An adapter's `contract.test.ts`
  * calls `runServerRuntimeContract` with a harness that builds its runtime and
- * drives that fake. A row the adapter cannot express, or one a known bug still
- * fails, is named in `gaps` with its reason and left out.
+ * drives that fake. A row the native server has no concept for is named in
+ * `gaps` with its reason, and every run lists it as skipped with that reason.
  *
  * Test-only: the architecture guard keeps production code from importing it.
  */
@@ -65,7 +65,7 @@ export type RuntimeContractHarness = {
 export type RuntimeContractOptions = {
   /** The caller errors this runtime can report for a refused read. */
   callerErrors: readonly CallerError[]
-  /** Rows left out, each with why: a capability it lacks or the bug it has. */
+  /** Rows skipped, each with the concept its native server lacks. */
   gaps?: Partial<Record<RuntimeContractRow, string>>
 }
 
@@ -176,7 +176,10 @@ export function runServerRuntimeContract(
       close: () => Promise<void>
     ) => Promise<void>
   ) {
-    if (gaps[id] !== undefined) return
+    if (gaps[id] !== undefined) {
+      it.skip(`${title} (gap: ${gaps[id]})`)
+      return
+    }
     it(title, async () => {
       const clock = useFakeClock()
       const harness = await until(clock, Promise.resolve(createHarness()))
