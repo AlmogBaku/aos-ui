@@ -73,6 +73,24 @@ multiplexed JSON-RPC connection and durable-to-live Session attachments;
 OpenClaw and OpenCode have different native observation and recovery models.
 They share coordinator semantics, not a generic socket manager.
 
+## Own the native link
+
+Each adapter keeps one connection owner per native link, built with
+`createLink` (`packages/proxy/core/link.ts`). The owner dials the link,
+reconnects on backoff with full jitter (`LINK_BACKOFF`: base 250 ms, cap 5 s),
+and applies a circuit breaker (`LINK_BREAKER`: open after 5 consecutive failed
+dials, half-open after 10 s). It stops retrying when the failure kind is
+`gone` or `runtime_authentication_required`; both are terminal until the upstream
+turns ready.
+
+`Link.held()` returns `true` while the breaker holds the dials: a caller that
+wants to wait for the link to come up may check it before queuing. The adapter
+must call `link.dispose()` on every exit path — normal close, error, and
+cancellation — so the owner stops dialing and releases any open connection.
+
+Keep the reconnect budget (`RETRY_BUDGET`) shared across all owners of one
+runtime so that N owners do not retry in lockstep after a runtime restart.
+
 ## Map native output to the proxy-owned turn vocabulary
 
 Adapters emit the proxy-owned turn vocabulary (`TurnEvent`, `TurnEventKind`,
@@ -248,6 +266,30 @@ opaque `{ epoch, lastSeen }` an adapter reports, never a provider cursor. Replay
 overflow or an epoch change falls back to authoritative reads without
 resubmitting user intent.
 
+## Classify every failure
+
+Every failure crossing the adapter boundary is one of three kinds, or a caller error
+(`packages/proxy/core/failures.ts`):
+
+| Kind                              | Meaning                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------- |
+| `gone`                            | What the request named no longer exists; nothing brings it back.                 |
+| `unavailable`                     | Nothing happened; the same request may succeed later.                            |
+| `uncertain`                       | A write may have landed; reconcile before trying it again.                       |
+| `invalid_request`                 | The caller supplied a bad input; a retry would meet it again.                    |
+| `revision_conflict`               | A concurrent write changed the state the request assumed.                        |
+| `runtime_authentication_required` | The credential is absent or rejected; re-authenticate before retrying.           |
+
+A read is never uncertain: an adapter call past `ADAPTER_CALL_MS`
+(`packages/proxy/core/limits.ts`, 15 s) is `unavailable` for a read and
+`uncertain` for a write. The native error travels as `cause` on every failure,
+so the coordinator and the proxy log can include the chain without the adapter
+deciding what to reveal.
+
+Use `failureOf(kind, cause)` to construct a `PublicFailure` with the
+canonical machine code for that kind. Use `publicFailure(cause, table)` when
+the native error carries a code the adapter maps to a kind.
+
 ## Normalize capabilities, state, and content
 
 Capabilities are structured values. Preserve native choices, limits, scopes,
@@ -313,7 +355,10 @@ An adapter is ready when:
 - lost mutation acknowledgements are uncertain and never replayed;
 - reconnect restores observation and state without resending prompts;
 - provider payloads and paths cannot enter normalized or guest output;
-- focused adapter tests and provider-neutral conformance tests pass.
+- focused adapter tests and provider-neutral conformance tests pass;
+- `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) passes
+  in the adapter's own `contract.test.ts` — this suite is the gate for the
+  adapter's failure taxonomy, recovery token, and link contract.
 
 When a runtime's native client is open source and the AOS server-side
 requirements (bounded decoding, credential isolation, uncertain-mutation

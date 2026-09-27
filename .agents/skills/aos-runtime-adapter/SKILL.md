@@ -58,6 +58,26 @@ turn state, control serialization, subscriber fanout, and turn segment identity
 in the coordinator. Emit the proxy-owned turn vocabulary (`core/events.ts`);
 extend the vocabulary there only for behavior it cannot yet express.
 
+## Classify failures and own the link
+
+Every failure the adapter raises is `gone`, `unavailable`, `uncertain`, or a
+caller error (`invalid_request`, `revision_conflict`,
+`runtime_authentication_required`), each built with `failureOf` or
+`publicFailure` from `packages/proxy/core/failures.ts`. The native error
+travels as `cause`. A write past `ADAPTER_CALL_MS` (15 s,
+`packages/proxy/core/limits.ts`) is `uncertain`; a read past it is
+`unavailable`.
+
+Each adapter owns one `createLink` owner per native link
+(`packages/proxy/core/link.ts`): it reconnects with jittered backoff and a
+circuit breaker, stops on `gone` or `runtime_authentication_required`, and
+exposes `Link.held()` for callers that want to know the breaker is open. Call
+`link.dispose()` on every exit path — normal close, error, and cancellation.
+
+The adapter's conformance suite is `runServerRuntimeContract`
+(`packages/proxy/core/runtime-contract.ts`), run in the adapter's own
+`contract.test.ts`; it must pass before the adapter is considered complete.
+
 ## Attachments and Artifacts
 
 Treat attachment and media planes as different public concepts:
