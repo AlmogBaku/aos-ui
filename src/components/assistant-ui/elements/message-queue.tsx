@@ -474,10 +474,6 @@ export function MessageQueue({
     moved?.members === members
       ? `${moved.text}${moved.repeat ? "\u00a0" : ""}`
       : ""
-  // An editor whose message left the queue is closed.
-  const openEditing = items.some((item) => item.id === editing?.id)
-    ? editing
-    : undefined
   return (
     <div
       data-slot="aui_message-queue"
@@ -496,7 +492,7 @@ export function MessageQueue({
               placeOf={placeOf}
               onMoved={announceMove}
               controls={controls}
-              editing={openEditing}
+              editing={editing}
               onEditingChange={onEditingChange}
             />
           )}
