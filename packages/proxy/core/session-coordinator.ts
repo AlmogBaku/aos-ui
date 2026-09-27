@@ -925,8 +925,8 @@ export class SessionCoordinator {
     key: string
     listener: (cause: unknown) => void
   }>()
-  /** The failures that ended a Session, which a second report ends no more. */
-  readonly #ended = new WeakSet<object>()
+  /** The Sessions each failure ended, which a second report ends no more. */
+  readonly #ended = new WeakMap<object, Set<string>>()
   /** How many turns the uncertainty deadline ended with their outcome unknown. */
   #deadlinesFired = 0
   /** Changed by every turn, and by a model switch. */
@@ -1107,11 +1107,12 @@ export class SessionCoordinator {
    */
   endIfGone(scope: SessionScope, cause: unknown) {
     if (this.#closed || this.#failure(cause)?.kind !== "gone") return false
-    if (typeof cause === "object" && cause !== null) {
-      if (this.#ended.has(cause)) return true
-      this.#ended.add(cause)
-    }
     const key = scopeKey(scope)
+    if (typeof cause === "object" && cause !== null) {
+      const ended = this.#ended.get(cause) ?? new Set<string>()
+      if (ended.has(key)) return true
+      this.#ended.set(cause, ended.add(key))
+    }
     const { agentId, sessionId } = scope
     this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
     // All taken first, so a listener that finds the Session gone again tells

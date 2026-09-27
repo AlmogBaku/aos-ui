@@ -3686,6 +3686,21 @@ describe("SessionCoordinator", () => {
     expect(operator).toEqual([listed])
   })
 
+  it("ends every Session one shared gone failure is reported for", () => {
+    const sessions = coordinator({ start: vi.fn(), recover: vi.fn() })
+    const first = vi.fn()
+    const second = vi.fn()
+    sessions.subscribeReadings(scope, "member-1", { gone: first })
+    sessions.subscribeReadings(otherScope, "member-2", { gone: second })
+    const gone = new ServerSessionNotFoundError()
+
+    sessions.endIfGone(scope, gone)
+    sessions.endIfGone(otherScope, gone)
+
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
+  })
+
   describe("eviction and gauges", () => {
     it("evicts an idle execution and its journal when its last reading subscriber leaves", async () => {
       const { advance } = useFakeClock()
