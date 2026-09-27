@@ -391,6 +391,7 @@ const script = {
         visibility: "visible",
         selectable: true,
         editable: false,
+        avatarEditable: false,
         revision: "research-1",
       },
     ],
@@ -874,7 +875,9 @@ function installAcpStub(script: AcpScript) {
           sessionId: newSessionId,
           update: {
             sessionUpdate: "session_info_update",
-            _meta: { aos: { agentId, status: "idle", archived: false, unread: false } },
+            _meta: {
+              aos: { agentId, status: "idle", archived: false, unread: false },
+            },
           },
         })
       })

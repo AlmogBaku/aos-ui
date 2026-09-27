@@ -51,7 +51,7 @@ import {
 } from "@/runtime-adapters/agent-identity"
 import {
   draftAgentId,
-  draftThreadId,
+  draftSessionId,
   isDraftAgentId,
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
@@ -1442,7 +1442,7 @@ export function useWorkspaceNavigation({
    */
   async function discardDraft(agentId: string) {
     if (!isDraftAgentId(agentId)) return
-    const sessionId = draftThreadId(agentId)
+    const sessionId = draftSessionId(agentId)
     if (!sessionId) {
       clearLocalDraft()
       if (defaultAgentId) await selectAgent(defaultAgentId)

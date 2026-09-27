@@ -147,7 +147,11 @@ It requires `operator.admin`.
 
 The `config.get` payload may carry credentials. The proxy keeps only the config
 hash and the set of authored Agent ids, and logs or returns nothing else from
-it. Every catalog read also calls `config.get` to refresh the authorized set.
+it. Every catalog read also calls `config.get` to refresh the authorized set,
+so the credential-bearing payload passes through proxy memory on each read
+before that reduction; the device's `operator.admin` scope can read it anyway.
+OpenClaw merges the patch into `agents.list` by id, refuses one that would drop
+an entry, and applies an `agents` change without restarting the Gateway.
 
 Visibility changes are unsupported for OpenClaw; a patch that includes
 `visibility` is rejected as a whole.

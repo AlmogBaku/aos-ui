@@ -410,14 +410,14 @@ block covers only the failures ACP has no code for (`AOS_JSONRPC_ERRORS`,
 
 **AOS-only codes (`AOS_JSONRPC_ERRORS`, block from -32010):**
 
-| Code     | Name                     | Meaning                                      |
-| -------- | ------------------------ | -------------------------------------------- |
-| `-32010` | `turnInProgress`         | Cannot send while a turn is active           |
-| `-32011` | `staleRequest`           | Request ID no longer valid                   |
-| `-32012` | `revisionConflict`       | Edit/rewind source message no longer current |
-| `-32013` | `temporarilyUnavailable` | Runtime not reachable; retry later           |
-| `-32014` | `uncertainMutation`      | Mutation dispatched but outcome unknown      |
-| `-32015` | `unsupported`            | Runtime cannot store a requested Agent field |
+| Code     | Name                     | Meaning                                                     |
+| -------- | ------------------------ | ----------------------------------------------------------- |
+| `-32010` | `turnInProgress`         | Cannot send while a turn is active                          |
+| `-32011` | `staleRequest`           | Request ID no longer valid                                  |
+| `-32012` | `revisionConflict`       | Observed Agent revision or source message no longer current |
+| `-32013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
+| `-32014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
+| `-32015` | `unsupported`            | Runtime cannot store a requested Agent field                |
 
 Codes `-32001` through `-32009` are no longer used.
 

@@ -25,13 +25,13 @@ export const draftAgentId = (sessionId: string) => `${DRAFT_PREFIX}${sessionId}`
  */
 export const PENDING_DRAFT_AGENT_ID = "draft-pending"
 
-export const draftThreadId = (agentId: string) =>
+export const draftSessionId = (agentId: string) =>
   agentId.startsWith(DRAFT_PREFIX)
     ? agentId.slice(DRAFT_PREFIX.length)
     : undefined
 
 export const isDraftAgentId = (agentId: string) =>
-  agentId === PENDING_DRAFT_AGENT_ID || draftThreadId(agentId) !== undefined
+  agentId === PENDING_DRAFT_AGENT_ID || draftSessionId(agentId) !== undefined
 
 function isEligible(
   session: SessionMetadata,
@@ -56,7 +56,7 @@ type ProjectDraftAgentsInput = {
   draftLabel: string
   /** Formats the start time for the active locale. */
   locale: string
-  /** Session titles by thread id, as the thread list reports them. */
+  /** Session titles by Session id, as the thread list reports them. */
   titles: ReadonlyMap<string, string | undefined>
   /**
    * Row id for a creator interview the provider has not listed yet: the
@@ -111,7 +111,7 @@ export function projectDraftAgents(input: ProjectDraftAgentsInput): {
   if (!creator) return { agents: [...agents], sessions: [...sessions] }
 
   const draftAgent = (id: string, createdAt?: string): AgentSummary => {
-    const sessionId = draftThreadId(id)
+    const sessionId = draftSessionId(id)
     return {
       kind: "ready",
       id,

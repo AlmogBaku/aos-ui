@@ -73,7 +73,7 @@ import {
 } from "./session-thread-list-item"
 import { RowIndicators, StatusDot } from "./status-dots"
 import { WorkspaceAgentTile } from "./workspace-agent-tile"
-import { draftThreadId, isDraftAgentId } from "@/runtime-adapters/draft-agents"
+import { draftSessionId, isDraftAgentId } from "@/runtime-adapters/draft-agents"
 
 export type WorkspaceAgentStatus =
   "idle" | "active" | "running" | "attention" | "unknown"
@@ -492,7 +492,7 @@ function AgentsPanel({
                 ((agentId) => {
                   // A pending interview destroys nothing, so it needs no
                   // question; one that owns a Session does.
-                  if (draftThreadId(agentId) && onConfirmDiscardDraft)
+                  if (draftSessionId(agentId) && onConfirmDiscardDraft)
                     onConfirmDiscardDraft({ agentId, name: agent.name })
                   else runAction(() => onDiscardDraft(agentId), onActionError)
                 })

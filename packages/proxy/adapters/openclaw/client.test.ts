@@ -344,37 +344,36 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it("leaves a dispatched write uncertain unless the Gateway refused it", async () => {
-    const clock = useFakeClock()
-    const { client, gateway } = await ready(clock)
-    const controller = new AbortController()
-    gateway().requestHandler = (options) => {
-      options?.onSent?.()
-      controller.abort()
-      return Promise.reject(new Error("native cancellation detail"))
-    }
+  it.each(["chat.send", "config.patch"])(
+    "leaves a dispatched %s uncertain unless the Gateway refused it",
+    async (method) => {
+      const clock = useFakeClock()
+      const { client, gateway } = await ready(clock)
+      const controller = new AbortController()
+      gateway().requestHandler = (options) => {
+        options?.onSent?.()
+        controller.abort()
+        return Promise.reject(new Error("native cancellation detail"))
+      }
 
-    await expect(
-      client.request(
-        "chat.send",
-        { text: "once" },
-        { signal: controller.signal }
-      )
-    ).rejects.toMatchObject({
-      kind: "cancelled",
-      uncertain: true,
-    })
+      await expect(
+        client.request(method, { text: "once" }, { signal: controller.signal })
+      ).rejects.toMatchObject({
+        kind: "cancelled",
+        uncertain: true,
+      })
 
-    gateway().requestHandler = (options) => {
-      options?.onSent?.()
-      return Promise.reject(
-        new GatewayClientRequestError({ code: "INVALID_REQUEST" })
-      )
+      gateway().requestHandler = (options) => {
+        options?.onSent?.()
+        return Promise.reject(
+          new GatewayClientRequestError({ code: "INVALID_REQUEST" })
+        )
+      }
+      await expect(
+        client.request(method, { text: "once" })
+      ).rejects.toMatchObject({ kind: "rejected", uncertain: false })
     }
-    await expect(
-      client.request("chat.send", { text: "once" })
-    ).rejects.toMatchObject({ kind: "rejected", uncertain: false })
-  })
+  )
 
   it("preserves official sent and accepted acknowledgement boundaries for a leaf", async () => {
     const clock = useFakeClock()

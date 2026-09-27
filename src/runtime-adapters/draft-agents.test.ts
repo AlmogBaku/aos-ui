@@ -4,7 +4,7 @@ import type { AgentSummary, SessionMetadata } from "./contracts"
 import {
   DRAFT_AGENT_WINDOW_MS,
   draftAgentId,
-  draftThreadId,
+  draftSessionId,
   isDraftAgentId,
   nextDraftExpiry,
   PENDING_DRAFT_AGENT_ID,
@@ -45,16 +45,16 @@ function session(
 const copy = { name: "New Agent", draftLabel: "Draft", locale: "en" }
 
 describe("draft Agent identifiers", () => {
-  it("round-trips a thread id and rejects ordinary Agent ids", () => {
-    expect(draftThreadId(draftAgentId("thread-1"))).toBe("thread-1")
+  it("round-trips a Session id and rejects ordinary Agent ids", () => {
+    expect(draftSessionId(draftAgentId("thread-1"))).toBe("thread-1")
     expect(isDraftAgentId(draftAgentId("thread-1"))).toBe(true)
-    expect(draftThreadId("aster")).toBeUndefined()
+    expect(draftSessionId("aster")).toBeUndefined()
     expect(isDraftAgentId("aster")).toBe(false)
   })
 
   it("names the pending draft without naming any thread", () => {
     expect(isDraftAgentId(PENDING_DRAFT_AGENT_ID)).toBe(true)
-    expect(draftThreadId(PENDING_DRAFT_AGENT_ID)).toBeUndefined()
+    expect(draftSessionId(PENDING_DRAFT_AGENT_ID)).toBeUndefined()
   })
 })
 
