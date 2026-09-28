@@ -555,7 +555,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ),
         signal
       )
-      return { _meta: { [AOS_META_KEY]: { messageId } } }
+      return { messageId }
     }
   )
 

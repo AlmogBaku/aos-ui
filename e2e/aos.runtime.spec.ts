@@ -787,7 +787,7 @@ function installAcpStub(script: AcpScript) {
         turn += 1
         const messageId = `user-${turn}`
         const answerId = `answer-${turn}`
-        this.respond(id, { _meta: { aos: { messageId } } })
+        this.respond(id, { messageId })
         this.update({
           sessionUpdate: "user_message",
           messageId,

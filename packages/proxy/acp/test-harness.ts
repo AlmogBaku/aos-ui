@@ -1096,9 +1096,7 @@ export async function prompt(
       typeof content === "string" ? [{ type: "text", text: content }] : content,
     _meta: { [AOS_META_KEY]: meta },
   })
-  return z
-    .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
-    .parse(accepted)._meta.aos.messageId
+  return accepted.messageId
 }
 
 /** Opens a Session and waits for the execution report its resume owes. */

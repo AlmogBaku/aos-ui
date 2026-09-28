@@ -191,15 +191,6 @@ export const AosSessionResumeMetaSchema = z.strictObject({
 })
 
 /**
- * `PromptResponse._meta.aos`. The pinned SDK's v2 `PromptResponse` has no
- * `messageId` field and its client parser strips unknown keys, so the proxy's
- * minted user message id travels here.
- */
-export const AosPromptResponseMetaSchema = readObject({
-  messageId: IdentifierSchema,
-})
-
-/**
  * The reserved `replayFrom` extension variant that reads one older page of a
  * Session this connection is already a member of. `cursor` is the opaque
  * `history.nextCursor` a previous resume returned; the server picks the page

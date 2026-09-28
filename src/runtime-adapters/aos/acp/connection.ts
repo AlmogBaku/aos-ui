@@ -49,7 +49,6 @@ import {
   AosHistoryPageResponseMetaSchema,
   AosHistoryPageTagSchema,
   AosInitializeMetaSchema,
-  AosPromptResponseMetaSchema,
   AosSessionInvalidatedNotificationSchema,
   AosSessionResumeResponseMetaSchema,
   AosSteerAcceptedNotificationSchema,
@@ -1467,7 +1466,7 @@ export function createAcpConnection(
           options
         )
       )
-      return AosPromptResponseMetaSchema.parse(aosMetaOf(response._meta))
+      return { messageId: response.messageId }
     },
 
     cancel(sessionId) {

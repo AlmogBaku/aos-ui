@@ -187,7 +187,7 @@ function createProxyAgent(
     })
     .onRequest(methods.agent.session.prompt, ({ params }) => {
       record(methods.agent.session.prompt, params)
-      return { _meta: { [AOS_META_KEY]: { messageId: "message-7" } } }
+      return { messageId: "message-7" }
     })
     .onRequest(methods.agent.session.setConfigOption, ({ params }) => {
       record(methods.agent.session.setConfigOption, params)

@@ -259,7 +259,7 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
         })
         if (!options.holdRuns) finishRun()
       })
-      return { _meta: { [AOS_META_KEY]: { messageId } } }
+      return { messageId }
     })
     .onRequest(AOS_METHODS.session.steer, z.unknown(), ({ params }) => {
       steers.push(params)

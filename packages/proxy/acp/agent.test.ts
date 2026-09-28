@@ -463,9 +463,7 @@ describe("AOS ACP agent", () => {
       _meta: { [AOS_META_KEY]: {} },
     })
 
-    const messageId = z
-      .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
-      .parse(accepted)._meta.aos.messageId
+    const messageId = accepted.messageId
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     expect(test.start.mock.calls[0]?.[0]).toMatchObject({ sessionId: CREATED })
     expect(test.start.mock.calls[0]?.[1]).toMatchObject({

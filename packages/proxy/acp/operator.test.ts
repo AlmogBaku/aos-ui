@@ -13,7 +13,6 @@ import {
   AosActivityNotificationSchema,
   AosElicitationMetaSchema,
   AosPlanMetaSchema,
-  AosPromptResponseMetaSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -181,7 +180,7 @@ async function runningTurn(test: Harness, text: string) {
   if (!source) throw new Error("The engine opened no run segment")
   return {
     source,
-    messageId: AosPromptResponseMetaSchema.parse(aosMetaOf(accepted)).messageId,
+    messageId: accepted.messageId,
   }
 }
 
