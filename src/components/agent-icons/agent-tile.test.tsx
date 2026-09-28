@@ -5,7 +5,10 @@ import { AgentTile } from "@/components/agent-icons/agent-tile"
 
 describe("AgentTile", () => {
   it.each([
-    ["a pool token", <AgentTile key="pool" avatar="ring/blue" running />],
+    [
+      "a pool token",
+      <AgentTile key="pool" avatar="ring/blue" state="attention" />,
+    ],
     ["an unknown token", <AgentTile key="unknown" avatar="future/shape" />],
     ["the draft tile", <AgentTile key="draft" variant="draft" />],
     ["the hidden tile", <AgentTile key="hidden" variant="hidden" />],

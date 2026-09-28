@@ -1,4 +1,4 @@
-import { useId } from "react"
+import { useId, type CSSProperties } from "react"
 
 import { parseAvatar } from "@/components/agent-icons/allocation"
 import { trackPairSensor } from "@/components/agent-icons/pointer-tracking"
@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils"
 
 import styles from "./agent-tile.module.css"
 
+export type AgentTileState = "running" | "attention"
+
 export type AgentTileProps = (
   | {
       /** A resolved token from `resolveAgentIcons`, for example `ring/blue`. */
@@ -21,14 +23,21 @@ export type AgentTileProps = (
 ) & {
   /** Rendered size in CSS pixels. */
   size?: number
-  /** Blinks the pair sensor while the Agent runs. */
-  running?: boolean
+  /**
+   * Animates the tile: the pair blinks while the Agent runs, and the tile
+   * looks around and hops while the Agent waits on the person.
+   */
+  state?: AgentTileState
+  /** The side a waiting pair looks toward: where the conversation is. */
+  lookToward?: "inline-start" | "inline-end"
   className?: string
 }
 
 /** A decorative generated Agent icon; the caller supplies the accessible name. */
 export function AgentTile(props: AgentTileProps) {
-  const { size = 40, running = false, className } = props
+  const { size = 40, state, lookToward = "inline-end", className } = props
+  const side = lookToward === "inline-end" ? 1 : -1
+  const hop = state === "attention" ? styles.hop : undefined
   const clipId = useId()
   // Keeps the corner radius visually steady across sizes, in view box units.
   const radius = ((size >= 40 ? 8 : 6) * 48) / size
@@ -49,9 +58,16 @@ export function AgentTile(props: AgentTileProps) {
 
   if (props.variant) {
     return (
-      <svg {...frame} className={cn(styles.tile, styles.draft, className)}>
+      <svg {...frame} className={cn(styles.tile, styles.draft, hop, className)}>
         <Outline radius={radius} dashed />
-        <Pair x={24} y={24} fill="currentColor" running={running} />
+        {/* The empty outline leaves room for the pool's widest look. */}
+        <Pair
+          x={24}
+          y={24}
+          glance={2.5 * side}
+          fill="currentColor"
+          state={state}
+        />
       </svg>
     )
   }
@@ -63,7 +79,7 @@ export function AgentTile(props: AgentTileProps) {
   const shapeFill = `oklch(0.93 0.012 ${h})`
 
   return (
-    <svg {...frame} className={cn(styles.tile, className)}>
+    <svg {...frame} className={cn(styles.tile, hop, className)}>
       <defs>
         <clipPath id={clipId}>
           <rect width={48} height={48} rx={radius} />
@@ -77,10 +93,10 @@ export function AgentTile(props: AgentTileProps) {
           ))}
         </g>
         <Pair
-          x={silhouette.sensor.x}
-          y={silhouette.sensor.y}
+          {...silhouette.sensor}
+          glance={silhouette.sensor.glance * side}
           fill={silhouette.hollow ? shapeFill : background}
-          running={running}
+          state={state}
         />
       </g>
     </svg>
@@ -124,22 +140,40 @@ function Shape({ shape }: { shape: SilhouetteShape }) {
   }
 }
 
-/** The two-bar sensor, centred on (x, y); it tracks the pointer. */
+const barMotion: Record<AgentTileState, string | undefined> = {
+  running: styles.blink,
+  attention: styles.attentionBlink,
+}
+
+/**
+ * The two-bar sensor, centred on (x, y); it tracks the pointer, except while
+ * the Agent waits on the person and the pair looks `glance` toward the inline
+ * end, or the inline start when negative.
+ */
 function Pair({
   x,
   y,
+  glance,
   fill,
-  running,
+  state,
 }: {
   x: number
   y: number
+  glance: number
   fill: string
-  running: boolean
+  state?: AgentTileState
 }) {
-  const bar = running ? styles.blink : undefined
+  const bar = state && barMotion[state]
   return (
-    <g transform={`translate(${x} ${y})`}>
-      <g ref={trackPairSensor} className={styles.sensor} fill={fill}>
+    <g
+      transform={`translate(${x} ${y})`}
+      style={{ "--glance": glance } as CSSProperties}
+    >
+      <g
+        ref={trackPairSensor}
+        className={cn(styles.sensor, state === "attention" && styles.look)}
+        fill={fill}
+      >
         <rect x={-6} y={-3} width={3} height={6} rx={0.5} className={bar} />
         <rect x={3} y={-3} width={3} height={6} rx={0.5} className={bar} />
       </g>

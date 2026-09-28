@@ -512,8 +512,11 @@ assistant's answer.
   transitions while preserving visible state and focus behavior.
 
 - **Agent tile:** the pair sensor follows a fine pointer and blinks while the
-  Agent runs. Both stop under reduced motion, and the status indicator still
-  states the run.
+  Agent runs. While the Agent waits on the person, the pair looks away and
+  back, the tile hops, and the pair turns toward the conversation as it lands
+  and holds there: the inline end, or the inline start from the inspector. Under reduced motion the pointer tracking, blink, and hop stop,
+  the waiting pair keeps its aside pose, and the status indicator still states
+  either state.
 
 **The Motion-Is-Optional Rule.** Motion may confirm a change, but the changed
 state must be legible without it. Do not make progress, errors, or focus depend

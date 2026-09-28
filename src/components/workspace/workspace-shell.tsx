@@ -931,7 +931,8 @@ function InspectorPanel({
   return (
     <div className={styles.inspectorPanel}>
       <div className={styles.inspectorHeader}>
-        <WorkspaceAgentTile agent={agent} size={28} />
+        {/* The inspector sits past the conversation's inline end. */}
+        <WorkspaceAgentTile agent={agent} size={28} lookToward="inline-start" />
         <bdi className={cn(styles.inspectorName, "truncate text-sm leading-5")}>
           {agent.name}
         </bdi>

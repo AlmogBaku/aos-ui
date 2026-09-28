@@ -89,3 +89,9 @@ Any intentional visual departure must be called out before it is introduced.
   rules out: the sensor is the Agent's identity, and the blink only mirrors a
   running state the status indicator already shows. Both motions stop under
   reduced motion.
+- **Waiting Agent tile (2026-09-28):** an Agent waiting on the person looks
+  away and back, hops, and looks toward the conversation as it lands, then
+  holds that pose. Like the blink, it mirrors the attention state the status
+  indicator already shows. The aside pose stays under reduced motion, so
+  waiting still reads differently from idle. Each silhouette caps how far its
+  pair may look aside, so no bar leaves its backdrop.

@@ -34,13 +34,117 @@
   }
 }
 
+/* Waiting on the person: the pair looks away and back, the tile crouches and
+   hops, and the pair turns aside as it lands, then holds with one blink. The
+   look overrides pointer tracking, and the squash scales about the base. */
+.hop {
+  transform-origin: 50% 100%;
+  animation: attention-hop 5s infinite;
+}
+
+.look {
+  --side: 1;
+  animation: attention-look 5s ease-in-out infinite;
+}
+
+[dir="rtl"] .look {
+  --side: -1;
+}
+
+.attentionBlink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: attention-blink 5s linear infinite;
+}
+
+@keyframes attention-hop {
+  0%,
+  26% {
+    transform: translateY(0) scale(1, 1);
+    animation-timing-function: ease-in-out;
+  }
+
+  30% {
+    transform: translateY(0) scale(1.04, 0.9);
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.4, 1);
+  }
+
+  35% {
+    transform: translateY(-5%) scale(0.97, 1.04);
+    animation-timing-function: cubic-bezier(0.6, 0, 0.9, 0.4);
+  }
+
+  40% {
+    transform: translateY(0) scale(1.05, 0.92);
+    animation-timing-function: ease-out;
+  }
+
+  43% {
+    transform: translateY(0) scale(1, 1);
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.4, 1);
+  }
+
+  46.5% {
+    transform: translateY(-2%) scale(1, 1);
+    animation-timing-function: cubic-bezier(0.6, 0, 0.9, 0.4);
+  }
+
+  50%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes attention-look {
+  0%,
+  4%,
+  26%,
+  37%,
+  100% {
+    transform: translateX(0);
+  }
+
+  9%,
+  13% {
+    transform: translateX(calc(var(--glance) * var(--side) * -1px));
+  }
+
+  18%,
+  22%,
+  42%,
+  90% {
+    transform: translateX(calc(var(--glance) * var(--side) * 1px));
+  }
+}
+
+@keyframes attention-blink {
+  0%,
+  74%,
+  80%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  77% {
+    transform: scaleY(0.15);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sensor {
     transition: none;
     transform: none !important;
   }
 
-  .blink {
+  .blink,
+  .hop,
+  .attentionBlink {
     animation: none;
+  }
+
+  /* Still, the waiting pair holds its aside pose. */
+  .sensor.look {
+    animation: none;
+    transform: translateX(calc(var(--glance) * var(--side) * 1px)) !important;
   }
 }
