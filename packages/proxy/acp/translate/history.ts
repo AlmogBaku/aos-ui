@@ -181,40 +181,49 @@ function partsOutbound(
   return outbound
 }
 
-/**
- * Assistant and system turns; ACP v2 has no system role of its own. An assistant
- * turn replays between the two state updates its stream sent, because that is what
- * opens the turn, dates it, and settles it on the browser's one code path.
- */
-function agentOutbound(
-  message: SessionMessage,
-  context: TranslateContext,
-  startedAt: string
-): AcpOutbound[] {
-  const parts = partsOutbound(message, context)
-  // A notice the provider wrote is no turn: no turn produced it, so no turn state
-  // brackets it.
-  if (message.role !== "assistant") return parts
-  // A turn that shows nothing is no turn either. Only a failure the
-  // provider persisted is worth bracketing alone, because the browser shows it.
-  if (parts.length === 0 && message.status === undefined) return []
-  return [
-    stateOutbound(context, { state: "running" }, { at: startedAt }),
-    ...parts,
-    settledOutbound(context, message),
-  ]
-}
-
 export const translateHistory = ((history) => {
   const context = HISTORY_CONTEXT
   const outbound: AcpOutbound[] = []
   // What live's TurnStarted approximates: the turn started when its prompt
   // landed. A page that opens mid-conversation has only the turn's own time.
   let promptedAt: string | undefined
+  // A turn's agent messages replay between the two state updates its stream
+  // sent, because that is what opens the turn, dates it, and settles it on the
+  // browser's one code path. Its last message says how it ended.
+  let last: SessionMessage | undefined
+  const settle = () => {
+    if (last) outbound.push(settledOutbound(context, last))
+    last = undefined
+  }
   for (const message of history.messages) {
-    if (message.role === "activity")
+    if (message.role === "activity") {
+      settle()
       outbound.push(update(planUpdate(message.content.todos, { sequence: 0 })))
-    else if (message.role === "user") {
+    } else if (message.role === "assistant") {
+      const parts = partsOutbound(message, context)
+      // A message that shows nothing is no part of a turn. Only a failure the
+      // provider persisted is worth bracketing alone, because the browser
+      // shows it.
+      if (parts.length === 0 && message.status === undefined) continue
+      if (!last)
+        outbound.push(
+          stateOutbound(
+            context,
+            { state: "running" },
+            { at: promptedAt ?? message.createdAt }
+          )
+        )
+      outbound.push(...parts)
+      last = message
+      // A failure ends its turn where the provider stored it.
+      if (message.status?.type === "incomplete") settle()
+    } else if (message.role === "system") {
+      // A notice the provider wrote is no turn: no turn produced it, so no
+      // turn state brackets it.
+      settle()
+      outbound.push(...partsOutbound(message, context))
+    } else {
+      settle()
       promptedAt = message.createdAt
       outbound.push(
         update({
@@ -227,10 +236,8 @@ export const translateHistory = ((history) => {
       // carried follows the message it belongs to.
       for (const part of message.content)
         outbound.push(...storedArtifactOutbound(context, message, part))
-    } else
-      outbound.push(
-        ...agentOutbound(message, context, promptedAt ?? message.createdAt)
-      )
+    }
   }
+  settle()
   return outbound
 }) satisfies TranslateHistory

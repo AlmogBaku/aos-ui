@@ -54,12 +54,12 @@ export function turnOutcome(status: unknown): TurnOutcome {
 
 /**
  * Whether this run has projected any assistant output. Every projection path
- * binds a message id first — `message.start`, a tool call, streamed text — and
- * sealing a generation moves that id into `sealedMessageIds`, so the two
- * together are the run's own record that Hermes ran something for it.
+ * opens a model response first — a tool call, streamed text or thought — and
+ * a native command's output binds its own message id, so the two together
+ * are the run's own record that Hermes ran something for it.
  */
 function outputObserved(active: ActiveTurn) {
-  return active.messageId !== undefined || active.sealedMessageIds.size > 0
+  return active.messageId !== undefined || active.responses > 0
 }
 
 function settlingWatcher(active: ActiveTurn): SettlingWatcher {

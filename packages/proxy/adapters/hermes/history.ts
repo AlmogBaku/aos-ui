@@ -239,11 +239,25 @@ export function projectHermesHistory(
 ): SessionMessage[] {
   const messages: SessionMessage[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
+  /** The media each turn's calls returned, keyed by the turn's first row. */
   const mediaReferences = new Map<number, Set<string>>()
-  /** The newest row time each merged turn was built from, in epoch ms. */
+  /** The newest row time each merged message was built from, in epoch ms. */
   const completions = new Map<number, number>()
+  /**
+   * The turn the rows are in: the prompt row its model responses number from,
+   * as live numbers them, and how many it opened. Rows before any prompt keep
+   * their own row ids.
+   */
+  let turn: { base?: string; responses: number; index: number } = {
+    responses: 0,
+    index: -1,
+  }
+  /** The model response the next assistant row may continue. */
+  let response: number | undefined
+  /** A call finished since that response opened. */
+  let toolSince = false
 
-  /** One turn spans every row that patched into it, so its end is their newest. */
+  /** A message spans every row that patched into it, so its end is their newest. */
   function contributed(messageIndex: number, row: JsonRecord) {
     const ms = timestampMs(row.timestamp ?? row.created_at)
     if (ms === undefined) return
@@ -301,18 +315,19 @@ export function projectHermesHistory(
         shifted(target.messageIndex, target.partIndex, outcome.parts.length)
       }
       if (outcome.trustedMedia.length) {
-        const trusted = mediaReferences.get(target.messageIndex) ?? new Set()
+        const trusted = mediaReferences.get(turn.index) ?? new Set()
         for (const reference of outcome.trustedMedia) trusted.add(reference)
-        mediaReferences.set(target.messageIndex, trusted)
+        mediaReferences.set(turn.index, trusted)
       }
       messages[target.messageIndex] = { ...message, content }
       contributed(target.messageIndex, value)
+      toolSince = true
       return
     }
 
     if (role !== "user" && role !== "assistant" && role !== "system") return
     const rowId = value.row_id ?? value._row_id
-    const id =
+    const rowMessageId =
       typeof rowId === "number" && Number.isSafeInteger(rowId) && rowId > 0
         ? hermesRowMessageId(rowId)
         : typeof value.id === "number" &&
@@ -320,13 +335,6 @@ export function projectHermesHistory(
             value.id > 0
           ? hermesRowMessageId(value.id)
           : (trimmedText(value.id) ?? `hermes-history-${index}`)
-    const previousAssistant =
-      role === "assistant" && messages.at(-1)?.role === "assistant"
-        ? messages.at(-1)
-        : undefined
-    const messageIndex = previousAssistant
-      ? messages.length - 1
-      : messages.length
     const rawContent = parseRowJson(value.content)
     // `rowText` only reads Hermes' display projection on a persisted compaction
     // carrier, so provider-only fields cannot replace a Session's durable
@@ -334,21 +342,64 @@ export function projectHermesHistory(
     // so an attachment it resolves is the one the operator was shown.
     const text = rowText(value, rawContent)
     const interrupted = role === "assistant" && isInterruptMarker(value, text)
+    const correction = role === "user" && isRedirectCorrection(value)
+    if (role !== "assistant") {
+      response = undefined
+      if (role === "user" && !correction) {
+        turn = { base: rowMessageId, responses: 0, index }
+        toolSince = false
+      }
+    }
     const userContent =
-      role === "user" ? projectHermesUserContent(text, id) : undefined
+      role === "user" ? projectHermesUserContent(text, rowMessageId) : undefined
     const assistantContent =
       role === "assistant" && !interrupted
-        ? projectHermesMediaText(text, mediaReferences.get(messageIndex) ?? [])
+        ? projectHermesMediaText(text, mediaReferences.get(turn.index) ?? [])
         : undefined
     const visibleText = interrupted
       ? ""
       : (assistantContent?.text ?? userContent?.text ?? text)
-    const content = previousAssistant ? [...previousAssistant.content] : []
     const reasoning =
       role === "assistant"
         ? (trimmedText(value.reasoning_content) ?? trimmedText(value.reasoning))
         : undefined
-    if (reasoning) content.push({ type: "reasoning", text: reasoning })
+    // A model response is known by what it streams, as live knows it: prose
+    // or thought after one of its calls finished is the next response.
+    const prose = Boolean(
+      reasoning || visibleText || assistantContent?.artifacts.length
+    )
+    const previousAssistant =
+      role === "assistant" && response !== undefined && !(toolSince && prose)
+        ? messages[response]
+        : undefined
+    let id = rowMessageId
+    if (role === "assistant" && !previousAssistant) {
+      turn.responses += 1
+      toolSince = false
+      if (turn.base !== undefined) id = `${turn.base}-${turn.responses}`
+      // A thought is its own message, ahead of the response it leads to.
+      if (reasoning)
+        messages.push({
+          id: `${id}-thought`,
+          role,
+          content: [{ type: "reasoning", text: reasoning }],
+          createdAt: timestamp(value.timestamp ?? value.created_at, index),
+        })
+    } else if (reasoning && previousAssistant) {
+      // Live keeps thought only ahead of a response's prose.
+      const thought = messages[response! - 1]
+      if (
+        thought?.id === `${previousAssistant.id}-thought` &&
+        !previousAssistant.content.some((part) => part.type === "text")
+      )
+        messages[response! - 1] = {
+          ...thought,
+          content: [...thought.content, { type: "reasoning", text: reasoning }],
+        }
+    }
+    const messageIndex = previousAssistant ? response! : messages.length
+    if (role === "assistant") response = messageIndex
+    const content = previousAssistant ? [...previousAssistant.content] : []
     if (visibleText) content.push({ type: "text", text: visibleText })
     // Live publishes a MEDIA line's artifact as the line streams past, once per
     // reference however many rows of the turn repeat it.
@@ -404,20 +455,20 @@ export function projectHermesHistory(
         calls.set(toolCallId, { messageIndex, partIndex })
       }
     }
-    // Only an assistant turn spans more than one row, so only its end is worth
-    // recording: every other role completed where it was created.
+    // Only an assistant message spans more than one row, so only its end is
+    // worth recording: every other role completed where it was created.
     if (role === "assistant") contributed(messageIndex, value)
-    // A turn's newest row says how it stopped.
+    // A message's newest row says how it stopped.
     const stopReason = interrupted
       ? StopReason.Cancelled
       : role === "assistant"
         ? STOP_REASONS[String(value.finish_reason)]
         : undefined
     if (previousAssistant) {
-      const turn: SessionMessage = { ...previousAssistant, content }
-      if (stopReason) turn.stopReason = stopReason
-      else delete turn.stopReason
-      messages[messageIndex] = turn
+      const merged: SessionMessage = { ...previousAssistant, content }
+      if (stopReason) merged.stopReason = stopReason
+      else delete merged.stopReason
+      messages[messageIndex] = merged
     } else {
       messages.push({
         id,
@@ -430,9 +481,7 @@ export function projectHermesHistory(
           : {}),
         // The same turn the journal acknowledges as `aos.steer.accepted`: the
         // flag lets a from-start replay announce it once.
-        ...(role === "user" && isRedirectCorrection(value)
-          ? { correction: true as const }
-          : {}),
+        ...(correction ? { correction: true as const } : {}),
       })
     }
   })

@@ -219,9 +219,12 @@ describe("HermesRunEngine", () => {
     expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
     expect(ofKind(events, TurnEventKind.TurnStarted)).toHaveLength(1)
     expect(ofKind(events, TurnEventKind.TurnEnded)).toHaveLength(1)
-    expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
+    expect(messageIds(events)).toEqual([
+      "run-1:assistant-1",
+      "run-1:assistant-2",
+    ])
     expect(ofKind(events, TurnEventKind.ToolCallStarted)).toMatchObject([
-      { toolCallId: "tool-1", parentMessageId: "reply-before" },
+      { toolCallId: "tool-1", parentMessageId: "run-1:assistant-1" },
     ])
     expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
       { toolCallId: "tool-1" },
@@ -387,21 +390,9 @@ describe("HermesRunEngine", () => {
       })
     })
 
-    it("prefers a complete receipt to the submit answer", async () => {
-      await expect(endOf(receipt, { userRowId: 7 })).resolves.toMatchObject({
-        saved: {
-          user: { messageId: "user-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
-      })
-    })
-
-    it("names the prompt and its reply by the rows a complete receipt committed", async () => {
+    it("names the prompt by the row a complete receipt committed", async () => {
       await expect(endOf(receipt)).resolves.toMatchObject({
-        saved: {
-          user: { messageId: "user-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
+        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
       })
     })
 
@@ -525,12 +516,12 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant",
+        messageId: "run-1:assistant-1",
         text: "Final",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant",
+        messageId: "run-1:assistant-1",
         text: " answer",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -564,7 +555,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Checked the evidence.",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -600,7 +591,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.ThoughtChunk)).toEqual([
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Checked the evidence.",
       },
     ])
@@ -623,7 +614,7 @@ describe("HermesRunEngine", () => {
             type: "message.start",
             session_id: "live-secret",
             seq: 1,
-            payload: { message_id: "native-message-secret" },
+            payload: {},
           })
           publish({
             type: "message.delta",
@@ -654,7 +645,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "native-message-secret",
+        messageId: "run-1:assistant-1",
         text: "Hi",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -792,7 +783,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "continued",
+        messageId: "run-2:assistant-1",
         text: "Done",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -989,7 +980,7 @@ describe("HermesRunEngine", () => {
         title: "question",
         name: "question",
         toolKind: ToolKind.Other,
-        parentMessageId: "run-2:assistant",
+        parentMessageId: "run-2:assistant-1",
       },
       {
         kind: TurnEventKind.ToolCallInputChunk,
@@ -1019,7 +1010,7 @@ describe("HermesRunEngine", () => {
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-2:assistant",
+        messageId: "run-2:assistant-2",
         text: "No answers selected.",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1092,7 +1083,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-2:assistant",
+        messageId: "run-2:assistant-2",
         text: "It is a bar chart.",
       },
     ])
@@ -1317,7 +1308,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Consider",
       },
       {
@@ -1326,7 +1317,7 @@ describe("HermesRunEngine", () => {
         title: "delegate_subagent",
         name: "delegate_subagent",
         toolKind: ToolKind.Other,
-        parentMessageId: "message-42",
+        parentMessageId: "run-1:assistant-1",
       },
       {
         kind: TurnEventKind.ToolCallInputChunk,
@@ -1344,7 +1335,7 @@ describe("HermesRunEngine", () => {
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-2",
         text: "Done",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1629,7 +1620,7 @@ describe("HermesRunEngine", () => {
     )
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "message-42",
+      messageId: "run-1:assistant-2",
       text: "Recovered response",
     })
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
@@ -1790,7 +1781,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-43",
+        messageId: "run-1:assistant-1",
         text: "Current",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1859,7 +1850,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-43",
+        messageId: "run-1:assistant-1",
         text: "Current",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1961,7 +1952,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Recovered",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -2203,7 +2194,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Recovered",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -2568,7 +2559,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: "The completed response retained by Hermes",
       },
       {
@@ -2629,12 +2620,12 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: "Retained while streaming",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: " and at completion",
       },
       {
@@ -2821,12 +2812,12 @@ describe("HermesRunEngine", () => {
     ).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply",
+        messageId: "run-1:assistant-1",
         text: "Checking the next boundary.",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant:2",
+        messageId: "run-1:assistant-2",
         text: "Final answer",
       },
     ])
@@ -3167,7 +3158,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4188,7 +4179,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "new-message",
+        messageId: "recovered-run:assistant-1",
         text: "new",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4288,7 +4279,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(discovered!.handle)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "new-message",
+      messageId: "recovered-run:assistant-1",
       text: "new",
     })
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
@@ -4347,7 +4338,7 @@ describe("HermesRunEngine", () => {
     ).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-2",
         text: "Hello",
       },
     ])
@@ -4385,7 +4376,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4518,7 +4509,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       {
@@ -4543,7 +4534,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: " world",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4619,7 +4610,7 @@ describe("HermesRunEngine", () => {
     ).toHaveLength(1)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "message-media",
+      messageId: "run-1:assistant-2",
       text: "Your brief is ready.\n",
     })
     expect(JSON.stringify(events)).not.toContain("Media unavailable")
@@ -4674,7 +4665,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-a",
+        messageId: "run-a:assistant-1",
         text: "alpha",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4683,7 +4674,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-b",
+        messageId: "run-b:assistant-1",
         text: "beta",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4748,7 +4739,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4884,12 +4875,12 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "missed ",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "held",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -5415,7 +5406,10 @@ describe("HermesRunEngine", () => {
       ]).toEqual([
         { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
       ])
-      expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
+      expect(messageIds(events)).toEqual([
+        "run-1:assistant-1",
+        "run-1:assistant-2",
+      ])
     } finally {
       vi.useRealTimers()
     }
@@ -5448,7 +5442,7 @@ describe("HermesRunEngine", () => {
       publish(turn.idle())
 
       const events = await collect(handle)
-      expect(messageIds(events)).toEqual(["queued-reply"])
+      expect(messageIds(events)).toEqual(["run-1:assistant-1"])
       expect(JSON.stringify(events)).not.toContain("Previous answer")
       expect([
         ...ofKind(events, TurnEventKind.TurnEnded),
@@ -5606,7 +5600,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply",
+        messageId: "run-1:assistant-1",
         text: "I read the filing and then",
       },
     ])
@@ -5805,7 +5799,7 @@ describe("HermesRunEngine", () => {
     )
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "msg-ftr",
+      messageId: "run-1:assistant-2",
       text: "I will try another approach.",
     })
   })
@@ -5843,7 +5837,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "msg-tei",
+      messageId: "run-1:assistant-1",
       text: "Partial response before",
     })
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
@@ -5942,7 +5936,7 @@ describe("HermesRunEngine", () => {
       ])
       expect(events).toContainEqual({
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply-after",
+        messageId: "run-1:assistant-2",
         text: "After",
       })
     } finally {
@@ -6742,7 +6736,7 @@ describe("Hermes native provider facts", () => {
         name: "patch",
         toolKind: ToolKind.Edit,
         locations: [{ path }],
-        parentMessageId: "m1",
+        parentMessageId: "run-1:assistant-1",
       },
     ])
     expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
@@ -7275,7 +7269,7 @@ describe("Hermes discovery of its own turns", () => {
     publish(turn.complete("delegation-result", "Result"))
     await expect(collect(discovered!.handle)).resolves.toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "delegation-result",
+      messageId: "adopted:assistant-1",
       text: "Result",
     })
   })

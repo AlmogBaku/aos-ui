@@ -26,5 +26,6 @@ runWireContract("OpenCode", () => {
         logger
       ),
     agentId: opencode.scope.agentId,
+    turn: opencode.turn,
   }
 })

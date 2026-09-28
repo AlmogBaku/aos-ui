@@ -30,6 +30,7 @@ function hermesRuntime(): WireRuntime {
         logger
       ),
     agentId: hermes.scope.agentId,
+    turn: hermes,
   }
 }
 

@@ -65,9 +65,19 @@ export type ActiveTurn = {
   unsubscribe: () => void
   epoch: string
   lastSeen: number
+  /**
+   * The model response streaming now: `<base>-<n>` for the turn's n-th
+   * response, the id history gives it too. Its thought is `<id>-thought`.
+   */
   messageId?: string
+  /** The prompt's row id the response ids number from, once Hermes names it. */
+  messageBase?: string
+  /** How many model responses this run opened. */
+  responses: number
+  /** A call of the current response finished, so new text is a new response. */
+  toolsDone: boolean
+  /** How many times the run sealed its streaming message. */
   generation: number
-  sealedMessageIds: Set<string>
   textStarted: boolean
   streamedText?: string
   mediaFilter: HermesMediaTextFilter
@@ -208,8 +218,9 @@ export function createActiveTurn(
     unsubscribe: () => undefined,
     epoch: "",
     lastSeen: 0,
+    responses: 0,
+    toolsDone: false,
     generation: 0,
-    sealedMessageIds: new Set(),
     ...generationState(),
     tools: new Map(),
     turn: "open",

@@ -21,10 +21,7 @@ const project = (event: TurnEvent) =>
 
 describe("guest turn projection", () => {
   it("keeps the stop reason, the prefill, and the saved ids but drops usage and cost", () => {
-    const saved = {
-      user: { messageId: "user-1", savedId: "hermes-row-7" },
-      replyId: "hermes-row-8",
-    }
+    const saved = { user: { messageId: "user-1", savedId: "hermes-row-7" } }
     expect(
       project({
         kind: TurnEventKind.TurnEnded,

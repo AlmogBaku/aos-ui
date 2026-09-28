@@ -145,14 +145,17 @@ export type TranslateContext = {
 }
 
 /**
- * State the turn-event reducer carries between events of one turn segment:
- * the assistant message currently streaming, the arguments text streamed so
- * far per open tool call, the tool call each announced terminal belongs to,
- * and the tool call that spawned each subagent. Starts as
+ * State the turn-event reducer carries between events of one turn: the
+ * assistant message the adapter last named, the message each tool call sits
+ * in, the arguments text streamed so far per open tool call, the tool call
+ * each announced terminal belongs to, and the tool call that spawned each
+ * subagent. Every id is the adapter's; the reducer mints none. Starts as
  * `initialTranslateState`.
  */
 export type TranslateState = {
   messageId: string | undefined
+  /** toolCallId → the message the adapter started it in. */
+  toolMessages: Readonly<Record<string, string>>
   toolArgsText: Readonly<Record<string, string>>
   /** terminalId → toolCallId, for every terminal the segment announced. */
   terminals: Readonly<Record<string, string>>
@@ -166,6 +169,7 @@ export type TranslateState = {
 }
 export const initialTranslateState: TranslateState = {
   messageId: undefined,
+  toolMessages: {},
   toolArgsText: {},
   terminals: {},
   subagents: {},

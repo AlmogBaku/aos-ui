@@ -5,8 +5,11 @@
  * real `HermesGateway` through `fakeHermesGateway`, so the gateway's own dial,
  * heal and refusal handling is what the contracts prove.
  *
- * It copies Hermes v2026.9.21 (`d337b736aa1e`), its `tui_gateway` socket and
+ * It copies Hermes v2026.9.24 (`f97608f178d1`), its `tui_gateway` socket and
  * dashboard API, with `close_on_disconnect: false` Sessions under one profile.
+ * As the release does, it stores a prompt's row at `prompt.submit` and answers
+ * with its `user_row_id`, streams `message.start` with no payload, and closes a
+ * turn with the `persisted_turn` receipt of the rows it stored.
  *
  * Usage:
  *
@@ -98,10 +101,12 @@ export function fakeHermes() {
   let fault: Fault = "none"
   let deleted = false
   let running = false
-  let replyId: string | undefined
-  let replies = 0
+  let streaming = false
   let calls = 0
   let rows: unknown[] = []
+  let nextRowId = 1
+  /** The rows the running turn stored, its prompt's first. */
+  let turnRows: number[] = []
   let inflight: Record<string, unknown> | undefined
 
   const socket = () => sockets.at(-1)
@@ -111,6 +116,49 @@ export function fakeHermes() {
     frames.push(frame)
     const current = socket()
     if (current?.readyState === FakeSocket.OPEN) current.deliverEvent(frame)
+  }
+
+  /** Stores a row of the running turn as the release's `messages` table does. */
+  function store(row: Record<string, unknown>) {
+    const id = nextRowId++
+    rows.push({
+      id,
+      session_id: STORED_ID,
+      timestamp: Date.now() / 1000,
+      ...row,
+    })
+    turnRows.push(id)
+    return id
+  }
+
+  function startStreaming() {
+    if (streaming) return
+    streaming = true
+    emit(turn.frame("message.start"))
+  }
+
+  /** The reply's final body, stored, then the receipt and the idle frame. */
+  function complete(text: string) {
+    const final = store({
+      role: "assistant",
+      content: text,
+      finish_reason: "stop",
+    })
+    running = false
+    streaming = false
+    emit(
+      turn.frame("message.complete", {
+        text,
+        status: "complete",
+        persisted_turn: {
+          row_ids: turnRows,
+          complete: true,
+          user_row_id: turnRows[0],
+          final_assistant_row_id: final,
+        },
+      })
+    )
+    emit(turn.idle())
   }
 
   function rpc(method: string, params: Record<string, unknown>): Reply {
@@ -142,9 +190,13 @@ export function fakeHermes() {
             sessions: [{ id: LIVE_ID, status: running ? "working" : "idle" }],
           },
         }
-      case "prompt.submit":
+      case "prompt.submit": {
         running = true
-        return { result: { status: "streaming" } }
+        turnRows = []
+        const text = typeof params.text === "string" ? params.text : ""
+        const userRowId = store({ role: "user", content: text })
+        return { result: { status: "streaming", user_row_id: userRowId } }
+      }
       case "session.create":
         // The release answers a new draft with its live and stored ids; this
         // fake's one Session stands for it.
@@ -234,19 +286,53 @@ export function fakeHermes() {
     }) as unknown as typeof fetch,
 
     async progress() {
-      if (replyId === undefined) {
-        replies += 1
-        replyId = `assistant-${replies}`
-        emit(turn.messageStart(replyId))
-      }
+      startStreaming()
       emit(turn.delta("Contract reply"))
     },
 
     async finish() {
-      running = false
-      emit(turn.complete(replyId ?? `assistant-${replies}`, "Contract reply"))
-      emit(turn.idle())
-      replyId = undefined
+      complete("Contract reply")
+    },
+
+    /** The wire contract's first model response: a thought, text, a tool. */
+    async firstResponse() {
+      const thought = "I should read the file."
+      const text = "Reading the file."
+      const args = { path: "/tmp/demo.txt" }
+      const result = "alpha\nbeta\ngamma"
+      startStreaming()
+      emit(turn.frame("reasoning.delta", { text: thought }))
+      emit(turn.delta(text))
+      // The model's text beside its tool call is sealed as interim commentary.
+      emit(turn.interim(text, true))
+      emit(turn.toolStart("call-read", "read_file", args))
+      store({
+        role: "assistant",
+        content: text,
+        reasoning: thought,
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: "call-read",
+            type: "function",
+            function: { name: "read_file", arguments: JSON.stringify(args) },
+          },
+        ],
+      })
+      emit(turn.toolComplete("call-read", "read_file", result))
+      store({
+        role: "tool",
+        tool_call_id: "call-read",
+        tool_name: "read_file",
+        content: result,
+      })
+    },
+
+    /** The wire contract's second model response: the final text. */
+    async secondResponse() {
+      const text = "The file lists three names."
+      emit(turn.delta(text))
+      complete(text)
     },
 
     deleteSession() {

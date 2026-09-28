@@ -286,7 +286,7 @@ describe("translateTurnEvent messages", () => {
     })
   })
 
-  it("keeps the segment's first message id across later message ids", () => {
+  it("passes each chunk's own message id through", () => {
     const { outbound } = translate([
       messageChunk("m1", "he"),
       messageChunk("m2", "more"),
@@ -301,7 +301,7 @@ describe("translateTurnEvent messages", () => {
       },
       {
         sessionUpdate: "agent_message_chunk",
-        messageId: "m1",
+        messageId: "m2",
         content: { type: "text", text: "more" },
         _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
@@ -353,7 +353,7 @@ describe("translateTurnEvent tool calls", () => {
   })
 
   it.each([
-    ["the streaming message over the event's parent", "m9", "m1", "m1"],
+    ["the event's parent over the streaming message", "m9", "m1", "m9"],
     ["the streaming message", undefined, "m1", "m1"],
     ["the parent message of the event", "m9", undefined, "m9"],
     ["the run itself", undefined, undefined, "run-1"],
@@ -378,26 +378,23 @@ describe("translateTurnEvent tool calls", () => {
     }
   )
 
-  it("streams one message across the provider's mid-turn message rotation", () => {
-    // Hermes rotates its message id at every `message.interim`: the commentary
-    // is one message, the tools that follow another, the closing text a third.
-    // History replays the whole turn as one message, so the live stream must.
+  it("keeps a call's patches on the message it started in", () => {
+    // The next model response may stream before the call settles.
     const { outbound } = translate([
       messageChunk("m1", "Checking."),
       {
         kind: TurnEventKind.ToolCallStarted,
         toolCallId: "c1",
         title: "terminal",
-        parentMessageId: "run-1:assistant:2",
+        parentMessageId: "m1",
       },
-      { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
+      messageChunk("m2", "Still running."),
       {
         kind: TurnEventKind.ToolCallFinished,
         toolCallId: "c1",
         output: "ok",
         failed: false,
       },
-      messageChunk("run-1:assistant:3", "Done."),
     ])
 
     // Chunks name their message on the update; tool calls in `_meta.aos`.
@@ -409,23 +406,7 @@ describe("translateTurnEvent tool calls", () => {
           ? meta.messageId
           : undefined
     })
-    expect(owners).toEqual(["m1", "m1", "m1", "m1", "m1"])
-  })
-
-  it("lets a tool call that opens the segment name it for the text after", () => {
-    const { outbound } = translate([
-      {
-        kind: TurnEventKind.ToolCallStarted,
-        toolCallId: "c1",
-        title: "read_file",
-        parentMessageId: "m9",
-      },
-      messageChunk("m1", "Read."),
-    ])
-
-    const [call, chunk] = updatesOf(outbound)
-    expect(AosToolCallMetaSchema.parse(aosMeta(call!)).messageId).toBe("m9")
-    expect(chunk).toMatchObject({ messageId: "m9" })
+    expect(owners).toEqual(["m1", "m1", "m2", "m1"])
   })
 
   it("keeps unparseable streamed arguments as text", () => {
@@ -773,25 +754,6 @@ describe("provider facts", () => {
     })
   })
 
-  it("maps the prompt and the reply it streamed to their saved ids", () => {
-    const update = lastUpdate([
-      { kind: TurnEventKind.MessageChunk, messageId: "live-a", text: "hi" },
-      // The provider rotated its id; the segment still streamed one reply.
-      { kind: TurnEventKind.MessageChunk, messageId: "live-b", text: "!" },
-      {
-        kind: TurnEventKind.TurnEnded,
-        saved: {
-          user: { messageId: "prompt-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
-      },
-    ])
-    expect(AosStateMetaSchema.parse(aosMeta(update)).savedIds).toEqual({
-      "prompt-1": "hermes-row-7",
-      "live-a": "hermes-row-8",
-    })
-  })
-
   it("maps a failed turn's prompt to its saved id", () => {
     const update = lastUpdate([
       { kind: TurnEventKind.MessageChunk, messageId: "live-a", text: "hi" },
@@ -804,18 +766,6 @@ describe("provider facts", () => {
     expect(AosStateMetaSchema.parse(aosMeta(update)).savedIds).toEqual({
       "prompt-1": "hermes-row-7",
     })
-  })
-
-  it("maps no reply when the turn streamed none", () => {
-    const update = lastUpdate([
-      {
-        kind: TurnEventKind.TurnEnded,
-        saved: { replyId: "hermes-row-8" },
-      },
-    ])
-    expect(AosStateMetaSchema.parse(aosMeta(update))).not.toHaveProperty(
-      "savedIds"
-    )
   })
 
   it("names the provider and model a failure ran on", () => {

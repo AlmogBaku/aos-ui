@@ -239,7 +239,7 @@ describe("OpenCodeEventProjector", () => {
     expect(events.slice(0, -1)).toEqual([
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "assistant-1",
+        messageId: "assistant-1:thought",
         text: "think",
       },
       {

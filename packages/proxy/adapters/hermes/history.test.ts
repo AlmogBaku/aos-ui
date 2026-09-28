@@ -123,7 +123,8 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
-    expect(messages).toHaveLength(1)
+    // The call's response and the one after it, which still trusts its media.
+    expect(messages).toHaveLength(2)
     const artifact = messages[0]?.content.find(
       (part) => part.type === "data" && part.name === "aos.artifact"
     )
@@ -144,10 +145,9 @@ describe("server-side Hermes history projection", () => {
           ? artifact.data.id
           : undefined,
     })
-    expect(messages[0]?.content).toContainEqual({
-      type: "text",
-      text: "Your brief is ready.",
-    })
+    expect(messages[1]?.content).toEqual([
+      { type: "text", text: "Your brief is ready." },
+    ])
     expect(JSON.stringify(messages)).not.toContain("MEDIA:")
     expect(JSON.stringify(messages)).not.toContain(audioPath)
     expect(JSON.stringify(messages)).not.toContain(copiedPath)
@@ -410,13 +410,20 @@ describe("server-side Hermes history projection", () => {
           { type: "image", image: "data:image/png;base64,YQ==" },
         ],
       },
+      // Each model response numbers from the prompt's row, and its thought is
+      // a message of its own ahead of it.
       {
-        id: "assistant-native-1",
+        id: "user-native-1-1-thought",
         role: "assistant",
         createdAt: "1970-01-01T00:00:02.000Z",
-        completedAt: "1970-01-01T00:00:03.000Z",
+        content: [{ type: "reasoning", text: "Inspecting the measurements" }],
+      },
+      {
+        id: "user-native-1-1",
+        role: "assistant",
+        createdAt: "1970-01-01T00:00:02.000Z",
+        completedAt: "1970-01-01T00:00:02.000Z",
         content: [
-          { type: "reasoning", text: "Inspecting the measurements" },
           {
             type: "tool-call",
             toolCallId: "chart-1",
@@ -458,8 +465,14 @@ describe("server-side Hermes history projection", () => {
               source: { type: "provider", reference: "report-1" },
             },
           },
-          { type: "text", text: "Here it is." },
         ],
+      },
+      {
+        id: "user-native-1-2",
+        role: "assistant",
+        createdAt: "1970-01-01T00:00:03.000Z",
+        completedAt: "1970-01-01T00:00:03.000Z",
+        content: [{ type: "text", text: "Here it is." }],
       },
     ])
     expect(JSON.stringify(messages)).not.toContain("/srv/hermes")
@@ -895,7 +908,7 @@ describe("server-side Hermes history projection", () => {
     for (const message of messages) expect(message.metadata).toBeUndefined()
   })
 
-  it("ends a merged assistant turn at the newest row that built it", () => {
+  it("ends a model response at the newest row that built it", () => {
     const messages = projectHermesHistory([
       assistantToolCall(
         "a1",
@@ -906,11 +919,16 @@ describe("server-side Hermes history projection", () => {
       assistantText("a2", "Read it.", { timestamp: 160 }),
     ])
 
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatchObject({
-      createdAt: "1970-01-01T00:01:40.000Z",
-      completedAt: "1970-01-01T00:02:40.000Z",
-    })
+    expect(messages).toMatchObject([
+      {
+        createdAt: "1970-01-01T00:01:40.000Z",
+        completedAt: "1970-01-01T00:02:20.000Z",
+      },
+      {
+        createdAt: "1970-01-01T00:02:40.000Z",
+        completedAt: "1970-01-01T00:02:40.000Z",
+      },
+    ])
   })
 
   it("ends a single-row turn where it started", () => {
@@ -1012,6 +1030,7 @@ describe("server-side Hermes history projection", () => {
         .map((message) => message.stopReason)
     ).toEqual([
       StopReason.MaxTokens,
+      undefined,
       StopReason.EndTurn,
       StopReason.Refusal,
       undefined,

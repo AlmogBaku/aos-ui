@@ -1829,7 +1829,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     active.reasoning += delta
     active.queue.push({
       kind: TurnEventKind.ThoughtChunk,
-      messageId: this.#messageId(active),
+      // A thought is its own message, named after the response it leads to.
+      messageId: `${this.#messageId(active)}:thought`,
       text: delta,
     })
   }

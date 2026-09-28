@@ -52,25 +52,21 @@ const ACP_COMPACTION_STATUS = {
 } as const satisfies Record<CompactionStatus, string>
 
 /**
- * One ACP assistant message per run segment: the first message chunk, thought
- * chunk, or tool call of the segment fixes its id, and every later chunk and
- * tool call of the segment carries that one id, so reasoning stays on the turn
- * it answers with and a provider that rotates its own message id mid-turn
- * (Hermes does at every `message.interim`) still streams the one turn its
- * history replays. A segment's terminal event resets it with the rest of the
- * segment state.
+ * The message a patch hangs off. The adapter names every message where it is
+ * born, the way its history names it too; the reducer only passes the id on.
+ * A patch without an id of its own lands on its call's message, else on the
+ * message the adapter last named, and a turn id always exists.
  */
-function segmentMessage(state: TranslateState, messageId: string) {
-  const id = state.messageId ?? messageId
-  return {
-    state: state.messageId === undefined ? { ...state, messageId: id } : state,
-    messageId: id,
-  }
-}
-
-/** The assistant message a later tool patch hangs off; a turn id always exists. */
-function attachedTo(state: TranslateState, context: TranslateContext) {
-  return state.messageId ?? context.turnId
+function attachedTo(
+  state: TranslateState,
+  context: TranslateContext,
+  toolCallId?: string
+) {
+  return (
+    (toolCallId === undefined ? undefined : state.toolMessages[toolCallId]) ??
+    state.messageId ??
+    context.turnId
+  )
 }
 
 function openArgs(
@@ -153,18 +149,15 @@ function chunkStep(
     typeof TurnEventKind.MessageChunk | typeof TurnEventKind.ThoughtChunk
   >
 ): Step {
-  const segment = segmentMessage(state, event.messageId)
-  const sessionUpdate =
-    event.kind === TurnEventKind.MessageChunk
-      ? "agent_message_chunk"
-      : "agent_thought_chunk"
+  const message = event.kind === TurnEventKind.MessageChunk
   return {
-    state: segment.state,
+    // A thought is its own message, so only a reply names where patches go.
+    state: message ? { ...state, messageId: event.messageId } : state,
     outbound: [
       chunkOutbound(
         context,
-        sessionUpdate,
-        segment.messageId,
+        message ? "agent_message_chunk" : "agent_thought_chunk",
+        event.messageId,
         event.text,
         attribution(state, event.subagentId)
       ),
@@ -181,16 +174,15 @@ function artifactStep(
   // malformed descriptor, as it refuses malformed Todos below.
   const artifact = AosArtifactDescriptorSchema.safeParse(event.artifact)
   if (!artifact.success) return { state, outbound: [] }
-  // A link is message content, so it lands on the segment's one turn, and
-  // one published before anything streamed opens that turn itself.
-  const segment = segmentMessage(state, attachedTo(state, context))
+  // A link is message content, so it lands on the message the adapter last
+  // named: the reply its MEDIA line streamed in, or the one its tool ran in.
   return {
-    state: segment.state,
+    state,
     outbound: [
       artifactOutbound(
         context,
         "agent_message_chunk",
-        segment.messageId,
+        attachedTo(state, context),
         artifact.data
       ),
     ],
@@ -226,37 +218,30 @@ function steerStep(
 }
 
 /**
- * Each message id the browser saw this turn under, mapped to the id the
- * provider saved it as: the prompt's own, and the segment's one reply. An id
- * the wire contract refuses drops the whole map rather than part of it.
+ * The prompt's message id the browser saw this turn under, mapped to the id
+ * the provider saved it as. An agent message needs no entry: the adapter set
+ * its id where it was born, the one history gives it. An id the wire contract
+ * refuses drops the map.
  */
 function savedIdsOf(
   event: TurnEventOf<
     typeof TurnEventKind.TurnEnded | typeof TurnEventKind.TurnFailed
-  >,
-  replyMessageId: string | undefined
+  >
 ) {
   const { user } = event.saved ?? {}
-  const replyId =
-    event.kind === TurnEventKind.TurnEnded ? event.saved?.replyId : undefined
-  const entries = [
-    ...(user ? [[user.messageId, user.savedId]] : []),
-    ...(replyId && replyMessageId ? [[replyMessageId, replyId]] : []),
-  ].filter(([live, saved]) => live !== saved)
-  if (entries.length === 0) return undefined
-  const savedIds = AosStateMetaSchema.shape.savedIds.safeParse(
-    Object.fromEntries(entries)
-  )
+  if (!user || user.messageId === user.savedId) return undefined
+  const savedIds = AosStateMetaSchema.shape.savedIds.safeParse({
+    [user.messageId]: user.savedId,
+  })
   return savedIds.success ? savedIds.data : undefined
 }
 
 function endedOutbound(
   context: TranslateContext,
-  event: TurnEventOf<typeof TurnEventKind.TurnEnded>,
-  replyMessageId: string | undefined
+  event: TurnEventOf<typeof TurnEventKind.TurnEnded>
 ): AcpOutbound[] {
   const outbound: AcpOutbound[] = []
-  const savedIds = savedIdsOf(event, replyMessageId)
+  const savedIds = savedIdsOf(event)
   if (event.composerPrefill !== undefined)
     outbound.push({
       kind: "composer-prefill",
@@ -307,7 +292,7 @@ function failedOutbound(
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.model ? { model: event.model } : {}),
   }
-  const savedIds = savedIdsOf(event, undefined)
+  const savedIds = savedIdsOf(event)
   return [
     stateOutbound(
       context,
@@ -343,9 +328,16 @@ function toolStarted(
     ...attribution(state, event.subagentId),
     ...(event.app ? { app: {} } : {}),
   }
-  // The adapter's parent id only names the segment when nothing has yet.
-  const segment = segmentMessage(state, event.parentMessageId ?? context.turnId)
-  const opened = openArgs(segment.state, event.toolCallId, "")
+  const messageId = event.parentMessageId ?? attachedTo(state, context)
+  const opened = openArgs(
+    {
+      ...state,
+      messageId,
+      toolMessages: { ...state.toolMessages, [event.toolCallId]: messageId },
+    },
+    event.toolCallId,
+    ""
+  )
   return {
     state: event.subagent
       ? {
@@ -356,7 +348,7 @@ function toolStarted(
           },
         }
       : opened,
-    outbound: [toolOutbound(context, segment.messageId, call, extra)],
+    outbound: [toolOutbound(context, messageId, call, extra)],
   }
 }
 
@@ -370,9 +362,14 @@ function toolInputChunk(
   return {
     state: openArgs(state, event.toolCallId, argsText),
     outbound: [
-      toolOutbound(context, attachedTo(state, context), call, {
-        argsTextDelta: event.delta,
-      }),
+      toolOutbound(
+        context,
+        attachedTo(state, context, event.toolCallId),
+        call,
+        {
+          argsTextDelta: event.delta,
+        }
+      ),
     ],
   }
 }
@@ -391,7 +388,12 @@ function toolInputEnded(
   return {
     state: { ...state, toolArgsText },
     outbound: [
-      toolOutbound(context, attachedTo(state, context), call, { argsText }),
+      toolOutbound(
+        context,
+        attachedTo(state, context, event.toolCallId),
+        call,
+        { argsText }
+      ),
     ],
   }
 }
@@ -424,13 +426,16 @@ function toolFinished(
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
     ...(event.app ? { app: {} } : {}),
   }
-  // A named finish opens its card, and so may open the segment it sits in.
-  const segment = event.name
-    ? segmentMessage(state, context.turnId)
-    : { state, messageId: attachedTo(state, context) }
   return {
-    state: segment.state,
-    outbound: [toolOutbound(context, segment.messageId, call, extra)],
+    state,
+    outbound: [
+      toolOutbound(
+        context,
+        attachedTo(state, context, event.toolCallId),
+        call,
+        extra
+      ),
+    ],
   }
 }
 
@@ -442,7 +447,7 @@ function toolOutputChunk(
   return [
     toolContentOutbound(
       context,
-      attachedTo(state, context),
+      attachedTo(state, context, event.toolCallId),
       event.toolCallId,
       textContent(event.text)
     ),
@@ -475,7 +480,7 @@ function terminalStep(
     outbound.push(
       toolContentOutbound(
         context,
-        attachedTo(state, context),
+        attachedTo(state, context, event.toolCallId),
         event.toolCallId,
         {
           type: "terminal",
@@ -541,7 +546,7 @@ function subagentOutbound(
   return [
     toolOutbound(
       context,
-      attachedTo(state, context),
+      attachedTo(state, context, event.toolCallId),
       { toolCallId: event.toolCallId },
       extra
     ),
@@ -604,13 +609,11 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
     case TurnEventKind.TurnEnded:
       return {
         state: initialTranslateState,
-        outbound: endedOutbound(context, event, state.messageId),
+        outbound: endedOutbound(context, event),
       }
+    // A wait pauses the turn, so what the turn opened stays open.
     case TurnEventKind.TurnRequiresAction:
-      return {
-        state: initialTranslateState,
-        outbound: requiresActionOutbound(context, event),
-      }
+      return { state, outbound: requiresActionOutbound(context, event) }
     case TurnEventKind.TurnFailed:
       // A failure awaiting Stop reports on a run that is still going, so the
       // segment keeps its state until the run actually ends.

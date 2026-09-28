@@ -375,18 +375,14 @@ describe("Hermes native submit outcomes", () => {
       { row_id: 9, role: "tool", tool_call_id: "call-1", content: "file" },
       { row_id: 10, role: "assistant", content: "Done" },
     ]
-    const saved = persistedTurnRows({
+    const userRow = persistedTurnRows({
       row_ids: [7, 8, 9, 10],
       complete: true,
       user_row_id: 7,
       final_assistant_row_id: 10,
     })!
-    // The saved ids are the ones history names the prompt and its reply by.
-    expect(
-      projectHermesHistory(rows)
-        .slice(2)
-        .map(({ id }) => id)
-    ).toEqual([hermesRowMessageId(saved.user), hermesRowMessageId(saved.reply)])
+    // The saved id is the one history names the prompt by.
+    expect(projectHermesHistory(rows)[2]?.id).toBe(hermesRowMessageId(userRow))
     const { native, router } = runtime(
       { "prompt.submit": async () => ({ status: "streaming" }) },
       rows
@@ -396,7 +392,7 @@ describe("Hermes native submit outcomes", () => {
       scope,
       text: "Edited",
       turnId: "edit-run",
-      rewindSourceId: hermesRowMessageId(saved.user),
+      rewindSourceId: hermesRowMessageId(userRow),
     })
 
     expect(router.calls("prompt.submit")[0]?.params).toMatchObject({

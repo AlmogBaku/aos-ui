@@ -1535,7 +1535,7 @@ describe("OpenClaw run engine", () => {
       },
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "run-a:assistant",
+        messageId: "run-a:assistant:thought",
         text: "checking",
       },
       {

@@ -108,12 +108,17 @@ describe("OpenCode history projection", () => {
         ],
       },
       {
+        id: "assistant-1:thought",
+        role: "assistant",
+        createdAt: "1970-01-01T00:33:20.000Z",
+        content: [{ type: "reasoning", text: "Thinking" }],
+      },
+      {
         id: "assistant-1",
         role: "assistant",
         createdAt: "1970-01-01T00:33:20.000Z",
         content: [
           { type: "text", text: "Answer" },
-          { type: "reasoning", text: "Thinking" },
           {
             type: "tool-call",
             toolCallId: "pending-tool",

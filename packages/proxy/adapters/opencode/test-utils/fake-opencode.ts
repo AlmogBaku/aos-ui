@@ -29,6 +29,7 @@ const SESSION = {
   title: "Contract Session",
   time: { created: 1_000, updated: 2_000 },
 }
+const MODEL = { providerID: "contract", id: "contract-model" }
 const NATIVE_FAILURE_STATUS = 500
 /** The status OpenCode refuses a call with, by the caller error it means. */
 const REFUSALS: Partial<Record<CallerError, number>> = {
@@ -55,6 +56,11 @@ function json(body: unknown, status = 200) {
   return Response.json(body, { status })
 }
 
+/** When the event happened, which is also when what it stored was created. */
+function created(event: DurableEvent) {
+  return event.data.timestamp as number
+}
+
 function frame(event: DurableEvent) {
   const envelope = {
     id: String(event.durable.seq),
@@ -79,6 +85,8 @@ export type FakeOpenCode = ReturnType<typeof fakeOpenCode>
 
 export function fakeOpenCode() {
   const log: DurableEvent[] = []
+  /** The Session's stored messages, as `GET …/message` answers them. */
+  const messages: Record<string, unknown>[] = []
   const held = new Set<Held>()
   let fault: Fault = "none"
   let refusal = 0
@@ -86,14 +94,17 @@ export function fakeOpenCode() {
   let running = false
   let calls = 0
   let replies = 0
+  let steps = 0
 
   function append(type: string, data: Record<string, unknown>) {
     const seq = log.length
+    // The release versions a step's end apart from every other event.
+    const version = type === "session.next.step.ended" ? 2 : 1
     const event: DurableEvent = {
       id: `native-${seq}`,
       type,
-      durable: { aggregateID: SESSION_ID, seq, version: 1 },
-      data: { sessionID: SESSION_ID, timestamp: 1_000 + seq, ...data },
+      durable: { aggregateID: SESSION_ID, seq, version },
+      data: { sessionID: SESSION_ID, timestamp: Date.now(), ...data },
     }
     log.push(event)
     for (const answer of held) answer.push?.(event)
@@ -155,6 +166,12 @@ export function fakeOpenCode() {
       prompt: body.prompt,
       delivery: "queue",
     })
+    messages.push({
+      id: body.id,
+      type: "user",
+      text: body.prompt.text,
+      time: { created: created(admitted) },
+    })
     return json({
       data: {
         admittedSeq: admitted.durable.seq,
@@ -165,6 +182,94 @@ export function fakeOpenCode() {
         timeCreated: 1,
       },
     })
+  }
+
+  /**
+   * One model response, streamed and then stored as the release keeps it: an
+   * assistant message per step, with its reasoning, text and calls as parts.
+   */
+  function step(parts: { reasoning?: string; text: string; read?: string }) {
+    steps += 1
+    const assistantMessageID = `assistant-step-${steps}`
+    const started = append("session.next.step.started", {
+      assistantMessageID,
+      agent: AGENT_ID,
+      model: MODEL,
+    })
+    const content: Record<string, unknown>[] = []
+    if (parts.reasoning !== undefined) {
+      const reasoningID = `reasoning-step-${steps}`
+      append("session.next.reasoning.ended", {
+        assistantMessageID,
+        reasoningID,
+        text: parts.reasoning,
+      })
+      content.push({
+        id: reasoningID,
+        type: "reasoning",
+        text: parts.reasoning,
+      })
+    }
+    const textID = `text-step-${steps}`
+    append("session.next.text.ended", {
+      assistantMessageID,
+      textID,
+      text: parts.text,
+    })
+    content.push({ id: textID, type: "text", text: parts.text })
+    if (parts.read !== undefined) {
+      const callID = `call-step-${steps}`
+      const input = { filePath: parts.read }
+      const output = [{ type: "text", text: "alice\nbob\ncarol" }]
+      const provider = { executed: true }
+      const called = append("session.next.tool.called", {
+        assistantMessageID,
+        callID,
+        tool: "read",
+        input,
+        provider,
+      })
+      const succeeded = append("session.next.tool.success", {
+        assistantMessageID,
+        callID,
+        structured: {},
+        content: output,
+        provider,
+      })
+      content.push({
+        id: callID,
+        type: "tool",
+        name: "read",
+        state: { status: "completed", input, content: output, structured: {} },
+        time: { created: created(called), completed: created(succeeded) },
+      })
+    }
+    const finish = parts.read === undefined ? "stop" : "tool-calls"
+    const ended = append("session.next.step.ended", {
+      assistantMessageID,
+      finish,
+      cost: 0,
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      },
+    })
+    messages.push({
+      id: assistantMessageID,
+      type: "assistant",
+      agent: AGENT_ID,
+      model: MODEL,
+      content,
+      finish,
+      time: { created: created(started), completed: created(ended) },
+    })
+  }
+
+  async function finish() {
+    running = false
+    for (const answer of [...held]) answer.idle?.()
   }
 
   async function route(request: Request) {
@@ -199,7 +304,7 @@ export function fakeOpenCode() {
       case session:
         return json({ data: SESSION })
       case `${session}/message`:
-        return json({ data: [], cursor: {} })
+        return json({ data: messages, cursor: {} })
       case `/session/${SESSION_ID}/todo`:
         return json([])
       case `${session}/history`:
@@ -243,9 +348,21 @@ export function fakeOpenCode() {
       })
     },
 
-    async finish() {
-      running = false
-      for (const answer of [...held]) answer.idle?.()
+    finish,
+
+    /** The wire contract's turn: two model responses, each its own step. */
+    turn: {
+      async firstResponse() {
+        step({
+          reasoning: "I should read the file.",
+          text: "Reading the file.",
+          read: "/tmp/demo.txt",
+        })
+      },
+      async secondResponse() {
+        step({ text: "The file lists three names." })
+        await finish()
+      },
     },
 
     deleteSession() {

@@ -15,6 +15,7 @@ import { openCodeArtifactReceipt } from "./content"
 import {
   openCodeModelOptionId,
   openCodeStopReason,
+  openCodeThoughtId,
   openCodeTimestamp,
 } from "./native-schemas"
 import { OPENCODE_TODO_TOOL } from "./todos"
@@ -707,15 +708,17 @@ export class OpenCodeEventProjector {
       type === "session.next.text.ended"
     ) {
       const text = data.text as string
+      const messageId = data.assistantMessageID as string
       if (text)
-        events.push({
-          kind:
-            type === "session.next.text.ended"
-              ? TurnEventKind.MessageChunk
-              : TurnEventKind.ThoughtChunk,
-          messageId: data.assistantMessageID as string,
-          text,
-        })
+        events.push(
+          type === "session.next.text.ended"
+            ? { kind: TurnEventKind.MessageChunk, messageId, text }
+            : {
+                kind: TurnEventKind.ThoughtChunk,
+                messageId: openCodeThoughtId(messageId),
+                text,
+              }
+        )
     } else if (type === "session.next.tool.input.started") {
       this.#openTool(
         events,
