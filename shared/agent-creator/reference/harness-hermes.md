@@ -45,7 +45,15 @@ as `'\''`.
 
    Change `model.default` only when the operator named a model.
 
-7. Verify: `hermes profile show <id>` and `hermes -p <id> skills list`.
+7. Turn on show reasoning, which AOS needs: with it off, Hermes streams no
+   tool calls or thoughts live, and they appear in AOS only after a reload.
+
+   ```bash
+   hermes -p <id> config set display.show_reasoning true
+   ```
+
+8. Verify: `hermes profile show <id>`, `hermes -p <id> skills list`, and
+   `hermes -p <id> config get display.show_reasoning`, which prints `true`.
 
 A new profile is visible in AOS by default. `hermes profile create` tells a
 running gateway to serve it; if AOS does not list it within a minute, tell the
