@@ -1,23 +1,23 @@
 /**
- * fakeHermes — one in-memory Hermes holding one Session, for the runtime
- * contract: the socket RPCs and dashboard routes a turn and a read reach, and
- * the faults the contract drives. Pair it with the real `HermesGateway`, so the
- * gateway's own dial, heal and refusal handling is what the contract proves.
+ * fakeHermes — one in-memory Hermes holding one Session, for the runtime and
+ * wire contracts: the socket RPCs and dashboard routes a create, a turn and a
+ * read reach, and the faults the runtime contract drives. Pair it with the
+ * real `HermesGateway` through `fakeHermesGateway`, so the gateway's own dial,
+ * heal and refusal handling is what the contracts prove.
+ *
+ * It copies Hermes v2026.9.21 (`d337b736aa1e`), its `tui_gateway` socket and
+ * dashboard API, with `close_on_disconnect: false` Sessions under one profile.
  *
  * Usage:
  *
  *   const hermes = fakeHermes()
- *   const gateway = new HermesGateway({
- *     baseUrl: "http://127.0.0.1:9119",
- *     credentials: async () => ({ "X-Hermes-Session-Token": "test-token" }),
- *     socketFactory: hermes.socketFactory,
- *     fetcher: hermes.fetcher,
- *   })
+ *   const transport = fakeHermesGateway(hermes, logger)
  *   hermes.progress() // stream a reply fragment into the running turn
  */
+import type { Logger } from "../../../../lifecycle"
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
-import { HermesRpcRejectedError } from "../gateway"
+import { HermesGateway, HermesRpcRejectedError } from "../gateway"
 import { HermesHttpError } from "../http"
 import { FakeSocket } from "./fake-socket"
 import { assistantText, userRow } from "./history-rows"
@@ -78,6 +78,19 @@ function json(status: number, body: unknown = {}) {
   })
 }
 
+/** The real gateway over `hermes`, as every contract dials it. */
+export function fakeHermesGateway(hermes: FakeHermes, log: Logger) {
+  return new HermesGateway({
+    baseUrl: "http://127.0.0.1:9119",
+    credentials: async () => ({ "X-Hermes-Session-Token": "test-token" }),
+    log,
+    socketFactory: hermes.socketFactory,
+    fetcher: hermes.fetcher,
+  })
+}
+
+export type FakeHermes = ReturnType<typeof fakeHermes>
+
 export function fakeHermes() {
   const turn = nativeTurn(LIVE_ID)
   const frames: NativeFrame[] = []
@@ -132,6 +145,22 @@ export function fakeHermes() {
       case "prompt.submit":
         running = true
         return { result: { status: "streaming" } }
+      case "session.create":
+        // The release answers a new draft with its live and stored ids; this
+        // fake's one Session stands for it.
+        return {
+          result: {
+            session_id: LIVE_ID,
+            stored_session_id: STORED_ID,
+            message_count: 0,
+            messages: [],
+            info: {
+              model: "contract-model",
+              lazy: true,
+              profile_name: PROFILE,
+            },
+          },
+        }
       case "session.close":
         return { result: {} }
       default:

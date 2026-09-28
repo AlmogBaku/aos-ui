@@ -31,9 +31,9 @@ function escapeRegExp(value: string) {
 
 /** A module only tests may import, by its path under the proxy. */
 const TEST_ONLY_MODULE =
-  /(?:^|\/)(?:test-harness|test-faults|runtime-contract)\.ts$|(?:^|\/)test-utils\//u
+  /(?:^|\/)(?:test-harness|test-faults|runtime-contract|wire-contract)\.ts$|(?:^|\/)test-utils\//u
 const TEST_ONLY_IMPORT =
-  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|test-utils\/)/u
+  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|wire-contract|test-utils\/)/u
 
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu

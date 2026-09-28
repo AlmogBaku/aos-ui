@@ -1,22 +1,25 @@
 /**
  * fakeOpenCode — one in-memory OpenCode server holding one Agent and one
- * Session, for the runtime contract: the HTTP routes and the durable event
- * stream a turn and a read reach, and the faults the contract drives. It
- * answers the real `createOpenCodeClient` through its `fetcher`, so the
- * client's own status mapping and credential tracking are what the contract
- * proves.
+ * Session, for the runtime and wire contracts: the HTTP routes and the durable
+ * event stream a create, a turn and a read reach, and the faults the runtime
+ * contract drives. It answers the real `createOpenCodeClient`, built by
+ * `fakeOpenCodeClient`, through its `fetcher`, so the client's own status
+ * mapping and credential tracking are what the contracts prove.
+ *
+ * It copies OpenCode 1.18.29 (`@opencode-ai/sdk` 1.18.29), its v2 Session API
+ * behind basic auth, serving one project directory.
  *
  * Usage:
  *
  *   const opencode = fakeOpenCode()
- *   const client = createOpenCodeClient({ ...options, fetcher: opencode.fetcher })
+ *   const client = fakeOpenCodeClient(opencode)
  *   opencode.progress() // stream a reply fragment into the running turn
  *
  * Every answer takes the shape the pinned SDK types for its route.
  */
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
-import { OpenCodeClientError } from "../client"
+import { createOpenCodeClient, OpenCodeClientError } from "../client"
 
 const AGENT_ID = "writer"
 const SESSION_ID = "session-1"
@@ -60,6 +63,19 @@ function frame(event: DurableEvent) {
   }
   return new TextEncoder().encode(`data: ${JSON.stringify(envelope)}\n\n`)
 }
+
+/** The real client over `opencode`, as every contract composes it. */
+export function fakeOpenCodeClient(opencode: FakeOpenCode) {
+  return createOpenCodeClient({
+    baseUrl: "http://127.0.0.1:4096",
+    directory: "/workspaces/contract",
+    username: "operator",
+    password: async () => "test-password",
+    fetcher: opencode.fetcher,
+  })
+}
+
+export type FakeOpenCode = ReturnType<typeof fakeOpenCode>
 
 export function fakeOpenCode() {
   const log: DurableEvent[] = []
@@ -169,6 +185,9 @@ export function fakeOpenCode() {
           ],
         })
       case "/api/session":
+        // The release answers a create with the new Session; this fake's one
+        // Session stands for it.
+        if (request.method === "POST") return json({ data: SESSION })
         return json({ data: deleted ? [] : [SESSION], cursor: {} })
       case "/api/session/active":
         return json({

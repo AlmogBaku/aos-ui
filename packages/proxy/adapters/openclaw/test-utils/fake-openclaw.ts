@@ -1,32 +1,37 @@
 /**
  * fakeOpenClaw — one in-memory OpenClaw Gateway holding one Agent and one
- * Session, for the runtime contract: the calls a turn and a read reach, the
- * events a run streams, and the faults the contract drives. It stands in for
- * the official Gateway client under the real `OpenClawClient`, so the client's
- * own link, deadlines and error mapping are what the contract proves.
+ * Session, for the runtime and wire contracts: the calls a create, a turn and
+ * a read reach, the events a run streams, and the faults the runtime contract
+ * drives. It stands in for the official Gateway client under the real
+ * `OpenClawClient`, built by `fakeOpenClawClient`, so the client's own link,
+ * deadlines and error mapping are what the contracts prove.
+ *
+ * It copies the OpenClaw v2026.9.4 Gateway protocol
+ * (`@openclaw/gateway-protocol` 2026.9.4), for an operator device holding the
+ * admin scope.
  *
  * Usage:
  *
  *   const openclaw = fakeOpenClaw()
- *   const client = new OpenClawClient({
- *     ...options,
- *     createGatewayClient: openclaw.createGatewayClient,
- *   })
+ *   const client = fakeOpenClawClient(openclaw)
+ *   composeOpenClawRuntime({ ...client, baseUrl, logger })
+ *   await client.start()
  *   openclaw.progress() // stream a reply fragment into the running turn
  *
- * The official client marks every Gateway answer it builds, so a test that
- * lets this fake refuse a call must mock `isGatewayProtocolResponseError` to
- * accept a `GatewayClientRequestError`, as `client.test.ts` does.
+ * The official client marks every Gateway answer it builds, so a test over
+ * this fake mocks `@openclaw/gateway-client` with `gatewayClientMock`.
  */
 import { GatewayClientRequestError } from "@openclaw/gateway-client"
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol"
 
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
-import type {
-  OpenClawGatewayClient,
-  OpenClawGatewayClientOptions,
-  OpenClawRequestOptions,
+import {
+  OpenClawClient,
+  type OpenClawClientOptions,
+  type OpenClawGatewayClient,
+  type OpenClawGatewayClientOptions,
+  type OpenClawRequestOptions,
 } from "../client"
 
 const AGENT_ID = "research"
@@ -41,6 +46,35 @@ type Connection = {
   up: boolean
   stopped: boolean
 }
+
+/**
+ * The real client over `openclaw`, as every contract composes it: synthetic
+ * device credentials, a client factory, and the start that brings its link up
+ * as the proxy's first catalog read does.
+ */
+export function fakeOpenClawClient(openclaw: FakeOpenClaw) {
+  let client: OpenClawClient | undefined
+  return {
+    credentials: async () => ({
+      deviceIdentity: {
+        deviceId: "device-test",
+        privateKeyPem: "test-private-key",
+        publicKeyPem: "test-public-key",
+      },
+      deviceToken: "test-token",
+      signDevicePayload: () => "test-signature",
+      publicKeyRawBase64UrlFromPem: () => "test-public-key-raw",
+    }),
+    clientFactory: (options: OpenClawClientOptions) =>
+      (client = new OpenClawClient({
+        ...options,
+        createGatewayClient: openclaw.createGatewayClient,
+      })),
+    start: () => client!.start(),
+  }
+}
+
+export type FakeOpenClaw = ReturnType<typeof fakeOpenClaw>
 
 export function fakeOpenClaw() {
   const pending = new Set<(error: Error) => void>()
@@ -126,6 +160,10 @@ export function fakeOpenClaw() {
                 },
               ],
         }
+      case "sessions.create":
+        // The release answers a new Session with its key; this fake's one
+        // Session stands for it.
+        return { ok: true, key: SESSION_KEY, sessionId: "transcript-a" }
       case "sessions.messages.subscribe":
         return { key: params.key }
       case "sessions.messages.unsubscribe":
