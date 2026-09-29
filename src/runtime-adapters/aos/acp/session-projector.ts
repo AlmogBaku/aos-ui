@@ -269,12 +269,14 @@ function emptyRequestHostId(state: ProjectorState): string | undefined {
   const id = state.activeAssistantId
   if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
   const host = state.messages.find((message) => message.id === id)
-  return host?.parts.every(isCompaction) ? id : undefined
+  return host?.parts.every(isHostedStatus) ? id : undefined
 }
 
-/** A compaction the host shows ahead of the run's turn moves with it. */
-const isCompaction = (part: ProjectedMessage["parts"][number]) =>
-  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
+/** A compaction or notice the host shows ahead of the run's turn moves with it. */
+const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" &&
+  (part.name === COMPACTION_DATA_PART_NAME ||
+    part.name === NOTICE_DATA_PART_NAME)
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -567,7 +569,8 @@ function applyNotice(
     isRecord(lastPart.data) &&
     lastPart.data.kind === data.kind &&
     lastPart.data.title === data.title
-  ) return state
+  )
+    return state
   return onMessage(withCounter, id, "assistant", (message) =>
     appendData(message, NOTICE_DATA_PART_NAME, data)
   )

@@ -429,7 +429,7 @@ assistant's answer.
   mid-turn. A failed compaction is a warning System Notice.
 - **Runtime status is a quiet, live-only line:** a `notice` session update from
   the runtime reads as a single muted line in the turn, with a kind icon chosen
-  by `_meta.aos.kind` (heartbeat, loop, goal, process, status). A `warning` or
+  by `_meta.aos.kind` (heartbeat, loop, goal, process; any other kind gets a plain status icon). A `warning` or
   `error` severity becomes a System Notice instead. Notices are never stored in
   history: they arrive as live stream events and travel with the turn they land
   in, or append to the latest assistant turn when no run is active.

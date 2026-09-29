@@ -6,7 +6,10 @@ import { AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
-import { COMPACTION_DATA_PART_NAME, NOTICE_DATA_PART_NAME } from "@/lib/message-parts"
+import {
+  COMPACTION_DATA_PART_NAME,
+  NOTICE_DATA_PART_NAME,
+} from "@/lib/message-parts"
 import {
   permissionProviderMetadata,
   readAosToolArtifact,
@@ -2359,6 +2362,32 @@ describe("applyUpdate notice", () => {
         data: { severity: "info", title: "Loop wakeup", kind: "loop" },
       },
       { type: "text", text: " done" },
+    ])
+  })
+
+  it("keeps a notice sent before the first chunk in the run's own turn", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      notice({ title: "Process started" }, "process"),
+      agentChunk("a1", "Reply"),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(toThreadMessages(state)).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          {
+            type: "data",
+            name: NOTICE_DATA_PART_NAME,
+            data: {
+              severity: "info",
+              title: "Process started",
+              kind: "process",
+            },
+          },
+          { type: "text", text: "Reply" },
+        ],
+      },
     ])
   })
 

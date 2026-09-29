@@ -24,8 +24,8 @@ function noticeKind(kind: string | undefined): NoticeKind {
 }
 
 /**
- * A status the runtime announces while a turn runs, such as a heartbeat or a
- * loop wakeup. It is the runtime speaking, not the Agent, so an ordinary one
+ * A status the runtime announces live, during a turn or between turns, such
+ * as a heartbeat or a loop wakeup. It is the runtime speaking, not the Agent, so an ordinary one
  * reads as one muted line in the trace; a warning or error is a System Notice.
  */
 export function NoticeLine({ data }: { data: unknown }) {
