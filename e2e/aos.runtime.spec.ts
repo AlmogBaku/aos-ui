@@ -1087,7 +1087,7 @@ test("AOS proxy at capacity is waited out before the browser reconnects", async 
   await expect(full).toBeHidden()
 })
 
-test("AOS shows a reconnecting notice while a dropped link recovers", async ({
+test("AOS shows a reconnecting notice over the conversation while a dropped link recovers", async ({
   page,
 }) => {
   await page.clock.install()
@@ -1096,22 +1096,29 @@ test("AOS shows a reconnecting notice while a dropped link recovers", async ({
   await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000))
   const reconnecting = page.getByText("Reconnecting to AOS…")
+  const reconnected = page.getByText("Reconnected")
 
-  // A rejoin still held past the 2 s grace shows the notice until it lands.
+  // A rejoin still held past the 2 s grace shows the notice until it lands,
+  // over the conversation it leaves in place, then says so for a moment.
   await page.evaluate(() => window.__acpStub.dropSocket())
   await page.clock.runFor(1_900)
   await expect(reconnecting).toBeHidden()
   await page.clock.runFor(200)
   await expect(reconnecting).toBeVisible()
+  await expect(page.getByText("Restored from AOS.")).toBeVisible()
   await page.evaluate(() => window.__acpStub.releaseRejoin())
   await page.clock.runFor(100)
   await expect(reconnecting).toBeHidden()
+  await expect(reconnected).toBeVisible()
+  await page.clock.runFor(2_000)
+  await expect(reconnected).toBeHidden()
 
   // A drop that recovers within the grace shows nothing.
   await page.evaluate(() => window.__acpStub.dropSocket())
   await page.clock.runFor(2_500)
   expect(await page.evaluate(() => window.__acpStub.connections)).toBe(3)
   await expect(reconnecting).toBeHidden()
+  await expect(reconnected).toBeHidden()
 })
 
 test("AOS proxy loads a long Session's earlier messages as the reader scrolls up, keeping their place", async ({

@@ -8,16 +8,16 @@
 export const HANDSHAKE_DEADLINE_MS = 10_000
 
 /**
- * How long a request waits for its reply before its transport counts as
- * stalled: short for reads and the other small requests, medium for a resume,
+ * How long a request waits for its reply before it fails and its transport
+ * is checked in with a liveness probe: short for reads and the other small requests, medium for a resume,
  * a config write and a steer, long for a prompt and a from-start resume.
  * The `probe` tier is the liveness probe deadline; focus uses it.
  */
 export const REQUEST_DEADLINE_MS = {
-  short: 30_000,
+  short: 45_000,
   medium: 45_000,
   long: 90_000,
-  probe: 10_000,
+  probe: 20_000,
 } as const
 
 export type RequestTier = keyof typeof REQUEST_DEADLINE_MS
