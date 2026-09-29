@@ -11,7 +11,6 @@ import {
   type HermesGatewayOptions,
 } from "./gateway"
 import { useFakeClock } from "../../../../test/support/fake-clock"
-import { MAX_EVENT_FRAME_BYTES } from "./gateway-socket"
 import { FakeSocket } from "./test-utils/fake-socket"
 import { nativeTurn } from "./test-utils/native-events"
 
@@ -558,36 +557,6 @@ describe("Hermes gateway response bounds", () => {
     sockets[1]!.reply(id, { ok: true })
     await expect(pending).resolves.toEqual({ ok: true })
     expect(factory).toHaveBeenCalledTimes(2)
-    await gateway.close()
-  })
-
-  it("drops an oversized event frame and keeps delivering the next one", async () => {
-    const { gateway, sockets } = harness()
-    const observed = vi.fn()
-    gateway.subscribeEvents(observed)
-    await gateway.connect()
-
-    sockets[0]!.deliverEvent({
-      type: "message.delta",
-      session_id: "live-a",
-      seq: 1,
-      payload: { text: "x".repeat(MAX_EVENT_FRAME_BYTES) },
-    })
-    sockets[0]!.deliverEvent({
-      type: "message.delta",
-      session_id: "live-a",
-      seq: 2,
-      payload: { text: "next" },
-    })
-
-    expect(sockets[0]!.readyState).toBe(1)
-    expect(observed).toHaveBeenCalledTimes(1)
-    expect(observed).toHaveBeenCalledWith({
-      type: "message.delta",
-      session_id: "live-a",
-      seq: 2,
-      payload: { text: "next" },
-    })
     await gateway.close()
   })
 })

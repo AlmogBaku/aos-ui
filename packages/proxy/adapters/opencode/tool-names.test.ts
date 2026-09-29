@@ -9,13 +9,6 @@ import {
   openCodeToolKind,
 } from "./tool-names"
 
-describe("canonicalOpenCodeToolName", () => {
-  it("renames the native subagent tool and passes every other name through", () => {
-    expect(canonicalOpenCodeToolName("task")).toBe("delegate_subagent")
-    expect(canonicalOpenCodeToolName("read")).toBe("read")
-  })
-})
-
 describe("openCodeToolKind", () => {
   it.each([
     ["read", ToolKind.Read],

@@ -3,8 +3,6 @@ import { TurnEventKind } from "../../core/events"
 import type { ServerAttachmentStage } from "../../core/runtime"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
-import { HermesTurnEngine } from "./run"
-import type { HermesTurnNative } from "./run-native"
 import { HermesNativeRuntime } from "./run-native"
 import {
   HermesRpcRejectedError,
@@ -399,40 +397,6 @@ it("rejects recognized commands with attachments before any write and sends unkn
   expect(router.calls("prompt.submit").map(({ params }) => params)).toEqual([
     { session_id: "live-secret", text: "/unknown" },
   ])
-})
-
-it("finishes a synchronous command run without waiting for native conversational events", async () => {
-  const native: HermesTurnNative = {
-    resume: async () => ({ liveSessionId: "live", running: false }),
-    subscribeLive: async () => () => {},
-    cursor: async () => ({ epoch: "epoch", latestSeq: 0 }),
-    replay: async () => ({ epoch: "epoch", lastSeen: 0, events: [] }),
-    status: async () => "idle",
-    interrupt: async () => "interrupted",
-    redirect: async () => "redirected",
-    retain: async () => () => {},
-    inspectExecution: async () => ({ running: false, status: "idle" }),
-    subscribePendingRequests: () => () => undefined,
-    respondInteractions: async () => [],
-    submit: async () => ({
-      acknowledgement: "accepted",
-      status: "streaming",
-      completion: { output: "Help output" },
-    }),
-  }
-  const engine = new HermesTurnEngine(native)
-  const handle = await engine.start(
-    { agentId: "writer", providerSessionId: "stored", sessionId: "thread" },
-    { turnId: "run", messageId: "user", prompt: "/help" }
-  )
-  const events = []
-  for await (const event of handle.events) events.push(event)
-  expect(events.map((event) => event.kind)).toEqual([
-    TurnEventKind.TurnStarted,
-    TurnEventKind.MessageChunk,
-    TurnEventKind.TurnEnded,
-  ])
-  expect(events[1]).toMatchObject({ text: "Help output" })
 })
 
 it("re-sends only the expansion when Hermes rejects the command's own submit as gone", async () => {

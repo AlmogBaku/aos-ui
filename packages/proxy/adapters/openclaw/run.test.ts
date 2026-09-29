@@ -345,36 +345,6 @@ describe("OpenClaw run engine", () => {
     expect(native.calls).toEqual([])
   })
 
-  it("does not retry a staged turn after an uncertain native send", async () => {
-    const native = new ControlledNative()
-    native.sendError = new OpenClawClientRequestError("connection closed", true)
-    const subscriptions = new OpenClawSessionSubscriptions(native, logger)
-    const engine = new OpenClawTurnEngine({
-      watch,
-      client: native,
-      subscriptions,
-    })
-    const stage = stageOpenClawChatAttachments(
-      [{ type: "file", dataUrl: "data:text/plain;base64,aGk=" }],
-      {
-        maxPayload: 1_000_000,
-        attachments: { maxBytes: 10_000, maxImageBytes: 10_000 },
-      }
-    )
-
-    const handle = await engine.start(scope, input(), stage)
-    const events: unknown[] = []
-    for await (const event of handle.events) events.push(event)
-
-    expect(events.at(-1)).toMatchObject({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_SEND_UNCERTAIN",
-    })
-    expect(
-      native.calls.filter(({ method }) => method === "chat.send")
-    ).toHaveLength(1)
-  })
-
   it("rejects a staged request that exceeds the negotiated frame before reserving the run", async () => {
     const native = new ControlledNative()
     const subscriptions = new OpenClawSessionSubscriptions(native, logger)

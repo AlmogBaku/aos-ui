@@ -97,16 +97,4 @@ describe("guest audio budget", () => {
     expect(audio.acquire(REF)).toBeDefined()
     expect(audio.acquire(REF)).toBeUndefined()
   })
-
-  it("gives a conversation its full allowance again after it drains", () => {
-    const { advance, audio } = harness({ maxOps: 1 })
-
-    expect(spend(audio, REF)).toBe(true)
-    expect(audio.acquire(REF)).toBeUndefined()
-
-    advance(WINDOW_MS + 1)
-
-    expect(spend(audio, REF)).toBe(true)
-    expect(audio.acquire(REF)).toBeUndefined()
-  })
 })

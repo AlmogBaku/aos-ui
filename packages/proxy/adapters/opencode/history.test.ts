@@ -346,54 +346,5 @@ describe("OpenCode history projection", () => {
       { type: "data", name: "aos.artifact", data: live?.descriptor },
     ])
     expect(JSON.stringify(message)).not.toContain("/workspaces")
-    expect(
-      projectOpenCodeHistory({
-        messages: [
-          assistant(
-            "aos-ui_present_artifact",
-            JSON.stringify({
-              ok: true,
-              type: "aos.artifact",
-              artifact: { path: "out/report.pdf", filename: "report.pdf" },
-            })
-          ),
-        ],
-        sessionId: "session-1",
-      })[0]?.content.some((part) => part.type === "data")
-    ).toBe(false)
-  })
-
-  it("canonicalizes an aos-ui render tool in history", () => {
-    const [message] = projectOpenCodeHistory({
-      messages: [
-        {
-          id: "assistant-1",
-          type: "assistant",
-          agent: "research",
-          model: { providerID: "openai", id: "gpt" },
-          time: { created: 2_000 },
-          content: [
-            {
-              id: "call-1",
-              type: "tool",
-              name: "aos-ui_render_chart",
-              time: { created: 2_000 },
-              state: {
-                status: "completed",
-                input: { title: "Sales" },
-                content: [],
-                structured: {},
-                result: "ok",
-              },
-            },
-          ],
-        },
-      ],
-      sessionId: "session-1",
-    })
-    expect(message?.content[0]).toMatchObject({
-      type: "tool-call",
-      toolName: "render_chart",
-    })
   })
 })

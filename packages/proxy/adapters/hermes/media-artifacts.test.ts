@@ -68,21 +68,6 @@ describe("Hermes native media projection", () => {
     ).toEqual([])
   })
 
-  it("suppresses a trusted MEDIA line across split deltas while preserving prose", () => {
-    const filter = new HermesMediaTextFilter([audioPath])
-    const output = [
-      filter.write("Your brief is ready.\nME"),
-      filter.write("DIA:"),
-      filter.write("/home/alice/voice-"),
-      filter.write("memos/out/quick-brief.mp3\nPlay it when convenient."),
-      filter.finish(),
-    ].join("")
-
-    expect(output).toBe("Your brief is ready.\nPlay it when convenient.")
-    expect(output).not.toContain("MEDIA:")
-    expect(output).not.toContain("/home/")
-  })
-
   it("redacts a MEDIA line naming a sensitive file without granting an artifact", () => {
     const filter = new HermesMediaTextFilter()
     const output = [

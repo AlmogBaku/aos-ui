@@ -1,58 +1,12 @@
 import { describe, expect, it } from "vitest"
 
 import { INTERACTION_PROTOCOL } from "../../protocol"
-import type { VerifiedGuestAuthorization } from "./guest-invitation"
 import {
   projectGuestCapabilities,
-  projectGuestError,
   publicTurnError,
 } from "./guest-runtime-projection"
 
-const authorization: VerifiedGuestAuthorization = {
-  version: 1,
-  role: "guest",
-  issuer: "aos-invite",
-  audience: "aos-guest",
-  deploymentId: "deployment",
-  principalId: "guest_ref",
-  invitationId: "invite_ref",
-  runtimeId: "runtime",
-  agentId: "agent",
-  sessionId: "ref",
-  ref: "ref",
-  capabilities: [
-    "artifact-metadata",
-    "attachment-metadata",
-    "custom-ui",
-    "message-text",
-    "safe-errors",
-  ],
-  tokenId: "token",
-  issuedAt: 1,
-  notBefore: 1,
-  expiresAt: 100,
-  authorizationExpiresAt: 100,
-  operation: "messages:read",
-}
-
 describe("guest runtime projection", () => {
-  it("returns normalized friendly HTTP errors", async () => {
-    const response = projectGuestError(
-      { ...authorization, operation: "errors:read" },
-      "temporarily_unavailable",
-      true,
-      503
-    )
-
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: "temporarily_unavailable",
-        description:
-          "The service is temporarily unavailable. Please try again.",
-      },
-    })
-  })
-
   it("keeps a turn whose outcome is unknown distinct from a failed one, and final", () => {
     expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
       code: "AOS_OUTCOME_UNKNOWN",

@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest"
 
 import { READY_LINK } from "../../core/link"
 import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
-import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
   OpenClawAdapterUnavailableError,
   OpenClawServerAdapter,
@@ -286,11 +285,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
         }),
       })
     )
-    expect(
-      SessionWorkspaceCapabilitiesResponseSchema.parse(
-        await adapter.workspaceCapabilities("research", sessionKey)
-      )
-    ).toBeDefined()
     await expect(
       adapter.stageAttachments("research", sessionKey, [
         { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },

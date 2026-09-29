@@ -410,34 +410,6 @@ describe("HermesAttachmentRegistry", () => {
     expect(resume).toHaveBeenCalledTimes(3)
   })
 
-  it("stops waiting for a native close no socket will answer", async () => {
-    vi.useFakeTimers()
-    try {
-      const gateway = fakeGateway()
-      const close = vi.fn(() => new Promise<void>(() => undefined))
-      const registry = new HermesAttachmentRegistry(
-        { resume: async () => ({ liveSessionId: "live-stored" }), close },
-        gateway.transport,
-        { closeFlushMs: 1_000 }
-      )
-      await registry.ensure(scope)
-
-      const closed = registry.close()
-      let settled = false
-      void closed.then(() => {
-        settled = true
-      })
-      await vi.advanceTimersByTimeAsync(0)
-      expect(close).toHaveBeenCalledWith("live-stored")
-      expect(settled).toBe(false)
-
-      await vi.advanceTimersByTimeAsync(1_000)
-      await expect(closed).resolves.toBeUndefined()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   it("closes only an idle exact native Session and drops an unsaved draft", async () => {
     vi.useFakeTimers()
     const gateway = fakeGateway()

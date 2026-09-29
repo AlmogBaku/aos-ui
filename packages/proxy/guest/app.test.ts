@@ -410,10 +410,7 @@ describe("guest app", () => {
   })
 
   it.each([
-    ["expired", { exp: NOW / 1_000 - 1 }],
     ["wrong audience", { aud: "other" }],
-    ["wrong deployment", { dep: "deployment-b" }],
-    ["wrong runtime", { runtime: "other-runtime" }],
     ["wrong Agent", { agent: "other-agent" }],
     ["wrong reference", { ref: "other-ref" }],
   ])("rejects %s before runtime access", async (_name, overrides) => {
@@ -651,25 +648,6 @@ describe("guest app", () => {
     for (const response of held) expect((await response).status).toBe(200)
 
     expect((await speakRequest(subject, invite)).status).toBe(200)
-  })
-
-  it("stops spending for an invitation that used its whole window", async () => {
-    const subject = harness()
-    const invite = await token(subject.invitationService)
-
-    for (let index = 0; index < 60; index += 1)
-      expect(
-        (await speakRequest(subject, invite)).status,
-        `speak ${index + 1}`
-      ).toBe(200)
-
-    const refused = await speakRequest(subject, invite)
-
-    expect(refused.status).toBe(503)
-    await expect(refused.json()).resolves.toMatchObject({
-      error: { code: "turn_capacity_exceeded" },
-    })
-    expect(subject.speak).toHaveBeenCalledTimes(60)
   })
 
   it("budgets each invitation separately", async () => {

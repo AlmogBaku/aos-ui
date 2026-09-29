@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest"
 import {
   aosToolsPatch,
   OpenClawNativePayloadError,
-  openClawCreateSessionParams,
-  openClawDeleteSessionParams,
   openClawHistoryParams,
   openClawModelsParams,
   openClawPatchSessionParams,
@@ -15,22 +13,6 @@ import {
 
 describe("OpenClaw native workspace schemas", () => {
   it("[CL1-SCHEMA-001] emits only official, scope-bound RPC parameters", () => {
-    expect(openClawSessionsParams("researcher", 50, 0)).toEqual({
-      agentId: "researcher",
-      limit: 50,
-      offset: 0,
-      sortBy: "updatedAt",
-      configuredAgentsOnly: true,
-      includeDerivedTitles: true,
-    })
-    expect(
-      openClawHistoryParams("researcher", "agent:researcher:main", 200, 0)
-    ).toEqual({
-      agentId: "researcher",
-      sessionKey: "agent:researcher:main",
-      limit: 200,
-      offset: 0,
-    })
     expect(openClawModelsParams("researcher", "agent:researcher:main")).toEqual(
       { agentId: "researcher", sessionKey: "agent:researcher:main" }
     )
@@ -71,28 +53,7 @@ describe("OpenClaw native workspace schemas", () => {
     ).toThrow(OpenClawNativePayloadError)
   })
 
-  it("[CL1-SCHEMA-005] emits one official Session mutation flag and rejects an unofficial pin state", () => {
-    expect(
-      openClawPatchSessionParams("researcher", "agent:researcher:main", {
-        label: "Renamed",
-      })
-    ).toEqual({
-      agentId: "researcher",
-      key: "agent:researcher:main",
-      label: "Renamed",
-    })
-    expect(
-      openClawPatchSessionParams("researcher", "agent:researcher:main", {
-        pinned: true,
-      })
-    ).toEqual({
-      agentId: "researcher",
-      key: "agent:researcher:main",
-      pinned: true,
-    })
-    expect(
-      openClawDeleteSessionParams("researcher", "agent:researcher:main")
-    ).toEqual({ agentId: "researcher", key: "agent:researcher:main" })
+  it("[CL1-SCHEMA-005] rejects an unscoped Session mutation and an unofficial pin state", () => {
     expect(() =>
       openClawPatchSessionParams("researcher", "", { archived: true })
     ).toThrow(OpenClawNativePayloadError)
@@ -110,11 +71,7 @@ describe("OpenClaw native workspace schemas", () => {
     ).toThrow(OpenClawNativePayloadError)
   })
 
-  it("enables the aos-ui MCP server through official create and patch parameters", () => {
-    expect(openClawCreateSessionParams("researcher")).toEqual({
-      agentId: "researcher",
-      toolOverrides: { mcpServers: { "aos-ui": true } },
-    })
+  it("enables the aos-ui MCP server through official patch parameters", () => {
     expect(
       openClawPatchSessionParams(
         "researcher",

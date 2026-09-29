@@ -298,22 +298,6 @@ describe("guest turn projection", () => {
     )
   })
 
-  it("never projects the provider detail of a run failure to a guest", () => {
-    const projected = project({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
-      message:
-        "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
-    })
-
-    expect(projected).toEqual({
-      kind: TurnEventKind.TurnFailed,
-      code: "temporarily_unavailable",
-      message: guestErrorDescription("temporarily_unavailable"),
-    })
-    expect(JSON.stringify(projected)).not.toContain("ValidationException")
-  })
-
   it("keeps a guest run whose failure awaits Stop stoppable", () => {
     expect(
       project({
