@@ -63,6 +63,34 @@ describe("the bounded turn event queue", () => {
     })
   })
 
+  it("refuses an event past its count bound and still delivers a terminal event", async () => {
+    const queue = startedTurnQueue()
+    const chunk = {
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-1",
+      text: "x",
+    } as const
+
+    // TurnStarted holds the first of the 4,096 places.
+    const accepted = Array.from({ length: 4_096 }, () => queue.push(chunk))
+    queue.terminal({
+      kind: TurnEventKind.TurnFailed,
+      message: "Hermes produced more events than AOS can safely buffer.",
+      code: "AOS_STREAM_OVERFLOW",
+    })
+
+    expect(accepted.filter(Boolean)).toHaveLength(4_095)
+    expect(accepted.at(-1)).toBe(false)
+    expect(await drain(queue)).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      {
+        kind: TurnEventKind.TurnFailed,
+        message: "Hermes produced more events than AOS can safely buffer.",
+        code: "AOS_STREAM_OVERFLOW",
+      },
+    ])
+  })
+
   it("publishes nothing more once it is closed", async () => {
     const queue = new EventQueue()
     queue.close()
