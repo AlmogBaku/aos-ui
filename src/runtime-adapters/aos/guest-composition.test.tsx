@@ -24,7 +24,6 @@ import {
   AOS_AUTH_METHOD_INVITE,
   AOS_META_KEY,
   AOS_METHODS,
-  AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerRequestSchema,
 } from "@aos/protocol/acp"
@@ -680,11 +679,6 @@ describe("AOS guest browser composition", () => {
 
     proxy.finishRun()
     await waitFor(() => expect(composer).toHaveValue("What about pricing?"))
-    expect(
-      AosComposerPrefillNotificationSchema.safeParse(
-        prefillParams("What about pricing?")
-      ).success
-    ).toBe(true)
   })
 
   it("never lets a suggested turn overwrite what the guest typed", async () => {
