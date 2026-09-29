@@ -115,6 +115,51 @@ describe("guest history projection", () => {
       expect(message).not.toHaveProperty("metadata")
   })
 
+  it("keeps a turn the provider started on its own apart for a guest, without its notice", () => {
+    const projected = projectGuestHistory(
+      {
+        sessionId: "stored",
+        messages: [
+          {
+            id: "wake-thought",
+            role: "assistant",
+            content: [
+              {
+                type: "data",
+                name: "aos-notice",
+                data: { severity: "info", title: "/loop wakeup #1" },
+              },
+              { type: "reasoning", text: "Check it" },
+            ],
+            createdAt: "2026-09-15T00:00:00.000Z",
+            opensTurn: true,
+          },
+          {
+            id: "wake",
+            role: "assistant",
+            content: [{ type: "text", text: "TICK" }],
+            createdAt: "2026-09-15T00:00:01.000Z",
+          },
+        ],
+        total: 2,
+        limit: 200,
+        offset: 0,
+        nextOffset: 2,
+      },
+      "ref"
+    )
+
+    // A guest is not shown the thought, so the reply opens the turn instead.
+    expect(projected.messages).toEqual([
+      expect.objectContaining({
+        id: "wake",
+        opensTurn: true,
+        content: [{ type: "text", text: "TICK" }],
+      }),
+    ])
+    expect(JSON.stringify(projected)).not.toContain("loop wakeup")
+  })
+
   it("keeps a restored failed turn failed for a guest", () => {
     const projected = projectGuestHistory(
       {

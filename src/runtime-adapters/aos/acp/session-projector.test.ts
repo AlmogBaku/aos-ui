@@ -1466,6 +1466,59 @@ describe("one turn per user message", () => {
     expect(messages[1]?.content).toEqual(toThreadMessages(ended)[1]?.content)
   })
 
+  it("shows a stored turn the provider started on its own apart, led by its notice", () => {
+    const notice = { severity: "info", title: "/loop wakeup #1", kind: "loop" }
+    const stored = fold([
+      userChunk("u1", "Reply only: OK"),
+      agentChunk("a1", "OK"),
+      [
+        {
+          sessionUpdate: "agent_message",
+          messageId: "a2",
+          content: [],
+        },
+        { opensTurn: true, notice },
+      ],
+      agentChunk("a2", "TICK"),
+    ])
+
+    expect(toThreadMessages(stored)).toMatchObject([
+      { id: "u1" },
+      { id: "a1", content: [{ type: "text", text: "OK" }] },
+      {
+        id: "a2",
+        content: [
+          { type: "data", name: NOTICE_DATA_PART_NAME, data: notice },
+          { type: "text", text: "TICK" },
+        ],
+      },
+    ])
+  })
+
+  it("shows a run no prompt opened as a turn of its own, however many responses it streams", () => {
+    const woken = fold(
+      [
+        stateUpdate(
+          { state: "running" },
+          { ...TURN_META, turnId: "run-2", at: COMPLETED_AT }
+        ),
+        agentChunk("w1", "Checking"),
+        agentChunk("w2", "TICK"),
+      ],
+      ended
+    )
+
+    const messages = toThreadMessages(woken)
+    expect(messages.map(({ id }) => id)).toEqual(["u1", "r1-thought", "w1"])
+    expect(messages[1]).toEqual(toThreadMessages(ended)[1])
+    expect(messages[2]).toMatchObject({
+      content: [
+        { type: "text", text: "Checking" },
+        { type: "text", text: "TICK" },
+      ],
+    })
+  })
+
   it("keeps a turn nothing touched reference-equal", () => {
     const later = fold([userChunk("u2", "Again")], ended)
     expect(toThreadMessages(later)[1]).toBe(toThreadMessages(ended)[1])

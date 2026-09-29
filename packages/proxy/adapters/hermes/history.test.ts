@@ -276,14 +276,14 @@ describe("server-side Hermes history projection", () => {
       ),
       ["u1", "u1-1", "x!", "u1-2"],
     ],
-    // Hidden, but its reply is its own message.
+    // Hidden, but its reply is its own message, opening a turn of its own.
     ...[
       "auto_continue",
       "process_complete",
       "async_delegation_complete",
       "internal_notification",
       "hidden",
-    ].map((kind) => [`${kind} row`, tagged(kind), ["u1", "u1-1", "x-1"]]),
+    ].map((kind) => [`${kind} row`, tagged(kind), ["u1", "u1-1", "x-1^"]]),
     ...[
       "[Continuing toward your standing goal]\nGoal: tidy the notes",
       "[/loop wakeup #2, every 10m]\nRecurring task: check the build",
@@ -294,7 +294,7 @@ describe("server-side Hermes history projection", () => {
     ].map((text) => [
       text.split("\n")[0],
       untagged(text),
-      ["u1", "u1-1", "x-1"],
+      ["u1", "u1-1", "x-1^"],
     ]),
     // Model-only: hidden, and the reply stays with the original request.
     ...[
@@ -330,8 +330,98 @@ describe("server-side Hermes history projection", () => {
     ])
 
     expect(
-      messages.map(({ id, correction }) => (correction ? `${id}!` : id))
+      messages.map(
+        ({ id, correction, opensTurn }) =>
+          `${id}${correction ? "!" : ""}${opensTurn ? "^" : ""}`
+      )
     ).toEqual(ids)
+  })
+
+  it.each([
+    [
+      "[/loop wakeup #1, every 30s]\nRecurring task: tick",
+      { title: "/loop wakeup #1, every 30s", kind: "loop" },
+    ],
+    [
+      "[Heartbeat — recurring instruction, fires every 1h]\nCheck the inbox",
+      {
+        title: "Heartbeat — recurring instruction, fires every 1h",
+        kind: "heartbeat",
+      },
+    ],
+    [
+      "[Continuing toward your standing goal — a quality gate failed]\nGoal: x",
+      {
+        title: "Continuing toward your standing goal — a quality gate failed",
+        kind: "goal",
+      },
+    ],
+    [
+      "[IMPORTANT: Background process proc_1 exited (exit code 0).\nCommand: make\nOutput:\nok]",
+      {
+        title: "Background process proc_1 exited (exit code 0).",
+        kind: "process",
+      },
+    ],
+    [
+      "[System note: Your previous turn was interrupted mid-run. Resume it.]",
+      {
+        title:
+          "System note: Your previous turn was interrupted mid-run. Resume it.",
+      },
+    ],
+    // A row that names nothing still opens its turn, with no notice to lead.
+    ["Synthetic payload", undefined],
+  ])(
+    "leads an automation turn with the notice its row names: %#",
+    (text, notice) => {
+      const messages = projectHermesHistory([
+        userRow("u1", "Reply only: OK"),
+        assistantText("a1", "OK"),
+        userRow("x", text, { displayKind: "internal_notification" }),
+        assistantText("a2", "TICK"),
+      ])
+
+      expect(messages.slice(1)).toEqual([
+        expect.not.objectContaining({ opensTurn: true }),
+        expect.objectContaining({
+          opensTurn: true,
+          content: [
+            ...(notice
+              ? [
+                  {
+                    type: "data",
+                    name: "aos-notice",
+                    data: { severity: "info", ...notice },
+                  },
+                ]
+              : []),
+            { type: "text", text: "TICK" },
+          ],
+        }),
+      ])
+    }
+  )
+
+  it("opens an automation turn at the thought that leads its reply", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Reply only: OK"),
+      assistantText("a1", "OK"),
+      untagged("[/loop wakeup #1, every 30s]\nRecurring task: tick"),
+      { id: "a2", role: "assistant", content: "TICK", reasoning: "Check it" },
+    ])
+
+    expect(messages.slice(2)).toEqual([
+      expect.objectContaining({
+        id: "x-1-thought",
+        opensTurn: true,
+        content: [
+          expect.objectContaining({ name: "aos-notice" }),
+          { type: "reasoning", text: "Check it" },
+        ],
+      }),
+      expect.not.objectContaining({ opensTurn: true }),
+    ])
   })
 
   it.each([

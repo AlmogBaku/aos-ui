@@ -1,3 +1,6 @@
+import type { SessionNotice } from "../../core/member"
+import { boundedText } from "./run-frames"
+
 /**
  * The model-facing rows Hermes persists as ordinary user rows, and what each
  * one is to the operator. The dashboard messages route returns stored rows as
@@ -10,13 +13,21 @@
  * What a stored row is to the operator:
  * - `prompt`: shown as its role projects it; a user prompt opens a turn.
  * - `correction`: shown, flagged as a correction of the running turn.
- * - `automation`: hidden, but opens a turn so its reply is its own message.
+ * - `automation`: hidden, but opens a turn so its reply is its own message,
+ *   headed by the notice naming what started it when the row names it.
  * - `skip`: hidden, and opens no turn, so the reply stays with its request.
  */
 export type HermesRowKind = "prompt" | "correction" | "automation" | "skip"
 
-/** A row's class and, for a shown user row, the text it shows. */
-export type HermesRowClass = { kind: HermesRowKind; text: string }
+/**
+ * A row's class and, for a shown user row, the text it shows; an automation row
+ * may carry the notice its turn leads with.
+ */
+export type HermesRowClass = {
+  kind: HermesRowKind
+  text: string
+  notice?: SessionNotice
+}
 
 /** Openers of rows only the model reads. */
 export const MODEL_ONLY_PREFIXES: readonly string[] = [
@@ -38,14 +49,6 @@ export const MODEL_ONLY_PREFIXES: readonly string[] = [
 ]
 
 /**
- * A background process's still-running heartbeat wake, persisted untyped
- * before Hermes tagged it `hidden`: `tools/process_registry_notifications.py`
- * `_format_process_notification` (newer than the pinned commit). Like the
- * tagged wake, it opens a turn.
- */
-const LEGACY_PROCESS_HEARTBEAT = /^\[Background process \S+ heartbeat #/u
-
-/**
  * Headers Hermes appends after `\n\n` to a row with real content: compaction
  * folds the todo snapshot into the last real prompt
  * (`agent/conversation_compression.py`, stripped there with
@@ -58,21 +61,65 @@ const MERGED_HEADERS: readonly string[] = [
   "[STILL IN PROGRESS",
 ]
 
-/** Openers of the untyped turns Hermes starts on its own. */
-export const AUTOMATION_PREFIXES: readonly string[] = [
+/**
+ * Openers of the turns Hermes starts on its own, and the status kind Hermes
+ * announces each with live, which a stored turn's notice reuses.
+ */
+const AUTOMATION_OPENERS: readonly {
+  opener: string | RegExp
+  kind?: string
+}[] = [
   // `hermes_cli/goals.py` `CONTINUATION_PROMPT_*_TEMPLATE`.
-  "[Continuing toward your standing goal",
+  { opener: "[Continuing toward your standing goal", kind: "goal" },
   // `hermes_cli/loops.py` `WAKEUP_PROMPT_TEMPLATE`.
-  "[/loop wakeup #",
+  { opener: "[/loop wakeup #", kind: "loop" },
   // `hermes_cli/heartbeat.py` `HEARTBEAT_PROMPT_TEMPLATE`.
-  "[Heartbeat — recurring instruction",
+  { opener: "[Heartbeat — recurring instruction", kind: "heartbeat" },
   // Watch matches and untyped completions:
   // `tools/process_registry_notifications.py` `_format_process_notification`.
-  "[IMPORTANT: Background process ",
+  { opener: "[IMPORTANT: Background process ", kind: "process" },
+  // A background process's still-running heartbeat wake, persisted untyped
+  // before Hermes tagged it `hidden` (newer than the pinned commit).
+  { opener: /^\[Background process \S+ heartbeat #/u, kind: "process" },
   // Crash-recovery continuation persisted before display typing:
   // `tui_gateway/session_history.py` `_AUTO_CONTINUE_NOTE_PREFIX`.
-  "[System note: Your previous turn was interrupted mid-run",
+  { opener: "[System note: Your previous turn was interrupted mid-run" },
 ]
+
+/** The automation opener `opening` starts with, if any. */
+function automationOpener(opening: string) {
+  return AUTOMATION_OPENERS.find(({ opener }) =>
+    typeof opener === "string"
+      ? opening.startsWith(opener)
+      : opener.test(opening)
+  )
+}
+
+/**
+ * The notice an automation turn leads with: the row's bracketed first line,
+ * as Hermes' own header names what started the turn, without the emphasis a
+ * process wake shouts to the model.
+ */
+function automationNotice(opening: string): SessionNotice | undefined {
+  const [line = ""] = opening.split("\n", 1)
+  if (!line.startsWith("[")) return undefined
+  const title = boundedText(
+    line
+      .slice(1)
+      .replace(/\]\s*$/u, "")
+      .replace(/^IMPORTANT: /u, "")
+      .trim()
+  )
+  if (!title) return undefined
+  const kind = automationOpener(opening)?.kind
+  return { severity: "info", title, ...(kind ? { kind } : {}) }
+}
+
+/** An automation row's class, with the notice its turn leads with. */
+function automation(text: string, opening: string): HermesRowClass {
+  const notice = automationNotice(opening)
+  return { kind: "automation", text, ...(notice ? { notice } : {}) }
+}
 
 /**
  * User-row tags whose turn Hermes started on its own. `hidden` is also
@@ -179,6 +226,7 @@ export function classifyHermesRow(
   const kind =
     typeof row.display_kind === "string" ? row.display_kind.trim() : ""
   if (row.role !== "user") return { kind: kind ? "skip" : "prompt", text }
+  const opening = text.trimStart()
   if (kind === "steer")
     return {
       kind: "correction",
@@ -186,16 +234,11 @@ export function classifyHermesRow(
     }
   // A compaction handoff is also tagged `hidden`, and opens nothing.
   if (AUTOMATION_KINDS.has(kind) && row._compressed_summary !== true)
-    return { kind: "automation", text }
+    return automation(text, opening)
   if (kind && kind !== "skill_invocation") return { kind: "skip", text }
-  const opening = text.trimStart()
   if (MODEL_ONLY_PREFIXES.some((prefix) => opening.startsWith(prefix)))
     return { kind: "skip", text }
-  if (
-    AUTOMATION_PREFIXES.some((prefix) => opening.startsWith(prefix)) ||
-    LEGACY_PROCESS_HEARTBEAT.test(opening)
-  )
-    return { kind: "automation", text }
+  if (automationOpener(opening)) return automation(text, opening)
   const shown = stripMergedScaffolding(text)
   if (isRedirect(row)) return { kind: "correction", text: shown }
   return {

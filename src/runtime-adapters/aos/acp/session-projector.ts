@@ -13,6 +13,7 @@ import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
   AosChunkMetaSchema,
+  AosMessageMetaSchema,
   AosNoticeMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
@@ -209,6 +210,12 @@ function onMessage(
   // A run moves on from the turn it had open only when that turn was one a
   // resume reopened, so that turn has written all it will.
   const prior = opened ? activeAssistantId(renamed) : undefined
+  // A run whose first turn follows a reply, not a prompt, is one the provider
+  // started on its own, so it is a turn of its own.
+  const unprompted =
+    opened &&
+    prior === undefined &&
+    roleBefore(renamed.messages, id) === "assistant"
   const source =
     prior === undefined
       ? renamed
@@ -221,12 +228,25 @@ function onMessage(
   const next = withMessages(
     source,
     withMessage(source.messages, id, role, (message) =>
-      patch(opened ? opening(message, state.execution) : message)
+      patch(
+        opened
+          ? opening(
+              unprompted ? { ...message, opensTurn: true } : message,
+              state.execution
+            )
+          : message
+      )
     )
   )
   return opened || host !== undefined
     ? { ...next, activeAssistantId: id }
     : next
+}
+
+/** The role of the message `id` follows, or would follow once appended. */
+function roleBefore(messages: readonly ProjectedMessage[], id: string) {
+  const index = messages.findIndex((message) => message.id === id)
+  return (index < 0 ? messages.at(-1) : messages[index - 1])?.role
 }
 
 /**
@@ -806,7 +826,8 @@ function applyState(
 /**
  * The thread's turns: each user message alone, and each run of agent messages
  * and thoughts between two of them as one, in arrival order, as Hermes Desktop
- * groups a turn. The group goes by its first message's id.
+ * groups a turn, save that a message opening a turn of its own starts one. The
+ * group goes by its first message's id.
  */
 function turnsOf(
   messages: readonly ProjectedMessage[]
@@ -814,7 +835,11 @@ function turnsOf(
   const turns: ProjectedMessage[][] = []
   for (const message of messages) {
     const last = turns.at(-1)
-    if (message.role === "assistant" && last?.[0]?.role === "assistant")
+    if (
+      message.role === "assistant" &&
+      last?.[0]?.role === "assistant" &&
+      !message.opensTurn
+    )
       last.push(message)
     else turns.push([message])
   }
@@ -897,10 +922,28 @@ function applyPlan(
  */
 type UpdatePayload = Record<string, unknown>
 
+/**
+ * A replayed message that opens a turn of its own, led by the notice naming
+ * what started it, once however often the replay restates it.
+ */
+function openingTurn(message: ProjectedMessage, meta: unknown) {
+  const parsed = AosMessageMetaSchema.safeParse(meta)
+  if (!parsed.success) return message
+  const { notice } = parsed.data
+  const opened: ProjectedMessage = { ...message, opensTurn: true }
+  return notice === undefined ||
+    message.parts.some(
+      (part) => part.source === "data" && part.name === NOTICE_DATA_PART_NAME
+    )
+    ? opened
+    : appendData(opened, NOTICE_DATA_PART_NAME, notice satisfies AosNotice)
+}
+
 function applyWhole(
   state: ProjectorState,
   kind: string,
-  update: UpdatePayload
+  update: UpdatePayload,
+  meta: unknown
 ): ProjectorState {
   const messageId = text(update.messageId)
   if (messageId === undefined) return state
@@ -918,7 +961,7 @@ function applyWhole(
           ? next
           : appendData(next, ARTIFACT_DATA_PART_NAME, artifact),
       replaceBlocks(
-        message,
+        kind === "agent_message" ? openingTurn(message, meta) : message,
         sourceOf(kind),
         blocks && blocks.filter((block) => !linkedArtifact(block))
       )
@@ -1056,7 +1099,7 @@ function applyKind(
     case "user_message":
     case "agent_message":
     case "agent_thought":
-      return applyWhole(state, kind, update)
+      return applyWhole(state, kind, update, meta)
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":

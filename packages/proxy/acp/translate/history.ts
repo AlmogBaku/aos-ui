@@ -2,8 +2,11 @@ import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
 import type { SessionMessage } from "../../../protocol"
 import {
+  AOS_META_KEY,
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
+  AosMessageMetaSchema,
+  type AosMessageMeta,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext, TranslateHistory } from "../types"
 import {
@@ -27,6 +30,9 @@ const HISTORY_TURN_ID = "history"
 
 /** The `data` part name a published artifact travels under, live and stored. */
 const ARTIFACT_PART_NAME = "aos.artifact"
+
+/** The `data` part name of the notice a stored turn leads with. */
+const NOTICE_PART_NAME = "aos-notice"
 
 /**
  * The turn identity the shared builders ask for, given a replay has no live turn
@@ -122,6 +128,32 @@ function toolCallOutbound(
 }
 
 /**
+ * The upsert that opens a turn the provider started on its own, carrying the
+ * notice its message leads with. It stands ahead of the message's parts, which
+ * therefore start from it rather than from an upsert of their own.
+ */
+function turnOpeningOutbound(message: SessionMessage): AcpOutbound[] {
+  if (!message.opensTurn) return []
+  const lead = message.content[0]
+  const notice =
+    lead?.type === "data" && lead.name === NOTICE_PART_NAME
+      ? AosMessageMetaSchema.shape.notice.safeParse(lead.data).data
+      : undefined
+  const meta: AosMessageMeta = {
+    opensTurn: true,
+    ...(notice ? { notice } : {}),
+  }
+  return [
+    update({
+      sessionUpdate: "agent_message",
+      messageId: message.id,
+      content: [],
+      _meta: { [AOS_META_KEY]: meta },
+    }),
+  ]
+}
+
+/**
  * The failure a provider stored on an assistant message, as the live turn
  * reports it. Only a failure replays a state: the browser shows it, and no
  * other stored turn has a state that still stands.
@@ -185,13 +217,17 @@ const MESSAGE_START = {
 /**
  * Starts each agent message from empty content before its first chunk, so a
  * view that already holds the message, as one rebuilt in place does, shows it
- * once.
+ * once. A message already started needs no second upsert.
  */
 function fromEmpty(outbound: readonly AcpOutbound[]): AcpOutbound[] {
   const started = new Set<string>()
   return outbound.flatMap((item) => {
     if (item.kind !== "update") return [item]
     const { update: value } = item
+    if (value.sessionUpdate === "agent_message") {
+      started.add(`${value.sessionUpdate}\u0000${value.messageId}`)
+      return [item]
+    }
     if (
       value.sessionUpdate !== "agent_message_chunk" &&
       value.sessionUpdate !== "agent_thought_chunk"
@@ -226,6 +262,7 @@ export const translateHistory = ((history) => {
       outbound.push(update(planUpdate(message.content.todos, { sequence: 0 })))
     else if (message.role === "assistant")
       outbound.push(
+        ...turnOpeningOutbound(message),
         ...partsOutbound(message, context),
         ...failureOutbound(context, message)
       )
