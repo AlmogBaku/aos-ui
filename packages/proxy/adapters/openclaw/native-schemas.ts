@@ -439,7 +439,9 @@ export function parseOpenClawSessions(
         : {}),
       ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
       // channel is an opaque string; unknown values are resolved later by sessionPlatform.
-      ...(optionalString(value.channel) ? { channel: value.channel as string } : {}),
+      ...(optionalString(value.channel)
+        ? { channel: value.channel as string }
+        : {}),
       // Newer gateways report it; a missing or unusable value stays absent.
       ...(integer(value.createdAt) !== undefined
         ? { createdAt: integer(value.createdAt) }

@@ -15,24 +15,21 @@ describe("sessionPlatform", () => {
     ["BUZZ", "buzz"],
     ["WhatsApp", "whatsapp"],
     ["WHATSAPP_CLOUD", "whatsapp"],
-  ] as const)(
-    "maps %s to %s",
-    (native, expected) => {
-      expect(sessionPlatform(native)).toBe(expected)
+  ] as const)("maps %s to %s", (native, expected) => {
+    expect(sessionPlatform(native)).toBe(expected)
+  })
+
+  it.each(["aos-ui", "cli", "unknown-channel", "", "DISCORD_UNKNOWN"])(
+    "returns undefined for unlisted string %s",
+    (native) => {
+      expect(sessionPlatform(native)).toBeUndefined()
     }
   )
 
-  it.each([
-    "aos-ui",
-    "cli",
-    "unknown-channel",
-    "",
-    "DISCORD_UNKNOWN",
-  ])("returns undefined for unlisted string %s", (native) => {
-    expect(sessionPlatform(native)).toBeUndefined()
-  })
-
-  it.each([undefined, null, 42, {}, []])("returns undefined for non-string %s", (native) => {
-    expect(sessionPlatform(native)).toBeUndefined()
-  })
+  it.each([undefined, null, 42, {}, []])(
+    "returns undefined for non-string %s",
+    (native) => {
+      expect(sessionPlatform(native)).toBeUndefined()
+    }
+  )
 })

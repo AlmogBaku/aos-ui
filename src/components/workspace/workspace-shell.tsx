@@ -712,9 +712,7 @@ function SessionTabs({
               const stateLabels = [
                 session.unread ? dictionary.status.unread : null,
                 session.pinned ? dictionary.status.pinned : null,
-                session.platform
-                  ? dictionary.platform[session.platform]
-                  : null,
+                session.platform ? dictionary.platform[session.platform] : null,
               ].filter(Boolean)
 
               return (

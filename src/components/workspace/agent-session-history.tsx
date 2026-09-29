@@ -5,12 +5,14 @@ import {
   type ThreadListRuntime,
 } from "@assistant-ui/react"
 import { ChevronDown, Pin, Plus, Search } from "lucide-react"
-import { SessionPlatformIcon } from "./session-platform-icon"
 
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
 import { cn } from "@/lib/utils"
-import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
+import type {
+  SessionActionCapabilities,
+  SessionPlatform,
+} from "@/runtime-adapters/contracts"
 
 import {
   SessionHistoryLoadMore,
@@ -29,6 +31,7 @@ import {
 } from "./session-thread-list-item"
 import type { WorkspaceSession } from "./workspace-shell"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
+import { SessionPlatformIcon } from "./session-platform-icon"
 import { RowIndicators } from "./status-dots"
 import styles from "./agent-session-history.module.css"
 
@@ -61,14 +64,7 @@ export type AgentSessionHistoryCopy = SessionHistoryLoadMoreCopy & {
   pinned: string
   archived: string
   /** "From {platform}" labels keyed by platform id. */
-  platform: {
-    buzz: string
-    whatsapp: string
-    slack: string
-    telegram: string
-    discord: string
-    email: string
-  }
+  platform: Record<SessionPlatform, string>
   sessionMenu: SessionRowMenuCopy
 }
 
