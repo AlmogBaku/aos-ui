@@ -57,6 +57,42 @@ const withText = (message: AppendMessage, text: string): AppendMessage =>
     ],
   }) as AppendMessage
 
+/** The waiting messages' texts in queue order, one paragraph each. */
+const joinedText = (messages: readonly AppendMessage[]) =>
+  messages
+    .flatMap(({ content }) =>
+      content.flatMap((part) =>
+        part.type === "text" && part.text ? [part.text] : []
+      )
+    )
+    .join("\n\n")
+
+/**
+ * The waiting messages as the one message the queue sends: `first`'s send
+ * state, every text joined in queue order, and every other part and
+ * attachment kept in that order.
+ */
+const combined = (
+  first: AppendMessage,
+  rest: readonly AppendMessage[]
+): AppendMessage => {
+  if (rest.length === 0) return first
+  const all = [first, ...rest]
+  return withText(
+    {
+      ...first,
+      content: all.flatMap(({ content }) => [...content]),
+      attachments: all.flatMap(({ attachments }) => attachments ?? []),
+    } as AppendMessage,
+    joinedText(all)
+  )
+}
+
+/** Whether a queued message fits back into a composer: text and whole attachments. */
+const composable = (message: AppendMessage) =>
+  message.content.every((part) => part.type === "text") &&
+  (message.attachments ?? []).every((attachment) => attachment.content)
+
 /**
  * Holds the queue while a turn owns the Session. The proxy answers a prompt
  * as it accepts the turn, before the turn reports running, so a dispatched
@@ -66,8 +102,10 @@ const withText = (message: AppendMessage, text: string): AppendMessage =>
  * The queue follows the controller directly: a render would see the turn
  * start only after the next send had already gone out.
  *
- * Its controls edit a waiting message's text and hold the whole queue while
- * an editor is open, so an edit never races the send it changes.
+ * Every send carries all that waits, combined into one message. Its controls
+ * edit a waiting message's text, hold the whole queue while an editor is
+ * open, so an edit never races the send it changes, and hand the whole queue
+ * back to the composer.
  */
 export function createQueue(session: QueueSession) {
   const execution = () => session.getState().execution
@@ -114,7 +152,9 @@ export function createQueue(session: QueueSession) {
     idle()
   }
   const queue: MessageQueueController = createMessageQueue({
-    run: (message) => {
+    run: (head) => {
+      // Whatever still waits behind the head goes out with it, as one turn.
+      const message = combined(head, takeWaiting())
       const until = Date.now() + BUSY_RETRY_MS
       const attempt = (tries: number) => {
         const again = () => {
@@ -167,11 +207,24 @@ export function createQueue(session: QueueSession) {
     const waiting = new Set(adapter.items.map((item) => item.id))
     for (const id of queued.keys()) if (!waiting.has(id)) queued.delete(id)
   })
+  /** Empties the queue, handing back every waiting message in order. */
+  const takeWaiting = () => {
+    const messages = adapter.items.flatMap(({ id }) => {
+      const message = queued.get(id)
+      return message ? [message] : []
+    })
+    for (const { id } of adapter.items) adapter.remove(id)
+    return messages
+  }
   const cancelled = queue.notifyCancelled
-  // Stop is offered only while a turn is live.
+  // Stop is offered only while a turn is live. Only a running turn's Stop
+  // reaches the queue: before the dispatched turn reports running, the queue
+  // would count its start against the cancel and never see its idle.
   const notifyCancelled = () => {
-    if (busy || dispatch) stopped = cancelOwed = true
-    cancelled()
+    if (busy) {
+      stopped = cancelOwed = true
+      cancelled()
+    } else if (dispatch) stopped = true
   }
   queue.notifyCancelled = notifyCancelled
   adapter.__internal_notifyCancelled = notifyCancelled
@@ -209,6 +262,17 @@ export function createQueue(session: QueueSession) {
       adapter.edit(queueItemId, edited)
       queued.set(queueItemId, edited)
       return true
+    },
+    takeAll: () => {
+      const waiting = adapter.items.map(({ id }) => queued.get(id))
+      if (waiting.length === 0) return undefined
+      if (!waiting.every((message) => message && composable(message)))
+        return undefined
+      const messages = takeWaiting()
+      return {
+        text: joinedText(messages),
+        attachments: messages.flatMap((message) => message.attachments ?? []),
+      }
     },
     hold: () => {
       if (holds++ === 0 && !busy && !dispatch) {

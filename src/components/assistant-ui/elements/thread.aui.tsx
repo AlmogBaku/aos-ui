@@ -937,14 +937,6 @@ const Composer: FC<{
     })
   }, [])
 
-  const changeQueueEditing = useCallback(
-    (next: QueueEditing | undefined) => {
-      if (!next && queueEditing?.returnTo === "composer") focusInput()
-      setQueueEditing(next)
-    },
-    [focusInput, queueEditing]
-  )
-
   const restoreDraft = useCallback(
     (snapshot: RecoverableDraft) => {
       aui.composer.setText(snapshot.text)
@@ -1059,8 +1051,8 @@ const Composer: FC<{
 
       if (clearUndoRef.current) clearUndoRef.current = null
 
-      // Up from an empty composer edits the last queued message first; sent
-      // prompts come back once the queue is empty.
+      // Up from an empty composer pulls the whole queue back in as one draft;
+      // sent prompts come back once the queue is empty.
       if (
         event.key === "ArrowUp" &&
         !event.shiftKey &&
@@ -1071,11 +1063,15 @@ const Composer: FC<{
         queueControls
       ) {
         const { text, attachments, queue } = aui.composer.getState()
-        const last = queue.at(-1)
-        if (!text && attachments.length === 0 && last) {
+        const draft =
+          !text && attachments.length === 0 && queue.length > 0
+            ? queueControls.takeAll()
+            : undefined
+        if (draft) {
           event.preventDefault()
           historyBrowseRef.current = null
-          setQueueEditing({ id: last.id, returnTo: "composer" })
+          const end = draft.text.length
+          restoreDraft({ ...draft, selectionStart: end, selectionEnd: end })
           return
         }
       }
@@ -1386,7 +1382,7 @@ const Composer: FC<{
           onUnconfirmed={rememberUnconfirmed}
           direction={direction}
           editing={queueEditing}
-          onEditingChange={changeQueueEditing}
+          onEditingChange={setQueueEditing}
         />
       </AuiIf>
       {visibleUnconfirmedDeliveries.map((delivery) => (
