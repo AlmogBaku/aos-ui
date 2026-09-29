@@ -1,30 +1,9 @@
 // @vitest-environment node
 
-import { readdir, readFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
 
-/** The non-test TypeScript files in `root`, and below it when `recursive`. */
-async function productionFiles(
-  root: string,
-  recursive: boolean
-): Promise<string[]> {
-  const entries = await readdir(root, { withFileTypes: true })
-  return (
-    await Promise.all(
-      entries.flatMap((entry) => {
-        const path = join(root, entry.name)
-        if (entry.isDirectory())
-          return recursive ? [productionFiles(path, true)] : []
-        return entry.isFile() &&
-          /\.tsx?$/u.test(entry.name) &&
-          !/\.test\.tsx?$/u.test(entry.name)
-          ? [Promise.resolve([path])]
-          : []
-      })
-    )
-  ).flat()
-}
+import { productionSources } from "../support/production-sources"
 
 describe("vocabulary", () => {
   const sessionId = {
@@ -80,8 +59,9 @@ describe("vocabulary", () => {
     for (const { retired, scope, reason } of retiredNames) {
       const directory = join(repositoryRoot, scope.replace(/\/\*\*?$/u, ""))
       const recursive = scope.endsWith("/**")
-      for (const path of await productionFiles(directory, recursive)) {
-        const source = await readFile(path, "utf8")
+      for (const [path, source] of await productionSources(directory, {
+        recursive,
+      })) {
         expect(
           source.match(retired)?.[0],
           `${relative(repositoryRoot, path)}: ${reason}`
