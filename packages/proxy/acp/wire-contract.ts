@@ -52,6 +52,11 @@ export type WireContractRow =
   | "promptAnsweredAtStorage"
   | "sameIdsLiveAndAfterReload"
   | "historyAndLiveJoinedById"
+  | "oneTurnThroughQuestion"
+  | "stopMidStreamAndInQuestion"
+  | "withdrawnQuestion"
+  | "heldAndLostQuestions"
+  | "questionsDuringOwnTurn"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -66,6 +71,33 @@ export type WireTurn = Readonly<{
   firstResponse(): Promise<void>
   /** The text "The file lists three names.", stored; the turn ends. */
   secondResponse(): Promise<void>
+  /** Absent only when every row that asks a question is a gap. */
+  questions?: WireQuestions
+}>
+
+/** The questions a running turn asks, and its Stop, as the release has them. */
+export type WireQuestions = Readonly<{
+  /**
+   * Asks "Proceed?" with the choices "yes" and "no" inside the running turn;
+   * settles once the runtime holds an answer or stopped waiting for one.
+   */
+  ask(): Promise<void>
+  /** The runtime withdraws the open question; its turn runs on. */
+  withdraw(): Promise<void>
+  /** Settles at the next interrupt the runtime receives. */
+  interrupted(): Promise<void>
+  /** The runtime confirms the interrupt: its turn ends interrupted. */
+  confirmInterrupt(): Promise<void>
+  /**
+   * Each asks one prompt the proxy holds back, and resolves with a value the
+   * prompt carries that must never reach a client.
+   */
+  held: Readonly<Record<string, () => Promise<string>>>
+  /**
+   * The Session already waits on a question no proxy can present again, as
+   * after a proxy restart.
+   */
+  lose(): Promise<void>
 }>
 
 /** The runtime one adapter's fake stands behind. */
@@ -167,14 +199,39 @@ function connectClient(
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
-  const idleWaiters = new Set<() => void>()
-  const app = client({ name: "wire-contract" }).onNotification(
-    methods.client.session.update,
-    ({ params }) => {
+  const stateWaiters = new Set<(update: SessionUpdate) => void>()
+  const askWaiters = new Set<(ask: WireAsk) => void>()
+  /** Holds one request open until the case answers it or the proxy withdraws it. */
+  function hold<T>(signal: AbortSignal, reply: T) {
+    return new Promise<T>((resolve, reject) => {
+      const ask: WireAsk = {
+        withdrawn: new Promise((settle) =>
+          signal.addEventListener("abort", () => settle(), { once: true })
+        ),
+        answer: () => resolve(reply),
+      }
+      signal.addEventListener("abort", () => reject(new Error("withdrawn")), {
+        once: true,
+      })
+      for (const settle of askWaiters) settle(ask)
+    })
+  }
+  const app = client({ name: "wire-contract" })
+    .onNotification(methods.client.session.update, ({ params }) => {
       updates.push(params.update)
-      if (isIdle(params.update)) for (const settle of idleWaiters) settle()
-    }
-  )
+      for (const settle of stateWaiters) settle(params.update)
+    })
+    .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
+      hold(signal, {
+        outcome: {
+          outcome: "selected" as const,
+          optionId: params.options[0]!.optionId,
+        },
+      })
+    )
+    .onRequest(methods.client.elicitation.create, ({ signal }) =>
+      hold(signal, { action: "accept" as const, content: { q0: "yes" } })
+    )
   const connection = app.connect(
     createWebSocketStream<AnyWireMessage>(
       `wss://${new URL(origin).host}${path}`,
@@ -184,20 +241,36 @@ function connectClient(
       }
     )
   )
+  /** Settles at the next update that says a turn is in `state`. */
+  const nextState = (state: string) =>
+    new Promise<void>((resolve) => {
+      const settle = (update: SessionUpdate) => {
+        if (!SessionUpdate.isStateUpdate(update) || update.state !== state)
+          return
+        stateWaiters.delete(settle)
+        resolve()
+      }
+      stateWaiters.add(settle)
+    })
   return {
     connection,
     bridge,
     /** Every `session/update` this client read, in order. */
     updates,
+    nextState,
     /** Settles at the next update that says a turn went idle. */
-    nextIdle: () =>
-      new Promise<void>((resolve) => {
-        const settle = () => {
-          idleWaiters.delete(settle)
-          resolve()
+    nextIdle: () => nextState("idle"),
+    /** Settles at the next question or permission request. */
+    nextAsked: () =>
+      new Promise<WireAsk>((resolve) => {
+        const settle = (ask: WireAsk) => {
+          askWaiters.delete(settle)
+          resolve(ask)
         }
-        idleWaiters.add(settle)
+        askWaiters.add(settle)
       }),
+    cancel: (sessionId: string) =>
+      connection.agent.notify(methods.agent.session.cancel, { sessionId }),
     initialize: () =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: 2,
@@ -206,6 +279,14 @@ function connectClient(
       }),
   }
 }
+
+/** One request the proxy sent this client, held open until answered. */
+type WireAsk = Readonly<{
+  /** Settles once the proxy withdraws the request with `$/cancel_request`. */
+  withdrawn: Promise<void>
+  /** Answers "yes", or allows with the first option offered. */
+  answer(): void
+}>
 
 type WireClient = ReturnType<typeof connectClient>
 
@@ -216,10 +297,6 @@ async function newSession({ connection }: WireClient, agentId: string) {
     { cwd: "/", _meta: { [AOS_META_KEY]: { agentId } } }
   )
   return sessionId
-}
-
-function isIdle(update: SessionUpdate) {
-  return SessionUpdate.isStateUpdate(update) && update.state === "idle"
 }
 
 /** `sessionId` joined on a fresh connection, its history read from the start. */
@@ -256,6 +333,57 @@ function prompt({ connection }: WireClient, sessionId: string, text: string) {
     sessionId,
     prompt: [{ type: "text", text }],
   })
+}
+
+/** A plain operator client, and one new Session it made on the Agent. */
+async function operatorSession({
+  proxy,
+  agentId,
+  clock,
+  connect,
+}: WireHarness) {
+  const plain = connect(
+    proxy.acpService,
+    OPERATOR_ORIGIN,
+    AOS_ACP_OPERATOR_PATH
+  )
+  await until(clock, plain.initialize())
+  const sessionId = await until(clock, newSession(plain, agentId))
+  return { plain, sessionId }
+}
+
+/**
+ * The runtime asks its question; resolves once `plain` holds it, with what
+ * settles once the runtime holds an answer.
+ */
+async function askQuestion(
+  clock: Clock,
+  plain: WireClient,
+  questions: WireQuestions
+) {
+  const asked = plain.nextAsked()
+  const settled = questions.ask()
+  return { ask: await until(clock, asked), settled }
+}
+
+/**
+ * Stops the running turn, and returns the state `plain` read once the runtime
+ * was interrupted and once it confirmed.
+ */
+async function stopTurn(
+  clock: Clock,
+  plain: WireClient,
+  sessionId: string,
+  questions: WireQuestions
+) {
+  const interrupted = questions.interrupted()
+  const idle = plain.nextIdle()
+  await until(clock, plain.cancel(sessionId))
+  await until(clock, interrupted)
+  const beforeConfirmation = states(plain.updates).at(-1)
+  await until(clock, questions.confirmInterrupt())
+  await until(clock, idle)
+  return { beforeConfirmation, after: states(plain.updates).at(-1) }
 }
 
 /**
@@ -305,6 +433,15 @@ function userSide(updates: readonly SessionUpdate[]) {
   return [...messages].map(([id, text]) => ({ id, text }))
 }
 
+/** Each turn state a plain reader read, an idle one with its stop reason. */
+function states(updates: readonly SessionUpdate[]) {
+  return updates.flatMap((update) =>
+    SessionUpdate.isStateUpdate(update)
+      ? [update.state === "idle" ? `idle:${update.stopReason}` : update.state]
+      : []
+  )
+}
+
 /** What every turn the rows play reads as, ids aside. */
 const PLAYED_TURN = [
   { kind: "agent_thought_chunk", text: "I should read the file." },
@@ -318,6 +455,21 @@ const NO_TURN: WireTurn = {
     Promise.reject(new Error("this fake plays no turn; name the row a gap")),
   secondResponse: () =>
     Promise.reject(new Error("this fake plays no turn; name the row a gap")),
+}
+
+/** A fake that asks nothing fails the row that asks, never skips it. */
+function questionsOf(turn: WireTurn): WireQuestions {
+  if (turn.questions) return turn.questions
+  const none = () =>
+    Promise.reject(new Error("this fake asks no question; name the row a gap"))
+  return {
+    ask: none,
+    withdraw: none,
+    interrupted: none,
+    confirmInterrupt: none,
+    held: {},
+    lose: none,
+  }
 }
 
 /** One case over a freshly composed proxy, closing all it opened. */
@@ -495,6 +647,148 @@ export function runWireContract(
             live.messages.map(({ kind, text }) => ({ kind, text }))
           ).toEqual([...PLAYED_TURN, ...PLAYED_TURN])
           expect(agentSide(reader.updates)).toEqual(live)
+        }
+      )
+
+      row(
+        "oneTurnThroughQuestion",
+        "keeps one turn through a question it asks",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const from = plain.updates.length
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const { ask, settled } = await askQuestion(
+            clock,
+            plain,
+            questionsOf(turn)
+          )
+          ask.answer()
+          await until(clock, settled)
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          expect(states(plain.updates.slice(from))).toEqual([
+            "running",
+            "requires_action",
+            "running",
+            "idle:end_turn",
+          ])
+          // One turn numbers its responses as one, the same after a reload.
+          expect(agentSide(reader.updates)).toEqual(agentSide(plain.updates))
+        }
+      )
+
+      row(
+        "stopMidStreamAndInQuestion",
+        "stops a turn mid-stream and during a question once the runtime confirms, then takes the next prompt",
+        async (harness) => {
+          const { clock, turn } = harness
+          const questions = questionsOf(turn)
+          const { plain, sessionId } = await operatorSession(harness)
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const midStream = await stopTurn(clock, plain, sessionId, questions)
+          await until(clock, prompt(plain, sessionId, "and their sizes"))
+          await askQuestion(clock, plain, questions)
+          const inQuestion = await stopTurn(clock, plain, sessionId, questions)
+
+          await expect(
+            until(clock, prompt(plain, sessionId, "list the files"))
+          ).resolves.toMatchObject({ messageId: expect.any(String) })
+          // Stop in a question runs the turn on until the runtime confirms.
+          const stopped = {
+            beforeConfirmation: "running",
+            after: "idle:cancelled",
+          }
+          expect(midStream).toEqual(stopped)
+          expect(inQuestion).toEqual(stopped)
+        }
+      )
+
+      row(
+        "withdrawnQuestion",
+        "withdraws a question the runtime stopped waiting on, and runs on",
+        async (harness) => {
+          const { clock, turn } = harness
+          const questions = questionsOf(turn)
+          const { plain, sessionId } = await operatorSession(harness)
+          const from = plain.updates.length
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          const { ask, settled } = await askQuestion(clock, plain, questions)
+          const running = plain.nextState("running")
+          await until(clock, questions.withdraw())
+          await until(clock, settled)
+          await until(clock, ask.withdrawn)
+          await until(clock, running)
+
+          expect(states(plain.updates.slice(from))).toEqual([
+            "running",
+            "requires_action",
+            "running",
+          ])
+        }
+      )
+
+      row(
+        "heldAndLostQuestions",
+        "reports a question it holds back or lost as waiting, and sends none of its fields",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const questions = questionsOf(turn)
+          const { plain, sessionId } = await operatorSession(harness)
+          const held: Record<string, string | undefined> = {}
+          for (const [name, ask] of Object.entries(questions.held)) {
+            await until(clock, prompt(plain, sessionId, "list the files"))
+            const waiting = plain.nextState("requires_action")
+            const value = await until(clock, ask())
+            await until(clock, waiting)
+            held[name] = JSON.stringify(plain.updates).includes(value)
+              ? "sent"
+              : states(plain.updates).at(-1)
+            await stopTurn(clock, plain, sessionId, questions)
+          }
+          const lost = plain.nextState("requires_action")
+          await until(clock, questions.lose())
+          await until(clock, lost)
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          held.lost = states(reader.updates).at(-1)
+
+          expect(Object.keys(held)).not.toHaveLength(0)
+          expect(held).toEqual(
+            Object.fromEntries(
+              Object.keys(held).map((name) => [name, "requires_action"])
+            )
+          )
+        }
+      )
+
+      row(
+        "questionsDuringOwnTurn",
+        "asks a question live during a turn it prompted",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await until(clock, prompt(plain, sessionId, "list the files"))
+
+          await expect(
+            askQuestion(clock, plain, questionsOf(turn))
+          ).resolves.toBeTypeOf("object")
         }
       )
     })

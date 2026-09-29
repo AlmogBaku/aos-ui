@@ -23,7 +23,6 @@ import {
   type TurnStream,
   type WorkspaceEvent,
 } from "../core/member"
-import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import { sessionInfoMeta } from "./agent-sessions"
 import { promptBlocks } from "./prompt-content"
@@ -118,11 +117,12 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
  * The Session's execution as one `state_update`: the out-of-band report a
  * resume or an acknowledged Stop owes the client.
  */
-function executionUpdate(
-  state: SessionExecutionState,
-  turnId: string | undefined,
-  sequence: number
-): SessionUpdate {
+function executionUpdate({
+  state,
+  turnId,
+  sequence,
+  awaitingStop,
+}: Extract<MemberEvent, { kind: "execution" }>): SessionUpdate {
   const meta =
     turnId === undefined
       ? {}
@@ -137,7 +137,7 @@ function executionUpdate(
             },
           },
         }
-  if (state === "waiting-for-input")
+  if (state === "waiting-for-input" || (state === "running" && awaitingStop))
     return { sessionUpdate: "state_update", state: "requires_action", ...meta }
   if (state === "running" || state === "stopping")
     return { sessionUpdate: "state_update", state: "running", ...meta }
@@ -440,10 +440,7 @@ export function createMemberEncoder({
         return
       }
       case "execution":
-        return update(
-          sessionId,
-          executionUpdate(event.state, event.turnId, event.sequence)
-        )
+        return update(sessionId, executionUpdate(event))
       case "usage":
         return update(sessionId, usageUpdate(event.usage))
       case "model":

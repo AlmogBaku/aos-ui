@@ -103,6 +103,15 @@ export type ActiveTurn = {
    * whose completion frame already passed: Hermes idling is the only end it has.
    */
   resumedInteraction: boolean
+  /**
+   * The requests the native turn blocks on inside itself: the run keeps its
+   * stream and observer while Hermes waits, and runs on once they end.
+   */
+  waitingOn?: Set<string>
+  /** Called once Hermes ends every request of the wait without an answer. */
+  resumed?: () => void
+  /** The turn waits on a prompt AOS holds or lost, which only Stop ends here. */
+  awaitingStop?: boolean
   /** Live frames waiting behind the one in-flight `session.events.since`. */
   catchUp?: BufferedNativeEvents
   /** A settlement edge a catch-up deferred; re-decided once the page drained. */
@@ -163,6 +172,8 @@ export type TurnEngineHost = {
   sealGeneration(active: ActiveTurn): void
   finish(active: ActiveTurn, ending?: TurnEnding, confirmedIdle?: boolean): void
   requireAction(active: ActiveTurn, requests: PendingRequest[]): void
+  /** The turn waits on a prompt no client here can answer. */
+  awaitStop(active: ActiveTurn): void
   fail(active: ActiveTurn, failure: TurnFailure): void
   detach(active: ActiveTurn, failure: DetachedTurnFailure): void
   settle(active: ActiveTurn): void

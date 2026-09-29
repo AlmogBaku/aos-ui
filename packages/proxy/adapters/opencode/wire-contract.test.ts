@@ -3,29 +3,42 @@ import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenCodeRuntime } from "./factory"
 import { fakeOpenCode, fakeOpenCodeClient } from "./test-utils/fake-opencode"
 
-runWireContract("OpenCode", () => {
-  const opencode = fakeOpenCode()
-  return {
-    config: {
-      id: "opencode-contract",
-      kind: "opencode",
-      baseUrl: "http://127.0.0.1:4096",
-      directory: "/workspaces/contract",
-      username: "operator",
-      passwordFile: "/run/secrets/opencode-password",
+runWireContract(
+  "OpenCode",
+  () => {
+    const opencode = fakeOpenCode()
+    return {
+      config: {
+        id: "opencode-contract",
+        kind: "opencode",
+        baseUrl: "http://127.0.0.1:4096",
+        directory: "/workspaces/contract",
+        username: "operator",
+        passwordFile: "/run/secrets/opencode-password",
+      },
+      runtimeFactory: async (config, limits, { logger, mcpServerOverrides }) =>
+        coordinatedRuntime(
+          config.id,
+          composeOpenCodeRuntime({
+            client: fakeOpenCodeClient(opencode),
+            logger,
+            mcpServerOverrides,
+          }),
+          limits,
+          logger
+        ),
+      agentId: opencode.scope.agentId,
+      turn: opencode.turn,
+    }
+  },
+  {
+    gaps: {
+      // Every question and permission carries a presentable form, so the
+      // adapter holds none back, and OpenCode lists each pending one
+      // (`GET /api/session/{sessionID}/question` and `…/permission`), so a
+      // restarted proxy presents it again rather than losing it.
+      heldAndLostQuestions:
+        "OpenCode holds no question back and lists every pending one",
     },
-    runtimeFactory: async (config, limits, { logger, mcpServerOverrides }) =>
-      coordinatedRuntime(
-        config.id,
-        composeOpenCodeRuntime({
-          client: fakeOpenCodeClient(opencode),
-          logger,
-          mcpServerOverrides,
-        }),
-        limits,
-        logger
-      ),
-    agentId: opencode.scope.agentId,
-    turn: opencode.turn,
   }
-})
+)

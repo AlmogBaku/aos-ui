@@ -15,7 +15,9 @@
  *   const client = fakeOpenCodeClient(opencode)
  *   opencode.progress() // stream a reply fragment into the running turn
  *
- * Every answer takes the shape the pinned SDK types for its route.
+ * Every answer takes the shape the pinned SDK types for its route. A Session's
+ * questions reach only the server's own push, `GET /api/event`, as
+ * `question.v2.*` events; its durable stream carries none.
  */
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
@@ -45,9 +47,16 @@ type DurableEvent = Readonly<{
   durable: { aggregateID: string; seq: number; version: number }
   data: Record<string, unknown>
 }>
+/** One event of the server's own push, `GET /api/event`. */
+type ServerEvent = Readonly<{
+  id: string
+  type: string
+  properties: Record<string, unknown>
+}>
 /** An open answer the fake settles later: an event stream or a wait. */
 type Held = Readonly<{
   push?(event: DurableEvent): void
+  announce?(event: ServerEvent): void
   idle?(): void
   sever(): void
 }>
@@ -68,6 +77,11 @@ function frame(event: DurableEvent) {
     data: JSON.stringify(event),
   }
   return new TextEncoder().encode(`data: ${JSON.stringify(envelope)}\n\n`)
+}
+
+/** The server's push frames each event as its own `V2Event` body. */
+function serverFrame(event: ServerEvent) {
+  return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`)
 }
 
 /** The real client over `opencode`, as every contract composes it. */
@@ -95,6 +109,12 @@ export function fakeOpenCode() {
   let calls = 0
   let replies = 0
   let steps = 0
+  let serverEvents = 0
+  /** The question the running turn blocks on, and what settles its wait. */
+  let asked:
+    { request: Record<string, unknown>; settle: () => void } | undefined
+  let nextQuestion = 1
+  let interrupted: (() => void) | undefined
 
   function append(type: string, data: Record<string, unknown>) {
     const seq = log.length
@@ -111,14 +131,17 @@ export function fakeOpenCode() {
     return event
   }
 
-  /** An event stream replaying the log after `after`, then following it. */
-  function stream(after: number, signal: AbortSignal) {
+  /** An event stream sending `replay`, then what `follow` hands it. */
+  function sse(
+    signal: AbortSignal,
+    replay: readonly Uint8Array[],
+    follow: (send: (chunk: Uint8Array) => void) => Omit<Held, "sever">
+  ) {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const event of log)
-          if (event.durable.seq > after) controller.enqueue(frame(event))
+        for (const chunk of replay) controller.enqueue(chunk)
         const entry: Held = {
-          push: (event) => controller.enqueue(frame(event)),
+          ...follow((chunk) => controller.enqueue(chunk)),
           sever: () => controller.error(new TypeError("terminated")),
         }
         held.add(entry)
@@ -131,6 +154,40 @@ export function fakeOpenCode() {
     return new Response(body, {
       headers: { "content-type": "text/event-stream" },
     })
+  }
+
+  /** An event stream replaying the log after `after`, then following it. */
+  function stream(after: number, signal: AbortSignal) {
+    return sse(
+      signal,
+      log.filter(({ durable }) => durable.seq > after).map(frame),
+      (send) => ({ push: (event) => send(frame(event)) })
+    )
+  }
+
+  /** The server's push, which replays nothing: it follows from now. */
+  function serverStream(signal: AbortSignal) {
+    return sse(signal, [], (send) => ({
+      announce: (event) => send(serverFrame(event)),
+    }))
+  }
+
+  function announce(type: string, properties: Record<string, unknown>) {
+    serverEvents += 1
+    const event = { id: `event-${serverEvents}`, type, properties }
+    for (const answer of held) answer.announce?.(event)
+  }
+
+  /** The open question ends as `type` announces it; the turn goes on. */
+  function endQuestion(
+    type: "question.v2.replied" | "question.v2.rejected",
+    fields: Record<string, unknown> = {}
+  ) {
+    if (!asked) return
+    const { request, settle } = asked
+    asked = undefined
+    announce(type, { sessionID: SESSION_ID, requestID: request.id, ...fields })
+    settle()
   }
 
   /** A long poll that answers once the Session idles. */
@@ -298,6 +355,8 @@ export function fakeOpenCode() {
         return json({
           data: running ? { [SESSION_ID]: { type: "running" } } : {},
         })
+      case "/api/event":
+        return serverStream(request.signal)
     }
     if (deleted) return json({}, 404)
     switch (url.pathname) {
@@ -318,6 +377,26 @@ export function fakeOpenCode() {
         return prompt(request)
       case `${session}/wait`:
         return wait(request.signal)
+      case `${session}/question`:
+        return json({ data: asked ? [asked.request] : [] })
+      case `${session}/permission`:
+        return json({ data: [] })
+      case `${session}/interrupt`:
+        // An interrupt rejects the turn's open question at once; the turn
+        // ends only once its loop stops.
+        endQuestion("question.v2.rejected")
+        interrupted?.()
+        return new Response(null, { status: 204 })
+    }
+    const question = `${session}/question/${String(asked?.request.id)}`
+    if (url.pathname === `${question}/reply`) {
+      const { answers } = (await request.json()) as { answers: unknown }
+      endQuestion("question.v2.replied", { answers })
+      return new Response(null, { status: 204 })
+    }
+    if (url.pathname === `${question}/reject`) {
+      endQuestion("question.v2.rejected")
+      return new Response(null, { status: 204 })
     }
     return json({}, 404)
   }
@@ -362,6 +441,44 @@ export function fakeOpenCode() {
       async secondResponse() {
         step({ text: "The file lists three names." })
         await finish()
+      },
+      /** The turn's in-turn prompts, as the release's `question` tool asks. */
+      questions: {
+        ask: () =>
+          new Promise<void>((settle) => {
+            const request = {
+              id: `question-${nextQuestion++}`,
+              sessionID: SESSION_ID,
+              questions: [
+                {
+                  header: "Proceed?",
+                  question: "Proceed? yes / no",
+                  options: [
+                    { label: "yes", description: "Go on" },
+                    { label: "no", description: "Stop here" },
+                  ],
+                },
+              ],
+            }
+            asked = { request, settle }
+            announce("question.v2.asked", request)
+          }),
+        /** Another client dismissed the question: the turn goes on. */
+        async withdraw() {
+          endQuestion("question.v2.rejected")
+        },
+        interrupted: () =>
+          new Promise<void>((resolve) => {
+            interrupted = () => {
+              interrupted = undefined
+              resolve()
+            }
+          }),
+        /** The interrupted turn's loop stops: the Session idles. */
+        confirmInterrupt: finish,
+        held: {},
+        lose: () =>
+          Promise.reject(new Error("OpenCode lists every pending question")),
       },
     },
 

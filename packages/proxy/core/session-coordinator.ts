@@ -94,6 +94,8 @@ export type SessionSnapshot = {
   requests: PendingRequest[]
   /** The principal that admitted the turn, when this proxy admitted it. */
   startedBy?: string
+  /** The running turn waits on a prompt no client here answers: only Stop ends it. */
+  awaitingStop?: true
 }
 
 export type SequencedTurnEvent = {
@@ -514,6 +516,13 @@ type Segment = {
   /** The turn generation its admission landed as. */
   generation: number
   handle: ServerTurnHandle
+  /**
+   * Where this segment reads `handle.events`. A wait its turn runs on through
+   * leaves the reader open, so the segment that continues it reads on.
+   */
+  reader?: AsyncIterator<TurnEvent>
+  /** Its last word was a failure only Stop ends, and it has not run on since. */
+  awaitingStop?: boolean
   fanout: SubscriberFanout<SequencedTurnEvent>
   journal?: SegmentJournal
   nextSequence: number
@@ -1167,6 +1176,7 @@ export class SessionCoordinator {
       turnId: segment?.turnId ?? turnId,
       requests: segment ? structuredClone(openRequests(segment)) : [],
       ...(startedBy === undefined ? {} : { startedBy }),
+      ...(segment?.awaitingStop ? { awaitingStop: true as const } : {}),
     }
   }
 
@@ -1230,11 +1240,13 @@ export class SessionCoordinator {
   async discover(scope: SessionScope) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
-    // A turn in flight, or one being reconciled, is not the runtime's own.
+    // A turn in flight, or one being reconciled, is not the runtime's own, and
+    // nor is a wait whose turn runs on through it.
     const { state } = this.#turnExecution(key)
     if (
       !this.options.engine.discover ||
-      (state !== "waiting-for-input" && state !== "idle")
+      (state !== "waiting-for-input" && state !== "idle") ||
+      (state === "waiting-for-input" && existing?.segment.handle.wait)
     )
       return existing
     const inFlight = this.#discoveries.get(key)
@@ -1791,6 +1803,13 @@ export class SessionCoordinator {
     if (execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
       const { turn } = execution
+      // A wait inside a turn that runs on through it is stopped as that turn:
+      // Stop interrupts it, and its stream reports how it ended.
+      if (
+        execution.state === "waiting-for-input" &&
+        execution.segment.handle.wait
+      )
+        this.#continueWait(execution)
       const { generation } = execution.segment
       try {
         const status = await execution.segment.handle.stop()
@@ -2214,11 +2233,57 @@ export class SessionCoordinator {
         }
   }
 
+  /**
+   * Continues a wait its turn runs on through, no answer given: the same
+   * handle streams on as a fresh segment, which every member follows as it
+   * follows an answer's, and the requests it waited on are resolved.
+   */
+  #continueWait(execution: Execution) {
+    const paused = execution.segment
+    const turnId = crypto.randomUUID()
+    const { turn, generation } = this.#admit(execution.scope, turnId)
+    try {
+      const segment = this.#createSegment({
+        cacheKey: scopeKey(execution.scope),
+        turnId,
+        generation: this.#landed(turn, generation, "running", turnId),
+        handle: paused.handle,
+        history: { journal: "start", at: Date.now() },
+      })
+      segment.reader = paused.reader
+      paused.handle.wait?.continue(turnId)
+      // A command running on the execution keeps its place in line.
+      const { control } = execution
+      Object.assign(
+        execution,
+        admittedTurn({ turnId, request: { turnId }, segment }),
+        { control }
+      )
+      this.#trackJournal(segment)
+      this.#consume(execution, segment)
+      this.#resolveAttention(execution, paused)
+    } finally {
+      this.#endAdmission(turn, generation)
+    }
+  }
+
+  /** The provider ended the wait `paused` holds without an answer. */
+  #resumed(execution: Execution, paused: Segment) {
+    if (execution.segment !== paused || execution.state !== "waiting-for-input")
+      return
+    try {
+      this.#continueWait(execution)
+    } catch (err) {
+      const { agentId, sessionId } = execution.scope
+      this.#logger.warn({ err, agentId, sessionId }, "turn.wait.resume.failed")
+    }
+  }
+
   /** A wait ended or cleared resolves the requests nobody answered. */
-  #resolveAttention(execution: Execution) {
-    const requests = openRequests(execution.segment)
+  #resolveAttention(execution: Execution, segment = execution.segment) {
+    const requests = openRequests(segment)
     if (requests.length === 0) return
-    const origin = this.#origin(execution.scope, execution.segment.turnId)
+    const origin = this.#origin(execution.scope, segment.turnId)
     for (const { requestId } of requests)
       this.#announce(execution.scope, {
         ...origin,
@@ -2271,9 +2336,21 @@ export class SessionCoordinator {
       })
     }
     const { agentId, sessionId } = execution.scope
+    const reader = (segment.reader ??=
+      segment.handle.events[Symbol.asyncIterator]())
+    // `drained`: the stream ended by itself. `kept`: the turn runs on past the
+    // wait it paused on, so the segment continuing it reads on.
+    let drained = false
+    let kept = false
     const readStream = async () => {
       try {
-        for await (const raw of segment.handle.events) {
+        for (;;) {
+          const next = await reader.next()
+          if (next.done) {
+            drained = true
+            break
+          }
+          const raw = next.value
           // A turn whose outcome went unknown takes no more of its stream.
           if (execution.segment !== segment || segment.terminal) return
           // Dated where the replay starts, so a reload counts from there.
@@ -2284,6 +2361,9 @@ export class SessionCoordinator {
           // A failure awaiting Stop leaves the turn active: its settlement, not
           // this event, is the terminal one.
           const awaitingStop = isAwaitingStopFailure(event)
+          if (awaitingStop) segment.awaitingStop = true
+          else if (event.kind === TurnEventKind.TurnStarted)
+            segment.awaitingStop = false
           const ended =
             event.kind === TurnEventKind.TurnEnded ||
             event.kind === TurnEventKind.TurnRequiresAction
@@ -2315,7 +2395,7 @@ export class SessionCoordinator {
             segment.requests = pendingRequestsOf(event)
             outcome(segment.requests.length ? "paused" : "ended")
             const origin = this.#origin(execution.scope, segment.turnId)
-            if (segment.requests.length)
+            if (segment.requests.length) {
               for (const request of segment.requests)
                 this.#announce(execution.scope, {
                   ...origin,
@@ -2325,7 +2405,13 @@ export class SessionCoordinator {
                     ? {}
                     : { startedBy: execution.turn.startedBy }),
                 })
-            else
+              if (segment.handle.wait) {
+                kept = true
+                segment.handle.wait.onResumed(() =>
+                  this.#resumed(execution, segment)
+                )
+              }
+            } else
               this.#announce(execution.scope, {
                 ...origin,
                 kind: "turn-finished",
@@ -2355,6 +2441,7 @@ export class SessionCoordinator {
         // A stream that throws ended like any other stream without a terminal
         // event: the provider's settlement below is what decides the turn.
       } finally {
+        if (!drained && !kept) await reader.return?.().catch(() => undefined)
         segment.fanout.close()
         if (!segment.terminal && !turn.owner.stale(segment.generation))
           outcome((await settledNow(segment.handle.settled)) ? "ended" : "lost")

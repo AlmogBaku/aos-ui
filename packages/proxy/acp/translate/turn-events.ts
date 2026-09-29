@@ -296,8 +296,10 @@ function failedOutbound(
   return [
     stateOutbound(
       context,
+      // A turn held on a question no client here can answer waits all the
+      // same: only Stop ends it.
       isAwaitingStopFailure(event)
-        ? { state: "running" }
+        ? { state: "requires_action" }
         : {
             state: "idle",
             stopReason: isUncertainFailure(event)

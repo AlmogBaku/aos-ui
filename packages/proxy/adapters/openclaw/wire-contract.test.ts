@@ -47,12 +47,20 @@ runWireContract(
           logger
         ),
       agentId: openclaw.scope.agentId,
+      turn: openclaw.turn,
     }
   },
   {
     gaps: {
       sameIdsLiveAndAfterReload: LIVE_IDS_ADAPTER_MADE,
       historyAndLiveJoinedById: LIVE_IDS_ADAPTER_MADE,
+      oneTurnThroughQuestion: LIVE_IDS_ADAPTER_MADE,
+      // Every approval carries a reviewer-safe presentation, so the adapter
+      // holds none back, and `sessions.messages.subscribe` replays each
+      // pending one (`SessionApprovalReplaySchema`), so a restarted proxy
+      // presents it again rather than losing it.
+      heldAndLostQuestions:
+        "OpenClaw holds no approval back and replays every pending one on subscribe",
     },
   }
 )

@@ -21,6 +21,7 @@ import {
   TurnEventKind,
   TurnInputSchema,
   type PendingRequest,
+  type RequestReply,
   type TurnEvent,
 } from "../../core/events"
 import {
@@ -214,6 +215,7 @@ export class HermesTurnEngine {
         this.#finish(active, ending, confirmedIdle),
       requireAction: (active, requests) =>
         this.#requireAction(active, requests),
+      awaitStop: (active) => this.#awaitStop(active),
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
@@ -256,6 +258,14 @@ export class HermesTurnEngine {
       )
     const key = sessionKey(scope)
     const stale = this.#active.get(key)
+    // Hermes holds its turn open on its own question, so the answer continues
+    // the run that asked it.
+    if (replies && stale?.waitingOn) {
+      stale.turnId = input.turnId
+      stale.waitingOn = undefined
+      await this.#respond(stale, replies)
+      return this.#handle(stale)
+    }
     if (this.#admissions.has(key) || (stale && !stale.uncertain))
       throw new ServerTurnConflictError()
     this.#admissions.add(key)
@@ -279,21 +289,7 @@ export class HermesTurnEngine {
       // The answer resumes a native turn whose completion frame already passed,
       // so settlement may end this run on Hermes' own idle edge.
       active.resumedInteraction = true
-      let results: readonly { status: string }[]
-      try {
-        results = await this.#native.respondInteractions(
-          { ...scope, turnId: input.turnId },
-          replies
-        )
-      } catch {
-        this.#fail(active, TURN_FAILURES.interactionFailed)
-        return this.#handle(active)
-      }
-      if (active.terminal) return this.#handle(active)
-      if (results.some(({ status }) => status === "uncertain"))
-        this.#detach(active, TURN_FAILURES.interactionUncertain)
-      else if (results.some(({ status }) => status === "expired"))
-        this.#fail(active, TURN_FAILURES.interactionExpired)
+      await this.#respond(active, replies)
       return this.#handle(active)
     }
     const status = await readStatus(this.#host, active.liveSessionId)
@@ -543,14 +539,7 @@ export class HermesTurnEngine {
       if (!unchanged()) return
       const status = await readStatus(this.#host, liveSessionId)
       if (status !== "waiting" || !unchanged()) return
-      const { code, message } = TURN_FAILURES.interactionLost
-      this.#log.warn({ publicCode: code }, TURN_FAILED_LOG)
-      this.#emit(active, {
-        kind: TurnEventKind.TurnFailed,
-        message,
-        code,
-        awaitingStop: true,
-      })
+      this.#awaitStop(active)
     }
     const timer = setTimeout(() => {
       checkLost().catch((err: unknown) =>
@@ -559,6 +548,39 @@ export class HermesTurnEngine {
     }, this.#lostInteractionGraceMs)
     // Detection is reconciliation, never a reason to keep the process alive.
     if (typeof timer !== "number") timer.unref()
+  }
+
+  /** The turn waits on a prompt no client here can answer: only Stop ends it. */
+  #awaitStop(active: ActiveTurn) {
+    if (active.terminal) return
+    active.awaitingStop = true
+    const { code, message } = TURN_FAILURES.interactionLost
+    this.#log.warn({ publicCode: code }, TURN_FAILED_LOG)
+    this.#emit(active, {
+      kind: TurnEventKind.TurnFailed,
+      message,
+      code,
+      awaitingStop: true,
+    })
+  }
+
+  /** Sends the answers the run's turn waits on; a failed send ends the run. */
+  async #respond(active: ActiveTurn, replies: readonly RequestReply[]) {
+    let results: readonly { status: string }[]
+    try {
+      results = await this.#native.respondInteractions(
+        { ...active.scope, turnId: active.turnId },
+        replies
+      )
+    } catch {
+      this.#fail(active, TURN_FAILURES.interactionFailed)
+      return
+    }
+    if (active.terminal) return
+    if (results.some(({ status }) => status === "uncertain"))
+      this.#detach(active, TURN_FAILURES.interactionUncertain)
+    else if (results.some(({ status }) => status === "expired"))
+      this.#fail(active, TURN_FAILURES.interactionExpired)
   }
 
   /** The same run continues on a new stream from the browser's own cursor. */
@@ -692,6 +714,18 @@ export class HermesTurnEngine {
           lastSeen: active.lastSeen,
         }),
       ...(active.stored ? { stored: active.stored.promise } : {}),
+      wait: {
+        continue: (turnId) => {
+          active.turnId = turnId
+          active.waitingOn = undefined
+          active.resumed = undefined
+        },
+        onResumed: (listener) => {
+          // Hermes may have ended the wait before anyone listened for it.
+          if (active.waitingOn) active.resumed = listener
+          else listener()
+        },
+      },
     }
   }
 
@@ -834,6 +868,9 @@ export class HermesTurnEngine {
       }
       case "message.complete":
         return this.#acceptComplete(active, payload)
+      // A request timed out or was interrupted: the turn runs on without it.
+      case "request.cancel":
+        return this.#withdrawn(active, stableNativeId(payload.id))
     }
   }
 
@@ -1271,12 +1308,34 @@ export class HermesTurnEngine {
         ? { ...request, toolCallId }
         : request
     )
-    this.#closeGeneration(active, { tools: "unresolved" })
+    // Hermes blocks its turn on the request inside the turn, so the run keeps
+    // its calls, stream and observer: the stream pauses here and, read on once
+    // the wait ends, starts the turn's next segment.
+    active.waitingOn = new Set([
+      ...(active.waitingOn ?? []),
+      ...linked.map(({ requestId }) => requestId),
+    ])
     this.#emit(active, {
       kind: TurnEventKind.TurnRequiresAction,
       requests: linked,
     })
-    this.#settle(active)
+    this.#emit(active, { kind: TurnEventKind.TurnStarted })
+  }
+
+  /** Hermes ended one request the turn waited on, answered by no one here. */
+  #withdrawn(active: ActiveTurn, requestId: string | undefined) {
+    if (!requestId) return
+    const waiting = active.waitingOn
+    if (waiting?.delete(requestId)) {
+      if (waiting.size > 0) return
+      active.waitingOn = undefined
+      active.resumed?.()
+      return
+    }
+    // A prompt AOS holds or lost ended too, unless a Stop withdrew it.
+    if (!active.awaitingStop || active.stopping) return
+    active.awaitingStop = false
+    this.#emit(active, { kind: TurnEventKind.TurnStarted })
   }
 
   #fail(active: ActiveTurn, failure: TurnFailure) {

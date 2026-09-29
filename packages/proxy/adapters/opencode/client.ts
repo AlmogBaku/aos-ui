@@ -85,6 +85,16 @@ export type OpenCodeSessionEvents = AsyncIterable<OpenCodeDurableEvent> & {
   abort(): void
 }
 
+/** One event of the server's own push, as `V2Event` types it. */
+export type OpenCodeServerEvent = Readonly<{
+  type: string
+  properties: Record<string, unknown>
+}>
+
+export type OpenCodeServerEvents = AsyncIterable<OpenCodeServerEvent> & {
+  abort(): void
+}
+
 type OpenCodeRawDurableEvent = { id: string; event: string; data: string }
 
 export type OpenCodeClient = Readonly<{
@@ -196,6 +206,12 @@ export type OpenCodeClient = Readonly<{
     read(path: string, signal?: AbortSignal): Promise<OpenCodeFileContent>
   }>
   /**
+   * The server's own push, `GET /api/event`: the one stream that carries a
+   * Session's questions and permissions as OpenCode asks and ends them, which
+   * its durable Session stream does not.
+   */
+  events(signal?: AbortSignal): Promise<OpenCodeServerEvents>
+  /**
    * Whether OpenCode refused the password as it reads now: it answered a
    * request carrying it 401 or 403 and has taken none since.
    */
@@ -218,6 +234,14 @@ type NativeRequest = Readonly<{
   signal: AbortSignal
   headers: Readonly<{ authorization: string }>
 }>
+
+/** The options one native event stream is opened with. */
+type StreamRequest = NativeRequest &
+  Readonly<{
+    fetch: typeof fetch
+    sseMaxRetryAttempts: number
+    onSseError(error: unknown): void
+  }>
 
 function record(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return
@@ -368,6 +392,14 @@ function parseEvent(value: unknown): OpenCodeDurableEvent {
   const envelope = value
   const data: unknown = JSON.parse(envelope.data)
   return { id: envelope.id, event: envelope.event, data }
+}
+
+/** A server event, or none when its shape is not one any reader reads. */
+function parseServerEvent(value: unknown): OpenCodeServerEvent | undefined {
+  const event = record(value)
+  const properties = record(event?.properties)
+  if (!event || !text(event.type) || !properties) return undefined
+  return { type: event.type as string, properties }
 }
 
 /** Whether OpenCode answered a request as one whose credential it refuses. */
@@ -785,6 +817,14 @@ class Facade implements OpenCodeClient {
       ),
   }
 
+  events(signal?: AbortSignal): Promise<OpenCodeServerEvents> {
+    return this.#stream(
+      (options) => this.#sdk.v2.event.subscribe(options),
+      parseServerEvent,
+      signal
+    )
+  }
+
   async credentialRefused() {
     return (
       this.#refused !== undefined &&
@@ -874,18 +914,39 @@ class Facade implements OpenCodeClient {
     await this.#mutation(operation, () => undefined, callerSignal)
   }
 
-  /**
-   * One Session's durable events, resolving once OpenCode accepts the stream:
-   * a refused stream rejects here, never on its first read. The adapter call
-   * deadline bounds that answer and nothing after it.
-   */
-  async #events(
+  /** One Session's durable events. */
+  #events(
     sessionId: string,
     options?: Readonly<{ after?: string; signal?: AbortSignal }>
   ): Promise<OpenCodeSessionEvents> {
     identifier(sessionId, "session")
     if (options?.after !== undefined) identifier(options.after, "after")
-    const lease = this.#lease(options?.signal, false)
+    return this.#stream(
+      (request) =>
+        this.#sdk.v2.session.events(
+          {
+            sessionID: sessionId,
+            ...(options?.after === undefined ? {} : { after: options.after }),
+          },
+          request
+        ),
+      parseEvent,
+      options?.signal
+    )
+  }
+
+  /**
+   * One event stream, resolving once OpenCode accepts it: a refused stream
+   * rejects here, never on its first read. The adapter call deadline bounds
+   * that answer and nothing after it. `parse` skips a value it answers none
+   * for.
+   */
+  async #stream<T>(
+    open: (request: StreamRequest) => Promise<{ stream: AsyncGenerator }>,
+    parse: (value: unknown) => T | undefined,
+    signal?: AbortSignal
+  ): Promise<AsyncIterable<T> & { abort(): void }> {
+    const lease = this.#lease(signal, false)
     const answer = new Deadline(ADAPTER_CALL_MS)
     let streamError: unknown
     let answered!: (accepted: boolean) => void
@@ -895,36 +956,34 @@ class Facade implements OpenCodeClient {
     const failure = () =>
       statusError(statusFrom(streamError), { cause: streamError })
     try {
-      const { stream } = await this.#sdk.v2.session.events(
-        {
-          sessionID: sessionId,
-          ...(options?.after === undefined ? {} : { after: options.after }),
+      const { stream } = await open({
+        ...(await this.#native(AbortSignal.any([lease.signal, answer.signal]))),
+        fetch: hearing(this.#fetch, (response) => {
+          if (response.ok) answered(true)
+        }),
+        // AOS reconnects, from a durable position where the stream has one.
+        sseMaxRetryAttempts: 1,
+        onSseError: (error) => {
+          streamError = error
+          answered(false)
         },
-        {
-          ...(await this.#native(
-            AbortSignal.any([lease.signal, answer.signal])
-          )),
-          fetch: hearing(this.#fetch, (response) => {
-            if (response.ok) answered(true)
-          }),
-          // AOS reconnects from the durable aggregate position itself.
-          sseMaxRetryAttempts: 1,
-          onSseError: (error) => {
-            streamError = error
-            answered(false)
-          },
-        }
-      )
+      })
       // The SDK sends the request on the stream's first read.
       const head = stream.next()
-      const open = await Promise.race([accepted, head.then(() => false)])
+      const opened = await Promise.race([accepted, head.then(() => false)])
       answer.clear()
-      if (!open) throw failure()
+      if (!opened) throw failure()
       const iterator = (async function* () {
         try {
           const first = await head
-          if (!first.done) yield parseEvent(first.value)
-          for await (const event of stream) yield parseEvent(event)
+          const values = (async function* () {
+            if (!first.done) yield first.value
+            yield* stream
+          })()
+          for await (const value of values) {
+            const event = parse(value)
+            if (event !== undefined) yield event
+          }
           if (streamError !== undefined && !lease.controller.signal.aborted)
             throw failure()
         } catch (error) {

@@ -62,6 +62,18 @@ export type ServerTurnHandle = {
    * turn stores no prompt of its own, such as an answer to a request.
    */
   stored?: Promise<string>
+  /**
+   * Present when the provider's turn runs on through its waits, as a turn
+   * blocked on its own question does: once it pauses on a request, `events`
+   * read again continue it. An answer continues it through `start`; a wait
+   * that ends without one continues through this.
+   */
+  wait?: {
+    /** The paused turn continues as `turnId`, no answer given. */
+    continue(turnId: string): void
+    /** Calls `listener` once the provider ends the wait without an answer. */
+    onResumed(listener: () => void): void
+  }
 }
 
 export type RecoveryRequest = {

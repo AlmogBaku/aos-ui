@@ -86,6 +86,11 @@ export function fakeOpenClaw() {
   let run: { id: string; seq: number } | undefined
   /** The rows the Session stored, as `chat.history` reads them back. */
   const transcript: Record<string, unknown>[] = []
+  /** The approval the running turn blocks on, and what settles its wait. */
+  let open:
+    { approval: Record<string, unknown>; settle: () => void } | undefined
+  let nextApproval = 1
+  let interrupted: (() => void) | undefined
 
   function hello(dialed: Connection) {
     if (dialed.stopped || dialed.up || connection !== dialed) return
@@ -131,6 +136,66 @@ export function fakeOpenClaw() {
   function agentEvent(stream: string, data: Record<string, unknown>) {
     if (!run) return
     emit("agent", { seq: run.seq++, stream, ts: 1_000 + seq, data })
+  }
+
+  /**
+   * A `session.approval` transition, as the release pushes it to a Session's
+   * audience: its payload names the Session and the approval, no run.
+   */
+  function emitApproval(
+    phase: "pending" | "terminal",
+    approval: Record<string, unknown>
+  ) {
+    if (!connection?.up) return
+    seq += 1
+    connection.options.onEvent?.({
+      type: "event",
+      event: "session.approval",
+      seq,
+      payload: {
+        sessionKey: SESSION_KEY,
+        ...(phase === "pending" ? { sourceSessionKey: SESSION_KEY } : {}),
+        updatedAtMs: Date.now(),
+        phase,
+        approval,
+      },
+    })
+  }
+
+  /** The open approval ends as `terminal` records it; the run goes on. */
+  function endApproval(terminal: Record<string, unknown>) {
+    if (!open) return undefined
+    const { approval, settle } = open
+    open = undefined
+    // A terminal snapshot drops the pending projection's `sourceSessionKey`.
+    const common: Record<string, unknown> = { ...approval }
+    delete common.sourceSessionKey
+    delete common.status
+    const ended = {
+      ...common,
+      resolvedAtMs: Date.now(),
+      source: { agentId: AGENT_ID, sessionKey: SESSION_KEY },
+      ...terminal,
+    }
+    emitApproval("terminal", ended)
+    settle()
+    return ended
+  }
+
+  /** The run ends; its last model response is stored as a transcript row. */
+  function complete(text: string) {
+    agentEvent("lifecycle", { phase: "end" })
+    emit("chat", { seq: 0, state: "final" })
+    transcript.push({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+      __openclaw: {
+        id: `msg-${transcript.length + 1}`,
+        seq: transcript.length + 1,
+      },
+    })
+    run = undefined
   }
 
   function answer(
@@ -204,6 +269,36 @@ export function fakeOpenClaw() {
         )
         return { runId: id, status: "started" }
       }
+      case "approval.get":
+        if (!open || open.approval.id !== params.id)
+          throw new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "unknown approval",
+          })
+        return { approval: open.approval }
+      case "approval.resolve": {
+        const approval = endApproval({
+          status: "allowed",
+          decision: params.decision,
+          reason: "user",
+        })
+        if (!approval)
+          throw new GatewayClientRequestError({
+            code: "INVALID_REQUEST",
+            message: "unknown approval",
+          })
+        return { applied: true, approval }
+      }
+      case "sessions.abort": {
+        // An abort cancels the run's open approval at once; the run ends
+        // aborted only once its loop stops.
+        const aborted = run?.id
+        endApproval({ status: "cancelled", reason: "run-aborted" })
+        interrupted?.()
+        return aborted
+          ? { ok: true, status: "aborted", abortedRunId: aborted }
+          : { ok: true, status: "no-active-run", abortedRunId: null }
+      }
       default:
         throw new GatewayClientRequestError({
           code: "INVALID_REQUEST",
@@ -262,6 +357,80 @@ export function fakeOpenClaw() {
         message: { content: [{ type: "text", text: "Contract reply" }] },
       })
       run = undefined
+    },
+
+    /** The wire contract's turn, as a run of the release streams it. */
+    turn: {
+      async firstResponse() {
+        const call = { toolCallId: "call-read", name: "read_file" }
+        agentEvent("thinking", { delta: "I should read the file." })
+        agentEvent("assistant", { delta: "Reading the file." })
+        agentEvent("tool", {
+          ...call,
+          phase: "start",
+          args: { path: "/tmp/demo.txt" },
+        })
+        agentEvent("tool", {
+          ...call,
+          phase: "result",
+          result: "alpha\nbeta\ngamma",
+          isError: false,
+        })
+      },
+      async secondResponse() {
+        const text = "The file lists three names."
+        agentEvent("assistant", { delta: text })
+        complete(text)
+      },
+      /**
+       * The release has no Session-scoped push for a question (no
+       * `question.*` event reaches `sessions.messages.subscribe`), so the
+       * run's in-turn prompt is a plugin approval.
+       */
+      questions: {
+        ask: () =>
+          new Promise<void>((settle) => {
+            const now = Date.now()
+            const id = `approval-${nextApproval++}`
+            const approval = {
+              id,
+              urlPath: `/approvals/${id}`,
+              createdAtMs: now,
+              expiresAtMs: now + 600_000,
+              presentation: {
+                kind: "plugin",
+                title: "Proceed?",
+                description: "Proceed? yes / no",
+                severity: "info",
+                agentId: AGENT_ID,
+                allowedDecisions: ["allow-once", "deny"],
+              },
+              status: "pending",
+              sourceSessionKey: SESSION_KEY,
+            }
+            open = { approval, settle }
+            emitApproval("pending", approval)
+          }),
+        /** The approval timed out: it failed closed and the run goes on. */
+        async withdraw() {
+          endApproval({ status: "expired", reason: "timeout" })
+        },
+        interrupted: () =>
+          new Promise<void>((resolve) => {
+            interrupted = () => {
+              interrupted = undefined
+              resolve()
+            }
+          }),
+        /** The aborted run's loop stops: it ends aborted. */
+        async confirmInterrupt() {
+          emit("chat", { seq: 0, state: "aborted" })
+          run = undefined
+        },
+        held: {},
+        lose: () =>
+          Promise.reject(new Error("OpenClaw replays every pending approval")),
+      },
     },
 
     deleteSession() {

@@ -108,9 +108,50 @@ export function fakeHermes() {
   /** The rows the running turn stored, its prompt's first. */
   let turnRows: number[] = []
   let inflight: Record<string, unknown> | undefined
+  /** The server request the running turn blocks on, as `server_requests` holds it. */
+  let open:
+    | {
+        id: string
+        method: string
+        params: Record<string, unknown>
+        settle: () => void
+      }
+    | undefined
+  let nextRequest = 1
+  /** The Session waits on a request no socket can be sent any more. */
+  let lost = false
+  let interrupted: (() => void) | undefined
 
   const socket = () => sockets.at(-1)
   const latestSeq = () => frames.at(-1)?.seq ?? 0
+  /** `_open_requests`: what a resume or a replay re-delivers. */
+  const openRequests = () =>
+    open ? [{ id: open.id, method: open.method, params: open.params }] : []
+
+  /**
+   * One blocking server→client request of the running turn, as `_ask` and
+   * `_clarify_block` send it; settles once Hermes stops waiting on it.
+   */
+  function request(
+    method: string,
+    fields: Record<string, unknown>,
+    settle: () => void = () => {}
+  ) {
+    startStreaming()
+    const id = `srq-${String(nextRequest++).padStart(12, "0")}`
+    const params = { session_id: LIVE_ID, ...fields }
+    open = { id, method, params, settle }
+    socket()?.deliver({ id, method, params })
+  }
+
+  /** `server_requests.cancel`: the open request ends with a `request.cancel`. */
+  function cancelOpen(reason: string) {
+    if (!open) return
+    const { id, method, settle } = open
+    open = undefined
+    emit(turn.frame("request.cancel", { id, method, reason }))
+    settle()
+  }
 
   function emit(frame: NativeFrame) {
     frames.push(frame)
@@ -173,6 +214,7 @@ export function fakeHermes() {
             stored_session_id: STORED_ID,
             running,
             ...(inflight ? { inflight } : {}),
+            open_requests: openRequests(),
           },
         }
       case "session.events.since":
@@ -182,14 +224,35 @@ export function fakeHermes() {
             latest_seq: latestSeq(),
             truncated: false,
             events: frames.filter(({ seq }) => seq > Number(params.last_seen)),
+            open_requests: openRequests(),
           },
         }
       case "session.active_list":
         return {
           result: {
-            sessions: [{ id: LIVE_ID, status: running ? "working" : "idle" }],
+            sessions: [
+              {
+                id: LIVE_ID,
+                // `_session_live_status`: a pending request is `waiting`.
+                status: open || lost ? "waiting" : running ? "working" : "idle",
+              },
+            ],
           },
         }
+      case "request.answer": {
+        const answered = open
+        if (!answered || answered.id !== params.id)
+          return { result: { status: "expired" } }
+        open = undefined
+        answered.settle()
+        return { result: { status: "ok" } }
+      }
+      case "session.interrupt":
+        // `_interrupt_session_turn` withdraws the open requests at once; the
+        // turn ends interrupted only once its thread stops.
+        cancelOpen("interrupted")
+        interrupted?.()
+        return { result: { status: "interrupted" } }
       case "prompt.submit": {
         running = true
         turnRows = []
@@ -333,6 +396,65 @@ export function fakeHermes() {
       const text = "The file lists three names."
       emit(turn.delta(text))
       complete(text)
+    },
+
+    /** The wire contract's questions, as `server_requests` asks and ends them. */
+    questions: {
+      ask: () =>
+        new Promise<void>((settle) =>
+          request(
+            "clarify",
+            { question: "Proceed?", choices: ["yes", "no"] },
+            settle
+          )
+        ),
+      /** The clarify wait timed out: the tool returns and the turn runs on. */
+      async withdraw() {
+        cancelOpen("timeout")
+      },
+      interrupted: () =>
+        new Promise<void>((resolve) => {
+          interrupted = () => {
+            interrupted = undefined
+            resolve()
+          }
+        }),
+      /** The interrupted turn's thread stops: it completes interrupted. */
+      async confirmInterrupt() {
+        running = false
+        streaming = false
+        lost = false
+        emit(
+          turn.frame("message.complete", { text: "", status: "interrupted" })
+        )
+        emit(turn.idle())
+      },
+      held: {
+        sudo: async () => {
+          const command = "sudo ls /tmp/demo.txt"
+          request("sudo", { command })
+          return command
+        },
+        secret: async () => {
+          const prompt = "Enter the demo token"
+          request("secret", { env_var: "DEMO_TOKEN", prompt })
+          return prompt
+        },
+        vault: async () => {
+          const display = "Demo Vault"
+          request("vault.unlock_prompt", {
+            backend: "demo-vault",
+            display_name: display,
+          })
+          return display
+        },
+      },
+      /** Hermes runs a turn of its own, blocked on a request nobody holds. */
+      async lose() {
+        running = true
+        lost = true
+        startStreaming()
+      },
     },
 
     deleteSession() {

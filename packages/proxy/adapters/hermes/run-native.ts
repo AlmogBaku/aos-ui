@@ -149,9 +149,11 @@ export interface HermesTurnNative {
   inspectExecution(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
+  /** `held`: the turn waits on a prompt AOS holds unrendered. */
   subscribePendingRequests(
     scope: HermesTurnScope,
-    listener: (request: PendingRequest) => void
+    listener: (request: PendingRequest) => void,
+    held?: () => void
   ): () => void
   respondInteractions(
     scope: HermesTurnScope & { turnId: string },
@@ -174,7 +176,8 @@ export type HermesNativeAttachments = {
 export type HermesNativeInteractions = {
   subscribePendingRequests(
     scope: HermesTurnScope,
-    listener: (request: PendingRequest) => void
+    listener: (request: PendingRequest) => void,
+    held?: () => void
   ): () => void
   respond(
     scope: HermesTurnScope & { turnId: string },
@@ -630,9 +633,10 @@ export class HermesNativeRuntime implements HermesTurnNative {
    */
   subscribePendingRequests(
     scope: HermesTurnScope,
-    listener: (request: PendingRequest) => void
+    listener: (request: PendingRequest) => void,
+    held?: () => void
   ) {
-    return this.#interactions.subscribePendingRequests(scope, listener)
+    return this.#interactions.subscribePendingRequests(scope, listener, held)
   }
 
   async respondInteractions(

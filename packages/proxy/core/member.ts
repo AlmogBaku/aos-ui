@@ -105,6 +105,8 @@ export type SessionEvent =
       state: SessionExecutionState
       turnId?: string
       sequence: number
+      /** The running turn waits on a prompt only Stop ends. */
+      awaitingStop?: true
     }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }

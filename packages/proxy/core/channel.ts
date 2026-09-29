@@ -1395,8 +1395,9 @@ class Membership {
       const unsubscribe = this.#coordinator.subscribeScope(
         this.#scope,
         (event) => {
-          if (event.kind === "attention-resolved")
-            this.#withdraw(event.requestId)
+          if (event.kind !== "attention-resolved") return
+          this.#withdraw(event.requestId)
+          this.#followContinued(event.turnId)
         }
       )
       this.#partChannel = () => {
@@ -1433,11 +1434,14 @@ class Membership {
    * an acknowledged Stop owes the member.
    */
   reportExecution() {
-    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
+    const { state, turnId, awaitingStop } = this.#coordinator.snapshot(
+      this.#scope
+    )
     return this.emit({
       kind: "execution",
       state,
       ...(turnId === undefined ? {} : { turnId }),
+      ...(awaitingStop ? { awaitingStop } : {}),
       sequence: this.#sequence,
     })
   }
@@ -1638,6 +1642,17 @@ class Membership {
     if (!continued) return
     this.#channels.continueTurn(this.#scope, continued.from, continued.turnId)
     await this.#channels.sync(this.#scope)
+  }
+
+  /**
+   * Follows a wait the Session continued with no answer, as a Stop or the
+   * runtime itself ends one: the same prompt runs on under a fresh turnId.
+   */
+  #followContinued(from: string) {
+    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
+    if (state !== "running" || turnId === undefined || turnId === from) return
+    this.#channels.continueTurn(this.#scope, from, turnId)
+    this.catchUp().catch((cause: unknown) => this.report(cause))
   }
 
   /**

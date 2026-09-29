@@ -185,7 +185,7 @@ describe("translateTurnEvent lifecycle", () => {
     expect(state).toEqual(initialTranslateState)
   })
 
-  it("reports a failure awaiting Stop as a running state that keeps the segment", () => {
+  it("reports a failure awaiting Stop as a wait that keeps the segment", () => {
     const { state: streaming } = translate([messageChunk("m1", "he")])
     const { state, outbound } = translate(
       [
@@ -203,7 +203,7 @@ describe("translateTurnEvent lifecycle", () => {
 
     expect(update).toMatchObject({
       sessionUpdate: "state_update",
-      state: "running",
+      state: "requires_action",
     })
     expect(update).not.toHaveProperty("stopReason")
     expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({

@@ -9,6 +9,7 @@ import {
   type PromptTurnInput,
   type RepliesTurnInput,
   type RequestReply,
+  type TurnEvent,
 } from "../../core/events"
 import { ServerTurnConflictError } from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
@@ -131,19 +132,29 @@ function observation() {
  */
 function pendingRequests() {
   const listeners = new Set<(request: PendingRequest) => void>()
+  const holders = new Set<() => void>()
   return {
     subscribePendingRequests: (
       _scope: HermesTurnScope,
-      listener: (request: PendingRequest) => void
+      listener: (request: PendingRequest) => void,
+      held?: () => void
     ) => {
       listeners.add(listener)
-      return () => listeners.delete(listener)
+      if (held) holders.add(held)
+      return () => {
+        listeners.delete(listener)
+        if (held) holders.delete(held)
+      }
     },
     subscribed() {
       return listeners.size
     },
     raise(request: PendingRequest) {
       for (const listener of [...listeners]) listener(request)
+    },
+    /** Hermes asks through a prompt AOS never renders, such as `sudo`. */
+    hold() {
+      for (const held of [...holders]) held()
     },
   }
 }
@@ -170,6 +181,16 @@ function messageIds(events: readonly unknown[]) {
 async function collect(handle: { events: AsyncIterable<unknown> }) {
   const events: unknown[] = []
   for await (const event of handle.events) events.push(event)
+  return events
+}
+
+/** A turn's events up to the wait it pauses on; the turn runs on after it. */
+async function collectToWait(handle: { events: AsyncIterable<unknown> }) {
+  const events: unknown[] = []
+  for await (const event of handle.events) {
+    events.push(event)
+    if ((event as TurnEvent).kind === TurnEventKind.TurnRequiresAction) break
+  }
   return events
 }
 
@@ -715,14 +736,10 @@ describe("HermesRunEngine", () => {
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const interrupt = pendingRequests()
     let submits = 0
-    // Hermes' own watermark: the resumed run attaches after the first turn's
-    // frames and continues their sequence.
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
         subscribePendingRequests: interrupt.subscribePendingRequests,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         submit: async () => {
           submits += 1
           interrupt.raise({
@@ -747,19 +764,19 @@ describe("HermesRunEngine", () => {
           publish({
             type: "message.start",
             session_id: "live-secret",
-            seq: 2,
+            seq: 1,
             payload: { message_id: "continued" },
           })
           publish({
             type: "message.delta",
             session_id: "live-secret",
-            seq: 3,
+            seq: 2,
             payload: { text: "Done" },
           })
           publish({
             type: "message.complete",
             session_id: "live-secret",
-            seq: 4,
+            seq: 3,
             payload: {},
           })
           return [{ status: "resolved" }]
@@ -767,7 +784,9 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+    await expect(
+      collectToWait(await engine.start(scope, input()))
+    ).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.TurnRequiresAction,
@@ -782,7 +801,7 @@ describe("HermesRunEngine", () => {
       },
     ])
 
-    watermark = 1
+    // The answer resumes the same run, which reads on from the turn's frames.
     await expect(
       collect(
         await engine.start(
@@ -836,7 +855,7 @@ describe("HermesRunEngine", () => {
         },
       })
     )
-    const events = await collect(await engine.start(scope, input()))
+    const events = await collectToWait(await engine.start(scope, input()))
     return ofKind(events, TurnEventKind.TurnRequiresAction).flatMap(
       (event) => (event as { requests: PendingRequest[] }).requests
     )
@@ -907,17 +926,51 @@ describe("HermesRunEngine", () => {
     await vi.waitFor(() => expect(interrupt.subscribed()).toBe(0))
   })
 
+  it("runs a turn on once Hermes withdraws a prompt AOS holds", async () => {
+    const attachment = observation()
+    const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const questions = pendingRequests()
+    const turn = nativeTurn()
+    const engine = new HermesTurnEngine(
+      runtime({
+        subscribeLive: attachment.subscribeLive,
+        subscribePendingRequests: questions.subscribePendingRequests,
+      })
+    )
+
+    const handle = await engine.start(scope, input())
+    publish(turn.messageStart("msg-1"))
+    questions.hold()
+    // `server_requests` withdraws the sudo prompt its timeout ended.
+    publish(
+      turn.frame("request.cancel", {
+        id: "srq-000000000001",
+        method: "sudo",
+        reason: "timeout",
+      })
+    )
+    publish(turn.complete("msg-1", "Done"))
+    publish(turn.idle())
+
+    const events = await collect(handle)
+    expect(eventKinds(events).slice(0, 3)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.TurnFailed,
+      TurnEventKind.TurnStarted,
+    ])
+    expect(events.at(-1)).toEqual({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
+    })
+  })
+
   it("streams a resumed interaction when Hermes continues without another message start", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const interrupt = pendingRequests()
-    // Hermes' own watermark: the resumed run attaches after the first turn's
-    // frames and continues their sequence.
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         subscribePendingRequests: interrupt.subscribePendingRequests,
         submit: async () => {
           interrupt.raise({
@@ -934,7 +987,7 @@ describe("HermesRunEngine", () => {
           publish({
             type: "tool.complete",
             session_id: "live-secret",
-            seq: 2,
+            seq: 1,
             payload: {
               tool_id: "clarify-call",
               name: "clarify",
@@ -961,13 +1014,13 @@ describe("HermesRunEngine", () => {
           publish({
             type: "message.delta",
             session_id: "live-secret",
-            seq: 3,
+            seq: 2,
             payload: { text: "No answers selected." },
           })
           publish({
             type: "message.complete",
             session_id: "live-secret",
-            seq: 4,
+            seq: 3,
             payload: { text: "No answers selected." },
           })
           return [{ status: "resolved" }]
@@ -975,8 +1028,7 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await collect(await engine.start(scope, input()))
-    watermark = 1
+    await collectToWait(await engine.start(scope, input()))
     const resumed = await collect(
       await engine.start(
         scope,
@@ -1033,40 +1085,24 @@ describe("HermesRunEngine", () => {
   })
 
   /**
-   * A Session that asked one native question, then the run that answers it. The
-   * resumed run attaches past the first turn's frames, so a test publishes
-   * whatever Hermes does next through the returned `publish`.
+   * The run that answers a question no run of this engine asked, as after a
+   * proxy restart. It attaches past the frames Hermes already sent, so a test
+   * publishes whatever Hermes does next through the returned `publish`.
    */
   async function resumedRun(
     overrides: Partial<HermesTurnNative> = {},
     options: { log?: HermesLog } = {}
   ) {
     const attachment = observation()
-    const interrupt = pendingRequests()
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
-        subscribePendingRequests: interrupt.subscribePendingRequests,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
-        submit: async () => {
-          interrupt.raise({
-            requestId: "question-1",
-            kind: PendingRequestKind.Elicitation,
-            message: "Which screenshot?",
-          })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
+        cursor: async () => ({ epoch: "epoch-1", latestSeq: 1 }),
         respondInteractions: async () => [{ status: "resolved" as const }],
         ...overrides,
       }),
       options
     )
-    await collect(await engine.start(scope, input()))
-    watermark = 1
     const handle = await engine.start(
       scope,
       replies("run-2", {
@@ -3056,10 +3092,7 @@ describe("HermesRunEngine", () => {
     try {
       const { engine, questions } = waitingOnQuestion()
       const discovered = await engine.discover(scope, "recovered-run")
-      const events: unknown[] = []
-      const reading = (async () => {
-        for await (const event of discovered!.handle.events) events.push(event)
-      })()
+      const reading = collectToWait(discovered!.handle)
       const question = {
         requestId: "question-1",
         kind: PendingRequestKind.Elicitation,
@@ -3070,7 +3103,7 @@ describe("HermesRunEngine", () => {
       await vi.advanceTimersByTimeAsync(1_000)
       questions.raise(question)
       await vi.advanceTimersByTimeAsync(2_000)
-      await reading
+      const events = await reading
 
       expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
       expect(events.at(-1)).toEqual({

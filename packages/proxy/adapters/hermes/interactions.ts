@@ -154,6 +154,18 @@ const BROAD_APPROVAL_CHOICES = new Set<ApprovalChoice>(["session", "always"])
 const ANSWERED_METHODS = ["clarify", "approval"] as const
 type AnsweredMethod = (typeof ANSWERED_METHODS)[number]
 
+/**
+ * The prompts Hermes' turn blocks on (`agent_callbacks.py` `_ask`) that AOS
+ * holds unrendered: the turn waits on them all the same.
+ */
+const HELD_METHODS = new Set([
+  "sudo",
+  "secret",
+  "vault.unlock_prompt",
+  "vault.save_login",
+  "vault.code",
+])
+
 export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxNativePayloadBytes: 65_536,
   maxDepth: 8,
@@ -248,6 +260,12 @@ export type HermesInteractionResumeSnapshot = {
 }
 
 export type HermesPendingRequestListener = (request: PendingRequest) => void
+
+type PendingRequestSubscriber = {
+  requested: HermesPendingRequestListener
+  /** The turn waits on a prompt AOS holds unrendered. */
+  held?: () => void
+}
 
 // ---------------------------------------------------------------------------
 // Native validation and public projection
@@ -713,7 +731,7 @@ export class HermesInteractions {
     string,
     { fingerprint?: string; result: HermesInteractionResult }
   >()
-  readonly #listeners = new Map<string, Set<HermesPendingRequestListener>>()
+  readonly #listeners = new Map<string, Set<PendingRequestSubscriber>>()
   /**
    * Requests whose live Session id was not bound yet. `open_requests` are
    * re-delivered before the `session.resume` that carried them resolves, so the
@@ -788,17 +806,22 @@ export class HermesInteractions {
       .map(({ pendingRequest }) => pendingRequest)
   }
 
-  /** Notify the turn observing this Session of every live request. */
+  /**
+   * Notify the turn observing this Session of every live request, and through
+   * `held` of each prompt it waits on that AOS holds unrendered.
+   */
   subscribePendingRequests(
     scope: HermesInteractionScope,
-    listener: HermesPendingRequestListener
+    listener: HermesPendingRequestListener,
+    held?: () => void
   ) {
     const key = sessionKey(scope)
     const listeners = this.#listeners.get(key) ?? new Set()
     this.#listeners.set(key, listeners)
-    listeners.add(listener)
+    const subscriber = { requested: listener, ...(held ? { held } : {}) }
+    listeners.add(subscriber)
     return () => {
-      listeners.delete(listener)
+      listeners.delete(subscriber)
       if (listeners.size === 0) this.#listeners.delete(key)
     }
   }
@@ -976,7 +999,10 @@ export class HermesInteractions {
     const method = ANSWERED_METHODS.find(
       (candidate) => candidate === request.method
     )
-    if (!method) return this.#hold(request.method)
+    if (!method) {
+      if (HELD_METHODS.has(request.method)) this.#notifyHeld(request)
+      return this.#hold(request.method)
+    }
     const liveSessionId = nativeId(request.params.session_id, 256)
     if (!liveSessionId) return this.#decline(request.method)
     const scope = this.attachments.scopeFor(liveSessionId)
@@ -1165,9 +1191,25 @@ export class HermesInteractions {
   }
 
   #notify(scope: HermesInteractionScope, request: PendingRequest) {
-    for (const listener of [...(this.#listeners.get(sessionKey(scope)) ?? [])])
+    this.#each(scope, ({ requested }) => requested(request))
+  }
+
+  /** Tells the Session's turn it waits on a prompt; none of its fields go. */
+  #notifyHeld(request: ServerRequest) {
+    const liveSessionId = nativeId(request.params.session_id, 256)
+    const scope = liveSessionId && this.attachments.scopeFor(liveSessionId)
+    if (scope) this.#each(scope, ({ held }) => held?.())
+  }
+
+  #each(
+    scope: HermesInteractionScope,
+    notify: (subscriber: PendingRequestSubscriber) => void
+  ) {
+    for (const subscriber of [
+      ...(this.#listeners.get(sessionKey(scope)) ?? []),
+    ])
       try {
-        listener(request)
+        notify(subscriber)
       } catch (error) {
         this.#log?.warn(
           {
