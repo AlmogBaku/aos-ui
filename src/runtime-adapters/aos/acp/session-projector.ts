@@ -13,6 +13,7 @@ import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
   AosChunkMetaSchema,
+  AosNoticeMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosToolCallMetaSchema,
@@ -23,7 +24,9 @@ import {
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
   COMPACTION_DATA_PART_NAME,
+  NOTICE_DATA_PART_NAME,
   type AosCompaction,
+  type AosNotice,
 } from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
@@ -124,6 +127,11 @@ export type ProjectorState = {
   readonly approvals?: readonly AcpApproval[]
   /** The turn each approval was first seen beside, by approval id. */
   readonly approvalHosts?: ReadonlyMap<string, string>
+  /**
+   * Monotonically increasing across rebuilds, so `aos-notice-<n>` ids never
+   * collide when the transcript is cleared and notices arrive again.
+   */
+  readonly noticeCounter?: number
 }
 
 type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
@@ -261,12 +269,14 @@ function emptyRequestHostId(state: ProjectorState): string | undefined {
   const id = state.activeAssistantId
   if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
   const host = state.messages.find((message) => message.id === id)
-  return host?.parts.every(isCompaction) ? id : undefined
+  return host?.parts.every(isHostedStatus) ? id : undefined
 }
 
-/** A compaction the host shows ahead of the run's turn moves with it. */
-const isCompaction = (part: ProjectedMessage["parts"][number]) =>
-  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
+/** A compaction or notice the host shows ahead of the run's turn moves with it. */
+const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" &&
+  (part.name === COMPACTION_DATA_PART_NAME ||
+    part.name === NOTICE_DATA_PART_NAME)
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -509,6 +519,60 @@ function withoutCompaction(
         ? { ...message, parts: message.parts.filter((part) => !placed(part)) }
         : message
     )
+  )
+}
+
+const NOTICE_SEVERITY = new Set<string>(["info", "warning", "error"])
+
+const noticeSeverity = (raw: string | undefined): AosNotice["severity"] =>
+  raw !== undefined && NOTICE_SEVERITY.has(raw)
+    ? (raw as AosNotice["severity"])
+    : "info"
+
+/**
+ * A status the proxy announces live: attaches to the active assistant turn
+ * while a run is under way, or to the latest assistant message while idle
+ * (so `resumed()` cannot reopen a notice message as the next turn). When
+ * the thread holds no assistant message yet a standalone `aos-notice-<n>`
+ * is created instead. A consecutive duplicate — same kind and title as the
+ * last part of the target message — is dropped.
+ */
+function applyNotice(
+  state: ProjectorState,
+  update: UpdatePayload,
+  meta: unknown
+): ProjectorState {
+  const title = text(update.title)
+  if (!title) return state
+  const severity = noticeSeverity(text(update.severity))
+  const description = text(update.description)
+  const parsed = AosNoticeMetaSchema.safeParse(meta)
+  const kind = parsed.success ? parsed.data.kind : undefined
+  const data: AosNotice = {
+    severity,
+    title,
+    ...(description !== undefined ? { description } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+  }
+  const counter = (state.noticeCounter ?? 0) + 1
+  const withCounter: ProjectorState = { ...state, noticeCounter: counter }
+  const isRunning = state.execution.status === "running"
+  const id = isRunning
+    ? (activeAssistantId(state) ?? requestHostId(state.execution.turnId))
+    : (latestAssistantId(state.messages) ?? `aos-notice-${counter}`)
+  // Drop a consecutive duplicate at the same location.
+  const target = state.messages.find((m) => m.id === id)
+  const lastPart = target?.parts.at(-1)
+  if (
+    lastPart?.source === "data" &&
+    lastPart.name === NOTICE_DATA_PART_NAME &&
+    isRecord(lastPart.data) &&
+    lastPart.data.kind === data.kind &&
+    lastPart.data.title === data.title
+  )
+    return state
+  return onMessage(withCounter, id, "assistant", (message) =>
+    appendData(message, NOTICE_DATA_PART_NAME, data)
   )
 }
 
@@ -1006,6 +1070,8 @@ function applyKind(
       return applyTerminal(state, kind, update)
     case "compaction_update":
       return applyCompaction(state, update, meta)
+    case "notice":
+      return applyNotice(state, update, meta)
     case "state_update":
       return applyState(state, update, meta)
     case "plan_update":

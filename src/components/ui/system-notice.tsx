@@ -68,11 +68,14 @@ export function SystemNotice({
         >
           {(locale === "he" ? he : en).productName}
         </p>
-        <p id={titleId} className="mt-0.5 text-sm">
+        <p id={titleId} dir="auto" className="mt-0.5 text-sm">
           {title}
         </p>
         {detail && (
-          <p className="mt-1 max-w-prose text-xs text-muted-foreground">
+          <p
+            dir="auto"
+            className="mt-1 max-w-prose text-xs text-muted-foreground"
+          >
             {detail}
           </p>
         )}

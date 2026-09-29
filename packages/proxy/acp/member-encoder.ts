@@ -15,12 +15,14 @@ import {
   AOS_STOP_REASONS,
   AosStateMetaSchema,
   type AosActivityNotification,
+  type AosNoticeMeta,
 } from "../../protocol/acp"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
 import {
   unhandledKind,
   type MemberConnection,
   type MemberEvent,
+  type SessionNotice,
   type TurnStream,
   type WorkspaceEvent,
 } from "../core/member"
@@ -112,6 +114,24 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
         ...(usage.breakdown ? { breakdown: usage.breakdown } : {}),
       },
     },
+  }
+}
+
+/** One Session-scoped `notice`; the provider's own status kind rides in `_meta.aos`. */
+function noticeUpdate({
+  severity,
+  title,
+  description,
+  kind,
+}: SessionNotice): SessionUpdate {
+  return {
+    sessionUpdate: "notice",
+    severity,
+    title,
+    ...(description === undefined ? {} : { description }),
+    ...(kind === undefined
+      ? {}
+      : { _meta: { [AOS_META_KEY]: { kind } satisfies AosNoticeMeta } }),
   }
 }
 
@@ -487,6 +507,8 @@ export function createMemberEncoder({
         return update(sessionId, sessionInfoUpdate(event.row))
       case "commands":
         return update(sessionId, commandsUpdate(event.capabilities))
+      case "notice":
+        return update(sessionId, noticeUpdate(event.notice))
       case "error": {
         const failure = describe(event.cause)
         logger.error(

@@ -46,6 +46,7 @@ import {
 } from "@/components/assistant-ui/elements/model-selector"
 import { ComposerContext } from "@/components/assistant-ui/elements/composer-context"
 import { CompactionDataUI } from "@/components/assistant-ui/elements/compaction-divider"
+import { NoticeDataUI } from "@/components/assistant-ui/elements/notice-line"
 import { ComposerSlashCommands } from "@/components/assistant-ui/elements/composer-slash-commands"
 import {
   ConversationSearch,
@@ -469,6 +470,7 @@ export const Thread: FC<ThreadProps> = ({
             <ThreadComposerFeaturesContext.Provider value={composerFeatures}>
               <ThreadComponentsContext.Provider value={components}>
                 <CompactionDataUI />
+                <NoticeDataUI />
                 <ThreadRoot
                   isEmpty={isEmpty}
                   autoFocus={autoFocus}

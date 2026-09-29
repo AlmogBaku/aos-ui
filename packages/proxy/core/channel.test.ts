@@ -8,7 +8,12 @@ import {
   type PendingRequest,
   type RequestReply,
 } from "./events"
-import type { MemberAct, MemberConnection, Middleware } from "./member"
+import type {
+  MemberAct,
+  MemberConnection,
+  Middleware,
+  SessionNotice,
+} from "./member"
 import {
   ServerRequestStaleError,
   ServerSessionNotFoundError,
@@ -60,6 +65,7 @@ function member(
 ) {
   const sent: string[] = []
   const reported: unknown[] = []
+  const notices: SessionNotice[] = []
   let follows = 0
   let rebuilds = 0
   const fake: MembershipDelivery = {
@@ -78,11 +84,15 @@ function member(
     report(cause) {
       reported.push(cause)
     },
+    notice(notice) {
+      notices.push(notice)
+    },
   }
   return {
     fake,
     sent,
     reported,
+    notices,
     follows: () => follows,
     rebuilds: () => rebuilds,
   }
@@ -629,6 +639,27 @@ describe("createChannel adopting runtime-started turns", () => {
     await settle()
 
     expect(runtime.discovered).toHaveLength(2)
+  })
+
+  it("shows a notice the runtime reports to every member, and not to a later one", () => {
+    const runtime = adoptingHarness()
+    const first = member()
+    const second = member()
+    runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })
+    runtime.channels.add(GUEST_SCOPE, second.fake, { hasPrompt: false })
+    const notice: SessionNotice = {
+      severity: "info",
+      title: "Heartbeat",
+      kind: "heartbeat",
+    }
+
+    runtime.watchers[0]!.onNotice?.(notice)
+    const late = member()
+    runtime.channels.add(SCOPE, late.fake, { hasPrompt: false })
+
+    expect(first.notices).toEqual([notice])
+    expect(second.notices).toEqual([notice])
+    expect(late.notices).toEqual([])
   })
 
   it("rechecks after a member's own start fails", async () => {
