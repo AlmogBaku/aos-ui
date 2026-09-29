@@ -11,7 +11,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aos-workspace-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/aos-workspace-light.png">
-  <img alt="AOS workspace showing a Q1 planning request, an executive-assistant recommendation, and an investment chart alongside personal business agents and Sessions" src="docs/assets/aos-workspace-light.png">
+  <img alt="AOS workspace: an executive-assistant Agent answers a Q1 planning request with a subagent result, an interactive investment chart, a downloadable brief, and a recommendation, beside the Agent roster, Session tabs, and the Agent's open Sessions and History" src="docs/assets/aos-workspace-light.png">
 </picture>
 
 </div>
@@ -22,22 +22,33 @@ AOS UI complements the [AOS kit](https://github.com/AlmogBaku/aos), which packag
 
 ## What AOS provides
 
-- Agent and Session navigation with provider-verified ownership
-- Streaming chat, queued follow-ups, Stop, active-turn steering, questions,
-  approvals, and attachments where the selected runtime supports them
-- Session rename, archive, and delete with provider-owned read state (Hermes)
+- Agent and Session navigation with provider-verified ownership, Session tabs,
+  and pinned Sessions that always stay open
+- Streaming chat, Stop, active-turn steering, questions, approvals, and
+  attachments where the selected runtime supports them
+- A message queue docked to the composer: reorder queued follow-ups, pull them
+  back into the composer to edit, or send the whole queue as one message
+- Session rename, pin, archive, and delete with provider-owned read state
 - Model and reasoning-effort selection with a context-window gauge where the
   runtime supports them
+- Runtime notices in the thread (for example Hermes goals, loops, heartbeats,
+  and background processes), a reconnecting notice while the connection
+  recovers, and the platform each Session came from
 - Inline image, audio, and video Artifacts; conversation search; slash-command
   suggestions; questions answered from the composer with a free-text "Other";
   deep links to any Session
 - Session-scoped Todos
-- Safe, inspectable rich output including charts, maps, Mermaid, and published Artifacts
+- Safe, inspectable rich output including charts, maps, Mermaid, published
+  Artifacts, and sandboxed MCP Apps
 - A stateless tools MCP server (`bun run tools-mcp:serve`) that gives any
   harness the `render_chart`, `render_map`, and `render_stats` MCP Apps and the
   `present_artifact` tool
-- Activity history and opt-in browser notifications
-- English LTR and Hebrew RTL layouts with keyboard-first navigation
+- Agent icons and visibility management, and `New Agent` creation through a
+  runtime's hidden creator where one is configured
+- Activity history, opt-in browser notifications, optional Web Push, and an
+  installable app window
+- English LTR and Hebrew RTL layouts with keyboard-first navigation and a
+  command palette
 - Optional voice controls (microphone transcription and read-aloud) and restricted guest invitations
 
 The browser has one real runtime: the normalized AOS proxy. The browser speaks
