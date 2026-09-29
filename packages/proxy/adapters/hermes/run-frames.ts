@@ -11,6 +11,7 @@ import {
   type Subagent,
   type TokenUsage,
 } from "../../core/events"
+import type { SessionNotice } from "../../core/member"
 
 import {
   boundedNativeBytes,
@@ -91,6 +92,25 @@ export function boundedText(value: unknown) {
     utf8BytesWithin(value, MAX_NATIVE_TEXT_DELTA_BYTES) !== undefined
     ? value
     : undefined
+}
+
+/** The `status.update` kinds Hermes announces about a Session, not a turn. */
+const NOTICE_KINDS: ReadonlySet<string> = new Set([
+  "goal",
+  "loop",
+  "heartbeat",
+  "process",
+])
+
+/** A `status.update` payload as the notice it announces, if it is one. */
+export function statusNotice({
+  kind,
+  text,
+}: Record<string, unknown>): SessionNotice | undefined {
+  const title = boundedText(text)
+  if (typeof kind !== "string" || !NOTICE_KINDS.has(kind) || !title)
+    return undefined
+  return { severity: "info", title, kind }
 }
 
 /** Hermes' token counter names, as AOS token usage fields. */

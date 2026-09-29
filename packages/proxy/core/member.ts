@@ -132,6 +132,8 @@ export type SessionEvent =
   /** The Session's row, whose status is the one its live execution overlays. */
   | { kind: "session-info"; row: SessionRow }
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
+  /** A status the runtime announced. Live only: never stored or replayed. */
+  | { kind: "notice"; notice: SessionNotice }
   /** A failure that has no request to answer. */
   | { kind: "error"; cause: unknown }
 

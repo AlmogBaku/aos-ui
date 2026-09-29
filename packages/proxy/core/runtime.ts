@@ -24,6 +24,7 @@ import type {
 import type { PublicFailure } from "./failures"
 import type { ProviderSessionId, SessionId } from "./ids"
 import type { ServerLink } from "./link"
+import type { SessionNotice } from "./member"
 
 export type SessionScope = {
   agentId: string
@@ -143,6 +144,8 @@ export type ServerTurnEngine = {
    *   during one is found by the `discover` that follows every turn's end;
    * - it fires at most once per native turn, however often the runtime
    *   announces it;
+   * - `onNotice` reports each status the runtime announces about the Session,
+   *   during any turn or none, the adapter's own included; live only;
    * - setup may be asynchronous: the adapter owns reconnect retries and reports
    *   failures through `onError`, never by throwing.
    * The returned stop function may be called more than once and ends retries.
@@ -153,6 +156,7 @@ export type ServerTurnEngine = {
 export type ServerTurnListener = {
   onTurn(): void
   onError(cause: unknown): void
+  onNotice?(notice: SessionNotice): void
 }
 
 export type RuntimeInstance = {

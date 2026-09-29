@@ -7023,6 +7023,7 @@ describe("Hermes turn watch", () => {
     const hermes: { status: HermesNativeStatus } = { status: "idle" }
     const onTurn = vi.fn()
     const onError = vi.fn()
+    const onNotice = vi.fn()
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
@@ -7036,7 +7037,9 @@ describe("Hermes turn watch", () => {
       hermes,
       onTurn,
       onError,
-      subscribeTurns: () => engine.subscribeTurns(scope, { onTurn, onError }),
+      onNotice,
+      subscribeTurns: () =>
+        engine.subscribeTurns(scope, { onTurn, onError, onNotice }),
       publish: (frame: unknown) => attachment.publish("live-secret", frame),
       observed: () =>
         vi.waitFor(() => expect(attachment.observers("live-secret")).toBe(1)),
@@ -7057,6 +7060,43 @@ describe("Hermes turn watch", () => {
     await handle.settled
 
     expect(onTurn).not.toHaveBeenCalled()
+  })
+
+  it("reports the heartbeat Hermes announces before its turn, with no turn open", async () => {
+    const { onTurn, onNotice, subscribeTurns, publish, observed } = watched()
+    subscribeTurns()
+    await observed()
+
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.frame("status.update", { kind: "heartbeat", text: "Pulse" }))
+
+    expect(onNotice).toHaveBeenCalledExactlyOnceWith({
+      severity: "info",
+      title: "Pulse",
+      kind: "heartbeat",
+    })
+    expect(onTurn).not.toHaveBeenCalled()
+  })
+
+  it("reports a goal status after this engine's own turn, and no compaction", async () => {
+    const { engine, onNotice, subscribeTurns, publish, observed } = watched()
+    subscribeTurns()
+    await observed()
+
+    const handle = await engine.start(scope, input())
+    const turn = nativeTurn("live-secret", 1)
+    publish(turn.messageStart("reply"))
+    publish(turn.frame("status.update", { kind: "compacting", text: "Wait" }))
+    publish(turn.complete("reply", "Hi"))
+    publish(turn.frame("status.update", { kind: "goal", text: "Goal 1/3" }))
+    publish(turn.idle())
+    await handle.settled
+
+    expect(onNotice).toHaveBeenCalledExactlyOnceWith({
+      severity: "info",
+      title: "Goal 1/3",
+      kind: "goal",
+    })
   })
 
   it("announces each turn Hermes starts by itself", async () => {

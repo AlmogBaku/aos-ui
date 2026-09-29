@@ -67,6 +67,7 @@ import {
   payloadOf,
   persistedTurnRows,
   stableNativeId,
+  statusNotice,
   subagentPatch,
   terminalText,
   tokenUsage,
@@ -484,7 +485,11 @@ export class HermesTurnEngine {
         }
         const event = nativeEvent(attachment.event)
         if (!event || event.session_id !== liveSessionId) return
-        if (event.type === "message.start") announce(this.#active.has(key))
+        if (event.type === "status.update") {
+          const notice = statusNotice(payloadOf(event))
+          if (notice) listener.onNotice?.(notice)
+        } else if (event.type === "message.start")
+          announce(this.#active.has(key))
         else if (
           event.type === "message.complete" ||
           (event.type === "session.info" && payloadOf(event).running === false)

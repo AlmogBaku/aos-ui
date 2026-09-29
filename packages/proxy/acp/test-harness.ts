@@ -1057,7 +1057,7 @@ export function flow(recorder: Recorder, sessionId = SESSION, from = 0) {
 
 /** What one Session update shows, as `flow` lists it. */
 export function shown(update: object): string[] {
-  const { sessionUpdate, messageId, state, content } = update as Record<
+  const { sessionUpdate, messageId, state, content, title } = update as Record<
     string,
     unknown
   >
@@ -1070,6 +1070,8 @@ export function shown(update: object): string[] {
       return [`state ${String(state)}`]
     case "agent_message_chunk":
       return [`chunk ${(content as { text: string }).text}`]
+    case "notice":
+      return [`notice ${String(title)}`]
     default:
       return []
   }

@@ -202,6 +202,7 @@ export function createTurnsMiddleware(): Middleware {
         case "error":
         case "session-info":
         case "commands":
+        case "notice":
         case "catalog-invalidated":
         case "activity":
           return event

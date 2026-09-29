@@ -39,6 +39,7 @@ import {
   type MemberScope,
   type PromptPart,
   type SessionEvent,
+  type SessionNotice,
   type TurnStream,
 } from "./member"
 import {
@@ -97,6 +98,8 @@ export type MembershipDelivery = {
   rebuild(ended?: string): void | Promise<void>
   /** Record a send/follow failure for this member alone. */
   report(cause: unknown): void
+  /** Show the member a status the runtime announced, live only. */
+  notice(notice: SessionNotice): void
 }
 
 export type Channels = ReturnType<typeof createChannels>
@@ -465,6 +468,9 @@ function createChannelTable({
     const unsubscribeTurns = adoption.subscribeTurns(scope, {
       onTurn: () => adoptLater(channel),
       onError: (cause) => adopter(channel)?.[0].report(cause),
+      onNotice: (notice) => {
+        for (const member of channel.memberships.keys()) member.notice(notice)
+      },
     })
     channel.unsubscribe = () => {
       unsubscribeTurns()
@@ -907,6 +913,8 @@ class Membership {
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
   #rebuilding = false
+  /** The notices that arrived while the view was rebuilt, shown after its page. */
+  #heldNotices: SessionNotice[] = []
   /** The last stream this member was shown, settling once it has shown all. */
   #streamed: { turnId: string; done: Promise<void> } | undefined
   /**
@@ -968,6 +976,10 @@ class Membership {
           { errorCode: failure.code, message: failure.message },
           "channel.failed"
         )
+      },
+      notice: (notice) => {
+        if (this.#rebuilding) this.#heldNotices.push(notice)
+        else this.#showNotice(notice)
       },
     }
   }
@@ -1260,6 +1272,8 @@ class Membership {
    * `needsFollow`: the view streams it from its prompt.
    */
   async #recoverReplay(needsFollow: boolean) {
+    // A view that was not rebuilt shows nothing it held for after its page.
+    this.#heldNotices = []
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -1468,7 +1482,11 @@ class Membership {
    */
   joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
+    // The notices held while the view was rebuilt follow its page.
+    const held = this.#heldNotices
+    this.#heldNotices = []
     if (this.detached) return
+    for (const notice of held) this.#showNotice(notice)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -1829,6 +1847,13 @@ class Membership {
    */
   #deliver(event: SessionEvent) {
     return this.emit(event).catch((cause: unknown) => this.report(cause))
+  }
+
+  /** Shows one notice, which nothing awaits or retries. */
+  #showNotice(notice: SessionNotice) {
+    this.#deliver({ kind: "notice", notice }).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.notice.failed")
+    )
   }
 
   get #coordinator() {
