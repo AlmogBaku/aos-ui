@@ -150,6 +150,7 @@ import {
   useState,
   useSyncExternalStore,
   type ComponentType,
+  type CSSProperties,
   type FC,
   type KeyboardEvent,
   type PropsWithChildren,
@@ -515,6 +516,12 @@ function escapeAimsAtConversation(event: KeyboardEvent<HTMLDivElement>) {
   return true
 }
 
+const threadRootStyle = {
+  "--thread-max-width": "96rem",
+  "--thread-content-max-width": "clamp(52rem, 80cqi, 96rem)",
+  "--composer-bg": "var(--color-card)",
+} as CSSProperties
+
 const ThreadRoot: FC<{
   isEmpty: boolean
   autoFocus: boolean
@@ -573,11 +580,7 @@ const ThreadRoot: FC<{
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background [--composer-padding:0.25rem] [--composer-radius:0.75rem] @md:[--composer-padding:0.5rem] @md:[--composer-radius:1.5rem]"
-      style={{
-        ["--thread-max-width" as string]: "96rem",
-        ["--thread-content-max-width" as string]: "clamp(52rem, 80cqi, 96rem)",
-        ["--composer-bg" as string]: "var(--color-card)",
-      }}
+      style={threadRootStyle}
     >
       <VoiceReplyReader />
       <span

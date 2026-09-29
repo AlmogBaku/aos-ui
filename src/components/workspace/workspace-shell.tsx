@@ -204,6 +204,7 @@ const inspectorPreferenceKey = "aos_ui:workspace:inspector-open"
 const inspectorPreferenceEvent = "aos_ui:inspector-preference-change"
 const artifactWidthPreferenceKey = "aos_ui:workspace:artifact-width"
 const artifactWidthMin = 320
+const noNavigation: ReadonlyMap<string, AgentSessionNavigation> = new Map()
 const artifactConversationWidthMin = 320
 const artifactWidthMaxRatio = 0.8
 const artifactWidthStep = 16
@@ -1124,7 +1125,7 @@ export function WorkspaceShell({
   agentCreatorId,
   openSessions,
   olderSessions,
-  navigationCatalog = new Map(),
+  navigationCatalog = noNavigation,
   threadListRuntime,
   selectedAgentId,
   activeThreadId,

@@ -124,6 +124,29 @@ function toError(error: unknown) {
   return error instanceof Error ? error : new Error(String(error))
 }
 
+/**
+ * A Map that reports each real change, so render can read a copy while
+ * handlers and effects keep reading and writing the live Map synchronously.
+ */
+class ReportingMap<K, V> extends Map<K, V> {
+  constructor(private readonly onChange: (current: ReadonlyMap<K, V>) => void) {
+    super()
+  }
+
+  override set(key: K, value: V) {
+    if (this.has(key) && this.get(key) === value) return this
+    super.set(key, value)
+    this.onChange(new Map(this))
+    return this
+  }
+
+  override delete(key: K) {
+    if (!super.delete(key)) return false
+    this.onChange(new Map(this))
+    return true
+  }
+}
+
 type SessionSnapshot = {
   key: string
   sessions: SessionMetadata[]
@@ -188,7 +211,9 @@ export function useWorkspaceNavigation({
   )
   // A pinned tab can still be closed, but only until its Session is next
   // active. Remembering the `updatedAt` each dismissal saw is what dates it.
-  const pinnedDismissedAt = useRef(new Map<string, string>())
+  const [pinnedDismissedAt, setPinnedDismissedAt] = useState<
+    Readonly<Record<string, string>>
+  >({})
   const tabUndo = useSessionTabUndo()
   const [actionError, setActionError] = useState<Error | null>(null)
   // null until the runtime has answered; every action stays hidden meanwhile.
@@ -223,7 +248,13 @@ export function useWorkspaceNavigation({
   const eligibilityNow =
     clockSnapshot.seedMs === initialNowMs ? clockSnapshot.current : now
   // null remembers an intentionally empty tab strip; undefined permits initial history fallback.
-  const lastSelected = useRef(new Map<string, string | null>())
+  // Render reads `lastSelectedView`, the copy the Map reports on each change.
+  const [lastSelectedView, setLastSelectedView] = useState<
+    ReadonlyMap<string, string | null>
+  >(() => new Map())
+  const lastSelected = useRef(
+    new ReportingMap<string, string | null>(setLastSelectedView)
+  )
   const desiredThread = useRef<string | null>(null)
   const localDraftAgent = useRef<string | null>(null)
   const localDraftId = useRef<string | null>(null)
@@ -456,12 +487,12 @@ export function useWorkspaceNavigation({
         sessionIds.filter((sessionId) => {
           const session = byThread.get(sessionId)
           if (session?.pinned !== true) return true
-          const dismissedAt = pinnedDismissedAt.current.get(sessionId) ?? ""
+          const dismissedAt = pinnedDismissedAt[sessionId] ?? ""
           return !(Date.parse(session.updatedAt) > Date.parse(dismissedAt))
         }),
       ])
     )
-  }, [dismissedTabs, sessions])
+  }, [dismissedTabs, pinnedDismissedAt, sessions])
 
   const updateRoute = useCallback(
     (selection: WorkspaceSelection, mode: "push" | "replace") => {
@@ -517,65 +548,6 @@ export function useWorkspaceNavigation({
     return next
   }, [setAgents, workspace])
 
-  /**
-   * A created Agent is one the provider owns. The catalog decides when the
-   * draft is done: until the created Agent is listed, the interview stays
-   * exactly where the operator left it.
-   */
-  const acceptCreatedAgent = useEffectEvent(
-    async (event: WorkspaceActivityEvent) => {
-      const owner = publishedSessions.find(
-        ({ sessionId }) => sessionId === event.sessionId
-      )?.agentId
-      if (!agentCreator || owner !== agentCreator.id) return
-      let catalog = await refreshAgentCatalog()
-      if (!catalog.some(({ id }) => id === event.agentId)) {
-        await wait(CREATED_AGENT_CATALOG_RETRY_MS)
-        catalog = await refreshAgentCatalog()
-      }
-      if (!catalog.some(({ id }) => id === event.agentId)) {
-        setCreatorNotice(dictionary.creator.createdPending)
-        return
-      }
-      setResolvedDrafts((current) =>
-        current.has(event.sessionId)
-          ? current
-          : new Set(current).add(event.sessionId)
-      )
-      storeResolvedDraft(event.sessionId)
-      if (event.type === "agent-activation-failed") {
-        setCreatorNotice(dictionary.creator.createdHidden)
-        // A retired draft keeps neither the selection nor the route it owned.
-        if (
-          selectedAgentId === draftAgentId(event.sessionId) &&
-          defaultAgentId
-        ) {
-          noticeOutlivesRoute.current = true
-          await selectAgent(defaultAgentId)
-        }
-        return
-      }
-      if (selectedAgentId !== draftAgentId(event.sessionId)) return
-      // The created Agent owns no Session yet, and creation never invents one.
-      lastSelected.current.set(event.agentId, null)
-      setPreferredAgentId(event.agentId)
-      updateRoute({ agentId: event.agentId, sessionId: null }, "replace")
-    }
-  )
-
-  useEffect(() => {
-    if (!workspace.subscribeActivity) return
-    return workspace.subscribeActivity((event) => {
-      if (
-        event.type === "agent-ready" ||
-        event.type === "agent-activation-failed"
-      )
-        void acceptCreatedAgent(event).catch((reason: unknown) =>
-          setActionError(toError(reason))
-        )
-    })
-  }, [workspace])
-
   /** Forgets the open local draft, leaving provider-owned selection alone. */
   const clearLocalDraft = useCallback(() => {
     localDraftOperation.current = null
@@ -591,16 +563,29 @@ export function useWorkspaceNavigation({
       const operation = Symbol("selection")
       pendingSelection.current = operation
       desiredThread.current = sessionId
-      try {
-        await runtime.threads.switchToThread(sessionId)
-        const latestDesired = desiredThread.current
-        if (latestDesired && latestDesired !== sessionId) {
-          await runtime.threads.switchToThread(latestDesired)
-        }
-      } finally {
+      const settle = () => {
         if (pendingSelection.current === operation)
           pendingSelection.current = null
       }
+      const supersededBy = () => {
+        const latestDesired = desiredThread.current
+        return latestDesired && latestDesired !== sessionId
+          ? latestDesired
+          : null
+      }
+      // A catch-and-rethrow rather than `finally`, and no conditional
+      // expression inside `try`: React Compiler cannot compile either yet.
+      try {
+        await runtime.threads.switchToThread(sessionId)
+        const latestDesired = supersededBy()
+        if (latestDesired) {
+          await runtime.threads.switchToThread(latestDesired)
+        }
+      } catch (error) {
+        settle()
+        throw error
+      }
+      settle()
     },
     [clearLocalDraft, runtime]
   )
@@ -627,8 +612,10 @@ export function useWorkspaceNavigation({
         setConversationDraft({ agentId, sessionId: draftId })
       }
 
+      // Outside `try`: React Compiler cannot compile optional chaining there.
+      const createDraft = () => createSessionDraft?.(agentId)
       try {
-        const draftId = await createSessionDraft?.(agentId)
+        const draftId = await createDraft()
         if (draftId) {
           publishDraft(draftId)
           return true
@@ -724,11 +711,15 @@ export function useWorkspaceNavigation({
           publishError
         )
       } catch (reason) {
-        queueMicrotask(() => publishError(reason))
+        // Bound outside the closure: React Compiler cannot capture a catch
+        // parameter yet.
+        const error = reason
+        queueMicrotask(() => publishError(error))
       }
     }
 
-    const loadGeneration = ++generation
+    generation += 1
+    const loadGeneration = generation
     void workspace
       .getSessionMetadata(sessionQueryIds)
       .then((metadata) => {
@@ -997,12 +988,15 @@ export function useWorkspaceNavigation({
         unsubscribe()
       }
     } catch (reason) {
+      // Bound outside the closure: React Compiler cannot capture a catch
+      // parameter yet.
+      const error = toError(reason)
       queueMicrotask(() => {
         if (active) {
           setTodoSnapshot({
             key: subscriptionKey,
             todos: [],
-            error: toError(reason),
+            error,
           })
         }
       })
@@ -1122,7 +1116,7 @@ export function useWorkspaceNavigation({
     sessions,
     manuallyOpened,
     dismissedTabs: liveDismissedTabs,
-    lastSelected: lastSelected.current,
+    lastSelected: lastSelectedView,
     titles,
     now: eligibilityNow,
     untitledLabel: dictionary.actions.newSession,
@@ -1184,6 +1178,65 @@ export function useWorkspaceNavigation({
     await selectRuntimeThread(sessionId)
   }
 
+  /**
+   * A created Agent is one the provider owns. The catalog decides when the
+   * draft is done: until the created Agent is listed, the interview stays
+   * exactly where the operator left it.
+   */
+  const acceptCreatedAgent = useEffectEvent(
+    async (event: WorkspaceActivityEvent) => {
+      const owner = publishedSessions.find(
+        ({ sessionId }) => sessionId === event.sessionId
+      )?.agentId
+      if (!agentCreator || owner !== agentCreator.id) return
+      let catalog = await refreshAgentCatalog()
+      if (!catalog.some(({ id }) => id === event.agentId)) {
+        await wait(CREATED_AGENT_CATALOG_RETRY_MS)
+        catalog = await refreshAgentCatalog()
+      }
+      if (!catalog.some(({ id }) => id === event.agentId)) {
+        setCreatorNotice(dictionary.creator.createdPending)
+        return
+      }
+      setResolvedDrafts((current) =>
+        current.has(event.sessionId)
+          ? current
+          : new Set(current).add(event.sessionId)
+      )
+      storeResolvedDraft(event.sessionId)
+      if (event.type === "agent-activation-failed") {
+        setCreatorNotice(dictionary.creator.createdHidden)
+        // A retired draft keeps neither the selection nor the route it owned.
+        if (
+          selectedAgentId === draftAgentId(event.sessionId) &&
+          defaultAgentId
+        ) {
+          noticeOutlivesRoute.current = true
+          await selectAgent(defaultAgentId)
+        }
+        return
+      }
+      if (selectedAgentId !== draftAgentId(event.sessionId)) return
+      // The created Agent owns no Session yet, and creation never invents one.
+      lastSelected.current.set(event.agentId, null)
+      setPreferredAgentId(event.agentId)
+      updateRoute({ agentId: event.agentId, sessionId: null }, "replace")
+    }
+  )
+
+  useEffect(() => {
+    if (!workspace.subscribeActivity) return
+    return workspace.subscribeActivity((event) => {
+      if (
+        event.type === "agent-ready" ||
+        event.type === "agent-activation-failed"
+      )
+        void acceptCreatedAgent(event).catch((reason: unknown) =>
+          setActionError(toError(reason))
+        )
+    })
+  }, [workspace])
+
   async function openSession(sessionId: string, verifiedAgentId?: string) {
     const session =
       sessions.find((item) => item.sessionId === sessionId) ??
@@ -1206,6 +1259,30 @@ export function useWorkspaceNavigation({
     lastSelected.current.set(session.agentId, sessionId)
     updateRoute({ agentId: session.agentId, sessionId }, "push")
     await selectRuntimeThread(sessionId)
+  }
+
+  /**
+   * Moves selection off a Session the operator is leaving behind. Archival and
+   * deletion run this before mutating, because Assistant UI would otherwise
+   * strand the operator on an unrouted draft of its own choosing.
+   */
+  async function leaveSession(sessionId: string, agentId: string) {
+    if (agentId !== selectedAgentId || sessionId !== activeThreadId) return
+    const next = neighborAfterClose(
+      sessionView.openSessions.map((session) => session.sessionId),
+      sessionId,
+      activeThreadId
+    )
+    if (next) {
+      lastSelected.current.set(agentId, next)
+      updateRoute({ agentId, sessionId: next }, "replace")
+      await selectRuntimeThread(next)
+      return
+    }
+    lastSelected.current.set(agentId, null)
+    desiredThread.current = null
+    updateRoute({ agentId, sessionId: null }, "replace")
+    await switchToNewThread(agentId)
   }
 
   async function closeSession(sessionId: string, verifiedAgentId?: string) {
@@ -1231,7 +1308,10 @@ export function useWorkspaceNavigation({
       clearedLastSelected,
     })
     if (closed.pinned === true) {
-      pinnedDismissedAt.current.set(sessionId, closed.updatedAt)
+      setPinnedDismissedAt((current) => ({
+        ...current,
+        [sessionId]: closed.updatedAt,
+      }))
     }
     setDismissedTabs((current) => ({
       ...current,
@@ -1247,30 +1327,6 @@ export function useWorkspaceNavigation({
       lastSelected.current.delete(agentId)
     }
     await leaveSession(sessionId, agentId)
-  }
-
-  /**
-   * Moves selection off a Session the operator is leaving behind. Archival and
-   * deletion run this before mutating, because Assistant UI would otherwise
-   * strand the operator on an unrouted draft of its own choosing.
-   */
-  async function leaveSession(sessionId: string, agentId: string) {
-    if (agentId !== selectedAgentId || sessionId !== activeThreadId) return
-    const next = neighborAfterClose(
-      sessionView.openSessions.map((session) => session.sessionId),
-      sessionId,
-      activeThreadId
-    )
-    if (next) {
-      lastSelected.current.set(agentId, next)
-      updateRoute({ agentId, sessionId: next }, "replace")
-      await selectRuntimeThread(next)
-      return
-    }
-    lastSelected.current.set(agentId, null)
-    desiredThread.current = null
-    updateRoute({ agentId, sessionId: null }, "replace")
-    await switchToNewThread(agentId)
   }
 
   function owningAgentId(sessionId: string, verifiedAgentId?: string) {
@@ -1498,6 +1554,21 @@ export function useWorkspaceNavigation({
     forgetTab(agentId, sessionId, "forget")
   }
 
+  async function refreshAfterVisibilityChange() {
+    const nextAgents = await workspace.refreshAgents()
+    setAgents(nextAgents)
+    setPreferredAgentId((current) =>
+      nextAgents.some((agent) => agent.id === current && isRosterAgent(agent))
+        ? current
+        : (nextAgents.find(isRosterAgent)?.id ?? null)
+    )
+    if (!nextAgents.some(isRosterAgent)) {
+      clearLocalDraft()
+      desiredThread.current = null
+      await runtime.threads.switchToNewThread()
+    }
+  }
+
   /** The rail's way into the visibility rule Agent management already owns. */
   async function hideAgent(agentId: string) {
     if (!workspace.updateAgent)
@@ -1512,21 +1583,6 @@ export function useWorkspaceNavigation({
         : { visibility: "hidden" }
     )
     await refreshAfterVisibilityChange()
-  }
-
-  async function refreshAfterVisibilityChange() {
-    const nextAgents = await workspace.refreshAgents()
-    setAgents(nextAgents)
-    setPreferredAgentId((current) =>
-      nextAgents.some((agent) => agent.id === current && isRosterAgent(agent))
-        ? current
-        : (nextAgents.find(isRosterAgent)?.id ?? null)
-    )
-    if (!nextAgents.some(isRosterAgent)) {
-      clearLocalDraft()
-      desiredThread.current = null
-      await runtime.threads.switchToNewThread()
-    }
   }
 
   function retryWorkspace() {

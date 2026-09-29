@@ -89,6 +89,18 @@ type Options = {
  * setter keeps the value it has when the re-read carries the same data, so an
  * unchanged read does not re-render the workspace.
  */
+/**
+ * Runs a provider call whose failure the workspace outlives. It lives outside
+ * the hook because React Compiler cannot compile optional chaining inside `try`.
+ */
+function ignoreFailure(action: () => void) {
+  try {
+    action()
+  } catch {
+    /* A provider that cannot accept the call keeps the workspace usable. */
+  }
+}
+
 function useDataState<Value>(initial: Value) {
   const [value, setValue] = useState(initial)
   const setData = useCallback(
@@ -282,7 +294,9 @@ export function useActivityCoordinator(
     async function openPushed(target?: PushOpenTarget) {
       // Without ids the worker already focused this tab and nothing more is owed.
       if (!target) return
-      try {
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      await (async () => {
         const validated = await validateOwner(target.sessionId, true)
         if (!active || validated !== target.agentId) return
         await current.current.onOpenTarget(target.agentId, target.sessionId)
@@ -292,9 +306,9 @@ export function useActivityCoordinator(
         ).catch(() => {})
         setRecords(store.records())
         setNotice(null)
-      } catch {
+      })().catch(() => {
         if (active) setError(true)
-      }
+      })
     }
     const stopPushListening = push?.listen({
       onChange: () =>
@@ -360,12 +374,15 @@ export function useActivityCoordinator(
           if (active) setError(true)
         })
     }
-    try {
-      unsubscribe = workspace.subscribeActivity?.(ingest, () => {
+    // Outside `try`: React Compiler cannot compile optional chaining there.
+    const subscribe = () =>
+      workspace.subscribeActivity?.(ingest, () => {
         queueMicrotask(() => {
           if (active) setError(true)
         })
       })
+    try {
+      unsubscribe = subscribe()
     } catch {
       queueMicrotask(() => {
         if (active) setError(true)
@@ -392,11 +409,9 @@ export function useActivityCoordinator(
     return () => {
       active = false
       reported.current = undefined
-      try {
+      ignoreFailure(() =>
         workspace.reportFocus?.(null, { foreground: false, idle: false })
-      } catch {
-        /* A provider that cannot accept the report keeps the workspace usable. */
-      }
+      )
       heartbeat.stop()
       stopWatchingIdle()
       idleTracker.stop()
@@ -410,11 +425,7 @@ export function useActivityCoordinator(
       window.removeEventListener("focus", onFocus)
       window.removeEventListener("blur", refresh)
       document.removeEventListener("visibilitychange", refresh)
-      try {
-        unsubscribe?.()
-      } catch {
-        /* Subscription teardown cannot break the workspace. */
-      }
+      ignoreFailure(() => unsubscribe?.())
     }
   }, [setBrowserState, setRecords, workspace])
 
@@ -468,7 +479,9 @@ export function useActivityCoordinator(
       const store = storeRef.current
       const record = store?.records().find((item) => item.id === id)
       if (!record || !store) return false
-      try {
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      return (async () => {
         const validatedOwner = await validateOwnerRef.current(
           record.sessionId,
           true
@@ -495,10 +508,10 @@ export function useActivityCoordinator(
         browserRef.current?.publish()
         setNotice(null)
         return true
-      } catch {
+      })().catch(() => {
         setError(true)
         return false
-      }
+      })
     },
     markAllRead() {
       markSessionsRead(

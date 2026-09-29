@@ -66,6 +66,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentSummary,
   HarnessRuntime,
+  RuntimeInteractionAdapter,
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
@@ -85,27 +86,35 @@ type AosUiWorkspaceProps = {
   browserNotificationPort?: BrowserNotificationPort
 }
 
+/**
+ * Built outside the component that memoizes it: React Compiler cannot compile
+ * a component that declares a hook-calling function in its body.
+ */
+function createPendingComposer(
+  interactions: RuntimeInteractionAdapter,
+  locale: Locale
+): NonNullable<ThreadComponents["Composer"]> {
+  return function PendingComposer({ fallback }) {
+    const sessionId = useAuiState(
+      (state) => state.threadListItem.remoteId ?? state.threadListItem.id
+    )
+    return (
+      <PendingInteractionComposer
+        locale={locale}
+        sessionId={sessionId}
+        interactions={interactions}
+        fallback={fallback}
+      />
+    )
+  }
+}
+
 export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
   const interactions = runtime.interactions
   const locale = props.locale
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>
-      interactions
-        ? function PendingComposer({ fallback }) {
-            const sessionId = useAuiState(
-              (state) =>
-                state.threadListItem.remoteId ?? state.threadListItem.id
-            )
-            return (
-              <PendingInteractionComposer
-                locale={locale}
-                sessionId={sessionId}
-                interactions={interactions}
-                fallback={fallback}
-              />
-            )
-          }
-        : undefined,
+      interactions ? createPendingComposer(interactions, locale) : undefined,
     [interactions, locale]
   )
   const workspace = (

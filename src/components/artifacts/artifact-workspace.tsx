@@ -292,9 +292,13 @@ export function ArtifactWorkspaceProvider({
           URL.revokeObjectURL(url)
           downloadUrlsRef.current.delete(url)
         }, 0)
-      } finally {
+      } catch (error) {
+        // A catch-and-rethrow rather than `finally`, which React Compiler
+        // cannot compile yet.
         downloadControllersRef.current.delete(controller)
+        throw error
       }
+      downloadControllersRef.current.delete(controller)
     },
     [adapter, agentId, sessionId]
   )

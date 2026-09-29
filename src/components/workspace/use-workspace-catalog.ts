@@ -27,13 +27,16 @@ export function useWorkspaceCatalog(
     let refreshing = true
     let dirty = false
     const load = async (refresh: boolean) => {
-      const requestGeneration = ++generation
+      generation += 1
+      const requestGeneration = generation
+      // Outside `try`: React Compiler cannot compile a logical expression there.
+      const isLatest = () => active && requestGeneration === generation
       try {
         const { agents: next, avatarEditableIds: editable } = await readCatalog(
           workspace,
           refresh
         )
-        if (active && requestGeneration === generation) {
+        if (isLatest()) {
           // Every catalog invalidation re-reads the roster, and most leave it
           // as it was: keeping the value spares the workspace a re-render.
           setAgents((previous) => (sameData(previous, next) ? previous : next))
@@ -44,7 +47,7 @@ export function useWorkspaceCatalog(
           setAgentsLoading(false)
         }
       } catch (reason) {
-        if (active && requestGeneration === generation) {
+        if (isLatest()) {
           setAgentError(toError(reason))
           setAgents((previous) =>
             previous.map((agent) =>
@@ -81,17 +84,23 @@ export function useWorkspaceCatalog(
       refreshing = false
       if (active && dirty) void refreshCatalog()
     })
-    let unsubscribe: (() => void) | undefined
-    try {
-      unsubscribe = workspace.subscribeAgentCatalog?.(() => {
+    // Outside `try`: React Compiler cannot compile optional chaining there.
+    const subscribe = () =>
+      workspace.subscribeAgentCatalog?.(() => {
         void refreshCatalog()
       }, handleError)
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = subscribe()
     } catch (reason) {
-      queueMicrotask(() => handleError(toError(reason)))
+      // Bound outside the closure: React Compiler cannot capture a catch
+      // parameter yet.
+      const error = toError(reason)
+      queueMicrotask(() => handleError(error))
     }
     return () => {
       active = false
-      generation++
+      generation += 1
       reload.current = () => {}
       unsubscribe?.()
     }
