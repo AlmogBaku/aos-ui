@@ -34,15 +34,23 @@ const counted = {
   locale: "he",
 }
 
-/**
- * Every payload both readers must reach the same verdict on. Keep two accepted
- * rows and one rejection row; logic.test.ts and push.test.ts already cover the
- * rest of the rejection matrix. The two accepted rows prevent a vacuous run.
- */
+/** Every payload both readers must reach the same verdict on. */
 const agreed: [name: string, payload: unknown][] = [
   ["a single Session", singlePush()],
   ["a count", counted],
+  ["an extra key", { ...singlePush(), agentName: "Research" }],
+  ["a future version", singlePush({ v: 2 as 1 })],
+  ["an unknown category", singlePush({ category: "attention" as never })],
+  ["an unknown locale", singlePush({ locale: "ar" as never })],
   ["a count below one", { ...counted, count: 0 }],
+  ["a fractional count", { ...counted, count: 2.5 }],
+  ["a single Session without ids", { ...counted, count: 1 }],
+  ["a count carrying ids", singlePush({ count: 2 })],
+  [
+    "an id longer than the protocol allows",
+    singlePush({ agentId: "a".repeat(257) }),
+  ],
+  ["an id carrying a NUL", singlePush({ agentId: "agent\u0000one" })],
 ]
 
 /** The one clause the worker deliberately relaxes; see `readMessage`. */
