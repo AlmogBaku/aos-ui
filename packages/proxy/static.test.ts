@@ -69,6 +69,57 @@ describe("proxy static serving", () => {
     expect(icon?.headers.get("content-type")).toBe("image/png")
   })
 
+  it("serves a precompressed copy the client accepts and the raw file otherwise", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aos-static-"))
+    directories.push(root)
+    await mkdir(join(root, "assets"))
+    await writeFile(join(root, "assets", "app.js"), "raw")
+    await writeFile(join(root, "assets", "app.js.br"), "brotli")
+    await writeFile(join(root, "assets", "app.js.gz"), "gzipped")
+    await writeFile(join(root, "assets", "only.js"), "uncompressed")
+    const fetch = createStaticHandler({
+      root,
+      runtimeConfig: join(root, "runtime-config.json"),
+    })
+    const get = (path: string, acceptEncoding?: string, method = "GET") =>
+      fetch(
+        new Request(`https://aos.example.test${path}`, {
+          method,
+          headers: acceptEncoding ? { "accept-encoding": acceptEncoding } : {},
+        })
+      )
+
+    const brotli = await get("/assets/app.js", "gzip, deflate, br, zstd")
+    expect(brotli?.headers.get("content-encoding")).toBe("br")
+    expect(brotli?.headers.get("content-type")).toBe(
+      "application/javascript; charset=UTF-8"
+    )
+    expect(brotli?.headers.get("content-length")).toBe("6")
+    expect(brotli?.headers.get("vary")).toBe("Accept-Encoding")
+    expect(await brotli?.text()).toBe("brotli")
+
+    const gzip = await get("/assets/app.js", "gzip")
+    expect(gzip?.headers.get("content-encoding")).toBe("gzip")
+    expect(await gzip?.text()).toBe("gzipped")
+
+    const refused = await get("/assets/app.js", "br;q=0, gzip")
+    expect(refused?.headers.get("content-encoding")).toBe("gzip")
+
+    const raw = await get("/assets/app.js")
+    expect(raw?.headers.get("content-encoding")).toBeNull()
+    expect(raw?.headers.get("vary")).toBe("Accept-Encoding")
+    expect(await raw?.text()).toBe("raw")
+
+    const missing = await get("/assets/only.js", "br, gzip")
+    expect(missing?.headers.get("content-encoding")).toBeNull()
+    expect(await missing?.text()).toBe("uncompressed")
+
+    const head = await get("/assets/app.js", "br", "HEAD")
+    expect(head?.headers.get("content-encoding")).toBe("br")
+    expect(head?.headers.get("content-length")).toBe("6")
+    expect(await head?.text()).toBe("")
+  })
+
   it("leaves normalized APIs to Hono and rejects traversal", async () => {
     const root = await mkdtemp(join(tmpdir(), "aos-static-"))
     directories.push(root)
