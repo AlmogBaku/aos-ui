@@ -109,6 +109,12 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
    * its first prompt stores one (`tui_gateway/methods_session.py:394`).
    */
   let saved = stored
+  /**
+   * `display.tool_progress` is not "off": Hermes streams an ordinary tool
+   * call only then (`tui_gateway/tool_progress.py:253` and `:319`), and its
+   * thoughts either way (`tui_gateway/agent_callbacks.py:139`).
+   */
+  let toolProgress = true
   let running = false
   let streaming = false
   let calls = 0
@@ -436,7 +442,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       emit(turn.delta(text))
       // The model's text beside its tool call is sealed as interim commentary.
       emit(turn.interim(text, true))
-      emit(turn.toolStart("call-read", "read_file", args))
+      if (toolProgress) emit(turn.toolStart("call-read", "read_file", args))
       store({
         role: "assistant",
         content: text,
@@ -450,7 +456,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           },
         ],
       })
-      emit(turn.toolComplete("call-read", "read_file", result))
+      if (toolProgress)
+        emit(turn.toolComplete("call-read", "read_file", result))
       store({
         role: "tool",
         tool_call_id: "call-read",
@@ -498,6 +505,16 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         tool_name: "patch",
         content: JSON.stringify(result),
       })
+    },
+
+    /**
+     * `config.set` of `verbose` to "off", which sets the Session's tool
+     * progress (`tui_gateway/methods_config_set.py:214`). Hermes' "show
+     * reasoning" is no such setting: it only records a display choice
+     * (`:308`) that nothing streaming reads.
+     */
+    async quiet() {
+      toolProgress = false
     },
 
     /** The wire contract's second model response: the final text. */

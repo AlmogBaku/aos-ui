@@ -70,6 +70,8 @@ export type WireContractRow =
   | "costInUsageUpdate"
   | "unsavedSessionUndated"
   | "thoughtLevelDefault"
+  | "everyThoughtAndCallLive"
+  | "quietStreamPassedThrough"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -90,6 +92,12 @@ export type WireTurn = Readonly<{
    * holding "alpha" and completes, stored. Absent when its row is a gap.
    */
   createFile?(): Promise<void>
+  /**
+   * The runtime's own setting for a quieter live stream: from here on it
+   * streams no `read_file` call of the first response, yet still stores it.
+   * Absent when its row is a gap.
+   */
+  quiet?(): Promise<void>
   /** Absent only when every row that asks a question is a gap. */
   questions?: WireQuestions
 }>
@@ -1258,6 +1266,66 @@ export function runWireContract(
             )
             expect(values).toContain(option.currentValue)
           }
+        }
+      )
+
+      row(
+        "everyThoughtAndCallLive",
+        "streams every thought and tool call of a response while its turn runs",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          const called = plain.next(
+            (update): update is SessionUpdate =>
+              SessionUpdate.isToolCallUpdate(update) &&
+              update.status === "completed"
+          )
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          await until(clock, called)
+
+          const live = agentSide(plain.updates)
+          expect(
+            live.messages.map(({ kind, text }) => ({ kind, text }))
+          ).toEqual(PLAYED_TURN.slice(0, 2))
+          expect(Object.values(live.calls)).toEqual(["completed"])
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+        }
+      )
+
+      row(
+        "quietStreamPassedThrough",
+        "streams only what the runtime streams, filling in nothing it stored",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const quiet =
+            turn.quiet ??
+            (() =>
+              Promise.reject(
+                new Error("this fake has no quieter stream; name the row a gap")
+              ))
+          const { plain, sessionId } = await operatorSession(harness)
+          await until(clock, quiet())
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          const live = agentSide(plain.updates)
+          expect(
+            live.messages.map(({ kind, text }) => ({ kind, text }))
+          ).toEqual(PLAYED_TURN)
+          expect(live.calls).toEqual({})
+          // The runtime stored the call it did not stream, so a reload has it.
+          expect(Object.values(agentSide(reader.updates).calls)).toEqual([
+            "completed",
+          ])
         }
       )
     })

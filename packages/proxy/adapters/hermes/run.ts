@@ -818,9 +818,10 @@ export class HermesTurnEngine {
         )
           this.#appendText(active, delta)
         // Interim commentary ends the response's prose: its tool calls follow
-        // in the same message, and only message.complete settles.
+        // in the same message, text after it is the next response even when
+        // no call of this one streamed, and only message.complete settles.
         this.#closeGeneration(active, { media: true })
-        Object.assign(active, generationState())
+        Object.assign(active, generationState(), { toolsDone: true })
         return
       }
       // Hermes uses thinking.delta for transient spinner/status copy. It is not

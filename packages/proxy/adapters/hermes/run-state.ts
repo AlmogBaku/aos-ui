@@ -74,7 +74,10 @@ export type ActiveTurn = {
   messageBase?: string
   /** How many model responses this run opened. */
   responses: number
-  /** A call of the current response finished, so new text is a new response. */
+  /**
+   * The current response ended, by a finished call or its interim prose, so
+   * new text is a new response.
+   */
   toolsDone: boolean
   /** How many times the run sealed its streaming message. */
   generation: number
