@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { VoiceMediaController, waitForCommittedTranscript } from "./voice-media"
+import { FakeAudio } from "./voice.test-helpers"
 
 describe("voice ownership", () => {
   it("queues only an exact current reply and consumes it once", () => {
@@ -184,23 +185,7 @@ describe("voice ownership", () => {
   })
 
   it("pauses read-aloud when the page becomes hidden", async () => {
-    const audio = new (class extends EventTarget {
-      src = ""
-      currentTime = 0
-      duration = 30
-      playbackRate = 1
-      paused = true
-      play = vi.fn(async () => {
-        this.paused = false
-        this.dispatchEvent(new Event("play"))
-      })
-      pause = vi.fn(() => {
-        this.paused = true
-        this.dispatchEvent(new Event("pause"))
-      })
-      load = vi.fn()
-      removeAttribute = vi.fn()
-    })()
+    const audio = new FakeAudio()
     const media = new VoiceMediaController({
       createAudio: () => audio as unknown as HTMLAudioElement,
     })
