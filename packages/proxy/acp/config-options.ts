@@ -52,7 +52,8 @@ export const configOptionsOf = ((models) => {
       category: "thought_level",
       // ACP requires a current value that is one of the choices; the
       // provider's own default reports no effort, so it is a choice of its own
-      // rather than a claim to one of the ladder's ids.
+      // rather than a claim to one of the ladder's ids. It is offered only
+      // while it holds, so choosing it asks the provider for no change.
       currentValue: models.effortId ?? DEFAULT_EFFORT,
       options: [
         ...(models.effortId === undefined

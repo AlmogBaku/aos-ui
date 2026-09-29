@@ -260,6 +260,14 @@ function projectEffortId(value: unknown) {
 }
 
 /**
+ * The effort a Session's `session.info` names. Hermes reports "" while none is
+ * set, which is the provider's own default (`tui_gateway/server.py:2138`).
+ */
+function effortOf(info: unknown) {
+  return isRecord(info) ? projectEffortId(info.reasoning_effort) : undefined
+}
+
+/**
  * Reads back the `[provider, model]` pair this module mints as a model id. A
  * write that splits the id itself never pays for Hermes' catalog handler, and
  * the pair is held to the same shape the catalog projection accepts.
@@ -509,9 +517,7 @@ export function createHermesWorkspaceOperations(input: {
     // catalog would show a pick stashed mid-turn settling back to the model the
     // Session is leaving, and would keep doing so until that turn ended.
     const projected = projectModels(value, projectSessionModel(info))
-    const effortId = isRecord(info)
-      ? projectEffortId(info.reasoning_effort)
-      : undefined
+    const effortId = effortOf(info)
     return {
       selectedId: projected.selectedId,
       ...(effortId ? { effortId } : {}),
@@ -569,7 +575,15 @@ export function createHermesWorkspaceOperations(input: {
         patch.effortId === undefined
           ? undefined
           : projectEffortId(patch.effortId)
-      if (patch.effortId !== undefined && !effortId)
+      // Hermes cannot write its default back ("" is no effort it parses,
+      // `tui_gateway/methods_config_set.py:300`), so choosing it is taken only
+      // where it already holds, and changes nothing.
+      const keepsDefault =
+        patch.effortId === "" &&
+        !effortOf(
+          await input.transport.sessionInfo?.(session).catch(() => undefined)
+        )
+      if (patch.effortId !== undefined && !effortId && !keepsDefault)
         throw new HermesWorkspaceUnavailableError()
 
       let applied: { provider: string; model: string } | undefined

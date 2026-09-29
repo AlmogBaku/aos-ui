@@ -188,6 +188,34 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     return id
   }
 
+  /** One `patch` call of its own response, streamed and stored. */
+  function patchCall(
+    id: string,
+    args: Record<string, unknown>,
+    result: Record<string, unknown>
+  ) {
+    emit(turn.toolStart(id, "patch", args))
+    store({
+      role: "assistant",
+      content: "",
+      finish_reason: "tool_calls",
+      tool_calls: [
+        {
+          id,
+          type: "function",
+          function: { name: "patch", arguments: JSON.stringify(args) },
+        },
+      ],
+    })
+    emit(turn.toolComplete(id, "patch", result))
+    store({
+      role: "tool",
+      tool_call_id: id,
+      tool_name: "patch",
+      content: JSON.stringify(result),
+    })
+  }
+
   function startStreaming() {
     if (streaming) return
     streaming = true
@@ -467,44 +495,45 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     },
 
     /**
-     * A `patch` call adding `/tmp/notes.txt`, with the result the release's
-     * `patch_tool` returns for it (`tools/file_tools.py:1002`,
-     * `tools/patch_parser.py:333`), which `tool.complete` carries parsed.
+     * A `patch` call adding `/tmp/notes.txt`, then one replacing "alpha" in
+     * `/tmp/names.txt`, each with the result the release's `patch_tool`
+     * returns for it (`tools/file_tools.py:1002`; the add's diff from
+     * `tools/patch_parser.py:333`, the edit's from
+     * `tools/file_operations.py:446`), which `tool.complete` carries parsed.
      */
-    async createFile() {
-      const path = "/tmp/notes.txt"
-      const args = {
-        mode: "patch",
-        patch: `*** Begin Patch\n*** Add File: ${path}\n+alpha\n*** End Patch`,
-      }
-      const result = {
-        success: true,
-        diff: `--- /dev/null\n+++ b/${path}\n+alpha`,
-        files_created: [path],
-        files_modified: [path],
-        resolved_path: path,
-      }
+    async editFile() {
       startStreaming()
-      emit(turn.toolStart("call-write", "patch", args))
-      store({
-        role: "assistant",
-        content: "",
-        finish_reason: "tool_calls",
-        tool_calls: [
-          {
-            id: "call-write",
-            type: "function",
-            function: { name: "patch", arguments: JSON.stringify(args) },
-          },
-        ],
-      })
-      emit(turn.toolComplete("call-write", "patch", result))
-      store({
-        role: "tool",
-        tool_call_id: "call-write",
-        tool_name: "patch",
-        content: JSON.stringify(result),
-      })
+      const added = "/tmp/notes.txt"
+      patchCall(
+        "call-write",
+        {
+          mode: "patch",
+          patch: `*** Begin Patch\n*** Add File: ${added}\n+alpha\n*** End Patch`,
+        },
+        {
+          success: true,
+          diff: `--- /dev/null\n+++ b/${added}\n+alpha`,
+          files_created: [added],
+          files_modified: [added],
+          resolved_path: added,
+        }
+      )
+      const edited = "/tmp/names.txt"
+      patchCall(
+        "call-edit",
+        {
+          mode: "replace",
+          path: edited,
+          old_string: "alpha",
+          new_string: "beta",
+        },
+        {
+          success: true,
+          diff: `--- a/${edited}\n+++ b/${edited}\n@@ -1 +1 @@\n-alpha\n+beta\n`,
+          files_modified: [edited],
+          resolved_path: edited,
+        }
+      )
     },
 
     /**

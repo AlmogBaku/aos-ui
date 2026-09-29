@@ -89,9 +89,11 @@ export type WireTurn = Readonly<{
   secondResponse(text?: string): Promise<void>
   /**
    * In place of the first response: a call that creates `/tmp/notes.txt`
-   * holding "alpha" and completes, stored. Absent when its row is a gap.
+   * holding "alpha", then one that changes the line "alpha" of the existing
+   * `/tmp/names.txt` to "beta" and reports the edit's patch, each completed
+   * and stored. Absent when its row is a gap.
    */
-  createFile?(): Promise<void>
+  editFile?(): Promise<void>
   /**
    * The runtime's own setting for a quieter live stream: from here on it
    * streams no `read_file` call of the first response, yet still stores it.
@@ -616,19 +618,23 @@ function formChoices(params: unknown) {
   )
 }
 
-/** Each file change a reader holds, and each patch that came with one. */
-function fileChanges(updates: readonly SessionUpdate[]) {
-  const diffs = Object.values(toolCalls(updates)).flatMap(({ content }) =>
+/** Each diff a reader holds, in call order, with its patch where it has one. */
+function fileDiffs(updates: readonly SessionUpdate[]) {
+  return Object.values(toolCalls(updates)).flatMap(({ content }) =>
     content.flatMap((block) =>
       (block as { type?: string }).type === "diff"
         ? [block as { changes: unknown[]; patch?: unknown }]
         : []
     )
   )
-  return {
-    changes: diffs.flatMap(({ changes }) => changes),
-    patches: diffs.flatMap(({ patch }) => (patch == null ? [] : [patch])),
-  }
+}
+
+/** A patch `git apply` takes: its file headers, then a hunk. */
+const GIT_PATCH = {
+  format: "git_patch",
+  text: expect.stringMatching(
+    /^(?:diff --git .+\n)?--- (?:a\/|\/dev\/null).*\n\+\+\+ (?:b\/|\/dev\/null).*\n@@ /u
+  ),
 }
 
 /** A fake with no turn driver fails the row that plays one, never skips it. */
@@ -1139,19 +1145,19 @@ export function runWireContract(
 
       row(
         "diffAddedWithGitPatchOrNone",
-        "reports a created file as added, with a git patch or none, the same after a reload",
+        "reports a created file as added with a git patch or none, and an edit's git patch, the same after a reload",
         async (harness) => {
           const { proxy, agentId, clock, turn, connect } = harness
-          const createFile =
-            turn.createFile ??
+          const editFile =
+            turn.editFile ??
             (() =>
               Promise.reject(
-                new Error("this fake creates no file; name the row a gap")
+                new Error("this fake edits no file; name the row a gap")
               ))
           const { plain, sessionId } = await operatorSession(harness)
           const idle = plain.nextIdle()
           await until(clock, prompt(plain, sessionId, "write the notes"))
-          await until(clock, createFile())
+          await until(clock, editFile())
           await until(clock, turn.secondResponse())
           await until(clock, idle)
           const reader = connect(
@@ -1163,15 +1169,16 @@ export function runWireContract(
           await until(clock, resumeFromStart(reader, sessionId, agentId))
 
           for (const client of [plain, reader]) {
-            const { changes, patches } = fileChanges(client.updates)
-            expect(changes).toEqual([
+            const [added, edited, ...rest] = fileDiffs(client.updates)
+            expect(rest).toEqual([])
+            expect(added?.changes).toEqual([
               { operation: "add", path: "/tmp/notes.txt" },
             ])
-            for (const patch of patches)
-              expect(patch).toMatchObject({
-                format: "git_patch",
-                text: expect.stringMatching(/^diff --git /u),
-              })
+            if (added?.patch != null) expect(added.patch).toEqual(GIT_PATCH)
+            expect(edited).toMatchObject({
+              changes: [{ operation: "modify", path: "/tmp/names.txt" }],
+              patch: GIT_PATCH,
+            })
           }
         }
       )
@@ -1239,7 +1246,7 @@ export function runWireContract(
 
       row(
         "thoughtLevelDefault",
-        "offers a thought level whose current value is one of its choices",
+        "offers a thought level whose current value is one of its choices, and takes that choice",
         async ({ proxy, agentId, clock, connect }) => {
           const plain = connect(
             proxy.acpService,
@@ -1248,10 +1255,29 @@ export function runWireContract(
           )
           await until(clock, plain.initialize())
           const configured = plain.next(SessionUpdate.isConfigOptionUpdate)
-          await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain, agentId))
           const { configOptions } = await until(clock, configured)
-
           const selects = configOptions.filter(SessionConfigOption.isSelect)
+          const thought = selects.find(
+            ({ category }) => category === "thought_level"
+          )
+          if (thought) {
+            const { configId, currentValue: value } = thought
+            await expect(
+              until(
+                clock,
+                plain.connection.agent.request(
+                  methods.agent.session.setConfigOption,
+                  { sessionId, configId, type: "id", value }
+                )
+              )
+            ).resolves.toMatchObject({
+              configOptions: expect.arrayContaining([
+                expect.objectContaining({ configId, currentValue: value }),
+              ]),
+            })
+          }
+
           expect(selects.map(({ category }) => category)).toContain(
             "thought_level"
           )

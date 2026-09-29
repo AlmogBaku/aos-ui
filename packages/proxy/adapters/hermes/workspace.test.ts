@@ -606,6 +606,32 @@ describe("Hermes workspace operations", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
+  it("keeps Hermes' default effort chosen again, and refuses it once an effort is set", async () => {
+    const unset = harness({
+      sessionInfo: { provider: "native", model: "small", reasoning_effort: "" },
+    })
+    const set = harness({
+      sessionInfo: {
+        provider: "native",
+        model: "small",
+        reasoning_effort: "high",
+      },
+    })
+
+    await expect(
+      unset.operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "",
+      })
+    ).resolves.toEqual({ selectedId: '["native","small"]' })
+    await expect(
+      set.operations.updateModel("research", "hermes:research:stored-1", {
+        effortId: "",
+      })
+    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+    expect(unset.request).not.toHaveBeenCalled()
+    expect(set.request).not.toHaveBeenCalled()
+  })
+
   it("rejects a Hermes reasoning confirmation for a different effort", async () => {
     const { operations } = harness({
       request(method) {
