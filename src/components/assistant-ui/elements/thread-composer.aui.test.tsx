@@ -1242,7 +1242,7 @@ describe("Thread accessibility", () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it("enters history from a nonempty draft and restores its exact text selection", async () => {
+  it("moves the caret to the draft's start before Up enters history, and Down restores the draft", async () => {
     const user = userEvent.setup()
     render(
       <LocalThread
@@ -1261,12 +1261,18 @@ describe("Thread accessibility", () => {
     await user.type(input, "present draft")
     input.setSelectionRange(3, 3)
     fireEvent.keyDown(input, { key: "ArrowUp" })
+    expect(input).toHaveValue("present draft")
+    expect(input.selectionStart).toBe(0)
+
+    fireEvent.keyDown(input, { key: "ArrowUp" })
     await waitFor(() => expect(input).toHaveValue("Previous request"))
 
+    // A recalled entry steps straight on, wherever its caret sits.
+    input.setSelectionRange(4, 4)
     fireEvent.keyDown(input, { key: "ArrowDown" })
     await waitFor(() => expect(input).toHaveValue("present draft"))
-    expect(input.selectionStart).toBe(3)
-    expect(input.selectionEnd).toBe(3)
+    expect(input.selectionStart).toBe(0)
+    expect(input.selectionEnd).toBe(0)
   })
 
   it("queues busy Ctrl+Enter exactly once in the queue lane", async () => {
