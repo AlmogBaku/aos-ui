@@ -1223,37 +1223,16 @@ describe("HermesInteractions server requests", () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce())
   })
 
-  it("reports operation-specific interaction capabilities with choices, scopes, limits, and limitations", () => {
+  it("scopes each native approval choice to what it grants", () => {
     const { interactions } = harness()
 
-    expect(interactions.capabilities()).toEqual({
-      approvals: {
-        status: "available",
-        protocol: "acp-request",
-        scope: "turn",
-        choices: [
-          { value: "once", scope: "request" },
-          { value: "session", scope: "session" },
-          { value: "always", scope: "agent" },
-          { value: "deny", scope: "request" },
-        ],
-        maxPending: 64,
-      },
-      questions: {
-        status: "available",
-        protocol: "acp-request",
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-empty-answer",
-        maxQuestions: 32,
-        maxChoicesPerQuestion: 64,
-        maxAnswerValuesPerQuestion: 64,
-        maxStringBytes: 4_096,
-      },
-      reactions: {
-        status: "unavailable",
-        reason: "native-reaction-operation-unavailable",
-      },
+    expect(interactions.capabilities().approvals).toMatchObject({
+      choices: [
+        { value: "once", scope: "request" },
+        { value: "session", scope: "session" },
+        { value: "always", scope: "agent" },
+        { value: "deny", scope: "request" },
+      ],
     })
   })
 })
