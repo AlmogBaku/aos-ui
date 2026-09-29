@@ -84,7 +84,7 @@ Hermes cookies or credentials.
   container; it is never a browser-facing URL.
 - Check that the server version exposes the native interfaces described in the [Hermes guide](runtimes/hermes.md).
 
-AOS reconnects to the native Session without submitting a prompt. Recovery and auto-continue policy remain Hermes settings.
+AOS reconnects to the native Session without submitting a prompt, keeping the conversation on screen under a "Reconnecting to AOS…" notice until the Session rejoins. Recovery and auto-continue policy remain Hermes settings.
 
 ## The proxy container cannot reach Hermes
 
@@ -104,8 +104,8 @@ same-origin `/api/aos/v1` path.
   gateway. A native Gateway bound only to host loopback may not be reachable;
   use a trusted container-reachable address instead.
 - Pairing or policy-negotiation errors are Gateway/proxy configuration errors.
-  A missing rename/archive/delete, Todo, Activity, edit/regenerate, steering,
-  voice, or read-state control is an explicit capability limit.
+  A missing Todo, Activity, edit/regenerate, steering, voice, or read-state
+  control is an explicit capability limit.
 - Confirm Session records include matching `sessionId` and `agentId` values.
 - Confirm a newly created Session reports the Agent that was requested.
 - Ensure history responses contain valid message data and resumable state when advertised.
@@ -120,13 +120,12 @@ same-origin `/api/aos/v1` path.
 - From a proxy container, use the Compose service address (`opencode:4096`),
   not a browser-facing URL. For an independently operated server, ensure its
   address is reachable from the proxy process.
-- A missing Todo, Activity, context meter, title/delete, voice,
-  edit/regenerate, or steering control is an explicit OpenCode capability
-  limit, not a connection failure.
+- A missing Activity, context meter, voice, edit/regenerate, or steering
+  control is an explicit OpenCode capability limit, not a connection failure.
 
 ## A capability is missing
 
-Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenClaw and OpenCode catalogs are read-only; rename, archive, delete, read state, Todos, and Activity are Hermes-only.
+Check the [runtime capability matrix](runtime-capabilities.md). AOS shows only capabilities supported by the active adapter and provider. Fixture mode intentionally omits Agent creation; OpenClaw and OpenCode catalogs are read-only; read state and Activity are Hermes-only, and Todos are available on Hermes and OpenCode. Session rename, pin, archive, and delete work on every runtime; a Session menu item the runtime does not declare stays visible, disabled, as "Unavailable for this runtime".
 
 ## Browser notifications do not appear
 

@@ -173,7 +173,7 @@ uses it as the required `cwd` for `session/new` and `session/resume`.
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.
-- Session creation and Artifacts are available. Rename, archive, delete, Todos, Activity, edit/regenerate, steering, visibility changes, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Avatar writes are available for Agents with an authored config entry. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- Session creation, rename, pin, archive, delete, and Artifacts are available. Todos, Activity, edit/regenerate, steering, visibility changes, and read state are unavailable because the pinned Gateway leaves do not prove matching native operations. Avatar writes are available for Agents with an authored config entry. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - An invitation can resolve only a pre-existing reserved OpenClaw Session. The adapter does not create a Session for a new guest invitation because the pinned Gateway leaves do not prove equivalent native creation semantics.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private proxy configuration problems, never as browser credentials.
 - The proxy requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, and `operator.admin`. Admin scope is what lets it enable the `aos-ui` MCP server per Session; pair the proxy device with it.

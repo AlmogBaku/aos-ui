@@ -6,6 +6,10 @@ AOS is organized around provider-owned Agents and Sessions. The selected runtime
 
 Select an Agent from the roster, then open one of its Sessions. Desktop layouts show Sessions as tabs. Narrow layouts place Agent and Session navigation in a focus-managed drawer.
 
+A pinned Session is always open: it leads Open sessions and the tab strip however old it is, and never appears in History. Closing a pinned tab removes only the tab; its Open sessions row stays, and the tab returns the next time the Session is active. The pin is stored by the runtime, not the browser.
+
+A Session that came from another platform (Buzz, WhatsApp, Slack, Telegram, Discord, or email) shows that platform's icon on its tab and History row, where the runtime reports it (Hermes and OpenClaw).
+
 Routes use `/{agentId}/{sessionId}`. The `/en/` and `/he/` path prefixes are accepted and stripped, so bookmarked or shared locale-prefixed URLs resolve to the same route. Opening a compact route preserves the locally selected English or Hebrew preference. If an Agent or Session no longer exists, AOS refuses to navigate to stale provider data.
 
 Creating a Session always creates it for the selected Agent. Provider events remain attached to their originating Agent and Session even if you navigate elsewhere while work is running.
@@ -21,18 +25,36 @@ With a desktop keyboard, `Enter` submits and `Shift+Enter` inserts a newline.
 On a touch-primary phone or tablet, Return inserts a newline; use the visible
 Send button to submit. `Command/Ctrl+Enter` also submits on every platform.
 When the Session is idle, submission sends immediately and no queue is shown.
-While a run is active, submission adds a FIFO follow-up and
+While a run is active, submission adds a follow-up to the queue and
 `Command/Ctrl+Shift+Enter` steers the active turn when the runtime exposes
-text-only steering. Attachments always queue. A queued row can be steered
-individually without changing the order of the remaining rows. Waiting for a
-question or approval is not an active model turn, so new messages queue and the
-Steer action is unavailable.
+text-only steering. Attachments always queue. Waiting for a question or
+approval is not an active model turn, so new messages queue and the Steer
+action is unavailable.
+
+Queued messages appear in a tray docked above the composer. When the turn
+ends, the whole queue is sent as one message, its texts joined in queue order.
+Reorder rows by dragging them, or with `Alt+Up` and `Alt+Down` on a focused
+row. A queued row can be steered or removed individually without changing the
+order of the remaining rows.
 
 Queued messages stay with their Session. Stop parks queued follow-ups until the
 next explicit send. Editing the queue (Esc, Up from an empty composer, or
 double-click or Enter on a queued message) takes all of it into the composer as
 one draft; a draft you had written returns once that edit is sent or cleared. Switching away detaches or parks browser work according to
 the runtime adapter; it never transfers a queue to another Agent.
+
+## Follow runtime notices and reconnects
+
+Hermes reports goal, loop, heartbeat, and background-process status while it
+works; AOS shows each as a short notice line in the conversation, labelled by
+kind. Notices are live only: they are not stored in history, so they do not
+reappear after a reload.
+
+If the connection to the proxy drops, the conversation stays on screen and a
+"Reconnecting to AOS…" notice appears once the outage has lasted a few
+seconds. It clears when every resumed Session has rejoined; "The AOS server is
+full. Reconnecting shortly." means the proxy refused the connection for
+capacity.
 
 ## Read Plans, Todos, and Subagents
 
@@ -52,9 +74,11 @@ When an Agent calls a tool whose MCP server declares an App view, such as the AO
 
 An App may ask to fill the viewport; close it with the **Exit full screen** control, or with Esc while focus is outside the App. An App may send a text message into the same conversation on your behalf and may open `https` links in a new tab. It cannot navigate the workspace, open pop-ups, or submit forms. Which servers provide Apps is set in the runtime's own MCP configuration; see [MCP Apps](mcp-apps.md).
 
-## Rename, archive, or delete a Session
+## Rename, pin, archive, or delete a Session
 
-Open the "…" menu on a Session row or at the top of the conversation to rename, archive, or delete the Session. These actions are available only when the selected runtime supports them; they are Hermes-only in V1. Closing the tab after a delete offers a brief undo.
+Open the "…" menu on a Session row or at the top of the conversation, or right-click or long-press a Session tab or History row, to rename, pin, archive, or delete the Session. Hermes, OpenClaw, and OpenCode all perform these actions; an action the runtime does not declare stays in the menu, disabled, as "Unavailable for this runtime". Delete asks for confirmation and cannot be undone. Closing a tab offers a brief **Undo**.
+
+Right-click or long-press a message for its own menu: **Copy** on every message; **Export as Markdown** and, when voice is configured, read-aloud on an assistant message; and, where the runtime supports editing, **Retry response** on an assistant message or **Edit message** on your own. On a touch device, **Select text** lets the next press select text in that message instead of opening the menu.
 
 ## Select a model and view context usage
 
@@ -84,6 +108,8 @@ Use the **New Agent** control to open a Session with the creator Agent when exac
 
 Open **Manage Agents** to inspect the provider catalog. A visible, selectable Agent appears in the workspace roster. A hidden Agent remains provider-owned but is not selectable in normal navigation.
 
+Each Agent shows a generated robot icon. The workspace saves the icon it shows to the runtime, so every browser draws the same one: Hermes stores it in the profile, OpenClaw in an Agent's own config entry, and OpenCode only reads an icon written by hand in the Agent file. Hiding an Agent frees its icon. A running Agent's icon blinks; an Agent waiting for you looks around and hops, and under reduced motion it holds still, looking aside.
+
 Visibility edits are available only when the runtime exposes a native mutation and marks the entry editable. AOS confirms the provider result before updating the roster. Hermes can update native profile visibility; OpenClaw and OpenCode currently report their catalogs as read-only. Fixture changes are temporary.
 
 The dedicated creator identity and provider/system definitions never appear in normal management. Agent creation is available only when exactly one native Agent is marked as the creator. The public fixture intentionally omits it. See the [runtime matrix](runtime-capabilities.md) for current support.
@@ -94,8 +120,10 @@ Activity is the browser inbox for run completion, failures, questions, permissio
 
 Each Session navigation row shows at most one status dot at a time. A state that needs your attention (waiting for input, error) outranks unread, which outranks an in-progress run with nothing pending:
 
-- **Blue (waiting):** the Session is waiting for your input. Clears when you respond or the run finishes.
+- **Orange (waiting):** the Session is waiting for your input. Clears when you respond or the run finishes.
+- **Red (failed):** the run failed.
 - **Green (unread):** the Session has content you have not yet seen. Clears when you view the Session in a focused window. Browsing the Activity drawer does not mark anything read.
+- **Blue (running):** a run is in progress and nothing else is pending. The dot breathes, and holds steady under reduced motion.
 
 The selected visible and focused Session is already considered read, so its completion does not generate a separate alert. Events from other Sessions add unread markers and an in-app notice.
 

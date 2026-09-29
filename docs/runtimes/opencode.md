@@ -202,9 +202,9 @@ OpenCode ships it, enabling the proxy to store icons without frontmatter.
 
 ## Capability limits
 
-- AOS reads the native Agent catalog and creates Sessions, but Agent visibility, Agent icon writes, Session titles, deletion, Todos, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
+- AOS reads the native Agent catalog, creates, renames, pins, archives, and deletes Sessions, and projects Session Todos, but Agent visibility, Agent icon writes, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
-- An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API exposes neither title-bearing creation nor title mutation; a new invitation therefore cannot create a Session on first Send.
+- An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API has no title-bearing creation and a separate rename is not atomic; a new invitation therefore cannot create a Session on first Send.
 - AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
 
 ## Verify

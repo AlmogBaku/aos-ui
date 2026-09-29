@@ -43,7 +43,8 @@ evaluation and tests; invalid real-runtime configuration renders an unavailable
 screen rather than falling back to fixtures.
 
 Assistant UI owns queued messages. While a run is busy, an ordinary Send adds
-one FIFO follow-up; a supported text-only steering action delivers an
+a follow-up to the queue, and the whole queue goes out as one message when the
+turn ends; a supported text-only steering action delivers an
 `_aos/session/steer` request over the same ACP socket. It does not create
 another run. The proxy correlates the acknowledgement into the existing event
 stream, and provider history remains authoritative after settlement or reconnect.

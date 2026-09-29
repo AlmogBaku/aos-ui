@@ -321,7 +321,7 @@ visibility uses.
 - Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the proxy reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
 - The listed folder is the Agent's. A resumed Session runs in the folder Hermes stored on its own row, which can differ.
 - When Hermes compacts a conversation, the carried-forward messages receive new row ids. History reads after a compaction return the new ids; live ids before it remain in the browser until the page reloads.
-- Session rename, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
+- Session rename, pin, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
 - Voice controls appear for native STT/TTS interfaces and when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
   This is upstream Hermes behavior; Hermes accepts the token query parameter
