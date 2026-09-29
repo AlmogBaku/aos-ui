@@ -1,6 +1,7 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
+import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { AOS_METHODS } from "../../protocol/acp"
+import { ACP_PROTOCOL_VERSION, AOS_METHODS } from "../../protocol/acp"
 import { authenticationRequired } from "./validation"
 
 /** The WebSocket shape a prepared ACP upgrade drives. */
@@ -167,7 +168,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         refuse(data)
         return
       }
-      dispatch("message", { type: "message", data })
+      dispatch("message", { type: "message", data: askingVersion2(data) })
     },
     close() {
       if (closed) return
@@ -193,6 +194,43 @@ function requestIdOf(data: string): string | number | undefined {
     (typeof id === "string" || typeof id === "number")
     ? id
     : undefined
+}
+
+/**
+ * A frame whose `initialize`, alone or in a batch, asks for a version, with
+ * that version set to 2, so the SDK answers the one version it serves rather
+ * than refusing the handshake. Every other frame is passed on untouched.
+ */
+function askingVersion2(data: string) {
+  let frame: unknown
+  try {
+    frame = JSON.parse(data)
+  } catch {
+    return data
+  }
+  const entries: unknown[] = Array.isArray(frame) ? frame : [frame]
+  let asked = false
+  for (const entry of entries) {
+    if (typeof entry !== "object" || entry === null) continue
+    const { method, params } = entry as { method?: unknown; params?: unknown }
+    if (
+      method !== methods.agent.initialize ||
+      typeof params !== "object" ||
+      params === null ||
+      Array.isArray(params)
+    )
+      continue
+    const { protocolVersion } = params as { protocolVersion?: unknown }
+    if (
+      !Number.isInteger(protocolVersion) ||
+      protocolVersion === ACP_PROTOCOL_VERSION
+    )
+      continue
+    ;(params as { protocolVersion: number }).protocolVersion =
+      ACP_PROTOCOL_VERSION
+    asked = true
+  }
+  return asked ? JSON.stringify(frame) : data
 }
 
 function frameSize(raw: string | Uint8Array) {

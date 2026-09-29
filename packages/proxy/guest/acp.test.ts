@@ -770,7 +770,7 @@ describe("guest ACP listener", () => {
 
     expect(initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      capabilities: { session: { prompt: { image: {} } } },
+      capabilities: { session: {} },
       authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
       _meta: {
         [AOS_META_KEY]: {

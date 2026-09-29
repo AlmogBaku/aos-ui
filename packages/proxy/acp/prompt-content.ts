@@ -6,21 +6,32 @@ import {
 } from "../../protocol/acp"
 import type { PromptPart } from "../core/member"
 
-/** Text, or a link to a batch the browser staged over REST. */
+/**
+ * Text or a resource link, the content every ACP agent takes. A link to a
+ * batch the browser staged over REST is appended by its stage; any other
+ * link reaches the runtime in the prompt's text.
+ */
 export function isPromptBlock(block: ContentBlock) {
-  return (
-    ContentBlock.isText(block) ||
-    (block.type === "resource_link" &&
-      typeof block.uri === "string" &&
-      block.uri.startsWith(AOS_ATTACHMENT_URI_SCHEME))
-  )
+  return ContentBlock.isText(block) || ContentBlock.isResourceLink(block)
 }
 
-/** ACP text blocks joined the way the normalized wire carries a turn. */
+function isStagedLink(uri: string) {
+  return uri.startsWith(AOS_ATTACHMENT_URI_SCHEME)
+}
+
+/**
+ * ACP text blocks joined the way the normalized wire carries a turn, each
+ * link the stage does not supply written as a Markdown link.
+ */
 export function promptText(prompt: readonly ContentBlock[]) {
   return prompt
-    .filter(ContentBlock.isText)
-    .map(({ text }) => text)
+    .flatMap((block) =>
+      ContentBlock.isText(block)
+        ? [block.text]
+        : ContentBlock.isResourceLink(block) && !isStagedLink(block.uri)
+          ? [`[${block.name}](${block.uri})`]
+          : []
+    )
     .join("\n")
 }
 
@@ -72,7 +83,7 @@ export function promptBlocks(prompt: readonly PromptPart[]): ContentBlock[] {
  * A prompt as its viewers are shown it: each staged attachment the provider
  * already names an artifact for links to that artifact instead of the upload,
  * so the echo shows what the turn shows once it is history. `artifactIds`
- * follows the attachment parts' order.
+ * follows the staged attachment parts' order.
  */
 export function echoedParts(
   prompt: readonly PromptPart[],
@@ -80,7 +91,7 @@ export function echoedParts(
 ): PromptPart[] {
   let index = 0
   return prompt.map((part) => {
-    if (part.kind !== "attachment") return part
+    if (part.kind !== "attachment" || !isStagedLink(part.uri)) return part
     const artifactId = artifactIds[index++]
     return artifactId === undefined
       ? part

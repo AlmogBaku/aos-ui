@@ -395,10 +395,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
-        session: {
-          prompt: { image: {}, embeddedContext: {} },
-          ...(authentication ? {} : { delete: {} }),
-        },
+        // Text and resource links are every agent's baseline; no runtime port
+        // takes an image or embedded context, so neither is advertised.
+        session: authentication ? {} : { delete: {} },
       },
       authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {

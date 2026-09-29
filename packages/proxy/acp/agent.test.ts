@@ -180,7 +180,7 @@ describe("AOS ACP agent", () => {
         title: "Test Runtime",
         version: `${AOS_EXTENSION_VERSION}`,
       },
-      capabilities: { session: { delete: {}, prompt: { image: {} } } },
+      capabilities: { session: { delete: {} } },
       authMethods: [],
       _meta: {
         [AOS_META_KEY]: {

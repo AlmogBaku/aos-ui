@@ -53,6 +53,7 @@ import { CredentialValues } from "../redaction"
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
   | "promptAnswerCarriesMessageId"
+  | "onlyAdvertisedContentIn"
   | "promptAnsweredAtStorage"
   | "sameIdsLiveAndAfterReload"
   | "historyAndLiveJoinedById"
@@ -741,6 +742,62 @@ export function runWireContract(
       )
 
       row(
+        "onlyAdvertisedContentIn",
+        "takes a resource link in a prompt, and an image or embedded context exactly where it advertises one",
+        async ({ proxy, agentId, clock, connect }) => {
+          const plain = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          const { capabilities } = await until(clock, plain.initialize())
+          const advertised = capabilities?.session?.prompt ?? {}
+          const blocks = {
+            resourceLink: {
+              type: "resource_link",
+              uri: "file:///tmp/demo.txt",
+              name: "demo.txt",
+            },
+            image: {
+              type: "image",
+              data: "iVBORw0KGgo=",
+              mimeType: "image/png",
+            },
+            embeddedContext: {
+              type: "resource",
+              resource: { uri: "file:///tmp/demo.txt", text: "alpha" },
+            },
+          } satisfies Record<string, ContentBlock>
+          const read: Record<string, unknown> = {}
+          for (const [kind, block] of Object.entries(blocks)) {
+            // Each on its own Session, so one taken leaves the next unbusied.
+            const sessionId = await until(clock, newSession(plain, agentId))
+            read[kind] = await until(
+              clock,
+              plain.connection.agent.request(methods.agent.session.prompt, {
+                sessionId,
+                prompt: [{ type: "text", text: "list the files" }, block],
+              })
+            ).then(
+              ({ messageId }) => typeof messageId === "string",
+              (error: { code?: unknown }) => error.code
+            )
+          }
+
+          // No runtime port takes an image or embedded context in a prompt,
+          // so neither is advertised and each is refused.
+          const invalidParams = RequestError.invalidParams().code
+          expect(read).toEqual({
+            resourceLink: true,
+            image: invalidParams,
+            embeddedContext: invalidParams,
+          })
+          expect(advertised).not.toHaveProperty("image")
+          expect(advertised).not.toHaveProperty("embeddedContext")
+        }
+      )
+
+      row(
         "promptAnsweredAtStorage",
         "answers a prompt once stored, under the id it was stored as, and refuses one while its turn runs",
         async ({ proxy, agentId, clock, connect }) => {
@@ -1358,6 +1415,72 @@ export function runWireContract(
   )
 }
 
+/**
+ * A socket on `service` that writes raw text frames and reads each frame the
+ * server sends as JSON, for a case about framing the SDK's client never sends.
+ */
+async function rawSocket(
+  service: BridgedAcpService,
+  origin: string,
+  path: string
+) {
+  const bridge = acpBridge(service)
+  const socket = new bridge.WebSocket(
+    `wss://${new URL(origin).host}${path}`,
+    undefined,
+    { headers: { Origin: origin } }
+  ) as unknown as EventTarget & { send(data: string): void }
+  const read: unknown[] = []
+  const waiters = new Set<() => void>()
+  let closeCode: number | undefined
+  const wake = () => {
+    for (const settle of [...waiters]) settle()
+  }
+  socket.addEventListener("message", (event) => {
+    read.push(JSON.parse((event as MessageEvent<string>).data))
+    wake()
+  })
+  socket.addEventListener("close", (event) => {
+    closeCode = (event as CloseEvent).code
+    wake()
+  })
+  await new Promise((resolve) =>
+    socket.addEventListener("open", resolve, { once: true })
+  )
+  let taken = 0
+  return {
+    send: (frame: string) => socket.send(frame),
+    /** Settles with the next frame read, or the close code if none comes. */
+    next: () =>
+      new Promise<unknown>((resolve) => {
+        const settle = () => {
+          if (taken < read.length) {
+            waiters.delete(settle)
+            resolve(read[taken++])
+          } else if (closeCode !== undefined) {
+            waiters.delete(settle)
+            resolve({ closed: closeCode })
+          }
+        }
+        waiters.add(settle)
+        settle()
+      }),
+  }
+}
+
+/** A raw `initialize` asking for `protocolVersion`. */
+function rawInitialize(protocolVersion: unknown, id: number | string = 1) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    method: methods.agent.initialize,
+    params: {
+      protocolVersion,
+      info: { name: "wire-contract", version: "1.0.0" },
+    },
+  }
+}
+
 /** The cases no runtime changes, run once over one runtime's fake. */
 export function runWireListenerContract(
   name: string,
@@ -1366,6 +1489,118 @@ export function runWireListenerContract(
   describe(
     `${name} ACP listener wire contract`,
     withTransportsStubbed(() => {
+      it(
+        "answers version 2 to an initialize asking for any version, alone or as a batch's only entry",
+        wireCase(createRuntime, async ({ proxy, clock }) => {
+          const answers: unknown[] = []
+          for (const version of [1, 3])
+            for (const batched of [false, true]) {
+              const raw = await until(
+                clock,
+                rawSocket(
+                  proxy.acpService,
+                  OPERATOR_ORIGIN,
+                  AOS_ACP_OPERATOR_PATH
+                )
+              )
+              const frame = rawInitialize(version)
+              raw.send(JSON.stringify(batched ? [frame] : frame))
+              const answer = await until(clock, raw.next())
+              answers.push(batched ? (answer as unknown[])[0] : answer)
+            }
+
+          expect(answers).toEqual(
+            Array.from({ length: 4 }, () =>
+              expect.objectContaining({
+                id: 1,
+                result: expect.objectContaining({ protocolVersion: 2 }),
+              })
+            )
+          )
+        })
+      )
+
+      it(
+        "answers each malformed frame with the SDK's own error",
+        wireCase(createRuntime, async ({ proxy, clock }) => {
+          const open = () =>
+            until(
+              clock,
+              rawSocket(
+                proxy.acpService,
+                OPERATOR_ORIGIN,
+                AOS_ACP_OPERATOR_PATH
+              )
+            )
+          const answers: unknown[] = []
+          for (const frame of [
+            "{not json",
+            JSON.stringify({ ...rawInitialize(2), params: null }),
+            JSON.stringify({ ...rawInitialize(2), params: [] }),
+            JSON.stringify([{ ...rawInitialize(2), params: null }]),
+          ]) {
+            const raw = await open()
+            raw.send(frame)
+            answers.push(await until(clock, raw.next()))
+          }
+          const raw = await open()
+          raw.send(JSON.stringify(rawInitialize(2)))
+          await until(clock, raw.next())
+          raw.send(
+            JSON.stringify([
+              7,
+              {
+                jsonrpc: "2.0",
+                id: 2,
+                method: methods.agent.session.list,
+                params: {},
+              },
+            ])
+          )
+          answers.push(await until(clock, raw.next()))
+
+          const error = (id: number | null, code: number) =>
+            expect.objectContaining({
+              id,
+              error: expect.objectContaining({ code }),
+            })
+          expect(answers).toEqual([
+            error(null, -32700),
+            error(1, -32602),
+            error(1, -32602),
+            [error(1, -32602)],
+            [
+              error(null, -32600),
+              expect.objectContaining({ id: 2, result: expect.anything() }),
+            ],
+          ])
+        })
+      )
+
+      it(
+        "refuses an initialize batched with other entries",
+        wireCase(createRuntime, async ({ proxy, clock }) => {
+          const raw = await until(
+            clock,
+            rawSocket(proxy.acpService, OPERATOR_ORIGIN, AOS_ACP_OPERATOR_PATH)
+          )
+          raw.send(
+            JSON.stringify([
+              rawInitialize(1),
+              {
+                jsonrpc: "2.0",
+                id: 2,
+                method: methods.agent.session.list,
+                params: {},
+              },
+            ])
+          )
+
+          // The SDK refuses it by closing the socket, answering nothing.
+          expect(await until(clock, raw.next())).toEqual({ closed: 1002 })
+        })
+      )
+
       it(
         "admits a guest on its own listener once it logs in with an invite",
         wireCase(createRuntime, async ({ proxy, agentId, clock, connect }) => {
