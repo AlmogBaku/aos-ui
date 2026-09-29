@@ -7,6 +7,19 @@ import type { AcpConnectionContext } from "./acp/types"
 import { HANDSHAKE_BUDGET } from "./core/limits"
 import { startProxyServer, type ShutdownSettlement } from "./server"
 
+/** A WebSocket handshake for `url`, carrying `headers` besides. */
+function handshake(url: string, headers: Record<string, string> = {}) {
+  return new Request(url, {
+    headers: {
+      upgrade: "websocket",
+      connection: "Upgrade",
+      "sec-websocket-version": "13",
+      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      ...headers,
+    },
+  })
+}
+
 describe("Bun proxy server lifecycle", () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -59,7 +72,7 @@ describe("Bun proxy server lifecycle", () => {
         }
       ) => Promise<Response | undefined>
       let data: unknown
-      await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+      await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
         upgrade(_request, options) {
           data = options.data
           return true
@@ -216,8 +229,8 @@ describe("Bun proxy server lifecycle", () => {
       server: { upgrade: typeof upgrade }
     ) => Promise<Response | undefined>
     const denied = await fetch(
-      new Request("https://aos.example.test/api/aos/v1/acp", {
-        headers: { origin: "https://attacker.example.test" },
+      handshake("https://aos.example.test/api/aos/v1/acp", {
+        origin: "https://attacker.example.test",
       }),
       { upgrade }
     )
@@ -225,8 +238,8 @@ describe("Bun proxy server lifecycle", () => {
     // A path below the mount reaches its service, which may refuse it; a
     // path that only shares its prefix is the app's.
     const refused = await fetch(
-      new Request("https://aos.example.test/api/aos/v1/acp/unknown", {
-        headers: { origin: "https://aos.example.test" },
+      handshake("https://aos.example.test/api/aos/v1/acp/unknown", {
+        origin: "https://aos.example.test",
       }),
       { upgrade }
     )
@@ -236,12 +249,21 @@ describe("Bun proxy server lifecycle", () => {
       { upgrade }
     )
     expect(beside?.status).toBe(204)
+    // A request that is no WebSocket handshake never reaches the service.
+    const plain = await fetch(
+      new Request("https://aos.example.test/api/aos/v1/acp", {
+        headers: { origin: "https://aos.example.test" },
+      }),
+      { upgrade }
+    )
+    expect(plain?.status).toBe(400)
+    expect(acpService.authorizeUpgrade).toHaveBeenCalledTimes(2)
     expect(upgrade).not.toHaveBeenCalled()
     expect(acpService.open).not.toHaveBeenCalled()
 
     const accepted = await fetch(
-      new Request("https://aos.example.test/api/aos/v1/acp", {
-        headers: { origin: "https://aos.example.test" },
+      handshake("https://aos.example.test/api/aos/v1/acp", {
+        origin: "https://aos.example.test",
       }),
       { upgrade }
     )
@@ -333,7 +355,7 @@ describe("Bun proxy server lifecycle", () => {
       },
     }
     const connect = async (path: string) => {
-      await fetch(new Request(`https://aos.example.test${path}`), server)
+      await fetch(handshake(`https://aos.example.test${path}`), server)
       const peer = {
         data: upgrades[upgrades.length - 1]!.data,
         send: vi.fn(),
@@ -400,7 +422,7 @@ describe("Bun proxy server lifecycle", () => {
     }
     const connect = async () => {
       let data: unknown
-      await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+      await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
         upgrade(_request: Request, options: { data: unknown }) {
           data = options.data
           return true
@@ -480,15 +502,12 @@ describe("Bun proxy server lifecycle", () => {
     }
     const connect = async () => {
       let data: unknown
-      await fetch(
-        new Request(`${origin}/api/guest/v1/acp`, { headers: { origin } }),
-        {
-          upgrade(_request: Request, options: { data: unknown }) {
-            data = options.data
-            return true
-          },
-        }
-      )
+      await fetch(handshake(`${origin}/api/guest/v1/acp`, { origin }), {
+        upgrade(_request: Request, options: { data: unknown }) {
+          data = options.data
+          return true
+        },
+      })
       const closed: number[] = []
       let answer!: (raw: string) => void
       const answered = new Promise<string>((resolve) => (answer = resolve))
@@ -572,7 +591,7 @@ describe("Bun proxy server lifecycle", () => {
       request: Request,
       server: { upgrade(request: Request, options: { data: unknown }): boolean }
     ) => Promise<Response | undefined>
-    await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+    await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
       upgrade(_request, options) {
         data = options.data
         return true
@@ -670,7 +689,7 @@ describe("Bun proxy server lifecycle", () => {
       request: Request,
       server: { upgrade(request: Request, options: { data: unknown }): boolean }
     ) => Promise<Response | undefined>
-    await fetch(new Request("https://aos.example.test/api/aos/v1/acp"), {
+    await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
       upgrade(_request, options) {
         data = options.data
         return true

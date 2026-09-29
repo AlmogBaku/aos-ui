@@ -162,6 +162,14 @@ function bunServe(): Serve {
   return bun.serve.bind(bun)
 }
 
+/** A request asking to upgrade to a WebSocket, as RFC 6455 §4.2.1 has it. */
+function isWebSocketHandshake(request: Request) {
+  return (
+    request.headers.get("upgrade")?.toLowerCase() === "websocket" &&
+    request.headers.has("sec-websocket-key")
+  )
+}
+
 function mountState<Upgrade extends SocketUpgrade>(
   mount: ProxySocketMount<Upgrade>
 ): MountState<Upgrade> {
@@ -262,6 +270,10 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
     )
     if (mount) {
       if (request.method !== "GET") return new Response(null, { status: 405 })
+      // RFC 6455 §4.2.1: anything short of a WebSocket handshake is refused
+      // before the service reads it.
+      if (!isWebSocketHandshake(request))
+        return new Response(null, { status: 400 })
       const authorization = await mount.service.authorizeUpgrade(request)
       if (!authorization) return new Response(null, { status: 401 })
       if ("refused" in authorization)

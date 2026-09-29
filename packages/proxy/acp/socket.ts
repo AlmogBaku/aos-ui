@@ -19,11 +19,11 @@ const decoder = new TextDecoder()
 export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
 /**
- * How a listener shows its failures: an error reply as a public reply, and an
- * `_aos/error` notification's code, whatever it is, as a public code.
+ * How a listener shows its failures: an error reply's code, whatever it is, as
+ * a public reply, and an `_aos/error` notification's code as a public code.
  */
 export type PublicErrors = {
-  reply(error: AcpErrorReply): AcpErrorReply
+  reply(code: unknown): AcpErrorReply
   notice(code: unknown): string
 }
 
@@ -240,24 +240,35 @@ function frameSize(raw: string | Uint8Array) {
 }
 
 /**
- * One serialized frame as `shown` makes it public: an error reply, and an
- * error notification rebuilt from its Session and its code, which is its
- * message too. Any other frame is written as it is.
+ * One serialized frame, or each message of a batch, as `shown` makes it
+ * public. Any other frame is written as it is.
  */
 function publicFrame(raw: string, shown: PublicErrors) {
   const frame = JSON.parse(raw) as unknown
-  if (typeof frame !== "object" || frame === null) return raw
-  if (
-    "error" in frame &&
-    typeof frame.error === "object" &&
-    frame.error !== null &&
-    "code" in frame.error &&
-    typeof frame.error.code === "number"
-  )
-    return JSON.stringify({
+  if (Array.isArray(frame))
+    return JSON.stringify(frame.map((message) => publicMessage(message, shown)))
+  const message = publicMessage(frame, shown)
+  return message === frame ? raw : JSON.stringify(message)
+}
+
+/**
+ * One message as `shown` makes it public: an error reply rebuilt from its
+ * code alone, and an error notification from its Session and its code, which
+ * is its message too. Any other message is returned as it is.
+ */
+function publicMessage(frame: unknown, shown: PublicErrors): unknown {
+  if (typeof frame !== "object" || frame === null) return frame
+  if ("error" in frame) {
+    const { error } = frame
+    return {
       ...frame,
-      error: shown.reply(frame.error as AcpErrorReply),
-    })
+      error: shown.reply(
+        typeof error === "object" && error !== null && "code" in error
+          ? error.code
+          : undefined
+      ),
+    }
+  }
   if ("method" in frame && frame.method === AOS_METHODS.notify.error) {
     const params: Record<string, unknown> =
       "params" in frame &&
@@ -266,7 +277,7 @@ function publicFrame(raw: string, shown: PublicErrors) {
         ? { ...frame.params }
         : {}
     const code = shown.notice(params.code)
-    return JSON.stringify({
+    return {
       ...frame,
       params: {
         ...(typeof params.sessionId === "string"
@@ -275,9 +286,9 @@ function publicFrame(raw: string, shown: PublicErrors) {
         code,
         message: code,
       },
-    })
+    }
   }
-  return raw
+  return frame
 }
 
 function positiveLimit(value: number | undefined, fallback: number) {

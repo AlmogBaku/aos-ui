@@ -44,6 +44,7 @@ import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
+  AOS_METHODS,
   AOS_STOP_REASONS,
   aosAcpAgentPath,
 } from "../../protocol/acp"
@@ -1518,6 +1519,33 @@ export function runWireListenerContract(
       )
 
       it(
+        "admits an upgrade with no Origin or its listener's own, and no other",
+        wireCase(createRuntime, async ({ proxy, clock }) => {
+          const answers: unknown[] = []
+          for (const [service, origin, path] of [
+            [proxy.acpService, OPERATOR_ORIGIN, AOS_ACP_OPERATOR_PATH],
+            [proxy.guest!.acpService, GUEST_ORIGIN, AOS_ACP_GUEST_PATH],
+          ] as const)
+            for (const sent of [undefined, origin, "null", "https://x.test"]) {
+              const upgrade = await until(
+                clock,
+                service.authorizeUpgrade(
+                  new Request(`${origin}${path}`, {
+                    headers: sent === undefined ? {} : { Origin: sent },
+                  })
+                )
+              )
+              answers.push(upgrade === undefined ? 401 : "admitted")
+            }
+
+          expect(answers).toEqual([
+            ...["admitted", "admitted", 401, 401],
+            ...["admitted", "admitted", 401, 401],
+          ])
+        })
+      )
+
+      it(
         "serves each Agent at its own address, and no address it does not know",
         wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
           const answers: Record<string, unknown> = {}
@@ -1667,6 +1695,74 @@ export function runWireListenerContract(
               })
             )
           ).resolves.toEqual({})
+        })
+      )
+
+      it(
+        "shows a guest each batched reply as its public code and name alone",
+        wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
+          const guest = proxy.guest!
+          const ref = "wire-contract"
+          const { token } = await guest.invitations.issue({ agentId, ref })
+          const raw = await until(
+            clock,
+            rawSocket(guest.acpService, GUEST_ORIGIN, AOS_ACP_GUEST_PATH)
+          )
+          raw.send(JSON.stringify(rawInitialize(2)))
+          await until(clock, raw.next())
+          raw.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 2,
+              method: methods.agent.auth.login,
+              params: {
+                methodId: AOS_AUTH_METHOD_INVITE,
+                _meta: { [AOS_META_KEY]: { token } },
+              },
+            })
+          )
+          await until(clock, raw.next())
+
+          raw.send(
+            JSON.stringify([
+              {
+                jsonrpc: "2.0",
+                id: 3,
+                method: AOS_METHODS.session.focus,
+                params: {},
+              },
+              {
+                jsonrpc: "2.0",
+                id: 4,
+                method: AOS_METHODS.session.part,
+                // The SDK's invalid-params reply echoes an unknown key.
+                params: { sessionId: ref, "internal detail 7f3a": true },
+              },
+              {
+                jsonrpc: "2.0",
+                method: methods.agent.session.cancel,
+                params: { sessionId: ref },
+              },
+            ])
+          )
+          const reply = await until(clock, raw.next())
+
+          expect(JSON.stringify(reply)).not.toContain("internal detail 7f3a")
+          // A batch's replies come in the order they settle.
+          expect(reply).toHaveLength(2)
+          expect(reply).toEqual(
+            expect.arrayContaining([
+              { jsonrpc: "2.0", id: 3, result: {} },
+              {
+                jsonrpc: "2.0",
+                id: 4,
+                error: {
+                  code: RequestError.invalidParams().code,
+                  message: "invalid_request",
+                },
+              },
+            ])
+          )
         })
       )
 

@@ -114,16 +114,19 @@ function peer() {
 }
 
 describe("ACP WebSocket service", () => {
-  it("authorizes only the public origin and mints a connection id", async () => {
+  it("authorizes the public origin or none, and mints a connection id", async () => {
     const { acp } = service()
 
+    for (const origin of ["https://attacker.example.test", "null"])
+      await expect(
+        acp.authorizeUpgrade(
+          new Request(`${ORIGIN}${PATH}`, { headers: { origin } })
+        )
+      ).resolves.toBeUndefined()
+    // A client that is no browser sends no Origin at all.
     await expect(
-      acp.authorizeUpgrade(
-        new Request(`${ORIGIN}${PATH}`, {
-          headers: { origin: "https://attacker.example.test" },
-        })
-      )
-    ).resolves.toBeUndefined()
+      acp.authorizeUpgrade(new Request(`${ORIGIN}${PATH}`))
+    ).resolves.toMatchObject({ principalId: "operator" })
 
     const upgrade = await acp.authorizeUpgrade(
       new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })

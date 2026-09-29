@@ -147,7 +147,12 @@ export function createAcpService(options: AcpServiceOptions) {
   async function authorizeUpgrade(
     request: Request
   ): Promise<AcpUpgrade | SocketRefusal | undefined> {
-    if (request.headers.get("origin") !== options.publicOrigin) return undefined
+    // A client that is no browser sends no Origin; a browser's must be ours.
+    const origin = request.headers.get("origin")
+    if (origin !== null && origin !== options.publicOrigin) {
+      options.logger?.info({}, "acp.upgrade.origin_refused")
+      return undefined
+    }
     const target = await addressed(new URL(request.url).pathname)
     if ("refused" in target) return target
     const connectionId = randomUUID()

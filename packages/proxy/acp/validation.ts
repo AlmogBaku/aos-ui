@@ -144,14 +144,15 @@ const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
  * unavailable, and any other notice code as an internal error.
  */
 export const PUBLIC_ERRORS: PublicErrors = {
-  reply({ code }) {
-    const name = PUBLIC_ERROR_NAMES.get(code)
+  reply(code) {
+    const name =
+      typeof code === "number" ? PUBLIC_ERROR_NAMES.get(code) : undefined
     return name === undefined
       ? {
           code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
           message: "temporarily_unavailable",
         }
-      : { code, message: name }
+      : { code: code as number, message: name }
   },
   notice: (code) =>
     typeof code === "string" && PUBLIC_NOTICE_CODES.has(code)

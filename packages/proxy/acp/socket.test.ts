@@ -83,13 +83,51 @@ describe("ACP WebSocket shim", () => {
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
   })
 
-  it("keeps an unsupported refusal's code on a public reply", () => {
-    expect(
-      PUBLIC_ERRORS.reply({
-        code: AOS_JSONRPC_ERRORS.unsupported,
-        message: "private detail",
-      })
-    ).toEqual({ code: AOS_JSONRPC_ERRORS.unsupported, message: "unsupported" })
+  it("writes each error reply, batched or not, as its public code alone", () => {
+    const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
+    const unavailable = {
+      code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+      message: "temporarily_unavailable",
+    }
+
+    socket.socket.send(
+      JSON.stringify([
+        { jsonrpc: "2.0", id: 1, result: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          error: {
+            code: AOS_JSONRPC_ERRORS.unsupported,
+            message: "internal detail 7f3a",
+            data: "internal detail 7f3a",
+          },
+        },
+        {
+          jsonrpc: "2.0",
+          id: 3,
+          error: { code: "internal detail 7f3a", message: "private" },
+        },
+      ])
+    )
+    socket.socket.send(
+      JSON.stringify({ jsonrpc: "2.0", id: 4, error: "internal detail 7f3a" })
+    )
+
+    expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
+      [
+        { jsonrpc: "2.0", id: 1, result: {} },
+        {
+          jsonrpc: "2.0",
+          id: 2,
+          error: {
+            code: AOS_JSONRPC_ERRORS.unsupported,
+            message: "unsupported",
+          },
+        },
+        { jsonrpc: "2.0", id: 3, error: unavailable },
+      ],
+      { jsonrpc: "2.0", id: 4, error: unavailable },
+    ])
   })
 
   it("writes a listener's error notice as its Session and a public code alone", () => {
