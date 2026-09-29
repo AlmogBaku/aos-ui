@@ -125,7 +125,7 @@ import {
   useAui,
   useAuiEvent,
   useAuiState,
-  unstable_useTriggerPopoverRootContextOptional,
+  unstable_useTriggerPopoverRootContextOptional as useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
 import {
   ArrowDownIcon,
@@ -850,7 +850,7 @@ const Composer: FC<{
   const historyEntries = useAuiState((s) =>
     selectHistoryEntries(s.thread.messages)
   )
-  const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
+  const triggerPopover = useTriggerPopoverRootContextOptional()
   const queueControls = useQueueControlsExtras(
     (extras) => extras.queueControls,
     undefined
