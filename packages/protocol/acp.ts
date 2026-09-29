@@ -346,6 +346,15 @@ const TurnMetaBase = {
  */
 export const AosTurnMetaSchema = readObject(TurnMetaBase)
 
+/**
+ * `_meta.aos` of a Session-scoped `notice`: the provider's own status kind,
+ * such as `heartbeat`, which picks the line's icon. Notices are live only.
+ */
+export const AosNoticeMetaSchema = readObject({
+  kind: z.string().min(1).max(64).optional(),
+})
+export type AosNoticeMeta = z.infer<typeof AosNoticeMetaSchema>
+
 const CountSchema = z.number().int().nonnegative()
 
 /** What a turn cost, as the provider priced it; ISO 4217 currency. */

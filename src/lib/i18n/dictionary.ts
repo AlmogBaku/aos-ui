@@ -208,6 +208,16 @@ export type Dictionary = {
     length: string
     contentFilter: string
   }
+  /** The accessible names of the icons a runtime status line leads with. */
+  notice: {
+    kinds: {
+      goal: string
+      loop: string
+      heartbeat: string
+      process: string
+      status: string
+    }
+  }
   /** The quiet divider a context compaction leaves in the conversation. */
   compaction: {
     running: string

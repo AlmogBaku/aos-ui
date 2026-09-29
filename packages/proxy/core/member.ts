@@ -66,6 +66,18 @@ export type TurnStream = {
 }
 
 /**
+ * A status the runtime announces about a Session, during a turn or none, such
+ * as a heartbeat or a loop wakeup. Live only: never stored or replayed.
+ */
+export type SessionNotice = {
+  severity: "info" | "warning" | "error"
+  title: string
+  description?: string
+  /** The provider's own status kind, such as `heartbeat`. */
+  kind?: string
+}
+
+/**
  * Everything a member is shown of one Session. Every consumer switches over
  * `kind` exhaustively.
  */
