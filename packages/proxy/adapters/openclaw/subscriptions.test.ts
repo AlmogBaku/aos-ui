@@ -470,102 +470,65 @@ describe("OpenClaw Session subscriptions", () => {
       replay,
     })
 
-    for (const sessionKey of ["agent:foreign:main", "agent:research:other"]) {
+    // A replay for a foreign or sibling Session, and an acknowledgement coupled
+    // to a replay for another same-Agent Session, are both refused.
+    for (const [requested, key, replayKey] of [
+      ["agent:research:main", "agent:research:main", "agent:foreign:main"],
+      ["agent:research:main", "agent:research:main", "agent:research:other"],
+      ["agent:research:child", "agent:research:other", "agent:research:other"],
+    ] as const) {
       const invalid = new OpenClawSessionSubscriptions(
         {
           request: vi.fn(async () => ({
-            key: "agent:research:main",
-            approvalReplay: { ...replay, sessionKey },
+            key,
+            approvalReplay: { ...replay, sessionKey: replayKey },
           })),
         },
         logger
       )
       await expect(
-        invalid.acquire(
-          { agentId: "research", sessionKey: "agent:research:main" },
-          vi.fn()
-        )
+        invalid.acquire({ agentId: "research", sessionKey: requested }, vi.fn())
       ).rejects.toThrow("approval replay")
     }
   })
 
-  it("rejects a coupled acknowledgement and replay for another same-Agent Session", async () => {
-    const subscriptions = new OpenClawSessionSubscriptions(
-      {
-        request: vi.fn(async () => ({
-          key: "agent:research:other",
-          approvalReplay: {
-            sessionKey: "agent:research:other",
-            updatedAtMs: 1,
-            approvals: [],
-            truncated: false,
-          },
-        })),
-      },
-      logger
-    )
+  it.each([
+    {
+      alias: "a bare main alias",
+      requested: "main",
+      key: "agent:research:work",
+      replayKey: "agent:research:work",
+    },
+    {
+      alias: "an Agent-scoped main alias (global key)",
+      requested: "agent:research:main",
+      key: "global",
+      replayKey: "agent:research:global",
+    },
+  ])(
+    "accepts the Gateway canonical key for $alias",
+    async ({ requested, key, replayKey }) => {
+      const replay = {
+        sessionKey: replayKey,
+        updatedAtMs: 1,
+        approvals: [],
+        truncated: false,
+      }
+      const subscriptions = new OpenClawSessionSubscriptions(
+        { request: vi.fn(async () => ({ key, approvalReplay: replay })) },
+        logger
+      )
 
-    await expect(
-      subscriptions.acquire(
-        { agentId: "research", sessionKey: "agent:research:child" },
+      const lease = await subscriptions.acquire(
+        { agentId: "research", sessionKey: requested },
         vi.fn()
       )
-    ).rejects.toThrow("approval replay")
-  })
 
-  it("accepts the Gateway canonical key for a bare main alias", async () => {
-    const replay = {
-      sessionKey: "agent:research:work",
-      updatedAtMs: 1,
-      approvals: [],
-      truncated: false,
+      expect(lease.key).toBe(key)
+      expect(lease.approvalReplayKey).toBe(replayKey)
+      expect(lease.approvalReplay()?.replay).toEqual(replay)
     }
-    const subscriptions = new OpenClawSessionSubscriptions(
-      {
-        request: vi.fn(async () => ({
-          key: "agent:research:work",
-          approvalReplay: replay,
-        })),
-      },
-      logger
-    )
-
-    const lease = await subscriptions.acquire(
-      { agentId: "research", sessionKey: "main" },
-      vi.fn()
-    )
-
-    expect(lease.key).toBe("agent:research:work")
-    expect(lease.approvalReplayKey).toBe("agent:research:work")
-    expect(lease.approvalReplay()?.replay).toEqual(replay)
-  })
-
-  it("accepts the Gateway global key for an Agent-scoped main alias", async () => {
-    const replay = {
-      sessionKey: "agent:research:global",
-      updatedAtMs: 1,
-      approvals: [],
-      truncated: false,
-    }
-    const subscriptions = new OpenClawSessionSubscriptions(
-      {
-        request: vi.fn(async () => ({
-          key: "global",
-          approvalReplay: replay,
-        })),
-      },
-      logger
-    )
-
-    const lease = await subscriptions.acquire(
-      { agentId: "research", sessionKey: "agent:research:main" },
-      vi.fn()
-    )
-
-    expect(lease.key).toBe("global")
-    expect(lease.approvalReplayKey).toBe("agent:research:global")
-    expect(lease.approvalReplay()?.replay).toEqual(replay)
-  })
+  )
 })
 
 function deferred<T>() {

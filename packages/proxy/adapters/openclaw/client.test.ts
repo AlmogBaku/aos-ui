@@ -156,47 +156,46 @@ describe("OpenClaw client", () => {
     await expect(started).resolves.toBeUndefined()
   })
 
-  it("reads validated negotiated attachment limits from the HelloOk", async () => {
+  const negotiated = {
+    maxPayload: 30 * 1024 * 1024,
+    attachments: {
+      maxBytes: 25 * 1024 * 1024,
+      maxImageBytes: 10 * 1024 * 1024,
+    },
+  }
+
+  it.each([
+    {
+      name: "reads validated negotiated attachment limits from the HelloOk",
+      hello: {
+        protocol: 4,
+        policy: negotiated,
+        providerPrivate: "must-not-escape",
+      },
+      policy: negotiated,
+    },
+    {
+      name: "does not manufacture attachment policy from a missing HelloOk policy",
+      hello: { protocol: 4 },
+      policy: undefined,
+    },
+    {
+      name: "does not manufacture attachment policy from a malformed HelloOk policy",
+      hello: {
+        protocol: 4,
+        policy: { maxPayload: -1, attachments: { maxBytes: 1 } },
+      },
+      policy: undefined,
+    },
+  ])("$name", async ({ hello, policy }) => {
     const clock = useFakeClock()
     const { client, gateway } = await setup(clock)
     const started = client.start()
 
-    gateway().options.onHelloOk?.({
-      protocol: 4,
-      policy: {
-        maxPayload: 30 * 1024 * 1024,
-        attachments: {
-          maxBytes: 25 * 1024 * 1024,
-          maxImageBytes: 10 * 1024 * 1024,
-        },
-      },
-      providerPrivate: "must-not-escape",
-    } as never)
+    gateway().options.onHelloOk?.(hello as never)
 
     await expect(started).resolves.toBeUndefined()
-    expect(client.negotiatedPolicy()).toEqual({
-      maxPayload: 30 * 1024 * 1024,
-      attachments: {
-        maxBytes: 25 * 1024 * 1024,
-        maxImageBytes: 10 * 1024 * 1024,
-      },
-    })
-  })
-
-  it("does not manufacture attachment policy from missing or malformed HelloOk policy", async () => {
-    const clock = useFakeClock()
-    for (const hello of [
-      { protocol: 4 },
-      { protocol: 4, policy: { maxPayload: -1, attachments: { maxBytes: 1 } } },
-    ]) {
-      const { client, gateway } = await setup(clock)
-      const started = client.start()
-
-      gateway().options.onHelloOk?.(hello as never)
-
-      await expect(started).resolves.toBeUndefined()
-      expect(client.negotiatedPolicy()).toBeUndefined()
-    }
+    expect(client.negotiatedPolicy()).toEqual(policy)
   })
 
   it("fails closed when a Gateway reports a protocol other than v4", async () => {
@@ -241,34 +240,27 @@ describe("OpenClaw client", () => {
     expect(gateways[0]!.stopAndWait).toHaveBeenCalledOnce()
   })
 
-  it("keeps readiness usable through a transient transport failure until the Gateway reconnects", async () => {
-    const clock = useFakeClock()
-    const { client, gateway } = await setup(clock)
-    const started = client.start()
-
-    gateway().options.onConnectError?.(
-      new Error("wss://gateway.example.test token=tok-test-1")
-    )
-    expect(gateway().stopAndWait).not.toHaveBeenCalled()
-    gateway().options.onHelloOk?.({ protocol: 4 } as never)
-
-    await expect(started).resolves.toBeUndefined()
-  })
-
-  it("keeps readiness usable when pairing explicitly asks the client to retry", async () => {
-    const clock = useFakeClock()
-    const { client, gateway } = await setup(clock)
-    const started = client.start()
-
-    gateway().options.onConnectError?.(
-      new GatewayClientRequestError({
+  it.each([
+    {
+      name: "through a transient transport failure until the Gateway reconnects",
+      failure: new Error("wss://gateway.example.test token=tok-test-1"),
+    },
+    {
+      name: "when pairing explicitly asks the client to retry",
+      failure: new GatewayClientRequestError({
         details: {
           code: "PAIRING_REQUIRED",
           pauseReconnect: false,
           recommendedNextStep: "wait_then_retry",
         },
-      })
-    )
+      }),
+    },
+  ])("keeps readiness usable $name", async ({ failure }) => {
+    const clock = useFakeClock()
+    const { client, gateway } = await setup(clock)
+    const started = client.start()
+
+    gateway().options.onConnectError?.(failure)
     gateway().options.onHelloOk?.({ protocol: 4 } as never)
 
     await expect(started).resolves.toBeUndefined()
