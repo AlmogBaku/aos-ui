@@ -442,6 +442,20 @@ async function settle() {
   await Promise.resolve()
 }
 
+/** Lists the first Session, then collects every row snapshot published for `sessionIds`. */
+async function watchRows(
+  client: ReturnType<typeof createAcpWorkspaceClient>,
+  sessionIds = [SESSION_ID]
+) {
+  await client.getSessionMetadata([SESSION_ID])
+  const published: SessionMetadata[][] = []
+  client.subscribeSessionMetadata(sessionIds, (metadata) =>
+    published.push(metadata)
+  )
+  await settle()
+  return published
+}
+
 describe("ACP workspace client", () => {
   it("caches Session rows from the list and keeps provider read state", async () => {
     const { client, argsOf, calls } = createClient()
@@ -526,12 +540,7 @@ describe("ACP workspace client", () => {
 
   it("publishes row changes and never clobbers unread with an update that omits it", async () => {
     const { client, join, emitUpdate } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
     await join()
 
     emitUpdate(
@@ -550,13 +559,10 @@ describe("ACP workspace client", () => {
 
   it("publishes no snapshot until every named Session has a row", async () => {
     const { client, join } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata(
-      [SESSION_ID, UNLISTED_SESSION_ID],
-      (metadata) => published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client, [
+      SESSION_ID,
+      UNLISTED_SESSION_ID,
+    ])
 
     // The catalog has not reached the second Session yet. A snapshot naming
     // only the first would report the second as one the workspace does not
@@ -573,12 +579,7 @@ describe("ACP workspace client", () => {
 
   it("acks read state optimistically before the provider write", async () => {
     const { client, argsOf, emitNotification } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
 
     const acked = client.markSessionRead(SESSION_ID)
     expect(published.at(-1)?.[0]?.unread).toBe(false)
@@ -599,12 +600,7 @@ describe("ACP workspace client", () => {
 
   it("pins a Session optimistically before the provider write", async () => {
     const { client, argsOf } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
 
     const pinning = client.setSessionPinned(SESSION_ID, true)
     expect(published.at(-1)?.[0]?.pinned).toBe(true)
@@ -616,12 +612,7 @@ describe("ACP workspace client", () => {
 
   it("takes the pin back when the provider refuses the write", async () => {
     const { client, failUpdates } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
     failUpdates(new Error("Upstream request failed"))
 
     await expect(client.setSessionPinned(SESSION_ID, true)).rejects.toThrow(
@@ -633,12 +624,7 @@ describe("ACP workspace client", () => {
 
   it("publishes a row whose pin or archival the provider changed", async () => {
     const { client, join, emitUpdate } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
     await join()
     const before = published.length
 
@@ -661,12 +647,7 @@ describe("ACP workspace client", () => {
 
   it("keeps a Session's known creation time when a later read omits it", async () => {
     const { client, join, emitUpdate } = createClient()
-    await client.getSessionMetadata([SESSION_ID])
-    const published: SessionMetadata[][] = []
-    client.subscribeSessionMetadata([SESSION_ID], (metadata) =>
-      published.push(metadata)
-    )
-    await settle()
+    const published = await watchRows(client)
     await join()
 
     emitUpdate(
