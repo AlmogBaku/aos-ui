@@ -778,6 +778,10 @@ function toRepository(
 }
 
 export function useAcpRuntime(options: UseAcpRuntimeOptions): AssistantRuntime {
+  // Opted out of React Compiler: the store below reads the controller's
+  // mutable state, keyed on the `version` token it subscribes to. The compiler
+  // would drop that unread token from the keys and serve a stale store.
+  "use no memo"
   const { connection, approvals, sessionId, enableMessageQueue, isDisabled } =
     options
   // One controller per mounted thread: a local draft gains its Session while
