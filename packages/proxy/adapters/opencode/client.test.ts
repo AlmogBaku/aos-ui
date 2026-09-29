@@ -75,224 +75,196 @@ function client(
   })
 }
 
+type Subject = ReturnType<typeof client>
+
+/** Runs `check` against a client bound to a native server answering with `handler`. */
+async function withSubject(
+  handler: Parameters<typeof nativeServer>[0],
+  check: (subject: Subject) => Promise<unknown>,
+  password?: () => Promise<string>
+) {
+  const server = await nativeServer(handler)
+  const subject = client(server.baseUrl, password)
+  try {
+    await check(subject)
+  } finally {
+    await subject.close()
+    await server.close()
+  }
+}
+
 describe("OpenCodeClient", () => {
   it("binds Session pagination to the configured server, directory, and a Basic credential read for each request", async () => {
     const authorizations: (string | null)[] = []
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session")
-      expect(request.url.searchParams.get("limit")).toBe("20")
-      expect(request.url.searchParams.get("cursor")).toBe("next-page")
-      expect(request.directory).toBe("/workspaces/aos")
-      authorizations.push(request.authorization)
-      return Response.json({
-        data: [],
-        cursor: { previous: "previous-page", next: "following-page" },
-      })
-    })
     let password = "pw-test-1"
-    const subject = client(server.baseUrl, async () => password)
-
-    try {
-      await expect(
-        subject.sessions.list({ limit: 20, cursor: "next-page" })
-      ).resolves.toEqual({
-        data: [],
-        cursor: { previous: "previous-page", next: "following-page" },
-      })
-      password = "pw-test-2"
-      await subject.sessions.list({ limit: 20, cursor: "next-page" })
-      expect(authorizations).toEqual([
-        "Basic b3BlcmF0b3I6cHctdGVzdC0x",
-        "Basic b3BlcmF0b3I6cHctdGVzdC0y",
-      ])
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      (request) => {
+        expect(request.url.pathname).toBe("/api/session")
+        expect(request.url.searchParams.get("limit")).toBe("20")
+        expect(request.url.searchParams.get("cursor")).toBe("next-page")
+        expect(request.directory).toBe("/workspaces/aos")
+        authorizations.push(request.authorization)
+        return Response.json({
+          data: [],
+          cursor: { previous: "previous-page", next: "following-page" },
+        })
+      },
+      async (subject) => {
+        await expect(
+          subject.sessions.list({ limit: 20, cursor: "next-page" })
+        ).resolves.toEqual({
+          data: [],
+          cursor: { previous: "previous-page", next: "following-page" },
+        })
+        password = "pw-test-2"
+        await subject.sessions.list({ limit: 20, cursor: "next-page" })
+        expect(authorizations).toEqual([
+          "Basic b3BlcmF0b3I6cHctdGVzdC0x",
+          "Basic b3BlcmF0b3I6cHctdGVzdC0y",
+        ])
+      },
+      async () => password
+    )
   })
 
   it("holds a password OpenCode refused as refused until it reads another or OpenCode takes it", async () => {
     let accepts = false
-    const server = await nativeServer(() =>
-      accepts
-        ? Response.json({
-            data: [],
-            cursor: { previous: "previous-page", next: "following-page" },
-          })
-        : new Response(null, { status: 401 })
-    )
     let password = "pw-test-1"
-    const subject = client(server.baseUrl, async () => password)
-
-    try {
-      await expect(subject.credentialRefused()).resolves.toBe(false)
-      await expect(subject.sessions.list()).rejects.toMatchObject({
-        code: "authentication",
-      })
-      await expect(subject.credentialRefused()).resolves.toBe(true)
-      password = "pw-test-2"
-      await expect(subject.credentialRefused()).resolves.toBe(false)
-      password = "pw-test-1"
-      await expect(subject.credentialRefused()).resolves.toBe(true)
-      accepts = true
-      await subject.sessions.list()
-      await expect(subject.credentialRefused()).resolves.toBe(false)
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      () =>
+        accepts
+          ? Response.json({
+              data: [],
+              cursor: { previous: "previous-page", next: "following-page" },
+            })
+          : new Response(null, { status: 401 }),
+      async (subject) => {
+        await expect(subject.credentialRefused()).resolves.toBe(false)
+        await expect(subject.sessions.list()).rejects.toMatchObject({
+          code: "authentication",
+        })
+        await expect(subject.credentialRefused()).resolves.toBe(true)
+        password = "pw-test-2"
+        await expect(subject.credentialRefused()).resolves.toBe(false)
+        password = "pw-test-1"
+        await expect(subject.credentialRefused()).resolves.toBe(true)
+        accepts = true
+        await subject.sessions.list()
+        await expect(subject.credentialRefused()).resolves.toBe(false)
+      },
+      async () => password
+    )
   })
 
   it("preserves the native ascending message order before cursor pagination", async () => {
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/message")
-      expect(request.url.searchParams.get("limit")).toBe("20")
-      expect(request.url.searchParams.get("order")).toBe("asc")
-      expect(request.url.searchParams.get("cursor")).toBeNull()
-      return Response.json({ data: [], cursor: {} })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.sessions.messages("session-1", { limit: 20, order: "asc" })
-      ).resolves.toEqual({ data: [], cursor: {} })
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      (request) => {
+        expect(request.url.pathname).toBe("/api/session/session-1/message")
+        expect(request.url.searchParams.get("limit")).toBe("20")
+        expect(request.url.searchParams.get("order")).toBe("asc")
+        expect(request.url.searchParams.get("cursor")).toBeNull()
+        return Response.json({ data: [], cursor: {} })
+      },
+      async (subject) => {
+        await expect(
+          subject.sessions.messages("session-1", { limit: 20, order: "asc" })
+        ).resolves.toEqual({ data: [], cursor: {} })
+      }
+    )
   })
 
   it("reads one Session's native Todo list as a bare or enveloped array", async () => {
     const bare = [{ content: "Read the adapter", status: "pending" }]
     for (const body of [bare, { data: bare }]) {
-      const server = await nativeServer((request) => {
-        expect(request.url.pathname).toBe("/session/session-1/todo")
-        expect(request.directory).toBe("/workspaces/aos")
-        return Response.json(body)
-      })
-      const subject = client(server.baseUrl)
-
-      try {
-        await expect(subject.sessions.todos("session-1")).resolves.toEqual(bare)
-      } finally {
-        await subject.close()
-        await server.close()
-      }
-    }
-  })
-
-  it("rejects a native Todo body that is neither a bare nor an enveloped array", async () => {
-    const server = await nativeServer(() => Response.json({ todos: [] }))
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(subject.sessions.todos("session-1")).rejects.toMatchObject({
-        code: "invalid_response",
-      })
-    } finally {
-      await subject.close()
-      await server.close()
+      await withSubject(
+        (request) => {
+          expect(request.url.pathname).toBe("/session/session-1/todo")
+          expect(request.directory).toBe("/workspaces/aos")
+          return Response.json(body)
+        },
+        async (subject) => {
+          await expect(subject.sessions.todos("session-1")).resolves.toEqual(
+            bare
+          )
+        }
+      )
     }
   })
 
   it("reads a file inside the configured directory through the native file route", async () => {
     const paths: string[] = []
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/file/content")
-      expect(request.directory).toBe("/workspaces/aos")
-      paths.push(request.url.searchParams.get("path") ?? "")
-      return Response.json({ type: "text", content: "# Notes" })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.files.read("/workspaces/aos/out/notes.md")
-      ).resolves.toEqual({ type: "text", content: "# Notes" })
-      for (const outside of ["/workspaces/other/notes.md", "/etc/passwd"])
-        await expect(subject.files.read(outside)).rejects.toMatchObject({
-          code: "not_found",
-        })
-      expect(paths).toEqual(["out/notes.md"])
-    } finally {
-      await subject.close()
-      await server.close()
-    }
-  })
-
-  it("rejects a native file body that is not file content", async () => {
-    const server = await nativeServer(() => Response.json({ type: "folder" }))
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.files.read("/workspaces/aos/out/notes.md")
-      ).rejects.toMatchObject({ code: "invalid_response" })
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      (request) => {
+        expect(request.url.pathname).toBe("/file/content")
+        expect(request.directory).toBe("/workspaces/aos")
+        paths.push(request.url.searchParams.get("path") ?? "")
+        return Response.json({ type: "text", content: "# Notes" })
+      },
+      async (subject) => {
+        await expect(
+          subject.files.read("/workspaces/aos/out/notes.md")
+        ).resolves.toEqual({ type: "text", content: "# Notes" })
+        for (const outside of ["/workspaces/other/notes.md", "/etc/passwd"])
+          await expect(subject.files.read(outside)).rejects.toMatchObject({
+            code: "not_found",
+          })
+        expect(paths).toEqual(["out/notes.md"])
+      }
+    )
   })
 
   it("switches an exact native model with the same uncertain acknowledgement fence", async () => {
-    const server = await nativeServer(async (request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/model")
-      expect(JSON.parse(request.body)).toEqual({
-        model: { providerID: "openai", id: "gpt-5" },
-      })
-      return new Response(null, { status: 204 })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.sessions.switchModel("session-1", {
-          providerID: "openai",
-          id: "gpt-5",
+    await withSubject(
+      async (request) => {
+        expect(request.url.pathname).toBe("/api/session/session-1/model")
+        expect(JSON.parse(request.body)).toEqual({
+          model: { providerID: "openai", id: "gpt-5" },
         })
-      ).resolves.toBeUndefined()
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+        return new Response(null, { status: 204 })
+      },
+      async (subject) => {
+        await expect(
+          subject.sessions.switchModel("session-1", {
+            providerID: "openai",
+            id: "gpt-5",
+          })
+        ).resolves.toBeUndefined()
+      }
+    )
   })
 
   it("renames, archives, pins, and deletes through the pre-v2 native Session routes", async () => {
     const seen: Array<{ method: string; pathname: string; body: string }> = []
-    const server = await nativeServer((request) => {
-      seen.push({
-        method: request.method,
-        pathname: request.url.pathname,
-        body: request.body,
-      })
-      if (request.method === "DELETE") return Response.json(true)
-      return Response.json({
-        id: "session-1",
-        title: "Renamed",
-        time: { created: 1_000 },
-      })
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.sessions.update("session-1", {
-          title: "Renamed",
-          time: { archived: 1_700 },
-          metadata: { "aos.pinned": true },
+    await withSubject(
+      (request) => {
+        seen.push({
+          method: request.method,
+          pathname: request.url.pathname,
+          body: request.body,
         })
-      ).resolves.toBeUndefined()
-      await expect(
-        subject.sessions.delete("session-1")
-      ).resolves.toBeUndefined()
-      await expect(subject.sessions.delete("")).rejects.toBeInstanceOf(
-        OpenCodeClientError
-      )
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+        if (request.method === "DELETE") return Response.json(true)
+        return Response.json({
+          id: "session-1",
+          title: "Renamed",
+          time: { created: 1_000 },
+        })
+      },
+      async (subject) => {
+        await expect(
+          subject.sessions.update("session-1", {
+            title: "Renamed",
+            time: { archived: 1_700 },
+            metadata: { "aos.pinned": true },
+          })
+        ).resolves.toBeUndefined()
+        await expect(
+          subject.sessions.delete("session-1")
+        ).resolves.toBeUndefined()
+        await expect(subject.sessions.delete("")).rejects.toBeInstanceOf(
+          OpenCodeClientError
+        )
+      }
+    )
 
     expect(seen).toEqual([
       {
@@ -309,33 +281,29 @@ describe("OpenCodeClient", () => {
   })
 
   it("returns a bounded public error instead of an upstream error body", async () => {
-    const server = await nativeServer(() =>
-      Response.json(
-        { message: "native-password=do-not-disclose" },
-        { status: 503 }
-      )
-    )
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(subject.sessions.list()).rejects.toEqual(
-        expect.objectContaining({
-          name: "OpenCodeClientError",
-          code: "unavailable",
-          message: "OpenCode request unavailable",
-        })
-      )
-      await subject.sessions.list().catch((error: unknown) => {
-        expect(error).toBeInstanceOf(OpenCodeClientError)
-        expect(JSON.stringify(error)).not.toContain("native-password")
-        expect(error instanceof Error && error.message).not.toContain(
-          "native-password"
+    await withSubject(
+      () =>
+        Response.json(
+          { message: "native-password=do-not-disclose" },
+          { status: 503 }
+        ),
+      async (subject) => {
+        await expect(subject.sessions.list()).rejects.toEqual(
+          expect.objectContaining({
+            name: "OpenCodeClientError",
+            code: "unavailable",
+            message: "OpenCode request unavailable",
+          })
         )
-      })
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+        await subject.sessions.list().catch((error: unknown) => {
+          expect(error).toBeInstanceOf(OpenCodeClientError)
+          expect(JSON.stringify(error)).not.toContain("native-password")
+          expect(error instanceof Error && error.message).not.toContain(
+            "native-password"
+          )
+        })
+      }
+    )
   })
 
   it("maps an aborted native read to a cancellation without retrying it", async () => {
@@ -343,24 +311,24 @@ describe("OpenCodeClient", () => {
     const requested = new Promise<void>((resolve) => {
       started = resolve
     })
-    const server = await nativeServer(async () => {
-      started?.()
-      return await new Promise<Response>((resolve) => {
-        setTimeout(() => resolve(Response.json({ data: [], cursor: {} })), 500)
-      })
-    })
-    const subject = client(server.baseUrl)
     const controller = new AbortController()
-
-    try {
-      const request = subject.sessions.list({ signal: controller.signal })
-      await requested
-      controller.abort()
-      await expect(request).rejects.toBeInstanceOf(OpenCodeClientAbortError)
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      async () => {
+        started?.()
+        return await new Promise<Response>((resolve) => {
+          setTimeout(
+            () => resolve(Response.json({ data: [], cursor: {} })),
+            500
+          )
+        })
+      },
+      async (subject) => {
+        const request = subject.sessions.list({ signal: controller.signal })
+        await requested
+        controller.abort()
+        await expect(request).rejects.toBeInstanceOf(OpenCodeClientAbortError)
+      }
+    )
   })
 
   it("replays and validates durable Session events from the supplied aggregate position", async () => {
@@ -377,52 +345,65 @@ describe("OpenCodeClient", () => {
         text: "finished ".repeat(100),
       },
     }
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/event")
-      expect(request.url.searchParams.get("after")).toBe("41")
-      return new Response(
-        [
-          `data: ${JSON.stringify({
-            id: "42",
-            event: "session",
-            data: JSON.stringify(durableEvent),
-          })}`,
-          "",
-          "",
-        ].join("\n"),
-        { headers: { "content-type": "text/event-stream" } }
-      )
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      const stream = await subject.sessions.events("session-1", { after: "41" })
-      await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
-        done: false,
-        value: { id: "42", event: "session", data: durableEvent },
-      })
-    } finally {
-      await subject.close()
-      await server.close()
-    }
-  })
-
-  it("rejects malformed provider payloads before a converter can consume them", async () => {
-    const server = await nativeServer(() => Response.json({}))
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(subject.sessions.list()).rejects.toEqual(
-        expect.objectContaining({
-          name: "OpenCodeClientError",
-          code: "invalid_response",
+    await withSubject(
+      (request) => {
+        expect(request.url.pathname).toBe("/api/session/session-1/event")
+        expect(request.url.searchParams.get("after")).toBe("41")
+        return new Response(
+          [
+            `data: ${JSON.stringify({
+              id: "42",
+              event: "session",
+              data: JSON.stringify(durableEvent),
+            })}`,
+            "",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } }
+        )
+      },
+      async (subject) => {
+        const stream = await subject.sessions.events("session-1", {
+          after: "41",
         })
-      )
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+        await expect(stream[Symbol.asyncIterator]().next()).resolves.toEqual({
+          done: false,
+          value: { id: "42", event: "session", data: durableEvent },
+        })
+      }
+    )
   })
+
+  it.each([
+    {
+      body: "a Session page without data",
+      answer: {},
+      call: (subject: Subject) => subject.sessions.list(),
+    },
+    {
+      body: "a Todo body that is neither a bare nor an enveloped array",
+      answer: { todos: [] },
+      call: (subject: Subject) => subject.sessions.todos("session-1"),
+    },
+    {
+      body: "a file body that is not file content",
+      answer: { type: "folder" },
+      call: (subject: Subject) =>
+        subject.files.read("/workspaces/aos/out/notes.md"),
+    },
+  ])(
+    "rejects $body before a converter can consume it",
+    async ({ answer, call }) => {
+      await withSubject(
+        () => Response.json(answer),
+        (subject) =>
+          expect(call(subject)).rejects.toMatchObject({
+            name: "OpenCodeClientError",
+            code: "invalid_response",
+          })
+      )
+    }
+  )
 
   it("aborts each open observation exactly once when closed repeatedly", async () => {
     const subject = createOpenCodeClient({
@@ -453,6 +434,10 @@ describe("OpenCodeClient", () => {
   it.each([
     { answer: "a lost acknowledgement", response: () => ({ drop: true }) },
     {
+      answer: "a malformed successful acknowledgement",
+      response: () => Response.json({}),
+    },
+    {
       answer: "a server error",
       response: () => Response.json({}, { status: 503 }),
     },
@@ -460,25 +445,22 @@ describe("OpenCodeClient", () => {
     "classifies $answer to a mutation the server received as uncertain",
     async ({ response }) => {
       let received = false
-      const server = await nativeServer((request) => {
-        expect(request.url.pathname).toBe("/api/session/session-1/prompt")
-        received = true
-        return response()
-      })
-      const subject = client(server.baseUrl)
-
-      try {
-        await expect(
-          subject.sessions.prompt("session-1", {
-            id: "admission-1",
-            prompt: { text: "continue" },
-          })
-        ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
-        expect(received).toBe(true)
-      } finally {
-        await subject.close()
-        await server.close()
-      }
+      await withSubject(
+        (request) => {
+          expect(request.url.pathname).toBe("/api/session/session-1/prompt")
+          received = true
+          return response()
+        },
+        async (subject) => {
+          await expect(
+            subject.sessions.prompt("session-1", {
+              id: "admission-1",
+              prompt: { text: "continue" },
+            })
+          ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
+          expect(received).toBe(true)
+        }
+      )
     }
   )
 
@@ -516,57 +498,34 @@ describe("OpenCodeClient", () => {
     await subject.close()
   })
 
-  it("classifies a malformed successful mutation acknowledgement as uncertain", async () => {
-    let received = false
-    const server = await nativeServer((request) => {
-      expect(request.url.pathname).toBe("/api/session/session-1/prompt")
-      received = true
-      return Response.json({})
-    })
-    const subject = client(server.baseUrl)
-
-    try {
-      await expect(
-        subject.sessions.prompt("session-1", {
-          id: "admission-2",
-          prompt: { text: "continue" },
-        })
-      ).rejects.toBeInstanceOf(OpenCodeMutationUncertainError)
-      expect(received).toBe(true)
-    } finally {
-      await subject.close()
-      await server.close()
-    }
-  })
-
   it("classifies caller cancellation after native mutation dispatch as uncertain", async () => {
     let received: (() => void) | undefined
     const dispatched = new Promise<void>((resolve) => {
       received = resolve
     })
-    const server = await nativeServer(async (request) => {
-      received?.()
-      await new Promise<void>((resolve) => {
-        request.signal.addEventListener("abort", () => resolve(), {
-          once: true,
-        })
-      })
-      return Response.json({ data: {} })
-    })
-    const subject = client(server.baseUrl)
     const controller = new AbortController()
-
-    try {
-      const request = subject.sessions.interrupt("session-1", controller.signal)
-      await dispatched
-      controller.abort()
-      await expect(request).rejects.toBeInstanceOf(
-        OpenCodeMutationUncertainError
-      )
-    } finally {
-      await subject.close()
-      await server.close()
-    }
+    await withSubject(
+      async (request) => {
+        received?.()
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          })
+        })
+        return Response.json({ data: {} })
+      },
+      async (subject) => {
+        const request = subject.sessions.interrupt(
+          "session-1",
+          controller.signal
+        )
+        await dispatched
+        controller.abort()
+        await expect(request).rejects.toBeInstanceOf(
+          OpenCodeMutationUncertainError
+        )
+      }
+    )
   })
 
   it.each([
@@ -575,23 +534,18 @@ describe("OpenCodeClient", () => {
   ] as const)(
     "refuses to open an event stream OpenCode answers %i, as %s",
     async (status, code) => {
-      const server = await nativeServer(
+      await withSubject(
         () =>
           new Response("native secret must not cross the facade", {
             status,
             headers: { "content-type": "text/event-stream" },
-          })
+          }),
+        async (subject) => {
+          await expect(subject.sessions.events("session-1")).rejects.toEqual(
+            expect.objectContaining({ name: "OpenCodeClientError", code })
+          )
+        }
       )
-      const subject = client(server.baseUrl)
-
-      try {
-        await expect(subject.sessions.events("session-1")).rejects.toEqual(
-          expect.objectContaining({ name: "OpenCodeClientError", code })
-        )
-      } finally {
-        await subject.close()
-        await server.close()
-      }
     }
   )
 })
