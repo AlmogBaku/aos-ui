@@ -137,18 +137,24 @@ export function fakeOpenCode() {
     replay: readonly Uint8Array[],
     follow: (send: (chunk: Uint8Array) => void) => Omit<Held, "sever">
   ) {
+    let entry: Held | undefined
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of replay) controller.enqueue(chunk)
-        const entry: Held = {
+        const open: Held = {
           ...follow((chunk) => controller.enqueue(chunk)),
           sever: () => controller.error(new TypeError("terminated")),
         }
-        held.add(entry)
+        entry = open
+        held.add(open)
         signal.addEventListener("abort", () => {
-          held.delete(entry)
+          held.delete(open)
           controller.error(signal.reason)
         })
+      },
+      // A reader that cancels the body closes it: nothing is sent to it again.
+      cancel() {
+        if (entry) held.delete(entry)
       },
     })
     return new Response(body, {

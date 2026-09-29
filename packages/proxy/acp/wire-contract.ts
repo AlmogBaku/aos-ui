@@ -140,8 +140,10 @@ type WireHarness = Readonly<{
 /**
  * The real proxy over `runtime`, an operator and a guest listener, with its
  * invitation key written to a private directory as a deployment keeps it.
+ * Awaited directly, not on the fake clock: composing reads that key from
+ * disk, and real I/O takes no fixed count of clock steps.
  */
-async function composeProxy(runtime: WireRuntime, clock: Clock) {
+async function composeProxy(runtime: WireRuntime) {
   const directory = await mkdtemp(join(tmpdir(), "aos-wire-contract-"))
   const invitationKey = join(directory, "invitation-key")
   await writeFile(
@@ -151,38 +153,35 @@ async function composeProxy(runtime: WireRuntime, clock: Clock) {
   )
   const release = () => rm(directory, { recursive: true })
   try {
-    const proxy = await until(
-      clock,
-      createConfiguredProxy(
-        {
-          version: 1,
-          deploymentId: "wire-contract",
-          listen: { host: "127.0.0.1", port: 4100 },
-          publicOrigin: OPERATOR_ORIGIN,
-          runtime: runtime.config,
-          limits: {
-            activeExecutions: 256,
-            guestActiveExecutions: 32,
-            operatorEventPeers: 256,
-            subscriberEvents: 512,
-            subscriberBytes: 2_097_152,
-          },
-          guest: {
-            listen: { host: "127.0.0.1", port: 4101 },
-            publicOrigin: GUEST_ORIGIN,
-            invitations: {
-              keys: [{ id: "guest-current", secretFile: invitationKey }],
-              clockSkewSeconds: 0,
-            },
-          },
-          shutdownGraceMs: 5_000,
+    const proxy = await createConfiguredProxy(
+      {
+        version: 1,
+        deploymentId: "wire-contract",
+        listen: { host: "127.0.0.1", port: 4100 },
+        publicOrigin: OPERATOR_ORIGIN,
+        runtime: runtime.config,
+        limits: {
+          activeExecutions: 256,
+          guestActiveExecutions: 32,
+          operatorEventPeers: 256,
+          subscriberEvents: 512,
+          subscriberBytes: 2_097_152,
         },
-        {
-          runtimeFactory: runtime.runtimeFactory,
-          logger: captureLogs().logger,
-          credentials: new CredentialValues(),
-        }
-      )
+        guest: {
+          listen: { host: "127.0.0.1", port: 4101 },
+          publicOrigin: GUEST_ORIGIN,
+          invitations: {
+            keys: [{ id: "guest-current", secretFile: invitationKey }],
+            clockSkewSeconds: 0,
+          },
+        },
+        shutdownGraceMs: 5_000,
+      },
+      {
+        runtimeFactory: runtime.runtimeFactory,
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+      }
     )
     return { proxy, release }
   } catch (error) {
@@ -480,7 +479,7 @@ function wireCase(
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { proxy, release } = await composeProxy(runtime, clock)
+    const { proxy, release } = await composeProxy(runtime)
     const clients: WireClient[] = []
     try {
       await body({

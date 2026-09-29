@@ -385,7 +385,7 @@ describe("OpenCodeRunEngine", () => {
     expect(state.observation.abort).toHaveBeenCalledOnce()
   })
 
-  it("repeats interaction discovery when a scoped event overlaps its read", async () => {
+  it("repeats interaction discovery when a scoped event overlaps its read, and Stop interrupts the wait", async () => {
     const firstRead = deferred()
     const request = {
       requestId: "question-current",
@@ -429,12 +429,18 @@ describe("OpenCodeRunEngine", () => {
     await until(() => expect(state.observation.delivered).toBe(1))
     firstRead.resolve()
 
-    await expect(discovered).resolves.toMatchObject({
+    const wait = await discovered
+    expect(wait).toMatchObject({
       state: "waiting-for-input",
       requests: [request],
     })
     expect(discover).toHaveBeenCalledTimes(2)
     expect(state.observation.abort).toHaveBeenCalledOnce()
+
+    await expect(wait!.handle.stop()).resolves.toBe("idle")
+    expect(state.sessions.interrupt).toHaveBeenCalledExactlyOnceWith(
+      scope.providerSessionId
+    )
   })
 
   it("subscribes before prompt admission and finishes only after wait plus authoritative idle reconciliation", async () => {

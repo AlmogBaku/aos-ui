@@ -629,6 +629,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         { kind: TurnEventKind.TurnStarted },
         { kind: TurnEventKind.TurnRequiresAction, requests },
       ]
+      let interrupted = false
       return {
         state: "waiting-for-input" as const,
         requests,
@@ -637,7 +638,21 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
             yield* events
           })(),
           settled: Promise.resolve(),
-          stop: async () => "idle" as const,
+          // Stop interrupts the waiting turn once, then rechecks it: the wait
+          // is over only once OpenCode reports the Session idle.
+          stop: async () => {
+            if (!interrupted) {
+              await this.#client.sessions.interrupt(scope.providerSessionId)
+              interrupted = true
+            }
+            try {
+              if (!(await this.#active(scope.providerSessionId)))
+                return "idle" as const
+            } catch {
+              // A failed status read cannot prove the Session idle.
+            }
+            return "stopping" as const
+          },
           // A restored wait was never streamed, so it holds no native position
           // a later recovery could continue from.
           recoveryPosition: () => undefined,
