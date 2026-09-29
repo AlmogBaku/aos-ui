@@ -229,6 +229,7 @@ For code-level verification, run:
 
 ```bash
 bun run test
+bun run test:gate
 bun run typecheck
 bun run lint
 bun run build

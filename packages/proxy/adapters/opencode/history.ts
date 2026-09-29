@@ -110,6 +110,16 @@ function projectMessages(
   ]
 }
 
+/**
+ * How many messages these native messages project to. Name resolution only
+ * renames tool calls, so the count needs no MCP names loaded.
+ */
+export function openCodeProjectedCount(messages: readonly NativeMessage[]) {
+  let count = 0
+  for (const message of messages) count += projectMessages(message).length
+  return count
+}
+
 function projectMessage(
   message: NativeMessage,
   resolve?: McpToolNameResolver

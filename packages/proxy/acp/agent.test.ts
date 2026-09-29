@@ -3337,9 +3337,15 @@ const pageTag = (update: SentUpdate) =>
 
 const INVALID_PARAMS = { code: invalidParams().code }
 
+/** Pages of five rows reaching back twenty, so a few rows make a long Session. */
+const REACH = { pageSize: 5, maxOffset: 20 }
+
 describe("History pages", () => {
   it("gives a replaying resume the cursor of the next older page", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
 
     const replayed = await test.agent.request(methods.agent.session.resume, {
@@ -3353,7 +3359,7 @@ describe("History pages", () => {
     })
 
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
-      nextCursor: cursorOf(500),
+      nextCursor: cursorOf(5),
     })
     expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
     test.close()
@@ -3361,7 +3367,8 @@ describe("History pages", () => {
 
   it("replays the whole Session from the start to a client that does not page history", async () => {
     const test = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       pagesHistory: false,
     })
     await test.list()
@@ -3375,15 +3382,16 @@ describe("History pages", () => {
 
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({})
     expect(replayedIds(test.recorder, from)).toEqual(
-      conversation(1_200).map(({ id }) => id)
+      conversation(12).map(({ id }) => id)
     )
     test.close()
   })
 
   it("replays a message once when a turn stored during the replay shifts its page", async () => {
-    const transcript = conversation(1_200)
+    const transcript = conversation(12)
     let reads = 0
     const test = await harness({
+      historyReach: REACH,
       transcript,
       pagesHistory: false,
       beforeHistory: async () => {
@@ -3391,8 +3399,8 @@ describe("History pages", () => {
         reads += 1
         if (reads === 2)
           transcript.push(
-            ...conversation(1_202)
-              .slice(1_200)
+            ...conversation(14)
+              .slice(12)
               .map((message) => ({ ...message, id: `late-${message.id}` }))
           )
       },
@@ -3408,62 +3416,68 @@ describe("History pages", () => {
     })
 
     expect(replayedIds(test.recorder, from)).toEqual(
-      conversation(1_200).map(({ id }) => id)
+      conversation(12).map(({ id }) => id)
     )
     test.close()
   })
 
   it("sends each older page as tagged updates before its reply, one per message", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    const page = await older(test, cursorOf(500))
+    const page = await older(test, cursorOf(5))
 
     const sent = pageUpdates(test.recorder, from)
     expect(page).toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
-    expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 500, 500)
+    expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 5, 5)
     expect(sent.map((update) => update.messageId)).toEqual(
-      conversation(1_200)
-        .slice(200, 700)
+      conversation(12)
+        .slice(2, 7)
         .map(({ id }) => id)
     )
     for (const update of sent)
       expect(update._meta).toEqual({
-        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(500) } },
+        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(5) } },
       })
     expect(test.logged()).toContainEqual(
       expect.objectContaining({
         event: "acp.history.page",
         sessionId: SESSION,
-        offset: 500,
-        count: 500,
+        offset: 5,
+        count: 5,
       })
     )
 
     const last = test.recorder.entries.length
-    const oldest = await older(test, cursorOf(1_000))
+    const oldest = await older(test, cursorOf(10))
 
     expect(oldest).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
-    expect(pageUpdates(test.recorder, last)).toHaveLength(200)
+    expect(pageUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
 
   it("reads a page without rejoining, following, or reporting the Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
     await settled()
 
-    expect(test.recorder.entries.slice(from)).toHaveLength(500)
+    expect(test.recorder.entries.slice(from)).toHaveLength(5)
     expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
     await liveTurn(test, [test])
     const live = await test.recorder.wait(
@@ -3508,22 +3522,26 @@ describe("History pages", () => {
         },
       },
     ]
-    const transcript = [...special, ...conversation(500)]
-    const test = await harness({ transcript, translateHistory })
+    const transcript = [...special, ...conversation(5)]
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
 
     const expected = translateHistory(
       {
         sessionId: SESSION,
         messages: special,
         total: transcript.length,
-        limit: 500,
-        offset: 500,
+        limit: 5,
+        offset: 5,
         nextOffset: transcript.length,
       },
       "operator"
@@ -3541,7 +3559,7 @@ describe("History pages", () => {
           ...update._meta,
           [AOS_META_KEY]: {
             ...(update._meta?.[AOS_META_KEY] as object | undefined),
-            historyPage: { cursor: cursorOf(500) },
+            historyPage: { cursor: cursorOf(5) },
           },
         },
       }))
@@ -3552,37 +3570,43 @@ describe("History pages", () => {
   })
 
   it("serves a page only to a connection that resumed the Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
 
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
     })
     await test.create()
-    await expect(older(test, cursorOf(500), CREATED)).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    await expect(older(test, cursorOf(5), CREATED)).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     await open(test)
     await test.agent.request(methods.agent.session.close, {
       sessionId: SESSION,
     })
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
     })
     test.close()
   })
 
   it("refuses a replay cursor it does not understand", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
-    const cursor = cursorOf(500)
+    const cursor = cursorOf(5)
 
     for (const replayFrom of [
       { type: AOS_REPLAY_BEFORE },
       { type: AOS_REPLAY_BEFORE, cursor: "" },
       { type: AOS_REPLAY_BEFORE, cursor, after: 1 },
-      { type: AOS_REPLAY_BEFORE, cursor: 500 },
+      { type: AOS_REPLAY_BEFORE, cursor: 5 },
       { type: "_aos/after", cursor },
       { type: "future" },
     ])
@@ -3593,58 +3617,65 @@ describe("History pages", () => {
   })
 
   it("reports history past the proxy's or the runtime's reach as truncated", async () => {
-    const test = await harness({ transcript: conversation(100_600) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(26),
+    })
     await test.list()
     await open(test)
 
-    await expect(older(test, cursorOf(99_800))).resolves.toEqual({
+    await expect(older(test, cursorOf(18))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
-    await expect(older(test, cursorOf(100_000))).rejects.toMatchObject(
+    await expect(older(test, cursorOf(20))).rejects.toMatchObject(
       INVALID_PARAMS
     )
     test.close()
 
     const cut = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       truncated: true,
     })
     await cut.list()
     await open(cut)
-    await expect(older(cut, cursorOf(1_000))).resolves.toEqual({
+    await expect(older(cut, cursorOf(10))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     // A runtime at its reach may still count rows past it; no cursor leads there.
     cut.history.mockResolvedValueOnce({
       sessionId: SESSION,
-      messages: conversation(100),
-      total: 601,
-      limit: 500,
-      offset: 500,
-      nextOffset: 600,
+      messages: conversation(1),
+      total: 7,
+      limit: 5,
+      offset: 5,
+      nextOffset: 6,
       truncated: true,
     })
-    await expect(older(cut, cursorOf(500))).resolves.toEqual({
+    await expect(older(cut, cursorOf(5))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     cut.close()
   })
 
   it("reaches the beginning of a Session whose runtime estimated one more row", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test)
     // The previous page was full, so the runtime counted a row past it.
     test.history.mockResolvedValueOnce({
       sessionId: SESSION,
       messages: [],
-      total: 500,
-      limit: 500,
-      offset: 500,
-      nextOffset: 500,
+      total: 5,
+      limit: 5,
+      offset: 5,
+      nextOffset: 5,
     })
 
-    await expect(older(test, cursorOf(500))).resolves.toEqual({
+    await expect(older(test, cursorOf(5))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: {} } },
     })
     test.close()
@@ -3652,24 +3683,28 @@ describe("History pages", () => {
 
   it("sends a page of large messages one frame per message", async () => {
     const large = "x".repeat(900_000)
-    const transcript = conversation(1_000).map((message, index) =>
-      index < 505
+    const transcript = conversation(10).map((message, index) =>
+      index < 5
         ? { ...message, content: [{ type: "text" as const, text: large }] }
         : message
     )
-    const test = await harness({ transcript, translateHistory })
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
     await test.list()
     await open(test)
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
 
     const frames = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)
       .map((entry) => Buffer.byteLength(JSON.stringify(entry)))
-    expect(frames.length).toBeGreaterThanOrEqual(500)
+    expect(frames.length).toBeGreaterThanOrEqual(5)
     // The page as a whole is far past the socket's 4 MiB output limit.
     expect(frames.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(
       4 * 1_024 * 1_024
@@ -3679,18 +3714,21 @@ describe("History pages", () => {
   })
 
   it("refuses a cursor it could not have issued for this Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test)
     const encoded = (text: string) => Buffer.from(text).toString("base64url")
 
     for (const cursor of [
       "not-a-cursor",
-      `${cursorOf(500)}==`,
-      encoded("5e2"),
-      encoded("-500"),
+      `${cursorOf(5)}==`,
+      encoded("5e0"),
+      encoded("-5"),
       encoded("0"),
-      cursorOf(5_000),
+      cursorOf(15),
     ])
       await expect(older(test, cursor)).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
@@ -3700,25 +3738,24 @@ describe("History pages", () => {
     const pending = gate()
     let hold = false
     const test = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       beforeHistory: () => (hold ? pending.held : Promise.resolve()),
     })
     await test.list()
     await open(test)
     hold = true
 
-    const first = older(test, cursorOf(500))
+    const first = older(test, cursorOf(5))
     await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject(
-      INVALID_PARAMS
-    )
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject(INVALID_PARAMS)
     pending.release()
 
     await expect(first).resolves.toMatchObject({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     hold = false
-    await expect(older(test, cursorOf(1_000))).resolves.toBeDefined()
+    await expect(older(test, cursorOf(10))).resolves.toBeDefined()
     test.close()
   })
 
@@ -3727,16 +3764,17 @@ describe("History pages", () => {
     const background = new EventSource()
     const turns = [adopted(background)]
     // The live turn stored more rows than a page holds.
-    const steps = Array.from({ length: 700 }, (_, index) => ({
+    const steps = Array.from({ length: 7 }, (_, index) => ({
       id: `live-${index}`,
       text: `Step ${index}`,
     }))
     const transcript = [
-      ...conversation(601),
+      ...conversation(6),
       storedRow("live-prompt", "user", "Go", NOW),
       ...steps.map(({ id, text }) => storedRow(id, "assistant", text, NOW)),
     ]
     const test = await harness({
+      historyReach: REACH,
       providerIds: true,
       transcript,
       // The journal holds the whole turn.
@@ -3752,7 +3790,7 @@ describe("History pages", () => {
     background.emit(turnStarted())
     for (const { id, text } of steps) chunk(background, text, id)
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("Step 699"), "an update carrying Step 699")
+    await test.recorder.wait(said("Step 6"), "an update carrying Step 6")
 
     /** The message ids of the page older than `offset`. */
     const pageIds = async (offset: number) => {
@@ -3762,8 +3800,8 @@ describe("History pages", () => {
     }
     const ids = (from: number, to: number) =>
       transcript.slice(from, to).map(({ id }) => id)
-    expect(await pageIds(500)).toEqual(ids(302, 602))
-    expect(await pageIds(1_000)).toEqual(ids(0, 302))
+    expect(await pageIds(5)).toEqual(ids(4, 7))
+    expect(await pageIds(10)).toEqual(ids(0, 4))
     test.close()
   })
 })

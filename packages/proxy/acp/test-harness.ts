@@ -52,7 +52,7 @@ import type { Activity } from "../core/member"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
 import { createAosAcpAgent } from "./agent"
-import { createChannels } from "../core/channel"
+import { createChannels, type HistoryReach } from "../core/channel"
 import { withFaults, type Faults } from "./test-faults"
 import type {
   AcpConnectionContext,
@@ -610,6 +610,8 @@ export type HarnessOptions = {
    */
   transcript?: SessionHistoryResponse["messages"]
   truncated?: boolean
+  /** How history is paged; a small reach stands for a long Session. */
+  historyReach?: HistoryReach
   /** Replaces the harness's one-update-per-message history translation. */
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
@@ -876,6 +878,7 @@ export async function harness(options: HarnessOptions = {}) {
       logger: logs.logger,
       coordinator,
       runtime: faults.runtime,
+      ...(options.historyReach ? { historyReach: options.historyReach } : {}),
       ...(subscribeTurns
         ? {
             adoption: {

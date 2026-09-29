@@ -1140,6 +1140,7 @@ describe("HermesRunEngine", () => {
   })
 
   it("reports a resumed interaction Hermes never ran as a failed run", async () => {
+    const clock = useFakeClock()
     const warn = vi.fn()
     const { handle, publish } = await resumedRun({}, { log: { warn } })
 
@@ -1148,7 +1149,9 @@ describe("HermesRunEngine", () => {
     publish(nativeTurn("live-secret", 2).idle())
 
     // The verdict waits for the bounded re-read, not for the next Send.
-    await expect(settledWithin(handle, 2_000)).resolves.toBe("settled")
+    const settling = settledWithin(handle, 2_000)
+    await clock.advance(2_000)
+    await expect(settling).resolves.toBe("settled")
     const events = await collect(handle)
     expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([])
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
@@ -3696,7 +3699,7 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
-  it("bounds unread turn events and terminalizes overflow", async () => {
+  it("terminalizes overflow and admits the next run", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const engine = new HermesTurnEngine(
@@ -3709,13 +3712,12 @@ describe("HermesRunEngine", () => {
             seq: 1,
             payload: { message_id: "message-42" },
           })
-          for (let seq = 2; seq <= 4_100; seq += 1)
-            publish({
-              type: "message.delta",
-              session_id: "live-secret",
-              seq,
-              payload: { text: "x" },
-            })
+          publish({
+            type: "message.delta",
+            session_id: "live-secret",
+            seq: 2,
+            payload: { text: "x".repeat(4_194_305) },
+          })
           return {
             acknowledgement: "accepted" as const,
             status: "streaming" as const,
@@ -3852,13 +3854,12 @@ describe("HermesRunEngine", () => {
           seq: 1,
           payload: { message_id: "message-42" },
         })
-        for (let seq = 2; seq <= 4_100; seq += 1)
-          publish({
-            type: "message.delta",
-            session_id: "live-secret",
-            seq,
-            payload: { text: "x" },
-          })
+        publish({
+          type: "message.delta",
+          session_id: "live-secret",
+          seq: 2,
+          payload: { text: "x".repeat(4_194_305) },
+        })
       }
       releaseStatus?.()
       await started

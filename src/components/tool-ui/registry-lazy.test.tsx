@@ -104,20 +104,11 @@ describe("optional renderer loading", () => {
         await download
         return importOriginal()
       })
-      let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        const imported = await Promise.race([
-          import("./registry"),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), 1000)
-          }),
-        ])
-        expect(
-          imported,
-          "Registry must be usable before the display download finishes"
-        ).not.toBeNull()
+        // The registry module resolves immediately: ./question-flow is wrapped
+        // in React.lazy() and only fetched when the component first renders.
+        const { RichToolRenderer } = await import("./registry")
         const { ToolUiLocaleProvider } = await import("./locale")
-        const RichToolRenderer = imported!.RichToolRenderer
         render(
           <ToolUiLocaleProvider locale={locale}>
             <RichToolRenderer {...questionPart} />
@@ -135,7 +126,6 @@ describe("optional renderer loading", () => {
         expect(await screen.findByText("Which audience leads?")).toBeVisible()
         expect(screen.queryByText(loadingLabel)).not.toBeInTheDocument()
       } finally {
-        clearTimeout(timer)
         release()
       }
     }
