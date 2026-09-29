@@ -377,6 +377,31 @@ describe("OpenCode server adapter", () => {
       expect(edge).toMatchObject({ nextOffset: 300, truncated: true })
       expect(beyond).toMatchObject({ messages: [], truncated: true })
     })
+
+    it("counts a response's thought toward the messages a read needs", async () => {
+      const thinking = (id: string, created: number) => ({
+        ...assistant(id, created),
+        content: [
+          { id: `${id}-reason`, type: "reasoning" as const, text: id },
+          ...assistant(id, created).content,
+        ],
+      })
+      const native = transcriptClient(
+        Array.from({ length: 150 }, (_, index) =>
+          thinking(`a${index}`, index + 1)
+        )
+      )
+      const adapter = new OpenCodeServerAdapter({
+        client: native,
+        turns: turnEngine,
+      })
+
+      // One native page of 100 already projects to the 152 messages needed.
+      const page = await adapter.history("research", "session-1", 1, 150)
+
+      expect(page.messages.map(({ id }) => id)).toEqual(["a74"])
+      expect(native.sessions.messages).toHaveBeenCalledTimes(1)
+    })
   })
 
   it("renames, archives, pins, and deletes an owned Session through the native routes", async () => {
