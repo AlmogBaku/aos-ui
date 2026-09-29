@@ -1412,6 +1412,43 @@ describe("Hermes server adapter", () => {
     expect(Object.keys(page.sessions[2])).not.toContain("pinned")
   })
 
+  it("projects the native source as platform and omits platform when source is absent or unrecognised", async () => {
+    const adapter = new HermesServerAdapter({
+      request: vi.fn(),
+      http: vi.fn(async () => ({
+        sessions: [
+          {
+            id: "stored/1",
+            profile: "researcher",
+            title: "WhatsApp Cloud",
+            source: "whatsapp_cloud",
+          },
+          {
+            id: "stored/2",
+            profile: "researcher",
+            title: "Slack",
+            source: "slack",
+          },
+          {
+            id: "stored/3",
+            profile: "researcher",
+            title: "AOS native",
+            source: "aos-ui",
+          },
+          { id: "stored/4", profile: "researcher", title: "No source" },
+        ],
+        total: 4,
+      })),
+    })
+
+    const page = await adapter.listSessions("researcher", 50, 0)
+
+    expect(page.sessions[0].platform).toBe("whatsapp")
+    expect(page.sessions[1].platform).toBe("slack")
+    expect(Object.keys(page.sessions[2])).not.toContain("platform")
+    expect(Object.keys(page.sessions[3])).not.toContain("platform")
+  })
+
   it("treats a non-boolean native read state or pin as a malformed catalog payload", async () => {
     for (const flag of [{ unread: 1 }, { pinned: 1 }]) {
       const adapter = new HermesServerAdapter({

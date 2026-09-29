@@ -58,6 +58,7 @@ export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
     ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
     ...(row.unread === undefined ? {} : { unread: row.unread }),
     ...(row.pinned === undefined ? {} : { pinned: row.pinned }),
+    ...(row.platform === undefined ? {} : { platform: row.platform }),
   }
 }
 

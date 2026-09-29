@@ -13,6 +13,7 @@ import {
   SessionCreateResponseSchema,
 } from "../../../protocol"
 import { openClawInviteSessionKey } from "../../core/invite-key"
+import { sessionPlatform } from "../../core/session-platform"
 import * as ids from "../../core/ids"
 import {
   ServerAgentUpdateUnsupportedError,
@@ -152,6 +153,7 @@ function sessionStatus(row: OpenClawSession): Session["status"] {
 
 function projectSession(agentId: string, row: OpenClawSession): Session {
   verifyOwnership(agentId, row)
+  const platform = sessionPlatform(row.channel)
   return {
     id: row.key,
     agentId,
@@ -164,6 +166,8 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
     status: sessionStatus(row),
     // Absent pin state stays absent: it never overwrites a known value.
     ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+    // channel carries the external source; unknown/absent stays absent.
+    ...(platform !== undefined ? { platform } : {}),
   }
 }
 

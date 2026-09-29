@@ -35,7 +35,10 @@ import { SystemNotice } from "@/components/ui/system-notice"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { cn } from "@/lib/utils"
-import type { SessionActionCapabilities } from "@/runtime-adapters/contracts"
+import type {
+  SessionActionCapabilities,
+  SessionPlatform,
+} from "@/runtime-adapters/contracts"
 
 import { AgentRowContextMenu } from "./agent-row-menu"
 import { WorkspacePreferences } from "./workspace-preferences"
@@ -66,6 +69,7 @@ import {
 } from "./mobile-navigator"
 import type { AgentSessionNavigation } from "./workspace-navigation-catalog"
 import { AgentSessionHistory } from "./agent-session-history"
+import { SessionPlatformIcon } from "./session-platform-icon"
 import {
   SessionThreadListItem,
   SessionThreadListTitle,
@@ -105,6 +109,8 @@ export type WorkspaceSession = {
   archived?: boolean
   /** Provider pin; absent when the runtime does not track it. */
   pinned?: boolean
+  /** External platform the Session came from; absent for AOS-native Sessions. */
+  platform?: SessionPlatform
   canClose?: boolean
 }
 
@@ -367,6 +373,7 @@ function mobileNavigatorCopy(dictionary: Dictionary): MobileNavigatorCopy {
     noArchivedSessions: dictionary.mobileNavigation.noArchivedSessions,
     pinned: dictionary.status.pinned,
     archived: dictionary.status.archived,
+    platform: dictionary.platform,
     sessionMenu: sessionRowMenuCopy(dictionary),
     statusLabel: dictionary.status.label,
     status: {
@@ -705,6 +712,9 @@ function SessionTabs({
               const stateLabels = [
                 session.unread ? dictionary.status.unread : null,
                 session.pinned ? dictionary.status.pinned : null,
+                session.platform
+                  ? dictionary.platform[session.platform]
+                  : null,
               ].filter(Boolean)
 
               return (
@@ -778,6 +788,12 @@ function SessionTabs({
                           <Pin
                             className="size-3 shrink-0 text-muted-foreground"
                             aria-hidden="true"
+                          />
+                        ) : null}
+                        {session.platform ? (
+                          <SessionPlatformIcon
+                            platform={session.platform}
+                            className="size-3 shrink-0 text-muted-foreground"
                           />
                         ) : null}
                         <bdi>

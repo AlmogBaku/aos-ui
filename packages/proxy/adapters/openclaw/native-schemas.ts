@@ -57,6 +57,8 @@ export type OpenClawSession = Readonly<{
   displayName?: string
   archived?: boolean
   pinned?: boolean
+  /** External channel the Session came from (e.g. "whatsapp", "slack"). */
+  channel?: string
   createdAt?: number
   updatedAt?: number
   lastInteractionAt?: number
@@ -436,6 +438,8 @@ export function parseOpenClawSessions(
         ? { archived: value.archived }
         : {}),
       ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
+      // channel is an opaque string; unknown values are resolved later by sessionPlatform.
+      ...(optionalString(value.channel) ? { channel: value.channel as string } : {}),
       // Newer gateways report it; a missing or unusable value stays absent.
       ...(integer(value.createdAt) !== undefined
         ? { createdAt: integer(value.createdAt) }

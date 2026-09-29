@@ -93,7 +93,8 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
     left.archived === right.archived &&
     left.unread === right.unread &&
     left.pinned === right.pinned &&
-    left.createdAt === right.createdAt
+    left.createdAt === right.createdAt &&
+    left.platform === right.platform
   )
 }
 
@@ -168,6 +169,7 @@ export function createAcpSessionStore({
     const unread = info.unread ?? previous?.unread
     const pinned = info.pinned ?? previous?.pinned
     const createdAt = info.createdAt ?? previous?.createdAt
+    const platform = info.platform ?? previous?.platform
     write(sessionId, {
       sessionId,
       agentId: info.agentId,
@@ -178,6 +180,7 @@ export function createAcpSessionStore({
       ...(unread === undefined ? {} : { unread }),
       ...(pinned === undefined ? {} : { pinned }),
       ...(createdAt === undefined ? {} : { createdAt }),
+      ...(platform === undefined ? {} : { platform }),
     })
   }
 

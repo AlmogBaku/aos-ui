@@ -167,6 +167,14 @@ export const he = {
     pinned: "מוצמדת",
     archived: "בארכיון",
   },
+  platform: {
+    buzz: "מ-Buzz",
+    whatsapp: "מ-WhatsApp",
+    slack: "מ-Slack",
+    telegram: "מ-Telegram",
+    discord: "מ-Discord",
+    email: "מדוא״ל",
+  },
   runErrors: {
     AOS_RECONNECT_EXHAUSTED:
       "לא הצלחנו לשחזר את החיבור להרצה הזו. רעננו את השיחה כדי להמשיך.",

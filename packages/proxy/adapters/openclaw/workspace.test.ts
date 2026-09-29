@@ -339,6 +339,51 @@ describe("OpenClaw workspace reads", () => {
     expect(page.sessions[1]).not.toHaveProperty("pinned")
   })
 
+  it("[CL1-WORKSPACE-011b] projects native channel as platform and omits platform when channel is absent or unrecognised", async () => {
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.list": {
+        sessions: [
+          {
+            key: "agent:analyst:from-telegram",
+            agentId: "analyst",
+            label: "Telegram",
+            channel: "telegram",
+            updatedAt: 3,
+          },
+          {
+            key: "agent:analyst:from-whatsapp-cloud",
+            agentId: "analyst",
+            label: "WhatsApp Cloud",
+            channel: "whatsapp_cloud",
+            updatedAt: 2,
+          },
+          {
+            key: "agent:analyst:no-channel",
+            agentId: "analyst",
+            label: "AOS native",
+            updatedAt: 1,
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const page = await workspace.listSessions("analyst", 50, 0)
+
+    expect(page.sessions[0]).toMatchObject({
+      id: "agent:analyst:from-telegram",
+      platform: "telegram",
+    })
+    expect(page.sessions[1]).toMatchObject({
+      id: "agent:analyst:from-whatsapp-cloud",
+      platform: "whatsapp",
+    })
+    expect(page.sessions[2]).not.toHaveProperty("platform")
+  })
+
   it("[CL1-WORKSPACE-012] verifies exact Session ownership before any native mutation", async () => {
     const native = gateway({
       "agents.list": agentCatalog([

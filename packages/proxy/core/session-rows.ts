@@ -82,6 +82,7 @@ const COMPARED: readonly (keyof SessionRow)[] = [
   "status",
   "unread",
   "pinned",
+  "platform",
 ]
 
 function rowKey(agentId: string, sessionId: string) {

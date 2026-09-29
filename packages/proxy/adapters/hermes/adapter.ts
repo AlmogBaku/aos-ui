@@ -84,6 +84,7 @@ import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { inviteSessionKey } from "../../core/invite-key"
+import { sessionPlatform } from "../../core/session-platform"
 import type { McpAppClient } from "../../mcp-apps/client"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import { nativeSlashCommands } from "./slash-commands"
@@ -1400,6 +1401,7 @@ export class HermesServerAdapter implements ServerRuntime {
       )
         throw new HermesUnavailableError()
       seen.add(storedId)
+      const platform = sessionPlatform(row.source)
       return {
         id: sessionId(profile, storedId),
         agentId: profile,
@@ -1413,6 +1415,8 @@ export class HermesServerAdapter implements ServerRuntime {
         ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
         // The pin is stored, and absent stays absent for the same reason.
         ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+        // source carries the channel a Session came from; unknown/absent stays absent.
+        ...(platform !== undefined ? { platform } : {}),
       }
     })
     // A malformed count stays an error even where a short page replaces it.

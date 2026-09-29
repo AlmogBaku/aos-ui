@@ -119,6 +119,7 @@ export const fixtureSessions: SessionMetadata[] = [
     updatedAt: "2026-08-30T12:00:00.000Z",
     status: "waiting-for-input",
     unread: true,
+    platform: "whatsapp",
   },
   {
     sessionId: "thread-vela-metrics",
@@ -133,6 +134,7 @@ export const fixtureSessions: SessionMetadata[] = [
     updatedAt: "2026-08-27T12:00:00.000Z",
     status: "failed",
     unread: true,
+    platform: "slack",
   },
   {
     sessionId: "thread-vela-retrospective",

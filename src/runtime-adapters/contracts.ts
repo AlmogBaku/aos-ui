@@ -8,6 +8,7 @@ import type {
   ReadResourceResult,
 } from "@aos/protocol/mcp-apps"
 import type { PushSubscriptionManager } from "@/lib/notifications/push-subscription"
+import type { SessionPlatform } from "@aos/protocol"
 export type { RuntimeMode } from "@shared/runtime-modes"
 
 export type AgentStatus =
@@ -99,7 +100,11 @@ export type SessionMetadata = {
   pinned?: boolean
   /** Provider creation time; absent when the runtime does not report it. */
   createdAt?: string
+  /** External platform the Session came from; absent for AOS-native Sessions. */
+  platform?: SessionPlatform
 }
+
+export type { SessionPlatform }
 
 /** Which Session actions the selected runtime declares it performs. */
 export type SessionActionCapabilities = {

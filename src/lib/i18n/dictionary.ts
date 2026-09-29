@@ -170,6 +170,15 @@ export type Dictionary = {
     pinned: string
     archived: string
   }
+  /** "From {platform}" labels for Session row accessible names. */
+  platform: {
+    buzz: string
+    whatsapp: string
+    slack: string
+    telegram: string
+    discord: string
+    email: string
+  }
   /** Localized copy for the normalized `AOS_*` run failure codes. */
   runErrors: {
     AOS_RECONNECT_EXHAUSTED: string

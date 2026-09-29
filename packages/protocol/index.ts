@@ -166,6 +166,18 @@ export const SessionStatusSchema = z.enum([
   "failed",
   "unknown",
 ])
+
+/** The external platform a Session originated from, when the provider reports it. */
+export const SessionPlatformSchema = z.enum([
+  "buzz",
+  "whatsapp",
+  "slack",
+  "telegram",
+  "email",
+  "discord",
+])
+export type SessionPlatform = z.infer<typeof SessionPlatformSchema>
+
 export const SessionSchema = z.strictObject({
   id: IdentifierSchema,
   agentId: IdentifierSchema,
@@ -181,6 +193,8 @@ export const SessionSchema = z.strictObject({
   unread: z.boolean().optional(),
   /** Provider pin state; absent when untracked or unknowable on this read. */
   pinned: z.boolean().optional(),
+  /** External platform the Session came from; absent for AOS-native Sessions. */
+  platform: SessionPlatformSchema.optional(),
 })
 export type Session = z.infer<typeof SessionSchema>
 

@@ -5,6 +5,7 @@ import {
   type ThreadListRuntime,
 } from "@assistant-ui/react"
 import { ChevronDown, Pin, Plus, Search } from "lucide-react"
+import { SessionPlatformIcon } from "./session-platform-icon"
 
 import { Button } from "@/components/ui/button"
 import type { Locale } from "@/lib/i18n/config"
@@ -59,6 +60,15 @@ export type AgentSessionHistoryCopy = SessionHistoryLoadMoreCopy & {
   /** Row state appended to an accessible name. */
   pinned: string
   archived: string
+  /** "From {platform}" labels keyed by platform id. */
+  platform: {
+    buzz: string
+    whatsapp: string
+    slack: string
+    telegram: string
+    discord: string
+    email: string
+  }
   sessionMenu: SessionRowMenuCopy
 }
 
@@ -150,6 +160,7 @@ function SessionRow({
     !isActive && isLastSelected ? copy.lastSelected : null,
     session.unread ? copy.unread : null,
     session.pinned ? copy.pinned : null,
+    session.platform ? copy.platform[session.platform] : null,
     session.archived ? copy.archived : null,
   ]
     .filter(Boolean)
@@ -166,6 +177,12 @@ function SessionRow({
         />
         {session.pinned ? (
           <Pin className={styles.pinGlyph} aria-hidden="true" />
+        ) : null}
+        {session.platform ? (
+          <SessionPlatformIcon
+            platform={session.platform}
+            className={styles.pinGlyph}
+          />
         ) : null}
         <bdi className={cn(styles.rowTitle, "text-sm")}>
           {openable ? (

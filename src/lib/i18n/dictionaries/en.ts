@@ -173,6 +173,14 @@ export const en = {
     pinned: "Pinned",
     archived: "Archived",
   },
+  platform: {
+    buzz: "From Buzz",
+    whatsapp: "From WhatsApp",
+    slack: "From Slack",
+    telegram: "From Telegram",
+    discord: "From Discord",
+    email: "From email",
+  },
   runErrors: {
     AOS_RECONNECT_EXHAUSTED:
       "The connection to this run could not be restored. Reload the Session to continue.",

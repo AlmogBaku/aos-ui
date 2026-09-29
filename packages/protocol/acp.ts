@@ -8,6 +8,7 @@ import {
   type ArtifactDescriptor,
   TurnSteerResponseSchema,
   SessionContextResponseSchema,
+  SessionPlatformSchema,
   SessionStatusSchema,
   SessionTodosResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
@@ -191,6 +192,8 @@ export const AosSessionInfoMetaSchema = readObject({
   createdAt: z.string().datetime().optional(),
   unread: z.boolean().optional(),
   pinned: z.boolean().optional(),
+  /** External platform the Session came from; absent for AOS-native Sessions. */
+  platform: SessionPlatformSchema.optional(),
 })
 export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
 

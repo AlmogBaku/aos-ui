@@ -45,6 +45,14 @@ const copy: AgentSessionHistoryCopy = {
   noArchivedSessions: "No archived Sessions",
   pinned: "Pinned",
   archived: "In archive",
+  platform: {
+    buzz: "From Buzz",
+    whatsapp: "From WhatsApp",
+    slack: "From Slack",
+    telegram: "From Telegram",
+    discord: "From Discord",
+    email: "From email",
+  },
   sessionMenu: {
     sessionActions: "Session actions",
     rename: "Rename",
