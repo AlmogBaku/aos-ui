@@ -363,7 +363,7 @@ const script = {
   standalonePermission: permissionRequest("permission-2"),
   /** `InitializeResponse._meta.aos` for the operator role. */
   initializeMeta: {
-    version: 1,
+    version: 2,
     role: "operator",
     extensions: {
       steer: true,
@@ -393,13 +393,14 @@ const script = {
         editable: false,
         avatarEditable: false,
         revision: "research-1",
+        folder: "/srv/demo",
       },
     ],
   },
   sessions: [
     {
       sessionId: SESSION_ID,
-      cwd: "/",
+      cwd: "/srv/demo",
       title: "Research",
       updatedAt: "2026-09-12T00:00:00.000Z",
       _meta: {
@@ -544,6 +545,9 @@ function installAcpStub(script: AcpScript) {
       .map((block) => asRecord(block).text)
       .filter((text): text is string => typeof text === "string")
       .join(" ")
+
+  /** Whether a turn is actively running on the scripted Session. */
+  let busy = false
 
   class AcpStubSocket extends EventTarget {
     readyState = 0
@@ -783,7 +787,17 @@ function installAcpStub(script: AcpScript) {
       })
       // The prompt is acknowledged with the minted user message id, then the
       // turn streams. The pending prompt stays running until it is cancelled.
+      // A prompt sent while a turn is active gets a JSON-RPC error (-31010).
       this.handlers.set("session/prompt", (params, id) => {
+        if (busy) {
+          this.deliver({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -31010, message: "turn_in_progress" },
+          })
+          return
+        }
+        busy = true
         turn += 1
         const messageId = `user-${turn}`
         const answerId = `answer-${turn}`
@@ -795,12 +809,14 @@ function installAcpStub(script: AcpScript) {
         })
         this.run({ sessionUpdate: "state_update", state: "running" })
         if (promptText(params).includes(script.pendingPrompt)) return
-        const settle = () =>
+        const settle = () => {
+          busy = false
           this.run({
             sessionUpdate: "state_update",
             state: "idle",
             stopReason: "end_turn",
           })
+        }
         // A permission turn waits on the operator, as the proxy's
         // `requiresActionOutbound` does: the wait, then the request.
         if (promptText(params).includes(script.guardedPermissionPrompt)) {
@@ -838,6 +854,7 @@ function installAcpStub(script: AcpScript) {
             if (update.sessionUpdate === "config_option_update")
               this.update(update)
             else this.run(update)
+          busy = false
           // A settled turn restates the context window.
           this.update({ sessionUpdate: "usage_update", ...script.usage })
           return
@@ -848,18 +865,29 @@ function installAcpStub(script: AcpScript) {
             messageId: answerId,
             content: { type: "text", text },
           })
+        busy = false
         this.run({
           sessionUpdate: "state_update",
           state: "idle",
           stopReason: "end_turn",
         })
       })
-      this.handlers.set("session/cancel", () =>
+      this.handlers.set("session/cancel", () => {
+        busy = false
         this.run({
           sessionUpdate: "state_update",
           state: "idle",
           stopReason: "cancelled",
         })
+      })
+      // session/close stops the active work and detaches this connection.
+      this.handlers.set("session/close", (_params, id) => {
+        busy = false
+        this.respond(id, {})
+      })
+      // _aos/session/part detaches this connection only; work continues.
+      this.handlers.set("_aos/session/part", (_params, id) =>
+        this.respond(id, {})
       )
       this.handlers.set("session/set_config_option", (params, id) => {
         const configOptions = script.configOptions.map((option) =>
@@ -1172,7 +1200,7 @@ test("AOS proxy renders a turn's tools, diff, terminal, compaction, subagent, st
       ...script.sessions,
       {
         sessionId: CHILD_SESSION_ID,
-        cwd: "/",
+        cwd: "/srv/demo",
         title: "Pricing page check",
         updatedAt: "2026-09-11T00:00:00.000Z",
         _meta: {
