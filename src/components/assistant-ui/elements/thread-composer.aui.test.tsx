@@ -1623,7 +1623,7 @@ describe("Thread accessibility", () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
-  it("reorders queued messages from the row menu and with Alt+Arrow keys, and sends them in that order, with no Edit on a runtime that cannot edit", async () => {
+  it("reorders queued messages with Alt+Arrow keys on the focused row and sends them in that order, with no editing on a runtime that cannot edit", async () => {
     const user = userEvent.setup()
     const sent: string[] = []
     let finish!: () => void
@@ -1656,29 +1656,23 @@ describe("Thread accessibility", () => {
     await waitFor(() => expect(order()).toEqual(["A", "B", "C"]))
 
     const [rowA, , rowC] = rows()
-    await user.click(
-      within(rowA!).getByRole("button", { name: "Queued message actions" })
-    )
-    expect(
-      await screen.findByRole("menuitem", { name: "Move up" })
-    ).toHaveAttribute("aria-disabled", "true")
     // The local runtime keeps its queue private, so it offers no editing.
+    await user.dblClick(within(rowA!).getByText("A"))
+    rowA!.focus()
+    await user.keyboard("{Enter}")
     expect(
-      screen.queryByRole("menuitem", { name: "Edit" })
+      screen.queryByRole("textbox", { name: "Edit queued message" })
     ).not.toBeInTheDocument()
-    await user.click(screen.getByRole("menuitem", { name: "Move down" }))
+
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}")
     await waitFor(() => expect(order()).toEqual(["B", "A", "C"]))
     expect(within(region).getByText("Moved to 2 of 3")).toBeInTheDocument()
+    expect(rowA).toHaveFocus()
 
-    // The More button opens its menu on a plain arrow key, not on Alt+Arrow.
-    const more = within(rowC!).getByRole("button", {
-      name: "Queued message actions",
-    })
-    more.focus()
+    rowC!.focus()
     await user.keyboard("{Alt>}{ArrowUp}{/Alt}")
     await waitFor(() => expect(order()).toEqual(["B", "C", "A"]))
-    expect(more).toHaveFocus()
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument()
+    expect(rowC).toHaveFocus()
 
     // A message leaving is no move, so the last announcement goes quiet.
     await user.click(

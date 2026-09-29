@@ -1,3 +1,4 @@
+import type { CompleteAttachment } from "@assistant-ui/core"
 import { createRuntimeExtras } from "@assistant-ui/core/react"
 
 /** What a runtime lets the thread do to a message still waiting in its queue. */
@@ -6,6 +7,17 @@ export type QueueControls = {
   readonly editText: (queueItemId: string, text: string) => boolean
   /** Keeps every queued message waiting until the returned call releases it. */
   readonly hold: () => () => void
+  /**
+   * Empties the queue into one draft: every text in queue order, a blank line
+   * apart, and every attachment. Undefined, leaving the queue as it was, when
+   * nothing waits or a message holds a part a composer cannot take back.
+   */
+  readonly takeAll: () =>
+    | {
+        readonly text: string
+        readonly attachments: readonly CompleteAttachment[]
+      }
+    | undefined
 }
 
 export type QueueControlsExtras = {

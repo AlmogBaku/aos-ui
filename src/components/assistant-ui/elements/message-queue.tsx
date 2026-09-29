@@ -3,13 +3,28 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
-  type RefObject,
 } from "react"
-import { Menu } from "@base-ui/react/menu"
+import {
+  DndContext,
+  PointerSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type Modifier,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import {
   ComposerPrimitive,
   QueueItemPrimitive,
@@ -17,19 +32,14 @@ import {
   useAuiState,
 } from "@assistant-ui/react"
 import {
-  ArrowDownIcon,
   ArrowUpIcon,
-  CornerDownRightIcon,
-  EllipsisIcon,
+  GripVerticalIcon,
   LoaderCircleIcon,
-  PencilIcon,
-  Trash2Icon,
+  XIcon,
 } from "lucide-react"
 
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
-import { Button } from "@/components/ui/button"
-import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
 import { Textarea } from "@/components/ui/textarea"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import { cn } from "@/lib/utils"
@@ -40,18 +50,15 @@ import {
 
 export type MessageQueueLabels = {
   readonly region: string
-  readonly steer: string
+  readonly count: (count: number) => string
+  readonly sendsCombined: string
+  readonly editAll: string
+  readonly rowHint: string
   readonly steerLabel: string
   readonly removeLabel: string
   readonly steering: string
   readonly failed: string
-  readonly actions: string
-  readonly moveUp: string
-  readonly moveDown: string
   readonly moved: (position: number, count: number) => string
-  readonly edit: string
-  readonly save: string
-  readonly cancel: string
   readonly editor: string
 }
 
@@ -85,83 +92,61 @@ export function isUncertainDelivery(error: unknown) {
   )
 }
 
+const plainKey = (event: KeyboardEvent) =>
+  !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
+
 /**
  * The row's text as a field. It holds the queue while it is open, so a turn
- * ending meanwhile sends nothing until the edit is saved or cancelled.
+ * ending meanwhile sends nothing until the edit is saved or dropped. Leaving
+ * the field saves it; Escape drops the edit.
  */
 function QueueEditor({
   labels,
   initialText,
   hold,
-  fieldRef,
-  onSave,
-  onCancel,
+  onClose,
 }: {
   labels: MessageQueueLabels
   initialText: string
   hold: QueueControls["hold"]
-  fieldRef: RefObject<HTMLTextAreaElement | null>
-  onSave(text: string): void
-  onCancel(): void
+  onClose(text: string | undefined, refocus: boolean): void
 }) {
   const [text, setText] = useState(initialText)
+  const fieldRef = useRef<HTMLTextAreaElement>(null)
+  const closedRef = useRef(false)
   useEffect(() => hold(), [hold])
   useLayoutEffect(() => {
     const field = fieldRef.current
     field?.focus()
     field?.setSelectionRange(field.value.length, field.value.length)
-  }, [fieldRef])
-  const blank = text.trim() === ""
-  const save = () => {
-    if (!blank) onSave(text)
+  }, [])
+  const close = (save: boolean, refocus: boolean) => {
+    if (closedRef.current) return
+    closedRef.current = true
+    onClose(save && text.trim() !== "" ? text : undefined, refocus)
   }
   return (
-    <>
-      <Textarea
-        ref={fieldRef}
-        dir="auto"
-        rows={1}
-        aria-label={labels.editor}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={(event) => {
-          if (keyboardEventSafetyReason(event)) return
-          if (event.key === "Escape") {
-            event.preventDefault()
-            onCancel()
-          } else if (
-            event.key === "Enter" &&
-            !event.shiftKey &&
-            !event.altKey &&
-            !event.ctrlKey &&
-            !event.metaKey
-          ) {
-            event.preventDefault()
-            save()
-          }
-        }}
-        className="min-h-8 min-w-0 flex-1 resize-none px-2 py-1"
-      />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={blank}
-        className="shrink-0 [@media(pointer:coarse)]:min-h-11"
-        onClick={save}
-      >
-        {labels.save}
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="shrink-0 [@media(pointer:coarse)]:min-h-11"
-        onClick={onCancel}
-      >
-        {labels.cancel}
-      </Button>
-    </>
+    <Textarea
+      ref={fieldRef}
+      dir="auto"
+      rows={1}
+      aria-label={labels.editor}
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => close(true, false)}
+      onKeyDown={(event) => {
+        if (keyboardEventSafetyReason(event)) return
+        if (event.key === "Escape") {
+          event.preventDefault()
+          event.stopPropagation()
+          close(false, true)
+        } else if (event.key === "Enter" && plainKey(event)) {
+          event.preventDefault()
+          close(true, true)
+        }
+      }}
+      className="[field-sizing:content] max-h-32 min-h-7 min-w-0 flex-1 resize-none rounded-md border-transparent bg-background px-2 py-1 text-sm shadow-none dark:bg-popover"
+    />
   )
 }
 
@@ -174,9 +159,9 @@ type QueuePlace = {
 
 function QueueRow({
   labels,
+  hintId,
   steer,
   onUnconfirmed,
-  direction,
   placeOf,
   onMoved,
   controls,
@@ -184,9 +169,9 @@ function QueueRow({
   onEditingChange,
 }: {
   labels: MessageQueueLabels
+  hintId: string
   steer: NonNullable<ComposerFeatureViewModel["steer"]> | undefined
   onUnconfirmed(delivery: UnconfirmedDelivery): void
-  direction: "ltr" | "rtl"
   placeOf(id: string): QueuePlace
   onMoved(position: number): void
   controls: QueueControls | undefined
@@ -233,7 +218,19 @@ function QueueRow({
     }
   }, [aui, onUnconfirmed, originThreadId, requestId, status, steer, text])
 
+  const isEditing = editing?.id === requestId
+  const pending = status === "pending"
+  const {
+    setNodeRef,
+    listeners,
+    transform,
+    transition,
+    isDragging,
+    isSorting,
+  } = useSortable({ id: requestId, disabled: isEditing || pending })
+
   const { position, previousId, nextId } = placeOf(requestId)
+  const rowRef = useRef<HTMLLIElement | null>(null)
   // React moves a keyed row's node, which drops focus: whatever held focus
   // in the row takes it back once the row lands.
   const refocusRef = useRef<HTMLElement | null>(null)
@@ -250,100 +247,87 @@ function QueueRow({
     )
     onMoved(position + by)
   }
-  const moveOnKey = (event: KeyboardEvent<HTMLLIElement>) => {
+  const edit = () => {
+    if (controls && !pending)
+      onEditingChange({ id: requestId, returnTo: "row" })
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
+    if (isEditing) return
     if (
-      !event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      (event.key !== "ArrowUp" && event.key !== "ArrowDown")
-    )
-      return
-    event.preventDefault()
-    const focused = document.activeElement
-    move(
-      event.key === "ArrowUp" ? -1 : 1,
-      focused instanceof HTMLElement && event.currentTarget.contains(focused)
-        ? focused
-        : null
-    )
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown")
+    ) {
+      event.preventDefault()
+      const focused = document.activeElement
+      move(
+        event.key === "ArrowUp" ? -1 : 1,
+        focused instanceof HTMLElement && event.currentTarget.contains(focused)
+          ? focused
+          : null
+      )
+    } else if (
+      event.key === "Enter" &&
+      plainKey(event) &&
+      event.target === event.currentTarget
+    ) {
+      event.preventDefault()
+      edit()
+    }
   }
-  const moreRef = useRef<HTMLButtonElement>(null)
-  const fieldRef = useRef<HTMLTextAreaElement>(null)
-  const isEditing = editing?.id === requestId
-  const edit = () => onEditingChange({ id: requestId, returnTo: "row" })
-  // Focus goes back to More once the row leaves edit mode it opened.
-  const returnToMoreRef = useRef(false)
-  useLayoutEffect(() => {
-    if (isEditing || !returnToMoreRef.current) return
-    returnToMoreRef.current = false
-    moreRef.current?.focus()
-  }, [isEditing])
-  const closeEditor = () => {
-    returnToMoreRef.current = editing?.returnTo === "row"
-    onEditingChange(undefined)
-  }
-  const menuEntries: MenuPopupEntry[] = [
-    ...(controls
-      ? [
-          {
-            id: "edit",
-            label: labels.edit,
-            icon: <PencilIcon aria-hidden="true" />,
-            onSelect: edit,
-          },
-        ]
-      : []),
-    {
-      id: "move-up",
-      label: labels.moveUp,
-      icon: <ArrowUpIcon aria-hidden="true" />,
-      disabled: previousId === undefined,
-      onSelect: () => move(-1, moreRef.current),
-    },
-    {
-      id: "move-down",
-      label: labels.moveDown,
-      icon: <ArrowDownIcon aria-hidden="true" />,
-      disabled: nextId === undefined,
-      onSelect: () => move(1, moreRef.current),
-    },
-  ]
 
   const canSteer = running && steer !== undefined
-  const pending = status === "pending"
   return (
     <li
+      ref={(node) => {
+        setNodeRef(node)
+        rowRef.current = node
+      }}
       data-slot="aui_message-queue-item"
-      className="flex min-h-10 min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-background px-2.5 py-1.5 text-sm shadow-xs motion-reduce:transition-none"
-      // The field keeps Alt+Arrow keys: on macOS they move the caret.
-      onKeyDown={isEditing ? undefined : moveOnKey}
+      tabIndex={isEditing ? -1 : 0}
+      aria-describedby={controls ? hintId : undefined}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn(
+        "group/queue-row flex min-h-9 min-w-0 items-center gap-1.5 rounded-xl py-0.5 ps-1.5 pe-1 text-sm outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none",
+        !isEditing && "cursor-grab hover:bg-foreground/[0.04]",
+        isSorting && !isDragging && "hover:bg-transparent",
+        isDragging &&
+          "relative z-10 cursor-grabbing bg-background shadow-[0_6px_16px_-6px] shadow-foreground/25 dark:bg-popover"
+      )}
+      onKeyDown={onKeyDown}
+      onDoubleClick={(event) => {
+        if (event.target instanceof Element && event.target.closest("button"))
+          return
+        edit()
+      }}
+      {...(isEditing ? {} : listeners)}
     >
-      <CornerDownRightIcon
+      <span
         aria-hidden="true"
-        className="size-3.5 shrink-0 text-muted-foreground"
-      />
+        className="grid w-5 shrink-0 place-items-center text-xs text-muted-foreground tabular-nums"
+      >
+        <span className="group-hover/queue-row:hidden group-focus-visible/queue-row:hidden [@media(pointer:coarse)]:inline">
+          {position}
+        </span>
+        <GripVerticalIcon className="hidden size-3.5 group-hover/queue-row:block group-focus-visible/queue-row:block [@media(pointer:coarse)]:hidden" />
+      </span>
       {isEditing && controls ? (
         <QueueEditor
           labels={labels}
           initialText={text}
           hold={controls.hold}
-          fieldRef={fieldRef}
-          onSave={(edited) => {
-            controls.editText(requestId, edited)
-            closeEditor()
+          onClose={(edited, refocus) => {
+            if (edited !== undefined) controls.editText(requestId, edited)
+            onEditingChange(undefined)
+            if (refocus) queueMicrotask(() => rowRef.current?.focus())
           }}
-          onCancel={closeEditor}
         />
       ) : (
         <QueueItemPrimitive.Text
           dir="auto"
-          className={cn(
-            "min-w-0 flex-1 truncate text-start text-foreground/85",
-            controls && "cursor-text"
-          )}
-          // A pointer shortcut for the menu's Edit, which keyboards reach.
-          onClick={controls ? edit : undefined}
+          className="min-w-0 flex-1 truncate py-1 text-start text-foreground/75"
         />
       )}
       {status === "error" ? (
@@ -351,65 +335,40 @@ function QueueRow({
           {labels.failed}
         </span>
       ) : null}
-      {canSteer ? (
-        <Button
+      {canSteer && !isEditing ? (
+        <TooltipIconButton
           type="button"
-          variant="ghost"
-          size="sm"
+          tooltip={labels.steerLabel}
           aria-label={labels.steerLabel}
-          disabled={pending || isEditing}
-          className="shrink-0 [@media(pointer:coarse)]:min-h-11"
+          disabled={pending}
+          className="size-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:size-11"
           onClick={() => void submitSteering()}
         >
           {pending ? (
             <LoaderCircleIcon
-              data-icon="inline-start"
               aria-hidden="true"
               className="animate-spin motion-reduce:animate-none"
             />
-          ) : null}
-          {labels.steer}
-        </Button>
+          ) : (
+            <ArrowUpIcon aria-hidden="true" />
+          )}
+        </TooltipIconButton>
       ) : null}
       {isEditing ? null : (
-        <Menu.Root>
-          <Menu.Trigger
-            ref={moreRef}
-            // An arrow key opens the menu; Alt+Arrow belongs to the row's move.
-            onKeyDown={(event) => {
-              if (event.altKey) event.preventBaseUIHandler()
-            }}
-            render={
-              <TooltipIconButton
-                type="button"
-                tooltip={labels.actions}
-                aria-label={labels.actions}
-                className="size-8 shrink-0 [@media(pointer:coarse)]:size-11"
-              />
-            }
-          >
-            <EllipsisIcon aria-hidden="true" />
-          </Menu.Trigger>
-          <MenuPopup
-            entries={{ items: menuEntries }}
-            dir={direction}
-            finalFocus={() => fieldRef.current ?? moreRef.current}
-          />
-        </Menu.Root>
+        <QueueItemPrimitive.Remove
+          render={
+            <TooltipIconButton
+              type="button"
+              tooltip={labels.removeLabel}
+              aria-label={labels.removeLabel}
+              disabled={pending}
+              className="size-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:size-11"
+            />
+          }
+        >
+          <XIcon aria-hidden="true" />
+        </QueueItemPrimitive.Remove>
       )}
-      <QueueItemPrimitive.Remove
-        render={
-          <TooltipIconButton
-            type="button"
-            tooltip={labels.removeLabel}
-            aria-label={labels.removeLabel}
-            disabled={pending}
-            className="size-8 shrink-0 [@media(pointer:coarse)]:size-11"
-          />
-        }
-      >
-        <Trash2Icon aria-hidden="true" />
-      </QueueItemPrimitive.Remove>
       <span className="sr-only" role="status" aria-live="polite">
         {pending ? labels.steering : status === "error" ? labels.failed : ""}
       </span>
@@ -417,45 +376,55 @@ function QueueRow({
   )
 }
 
+// Rows only travel up and down the queue.
+const alongQueue: Modifier = ({ transform }) => ({ ...transform, x: 0 })
+
+// Dragging is a pointer affordance; keyboards move rows with Alt+Arrow and
+// the queue's own live region announces every landing.
+const silentDrag = {
+  announcements: {
+    onDragStart: () => undefined,
+    onDragOver: () => undefined,
+    onDragEnd: () => undefined,
+    onDragCancel: () => undefined,
+  },
+  screenReaderInstructions: { draggable: "" },
+}
+
 export function MessageQueue({
   labels,
   steer,
   onUnconfirmed,
-  direction,
   editing,
   onEditingChange,
 }: {
   labels: MessageQueueLabels
   steer: ComposerFeatureViewModel["steer"]
   onUnconfirmed(delivery: UnconfirmedDelivery): void
-  direction: "ltr" | "rtl"
   editing: QueueEditing | undefined
   onEditingChange(editing: QueueEditing | undefined): void
 }) {
+  const aui = useAui()
   const items = useAuiState((state) => state.composer.queue)
   const controls = queueControlsExtras.use(
     (extras) => extras.queueControls,
     undefined
   )
-  const placeOf = useCallback(
-    (id: string): QueuePlace => {
-      const index = items.findIndex((item) => item.id === id)
-      return {
-        position: index + 1,
-        previousId: items[index - 1]?.id,
-        nextId: items[index + 1]?.id,
-      }
-    },
-    [items]
-  )
+  const hintId = useId()
+  const ids = items.map((item) => item.id)
+  const placeOf = (id: string): QueuePlace => {
+    const index = ids.indexOf(id)
+    return {
+      position: index + 1,
+      previousId: ids[index - 1],
+      nextId: ids[index + 1],
+    }
+  }
   // The announcement is fixed as the move happens, and a repeat of the same
   // words toggles a trailing space so the live region reads it again.
   // A message joining or leaving the queue makes the last announcement stale,
   // so it is kept only while the queue holds the same messages.
-  const members = items
-    .map((item) => item.id)
-    .sort()
-    .join()
+  const members = [...ids].sort().join()
   const [moved, setMoved] = useState<{
     text: string
     repeat: boolean
@@ -476,30 +445,85 @@ export function MessageQueue({
     moved?.members === members
       ? `${moved.text}${moved.repeat ? "\u00a0" : ""}`
       : ""
+
+  const sensors = useSensors(
+    // A few pixels of travel before a drag, so clicks and double-clicks stay.
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 250, tolerance: 6 },
+    })
+  )
+  const drop = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    const from = ids.indexOf(String(active.id))
+    const to = ids.indexOf(String(over.id))
+    if (from < 0 || to < 0) return
+    aui.composer
+      .queueItem({ id: String(active.id) })
+      .move(
+        from < to
+          ? { insertAfter: String(over.id) }
+          : { insertBefore: String(over.id) }
+      )
+    announceMove(to + 1)
+  }
+
   return (
     <div
       data-slot="aui_message-queue"
       role="region"
       aria-label={labels.region}
-      className="mb-2"
+      className="w-full self-stretch @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width)"
     >
-      <ul className="flex min-w-0 flex-col gap-1">
-        <ComposerPrimitive.Queue>
-          {() => (
-            <QueueRow
-              labels={labels}
-              steer={steer}
-              onUnconfirmed={onUnconfirmed}
-              direction={direction}
-              placeOf={placeOf}
-              onMoved={announceMove}
-              controls={controls}
-              editing={editing}
-              onEditingChange={onEditingChange}
-            />
-          )}
-        </ComposerPrimitive.Queue>
-      </ul>
+      {/* Tucked behind the composer: the composer's rounded edge overlaps
+          the tray's foot, so the two read as one surface. */}
+      <div className="mx-3 -mb-5 rounded-t-2xl border border-b-0 border-border/60 bg-muted/50 px-1.5 pt-1.5 pb-6 dark:bg-muted/30">
+        <div className="flex min-w-0 items-center gap-1.5 px-2 pb-1 text-xs text-muted-foreground">
+          <span className="shrink-0 font-medium text-foreground/70 tabular-nums">
+            {labels.count(items.length)}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="min-w-0">{labels.sendsCombined}</span>
+          {controls ? (
+            <span className="ms-auto flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:hidden">
+              <kbd className="grid h-4 min-w-4 place-items-center rounded border border-border/80 bg-background px-1 font-sans text-[0.625rem] text-foreground/70 dark:bg-popover">
+                Esc
+              </kbd>
+              {labels.editAll}
+            </span>
+          ) : null}
+        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[alongQueue]}
+          accessibility={silentDrag}
+          onDragEnd={drop}
+        >
+          <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+            <ul className="flex min-w-0 flex-col">
+              <ComposerPrimitive.Queue>
+                {() => (
+                  <QueueRow
+                    labels={labels}
+                    hintId={hintId}
+                    steer={steer}
+                    onUnconfirmed={onUnconfirmed}
+                    placeOf={placeOf}
+                    onMoved={announceMove}
+                    controls={controls}
+                    editing={editing}
+                    onEditingChange={onEditingChange}
+                  />
+                )}
+              </ComposerPrimitive.Queue>
+            </ul>
+          </SortableContext>
+        </DndContext>
+      </div>
+      <span id={hintId} className="sr-only">
+        {labels.rowHint}
+      </span>
       <span className="sr-only" role="status" aria-live="polite">
         {announcement}
       </span>

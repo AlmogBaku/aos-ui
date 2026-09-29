@@ -31,7 +31,10 @@ import {
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
-import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
+import {
+  queueControlsExtras,
+  type QueueControls,
+} from "@/runtime-adapters/queue-controls"
 import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
 
 import { createAcpApprovals } from "./acp-approvals"
@@ -1000,7 +1003,7 @@ describe("useAcpRuntime", () => {
     ])
   })
 
-  it("holds queued sends while a run owns the Session", async () => {
+  it("holds queued sends while a run owns the Session, then sends them as one", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake, { enableMessageQueue: true })
     act(() => {
@@ -1008,10 +1011,11 @@ describe("useAcpRuntime", () => {
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
     await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Also check the logs" }],
-      })
+      for (const text of ["Also check the logs", "And the metrics"])
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text }],
+        })
     })
     expect(fake.prompt).not.toHaveBeenCalled()
     await act(async () => {
@@ -1024,10 +1028,11 @@ describe("useAcpRuntime", () => {
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
-        [{ type: "text", text: "Also check the logs" }],
+        [{ type: "text", text: "Also check the logs\n\nAnd the metrics" }],
         expect.objectContaining({})
       )
     })
+    expect(fake.prompt).toHaveBeenCalledTimes(1)
   })
 
   describe("a queued message under edit", () => {
@@ -1143,14 +1148,16 @@ describe("useAcpRuntime", () => {
         })
       })
       await ends(fake)
-      await waitFor(() => expect(sentText(fake)).toEqual(["From the app"]))
+      await waitFor(() =>
+        expect(sentText(fake)).toEqual(["From the app\n\nTyped"])
+      )
     })
 
     it("keeps the next message waiting past the turn's end until the hold is released", async () => {
       const fake = createFakeConnection()
       const { result } = await mount(fake, { enableMessageQueue: true })
       running(fake)
-      await queue(result.current, "Next")
+      await queue(result.current, "Next", "After")
       const release = controlsOf(result.current)!.hold()
       await ends(fake)
       expect(fake.prompt).not.toHaveBeenCalled()
@@ -1158,7 +1165,7 @@ describe("useAcpRuntime", () => {
         release()
         release()
       })
-      await waitFor(() => expect(sentText(fake)).toEqual(["Next"]))
+      await waitFor(() => expect(sentText(fake)).toEqual(["Next\n\nAfter"]))
     })
 
     it("stays paused after Stop, even when a message is queued while held", async () => {
@@ -1185,7 +1192,7 @@ describe("useAcpRuntime", () => {
       await queue(result.current, "Second")
       expect(fake.prompt).not.toHaveBeenCalled()
       await act(async () => release())
-      await waitFor(() => expect(sentText(fake)).toEqual(["First"]))
+      await waitFor(() => expect(sentText(fake)).toEqual(["First\n\nSecond"]))
     })
 
     it("sends nothing more for a hold released while a send waits on the proxy", async () => {
@@ -1199,9 +1206,10 @@ describe("useAcpRuntime", () => {
           })
       )
       running(fake)
-      await queue(result.current, "First", "Second")
+      await queue(result.current, "First")
       await ends(fake)
       expect(sentText(fake)).toEqual(["First"])
+      await queue(result.current, "Second")
       await act(async () => {
         controlsOf(result.current)!.hold()()
       })
@@ -1212,6 +1220,62 @@ describe("useAcpRuntime", () => {
       running(fake, accepted)
       await ends(fake, accepted)
       await waitFor(() => expect(sentText(fake)).toEqual(["First", "Second"]))
+    })
+
+    it("keeps sending after a Stop pressed before the dispatched turn ran", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      await queue(result.current, "First")
+      await ends(fake)
+      expect(sentText(fake)).toEqual(["First"])
+      await act(async () => {
+        result.current.thread.cancelRun()
+      })
+      const stopped = { sequence: 0, turnId: "run-2" }
+      running(fake, stopped)
+      await act(async () => {
+        fake.emit(
+          {
+            sessionUpdate: "state_update",
+            state: "idle",
+            stopReason: "cancelled",
+          },
+          stopped
+        )
+      })
+      await queue(result.current, "Second")
+      await waitFor(() => expect(sentText(fake)).toEqual(["First", "Second"]))
+    })
+
+    it("hands the whole queue back as one draft, emptying it", async () => {
+      const fake = createFakeConnection()
+      const { result } = await mount(fake, { enableMessageQueue: true })
+      running(fake)
+      const image: CompleteAttachment = {
+        id: "att-1",
+        type: "image",
+        name: "chart.png",
+        contentType: "image/png",
+        status: { type: "complete" },
+        content: [{ type: "image", image: "data:image/png;base64,AAA" }],
+      }
+      await act(async () => {
+        result.current.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "First" }],
+          attachments: [image],
+        })
+      })
+      await queue(result.current, "Second")
+      let draft: ReturnType<QueueControls["takeAll"]>
+      act(() => {
+        draft = controlsOf(result.current)?.takeAll()
+      })
+      expect(draft).toEqual({ text: "First\n\nSecond", attachments: [image] })
+      expect(queuedIds(result.current)).toEqual([])
+      await ends(fake)
+      expect(fake.prompt).not.toHaveBeenCalled()
     })
 
     it("sends nothing into a turn that started while held", async () => {
@@ -1260,13 +1324,14 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
-    await act(async () => {
-      for (const text of ["First", "Second"])
+    const append = (text: string) =>
+      act(async () => {
         result.current.thread.append({
           role: "user",
           content: [{ type: "text", text }],
         })
-    })
+      })
+    await append("First")
     // The proxy accepts the first send before its turn reports running.
     await act(async () => {
       fake.emit({
@@ -1277,6 +1342,7 @@ describe("useAcpRuntime", () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(fake.prompt).toHaveBeenCalledTimes(1)
+    await append("Second")
 
     const accepted = { sequence: 0, turnId: "run-2" }
     act(() => {
@@ -1354,13 +1420,14 @@ describe("useAcpRuntime", () => {
     act(() => {
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
-    await act(async () => {
-      for (const text of ["First", "Second"])
+    const append = (text: string) =>
+      act(async () => {
         result.current.thread.append({
           role: "user",
           content: [{ type: "text", text }],
         })
-    })
+      })
+    await append("First")
     await act(async () => {
       fake.emit({
         sessionUpdate: "state_update",
@@ -1371,6 +1438,7 @@ describe("useAcpRuntime", () => {
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledTimes(1)
     })
+    await append("Second")
 
     await act(async () => {
       fake.emit(
@@ -2002,7 +2070,7 @@ describe("the queue row editor", () => {
 
   it("edits a queued message in place, holding the queue until it is saved", async () => {
     const { user, fake, region } = await queued("Chekc the logs")
-    await user.click(within(region).getByText("Chekc the logs"))
+    await user.dblClick(within(region).getByText("Chekc the logs"))
     const editor = within(region).getByRole("textbox", {
       name: "Edit queued message",
     })
@@ -2031,10 +2099,9 @@ describe("the queue row editor", () => {
 
   it("leaves the message as it was on Escape, without stopping the turn", async () => {
     const { user, fake, region } = await queued("Keep me")
-    await user.click(
-      within(region).getByRole("button", { name: "Queued message actions" })
-    )
-    await user.click(await screen.findByRole("menuitem", { name: "Edit" }))
+    const row = within(region).getByRole("listitem")
+    act(() => row.focus())
+    await user.keyboard("{Enter}")
     await user.type(
       within(region).getByRole("textbox", { name: "Edit queued message" }),
       " not"
@@ -2044,35 +2111,22 @@ describe("the queue row editor", () => {
     expect(
       within(region).queryByRole("textbox", { name: "Edit queued message" })
     ).not.toBeInTheDocument()
-    expect(
-      within(region).getByRole("button", { name: "Queued message actions" })
-    ).toHaveFocus()
+    await waitFor(() => expect(row).toHaveFocus())
     expect(fake.cancel).not.toHaveBeenCalled()
   })
 
-  it("opens the last queued message with Up from an empty composer, and returns there after", async () => {
-    const { user, input, region } = await queued("First")
+  it("pulls the whole queue ahead of the draft with Esc, leaving the turn running until the next Esc", async () => {
+    const { user, fake, input, region } = await queued("First")
     await user.type(input, "Second{Enter}")
-    await user.keyboard("{ArrowUp}")
-    const editor = within(region).getByRole("textbox", {
-      name: "Edit queued message",
-    })
-    expect(editor).toHaveValue("Second")
-    expect(editor).toHaveFocus()
-    await user.keyboard("{Escape}")
-    await waitFor(() => expect(input).toHaveFocus())
-  })
-
-  it("restores a just-cleared draft on Up before opening the queue", async () => {
-    const { user, input, region } = await queued("Queued")
     await user.type(input, "Draft")
-    await user.keyboard("{Escape}{Escape}")
-    await waitFor(() => expect(input).toHaveValue(""))
-    await user.keyboard("{ArrowUp}")
-    await waitFor(() => expect(input).toHaveValue("Draft"))
-    expect(
-      within(region).queryByRole("textbox", { name: "Edit queued message" })
-    ).not.toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveValue("First\n\nSecond\n\nDraft"))
+    expect(region).not.toBeInTheDocument()
+    expect(fake.cancel).not.toHaveBeenCalled()
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(fake.cancel).toHaveBeenCalled())
+    expect(fake.prompt).not.toHaveBeenCalled()
   })
 })
 
