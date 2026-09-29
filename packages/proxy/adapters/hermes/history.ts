@@ -1,6 +1,7 @@
 import type { SessionMessage } from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { StopReason } from "../../core/events"
+import type { SessionNotice } from "../../core/member"
 import type { JsonValue } from "../json-value"
 import {
   isRecord as isNativeRecord,
@@ -14,6 +15,7 @@ import {
   projectHermesAttachedImages,
   projectHermesMediaText,
 } from "./media-artifacts"
+import { classifyHermesRow } from "./scaffolding"
 import {
   canonicalToolName,
   hermesToolDiffs,
@@ -24,6 +26,7 @@ import {
 } from "./tool-data"
 
 type JsonRecord = Record<string, JsonValue>
+type MessagePart = SessionMessage["content"][number]
 function isRecord(value: unknown): value is JsonRecord {
   return isNativeRecord(value)
 }
@@ -159,25 +162,6 @@ function projectHermesUserContent(text: string, messageId: string) {
 }
 
 /**
- * The scaffold Hermes prepends to the `api_content` of the user row an accepted
- * `session.redirect` persists: `agent/conversation_loop.py`
- * `_apply_active_turn_redirect` writes it there while the interrupted turn is
- * still open, so the row is the correction itself rather than a new prompt. See
- * the pinned upstream commit in `UPSTREAM.md`.
- */
-const REDIRECT_SCAFFOLD_PREFIX =
-  "[Context from the interrupted assistant response]"
-
-/** A mid-turn correction, which the run journal also acknowledges. */
-function isRedirectCorrection(value: JsonRecord): boolean {
-  const apiContent = value.api_content
-  return (
-    typeof apiContent === "string" &&
-    apiContent.startsWith(REDIRECT_SCAFFOLD_PREFIX)
-  )
-}
-
-/**
  * How a stored assistant row's model call finished, where it ends a turn. A
  * `tool_calls` row, or one a stop gate reopened, leaves the turn running.
  */
@@ -221,15 +205,26 @@ export function hermesRowMessageId(rowId: number) {
 
 /**
  * The index of the oldest row that opens a turn: the first user row the
- * projection turns into a message. `-1` when the rows hold no turn start.
+ * projection opens a turn at, prompt or automation. `-1` when the rows hold no
+ * turn start.
  */
 export function hermesTurnStart(rows: readonly unknown[]) {
-  return rows.findIndex(
-    (value) =>
-      isRecord(value) &&
-      !trimmedText(value.display_kind) &&
-      trimmedText(value.role) === "user"
-  )
+  return rows.findIndex((value) => {
+    if (!isRecord(value) || trimmedText(value.role) !== "user") return false
+    const { kind } = classifyHermesRow(
+      value,
+      rowText(value, parseRowJson(value.content))
+    )
+    return kind === "prompt" || kind === "automation"
+  })
+}
+
+/** The notice an automation turn's first message leads with, if it has one. */
+function leadOf(
+  opening: { notice?: SessionNotice } | undefined
+): MessagePart[] {
+  const notice = opening?.notice
+  return notice ? [{ type: "data", name: "aos-notice", data: notice }] : []
 }
 
 /** Converts provider-native durable rows into the strict public history shape. */
@@ -256,6 +251,8 @@ export function projectHermesHistory(
   let response: number | undefined
   /** A call finished since that response opened. */
   let toolSince = false
+  /** The automation row whose turn no message has opened yet. */
+  let automated: { notice?: SessionNotice } | undefined
 
   /** A message spans every row that patched into it, so its end is their newest. */
   function contributed(messageIndex: number, row: JsonRecord) {
@@ -273,9 +270,10 @@ export function projectHermesHistory(
   }
 
   rows.forEach((value, index) => {
-    if (!isRecord(value) || trimmedText(value.display_kind)) return
+    if (!isRecord(value)) return
     const role = trimmedText(value.role)
     if (role === "tool") {
+      if (trimmedText(value.display_kind)) return
       const toolCallId = trimmedText(value.tool_call_id ?? value.toolCallId)
       const target = toolCallId ? calls.get(toolCallId) : undefined
       if (!toolCallId || !target) return
@@ -340,15 +338,25 @@ export function projectHermesHistory(
     // carrier, so provider-only fields cannot replace a Session's durable
     // transcript content. The artifact reader derives a row's text the same way,
     // so an attachment it resolves is the one the operator was shown.
-    const text = rowText(value, rawContent)
+    const row = classifyHermesRow(value, rowText(value, rawContent))
+    // A hidden row neither splits the reply around it nor shifts its id.
+    if (row.kind === "skip") return
+    const text = row.text
     const interrupted = role === "assistant" && isInterruptMarker(value, text)
-    const correction = role === "user" && isRedirectCorrection(value)
+    const correction = row.kind === "correction"
     if (role !== "assistant") {
       response = undefined
       if (role === "user" && !correction) {
         turn = { base: rowMessageId, responses: 0, index }
         toolSince = false
+        automated = undefined
       }
+    }
+    // An automation row opens its turn but shows nothing of its own: the
+    // turn's first message opens it in the thread, led by its notice.
+    if (row.kind === "automation") {
+      automated = row.notice ? { notice: row.notice } : {}
+      return
     }
     const userContent =
       role === "user" ? projectHermesUserContent(text, rowMessageId) : undefined
@@ -373,18 +381,25 @@ export function projectHermesHistory(
         ? messages[response]
         : undefined
     let id = rowMessageId
+    /** The automation turn this row's first new message opens. */
+    let opening =
+      role === "assistant" && !previousAssistant ? automated : undefined
+    if (opening) automated = undefined
     if (role === "assistant" && !previousAssistant) {
       turn.responses += 1
       toolSince = false
       if (turn.base !== undefined) id = `${turn.base}-${turn.responses}`
       // A thought is its own message, ahead of the response it leads to.
-      if (reasoning)
+      if (reasoning) {
         messages.push({
           id: `${id}-thought`,
           role,
-          content: [{ type: "reasoning", text: reasoning }],
+          content: [...leadOf(opening), { type: "reasoning", text: reasoning }],
           createdAt: timestamp(value.timestamp ?? value.created_at, index),
+          ...(opening ? { opensTurn: true as const } : {}),
         })
+        opening = undefined
+      }
     } else if (reasoning && previousAssistant) {
       // Live keeps thought only ahead of a response's prose.
       const thought = messages[response! - 1]
@@ -399,7 +414,9 @@ export function projectHermesHistory(
     }
     const messageIndex = previousAssistant ? response! : messages.length
     if (role === "assistant") response = messageIndex
-    const content = previousAssistant ? [...previousAssistant.content] : []
+    const content = previousAssistant
+      ? [...previousAssistant.content]
+      : leadOf(opening)
     if (visibleText) content.push({ type: "text", text: visibleText })
     // Live publishes a MEDIA line's artifact as the line streams past, once per
     // reference however many rows of the turn repeat it.
@@ -482,6 +499,7 @@ export function projectHermesHistory(
         // The same turn the journal acknowledges as `aos.steer.accepted`: the
         // flag lets a from-start replay announce it once.
         ...(correction ? { correction: true as const } : {}),
+        ...(opening ? { opensTurn: true as const } : {}),
       })
     }
   })

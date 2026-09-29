@@ -210,6 +210,15 @@ export const he = {
     length: "התשובה נעצרה במגבלת האורך.",
     contentFilter: "המודל סירב לענות.",
   },
+  notice: {
+    kinds: {
+      goal: "מטרה",
+      loop: "לולאה",
+      heartbeat: "דופק",
+      process: "תהליך ברקע",
+      status: "סטטוס",
+    },
+  },
   compaction: {
     running: "דוחס את ההקשר…",
     completed: "ההקשר נדחס",

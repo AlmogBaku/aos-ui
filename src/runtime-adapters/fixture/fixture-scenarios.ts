@@ -44,6 +44,7 @@ export const fixtureScenarioNames = [
   "provider-error-detail",
   "compaction",
   "compaction-failed",
+  "notices",
 ] as const
 
 export type FixtureScenarioName = (typeof fixtureScenarioNames)[number]
@@ -231,8 +232,56 @@ function nestedSubagentMessages(): ThreadMessage[] {
   ]
 }
 
+/** A status line the runtime announced mid-turn. */
+function noticePart(notice: Record<string, unknown>): AssistantPart {
+  return { type: "data", name: "aos-notice", data: notice } as AssistantPart
+}
+
+/** A heartbeat turn that wakes, checks its goal, and reports a failed watch. */
+function noticeParts(): AssistantPart[] {
+  return [
+    noticePart({
+      severity: "info",
+      kind: "heartbeat",
+      title: "♥ heartbeat #3 firing…",
+    }),
+    noticePart({ severity: "info", kind: "loop", title: "/loop wakeup #4" }),
+    toolPart("run_command", { command: "bun run test" }, "12 passed", {
+      artifact: withAosToolArtifact(undefined, { kind: "execute" }),
+    }),
+    noticePart({
+      severity: "info",
+      kind: "goal",
+      title: "Goal check: 2 of 3 criteria met — continuing.",
+    }),
+    noticePart({
+      severity: "info",
+      kind: "process",
+      title: "Resuming interrupted turn…",
+    }),
+    noticePart({
+      severity: "warning",
+      kind: "process",
+      title: "Background process proc_7f2a exited with code 1.",
+    }),
+    {
+      type: "text",
+      text: "The test suite passes; the deploy watcher stopped and needs a restart.",
+    },
+  ]
+}
+
 export function buildFixtureScenario(prompt: string): FixtureScenario {
   const input = prompt.toLocaleLowerCase("en")
+
+  if (input.includes("notice") || input.includes("heartbeat")) {
+    const parts = noticeParts()
+    return {
+      name: "notices",
+      frames: [parts.slice(0, 1), parts.slice(0, 2), parts.slice(0, 4)],
+      parts,
+    }
+  }
 
   if (input.includes("compaction") || input.includes("compact")) {
     return input.includes("fail")

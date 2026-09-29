@@ -1,7 +1,7 @@
 import { StopReason, ToolKind } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
-import { projectHermesHistory } from "./history"
+import { hermesTurnStart, projectHermesHistory } from "./history"
 import {
   assistantText,
   assistantToolCall,
@@ -248,27 +248,267 @@ describe("server-side Hermes history projection", () => {
     expect(serialized).not.toContain("aos.artifact")
   })
 
-  it("omits native bookkeeping rows with a display kind", () => {
+  const tagged = (displayKind: string, content = "Synthetic payload") =>
+    userRow("x", content, { displayKind })
+  const untagged = (content: string) => userRow("x", content)
+
+  it.each([
+    // Shown, and the reply after it is its own turn's.
+    ["a prompt", untagged("And the appendix"), ["u1", "u1-1", "x", "x-1"]],
+    [
+      "a skill invocation",
+      tagged("skill_invocation", "/work fix the leak"),
+      ["u1", "u1-1", "x", "x-1"],
+    ],
+    // Shown as a correction of the running turn, which keeps the reply.
+    [
+      "a redirect",
+      userRow("x", "Use the second draft", {
+        apiContent: "[Context from the interrupted assistant response]\nDraft",
+      }),
+      ["u1", "u1-1", "x!", "u1-2"],
+    ],
+    [
+      "a steer",
+      tagged(
+        "steer",
+        "[OUT-OF-BAND USER MESSAGE — a direct message]\nUse the second draft\n[/OUT-OF-BAND USER MESSAGE]"
+      ),
+      ["u1", "u1-1", "x!", "u1-2"],
+    ],
+    // Hidden, but its reply is its own message, opening a turn of its own.
+    ...[
+      "auto_continue",
+      "process_complete",
+      "async_delegation_complete",
+      "internal_notification",
+      "hidden",
+    ].map((kind) => [`${kind} row`, tagged(kind), ["u1", "u1-1", "x-1^"]]),
+    ...[
+      "[Continuing toward your standing goal]\nGoal: tidy the notes",
+      "[/loop wakeup #2, every 10m]\nRecurring task: check the build",
+      "[Heartbeat — recurring instruction, fires every 1h]\nCheck the inbox",
+      '[IMPORTANT: Background process proc_1 matched watch pattern "ERR".\nCommand: make]',
+      "[System note: Your previous turn was interrupted mid-run. Resume it.]",
+      "[Background process proc_1 heartbeat #3 — still running after 5m]",
+    ].map((text) => [
+      text.split("\n")[0],
+      untagged(text),
+      ["u1", "u1-1", "x-1^"],
+    ]),
+    // Model-only: hidden, and the reply stays with the original request.
+    ...[
+      "[System: The active model for this chat has changed]",
+      "  [STILL IN PROGRESS — this is the active request.]\nSummarize the notes",
+      "[Your active task list was preserved across context compression]\n- [>] Draft",
+      "[Skills pruned during compression — reload before acting on these tasks]",
+      "Continue from the compressed conversation context above. No human turn.",
+    ].map((text) => [
+      text.split("\n")[0],
+      untagged(text),
+      ["u1", "u1-1", "u1-2"],
+    ]),
+    ...["model_switch", "personality_switch", "unknown_kind"].map((kind) => [
+      `${kind} row`,
+      tagged(kind),
+      ["u1", "u1-1", "u1-2"],
+    ]),
+    [
+      "a hidden compaction handoff",
+      { ...tagged("hidden"), _compressed_summary: true },
+      ["u1", "u1-1", "u1-2"],
+    ],
+  ])("projects %s by its row class", (_name, row, ids) => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Summarize the notes"),
+      assistantToolCall("a1", [
+        { toolCallId: "c1", name: "read_file", args: { path: "notes.md" } },
+      ]),
+      toolRow("c1", "read_file", "contents"),
+      row,
+      assistantText("a2", "Done."),
+    ])
+
+    expect(
+      messages.map(
+        ({ id, correction, opensTurn }) =>
+          `${id}${correction ? "!" : ""}${opensTurn ? "^" : ""}`
+      )
+    ).toEqual(ids)
+  })
+
+  it.each([
+    [
+      "[/loop wakeup #1, every 30s]\nRecurring task: tick",
+      { title: "/loop wakeup #1, every 30s", kind: "loop" },
+    ],
+    [
+      "[Heartbeat — recurring instruction, fires every 1h]\nCheck the inbox",
+      {
+        title: "Heartbeat — recurring instruction, fires every 1h",
+        kind: "heartbeat",
+      },
+    ],
+    [
+      "[Continuing toward your standing goal — a quality gate failed]\nGoal: x",
+      {
+        title: "Continuing toward your standing goal — a quality gate failed",
+        kind: "goal",
+      },
+    ],
+    [
+      "[IMPORTANT: Background process proc_1 exited (exit code 0).\nCommand: make\nOutput:\nok]",
+      {
+        title: "Background process proc_1 exited (exit code 0).",
+        kind: "process",
+      },
+    ],
+    [
+      "[System note: Your previous turn was interrupted mid-run. Resume it.]",
+      {
+        title:
+          "System note: Your previous turn was interrupted mid-run. Resume it.",
+      },
+    ],
+    // A row that names nothing still opens its turn, with no notice to lead.
+    ["Synthetic payload", undefined],
+  ])(
+    "leads an automation turn with the notice its row names: %#",
+    (text, notice) => {
+      const messages = projectHermesHistory([
+        userRow("u1", "Reply only: OK"),
+        assistantText("a1", "OK"),
+        userRow("x", text, { displayKind: "internal_notification" }),
+        assistantText("a2", "TICK"),
+      ])
+
+      expect(messages.slice(1)).toEqual([
+        expect.not.objectContaining({ opensTurn: true }),
+        expect.objectContaining({
+          opensTurn: true,
+          content: [
+            ...(notice
+              ? [
+                  {
+                    type: "data",
+                    name: "aos-notice",
+                    data: { severity: "info", ...notice },
+                  },
+                ]
+              : []),
+            { type: "text", text: "TICK" },
+          ],
+        }),
+      ])
+    }
+  )
+
+  it("opens an automation turn at the thought that leads its reply", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Reply only: OK"),
+      assistantText("a1", "OK"),
+      untagged("[/loop wakeup #1, every 30s]\nRecurring task: tick"),
+      { id: "a2", role: "assistant", content: "TICK", reasoning: "Check it" },
+    ])
+
+    expect(messages.slice(2)).toEqual([
+      expect.objectContaining({
+        id: "x-1-thought",
+        opensTurn: true,
+        content: [
+          expect.objectContaining({ name: "aos-notice" }),
+          { type: "reasoning", text: "Check it" },
+        ],
+      }),
+      expect.not.objectContaining({ opensTurn: true }),
+    ])
+  })
+
+  it.each([
+    [
+      '[IMPORTANT: The user has invoked the "work" skill, indicating they want you to follow its instructions. The full skill content is loaded below.]\n\nSkill body that quotes The user has provided the following instruction alongside the skill invocation: nothing\n\nThe user has provided the following instruction alongside the skill invocation: fix   the leak\n\n[Runtime note: synthetic]',
+      "/work fix the leak",
+    ],
+    [
+      '[IMPORTANT: The user has invoked the "/clean /work" stacked skill bundle, loading 2 skills together. Treat every skill below as active guidance for this turn.]\n\nSkills loaded: clean, work\n\nUser instruction: tidy up\n\n[Loaded as part of the stacked skill invocation "clean".]\nUser instruction: body text',
+      "/clean /work tidy up",
+    ],
+    [
+      '[IMPORTANT: The user has invoked the "work" skill, indicating they want you to follow its instructions. The full skill content is loaded below.]\n\nSkill body',
+      "/work",
+    ],
+  ])(
+    "shows a skill scaffold as the invocation typed: %#",
+    (scaffold, typed) => {
+      const [message] = projectHermesHistory([userRow("u1", scaffold)])
+
+      expect(message?.content).toEqual([{ type: "text", text: typed }])
+    }
+  )
+
+  it.each([
+    "[Your active task list was preserved across context compression]\n- [>] Draft\n\n[Skills pruned during compression — reload before acting on these tasks]",
+    "[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nSummarize the notes",
+  ])(
+    "shows a prompt without the scaffold Hermes merged onto it: %#",
+    (tail) => {
+      const [message] = projectHermesHistory([
+        userRow("u1", `Summarize the notes\n\n${tail}`),
+      ])
+
+      expect(message?.content).toEqual([
+        { type: "text", text: "Summarize the notes" },
+      ])
+    }
+  )
+
+  it("hides a compaction carrier whose only live content is the replayed request", () => {
+    const replay =
+      "[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nSummarize the notes"
     const messages = projectHermesHistory([
       {
-        id: "bookkeeping-row",
+        id: "carrier",
         role: "user",
-        content: "internal-content",
-        display_kind: "internal_notification",
-      },
-      {
-        id: "conversation-row",
-        role: "user",
-        content: "conversation-content",
+        content: `Synthetic summary\n--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---\n\n${replay}`,
+        display_content: replay,
+        _compressed_summary: true,
       },
     ])
 
+    expect(messages).toEqual([])
+  })
+
+  it("keeps one reply whole across a tagged assistant row", () => {
+    const messages = projectHermesHistory([
+      userRow("u1", "Summarize the notes"),
+      assistantText("a1", "Working."),
+      assistantText("a-hidden", "Understood.", { displayKind: "hidden" }),
+      assistantText("a2", "Done."),
+    ])
+
     expect(messages).toMatchObject([
+      { id: "u1" },
       {
-        id: "conversation-row",
-        content: [{ type: "text", text: "conversation-content" }],
+        id: "u1-1",
+        content: [
+          { type: "text", text: "Working." },
+          { type: "text", text: "Done." },
+        ],
       },
     ])
+    expect(messages).toHaveLength(2)
+  })
+
+  it("starts a page at its first prompt or automation row, never a hidden one", () => {
+    expect(
+      hermesTurnStart([
+        assistantText("a0", "Earlier reply."),
+        untagged("[System: The active model for this chat has changed]"),
+        tagged("model_switch"),
+        untagged("[/loop wakeup #2, every 10m]\nRecurring task: check"),
+        userRow("u1", "Summarize the notes"),
+      ])
+    ).toBe(3)
   })
 
   it("uses display content only for a compacted native row", () => {
@@ -709,13 +949,27 @@ describe("server-side Hermes history projection", () => {
     expect(serialized).toContain("[REDACTED]")
   })
 
-  it("flags the user row an accepted redirect persisted mid-turn", () => {
-    const scaffold =
-      "[Context from the interrupted assistant response]\nThe agent was drafting the summary."
-
+  it.each([
+    [
+      "an accepted redirect",
+      userRow("u2", "Use the second draft", {
+        rowId: 2,
+        apiContent:
+          "[Context from the interrupted assistant response]\nThe agent was drafting the summary.",
+      }),
+    ],
+    [
+      "a steer",
+      userRow(
+        "u2",
+        "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\nUse the second draft\n[/OUT-OF-BAND USER MESSAGE]",
+        { rowId: 2, displayKind: "steer" }
+      ),
+    ],
+  ])("flags the user row %s persisted mid-turn", (_name, correction) => {
     const messages = projectHermesHistory([
       userRow("u1", "Summarize the notes", { rowId: 1 }),
-      userRow("u2", "Use the second draft", { rowId: 2, apiContent: scaffold }),
+      correction,
     ])
 
     expect(messages).toMatchObject([

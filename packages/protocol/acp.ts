@@ -346,6 +346,34 @@ const TurnMetaBase = {
  */
 export const AosTurnMetaSchema = readObject(TurnMetaBase)
 
+const NoticeKindSchema = z.string().min(1).max(64)
+
+/**
+ * `_meta.aos` of a Session-scoped `notice`: the provider's own status kind,
+ * such as `heartbeat`, which picks the line's icon. A `notice` is live only; a
+ * stored one heads the turn it started (`AosMessageMetaSchema`).
+ */
+export const AosNoticeMetaSchema = readObject({
+  kind: NoticeKindSchema.optional(),
+})
+export type AosNoticeMeta = z.infer<typeof AosNoticeMetaSchema>
+
+/**
+ * `_meta.aos` of a replayed `agent_message` upsert whose message opens a turn
+ * of its own: one the provider started without a prompt, led by the notice
+ * naming what started it when the provider stored one. Live, a run no prompt
+ * opened says the same by its shape.
+ */
+export const AosMessageMetaSchema = readObject({
+  opensTurn: z.literal(true),
+  notice: readObject({
+    severity: z.enum(["info", "warning", "error"]),
+    title: z.string().min(1),
+    kind: NoticeKindSchema.optional(),
+  }).optional(),
+})
+export type AosMessageMeta = z.infer<typeof AosMessageMetaSchema>
+
 const CountSchema = z.number().int().nonnegative()
 
 /** What a turn cost, as the provider priced it; ISO 4217 currency. */

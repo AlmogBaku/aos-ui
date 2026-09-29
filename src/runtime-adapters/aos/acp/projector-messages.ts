@@ -111,6 +111,11 @@ export type ProjectedMessage = {
   readonly parts: readonly ProjectedPart[]
   readonly status?: MessageStatus
   readonly timing?: ProjectedTiming
+  /**
+   * The first message of a run the provider started on its own, which the
+   * thread shows as a turn of its own rather than more of the reply before it.
+   */
+  readonly opensTurn?: true
 }
 
 /** ACP three-state patch: omitted keeps, `null` clears, a value replaces. */

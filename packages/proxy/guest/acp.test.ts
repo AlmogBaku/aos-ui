@@ -45,6 +45,7 @@ import type {
   RuntimeInstance,
   ServerTurnEngine,
   ServerTurnHandle,
+  ServerTurnListener,
   ServerRuntime,
 } from "../core/runtime"
 import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
@@ -432,6 +433,7 @@ function harness(options: HarnessOptions = {}) {
     offset,
   }))
   let catalogChanged: (() => void) | undefined
+  let watcher: ServerTurnListener | undefined
   const runtime: ServerRuntime = {
     turns: engine,
     resolveInvitedSession,
@@ -498,7 +500,20 @@ function harness(options: HarnessOptions = {}) {
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),
-    channels: createChannels({ coordinator, runtime, logger: logs.logger }),
+    channels: createChannels({
+      coordinator,
+      runtime,
+      logger: logs.logger,
+      adoption: {
+        subscribeTurns: (_scope, listener) => {
+          watcher = listener
+          return () => undefined
+        },
+        discover: (scope) => coordinator.discover(scope),
+        subscribeExecutions: (scope, listener) =>
+          coordinator.subscribeScope(scope, listener),
+      },
+    }),
     catalog: createCatalog({
       runtime,
       coordinator,
@@ -544,6 +559,11 @@ function harness(options: HarnessOptions = {}) {
     changeCatalog() {
       if (!catalogChanged) throw new Error("Nothing watches the catalog")
       catalogChanged()
+    },
+    /** The runtime reports a status about the invited Session. */
+    notice() {
+      if (!watcher) throw new Error("Nothing watches the Session")
+      watcher.onNotice?.({ severity: "info", title: "Heartbeat" })
     },
     /**
      * Advertises paging older history, as the AOS browser does, by default,
@@ -1928,7 +1948,7 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest its command list and no Session row, usage, model, catalog signal, read state, or activity of any Session", async () => {
+  it("sends a guest its command list and no Session row, usage, model, notice, catalog signal, read state, or activity of any Session", async () => {
     const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
@@ -1953,6 +1973,7 @@ describe("guest scope and commands", () => {
       'an update carrying "idle"'
     )
     test.changeCatalog()
+    test.notice()
     await settled()
 
     const kinds = updates(test.recorder).map(
@@ -1963,6 +1984,7 @@ describe("guest scope and commands", () => {
     expect(kinds).not.toContain("session_info_update")
     expect(kinds).not.toContain("usage_update")
     expect(kinds).not.toContain("config_option_update")
+    expect(kinds).not.toContain("notice")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
     expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])

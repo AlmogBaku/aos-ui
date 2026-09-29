@@ -37,6 +37,11 @@ export function projectGuestHistory(
   publicSessionId = history.sessionId
 ) {
   const messages: unknown[] = []
+  /**
+   * A turn the provider started on its own, whose first message a guest is not
+   * shown (its thought), so the next one it is shown opens it instead.
+   */
+  let opensTurn = false
   for (const message of history.messages) {
     if (message.role === "system") continue
     // Pages count back from the newest, so the setup turn may open any page.
@@ -74,6 +79,7 @@ export function projectGuestHistory(
       message.role === "assistant" && message.status?.type === "incomplete"
         ? publicTurnError(message.turnErrorCode)
         : undefined
+    opensTurn ||= message.opensTurn === true
     if (
       content.length === 0 &&
       failure === undefined &&
@@ -85,6 +91,11 @@ export function projectGuestHistory(
       role: message.role,
       content,
       createdAt: message.createdAt,
+      // The notice naming what started it is a data part, which a guest is not
+      // shown; the turn it heads still stands apart.
+      ...(opensTurn && message.role === "assistant"
+        ? { opensTurn: true as const }
+        : {}),
       ...(message.role === "user" && message.attachments?.length
         ? { attachments: message.attachments }
         : {}),
@@ -98,6 +109,7 @@ export function projectGuestHistory(
           }
         : {}),
     })
+    opensTurn = false
   }
   return ProjectedHistorySchema.parse({
     sessionId: publicSessionId,
@@ -163,6 +175,7 @@ export function createHistoryMiddleware({
         case "model":
         case "session-info":
         case "commands":
+        case "notice":
         case "error":
         case "catalog-invalidated":
         case "activity":

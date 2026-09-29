@@ -402,6 +402,46 @@ describe("translateHistory", () => {
       })
     ).toEqual([])
   })
+
+  it("opens a turn the provider started on its own ahead of its parts, with its notice", () => {
+    const notice = { severity: "info", title: "/loop wakeup #1", kind: "loop" }
+    const opened = (
+      lead: SessionHistoryResponse["messages"][number]["content"]
+    ) =>
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a2",
+            role: "assistant",
+            content: [...lead, { type: "text", text: "TICK" }],
+            createdAt: "2026-09-19T09:00:03.000Z",
+            opensTurn: true,
+          },
+        ],
+      })
+    const noticePart = {
+      type: "data" as const,
+      name: "aos-notice",
+      data: notice,
+    }
+
+    expect(updatesOf(opened([noticePart]))).toEqual([
+      {
+        sessionUpdate: "agent_message",
+        messageId: "a2",
+        content: [],
+        _meta: { [AOS_META_KEY]: { opensTurn: true, notice } },
+      },
+      expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
+    ])
+    expect(updatesOf(opened([]))[0]).toMatchObject({
+      _meta: { [AOS_META_KEY]: { opensTurn: true } },
+    })
+    expect(JSON.stringify(opened([]))).not.toContain("notice")
+    // An ordinary message says nothing of turns.
+    expect(JSON.stringify(translateHistory(history))).not.toContain("opensTurn")
+  })
 })
 
 const PROMPTED_AT = "2026-09-19T09:00:00.000Z"

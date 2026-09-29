@@ -220,6 +220,15 @@ export const en = {
     length: "The answer stopped at the length limit.",
     contentFilter: "The model declined to answer.",
   },
+  notice: {
+    kinds: {
+      goal: "Goal",
+      loop: "Loop",
+      heartbeat: "Heartbeat",
+      process: "Background process",
+      status: "Status",
+    },
+  },
   compaction: {
     running: "Compacting context…",
     completed: "Context compacted",

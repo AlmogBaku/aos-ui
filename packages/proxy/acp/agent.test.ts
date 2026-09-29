@@ -2870,10 +2870,13 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("streams a turn the runtime started by itself to every open browser", async () => {
+  it("streams a turn the runtime started by itself to every open browser, and its notices", async () => {
     const watchers: ServerTurnListener[] = []
     const background = new EventSource()
     const turns: ReturnType<typeof adopted>[] = []
+    const rebuilding = gate()
+    let holding = false
+    let rebuilds = 0
     const test = await harness({
       providerIds: true,
       subscribeTurns: (_scope, watcher) => {
@@ -2881,6 +2884,11 @@ describe("Session rooms", () => {
         return () => undefined
       },
       discover: async () => turns.shift(),
+      beforeHistory: () => {
+        if (!holding) return Promise.resolve()
+        rebuilds += 1
+        return rebuilding.held
+      },
     })
     await test.list()
     await open(test)
@@ -2894,6 +2902,12 @@ describe("Session rooms", () => {
     const fromTest = test.recorder.entries.length
     const fromOther = other.recorder.entries.length
 
+    // Hermes announces its heartbeat before the turn it starts.
+    watchers[0]!.onNotice?.({
+      severity: "info",
+      title: "Heartbeat",
+      kind: "heartbeat",
+    })
     turns.push(adopted(background))
     background.emit(turnStarted())
     chunk(background, "Background")
@@ -2903,14 +2917,21 @@ describe("Session rooms", () => {
         said("Background"),
         "an update carrying Background"
       )
+    holding = true
     background.emit({ kind: TurnEventKind.TurnEnded })
+    // A notice that arrives while each view is rebuilt waits for its page.
+    await waitFor(() => expect(rebuilds).toBe(2))
+    watchers[0]!.onNotice?.({ severity: "info", title: "Goal", kind: "goal" })
+    rebuilding.release()
     // Nobody was shown its prompt, which each view is rebuilt from history for
     // once its stream showed the turn's end.
     const turn = [
+      "notice Heartbeat",
       "state running",
       "chunk Background",
       "state idle",
       "history message-1",
+      "notice Goal",
       "state idle",
     ]
     for (const [browser, from] of [
@@ -2923,6 +2944,21 @@ describe("Session rooms", () => {
     await settled()
     expect(flow(test.recorder, SESSION, fromTest)).toEqual(turn)
     expect(flow(other.recorder, SESSION, fromOther)).toEqual(turn)
+    expect(
+      updates(test.recorder).find(
+        (params) =>
+          (params as { update: { sessionUpdate: string } }).update
+            .sessionUpdate === "notice"
+      )
+    ).toEqual({
+      sessionId: SESSION,
+      update: {
+        sessionUpdate: "notice",
+        severity: "info",
+        title: "Heartbeat",
+        _meta: { [AOS_META_KEY]: { kind: "heartbeat" } },
+      },
+    })
     expect(watchers).toHaveLength(1)
     test.close()
     other.close()

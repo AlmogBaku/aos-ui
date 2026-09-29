@@ -13,6 +13,8 @@ import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
   AosChunkMetaSchema,
+  AosMessageMetaSchema,
+  AosNoticeMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
   AosToolCallMetaSchema,
@@ -23,7 +25,9 @@ import {
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
   COMPACTION_DATA_PART_NAME,
+  NOTICE_DATA_PART_NAME,
   type AosCompaction,
+  type AosNotice,
 } from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
 
@@ -124,6 +128,11 @@ export type ProjectorState = {
   readonly approvals?: readonly AcpApproval[]
   /** The turn each approval was first seen beside, by approval id. */
   readonly approvalHosts?: ReadonlyMap<string, string>
+  /**
+   * Monotonically increasing across rebuilds, so `aos-notice-<n>` ids never
+   * collide when the transcript is cleared and notices arrive again.
+   */
+  readonly noticeCounter?: number
 }
 
 type EarlyUpdate = { readonly update: SessionUpdate; readonly meta: unknown }
@@ -201,6 +210,12 @@ function onMessage(
   // A run moves on from the turn it had open only when that turn was one a
   // resume reopened, so that turn has written all it will.
   const prior = opened ? activeAssistantId(renamed) : undefined
+  // A run whose first turn follows a reply, not a prompt, is one the provider
+  // started on its own, so it is a turn of its own.
+  const unprompted =
+    opened &&
+    prior === undefined &&
+    roleBefore(renamed.messages, id) === "assistant"
   const source =
     prior === undefined
       ? renamed
@@ -213,12 +228,25 @@ function onMessage(
   const next = withMessages(
     source,
     withMessage(source.messages, id, role, (message) =>
-      patch(opened ? opening(message, state.execution) : message)
+      patch(
+        opened
+          ? opening(
+              unprompted ? { ...message, opensTurn: true } : message,
+              state.execution
+            )
+          : message
+      )
     )
   )
   return opened || host !== undefined
     ? { ...next, activeAssistantId: id }
     : next
+}
+
+/** The role of the message `id` follows, or would follow once appended. */
+function roleBefore(messages: readonly ProjectedMessage[], id: string) {
+  const index = messages.findIndex((message) => message.id === id)
+  return (index < 0 ? messages.at(-1) : messages[index - 1])?.role
 }
 
 /**
@@ -261,12 +289,14 @@ function emptyRequestHostId(state: ProjectorState): string | undefined {
   const id = state.activeAssistantId
   if (id === undefined || !id.startsWith(REQUEST_HOST_PREFIX)) return undefined
   const host = state.messages.find((message) => message.id === id)
-  return host?.parts.every(isCompaction) ? id : undefined
+  return host?.parts.every(isHostedStatus) ? id : undefined
 }
 
-/** A compaction the host shows ahead of the run's turn moves with it. */
-const isCompaction = (part: ProjectedMessage["parts"][number]) =>
-  part.source === "data" && part.name === COMPACTION_DATA_PART_NAME
+/** A compaction or notice the host shows ahead of the run's turn moves with it. */
+const isHostedStatus = (part: ProjectedMessage["parts"][number]) =>
+  part.source === "data" &&
+  (part.name === COMPACTION_DATA_PART_NAME ||
+    part.name === NOTICE_DATA_PART_NAME)
 
 /**
  * A tool call belongs to the turn that already holds it: a provider settles a
@@ -512,6 +542,60 @@ function withoutCompaction(
   )
 }
 
+const NOTICE_SEVERITY = new Set<string>(["info", "warning", "error"])
+
+const noticeSeverity = (raw: string | undefined): AosNotice["severity"] =>
+  raw !== undefined && NOTICE_SEVERITY.has(raw)
+    ? (raw as AosNotice["severity"])
+    : "info"
+
+/**
+ * A status the proxy announces live: attaches to the active assistant turn
+ * while a run is under way, or to the latest assistant message while idle
+ * (so `resumed()` cannot reopen a notice message as the next turn). When
+ * the thread holds no assistant message yet a standalone `aos-notice-<n>`
+ * is created instead. A consecutive duplicate — same kind and title as the
+ * last part of the target message — is dropped.
+ */
+function applyNotice(
+  state: ProjectorState,
+  update: UpdatePayload,
+  meta: unknown
+): ProjectorState {
+  const title = text(update.title)
+  if (!title) return state
+  const severity = noticeSeverity(text(update.severity))
+  const description = text(update.description)
+  const parsed = AosNoticeMetaSchema.safeParse(meta)
+  const kind = parsed.success ? parsed.data.kind : undefined
+  const data: AosNotice = {
+    severity,
+    title,
+    ...(description !== undefined ? { description } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+  }
+  const counter = (state.noticeCounter ?? 0) + 1
+  const withCounter: ProjectorState = { ...state, noticeCounter: counter }
+  const isRunning = state.execution.status === "running"
+  const id = isRunning
+    ? (activeAssistantId(state) ?? requestHostId(state.execution.turnId))
+    : (latestAssistantId(state.messages) ?? `aos-notice-${counter}`)
+  // Drop a consecutive duplicate at the same location.
+  const target = state.messages.find((m) => m.id === id)
+  const lastPart = target?.parts.at(-1)
+  if (
+    lastPart?.source === "data" &&
+    lastPart.name === NOTICE_DATA_PART_NAME &&
+    isRecord(lastPart.data) &&
+    lastPart.data.kind === data.kind &&
+    lastPart.data.title === data.title
+  )
+    return state
+  return onMessage(withCounter, id, "assistant", (message) =>
+    appendData(message, NOTICE_DATA_PART_NAME, data)
+  )
+}
+
 /** The vendor stop reasons carry the failure the run reported. */
 function errorFrom(aos: TurnFailure | undefined): TurnFailure | undefined {
   const error: TurnFailure = {
@@ -742,7 +826,8 @@ function applyState(
 /**
  * The thread's turns: each user message alone, and each run of agent messages
  * and thoughts between two of them as one, in arrival order, as Hermes Desktop
- * groups a turn. The group goes by its first message's id.
+ * groups a turn, save that a message opening a turn of its own starts one. The
+ * group goes by its first message's id.
  */
 function turnsOf(
   messages: readonly ProjectedMessage[]
@@ -750,7 +835,11 @@ function turnsOf(
   const turns: ProjectedMessage[][] = []
   for (const message of messages) {
     const last = turns.at(-1)
-    if (message.role === "assistant" && last?.[0]?.role === "assistant")
+    if (
+      message.role === "assistant" &&
+      last?.[0]?.role === "assistant" &&
+      !message.opensTurn
+    )
       last.push(message)
     else turns.push([message])
   }
@@ -833,10 +922,28 @@ function applyPlan(
  */
 type UpdatePayload = Record<string, unknown>
 
+/**
+ * A replayed message that opens a turn of its own, led by the notice naming
+ * what started it, once however often the replay restates it.
+ */
+function openingTurn(message: ProjectedMessage, meta: unknown) {
+  const parsed = AosMessageMetaSchema.safeParse(meta)
+  if (!parsed.success) return message
+  const { notice } = parsed.data
+  const opened: ProjectedMessage = { ...message, opensTurn: true }
+  return notice === undefined ||
+    message.parts.some(
+      (part) => part.source === "data" && part.name === NOTICE_DATA_PART_NAME
+    )
+    ? opened
+    : appendData(opened, NOTICE_DATA_PART_NAME, notice satisfies AosNotice)
+}
+
 function applyWhole(
   state: ProjectorState,
   kind: string,
-  update: UpdatePayload
+  update: UpdatePayload,
+  meta: unknown
 ): ProjectorState {
   const messageId = text(update.messageId)
   if (messageId === undefined) return state
@@ -854,7 +961,7 @@ function applyWhole(
           ? next
           : appendData(next, ARTIFACT_DATA_PART_NAME, artifact),
       replaceBlocks(
-        message,
+        kind === "agent_message" ? openingTurn(message, meta) : message,
         sourceOf(kind),
         blocks && blocks.filter((block) => !linkedArtifact(block))
       )
@@ -992,7 +1099,7 @@ function applyKind(
     case "user_message":
     case "agent_message":
     case "agent_thought":
-      return applyWhole(state, kind, update)
+      return applyWhole(state, kind, update, meta)
     case "user_message_chunk":
     case "agent_message_chunk":
     case "agent_thought_chunk":
@@ -1006,6 +1113,8 @@ function applyKind(
       return applyTerminal(state, kind, update)
     case "compaction_update":
       return applyCompaction(state, update, meta)
+    case "notice":
+      return applyNotice(state, update, meta)
     case "state_update":
       return applyState(state, update, meta)
     case "plan_update":

@@ -380,6 +380,14 @@ export const SessionMessageSchema = z.strictObject({
    */
   correction: z.literal(true).optional(),
   /**
+   * Present on the first assistant message of a turn the provider started on
+   * its own, with no user message ahead of it: the thread shows it as a turn of
+   * its own rather than more of the reply before it. Hermes sets this, and
+   * leads the message with an `aos-notice` data part naming what started it
+   * when the stored row names it.
+   */
+  opensTurn: z.literal(true).optional(),
+  /**
    * The normalized failure code for a turn the provider failed. Hermes sets
    * this; the coordinator reads it via `guest/middleware/history.ts`.
    */

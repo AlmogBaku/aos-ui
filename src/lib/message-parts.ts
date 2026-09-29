@@ -16,3 +16,16 @@ export const compactionSchema = z.object({
 })
 
 export type AosCompaction = z.infer<typeof compactionSchema>
+
+/** The data part a runtime emits for a live status the provider announces. */
+export const NOTICE_DATA_PART_NAME = "aos-notice"
+
+export const noticeSchema = z.object({
+  severity: z.enum(["info", "warning", "error"]),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  /** The provider's own status kind, such as `heartbeat`. */
+  kind: z.string().optional(),
+})
+
+export type AosNotice = z.infer<typeof noticeSchema>

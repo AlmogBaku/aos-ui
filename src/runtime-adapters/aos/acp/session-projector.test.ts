@@ -6,7 +6,10 @@ import { AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
-import { COMPACTION_DATA_PART_NAME } from "@/lib/message-parts"
+import {
+  COMPACTION_DATA_PART_NAME,
+  NOTICE_DATA_PART_NAME,
+} from "@/lib/message-parts"
 import {
   permissionProviderMetadata,
   readAosToolArtifact,
@@ -1463,6 +1466,59 @@ describe("one turn per user message", () => {
     expect(messages[1]?.content).toEqual(toThreadMessages(ended)[1]?.content)
   })
 
+  it("shows a stored turn the provider started on its own apart, led by its notice", () => {
+    const notice = { severity: "info", title: "/loop wakeup #1", kind: "loop" }
+    const stored = fold([
+      userChunk("u1", "Reply only: OK"),
+      agentChunk("a1", "OK"),
+      [
+        {
+          sessionUpdate: "agent_message",
+          messageId: "a2",
+          content: [],
+        },
+        { opensTurn: true, notice },
+      ],
+      agentChunk("a2", "TICK"),
+    ])
+
+    expect(toThreadMessages(stored)).toMatchObject([
+      { id: "u1" },
+      { id: "a1", content: [{ type: "text", text: "OK" }] },
+      {
+        id: "a2",
+        content: [
+          { type: "data", name: NOTICE_DATA_PART_NAME, data: notice },
+          { type: "text", text: "TICK" },
+        ],
+      },
+    ])
+  })
+
+  it("shows a run no prompt opened as a turn of its own, however many responses it streams", () => {
+    const woken = fold(
+      [
+        stateUpdate(
+          { state: "running" },
+          { ...TURN_META, turnId: "run-2", at: COMPLETED_AT }
+        ),
+        agentChunk("w1", "Checking"),
+        agentChunk("w2", "TICK"),
+      ],
+      ended
+    )
+
+    const messages = toThreadMessages(woken)
+    expect(messages.map(({ id }) => id)).toEqual(["u1", "r1-thought", "w1"])
+    expect(messages[1]).toEqual(toThreadMessages(ended)[1])
+    expect(messages[2]).toMatchObject({
+      content: [
+        { type: "text", text: "Checking" },
+        { type: "text", text: "TICK" },
+      ],
+    })
+  })
+
   it("keeps a turn nothing touched reference-equal", () => {
     const later = fold([userChunk("u2", "Again")], ended)
     expect(toThreadMessages(later)[1]).toBe(toThreadMessages(ended)[1])
@@ -2228,5 +2284,116 @@ describe("applyApprovals", () => {
     expect(toThreadMessages(again)[0]).toBe(toThreadMessages(first)[0])
     expect(toThreadMessages(first)[0]).not.toBe(toThreadMessages(withTurns)[0])
     expect(applyApprovals(first, list)).toBe(first)
+  })
+})
+
+describe("applyUpdate notice", () => {
+  const notice = (
+    patch: Record<string, unknown> = {},
+    aosKind?: string
+  ): Entry => [
+    { sessionUpdate: "notice", severity: "info", title: "Heartbeat", ...patch },
+    aosKind !== undefined ? { kind: aosKind } : undefined,
+  ]
+
+  const noticeParts = (state: ProjectorState) =>
+    toThreadMessages(state).flatMap((message) =>
+      (Array.isArray(message.content) ? message.content : []).filter(
+        (part) => part.type === "data" && part.name === NOTICE_DATA_PART_NAME
+      )
+    )
+
+  it("attaches an idle notice to the latest assistant turn", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Reply"),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+      notice({ title: "Heartbeat" }, "heartbeat"),
+    ])
+    expect(toThreadMessages(state)).toHaveLength(1)
+    const parts = Array.isArray(toThreadMessages(state)[0]?.content)
+      ? toThreadMessages(state)[0]!.content
+      : []
+    expect(parts).toEqual([
+      { type: "text", text: "Reply" },
+      {
+        type: "data",
+        name: NOTICE_DATA_PART_NAME,
+        data: { severity: "info", title: "Heartbeat", kind: "heartbeat" },
+      },
+    ])
+  })
+
+  it("places a running notice inside the active turn", () => {
+    // A data part breaks text merging, so text before and after appear as
+    // two separate text items with the notice between them.
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Working"),
+      notice({ title: "Loop wakeup" }, "loop"),
+      agentChunk("a1", " done"),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    const parts = Array.isArray(toThreadMessages(state)[0]?.content)
+      ? toThreadMessages(state)[0]!.content
+      : []
+    expect(parts).toEqual([
+      { type: "text", text: "Working" },
+      {
+        type: "data",
+        name: NOTICE_DATA_PART_NAME,
+        data: { severity: "info", title: "Loop wakeup", kind: "loop" },
+      },
+      { type: "text", text: " done" },
+    ])
+  })
+
+  it("keeps a notice sent before the first chunk in the run's own turn", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      notice({ title: "Process started" }, "process"),
+      agentChunk("a1", "Reply"),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(toThreadMessages(state)).toMatchObject([
+      {
+        id: "a1",
+        content: [
+          {
+            type: "data",
+            name: NOTICE_DATA_PART_NAME,
+            data: {
+              severity: "info",
+              title: "Process started",
+              kind: "process",
+            },
+          },
+          { type: "text", text: "Reply" },
+        ],
+      },
+    ])
+  })
+
+  it("drops a consecutive duplicate notice", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Working"),
+      notice({ title: "Heartbeat" }, "heartbeat"),
+      notice({ title: "Heartbeat" }, "heartbeat"),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(noticeParts(state)).toHaveLength(1)
+  })
+
+  it("maps an unknown severity to info", () => {
+    const state = fold([
+      stateUpdate({ state: "running" }),
+      agentChunk("a1", "Working"),
+      notice({ severity: "critical", title: "Odd thing" }),
+      stateUpdate({ state: "idle", stopReason: "end_turn" }),
+    ])
+    expect(noticeParts(state)[0]).toMatchObject({
+      data: { severity: "info", title: "Odd thing" },
+    })
   })
 })

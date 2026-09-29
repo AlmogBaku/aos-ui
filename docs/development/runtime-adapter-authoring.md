@@ -407,6 +407,8 @@ it resumed. The adapter only signals; the shared core adopts the turn through
 - Fire at most once per native turn, however often the runtime announces it.
 - Own reconnect retries and report failures through `onError`; never throw.
   The returned stop function may be called more than once and ends retries.
+- Report provider status about the Session, during any turn or none, through
+  the optional `onNotice`; notices are live only, never stored or replayed.
 
 Because the channel calls `discover` after every turn's end, `discover` must
 return `undefined` for a turn the adapter admitted, including one still
