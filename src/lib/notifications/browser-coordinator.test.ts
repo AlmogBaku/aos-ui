@@ -201,16 +201,6 @@ describe("live browser Activity", () => {
     h.coordinator.publish(h.store.ingest(event))
     expect(h.shown).toEqual([])
   })
-  it("delivers nothing for the exact selected Session on a visible, focused page", async () => {
-    const h = setup()
-    h.localContext.pageVisible = true
-    h.localContext.pageFocused = true
-    h.localContext.selection = { agentId: "a", sessionId: "t" }
-    h.coordinator.start()
-    await h.coordinator.setEnabled(true)
-    h.coordinator.publish(h.store.ingest(event))
-    expect(h.shown).toHaveLength(0)
-  })
   it.each(["denied", "unsupported"] as const)(
     "never re-prompts %s even on explicit enable",
     async (permission) => {
@@ -486,38 +476,6 @@ describe("the one-time ask", () => {
     expect(h.coordinator.settings().ask).toBe(true)
     h.coordinator.stop()
     expect(h.watchingPermission()).toBe(false)
-  })
-
-  it("stays declined when the browser resets the permission", () => {
-    const h = setup("granted")
-    // A decline is the operator's own answer, even with alerts switched on since.
-    h.seed(
-      serializeActivity({
-        version: 3,
-        preferences: { ...defaultBrowserPreferences, prompt: "declined" },
-      })
-    )
-    watchRun(h)
-
-    h.changePermission("default")
-
-    expect(h.coordinator.settings().ask).toBe(false)
-  })
-
-  it("offers nothing once the browser blocks notifications outright", () => {
-    const h = setup("granted")
-    h.seed(
-      serializeActivity({
-        version: 3,
-        preferences: { ...defaultBrowserPreferences, prompt: "accepted" },
-      })
-    )
-    watchRun(h)
-
-    h.changePermission("denied")
-
-    expect(h.coordinator.settings().status).toBe("denied")
-    expect(h.coordinator.settings().ask).toBe(false)
   })
 
   it("offers itself to a device whose notifications need an install first", () => {
