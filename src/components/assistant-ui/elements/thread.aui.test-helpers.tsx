@@ -111,10 +111,19 @@ export function parkedRun(stop: () => void): ChatModelAdapter {
   }
 }
 
+/**
+ * Focuses a composer field and sets its text in one change, for a test whose
+ * rule is not the typing itself.
+ */
+export function draft(input: HTMLElement, text: string) {
+  input.focus()
+  fireEvent.change(input, { target: { value: text } })
+}
+
 /** Sends one message through `parkedRun` and returns the composer input. */
 export async function startParkedRun(user: ReturnType<typeof userEvent.setup>) {
   const input = await screen.findByRole("textbox", { name: "Message input" })
-  await user.type(input, "Run")
+  draft(input, "Run")
   await user.click(screen.getByRole("button", { name: "Send message" }))
   await screen.findByText("Waiting on native run")
   return input
