@@ -757,16 +757,6 @@ runtime:
     })
   })
 
-  it("treats a guest key with no value as no guest block", async () => {
-    const message = await loadFailure({
-      flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
-      ...access({ [CONFIG_PATH]: { source: `${MINIMAL_YAML}guest: ~\n` } }),
-    })
-    expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
-    expect(message).toContain("guest block")
-  })
-
   it("lets the schema report an unknown runtime kind before any branch row is judged", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
@@ -781,14 +771,17 @@ runtime:
     expect(message).not.toContain("applies only")
   })
 
-  it("refuses a guest override when the file has no guest block", async () => {
+  it.each([
+    ["the file has no guest block", MINIMAL_YAML],
+    ["the guest key has no value", `${MINIMAL_YAML}guest: ~\n`],
+  ])("refuses a guest override when %s", async (_case, source) => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
       getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
-      ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
+      ...access({ [CONFIG_PATH]: { source } }),
     })
     expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
-    expect(message).toContain("guest")
+    expect(message).toContain("guest block")
   })
 
   it("cannot complete a guest listener from the environment, because its keys are file-only", async () => {
