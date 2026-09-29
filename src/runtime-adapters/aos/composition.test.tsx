@@ -261,6 +261,7 @@ function createProxyAgent() {
           selectable: true,
           editable: true,
           avatarEditable: true,
+          folder: "/srv/research",
           revision: "revision-1",
         },
       ],

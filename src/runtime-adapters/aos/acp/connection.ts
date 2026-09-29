@@ -600,7 +600,7 @@ export function createAcpConnection(
     page?: PageUpdates
     /** Whether a join has replayed it from the start yet. */
     replayed: boolean
-    /** A from-start replay is owed: asked for, or a rejoin's resync. */
+    /** A from-start replay is owed: asked for, or one that did not complete. */
     replayOwed: boolean
     /** The from-start replay in flight and the settle callbacks it owes. */
     replaying?: {
@@ -1038,7 +1038,6 @@ export function createAcpConnection(
         open.replayed = true
         replayed = true
       }
-      if (meta.resync) open.replayOwed = true
     } finally {
       // A from-start replay that did not complete is still owed: its
       // listeners may already hold part of it.
@@ -1062,15 +1061,18 @@ export function createAcpConnection(
 
   /**
    * The `cwd` a new or resumed Session names: its Agent's folder, read from
-   * the Agents list first if this tab has none for it. An Agent with no
-   * folder sends an empty one, which the proxy refuses as it should.
+   * the Agents list again whenever this tab holds none for it, since a list
+   * can miss a folder it reads next time. Still none fails the call here.
    */
   async function cwdOf(sessionId: string | undefined, agentId?: string) {
     if ((await initialized).role === "guest") return GUEST_CWD
     if (agentId === undefined)
       return (sessionId && listedCwds.get(sessionId)) ?? ""
-    if (!folders.has(agentId)) await listAgents()
-    return folders.get(agentId) ?? ""
+    if (folders.get(agentId) === undefined) await listAgents()
+    const folder = folders.get(agentId)
+    if (folder === undefined)
+      throw new Error("The Agent's folder could not be read")
+    return folder
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */

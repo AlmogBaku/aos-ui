@@ -1073,7 +1073,6 @@ describe("AOS v1 normalized protocol", () => {
         activity: "_aos/activity",
         composerPrefill: "_aos/composer_prefill",
         catalogInvalidated: "_aos/catalog_invalidated",
-        sessionInvalidated: "_aos/session_invalidated",
         error: "_aos/error",
       },
     })

@@ -63,7 +63,6 @@ export const AOS_METHODS = {
     activity: "_aos/activity",
     composerPrefill: "_aos/composer_prefill",
     catalogInvalidated: "_aos/catalog_invalidated",
-    sessionInvalidated: "_aos/session_invalidated",
     error: "_aos/error",
   },
 } as const
@@ -250,16 +249,14 @@ export const AosHistoryPageTagSchema = readObject({
 /**
  * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
- * `resync: true` means `after` was beyond bounded replay; the client must
- * resume again with `replayFrom: { type: "start" }`. The Session's row,
- * execution, models and capabilities follow the answer as updates.
+ * The Session's row, execution, models and capabilities follow the answer as
+ * updates.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
   position: readObject({
     turnId: IdentifierSchema,
     sequence: SequenceSchema,
   }).optional(),
-  resync: z.literal(true).optional(),
   /** Present whenever this resume replayed history. */
   history: AosHistoryCursorSchema.optional(),
 })

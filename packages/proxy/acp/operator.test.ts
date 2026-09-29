@@ -444,7 +444,6 @@ describe("operator ACP listener", () => {
     // A dropped stream is not an outcome: the run failed nowhere, the turn this
     // browser half-saw does not end in it, and the window it did not read stays
     // at the one reading the Session opened with.
-    expect(test.recorder.of(AOS_METHODS.notify.sessionInvalidated)).toEqual([])
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
     expect(usageUpdates(test.recorder)).toHaveLength(1)

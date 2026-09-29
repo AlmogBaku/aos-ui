@@ -76,7 +76,6 @@ const RESUME_REPLIED = "session/resume:replied"
 /** An in-process proxy: the AOS agent side of the connection under test. */
 function createProxyAgent(
   options: {
-    resyncOnResume?: number
     refuseLoginAfter?: number
     /** `_meta.aos.history` on every resume that replays from the start. */
     history?: AosHistoryCursor
@@ -91,12 +90,14 @@ function createProxyAgent(
     buildId?: string
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
+    /** How many Agents lists, from the first, fail to read the folder. */
+    listsWithoutFolder?: number
   } = {}
 ) {
   const calls: AgentCall[] = []
   let peer: AgentContext | undefined
-  let resumes = 0
   let logins = 0
+  let agentLists = 0
   const record = (method: string, params: unknown) => {
     calls.push({ method, params })
   }
@@ -173,7 +174,6 @@ function createProxyAgent(
           _meta: { [AOS_META_KEY]: history === undefined ? {} : { history } },
         }
       }
-      resumes += 1
       if (options.slowResume)
         await new Promise((resolve) => setTimeout(resolve, 20))
       record(RESUME_REPLIED, params)
@@ -181,7 +181,6 @@ function createProxyAgent(
       return {
         _meta: {
           [AOS_META_KEY]: {
-            ...(resumes === options.resyncOnResume ? { resync: true } : {}),
             ...(replayed && options.history
               ? { history: options.history }
               : {}),
@@ -221,7 +220,13 @@ function createProxyAgent(
       z.unknown().optional(),
       ({ params }) => {
         record(AOS_METHODS.agents.list, params)
-        return { revision: "revision-1", agents: [catalogEntry()] }
+        agentLists += 1
+        const { folder, ...entry } = catalogEntry()
+        const read = agentLists > (options.listsWithoutFolder ?? 0)
+        return {
+          revision: "revision-1",
+          agents: [read ? { ...entry, folder } : entry],
+        }
       }
     )
     .onRequest(AOS_METHODS.agents.update, z.unknown(), ({ params }) => {
@@ -400,6 +405,24 @@ describe("ACP connection", () => {
       })
     )
     expect(JSON.stringify(logs.records())).not.toContain("invitation-token")
+    connection.close()
+  })
+
+  it("reads a missing Agent folder again, and fails locally while it stays missing", async () => {
+    const proxy = createProxyAgent({ listsWithoutFolder: 2 })
+    const connection = connectInProcess(proxy)
+    await connection.listAgents()
+
+    await expect(connection.newSession({ agentId: AGENT_ID })).rejects.toThrow(
+      "The Agent's folder could not be read"
+    )
+    expect(proxy.callsOf(methods.agent.session.new)).toEqual([])
+
+    await connection.newSession({ agentId: AGENT_ID })
+    expect(proxy.callsOf(AOS_METHODS.agents.list)).toHaveLength(3)
+    expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
+      cwd: FOLDER,
+    })
     connection.close()
   })
 
@@ -906,7 +929,7 @@ describe("ACP connection", () => {
 
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent({ resyncOnResume: 2 })
+    const proxy = createProxyAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -931,17 +954,14 @@ describe("ACP connection", () => {
     pipe.sockets[0]?.drop()
     await clock.advance(250)
 
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(3)
+    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
         [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
       },
     })
-    expect(proxy.callsOf(methods.agent.session.resume)[2]).toMatchObject({
-      replayFrom: { type: "start" },
-    })
     // The proxy forgot this connection's presence when the transport dropped, so
-    // the report arrives again before the replay it would otherwise contradict.
+    // the report arrives again before the rejoin it would otherwise contradict.
     const reports = proxy.calls.flatMap((call, index) =>
       call.method === AOS_METHODS.session.focus ? [{ ...call, index }] : []
     )
