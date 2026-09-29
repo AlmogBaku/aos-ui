@@ -63,6 +63,7 @@ export function createOperatorAcpService({
         (await catalog.agents()).agents.some(
           ({ summary }) => summary.id === agentId
         ),
+      publicError: (cause) => runtimeInstance.runtime.publicError(cause),
     },
     logger,
     connection: (connectionId, principalId, agentId): AcpConnectionContext => ({

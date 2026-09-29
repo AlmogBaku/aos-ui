@@ -48,11 +48,13 @@ Any other code triggers a normal reconnect.
 
 `initialize` always answers `protocolVersion: 2`, whatever the client requested; this is ACP's version-negotiation rule, not v1 support.
 
-`initialize` response `_meta.aos` (`AosInitializeMetaSchema`, `acp.ts:115-119`):
+`initialize` response `_meta.aos` (`AosInitializeMetaSchema`, `acp.ts:115-119`).
+Its `version` is AOS's own extension version (`AOS_EXTENSION_VERSION`, now 1),
+not ACP's `protocolVersion`:
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "role": "operator | guest",
   "extensions": {
     "steer": true,
@@ -185,8 +187,13 @@ and trailing separators are allowed, but a relative path is refused). Any other
 unsupported. A non-empty `mcpServers` or `additionalDirectories` also returns
 invalid params. The runtime never receives the client's `cwd`. Every list row
 carries its Agent's folder; `_aos/agents/list` rows carry `folder` too. A list
-with a `cwd` filter that matches no Agent's folder returns no rows; a list across
-Agents skips, and logs, any Agent whose folder it cannot read.
+with a `cwd` filter that matches no Agent's folder returns no rows. A list across
+Agents skips, and logs, any Agent with no folder (`session.list.no_folder`) or an
+unreadable one (`session.list.folder_read_failed`), and still lists every other
+Agent's rows; a list on one Agent's address answers either as an error.
+`session/delete` on the shared address for a Session this connection never
+listed or resumed returns invalid params naming the per-Agent address; on an
+Agent's address a Session that is already gone deletes successfully.
 
 **`session/list`** request (`AosSessionListMetaSchema`, `acp.ts:138-140`): `{ agentId? }`
 

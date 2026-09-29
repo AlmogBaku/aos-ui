@@ -13,6 +13,7 @@ import type { SocketRefusal } from "../server"
 import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { createAcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
+import { errorNotificationOf } from "./validation"
 import type { Role } from "../core/member"
 
 /**
@@ -76,6 +77,8 @@ export type AcpServiceOptions = {
   agentAddress?: {
     path: string
     exists(agentId: string): Promise<boolean>
+    /** Classifies a failed lookup, as a connection's `publicError` does. */
+    publicError: AcpConnectionContext["publicError"]
   }
   /** Where a refused upgrade writes its one line. */
   logger?: Logger
@@ -136,8 +139,9 @@ export function createAcpService(options: AcpServiceOptions) {
     if (!agentId || agentId.includes("/")) return NOT_SERVED
     try {
       if (await address.exists(agentId)) return { agentId }
-    } catch (err) {
-      options.logger?.warn({ err }, "acp.upgrade.catalog_failed")
+    } catch (cause) {
+      const { code } = errorNotificationOf(address.publicError, cause)
+      options.logger?.warn({ errorCode: code }, "acp.upgrade.catalog_failed")
       return CATALOG_UNAVAILABLE
     }
     options.logger?.info({ agentId }, "acp.upgrade.agent_unknown")

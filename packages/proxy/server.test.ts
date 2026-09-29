@@ -300,6 +300,7 @@ describe("Bun proxy server lifecycle", () => {
     const guestSocket = { receive: vi.fn(), close: vi.fn() }
     const operatorSocket = { receive: vi.fn(), close: vi.fn() }
     const operatorOpen = vi.fn(() => operatorSocket)
+    const guestAuthorize = vi.fn(async () => ({ principalId: "guest" }))
     const upgrades: Array<{
       data: unknown
       headers?: Record<string, string>
@@ -311,7 +312,7 @@ describe("Bun proxy server lifecycle", () => {
         {
           path: "/api/guest/v1/acp",
           service: {
-            authorizeUpgrade: vi.fn(async () => ({ principalId: "guest" })),
+            authorizeUpgrade: guestAuthorize,
             open: vi.fn(() => guestSocket),
           },
           maxPeers: 1,
@@ -371,6 +372,8 @@ describe("Bun proxy server lifecycle", () => {
       1013,
       "Event peer capacity exceeded"
     )
+    // Past the budget the service is never asked, so it reads nothing.
+    expect(guestAuthorize).toHaveBeenCalledTimes(1)
 
     const operatorPeer = await connect("/api/aos/v1/acp")
     expect(upgrades[2]!.headers).toEqual({

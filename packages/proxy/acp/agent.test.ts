@@ -350,9 +350,15 @@ describe("AOS ACP agent", () => {
 
   it("refuses the Sessions of an Agent with no folder, and lists every other Agent's in its own", async () => {
     const test = await harness({
-      rows: [sessionRow(), sessionRow({ id: "session-2", agentId: "writer" })],
-      agentFolder: async (agentId) =>
-        agentId === AGENT ? undefined : "/srv/writer/",
+      rows: [
+        sessionRow(),
+        sessionRow({ id: "session-2", agentId: "writer" }),
+        sessionRow({ id: "session-3", agentId: "reader" }),
+      ],
+      agentFolder: async (agentId) => {
+        if (agentId === "reader") throw new Error("folder unreadable")
+        return agentId === AGENT ? undefined : "/srv/writer/"
+      },
     })
     const UNSUPPORTED = { code: AOS_JSONRPC_ERRORS.unsupported }
     const onAgent = { _meta: { [AOS_META_KEY]: { agentId: AGENT } } }
@@ -366,6 +372,13 @@ describe("AOS ACP agent", () => {
       expect.objectContaining({
         event: "session.list.no_folder",
         agentId: AGENT,
+      })
+    )
+    expect(test.logged()).toContainEqual(
+      expect.objectContaining({
+        event: "session.list.folder_read_failed",
+        agentId: "reader",
+        errorCode: "internal_error",
       })
     )
     await expect(
@@ -1064,6 +1077,13 @@ describe("AOS ACP agent", () => {
     expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
     expect(relists(test.recorder)).toHaveLength(1)
     expect(relists(other.recorder)).toHaveLength(1)
+    // The shared address cannot tell whose Session it never listed.
+    await expect(
+      test.agent.request(methods.agent.session.delete, {
+        sessionId: "session-unlisted",
+      })
+    ).rejects.toMatchObject(INVALID_PARAMS)
+    expect(test.deleteSession).toHaveBeenCalledTimes(1)
     test.close()
     other.close()
   })

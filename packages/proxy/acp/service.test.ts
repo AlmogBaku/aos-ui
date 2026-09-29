@@ -151,6 +151,7 @@ describe("ACP WebSocket service", () => {
       agentAddress: {
         path: PATH,
         exists: () => Promise.reject(new Error("internal detail 7f3a")),
+        publicError: () => undefined,
       },
       logger: logs.logger,
     })
@@ -162,9 +163,9 @@ describe("ACP WebSocket service", () => {
         })
       )
     ).resolves.toEqual({ refused: 503 })
-    expect(logs.records().map(({ message }) => message)).toEqual([
-      "acp.upgrade.catalog_failed",
-    ])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual([["acp.upgrade.catalog_failed", { errorCode: "internal_error" }]])
   })
 
   it("answers the first initialize frame through the prepared connection", async () => {

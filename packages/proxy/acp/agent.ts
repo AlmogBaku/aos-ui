@@ -538,11 +538,19 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         )
         await Promise.all(
           others.map(async (id) => {
-            const folder = await folderOf(id)
-            // A Session with no folder cannot be resumed, so it is not listed.
+            // A Session with no folder cannot be resumed, so it is not listed;
+            // one Agent's unreadable folder leaves every other Agent's rows.
+            const folder = await folderOf(id).catch((cause: unknown) => {
+              const { code } = errorNotificationOf(context.publicError, cause)
+              context.logger.warn(
+                { agentId: id, errorCode: code },
+                "session.list.folder_read_failed"
+              )
+              return null
+            })
             if (folder === undefined)
-              context.logger.warn({ agentId: id }, "session.list.no_folder")
-            folders.set(id, folder)
+              context.logger.info({ agentId: id }, "session.list.no_folder")
+            folders.set(id, folder ?? undefined)
           })
         )
         const rows = page.rows.filter((row) => {
@@ -717,8 +725,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId },
       async (command) => {
         const agentId = sessions.owner(command.sessionId) ?? context.agentId
-        const scope = agentId && catalog.scope(agentId, command.sessionId)
-        // A Session nobody can find is already gone.
+        if (agentId === undefined)
+          throw invalidParams(`connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`)
+        const scope = catalog.scope(agentId, command.sessionId)
+        // A Session its Agent cannot find is already gone.
         if (scope) {
           try {
             await catalog.delete(scope)

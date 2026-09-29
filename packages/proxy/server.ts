@@ -85,10 +85,10 @@ type MountState<Upgrade extends SocketUpgrade> = {
 }
 type SocketData<Upgrade extends SocketUpgrade> = {
   mount: MountState<Upgrade>
-  authorization: Upgrade
+  /** Absent for a peer past the budget, which is closed as soon as it opens. */
+  authorization?: Upgrade
   socket?: ProxySocket
   failed?: boolean
-  overloaded?: boolean
   /** Bun ran this peer's close handler, which it does inside the close call. */
   closed?: boolean
 }
@@ -216,14 +216,15 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
           backpressureLimit: WS_BACKPRESSURE_LIMIT,
           closeOnBackpressureLimit: true,
           open(peer: SocketPeer<Upgrade>) {
-            const mount = peer.data.mount
-            if (mount.reserved > 0) mount.reserved -= 1
-            if (peer.data.overloaded) {
+            const { mount, authorization } = peer.data
+            // An over-budget peer holds no slot and was never authorized.
+            if (authorization === undefined) {
               peer.close(1013, "Event peer capacity exceeded")
               return
             }
+            mount.reserved -= 1
             try {
-              const socket = mount.service.open(peer.data.authorization, {
+              const socket = mount.service.open(authorization, {
                 send: (raw) => peer.send(raw),
                 isOpen: () => peer.readyState === WS_OPEN,
                 close: (code, reason) => peer.close(code, reason),
@@ -274,24 +275,35 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
       // before the service reads it.
       if (!isWebSocketHandshake(request))
         return new Response(null, { status: 400 })
-      const authorization = await mount.service.authorizeUpgrade(request)
-      if (!authorization) return new Response(null, { status: 401 })
-      if ("refused" in authorization)
-        return new Response(null, { status: authorization.refused })
       const upgrade = rawServer as UpgradeServer | undefined
-      const overloaded = mount.peers.size + mount.reserved >= mount.maxPeers
-      if (!overloaded) mount.reserved += 1
+      // The slot is held before the service authorizes, so the lookups an
+      // upgrade makes (an Agent's address) stay within the peer budget.
+      if (mount.peers.size + mount.reserved >= mount.maxPeers)
+        return upgrade?.upgrade(request, { data: { mount } })
+          ? undefined
+          : new Response(null, { status: 500 })
+      mount.reserved += 1
+      const refuse = (status: number) => {
+        mount.reserved -= 1
+        return new Response(null, { status })
+      }
+      const authorization = await mount.service
+        .authorizeUpgrade(request)
+        .catch((cause: unknown) => {
+          mount.reserved -= 1
+          throw cause
+        })
+      if (!authorization) return refuse(401)
+      if ("refused" in authorization) return refuse(authorization.refused)
       if (
         !upgrade?.upgrade(request, {
-          data: { mount, authorization, overloaded },
+          data: { mount, authorization },
           ...(authorization.headers === undefined
             ? {}
             : { headers: authorization.headers }),
         })
-      ) {
-        if (!overloaded) mount.reserved -= 1
-        return new Response(null, { status: 500 })
-      }
+      )
+        return refuse(500)
       return undefined
     }
     return options.app.fetch(request, rawServer)
