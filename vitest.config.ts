@@ -22,6 +22,7 @@ const domTests = [
   "src/lib/notifications/push-subscription.test.ts",
   "src/lib/notifications/sound.test.ts",
   "src/runtime-adapters/aos/acp/connection.test.ts",
+  "src/runtime-adapters/aos/use-connection-outage.test.ts",
 ]
 
 /**
