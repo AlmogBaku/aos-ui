@@ -36,6 +36,7 @@ describe("deterministic fixture scenarios", () => {
       ["show a provider error", "provider-error-detail"],
       ["compact the context", "compaction"],
       ["show a failed compaction", "compaction-failed"],
+      ["show a heartbeat notice", "notices"],
     ]
     const scenarios = cases.map(([prompt, expected]) => {
       expect(buildFixtureScenario(prompt).name).toBe(expected)
