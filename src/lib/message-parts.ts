@@ -16,9 +16,3 @@ export const compactionSchema = z.object({
 })
 
 export type AosCompaction = z.infer<typeof compactionSchema>
-
-/**
- * The id the projector gives an accepted correction's user turn; the queue row
- * watches for it.
- */
-export const steerMessageId = (requestId: string) => `steer:${requestId}`
