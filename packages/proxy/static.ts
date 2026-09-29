@@ -58,7 +58,6 @@ async function fileResponse(
   // The file actually sent, when it is a compressed copy of `path`.
   body = path
 ) {
-  if (!(await isFile(body))) return undefined
   let file
   try {
     file = await readFile(body)
