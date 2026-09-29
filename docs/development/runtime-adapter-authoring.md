@@ -358,7 +358,12 @@ An adapter is ready when:
 - focused adapter tests and provider-neutral conformance tests pass;
 - `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) passes
   in the adapter's own `contract.test.ts` — this suite is the gate for the
-  adapter's failure taxonomy, recovery token, and link contract.
+  adapter's failure taxonomy, recovery token, and link contract;
+- `runWireContract` (`packages/proxy/acp/wire-contract.ts`) passes in the
+  adapter's own `wire-contract.test.ts` — this suite drives the real proxy over
+  the adapter's native fake via an in-memory WebSocket and proves what a plain
+  ACP v2 client reads; rows the adapter cannot express are named in `gaps`.
+  Each adapter's fake lives beside its source, not in a shared test helper.
 
 When a runtime's native client is open source and the AOS server-side
 requirements (bounded decoding, credential isolation, uncertain-mutation

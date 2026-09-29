@@ -74,9 +74,16 @@ circuit breaker, stops on `gone` or `runtime_authentication_required`, and
 exposes `Link.held()` for callers that want to know the breaker is open. Call
 `link.dispose()` on every exit path — normal close, error, and cancellation.
 
-The adapter's conformance suite is `runServerRuntimeContract`
-(`packages/proxy/core/runtime-contract.ts`), run in the adapter's own
-`contract.test.ts`; it must pass before the adapter is considered complete.
+Two conformance suites must pass before the adapter is considered complete:
+
+- `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) in the
+  adapter's own `contract.test.ts` — failure taxonomy, recovery token, link
+  contract.
+- `runWireContract` (`packages/proxy/acp/wire-contract.ts`) in the adapter's own
+  `wire-contract.test.ts` — drives the real proxy over the adapter's native fake
+  via an in-memory WebSocket, proving what a plain ACP v2 client reads. Rows the
+  adapter cannot express are named in `gaps`. Each adapter's fake lives beside its
+  source, not in a shared test helper.
 
 ## Attachments and Artifacts
 

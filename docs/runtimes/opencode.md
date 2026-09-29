@@ -165,6 +165,11 @@ MCP tools are not callable from the v2 session engine at the pinned `1.18.29`
 (see above), so Apps appear once upstream exposes them. This fallback is
 temporary and goes away once OpenCode serves MCP Apps itself.
 
+## Folder
+
+Each Agent's folder is the proxy's configured `runtime.directory`. AOS uses it
+as the required `cwd` for `session/new` and `session/resume`.
+
 ## Artifacts
 
 A completed `present_artifact` receipt publishes an Artifact. The proxy reads

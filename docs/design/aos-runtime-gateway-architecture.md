@@ -235,9 +235,12 @@ Only Sessions listed, created, or resumed on this connection are addressable.
 `adopt` trusts a client-supplied `agentId` for `session/resume` until the
 provider read confirms it.
 
-**Upgrade rules**: the server checks the Origin header and refuses upgrades
-that do not match `publicOrigin`. A cap of `operatorEventPeers` is enforced per
-socket mount (`cli/serve.ts:123,139`).
+**Upgrade rules**: an absent `Origin` is admitted (non-browser clients send
+none); a present `Origin` that does not equal `publicOrigin` is refused with 401
+and logged as `acp.upgrade.origin_refused`. The per-Agent path
+`/api/aos/v1/acp/agents/<agentId>` scopes a connection to one Agent and must
+never be exposed publicly. A cap of `operatorEventPeers` is enforced per socket
+mount (`cli/serve.ts:123,139`).
 
 For the full method table see [`docs/runtimes/acp.md`](../runtimes/acp.md).
 
@@ -260,7 +263,6 @@ cursor-bearing reconnects.
 
 | Turn event kind      | Wire form                                                            |
 | -------------------- | -------------------------------------------------------------------- |
-| `steer-accepted`     | `_aos/steer_accepted` notification                                   |
 | `artifact-published` | `resource_link` block, `uri: "artifact://<id>"`, on the turn's chunk |
 
 Mapping source: `acp/translate/turn-events.ts`.
@@ -411,9 +413,9 @@ Guest connections carry no activity feed (`acp/types.ts:85-90`).
 | `session_info_update` (`_meta.aos`) | `SessionRows` subscriber on a changed row (`acp/agent.ts:641-647`; `core/session-rows.ts:12-17`)                                              |
 | `_aos/activity`                     | Activity feed push (execution events, unread changes)                                                                                         |
 
-`_aos/session_invalidated` tells one connection that its live subscriber for a
-Session was dropped for falling behind the fanout bounds (`membership.detached`
-in the log); the browser answers by resuming that Session from the start.
+A subscriber that falls behind the fanout bounds is detached (`membership.detached`
+in the log); catch-up happens through a standard `session/resume` with
+`replayFrom: { type: "start" }`, not through `_aos/session_invalidated`.
 
 ---
 
@@ -439,12 +441,11 @@ The `discover` preamble reconstructs authoritative state before replay
 reconnect (`core/channel.ts:953-956`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
-**Accepted steering survives replay exactly once.** The browser projects
-`_aos/steer_accepted` as a user turn appended in arrival order. A provider that
-persists the correction the moment it accepts it makes that turn part of
-authoritative history, so a from-start resume announces each persisted
-correction exactly once: the history row wins and the journal's acknowledgement
-of it is dropped, in acceptance order.
+**Accepted steering survives replay exactly once.** A provider that persists the
+correction the moment it accepts it makes that turn part of authoritative
+history, so a from-start resume announces each persisted correction exactly once:
+the history row wins and the journal's acknowledgement of it is dropped, in
+acceptance order.
 
 ---
 
