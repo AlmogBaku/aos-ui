@@ -2,7 +2,7 @@
 // passive `pointermove` listener feeds at most one animation frame at a time,
 // and only on fine pointers without a reduced-motion preference.
 
-const sensors = new Set<SVGGElement>()
+const sensors = new Set<HTMLElement>()
 let pointerX = 0
 let pointerY = 0
 let queued = false
@@ -18,7 +18,8 @@ function canTrack() {
 function update() {
   queued = false
   for (const sensor of sensors) {
-    const box = (sensor.ownerSVGElement ?? sensor).getBoundingClientRect()
+    // The sensor's positioned stage spans its tile.
+    const box = (sensor.offsetParent ?? sensor).getBoundingClientRect()
     const dx = pointerX - (box.left + box.width / 2)
     const dy = pointerY - (box.top + box.height / 2)
     const distance = Math.hypot(dx, dy) || 1
@@ -40,7 +41,7 @@ function onPointerMove(event: PointerEvent) {
  * returns its cleanup. The listener goes away with the last sensor.
  */
 export function trackPairSensor(
-  sensor: SVGGElement | null
+  sensor: HTMLElement | null
 ): (() => void) | undefined {
   if (!sensor || !canTrack()) return undefined
   if (sensors.size === 0) {

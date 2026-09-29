@@ -58,17 +58,24 @@ export function AgentTile(props: AgentTileProps) {
 
   if (props.variant) {
     return (
-      <svg {...frame} className={cn(styles.tile, styles.draft, hop, className)}>
-        <Outline radius={radius} dashed />
+      <span
+        aria-hidden
+        className={cn(styles.tile, styles.draft, hop, className)}
+        style={{ width: size, height: size }}
+      >
+        <svg {...frame}>
+          <Outline radius={radius} dashed />
+        </svg>
         {/* The empty outline leaves room for the pool's widest look. */}
         <Pair
+          size={size}
           x={24}
           y={24}
           glance={2.5 * side}
           fill="currentColor"
           state={state}
         />
-      </svg>
+      </span>
     )
   }
 
@@ -79,27 +86,35 @@ export function AgentTile(props: AgentTileProps) {
   const shapeFill = `oklch(0.93 0.012 ${h})`
 
   return (
-    <svg {...frame} className={cn(styles.tile, hop, className)}>
-      <defs>
-        <clipPath id={clipId}>
-          <rect width={48} height={48} rx={radius} />
-        </clipPath>
-      </defs>
-      <g clipPath={`url(#${clipId})`}>
-        <rect width={48} height={48} fill={background} />
-        <g fill={shapeFill}>
-          {silhouette.shapes.map((shape, index) => (
-            <Shape key={index} shape={shape} />
-          ))}
+    <span
+      aria-hidden
+      className={cn(styles.tile, hop, className)}
+      style={{ width: size, height: size }}
+    >
+      <svg {...frame}>
+        <defs>
+          <clipPath id={clipId}>
+            <rect width={48} height={48} rx={radius} />
+          </clipPath>
+        </defs>
+        <g clipPath={`url(#${clipId})`}>
+          <rect width={48} height={48} fill={background} />
+          <g fill={shapeFill}>
+            {silhouette.shapes.map((shape, index) => (
+              <Shape key={index} shape={shape} />
+            ))}
+          </g>
         </g>
-        <Pair
-          {...silhouette.sensor}
-          glance={silhouette.sensor.glance * side}
-          fill={silhouette.hollow ? shapeFill : background}
-          state={state}
-        />
-      </g>
-    </svg>
+      </svg>
+      <Pair
+        size={size}
+        {...silhouette.sensor}
+        glance={silhouette.sensor.glance * side}
+        fill={silhouette.hollow ? shapeFill : background}
+        state={state}
+        clipRadius={radius}
+      />
+    </span>
   )
 }
 
@@ -149,34 +164,46 @@ const barMotion: Record<AgentTileState, string | undefined> = {
  * The two-bar sensor, centred on (x, y); it tracks the pointer, except while
  * the Agent waits on the person and the pair looks `glance` toward the inline
  * end, or the inline start when negative.
+ *
+ * The pair is HTML over the tile's SVG so the compositor runs its blink, look,
+ * and tracking transforms; an animated SVG child repaints its whole icon. The
+ * stage is the view box scaled to the tile, so every length below is in view
+ * box units and physical, like the SVG it sits on, and `clipRadius` repeats
+ * the tile's clip.
  */
 function Pair({
+  size,
   x,
   y,
   glance,
   fill,
   state,
+  clipRadius,
 }: {
+  size: number
   x: number
   y: number
   glance: number
   fill: string
   state?: AgentTileState
+  clipRadius?: number
 }) {
-  const bar = state && barMotion[state]
+  const bar = cn(styles.bar, state && barMotion[state])
   return (
-    <g
-      transform={`translate(${x} ${y})`}
-      style={{ "--glance": glance } as CSSProperties}
+    <span
+      className={cn(styles.stage, clipRadius !== undefined && styles.clip)}
+      style={{ transform: `scale(${size / 48})`, borderRadius: clipRadius }}
     >
-      <g
+      <span
         ref={trackPairSensor}
         className={cn(styles.sensor, state === "attention" && styles.look)}
-        fill={fill}
+        style={
+          { left: x, top: y, color: fill, "--glance": glance } as CSSProperties
+        }
       >
-        <rect x={-6} y={-3} width={3} height={6} rx={0.5} className={bar} />
-        <rect x={3} y={-3} width={3} height={6} rx={0.5} className={bar} />
-      </g>
-    </g>
+        <span className={bar} style={{ left: -6 }} />
+        <span className={bar} style={{ left: 3 }} />
+      </span>
+    </span>
   )
 }

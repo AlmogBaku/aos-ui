@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { trackPairSensor } from "@/components/agent-icons/pointer-tracking"
 
 function sensor() {
-  return document.createElementNS("http://www.w3.org/2000/svg", "g")
+  return document.createElement("span")
 }
 
 function stubMedia({ fine = true, reducedMotion = false } = {}) {
