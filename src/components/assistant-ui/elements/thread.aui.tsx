@@ -1105,6 +1105,15 @@ const Composer: FC<{
               measureTextareaVisualLineBoundary(input, request),
           })
         ) {
+          // The caret reaches a draft's edge before history moves: Up from
+          // the first line goes to its start, Down from the last to its end.
+          // A recalled entry steps straight on.
+          const edge = event.key === "ArrowUp" ? 0 : input.value.length
+          if (!browse && input.selectionStart !== edge) {
+            event.preventDefault()
+            input.setSelectionRange(edge, edge)
+            return
+          }
           if (event.key === "ArrowUp") {
             const nextCursor = browse ? browse.cursor + 1 : 0
             const entry = historyEntries[nextCursor]
