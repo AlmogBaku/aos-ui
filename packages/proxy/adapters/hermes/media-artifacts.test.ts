@@ -499,6 +499,25 @@ describe("Hermes attached image directives", () => {
     )
   })
 
+  it("reads the model-only image form a mid-turn compaction persists as the same image", () => {
+    const other = imagePath.replace("_1.png", "_2.png")
+    const block = (path: string) =>
+      `[The user attached an image: ${path.split("/").at(-1)}]\n[Examine it with the vision_analyze tool using image_url: ${path}]`
+    const projected = projectHermesAttachedImages(
+      `${block(imagePath)}\n\n${block(other)}\n\nthese images bg is not transparent!`
+    )
+
+    expect(projected.text).toBe("these images bg is not transparent!")
+    expect(projected.artifacts.map(({ descriptor }) => descriptor.id)).toEqual(
+      [
+        ...projectHermesAttachedImages(
+          `x\n@image:${imagePath}\n@image:${other}`
+        ).artifacts,
+      ].map(({ descriptor }) => descriptor.id)
+    )
+    expect(projected.artifacts).toHaveLength(2)
+  })
+
   it("keeps a directive out of the prose even when it grants no artifact", () => {
     const projected = projectHermesAttachedImages(
       "check this\n@image:/home/alice/.hermes/images/notes.txt"

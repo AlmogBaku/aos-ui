@@ -193,6 +193,15 @@ export function projectHermesMediaArtifacts(
 const IMAGE_DIRECTIVE_LINE =
   /^\s*@image:(?:`([^`\r\n]+)`|"([^"\r\n]+)"|'([^'\r\n]+)'|(\S+))\s*$/u
 
+/**
+ * The model-only form of the same attachment, `_build_image_ref_message` in
+ * `tui_gateway/session_history.py`. Hermes never persists it on purpose, but
+ * a compaction during the turn rewrites the row from its model payload, so
+ * the directive is lost and this pair of lines stands in its place.
+ */
+const IMAGE_REF_BLOCK =
+  /^\[The user attached an image: [^\r\n]*\]\r?\n\[Examine it with the vision_analyze tool using image_url: ([^\r\n]+)\]$/gmu
+
 /** The scope every attached-image id is derived under; no tool call owns one. */
 const ATTACHED_IMAGE_SCOPE = "hermes:attached-image"
 
@@ -215,16 +224,20 @@ export function projectHermesAttachedImages(text: string) {
   const prose: string[] = []
   const artifacts: HermesMediaArtifact[] = []
   const seen = new Set<string>()
-  for (const line of text.split(/\r?\n/u)) {
-    const reference = IMAGE_DIRECTIVE_LINE.exec(line)?.slice(1).find(Boolean)
-    if (reference === undefined) {
-      prose.push(line)
-      continue
-    }
+  const attach = (reference: string) => {
     const artifact = hermesAttachedImageArtifact(reference)
-    if (!artifact || seen.has(reference)) continue
+    if (!artifact || seen.has(reference)) return
     seen.add(reference)
     artifacts.push(artifact)
+  }
+  const rest = text.replace(IMAGE_REF_BLOCK, (_, reference: string) => {
+    attach(reference)
+    return ""
+  })
+  for (const line of rest.split(/\r?\n/u)) {
+    const reference = IMAGE_DIRECTIVE_LINE.exec(line)?.slice(1).find(Boolean)
+    if (reference === undefined) prose.push(line)
+    else attach(reference)
   }
   return { text: prose.join("\n").trim(), artifacts }
 }
