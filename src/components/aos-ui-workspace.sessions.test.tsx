@@ -287,9 +287,14 @@ describe("reversible local Session tabs", () => {
     expect(screen.queryByText("Loading workspace…")).toBeNull()
     expect(screen.getByText("Test response")).toBeVisible()
 
+    // A reload that lists fewer Sessions, the open one among those dropped,
+    // still leaves the conversation on screen.
     pendingList.resolve({ threads: [] })
     await act(() => reload)
     list.mockRestore()
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(screen.queryByText("Loading workspace…")).toBeNull()
+    expect(screen.getByText("Test response")).toBeVisible()
   })
 
   it("reloads the thread list only when the catalog names a Session it lacks", async () => {

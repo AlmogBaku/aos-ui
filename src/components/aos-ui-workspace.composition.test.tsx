@@ -123,6 +123,8 @@ describe("AosUiApp fixture composition", () => {
   it.each([
     ["en", { connectionStatus: "reconnecting" }, "Reconnecting to AOS…"],
     ["he", { connectionStatus: "reconnecting" }, "מתחברים מחדש ל-AOS…"],
+    ["en", { connectionStatus: "reconnected" }, "Reconnected"],
+    ["he", { connectionStatus: "reconnected" }, "החיבור חזר"],
     [
       "en",
       { connectionStatus: "capacity" },
@@ -157,9 +159,10 @@ describe("AosUiApp fixture composition", () => {
       }
       const { rerender } = render(<StatusFixture {...status} />)
 
-      expect(await screen.findByText(statusText)).toHaveAttribute(
-        "role",
-        "status"
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole("status").map(({ textContent }) => textContent)
+        ).toContain(statusText)
       )
       rerender(<StatusFixture />)
       expect(screen.queryByText(statusText)).toBeNull()

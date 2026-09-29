@@ -62,7 +62,7 @@ import {
   isAuthenticationRequired,
 } from "./acp/connection"
 import { tabAcpLogger } from "./acp/log"
-import type { AcpConnection, AcpConnectionOutage } from "./acp/types"
+import type { AcpConnection } from "./acp/types"
 import { useAcpRuntime } from "./acp/use-acp-runtime"
 import {
   AosAttachmentAdapter,
@@ -76,7 +76,10 @@ import {
   applyComposerPrefill,
   rewindSource,
 } from "./conversation-controls"
-import { useConnectionOutage } from "./use-connection-outage"
+import {
+  type ConnectionNotice,
+  useConnectionOutage,
+} from "./use-connection-outage"
 
 /**
  * The invited guest surface: one ACP connection to the proxy's guest listener,
@@ -182,7 +185,7 @@ function GuestArtifactShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
-  connectionStatus?: AcpConnectionOutage
+  connectionStatus?: ConnectionNotice
 }) {
   const stabilize = useMemo(() => createArtifactMessageStabilizer(), [])
   const messages = useAuiState((state: AssistantState) =>
@@ -233,7 +236,7 @@ function GuestConversationShell({
   logoUrl: string
   composerFeatures: ComposerFeatureViewModel
   composer: ThreadComponents["Composer"]
-  connectionStatus?: AcpConnectionOutage
+  connectionStatus?: ConnectionNotice
 }) {
   const { closeArtifact, labels, selectedArtifact } = useArtifactWorkspace()
   return (

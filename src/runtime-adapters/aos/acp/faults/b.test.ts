@@ -14,13 +14,37 @@ import { useFakeClock } from "../../../../../test/support/fake-clock"
 
 import { AOS_METHODS } from "@aos/protocol/acp"
 
-import { LIVENESS_SILENCE_MS, PART_GRACE_MS } from "../limits"
+import {
+  LIVENESS_SILENCE_MS,
+  PART_GRACE_MS,
+  REQUEST_DEADLINE_MS,
+} from "../limits"
 import { connectBrowser, methodsOf, sentFrames } from "./support"
 
 const SIBLING = "session-2"
 
 describe("browser connection faults", () => {
-  it("closes a transport that holds a request back at its deadline and reconnects", async () => {
+  it("fails a request that outlasts its deadline but keeps a transport that answers its check-in", async () => {
+    const clock = useFakeClock()
+    const test = await harness()
+    const { pipe, connection } = connectBrowser(test)
+    connection.start()
+    await connection.initialized
+
+    vi.mocked(test.catalog.agents).mockReturnValueOnce(new Promise(() => {}))
+    const slow = expect(connection.listAgents()).rejects.toMatchObject({
+      name: "TimeoutError",
+    })
+    await clock.advance(REQUEST_DEADLINE_MS.short)
+    await slow
+    await clock.advance(REQUEST_DEADLINE_MS.probe)
+
+    expect(pipe.sockets).toHaveLength(1)
+    expect(connection.status).toBe("ready")
+    await expect(connection.listAgents()).resolves.toBeDefined()
+  })
+
+  it("closes a transport that holds a request back and its check-in, and reconnects", async () => {
     const clock = useFakeClock()
     const { pipe, connection } = connectBrowser(await harness())
     connection.start()
@@ -30,9 +54,9 @@ describe("browser connection faults", () => {
     const stalled = expect(connection.listAgents()).rejects.toMatchObject({
       name: "TimeoutError",
     })
-    await clock.advance(30_000)
+    await clock.advance(REQUEST_DEADLINE_MS.short)
     await stalled
-    await clock.advance(250)
+    await clock.advance(REQUEST_DEADLINE_MS.probe + 250)
 
     expect(pipe.sockets).toHaveLength(2)
     expect(connection.status).toBe("ready")
@@ -279,15 +303,15 @@ describe("browser connection faults", () => {
 
     // Block the probe so it times out and forces a reconnect.
     pipe.sockets[0]!.halfOpen()
-    await clock.advance(10_000) // explicit focus probe deadline
+    await clock.advance(REQUEST_DEADLINE_MS.probe)
     await clock.advance(125) // reconnect backoff
 
     expect(pipe.sockets).toHaveLength(2)
-    // The first focus frame was the explicit call; the one from recover() follows.
-    const focusFrames = frames.filter(
-      (f) => f.method === AOS_METHODS.session.focus
-    )
-    expect(focusFrames).toHaveLength(2)
+    // recover() sends the focus again once the new socket is initialized.
+    const reopened = frames.findLastIndex((f) => f.method === "initialize")
+    const focusFrames = frames
+      .slice(reopened)
+      .filter((f) => f.method === AOS_METHODS.session.focus)
     expect(focusFrames.at(-1)?.params).toMatchObject({ sessionId: SESSION })
   })
 })
