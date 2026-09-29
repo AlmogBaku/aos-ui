@@ -22,6 +22,7 @@ import {
 import { useFakeClock } from "../../../../test/support/fake-clock"
 
 import type { SessionMetadata } from "../../contracts"
+import { sessionCapabilities } from "../test-capabilities"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,
@@ -44,9 +45,8 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 const available = { status: "available" } as const
 
 function capabilities(): AcpCapabilities {
-  return {
+  return sessionCapabilities({
     workspace: {
-      slashCommands: unavailable,
       models: {
         status: "available",
         scope: "session",
@@ -59,8 +59,6 @@ function capabilities(): AcpCapabilities {
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
-      todos: unavailable,
-      activity: unavailable,
     },
     interactions: {
       steering: {
@@ -88,16 +86,8 @@ function capabilities(): AcpCapabilities {
         maxAnswerValuesPerQuestion: 8,
         maxStringBytes: 4_096,
       },
-      reactions: unavailable,
     },
-    content: {
-      attachments: unavailable,
-      artifacts: unavailable,
-      mcpApps: unavailable,
-      transcription: unavailable,
-      speech: unavailable,
-    },
-  }
+  })
 }
 
 function runtimeInfo(
