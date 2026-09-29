@@ -269,21 +269,9 @@ export function createQueue(session: QueueSession) {
       if (!waiting.every((message) => message && composable(message)))
         return undefined
       const messages = takeWaiting()
-      let restored = false
       return {
         text: joinedText(messages),
         attachments: messages.flatMap((message) => message.attachments ?? []),
-        restore: () => {
-          if (restored) return
-          restored = true
-          // Queued back under a hold, so an idle Session sends them combined
-          // as it releases, and one Stop paused keeps them waiting.
-          const wasStopped = stopped
-          const release = controls.hold()
-          for (const message of messages) adapter.enqueue(message)
-          stopped = wasStopped
-          release()
-        },
       }
     },
     hold: () => {

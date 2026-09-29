@@ -1301,11 +1301,7 @@ describe("useAcpRuntime", () => {
       act(() => {
         draft = controlsOf(result.current)?.takeAll()
       })
-      expect(draft).toEqual({
-        text: "First\n\nSecond",
-        attachments: [image],
-        restore: expect.any(Function),
-      })
+      expect(draft).toEqual({ text: "First\n\nSecond", attachments: [image] })
       expect(queuedIds(result.current)).toEqual([])
       await ends(fake)
       expect(fake.prompt).not.toHaveBeenCalled()
@@ -2183,54 +2179,18 @@ describe("the queue row editor", () => {
     expect(fake.cancel).not.toHaveBeenCalled()
   })
 
-  it("pulls the whole queue into an empty composer with Up, and Escape puts it back", async () => {
+  it("pulls the whole queue ahead of the draft with Esc, leaving the turn running until the next Esc", async () => {
     const { user, fake, input, region } = await queued("First")
     await user.type(input, "Second{Enter}")
-    await user.keyboard("{ArrowUp}")
-    await waitFor(() => expect(input).toHaveValue("First\n\nSecond"))
-    expect(region).not.toBeInTheDocument()
-    expect(screen.getByText("Editing 2 queued messages")).toBeInTheDocument()
-
-    await user.type(input, " changed")
+    await user.type(input, "Draft")
     await user.keyboard("{Escape}")
-    await waitFor(() => expect(input).toHaveValue(""))
-    const restored = await screen.findByRole("region", {
-      name: "Queued messages",
-    })
-    expect(
-      within(restored)
-        .getAllByRole("listitem")
-        .map((row) => within(row).queryByText(/First|Second/)?.textContent)
-    ).toEqual(["First", "Second"])
+    await waitFor(() => expect(input).toHaveValue("First\n\nSecond\n\nDraft"))
+    expect(region).not.toBeInTheDocument()
     expect(fake.cancel).not.toHaveBeenCalled()
 
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
-    await waitFor(() =>
-      expect(fake.prompt).toHaveBeenCalledWith(
-        SESSION_ID,
-        [{ type: "text", text: "First\n\nSecond" }],
-        expect.objectContaining({})
-      )
-    )
-  })
-
-  it("restores a just-cleared draft on Up before opening the queue", async () => {
-    const { user, input, region } = await queued("Queued")
-    await user.type(input, "Draft")
-    await user.keyboard("{Escape}{Escape}")
-    await waitFor(() => expect(input).toHaveValue(""))
-    await user.keyboard("{ArrowUp}")
-    await waitFor(() => expect(input).toHaveValue("Draft"))
-    expect(
-      within(region).queryByRole("textbox", { name: "Edit queued message" })
-    ).not.toBeInTheDocument()
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(fake.cancel).toHaveBeenCalled())
+    expect(fake.prompt).not.toHaveBeenCalled()
   })
 })
 

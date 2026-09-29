@@ -146,7 +146,7 @@ function QueueEditor({
           close(true, true)
         }
       }}
-      className="max-h-32 min-h-7 min-w-0 flex-1 resize-none rounded-md border-transparent bg-background px-2 py-1 text-sm shadow-none [field-sizing:content] dark:bg-popover"
+      className="[field-sizing:content] max-h-32 min-h-7 min-w-0 flex-1 resize-none rounded-md border-transparent bg-background px-2 py-1 text-sm shadow-none dark:bg-popover"
     />
   )
 }
@@ -250,7 +250,8 @@ function QueueRow({
     onMoved(position + by)
   }
   const edit = () => {
-    if (controls && !pending) onEditingChange({ id: requestId, returnTo: "row" })
+    if (controls && !pending)
+      onEditingChange({ id: requestId, returnTo: "row" })
   }
   const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
     if (isEditing) return
@@ -487,9 +488,8 @@ export function MessageQueue({
           <span className="min-w-0">{labels.sendsCombined}</span>
           {controls ? (
             <span className="ms-auto flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:hidden">
-              <kbd className="grid h-4 min-w-4 place-items-center rounded border border-border/80 bg-background font-sans text-[0.625rem] text-foreground/70 dark:bg-popover">
-                <ArrowUpIcon aria-hidden="true" className="size-2.5" />
-                <span className="sr-only">↑</span>
+              <kbd className="grid h-4 min-w-4 place-items-center rounded border border-border/80 bg-background px-1 font-sans text-[0.625rem] text-foreground/70 dark:bg-popover">
+                Esc
               </kbd>
               {labels.editAll}
             </span>
