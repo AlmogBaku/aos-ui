@@ -2996,29 +2996,61 @@ describe("Hermes server adapter", () => {
       },
     ]
 
-    it("restores the failed turn Hermes kept out of its transcript", async () => {
-      const { adapter } = failedTurnAdapter(unansweredPrompt)
-
-      const history = await adapter.history("researcher", "stored", 200, 0)
-
-      expect(history.messages.at(-1)).toMatchObject({
+    // A turn that ran tools before failing keeps its calls and results in the
+    // transcript, so the prompt is no longer its last row.
+    const unansweredToolCall = [
+      ...unansweredPrompt,
+      {
+        id: "assistant-1",
         role: "assistant",
-        content: [{ type: "text", text: "I could not reach the model." }],
-        status: {
-          type: "incomplete",
-          reason: "error",
-          error:
-            "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
-        },
-        turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
-      })
-      // This retained cause names a credential and an internal host, so the
-      // detail is dropped whole and the headline stands alone.
-      const serialized = JSON.stringify(history)
-      expect(serialized).not.toContain("AWS Bedrock")
-      expect(serialized).not.toContain("native-secret")
-      expect(serialized).not.toContain("ValidationException")
-    })
+        content: "Reading the filing first.",
+        tool_calls: [
+          {
+            id: "read-call",
+            function: { name: "read_file", arguments: "{}" },
+          },
+        ],
+        finish_reason: "tool_calls",
+        timestamp: 2,
+      },
+      {
+        role: "tool",
+        tool_call_id: "read-call",
+        tool_name: "read_file",
+        content: "filing text",
+        timestamp: 3,
+      },
+    ]
+
+    it.each([
+      ["with an unanswered prompt", unansweredPrompt],
+      ["with a tool call nothing answered", unansweredToolCall],
+    ])(
+      "restores the failed turn Hermes kept out of a transcript ending %s",
+      async (_, rows) => {
+        const { adapter } = failedTurnAdapter(rows)
+
+        const history = await adapter.history("researcher", "stored", 200, 0)
+
+        expect(history.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "I could not reach the model." }],
+          status: {
+            type: "incomplete",
+            reason: "error",
+            error:
+              "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
+          },
+          turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+        })
+        // This retained cause names a credential and an internal host, so the
+        // detail is dropped whole and the headline stands alone.
+        const serialized = JSON.stringify(history)
+        expect(serialized).not.toContain("AWS Bedrock")
+        expect(serialized).not.toContain("native-secret")
+        expect(serialized).not.toContain("ValidationException")
+      }
+    )
 
     it("resumes once for a burst of history loads on the same Session", async () => {
       const { adapter, request } = failedTurnAdapter(unansweredPrompt)
@@ -3039,25 +3071,31 @@ describe("Hermes server adapter", () => {
       ).toHaveLength(1)
     })
 
-    it("never resumes a Session whose transcript ends with an answer", async () => {
-      const { adapter, request } = failedTurnAdapter([
-        ...unansweredPrompt,
-        {
-          id: "assistant-1",
-          role: "assistant",
-          content: "Here is the summary.",
-          timestamp: 2,
-        },
-      ])
+    it.each([
+      ["a prompt", unansweredPrompt],
+      ["a tool call", unansweredToolCall],
+    ])(
+      "never resumes a Session whose transcript answers %s",
+      async (_, rows) => {
+        const { adapter, request } = failedTurnAdapter([
+          ...rows,
+          {
+            id: "assistant-2",
+            role: "assistant",
+            content: "Here is the summary.",
+            timestamp: 4,
+          },
+        ])
 
-      const history = await adapter.history("researcher", "stored", 200, 0)
+        const history = await adapter.history("researcher", "stored", 200, 0)
 
-      expect(history.messages.at(-1)).toMatchObject({
-        content: [{ type: "text", text: "Here is the summary." }],
-      })
-      expect(history.messages.at(-1)).not.toHaveProperty("status")
-      expect(request).not.toHaveBeenCalled()
-    })
+        expect(history.messages.at(-1)).toMatchObject({
+          content: [{ type: "text", text: "Here is the summary." }],
+        })
+        expect(history.messages.at(-1)).not.toHaveProperty("status")
+        expect(request).not.toHaveBeenCalled()
+      }
+    )
 
     it("restores nothing for a retained turn belonging to another prompt", async () => {
       const { adapter, request } = failedTurnAdapter(unansweredPrompt, {
