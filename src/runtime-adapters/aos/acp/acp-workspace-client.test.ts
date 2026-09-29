@@ -559,10 +559,7 @@ describe("ACP workspace client", () => {
 
   it("publishes no snapshot until every named Session has a row", async () => {
     const { client, join } = createClient()
-    const published = await watchRows(client, [
-      SESSION_ID,
-      UNLISTED_SESSION_ID,
-    ])
+    const published = await watchRows(client, [SESSION_ID, UNLISTED_SESSION_ID])
 
     // The catalog has not reached the second Session yet. A snapshot naming
     // only the first would report the second as one the workspace does not
