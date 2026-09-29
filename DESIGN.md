@@ -427,6 +427,12 @@ assistant's answer.
 - **Compaction is a quiet divider:** it sits outside the fold, keeps its summary
   behind a disclosure, and splits the fold into before and after when it lands
   mid-turn. A failed compaction is a warning System Notice.
+- **Runtime status is a quiet, live-only line:** a `notice` session update from
+  the runtime reads as a single muted line in the turn, with a kind icon chosen
+  by `_meta.aos.kind` (heartbeat, loop, goal, process, status). A `warning` or
+  `error` severity becomes a System Notice instead. Notices are never stored in
+  history: they arrive as live stream events and travel with the turn they land
+  in, or append to the latest assistant turn when no run is active.
 - **Stops say why:** a turn stopped at the length limit or refused by the
   provider gets a warning System Notice under the message, and the fold
   headline says so ("Stopped at the length limit after 40 s"). A failure notice
