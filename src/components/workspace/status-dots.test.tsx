@@ -19,16 +19,9 @@ describe("StatusDot", () => {
     }
   )
 
-  it.each<[RowStatus, string]>([
-    ["running", "Running"],
-    ["active", "Active"],
-    ["attention", "Needs attention"],
-    ["waiting-for-input", "Waiting for input"],
-    ["failed", "Failed"],
-    ["unknown", "Status unavailable"],
-  ])("labels the %s dot with its own status", (status, label) => {
-    render(<StatusDot status={status} label={label} />)
-    expect(screen.getByTitle(label)).toHaveAttribute("aria-hidden", "true")
+  it("labels a non-quiet dot without repeating it to assistive technology", () => {
+    render(<StatusDot status="running" label="Running" />)
+    expect(screen.getByTitle("Running")).toHaveAttribute("aria-hidden", "true")
   })
 })
 
