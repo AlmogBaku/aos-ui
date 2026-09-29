@@ -750,7 +750,7 @@ describe("artifact workspace", () => {
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:pdf-preview")
   })
 
-  it("opens HTML on a sandboxed Preview tab and keeps source inspectable", async () => {
+  it("opens HTML beyond the text budget on a sandboxed Preview tab and keeps source inspectable", async () => {
     const htmlMessages = [
       {
         id: "html-message",
@@ -763,6 +763,7 @@ describe("artifact workspace", () => {
               id: "html",
               filename: "report.html",
               mimeType: "text/html",
+              sizeBytes: MAX_TEXT_PREVIEW_BYTES + 1,
               source: {
                 type: "inline",
                 encoding: "utf8",

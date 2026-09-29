@@ -714,6 +714,12 @@ function isTextPreview(kind: ArtifactPreviewKind) {
   return ["markdown", "text", "code", "json", "csv", "html"].includes(kind)
 }
 
+// HTML renders inside the sandboxed frame, so only text this page lays out
+// itself needs the tighter text budget.
+function hasTextPreviewBudget(kind: ArtifactPreviewKind) {
+  return isTextPreview(kind) && kind !== "html"
+}
+
 function ArtifactCopyButton({
   labels,
   text,
@@ -796,7 +802,7 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
     ? { status: "idle" }
     : !adapter
       ? { status: "error", reason: "unavailable" }
-      : isTextPreview(kind) &&
+      : hasTextPreviewBudget(kind) &&
           previewArtifact.sizeBytes !== undefined &&
           previewArtifact.sizeBytes > MAX_TEXT_PREVIEW_BYTES
         ? { status: "error", reason: "text-too-large" }
@@ -833,17 +839,17 @@ export function useArtifactPreviewController(artifact?: ArtifactDescriptor) {
       })
       .then(async (blob) => {
         if (!active) return
-        if (isTextPreview(kind)) {
-          if (blob.size > MAX_TEXT_PREVIEW_BYTES) {
-            finish({ status: "error", reason: "text-too-large" })
-            return
-          }
-          const text = await blob.text()
-          if (active) finish({ status: "ready", kind, text })
+        if (hasTextPreviewBudget(kind) && blob.size > MAX_TEXT_PREVIEW_BYTES) {
+          finish({ status: "error", reason: "text-too-large" })
           return
         }
         if (blob.size > MAX_ARTIFACT_PREVIEW_BYTES) {
           finish({ status: "error", reason: "file-too-large" })
+          return
+        }
+        if (isTextPreview(kind)) {
+          const text = await blob.text()
+          if (active) finish({ status: "ready", kind, text })
           return
         }
         objectUrl = URL.createObjectURL(blob)
