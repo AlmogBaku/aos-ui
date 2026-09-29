@@ -122,12 +122,6 @@ export const AgentCatalogEntrySchema = z.strictObject({
   /** The runtime can store this Agent's avatar. */
   avatarEditable: z.boolean(),
   revision: IdentifierSchema,
-  /**
-   * The absolute folder the Agent's Sessions run in, the `cwd` a new or
-   * resumed Session names. The proxy adds it; absent when the runtime names
-   * none.
-   */
-  folder: z.string().min(1).max(4096).optional(),
 })
 export type AgentCatalogEntry = z.infer<typeof AgentCatalogEntrySchema>
 

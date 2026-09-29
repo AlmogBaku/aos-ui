@@ -1662,97 +1662,80 @@ export function runWireListenerContract(
       )
 
       it(
-        "takes only the Agent's own folder as cwd, folded on the string, and lists every row in it",
-        wireCase(
-          createRuntime,
-          async ({ proxy, agentId, folder, clock, connect, connectPlain }) => {
-            const plain = connectPlain()
-            await until(clock, plain.initialize())
-            const request = (method: string, params: Record<string, unknown>) =>
-              until(clock, plain.connection.agent.request(method, params)).then(
-                () => "answered",
-                (error: { code?: unknown; message?: unknown }) => error
-              )
-            const invalid = expect.objectContaining({
-              code: RequestError.invalidParams().code,
+        "takes only the Agent's own folder as cwd, or an empty one for it, folded on the string, and lists every row in it",
+        wireCase(createRuntime, async ({ folder, clock, connectPlain }) => {
+          const plain = connectPlain()
+          await until(clock, plain.initialize())
+          const request = (method: string, params: Record<string, unknown>) =>
+            until(clock, plain.connection.agent.request(method, params)).then(
+              () => "answered",
+              (error: { code?: unknown; message?: unknown }) => error
+            )
+          const invalid = expect.objectContaining({
+            code: RequestError.invalidParams().code,
+          })
+          const { sessionId } = await until(
+            clock,
+            plain.connection.agent.request(methods.agent.session.new, {
+              cwd: `${folder}/../${folder.split("/").at(-1)}/`,
             })
-            const { sessionId } = await until(
-              clock,
-              plain.connection.agent.request(methods.agent.session.new, {
-                cwd: `${folder}/../${folder.split("/").at(-1)}/`,
-              })
-            )
+          )
 
-            await expect(
-              request(methods.agent.session.new, { cwd: folder.slice(1) })
-            ).resolves.toEqual(invalid)
-            await expect(
-              request(methods.agent.session.new, { cwd: `${folder}/other` })
-            ).resolves.toEqual(
-              expect.objectContaining({
-                code: RequestError.invalidParams().code,
-                message: expect.stringContaining(folder),
-              })
-            )
-            for (const extra of [
-              {
-                mcpServers: [
-                  { type: "stdio", name: "extra", command: "/bin/true" },
-                ],
-              },
-              { additionalDirectories: ["/tmp"] },
-            ])
-              expect(
-                await request(methods.agent.session.new, {
-                  cwd: folder,
-                  ...extra,
-                }),
-                Object.keys(extra)[0]
-              ).toEqual(invalid)
-            await expect(
-              request(methods.agent.session.resume, {
-                sessionId,
-                cwd: "/",
-              })
-            ).resolves.toEqual(invalid)
-
-            await until(clock, prompt(plain, sessionId, "list the files"))
-            const listed = await until(
-              clock,
-              plain.connection.agent.request(methods.agent.session.list, {
-                cwd: `${folder}/`,
-              })
-            )
-            const elsewhere = await until(
-              clock,
-              plain.connection.agent.request(methods.agent.session.list, {
-                cwd: `${folder}/other`,
-              })
-            )
-            const shared = connect(
-              proxy.acpService,
-              OPERATOR_ORIGIN,
-              AOS_ACP_OPERATOR_PATH
-            )
-            await until(clock, shared.initialize())
-            const agents = await until(
-              clock,
-              shared.connection.agent.request(AOS_METHODS.agents.list, {})
-            )
-
+          await expect(
+            request(methods.agent.session.new, { cwd: folder.slice(1) })
+          ).resolves.toEqual(invalid)
+          await expect(
+            request(methods.agent.session.new, { cwd: `${folder}/other` })
+          ).resolves.toEqual(
+            expect.objectContaining({
+              code: RequestError.invalidParams().code,
+              message: expect.stringContaining(folder),
+            })
+          )
+          for (const extra of [
+            {
+              mcpServers: [
+                { type: "stdio", name: "extra", command: "/bin/true" },
+              ],
+            },
+            { additionalDirectories: ["/tmp"] },
+          ])
             expect(
-              listed.sessions.map((row) => [row.sessionId, row.cwd])
-            ).toEqual([[sessionId, folder]])
-            expect(elsewhere.sessions).toEqual([])
-            expect(
-              (
-                agents as {
-                  agents: { summary: { id: string }; folder?: string }[]
-                }
-              ).agents.find(({ summary }) => summary.id === agentId)?.folder
-            ).toBe(folder)
-          }
-        )
+              await request(methods.agent.session.new, {
+                cwd: folder,
+                ...extra,
+              }),
+              Object.keys(extra)[0]
+            ).toEqual(invalid)
+          await expect(
+            request(methods.agent.session.resume, {
+              sessionId,
+              cwd: "/",
+            })
+          ).resolves.toEqual(invalid)
+
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          const listed = await until(
+            clock,
+            plain.connection.agent.request(methods.agent.session.list, {
+              cwd: `${folder}/`,
+            })
+          )
+          const elsewhere = await until(
+            clock,
+            plain.connection.agent.request(methods.agent.session.list, {
+              cwd: `${folder}/other`,
+            })
+          )
+
+          expect(
+            listed.sessions.map((row) => [row.sessionId, row.cwd])
+          ).toEqual([[sessionId, folder]])
+          expect(elsewhere.sessions).toEqual([])
+          await expect(
+            request(methods.agent.session.new, { cwd: "" })
+          ).resolves.toBe("answered")
+        })
       )
 
       it(

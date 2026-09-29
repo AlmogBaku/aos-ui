@@ -388,7 +388,8 @@ describe("AOS ACP agent", () => {
     await expect(
       test.agent.request(methods.agent.session.resume, {
         sessionId: SESSION,
-        cwd: "/",
+        // An empty cwd names the Agent's folder, and this Agent has none.
+        cwd: "",
         ...onAgent,
       })
     ).rejects.toMatchObject(UNSUPPORTED)

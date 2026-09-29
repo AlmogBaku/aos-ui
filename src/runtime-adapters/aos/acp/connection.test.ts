@@ -53,7 +53,7 @@ function modelOption(currentValue: string): SessionConfigOption {
   }
 }
 
-/** The folder the catalog names for the Agent, the one `cwd` it takes. */
+/** The Agent's folder, the `cwd` the proxy lists its Sessions in. */
 const FOLDER = "/srv/research"
 
 function catalogEntry() {
@@ -63,7 +63,6 @@ function catalogEntry() {
     selectable: true,
     editable: true,
     avatarEditable: true,
-    folder: FOLDER,
     revision: "revision-1",
   }
 }
@@ -90,14 +89,11 @@ function createProxyAgent(
     buildId?: string
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
-    /** How many Agents lists, from the first, fail to read the folder. */
-    listsWithoutFolder?: number
   } = {}
 ) {
   const calls: AgentCall[] = []
   let peer: AgentContext | undefined
   let logins = 0
-  let agentLists = 0
   const record = (method: string, params: unknown) => {
     calls.push({ method, params })
   }
@@ -220,13 +216,7 @@ function createProxyAgent(
       z.unknown().optional(),
       ({ params }) => {
         record(AOS_METHODS.agents.list, params)
-        agentLists += 1
-        const { folder, ...entry } = catalogEntry()
-        const read = agentLists > (options.listsWithoutFolder ?? 0)
-        return {
-          revision: "revision-1",
-          agents: [read ? { ...entry, folder } : entry],
-        }
+        return { revision: "revision-1", agents: [catalogEntry()] }
       }
     )
     .onRequest(AOS_METHODS.agents.update, z.unknown(), ({ params }) => {
@@ -408,24 +398,6 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("reads a missing Agent folder again, and fails locally while it stays missing", async () => {
-    const proxy = createProxyAgent({ listsWithoutFolder: 2 })
-    const connection = connectInProcess(proxy)
-    await connection.listAgents()
-
-    await expect(connection.newSession({ agentId: AGENT_ID })).rejects.toThrow(
-      "The Agent's folder could not be read"
-    )
-    expect(proxy.callsOf(methods.agent.session.new)).toEqual([])
-
-    await connection.newSession({ agentId: AGENT_ID })
-    expect(proxy.callsOf(AOS_METHODS.agents.list)).toHaveLength(3)
-    expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
-      cwd: FOLDER,
-    })
-    connection.close()
-  })
-
   it("creates, lists, resumes, and prompts Sessions with AOS metadata", async () => {
     const proxy = createProxyAgent()
     const connection = connectInProcess(proxy)
@@ -436,7 +408,7 @@ describe("ACP connection", () => {
     })
     expect(created).toEqual({ sessionId: SESSION_ID })
     expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
-      cwd: FOLDER,
+      cwd: "",
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
     })
 
@@ -829,7 +801,7 @@ describe("ACP connection", () => {
 
       expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
         sessionId: SESSION_ID,
-        cwd: FOLDER,
+        cwd: "",
         replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
       })
       expect(page.history).toEqual({ nextCursor: "cursor-older" })

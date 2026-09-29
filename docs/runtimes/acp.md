@@ -182,11 +182,12 @@ first create opened rather than creating a second one.
 
 `session/new` and `session/resume` on the operator listener enforce a folder
 rule: `cwd` must equal the Agent's folder exactly (folded on the string; `..`
-and trailing separators are allowed, but a relative path is refused). Any other
-`cwd` returns invalid params naming the folder; an Agent with no folder returns
-unsupported. A non-empty `mcpServers` or `additionalDirectories` also returns
-invalid params. The runtime never receives the client's `cwd`. Every list row
-carries its Agent's folder; `_aos/agents/list` rows carry `folder` too. A list
+and trailing separators are allowed, but a relative path is refused), or be
+empty, which names the Agent's folder; the AOS browser always sends it empty.
+Any other `cwd` returns invalid params naming the folder; an Agent with no
+folder returns unsupported. A non-empty `mcpServers` or `additionalDirectories`
+also returns invalid params. The runtime never receives the client's `cwd`.
+Every list row carries its Agent's folder. A list
 with a `cwd` filter that matches no Agent's folder returns no rows. A list across
 Agents skips, and logs, any Agent with no folder (`session.list.no_folder`) or an
 unreadable one (`session.list.folder_read_failed`), and still lists every other

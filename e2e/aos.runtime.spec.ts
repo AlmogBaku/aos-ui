@@ -394,7 +394,6 @@ const script = {
         editable: false,
         avatarEditable: false,
         revision: "research-1",
-        folder: "/srv/demo",
       },
     ],
   },

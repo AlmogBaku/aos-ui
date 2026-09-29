@@ -292,6 +292,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * Agent's folder, and anything the client asks the runtime to attach:
    * every runtime works out its own folder and servers, and never gets the
    * client's. A Session its stack scopes, as an invitation's, names none.
+   * An empty `cwd` takes the Agent's folder, so AOS's own browser need not
+   * echo a folder the proxy already knows.
    */
   async function requireFolder(
     agentId: string,
@@ -306,7 +308,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       throw invalidParams("additionalDirectories must be empty")
     const folder = await folderOf(agentId)
     if (folder === undefined) throw unsupported("no working folder")
-    if (normalizeFolder(params.cwd) !== folder)
+    if (params.cwd !== "" && normalizeFolder(params.cwd) !== folder)
       throw invalidParams(`cwd must be ${folder}`)
   }
 
@@ -860,25 +862,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       return await perform(
         "agents",
         {},
-        async () => {
-          const listed = await catalog.agents()
-          const agents = await Promise.all(
-            listed.agents.map(async (entry) => {
-              const agentId = entry.summary.id
-              // An unread folder only means the row names none.
-              const folder = await folderOf(agentId).catch((cause: unknown) => {
-                const { code } = errorNotificationOf(context.publicError, cause)
-                context.logger.warn(
-                  { agentId, errorCode: code },
-                  "agents.folder.read_failed"
-                )
-                return undefined
-              })
-              return folder === undefined ? entry : { ...entry, folder }
-            })
-          )
-          return { ...listed, agents }
-        },
+        async () => await catalog.agents(),
         requestId
       )
     }

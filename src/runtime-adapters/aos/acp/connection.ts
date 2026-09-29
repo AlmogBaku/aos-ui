@@ -97,10 +97,10 @@ const SILENT_LOGGER: Logger = {
 }
 
 /**
- * A guest's `cwd`: the proxy roots its invitation's Session itself. An
- * operator's names its Agent's folder instead, which the proxy checks.
+ * The `cwd` every new or resumed Session names: empty, which the proxy reads
+ * as the Agent's own folder, the only one a Session may run in.
  */
-const GUEST_CWD = "/"
+const AGENT_CWD = ""
 
 /** An ACP payload's `_meta`, keyed by extension; only AOS's half is read. */
 const AosEnvelopeSchema = z.object({
@@ -616,10 +616,6 @@ export function createAcpConnection(
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
-  /** Each Agent's folder, as `_aos/agents/list` last named it. */
-  const folders = new Map<string, string | undefined>()
-  /** Each listed Session's folder, for one whose Agent this tab never named. */
-  const listedCwds = new Map<string, string>()
 
   let status: AcpConnectionStatus = "connecting"
   let outage: AcpConnectionOutage | undefined
@@ -1003,8 +999,6 @@ export function createAcpConnection(
     open.replaying = replaying
     let replayed = false
     try {
-      const cwd = await cwdOf(sessionId, agentId)
-      if (signal.aborted) return
       const response = await requestOn(
         transport,
         fromStart ? "long" : "medium",
@@ -1013,7 +1007,7 @@ export function createAcpConnection(
             methods.agent.session.resume,
             {
               sessionId,
-              cwd,
+              cwd: AGENT_CWD,
               ...(fromStart ? { replayFrom: { type: "start" } } : {}),
               _meta: {
                 [AOS_META_KEY]: {
@@ -1048,31 +1042,11 @@ export function createAcpConnection(
   }
 
   async function listAgents() {
-    const listed = AosAgentsListResponseSchema.parse(
+    return AosAgentsListResponseSchema.parse(
       await request("short", (agent, options) =>
         agent.request(AOS_METHODS.agents.list, undefined, options)
       )
     )
-    folders.clear()
-    for (const entry of listed.agents)
-      folders.set(entry.summary.id, entry.folder)
-    return listed
-  }
-
-  /**
-   * The `cwd` a new or resumed Session names: its Agent's folder, read from
-   * the Agents list again whenever this tab holds none for it, since a list
-   * can miss a folder it reads next time. Still none fails the call here.
-   */
-  async function cwdOf(sessionId: string | undefined, agentId?: string) {
-    if ((await initialized).role === "guest") return GUEST_CWD
-    if (agentId === undefined)
-      return (sessionId && listedCwds.get(sessionId)) ?? ""
-    if (folders.get(agentId) === undefined) await listAgents()
-    const folder = folders.get(agentId)
-    if (folder === undefined)
-      throw new Error("The Agent's folder could not be read")
-    return folder
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1224,13 +1198,12 @@ export function createAcpConnection(
     const updates: PageUpdates = []
     open.page = updates
     try {
-      const cwd = await cwdOf(sessionId, owners.get(sessionId))
       const response = await request("medium", (agent, options) =>
         agent.request(
           methods.agent.session.resume,
           {
             sessionId,
-            cwd,
+            cwd: AGENT_CWD,
             replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
           },
           options
@@ -1450,11 +1423,10 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
-      const cwd = await cwdOf(undefined, meta.agentId)
       const { sessionId } = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
-          { cwd, _meta: { [AOS_META_KEY]: meta } },
+          { cwd: AGENT_CWD, _meta: { [AOS_META_KEY]: meta } },
           options
         )
       )
@@ -1481,8 +1453,6 @@ export function createAcpConnection(
           options
         )
       )
-      for (const { sessionId, cwd } of response.sessions)
-        listedCwds.set(sessionId, cwd)
       return {
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),

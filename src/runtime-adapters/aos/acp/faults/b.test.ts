@@ -18,7 +18,6 @@ import { LIVENESS_SILENCE_MS, PART_GRACE_MS } from "../limits"
 import { connectBrowser, methodsOf, sentFrames } from "./support"
 
 const SIBLING = "session-2"
-const UNPLACED = "session-3"
 
 describe("browser connection faults", () => {
   it("closes a transport that holds a request back at its deadline and reconnects", async () => {
@@ -118,7 +117,7 @@ describe("browser connection faults", () => {
     ])
   })
 
-  it("never resumes a Session its provider has gone from, nor one whose Agent has no folder, while a sibling waits out its failure", async () => {
+  it("never resumes a Session its provider has gone from, while a sibling waits out its failure", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const clock = useFakeClock()
     const { test, connection } = connectBrowser(
@@ -133,12 +132,9 @@ describe("browser connection faults", () => {
 
     connection.subscribe(SESSION, { agentId: AGENT })
     connection.subscribe(SIBLING, { agentId: AGENT })
-    // No folder is listed for its Agent, and a resume never goes without one.
-    connection.subscribe(UNPLACED, { agentId: "agent-unlisted" })
     await clock.advance(0)
     expect(connection.sessionState(SESSION)).toBe("gone")
     expect(connection.sessionState(SIBLING)).toBe("unavailable")
-    expect(connection.sessionState(UNPLACED)).toBe("unavailable")
 
     await clock.advance(125)
     expect(connection.sessionState(SIBLING)).toBe("joined")
@@ -148,7 +144,6 @@ describe("browser connection faults", () => {
       "session/resume",
       "session/resume",
     ])
-    expect(methodsOf(frames, UNPLACED)).toEqual([])
   })
 
   it("clears the outage once a failed rejoin leaves the Session unavailable", async () => {

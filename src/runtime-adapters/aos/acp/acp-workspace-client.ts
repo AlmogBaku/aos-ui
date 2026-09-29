@@ -364,20 +364,12 @@ export function createAcpWorkspaceClient({
     },
     async listAgentCatalog() {
       return (await catalog()).agents.map(
-        ({
+        ({ summary, visibility, selectable, editable, avatarEditable }) => ({
           summary,
           visibility,
           selectable,
           editable,
           avatarEditable,
-          folder,
-        }) => ({
-          summary,
-          visibility,
-          selectable,
-          editable,
-          avatarEditable,
-          ...(folder === undefined ? {} : { folder }),
         })
       )
     },
