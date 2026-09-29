@@ -10,6 +10,7 @@ import {
   type RepliesTurnInput,
   type RequestReply,
 } from "../../core/events"
+import { ServerTurnConflictError } from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../../../test/support/fake-clock"
@@ -321,7 +322,7 @@ describe("HermesRunEngine", () => {
       final_assistant_row_id: 10,
     }
 
-    async function eventsOf(
+    async function turnOf(
       persisted_turn: unknown,
       {
         userRowId,
@@ -354,12 +355,19 @@ describe("HermesRunEngine", () => {
         })
       )
       publish(t.idle())
-      return collect(handle)
+      return handle
+    }
+
+    async function eventsOf(
+      persisted_turn: unknown,
+      options?: Parameters<typeof turnOf>[1]
+    ) {
+      return collect(await turnOf(persisted_turn, options))
     }
 
     async function endOf(
       persisted_turn: unknown,
-      options?: Parameters<typeof eventsOf>[1]
+      options?: Parameters<typeof turnOf>[1]
     ) {
       return ofKind(
         await eventsOf(persisted_turn, options),
@@ -394,6 +402,13 @@ describe("HermesRunEngine", () => {
       await expect(endOf(receipt)).resolves.toMatchObject({
         saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
       })
+    })
+
+    it("proves the prompt stored by the submit's row, or else by the turn's receipt", async () => {
+      await expect(
+        (await turnOf(undefined, { userRowId: 3 })).stored
+      ).resolves.toBe("hermes-row-3")
+      await expect((await turnOf(receipt)).stored).resolves.toBe("hermes-row-7")
     })
 
     it.each([
@@ -2859,7 +2874,7 @@ describe("HermesRunEngine", () => {
     ).rejects.toThrow()
   })
 
-  it("does not submit when Hermes authoritatively reports the Session busy", async () => {
+  it("refuses a prompt, unsent, while Hermes authoritatively reports the Session busy", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
@@ -2874,14 +2889,9 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message: "Hermes is already running this Session.",
-        code: "AOS_SESSION_BUSY",
-      },
-    ])
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnConflictError
+    )
     expect(submissions).toBe(0)
   })
 
@@ -4887,7 +4897,7 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("settles a busy rejection as busy and admits the next run", async () => {
+  it("refuses a prompt Hermes rejects as busy and still submits the next one", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
@@ -4898,29 +4908,16 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const handle = await engine.start(scope, input())
-
-    await expect(collect(handle)).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message: "Hermes is already running this Session.",
-        code: "AOS_SESSION_BUSY",
-      },
-    ])
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnConflictError
+    )
     await expect(
       engine.start(scope, input({ turnId: "run-2" }))
-    ).resolves.toBeDefined()
+    ).rejects.toBeInstanceOf(ServerTurnConflictError)
     expect(submissions).toBe(2)
   })
 
   it.each([
-    [
-      "busy",
-      "AOS_SESSION_BUSY",
-      "Hermes is already running this Session.",
-      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo.",
-    ],
     [
       "in-use",
       "AOS_SESSION_IN_USE",
@@ -7196,9 +7193,7 @@ describe("Hermes turn watch", () => {
     publish(turn.messageStart("delegation-result"))
 
     expect(onTurn).toHaveBeenCalledOnce()
-    await expect(collect(await second)).resolves.toContainEqual(
-      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
-    )
+    await expect(second).rejects.toBeInstanceOf(ServerTurnConflictError)
   })
 })
 

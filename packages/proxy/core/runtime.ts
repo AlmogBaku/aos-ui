@@ -55,6 +55,13 @@ export type ServerTurnHandle = {
    * naming an epoch no provider can match.
    */
   recoveryPosition(): string | undefined
+  /**
+   * The prompt's storage receipt: resolves with the message id the provider
+   * stored the prompt under, at once when the start's own answer named it, and
+   * stays pending while the provider has not proven it stored. Absent when the
+   * turn stores no prompt of its own, such as an answer to a request.
+   */
+  stored?: Promise<string>
 }
 
 export type RecoveryRequest = {

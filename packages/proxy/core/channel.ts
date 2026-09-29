@@ -1296,7 +1296,7 @@ class Membership {
   ): Promise<CommandResults["send"]> {
     // Joined before admission, so a turn that wins the race still reaches it.
     this.joinChannel()
-    const { messageId } = clientTurnIds(
+    const ids = clientTurnIds(
       this.#member.principal.id,
       this.#scope.sessionId,
       input.clientId
@@ -1345,6 +1345,8 @@ class Membership {
       throw cause
     }
     const release = await enter()
+    // The prompt goes by the id its provider stored it under.
+    const messageId = subscription.messageId ?? ids.messageId
     let turn: ChannelTurn
     try {
       if (subscription.turnId === this.#followedTurn) {

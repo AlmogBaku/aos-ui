@@ -83,6 +83,7 @@ import {
 } from "./run-settlement"
 import {
   createActiveTurn,
+  deferred,
   failReset,
   generationState,
   readStatus,
@@ -114,10 +115,12 @@ export type HermesReconnectRequest = RecoveryRequest
 
 /** The public failure each refused submit reports, with Hermes' own words. */
 const REFUSAL_FAILURES: Record<
-  Exclude<HermesSubmitRejection, "command-with-attachments" | "session-gone">,
+  Exclude<
+    HermesSubmitRejection,
+    "busy" | "command-with-attachments" | "session-gone"
+  >,
   TurnFailure
 > = {
-  busy: TURN_FAILURES.sessionBusy,
   "in-use": TURN_FAILURES.sessionInUse,
   "session-limit": TURN_FAILURES.sessionLimit,
   storage: TURN_FAILURES.commandRejected,
@@ -301,9 +304,11 @@ export class HermesTurnEngine {
     }
     // Only a Session running a turn is authoritatively busy; one that is still
     // building its Agent, or that Hermes does not list, accepts the turn.
+    // Hermes would queue or steer a busy prompt rather than refuse it, so this
+    // run refuses it before it is sent.
     if (status === "working" || status === "waiting") {
-      this.#fail(active, TURN_FAILURES.sessionBusy)
-      return this.#handle(active)
+      this.#settle(active)
+      throw new ServerTurnConflictError()
     }
     await this.#submit(
       active,
@@ -609,11 +614,16 @@ export class HermesTurnEngine {
       // frame is a `message.start`, not the current turn's idle boundary; an
       // in-place `steered`/`redirected` prompt joins the turn already running.
       if (outcome.status === "queued") active.awaitingStart = true
+      // A prompt is answered once Hermes proves it stored: by this answer's
+      // row, or failing that by the completion receipt of the turn it runs.
+      if (active.promptMessageId && !outcome.completion)
+        active.stored = deferred<string>()
       // Hermes saves the prompt before the turn runs, so its row stands even
       // when the turn is stopped, fails, or compacts and proves nothing more.
       // The turn's model responses number from it, as history numbers them.
       if (outcome.userRowId !== undefined) {
         active.messageBase = hermesRowMessageId(outcome.userRowId)
+        active.stored?.resolve(active.messageBase)
         if (active.promptMessageId)
           active.saved = {
             user: {
@@ -638,6 +648,10 @@ export class HermesTurnEngine {
         composerPrefill === undefined ? undefined : { composerPrefill }
       )
       return
+    }
+    if (outcome.reason === "busy") {
+      this.#settle(active)
+      throw new ServerTurnConflictError()
     }
     if (outcome.reason === "command-with-attachments")
       return this.#fail(active, TURN_FAILURES.commandWithAttachments)
@@ -677,6 +691,7 @@ export class HermesTurnEngine {
           epoch: active.epoch,
           lastSeen: active.lastSeen,
         }),
+      ...(active.stored ? { stored: active.stored.promise } : {}),
     }
   }
 
@@ -1020,13 +1035,11 @@ export class HermesTurnEngine {
     const userRow = active.promptMessageId
       ? persistedTurnRows(payload.persisted_turn)
       : undefined
-    if (userRow !== undefined)
-      active.saved = {
-        user: {
-          messageId: active.promptMessageId!,
-          savedId: hermesRowMessageId(userRow),
-        },
-      }
+    if (userRow !== undefined) {
+      const savedId = hermesRowMessageId(userRow)
+      active.saved = { user: { messageId: active.promptMessageId!, savedId } }
+      active.stored?.resolve(savedId)
+    }
     const finalText = boundedText(payload.text)
     // A failed turn's `text` is the model's own prose only while `partial` marks
     // it as such. Without that flag Hermes composed the copy explaining the

@@ -122,6 +122,8 @@ export type CoordinatedTurnSubscription = {
   turnId: string
   events: AsyncIterable<SequencedTurnEvent>
   close(): void
+  /** The id the provider stored the turn's prompt under, once it did. */
+  messageId?: string
 }
 
 /**
@@ -1335,13 +1337,13 @@ export class SessionCoordinator {
     return created
   }
 
-  start(
+  async start(
     scope: SessionScope,
     input: SendInput,
     access: CoordinatorAccess,
     options: StartOptions = {}
   ): Promise<CoordinatedTurnSubscription> {
-    return this.#command(scope, async () => {
+    const admitted = await this.#command(scope, async () => {
       if (this.#closed) throw new Error("Session coordinator is closed")
       if (!("clientId" in input))
         return this.#startTurn(scope, input, access, options)
@@ -1374,12 +1376,43 @@ export class SessionCoordinator {
       }
       await repeated
       const execution = this.#executions.get(scopeKey(scope))
-      if (execution?.segment.turnId === ids.turnId)
-        return this.#repeat(execution, access)
+      if (execution?.segment.turnId === ids.turnId) return execution
       // The Session no longer holds the turn, so nothing of it is left to replay;
       // the repeat's reader follows the Session from its history.
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
+    return "segment" in admitted
+      ? this.#atStorage(admitted, access, options.signal)
+      : admitted
+  }
+
+  /**
+   * Subscribes to an admitted turn once its provider stored the prompt, under
+   * the id it stored it as. Waited for outside the Session's commands, so a
+   * Stop or a steer meanwhile is not held. A receipt still missing at the
+   * admission deadline leaves the turn running and its start uncertain.
+   */
+  async #atStorage(
+    execution: Execution,
+    access: CoordinatorAccess,
+    signal: AbortSignal | undefined
+  ): Promise<CoordinatedTurnSubscription> {
+    const { stored } = execution.segment.handle
+    if (!stored) return this.#repeat(execution, access)
+    const deadline = this.#deadline(signal)
+    let messageId: string
+    try {
+      messageId = await deadline.run(() => stored)
+    } catch (error) {
+      if (!deadline.signal.aborted) throw error
+      const { agentId, sessionId } = execution.scope
+      this.#logger.warn(
+        { agentId, sessionId, turnId: execution.segment.turnId },
+        "turn.receipt.deadline_passed"
+      )
+      throw new ServerTurnUncertainError()
+    }
+    return { ...this.#repeat(execution, access), messageId }
   }
 
   /**
@@ -1427,7 +1460,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess,
     { signal, quota }: StartOptions,
     stage?: ServerAttachmentStage
-  ): Promise<CoordinatedTurnSubscription> {
+  ): Promise<Execution> {
     signal?.throwIfAborted()
     const key = scopeKey(scope)
     // A discovery holds the admission while it asks the provider, and every
@@ -1445,7 +1478,7 @@ export class SessionCoordinator {
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerTurnConflictError()
-      return this.#repeat(existing, access)
+      return existing
     }
 
     // An uncertain turn holds its Session until a reconcile settles it.
@@ -1483,7 +1516,7 @@ export class SessionCoordinator {
       this.#executions.set(key, execution)
       this.#trackJournal(execution.segment)
       this.#consume(execution, execution.segment)
-      return this.#subscribe(execution.segment, 0, access)
+      return execution
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId, stage)

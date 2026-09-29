@@ -74,9 +74,7 @@ const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
   signal?: AbortSignal
-  expectFinal?: boolean
   onSent?: () => void
-  onAccepted?: (payload: unknown) => void
 }>
 
 export interface OpenClawRunRequestClient {
@@ -264,6 +262,8 @@ type ActiveRun = {
   planFingerprint?: string
   usage?: TokenUsage[]
   cost?: Cost
+  /** A prompt's storage receipt, resolved by OpenClaw's `session.message` of it. */
+  stored?: { promise: Promise<string>; resolve(messageId: string): void }
   settled: Promise<void>
   resolveSettled(): void
 }
@@ -309,6 +309,12 @@ function settlement() {
     resolveSettled = resolve
   })
   return { settled, resolveSettled }
+}
+
+function storageReceipt(): NonNullable<ActiveRun["stored"]> {
+  let resolve!: (messageId: string) => void
+  const promise = new Promise<string>((settle) => (resolve = settle))
+  return { promise, resolve }
 }
 
 function validId(value: unknown): value is string {
@@ -681,21 +687,21 @@ function validateHistory(
   }
 }
 
-function acceptedRunId(value: unknown) {
-  if (!value || typeof value !== "object") return undefined
-  const record = value as Record<string, unknown>
-  return record.status === "accepted" && validId(record.runId)
-    ? record.runId
-    : undefined
-}
-
-function finalAcknowledgement(value: unknown) {
-  if (!value || typeof value !== "object") return false
-  const record = value as Record<string, unknown>
-  return (
-    record.status === "ok" &&
-    (record.runId === undefined || validId(record.runId))
+/**
+ * The run a `chat.send` answer admitted: one it started, one already in flight
+ * under the same key, or one it already finished (`ok`).
+ */
+function admittedRun(value: unknown) {
+  const answer = record(value)
+  if (
+    !answer ||
+    (answer.status !== "started" &&
+      answer.status !== "in_flight" &&
+      answer.status !== "ok") ||
+    !validId(answer.runId)
   )
+    return undefined
+  return { runId: answer.runId, finished: answer.status === "ok" }
 }
 
 /**
@@ -766,6 +772,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     this.#replies = options.replies
     this.#mcpToolNames = options.mcpToolNames
     this.#watch = options.watch
+    // A send is answered as its run starts, so no open request hears the link
+    // drop: each bound run reads its history, and one it cannot read is lost.
+    options.watch.upstream?.subscribe((state) => {
+      if (state !== "lost") return
+      for (const active of this.#active.values())
+        if (!active.terminal)
+          this.#reconcile(active).catch(() => this.#markStreamLost(active))
+    })
   }
 
   async start(
@@ -922,6 +936,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         textStarted: false,
         reasoning: "",
         tools: new Map(),
+        ...(replies ? {} : { stored: storageReceipt() }),
         ...settlement(),
       }
       holder.active = active
@@ -971,58 +986,26 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       }
 
       let sent = false
-      let admitted = false
-      let resolveAdmission = () => {}
-      let rejectAdmission: (error: unknown) => void = () => {}
-      const admission = new Promise<void>((resolve, reject) => {
-        resolveAdmission = resolve
-        rejectAdmission = reject
-      })
-      this.#client
-        .request<unknown>("chat.send", sendParams!, {
-          // An abandoned admission stops the native request until it is accepted.
-          signal,
-          expectFinal: true,
-          onSent: () => {
-            sent = true
-          },
-          onAccepted: (payload) => {
-            sent = true
-            const runId = acceptedRunId(payload)
-            if (runId !== active?.nativeRunId) {
-              rejectAdmission(
-                new OpenClawTurnPublicError(
-                  "AOS_SEND_UNCERTAIN",
-                  "OpenClaw may have accepted this turn."
-                )
-              )
-              return
-            }
-            admitted = true
-            resolveAdmission()
-          },
-        })
-        .then((result) => {
-          if (!finalAcknowledgement(result))
-            throw new Error("Invalid OpenClaw final acknowledgement")
-          const runId = (result as Record<string, unknown>).runId
-          if (runId !== undefined && runId !== active?.nativeRunId)
-            throw new Error("OpenClaw acknowledged a different run")
-          if (!admitted) {
-            admitted = true
-            resolveAdmission()
-          }
-          if (active && !active.terminal)
-            this.#reconcile(active).catch(() => this.#markStreamLost(active))
-        })
-        .catch((error: unknown) => {
-          if (!admitted) rejectAdmission(error)
-          else if (active && !active.terminal)
-            this.#reconcile(active).catch(() => this.#markStreamLost(active))
-        })
-
+      let admitted: ReturnType<typeof admittedRun>
       try {
-        await admission
+        const answer = await this.#client.request<unknown>(
+          "chat.send",
+          sendParams!,
+          {
+            // An abandoned admission stops the native request until it is answered.
+            signal,
+            onSent: () => {
+              sent = true
+            },
+          }
+        )
+        sent = true
+        admitted = admittedRun(answer)
+        if (admitted?.runId !== active.nativeRunId)
+          throw new OpenClawTurnPublicError(
+            "AOS_SEND_UNCERTAIN",
+            "OpenClaw may have accepted this turn."
+          )
       } catch (error) {
         if (mayHaveLanded(error, sent)) {
           active.uncertain = true
@@ -1043,6 +1026,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active.resolveSettled()
         throw providerUnavailable(error)
       }
+      // A run OpenClaw already finished ends from its history.
+      if (admitted.finished && !active.terminal)
+        this.#reconcile(active).catch(() => this.#markStreamLost(active))
       return this.#handle(active)
     } catch (error) {
       if (lease && !this.#active.has(key))
@@ -1545,8 +1531,22 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   /** Delivers a subscribed event to a bound run, or defers it to reconciliation. */
   #observe(active: ActiveRun, event: EventFrame) {
+    if (event.event === "session.message")
+      return this.#acceptStored(active, event)
     if (active.reconciling) active.reconciliationDirty = true
     else this.#accept(active, event)
+  }
+
+  /** OpenClaw pushes each transcript row it stores; the prompt's is its receipt. */
+  #acceptStored(active: ActiveRun, event: EventFrame) {
+    const payload = event.payload as Record<string, unknown>
+    const identity = readSessionMessageIdentity(payload.message, payload)
+    if (
+      identity?.role === "user" &&
+      identity.sendId === active.nativeRunId &&
+      validId(identity.id)
+    )
+      active.stored?.resolve(identity.id)
   }
 
   /** Reconciles a bound run after its subscription was replaced. */
@@ -1572,6 +1572,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           generation: this.#subscriptions.generation,
           lastSeen: active.lastSeen,
         }),
+      ...(active.stored ? { stored: active.stored.promise } : {}),
     }
   }
 

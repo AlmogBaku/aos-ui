@@ -77,15 +77,15 @@ export function fakeOpenClawClient(openclaw: FakeOpenClaw) {
 export type FakeOpenClaw = ReturnType<typeof fakeOpenClaw>
 
 export function fakeOpenClaw() {
-  const pending = new Set<(error: Error) => void>()
   let connection: Connection | undefined
   let fault: Fault = "none"
   let failure: Error | undefined
   let deleted = false
   let calls = 0
   let seq = 0
-  let run:
-    { id: string; seq: number; answer(result: unknown): void } | undefined
+  let run: { id: string; seq: number } | undefined
+  /** The rows the Session stored, as `chat.history` reads them back. */
+  const transcript: Record<string, unknown>[] = []
 
   function hello(dialed: Connection) {
     if (dialed.stopped || dialed.up || connection !== dialed) return
@@ -107,8 +107,6 @@ export function fakeOpenClaw() {
     const dropped = connection
     if (!dropped?.up) return
     dropped.up = false
-    for (const reject of pending) reject(new Error("gateway closed (1006)"))
-    pending.clear()
     dropped.options.onClose?.(LOST_CLOSE_CODE, "lost", {
       phase: "post-hello",
     } as never)
@@ -174,28 +172,37 @@ export function fakeOpenClaw() {
         return {
           sessionKey: SESSION_KEY,
           sessionId: "transcript-a",
-          messages: [],
+          messages: transcript,
           sessionInfo: {
             hasActiveRun: run !== undefined,
             activeRunIds: run ? [run.id] : [],
           },
         }
       case "chat.send": {
+        // The release answers a send once, as it starts the run, and pushes
+        // the prompt's row once it stored it.
         const id = String(params.idempotencyKey)
         options?.onSent?.()
-        options?.onAccepted?.({ status: "accepted", runId: id })
-        return new Promise((resolve, reject) => {
-          const settle = (error: Error) => reject(error)
-          pending.add(settle)
-          run = {
-            id,
-            seq: 0,
-            answer: (result) => {
-              pending.delete(settle)
-              resolve(result)
-            },
-          }
-        })
+        run = { id, seq: 0 }
+        const row = {
+          role: "user",
+          content: [{ type: "text", text: String(params.message) }],
+          timestamp: Date.now(),
+          __openclaw: {
+            id: `msg-${transcript.length + 1}`,
+            seq: transcript.length + 1,
+            idempotencyKey: id,
+          },
+        }
+        transcript.push(row)
+        queueMicrotask(() =>
+          emit("session.message", {
+            message: row,
+            messageId: row.__openclaw.id,
+            messageSeq: row.__openclaw.seq,
+          })
+        )
+        return { runId: id, status: "started" }
       }
       default:
         throw new GatewayClientRequestError({
@@ -248,7 +255,6 @@ export function fakeOpenClaw() {
     },
 
     async finish() {
-      const ended = run
       agentEvent("lifecycle", { phase: "end" })
       emit("chat", {
         seq: 0,
@@ -256,7 +262,6 @@ export function fakeOpenClaw() {
         message: { content: [{ type: "text", text: "Contract reply" }] },
       })
       run = undefined
-      ended?.answer({ status: "ok", runId: ended.id })
     },
 
     deleteSession() {

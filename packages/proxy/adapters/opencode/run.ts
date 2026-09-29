@@ -1096,6 +1096,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       stop: () => this.#stop(run),
       recoveryPosition: () =>
         openCodeRecoveryToken.mint(run.projector.recoveryPosition()),
+      // OpenCode stores a prompt within its answer, under the id AOS sent.
+      ...(run.expectedAdmission === undefined
+        ? {}
+        : { stored: Promise.resolve(run.expectedAdmission) }),
     }
   }
 

@@ -118,6 +118,12 @@ export type ActiveTurn = {
    * submit answer, both rows from a complete completion receipt.
    */
   saved?: TurnSaved
+  /**
+   * The storage receipt of a prompt Hermes accepted: resolved with its row's
+   * message id by the submit answer that names the row or, failing that, by
+   * the completion receipt of the turn this run owns.
+   */
+  stored?: ReturnType<typeof deferred<string>>
   usage?: TokenUsage[]
   cost?: Cost
   /** The model the Session last reported; a change is published. */
@@ -183,9 +189,9 @@ export function failReset(
 }
 
 /** A promise and its resolver: the one shape for AOS' own settlement edges. */
-export function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((settle) => {
+export function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((settle) => {
     resolve = settle
   })
   return { promise, resolve }

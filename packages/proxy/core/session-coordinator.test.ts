@@ -3125,6 +3125,45 @@ describe("SessionCoordinator", () => {
     ).resolves.toMatchObject({ turnId: "run-2" })
   })
 
+  it("answers a start at its prompt's storage receipt, or leaves it uncertain at the deadline", async () => {
+    const { advance } = useFakeClock()
+    let store!: (messageId: string) => void
+    const receipted = Object.assign(new EventSource(), {
+      stored: new Promise<string>((resolve) => (store = resolve)),
+    })
+    const unreceipted = Object.assign(new EventSource(), {
+      stored: new Promise<string>(() => {}),
+    })
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(receipted)
+        .mockResolvedValueOnce(unreceipted),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine)
+
+    const first = sessions.start(scope, input("run-1"), access("one"))
+    await advance(ADMISSION_DEADLINE_MS - 1)
+    store("stored-1")
+    await expect(first).resolves.toMatchObject({
+      turnId: "run-1",
+      messageId: "stored-1",
+    })
+    receipted.emit(turnEnded)
+    receipted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    const second = expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+    await advance(ADMISSION_DEADLINE_MS)
+    await second
+    // The provider took the prompt, so its turn runs on and is not withdrawn.
+    expect(sessions.state(scope)).toBe("running")
+    expect(unreceipted.stop).not.toHaveBeenCalled()
+  })
+
   it("keeps the journal of a turn whose Stop could not be confirmed", async () => {
     const { advance } = useFakeClock()
     const stopped = new EventSource()

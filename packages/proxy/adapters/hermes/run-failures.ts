@@ -116,10 +116,6 @@ export const TURN_FAILURES = {
     code: "AOS_SESSION_LIMIT",
     message: "Hermes has reached its limit of active Sessions.",
   },
-  sessionBusy: {
-    code: "AOS_SESSION_BUSY",
-    message: "Hermes is already running this Session.",
-  },
   rewindConflict: {
     code: "AOS_REWIND_CONFLICT",
     message:

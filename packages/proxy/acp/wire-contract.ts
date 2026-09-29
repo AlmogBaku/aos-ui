@@ -38,6 +38,7 @@ import {
   AOS_ACP_GUEST_PATH,
   AOS_ACP_OPERATOR_PATH,
   AOS_AUTH_METHOD_INVITE,
+  AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
@@ -48,6 +49,7 @@ import { CredentialValues } from "../redaction"
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
   | "promptAnswerCarriesMessageId"
+  | "promptAnsweredAtStorage"
   | "sameIdsLiveAndAfterReload"
   | "historyAndLiveJoinedById"
 
@@ -286,6 +288,23 @@ function agentSide(updates: readonly SessionUpdate[]) {
   }
 }
 
+/**
+ * Each user message a plain reader holds, by id and text: a `user_message`
+ * replaces the message its id names.
+ */
+function userSide(updates: readonly SessionUpdate[]) {
+  const messages = new Map<string, string>()
+  for (const update of updates)
+    if (SessionUpdate.isUserMessage(update))
+      messages.set(
+        update.messageId,
+        (update.content ?? [])
+          .map((block) => (block.type === "text" ? block.text : block.type))
+          .join("")
+      )
+  return [...messages].map(([id, text]) => ({ id, text }))
+}
+
 /** What every turn the rows play reads as, ids aside. */
 const PLAYED_TURN = [
   { kind: "agent_thought_chunk", text: "I should read the file." },
@@ -376,6 +395,38 @@ export function runWireContract(
           )
 
           expect(answer.messageId).toEqual(expect.any(String))
+        }
+      )
+
+      row(
+        "promptAnsweredAtStorage",
+        "answers a prompt once stored, under the id it was stored as, and refuses one while its turn runs",
+        async ({ proxy, agentId, clock, connect }) => {
+          const plain = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, plain.initialize())
+          const sessionId = await until(clock, newSession(plain, agentId))
+          const answer = await until(
+            clock,
+            prompt(plain, sessionId, "list the files")
+          )
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          await expect(
+            until(clock, prompt(plain, sessionId, "and their sizes"))
+          ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+          const stored = [{ id: answer.messageId, text: "list the files" }]
+          expect(userSide(reader.updates)).toEqual(stored)
+          expect(userSide(plain.updates)).toEqual(stored)
         }
       )
 

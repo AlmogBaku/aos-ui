@@ -115,11 +115,7 @@ class ControlledNative implements OpenClawRunRequestClient {
         throw new OpenClawClientRequestError("cancelled")
       options?.onSent?.()
       if (this.sendError) throw this.sendError
-      options?.onAccepted?.({
-        status: "accepted",
-        runId: params.idempotencyKey,
-      })
-      return new Promise<T>(() => {})
+      return { status: "started", runId: params.idempotencyKey } as T
     }
     throw new Error(`Unexpected method ${method}`)
   }
@@ -253,7 +249,6 @@ describe("OpenClaw run engine", () => {
           message: "Investigate this",
           idempotencyKey: "run-a",
         },
-        options: { expectFinal: true },
       },
     ])
   })
@@ -958,11 +953,12 @@ describe("OpenClaw run engine", () => {
       if (method === "question.list") return { questions: [] }
       throw new Error(`Unexpected interaction method ${method}`)
     })
+    const subscriptions = new OpenClawSessionSubscriptions(native, logger)
     const sessions = coordinator(
       new OpenClawTurnEngine({
         watch,
         client: native,
-        subscriptions: new OpenClawSessionSubscriptions(native, logger),
+        subscriptions,
         replies: new OpenClawInteractions({ request }),
       })
     )
@@ -982,9 +978,39 @@ describe("OpenClaw run engine", () => {
     await expect(sessions.discover(scope)).resolves.toBeUndefined()
     expect(sessions.snapshot(scope)).toEqual({ state: "idle", requests: [] })
 
-    await expect(
-      sessions.start(scope, input("after-external-resolution"), operatorAccess)
-    ).resolves.toBeDefined()
+    const started = sessions.start(
+      scope,
+      input("after-external-resolution"),
+      operatorAccess
+    )
+    await vi.waitFor(() =>
+      expect(native.calls.some(({ method }) => method === "chat.send")).toBe(
+        true
+      )
+    )
+    // The start is answered once OpenClaw pushes the prompt's stored row.
+    subscriptions.accept(
+      {
+        type: "event",
+        event: "session.message",
+        seq: 1,
+        payload: {
+          sessionKey: scope.providerSessionId,
+          agentId: scope.agentId,
+          messageId: "msg-1",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "Investigate this" }],
+            __openclaw: {
+              id: "msg-1",
+              idempotencyKey: "after-external-resolution",
+            },
+          },
+        },
+      },
+      subscriptions.generation
+    )
+    await expect(started).resolves.toMatchObject({ messageId: "msg-1" })
     expect(recoveredRunId).toMatch(/^aos-recovered-/)
     expect(
       native.calls.filter(({ method }) => method === "chat.send")
