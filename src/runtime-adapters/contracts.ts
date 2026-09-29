@@ -351,10 +351,3 @@ export type WorkspaceCapabilities = {
   sessionDeletion: boolean
   sessionPin: boolean
 }
-
-export type WorkspaceProviderEvent<TPayload = unknown> = {
-  agentId: string
-  sessionId: string
-  sequence: number
-  payload: TPayload
-}

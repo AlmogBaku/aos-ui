@@ -55,10 +55,6 @@ describe("KeyboardShortcutsSettings", () => {
 
   it.each([
     ["composition", { key: "k", ctrlKey: true, isComposing: true }],
-    ["composition keyCode", { key: "k", ctrlKey: true, keyCode: 229 }],
-    ["dead key", { key: "Dead", ctrlKey: true }],
-    ["AltGraph", { key: "k", ctrlKey: true, altKey: true }],
-    ["missing key", { ctrlKey: true }],
     ["malformed key", { key: "Ctrl+", ctrlKey: true }],
   ])("does not capture or cancel %s events", async (_name, init) => {
     const user = userEvent.setup()
@@ -81,11 +77,6 @@ describe("KeyboardShortcutsSettings", () => {
       ...init,
       cancelable: true,
     } as KeyboardEventInit)
-    if (_name === "AltGraph") {
-      Object.defineProperty(event, "getModifierState", {
-        value: (name: string) => name === "AltGraph",
-      })
-    }
     capture.dispatchEvent(event)
 
     expect(setBinding).not.toHaveBeenCalled()

@@ -62,6 +62,10 @@ describe("fixture artifact adapter", () => {
         (artifact) => parseArtifactDescriptor(artifact) !== null
       )
     ).toBe(true)
+    const ids = Object.values(FIXTURE_ARTIFACT_CATALOG.examples).map(
+      ({ id }) => id
+    )
+    expect(new Set(ids).size).toBe(ids.length)
   })
 
   it("catalogs malformed, unavailable-provider, and oversized cases", async () => {

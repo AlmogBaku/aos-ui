@@ -825,6 +825,7 @@ describe("QuestionFlow renderer", () => {
 
     expect(screen.getByText("Cancelled")).toBeVisible()
     expect(screen.getByText("Where do you live?")).toBeVisible()
+    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
     expect(screen.getAllByText("Discarded")).toHaveLength(2)
     expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
@@ -1322,36 +1323,6 @@ describe("provider permission renderer", () => {
     expect(screen.queryByText("Unavailable")).toBeNull()
   })
 
-  it("renders every settled Hermes question with its recorded answer or discard", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "question",
-          args: {
-            question: "2 questions",
-            questions: [
-              { question: "Where do you live?" },
-              { question: "Which amenities do you use?" },
-            ],
-            allowFreeform: true,
-          },
-          result: {
-            status: "cancelled",
-            responses: [
-              { question: "Where do you live?", answers: [] },
-              { question: "Which amenities do you use?", answers: [] },
-            ],
-          },
-          status: { type: "complete" },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Where do you live?")).toBeVisible()
-    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
-    expect(screen.getAllByText("Discarded")).toHaveLength(2)
-  })
-
   it("retries the same provider-native choice once without double-submit", async () => {
     const user = userEvent.setup()
     let resolveRetry: (() => void) | undefined
@@ -1406,26 +1377,6 @@ describe("provider permission renderer", () => {
 })
 
 describe("informational renderers", () => {
-  it("keeps subagent activity visible as message content", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "delegate_subagent",
-          args: { task: "Validate the market segments" },
-          result: {
-            name: "Data analyst",
-            status: "completed",
-            summary: "Validated three segments.",
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Validated three segments.")).toBeVisible()
-    expect(screen.queryByText("Transcript")).toBeNull()
-    expect(screen.queryByText("Transcript unavailable.")).toBeNull()
-  })
-
   it.each([
     ["running", "Running", "Transcript is loading…"],
     ["waiting", "Waiting", "Transcript is loading…"],
@@ -1459,12 +1410,17 @@ describe("informational renderers", () => {
           {...toolPart({
             toolName: "delegate_subagent",
             args: { task: "Inspect child state" },
-            result: { name: "Child agent", status },
+            result: {
+              name: "Child agent",
+              status,
+              summary: "Validated three segments.",
+            },
           })}
         />
       )
 
       expect(screen.getByText(statusLabel)).toBeInTheDocument()
+      expect(screen.getByText("Validated three segments.")).toBeVisible()
       expect(screen.queryByText("Transcript")).toBeNull()
       expect(screen.queryByText("Transcript unavailable.")).toBeNull()
     }

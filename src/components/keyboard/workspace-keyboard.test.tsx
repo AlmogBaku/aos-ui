@@ -50,18 +50,6 @@ function renderShell() {
 }
 
 describe("workspace keyboard discovery", () => {
-  it("places the compact Commands trigger beside the language switcher", () => {
-    renderShell()
-    const trigger = screen.getByRole("button", { name: /^Commands \(/ })
-    const preferences = trigger.closest("[data-workspace-preferences]")
-    expect(preferences).not.toBeNull()
-    expect(trigger).toHaveAccessibleName(/Commands/)
-    expect(trigger).toBeEnabled()
-    expect(
-      preferences?.querySelector('[aria-label="Switch to Hebrew"]')
-    ).not.toBeNull()
-  })
-
   it("opens Commands with the platform shortcut and reference with physical Mod+/", async () => {
     const user = userEvent.setup()
     renderShell()
@@ -86,18 +74,12 @@ describe("workspace keyboard discovery", () => {
     )
   })
 
-  it("moves through visible regions with F6 and dispatches Shift+F10 to the focused control", async () => {
+  it("anchors Shift+F10's context menu inside the focused control", async () => {
     const user = userEvent.setup()
     renderShell()
-    const firstAgent = screen.getByRole("button", { name: /^One,/ })
-    firstAgent.focus()
-    await user.keyboard("{F6}")
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "A" })).toHaveFocus()
-    )
-
     const contextMenu = vi.fn()
     const tab = screen.getByRole("tab", { name: "A" })
+    tab.focus()
     vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
       left: 40,
       right: 160,

@@ -8,7 +8,6 @@ import {
   createToolTimelineModel,
   hasRunningTerminal,
   shouldRenderToolDetails,
-  toolIconKind,
   toolRunState,
 } from "./message-tool-experience"
 
@@ -143,16 +142,6 @@ describe("createToolTimelineModel", () => {
     )
     expect(toolRunState([{ status: { type: "incomplete" } }])).toBe("failed")
     expect(toolRunState([{ status: { type: "running" } }])).toBe("running")
-  })
-
-  it("uses semantic icons for compact tool rows", () => {
-    expect(toolIconKind("use_skill")).toBe("skill")
-    expect(toolIconKind("read_file")).toBe("read")
-    expect(toolIconKind("apply_patch")).toBe("edit")
-    expect(toolIconKind("bash")).toBe("command")
-    expect(toolIconKind("web_search")).toBe("search")
-    expect(toolIconKind("tool_describe")).toBe("inspect")
-    expect(toolIconKind("unknown_provider_tool")).toBe("generic")
   })
 
   it("uses settled action verbs instead of provider tool identifiers", () => {
