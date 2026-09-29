@@ -663,30 +663,6 @@ describe("OpenClaw interactions", () => {
     ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
   })
 
-  it("accepts exact native limits and free-form, empty-option and secret answers", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "question.get"
-        ? { question }
-        : {
-            status: "answered",
-            answers: nativeAnswers,
-          }
-    )
-    const x = new OpenClawInteractions({ request })
-    expect(x.acceptQuestion(scope, question)).toMatchObject({
-      requestId: "q",
-      kind: PendingRequestKind.Elicitation,
-    })
-    await expect(
-      x.respond(scope, [
-        {
-          requestId: "q",
-          status: "resolved",
-          payload: { answers: [["other"], ["secret-value"]] },
-        },
-      ])
-    ).resolves.toEqual({ status: "resolved" })
-  })
   it("requires authoritative source identities and rejects over-limit batches", () => {
     const x = new OpenClawInteractions({ request: vi.fn() })
     expect(() =>

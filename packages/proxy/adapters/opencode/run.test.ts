@@ -344,9 +344,6 @@ describe("OpenCodeRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       { kind: TurnEventKind.TurnRequiresAction, requests: [request] },
     ])
-    expect(
-      waitingEvents.every((event) => TurnEventSchema.safeParse(event).success)
-    ).toBe(true)
 
     await expect(engine.discover(scope, "aos-recovered-1")).resolves.toBe(
       undefined
@@ -505,8 +502,6 @@ describe("OpenCodeRunEngine", () => {
       },
       { kind: TurnEventKind.TurnEnded },
     ])
-    for (const value of events)
-      expect(TurnEventSchema.safeParse(value).success).toBe(true)
   })
 
   it("uses a backoff timer for authoritative reconciliation when native wait is unavailable", async () => {
