@@ -14,7 +14,12 @@ by both ends; nothing else defines these shapes.
 The proxy upgrades a GET request to a WebSocket at:
 
 - `/api/aos/v1/acp` — operator listener (`AOS_ACP_OPERATOR_PATH`, `acp.ts:25`)
+- `/api/aos/v1/acp/agents/<agentId>` — per-Agent operator address (`aosAcpAgentPath`, `acp.ts`); scopes the connection to one Agent, does not restrict access beyond it, and must never be exposed publicly
 - `/api/guest/v1/acp` — guest listener (`AOS_ACP_GUEST_PATH`, `acp.ts:26`), authenticated with the invitation token via `auth/login`
+
+A request to a socket path that is not a WebSocket handshake (RFC 6455 §4.2.1) gets HTTP 400 before the service reads it. An unknown Agent path gets 404; a catalog that cannot answer gets 503.
+
+`Origin` header rule: an absent `Origin` is admitted (non-browser clients send none); a present `Origin` must equal the configured `publicOrigin` exactly, `null` included, or the upgrade is refused with 401 and logged as `acp.upgrade.origin_refused`.
 
 The response carries an `Acp-Connection-Id` header. One socket per browser tab
 is the current topology; there is no SharedWorker multiplexing. The browser
@@ -41,11 +46,13 @@ Any other code triggers a normal reconnect.
 
 ## Handshake: `initialize` and `auth/login`
 
+`initialize` always answers `protocolVersion: 2`, whatever the client requested; this is ACP's version-negotiation rule, not v1 support.
+
 `initialize` response `_meta.aos` (`AosInitializeMetaSchema`, `acp.ts:115-119`):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "role": "operator | guest",
   "extensions": {
     "steer": true,
@@ -119,7 +126,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/prompt`                                                                                                     | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
 | `_aos/session/steer`                                                                                                 | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                     | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                      | Detaches the connection from the Session.                                                                                                    |
+| `session/close`                                                                                                      | Stops the Session's active work for every member, then detaches.                                                                             |
 | `_aos/session/focus`                                                                                                 | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_aos/session/update`, `_aos/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 
@@ -147,14 +154,21 @@ What a guest is shown:
 Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `packages/proxy/acp/validation.ts`): an error reply keeps its JSON-RPC code
 with the code's public name as its message, and an `_aos/error` notification
-keeps only a public code. Any other failure reads `-32013`
-`temporarily_unavailable`.
+keeps only a public code. Any other failure reads `-31013`
+`temporarily_unavailable`. In a batched reply each entry is redacted
+independently; a successful entry in the same batch is unaffected.
 
 ## Session lifecycle methods
 
 `session/new`, `session/list`, `session/resume`, `session/prompt`,
 `session/cancel`, `session/close`, `session/delete`, `session/set_config_option`
 (model → `category: "model"`, effort → `category: "thought_level"`).
+
+`session/close` stops the Session's active work for every member and then
+detaches this connection. `_aos/session/part` (`AosSessionPartRequestSchema`,
+`acp.ts`) only detaches this connection; the Session's work and all other
+members continue. `session/delete` of a Session not known to this connection
+succeeds rather than returning not-found.
 
 ### Request `_meta.aos` shapes
 
@@ -187,10 +201,11 @@ rather than guessing where to replay from.
 **`session/prompt`** request (`AosPromptMetaSchema`, `acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `clientId` becomes the
 turn's `turnId`; a retry with the same `clientId` returns the first answer
-unchanged. The response carries the minted user-message id in
-`_meta.aos.messageId` (`AosPromptResponseMetaSchema`, `acp.ts`). Attachment
-content referenced by `resource_link` blocks uses the `aos-attachment:` URI
-scheme (`AOS_ATTACHMENT_URI_SCHEME`, `acp.ts`).
+unchanged. The response carries the minted user-message id as the top-level
+`messageId` field (SDK 1.5.0 `PromptResponse`); the answer is sent only after
+the runtime confirms it stored the prompt. Attachment content referenced by
+`resource_link` blocks uses the `aos-attachment:` URI scheme
+(`AOS_ATTACHMENT_URI_SCHEME`, `acp.ts`).
 
 ### Response `_meta.aos` shapes
 
@@ -256,6 +271,18 @@ still carries `truncated: true` when the reading stopped at a reach bound.
 
 ## Run stream
 
+Message ids are set where the message is born and are the same live and after a
+reload. One prompt produces one turn: the state sequence is `running` →
+`requires_action`? → `running`? → one `idle`. Stop (`session/cancel`) sends the
+stop signal to the runtime; the turn continues until the runtime confirms it
+ended.
+
+On reconnect (session/resume with replay) a client with a pending prompt
+receives history first, then buffered live events, then the current state, then
+the stored prompt answer (if it arrived before the storage deadline).
+Catch-up uses only standard ACP session updates; no `_aos/session_invalidated`
+or `_aos/steer_accepted` is sent.
+
 | ACP event                   | Meaning                                                                                                  |
 | --------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `agent_message_chunk`       | Streaming assistant prose                                                                                |
@@ -305,6 +332,7 @@ as a `running` update followed by an `_aos_error` idle update for the same
 | Method                | Purpose                                                                                                                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `_aos/session/update` | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
+| `_aos/session/part`   | Detach this connection from the Session; the Session's work and all other members continue (`AosSessionPartRequestSchema`, `acp.ts`)                                                           |
 | `_aos/session/steer`  | Deliver a text correction to the active run                                                                                                                                                    |
 | `_aos/session/focus`  | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
 | `_aos/agents/list`    | Fetch the agent catalog                                                                                                                                                                        |
@@ -312,14 +340,12 @@ as a `running` update followed by an `_aos_error` idle update for the same
 
 ### Notifications (no response expected)
 
-| Method                     | Direction     | Purpose                                                                                                                                                                                                                                                                                                                                      |
-| -------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts`)                                                                                                                                                                                                                                                                                     |
-| `_aos/steer_accepted`      | server→client | Replayable steering acknowledgement                                                                                                                                                                                                                                                                                                          |
-| `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command                                                                                                                                                                                                                                                                                                   |
-| `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)                                                                                                                                                                                                                                                                                                   |
-| `_aos/session_invalidated` | server→client | The proxy dropped this connection's live subscriber for the Session because it fell behind its event/byte bounds (`membership.detached` in the log), so what the browser holds is incomplete. The browser re-resumes the Session with `replayFrom: { type: "start" }`. Session row changes still reach the browser as `session_info_update`. |
-| `_aos/error`               | server→client | Connection-level failure with no request to answer                                                                                                                                                                                                                                                                                           |
+| Method                     | Direction     | Purpose                                                  |
+| -------------------------- | ------------- | -------------------------------------------------------- |
+| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts`) |
+| `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command               |
+| `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)               |
+| `_aos/error`               | server→client | Connection-level failure with no request to answer       |
 
 #### `_aos/activity` union (`acp.ts:466-493`)
 
@@ -408,16 +434,16 @@ block covers only the failures ACP has no code for (`AOS_JSONRPC_ERRORS`,
 | `-32602` | `invalidParams()`    | Request parameters failed validation                 |
 | `-32800` | `requestCancelled()` | Request timed out or the transport closed            |
 
-**AOS-only codes (`AOS_JSONRPC_ERRORS`, block from -32010):**
+**AOS-only codes (`AOS_JSONRPC_ERRORS`, block from -31010):**
 
 | Code     | Name                     | Meaning                                                     |
 | -------- | ------------------------ | ----------------------------------------------------------- |
-| `-32010` | `turnInProgress`         | Cannot send while a turn is active                          |
-| `-32011` | `staleRequest`           | Request ID no longer valid                                  |
-| `-32012` | `revisionConflict`       | Observed Agent revision or source message no longer current |
-| `-32013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
-| `-32014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
-| `-32015` | `unsupported`            | Runtime cannot store a requested Agent field                |
+| `-31010` | `turnInProgress`         | Cannot send while a turn is active                          |
+| `-31011` | `staleRequest`           | Request ID no longer valid                                  |
+| `-31012` | `revisionConflict`       | Observed Agent revision or source message no longer current |
+| `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
+| `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
+| `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
 
 Codes `-32001` through `-32009` are no longer used.
 
@@ -432,12 +458,12 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-32601` | `method_not_found`        |
 | `-32602` | `invalid_request`         |
 | `-32800` | `request_cancelled`       |
-| `-32010` | `turn_in_progress`        |
-| `-32011` | `stale_request`           |
-| `-32012` | `revision_conflict`       |
-| `-32013` | `temporarily_unavailable` |
-| `-32014` | `uncertain_mutation`      |
-| `-32015` | `unsupported`             |
+| `-31010` | `turn_in_progress`        |
+| `-31011` | `stale_request`           |
+| `-31012` | `revision_conflict`       |
+| `-31013` | `temporarily_unavailable` |
+| `-31014` | `uncertain_mutation`      |
+| `-31015` | `unsupported`             |
 | (other)  | `internal_error`          |
 
 ## REST remains for bytes and discovery
@@ -484,5 +510,7 @@ token, scoped to the invited Agent and Session):
 ```bash
 bunx vitest run src/runtime-adapters/aos/acp
 ```
+
+<!-- TODO(3.4): document the folder rule for per-Agent connections once task 3.4 lands -->
 
 See [Troubleshooting](../troubleshooting.md) for connection and ownership failures.

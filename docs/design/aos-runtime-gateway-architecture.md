@@ -538,9 +538,9 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 **JSON-RPC extension codes** (`protocol/acp.ts:69-85`, `AOS_JSONRPC_ERRORS`):
 ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
-AOS block `-32010` turnInProgress, `-32011` staleRequest, `-32012`
-revisionConflict, `-32013` temporarilyUnavailable, `-32014` uncertainMutation,
-`-32015` unsupported. Codes `-32001` through `-32009` are no longer used.
+AOS block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
+revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
+`-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
 `_aos_uncertain` (`protocol/acp.ts:53-57`).

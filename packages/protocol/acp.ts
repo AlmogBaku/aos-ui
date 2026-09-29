@@ -84,15 +84,15 @@ export const AOS_PLAN_ID = "todos" as const
 /**
  * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
  * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
- * these sit in their own block from -32010, clear of the codes ACP uses.
+ * these sit in their own block from -31010, clear of the codes ACP uses.
  */
 export const AOS_JSONRPC_ERRORS = {
-  turnInProgress: -32010,
-  staleRequest: -32011,
-  revisionConflict: -32012,
-  temporarilyUnavailable: -32013,
-  uncertainMutation: -32014,
-  unsupported: -32015,
+  turnInProgress: -31010,
+  staleRequest: -31011,
+  revisionConflict: -31012,
+  temporarilyUnavailable: -31013,
+  uncertainMutation: -31014,
+  unsupported: -31015,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]

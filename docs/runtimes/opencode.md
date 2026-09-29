@@ -175,7 +175,7 @@ Only a receipt the Session still holds grants read access.
 ## Agent icons
 
 OpenCode has no native Agent write, so every `_aos/agents/update` call returns
-the `-32015 unsupported` error and `avatarEditable` is `false` for every Agent.
+the `-31015 unsupported` error and `avatarEditable` is `false` for every Agent.
 
 An operator may hand-write an `avatar: ring/blue` key in the Agent file's
 frontmatter. The proxy reads it from `request.body.avatar` and treats it as
