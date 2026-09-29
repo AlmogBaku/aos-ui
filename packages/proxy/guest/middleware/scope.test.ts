@@ -12,13 +12,19 @@ const layer = createScopeMiddleware({
 
 /** One event about `sessionId` through the guest's scope layer. */
 const shown = (sessionId: string) =>
-  runEvents([layer], { sessionId, kind: "invalidated" } as MemberEvent, {
-    decline: () => undefined,
-  })
+  runEvents(
+    [layer],
+    { sessionId, kind: "error", cause: "failed" } as MemberEvent,
+    { decline: () => undefined }
+  )
 
 describe("guest scope layer", () => {
   it("passes an event about the invited conversation", () => {
-    expect(shown(REF)).toEqual({ sessionId: REF, kind: "invalidated" })
+    expect(shown(REF)).toEqual({
+      sessionId: REF,
+      kind: "error",
+      cause: "failed",
+    })
   })
 
   it("drops an event about any other Session", () => {

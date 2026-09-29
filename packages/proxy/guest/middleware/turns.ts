@@ -201,7 +201,6 @@ export function createTurnsMiddleware(): Middleware {
         case "execution":
         case "usage":
         case "model":
-        case "invalidated":
         case "error":
         case "session-info":
         case "commands":

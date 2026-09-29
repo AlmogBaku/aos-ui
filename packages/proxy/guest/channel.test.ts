@@ -141,12 +141,7 @@ describe("guest in a Session channel", () => {
     await test.list()
     const guest = await connectGuest(test)
     const messageId = await liveTurn(test, [test])
-    // Stored under the live turn's own ids, which history and live join by.
-    const [stored, reply] = storedLiveTurn()
-    history.push(
-      { ...stored!, id: messageId },
-      { ...reply!, id: "assistant-1" }
-    )
+    history.push(...storedLiveTurn({ promptId: messageId }))
 
     await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")

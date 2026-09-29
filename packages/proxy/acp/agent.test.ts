@@ -145,21 +145,6 @@ async function usageOf(test: { recorder: Recorder }, count = 1) {
  */
 type StoredMessages = SessionHistoryResponse["messages"]
 
-/**
- * What the runtime stored of the live turn, under the ids its stream carries:
- * the prompt's as the prompt was answered, the reply's as it streams. A
- * runtime names each message where it is born.
- */
-function storedLive(
-  promptId = "user-1",
-  ...args: Parameters<typeof storedLiveTurn>
-): StoredMessages {
-  return storedLiveTurn(...args).map((row) => {
-    if (row.role === "assistant") return { ...row, id: "assistant-1" }
-    return row.id === "user-1" ? { ...row, id: promptId } : row
-  })
-}
-
 /** A runtime whose watch of the Session finds a turn it started by itself. */
 function announceRunningTurn(_scope: unknown, watcher: ServerTurnListener) {
   void Promise.resolve().then(() => watcher.onTurn())
@@ -2044,7 +2029,7 @@ describe("Session rooms", () => {
     const other = await test.connect("connection-2")
     await other.list()
     const messageId = await liveTurn(test, [test])
-    history.push(...storedLive(messageId))
+    history.push(...storedLiveTurn({ promptId: messageId }))
 
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
@@ -2065,7 +2050,8 @@ describe("Session rooms", () => {
   it("keeps a page that ends on an earlier prompt with the same text", async () => {
     const test = await harness({
       providerIds: true,
-      history: storedLiveTurn(NOW),
+      // An earlier turn, so none of its ids is the live one's.
+      history: storedLiveTurn({ replyId: "assistant-0", createdAt: NOW }),
     })
     await test.list()
     const other = await test.connect("connection-2")
@@ -2100,7 +2086,7 @@ describe("Session rooms", () => {
     await waitFor(() =>
       expect(test.coordinator.state(test.scope)).toBe("running")
     )
-    expect(flow(test.recorder)).toContain("history assistant-0")
+    expect(flow(test.recorder)).toContain("history assistant-1")
     // Streamed once the turn was adopted, so the page it reloads holds it too.
     chunk(background, "Live")
     await test.recorder.wait(said("Live"), "an update carrying Live")
@@ -2115,7 +2101,7 @@ describe("Session rooms", () => {
     const seen = flow(test.recorder, SESSION, from)
     expect(withoutStates(seen.slice(0, seen.indexOf("state idle")))).toEqual([
       "history user-1",
-      "history assistant-0",
+      "history assistant-1",
       "chunk Between",
       "chunk After",
     ])
@@ -2127,7 +2113,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true, history })
     await test.list()
     const messageId = await liveTurn(test, [test])
-    history.push(...storedLive(messageId))
+    history.push(...storedLiveTurn({ promptId: messageId }))
     test.sources[0]?.emit({
       kind: TurnEventKind.TurnRequiresAction,
       requests: [APPROVAL],
@@ -2159,7 +2145,7 @@ describe("Session rooms", () => {
     const test = await harness({ providerIds: true, history })
     await test.list()
     const messageId = await liveTurn(test, [test])
-    history.push(...storedLive(messageId))
+    history.push(...storedLiveTurn({ promptId: messageId }))
     test.sources[0]?.emit({
       kind: TurnEventKind.TurnRequiresAction,
       requests: [APPROVAL],
@@ -2336,7 +2322,7 @@ describe("Session rooms", () => {
       // The turn ends, and is stored, once the page left its rows to the stream.
       onReplay: () => {
         if (history.length) return
-        history.push(...storedLive(messageId))
+        history.push(...storedLiveTurn({ promptId: messageId }))
         test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
       },
     })
@@ -3086,7 +3072,7 @@ describe("Reloading a running turn", () => {
     const test = await harness({ providerIds: true, history })
     await test.list()
     const messageId = await liveTurn(test, [test])
-    history.push(...storedLive(messageId))
+    history.push(...storedLiveTurn({ promptId: messageId }))
 
     const reloaded = await reloadAlone(test)
     chunk(test.sources[0], "More")
@@ -3110,7 +3096,9 @@ describe("Reloading a running turn", () => {
     const turns = [adopted(background, startedAt)]
     const test = await harness({
       providerIds: true,
-      history: storedLive("user-1", new Date(startedAt + 1_000).toISOString()),
+      history: storedLiveTurn({
+        createdAt: new Date(startedAt + 1_000).toISOString(),
+      }),
       subscribeTurns: (_scope, watcher) => {
         watchers.push(watcher)
         return () => undefined

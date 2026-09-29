@@ -707,6 +707,10 @@ export class HermesTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
+      // Gap: Hermes answers `session.redirect` with `{status, text}` alone
+      // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
+      // the correction's row, so a live steer keeps its `requestId` while a
+      // reload shows the stored row's id.
       steer: (request) => steerTurn(this.#host, active, request.text),
       recoveryPosition: () =>
         hermesRecoveryToken.mint({

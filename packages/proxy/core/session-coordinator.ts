@@ -118,8 +118,6 @@ export type CoordinatorRecoveryRequest = Pick<
   "sessionId" | "turnId"
 > & {
   after?: number
-  /** The reader holds part of the turn it cannot position, so it reloads. */
-  reset?: true
 }
 
 export type CoordinatedTurnSubscription = {
@@ -1643,10 +1641,9 @@ export class SessionCoordinator {
       existing?.segment.turnId === request.turnId &&
       existing.state !== "uncertain"
     ) {
-      const plan = request.reset
-        ? "reset"
-        : replayPlan(existing.segment, request.after)
-      if (plan === "reset") return this.#unreplayable(existing.segment, request)
+      const plan = replayPlan(existing.segment, request.after)
+      if (plan === "reset")
+        return this.#unreplayable(existing.segment, request.after)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -1662,8 +1659,8 @@ export class SessionCoordinator {
     // browser cursor still applies. A recovery of a turn this coordinator never
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
-    const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
-    if (plan === "reset") return this.#unreplayable(recovered.segment, request)
+    const plan = replayPlan(recovered.segment, after)
+    if (plan === "reset") return this.#unreplayable(recovered.segment, after)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -2709,12 +2706,11 @@ export class SessionCoordinator {
   /**
    * Answers a reader the journal cannot. One with a cursor is refused, and its
    * resume answers `resync`: that is its one signal to rebuild from history.
-   * A cursorless reader, or one that holds part of the turn it cannot position,
-   * is sent one reset instead, since nothing else tells it.
+   * A cursorless reader, which follows a recovered turn the journal does not
+   * hold from its start, is sent one reset instead, since nothing else tells it.
    */
-  #unreplayable(segment: Segment, request: CoordinatorRecoveryRequest) {
-    if (request.after !== undefined && !request.reset)
-      throw new ReplayCursorLostError()
+  #unreplayable(segment: Segment, after: number | undefined) {
+    if (after !== undefined) throw new ReplayCursorLostError()
     return this.#resetSubscription(segment)
   }
 

@@ -1194,33 +1194,29 @@ export async function liveTurn(
 }
 
 /**
- * What Hermes stores of a turn still running: its prompt, then the rows it
- * folded into one message so far. Stored by default as the turn is admitted.
+ * What Hermes stores of a turn still running: its prompt under `promptId`,
+ * the id the live turn's prompt carries, then the rows it folded into one
+ * message so far, under the id its stream's `chunk` carries. Stored by
+ * default as the turn is admitted.
  */
-export function storedLiveTurn(
+export function storedLiveTurn({
+  promptId = "user-1",
+  replyId = "assistant-1",
   createdAt = new Date().toISOString(),
-  correction?: string
-): SessionHistoryResponse["messages"] {
+}: {
+  promptId?: string
+  replyId?: string
+  createdAt?: string
+} = {}): SessionHistoryResponse["messages"] {
   return [
     {
-      id: "user-1",
+      id: promptId,
       role: "user",
       content: [{ type: "text", text: " Summarize " }],
       createdAt,
     },
-    ...(correction === undefined
-      ? []
-      : [
-          {
-            id: "correction-1",
-            role: "user" as const,
-            content: [{ type: "text" as const, text: correction }],
-            createdAt,
-            correction: true as const,
-          },
-        ]),
     {
-      id: "assistant-0",
+      id: replyId,
       role: "assistant",
       content: [{ type: "text", text: "Live" }],
       createdAt,

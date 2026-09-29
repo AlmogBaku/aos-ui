@@ -120,8 +120,6 @@ export type SessionEvent =
   /** The Session's row, whose status is the one its live execution overlays. */
   | { kind: "session-info"; row: SessionRow }
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
-  /** The member's view is incomplete and must be rebuilt from history. */
-  | { kind: "invalidated" }
   /** A failure that has no request to answer. */
   | { kind: "error"; cause: unknown }
 

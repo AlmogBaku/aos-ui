@@ -1071,8 +1071,11 @@ describe("SessionCoordinator", () => {
       access("reload")
     )
     const readReload = reader(reload)
-    await expect(readReload()).resolves.toMatchObject({
+    // A reset names only its code: no message the browser would show.
+    await expect(readReload()).resolves.toEqual({
+      done: false,
       value: {
+        sequence: expect.any(Number),
         event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
@@ -1152,33 +1155,6 @@ describe("SessionCoordinator", () => {
     } finally {
       clock.mockRestore()
     }
-  })
-
-  it("resets a reload that holds part of the turn it cannot position", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
-    }
-    const sessions = coordinator(engine)
-    const own = await sessions.start(scope, input("run-1"), access("own"))
-    source.emit(turnStarted)
-    await reader(own)()
-
-    const reload = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", reset: true },
-      access("reload")
-    )
-
-    // A reset names only its code: no message the browser would show.
-    const head = await reader(reload)()
-    expect(head.value?.event).toEqual({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
-    })
-    expect(sessions.state(scope)).toBe("running")
-    own.close()
   })
 
   it("serves the redial after a reset from the live segment of a pruned run", async () => {

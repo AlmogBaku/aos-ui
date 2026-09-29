@@ -72,7 +72,6 @@ export function createPermissionsMiddleware({
         case "model":
         case "session-info":
         case "commands":
-        case "invalidated":
         case "error":
         case "catalog-invalidated":
         case "activity":

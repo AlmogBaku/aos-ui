@@ -470,10 +470,6 @@ export function createMemberEncoder({
         return update(sessionId, sessionInfoUpdate(event.row))
       case "commands":
         return update(sessionId, commandsUpdate(event.capabilities))
-      case "invalidated":
-        return client.notify(AOS_METHODS.notify.sessionInvalidated, {
-          sessionId,
-        })
       case "error": {
         const failure = describe(event.cause)
         logger.error(
