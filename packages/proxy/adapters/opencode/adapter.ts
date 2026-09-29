@@ -69,6 +69,7 @@ const MAX_HISTORY_PAGES = 100
 
 /** The assembly seam deliberately excludes coordinator-owned run state. */
 export type OpenCodeAdapterClient = Readonly<{
+  directory: OpenCodeClient["directory"]
   catalog: Pick<OpenCodeClient["catalog"], "agents" | "models"> &
     Partial<Pick<OpenCodeClient["catalog"], "config">>
   sessions: Pick<
@@ -306,6 +307,11 @@ export class OpenCodeServerAdapter implements ServerRuntime {
 
   listAgents(): Promise<AgentCatalogResponse> {
     return this.#workspace.listAgents()
+  }
+
+  /** Every OpenCode Agent runs in the one configured project directory. */
+  async agentFolder() {
+    return this.options.client.directory
   }
 
   async updateAgent(

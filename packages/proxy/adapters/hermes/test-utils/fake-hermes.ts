@@ -27,6 +27,9 @@ import { assistantText, userRow } from "./history-rows"
 import { nativeTurn, type NativeFrame } from "./native-events"
 
 const PROFILE = "researcher"
+const PROFILE_HOME = `/home/hermes/.hermes/profiles/${PROFILE}`
+/** Where the profile's Sessions run: its `terminal.cwd`. */
+export const PROJECT_FOLDER = "/srv/research"
 const STORED_ID = "stored-1"
 const LIVE_ID = "live-1"
 const EPOCH = "e1"
@@ -248,8 +251,17 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
 
   function rpc(method: string, params: Record<string, unknown>): Reply {
     switch (method) {
+      // A row's `path` is the profile's home, never where its Sessions run
+      // (`tui_gateway/methods_profiles.py:275`).
       case "profiles.list":
-        return { result: { profiles: [{ name: PROFILE }] } }
+        return { result: { profiles: [{ name: PROFILE, path: PROFILE_HOME }] } }
+      // The profile's `terminal.cwd` is an existing folder, so the project
+      // folder is the one `session.create` runs in
+      // (`tui_gateway/methods_config.py:139`, `session_workdir.py:23`).
+      case "config.get":
+        return params.key === "project" && params.profile === PROFILE
+          ? { result: { cwd: PROJECT_FOLDER, branch: null } }
+          : { error: NATIVE_FAILURE }
       case "session.resume":
         if (deleted) return { error: SESSION_NOT_FOUND }
         // A live draft with no stored row reattaches lazy

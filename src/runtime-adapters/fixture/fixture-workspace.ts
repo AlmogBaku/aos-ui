@@ -289,6 +289,7 @@ export class FixtureWorkspace implements WorkspaceAdapter {
         selectable: managed && summary.visibility === "visible",
         editable: managed,
         avatarEditable: managed,
+        folder: `/srv/agents/${summary.id}`,
       }
     })
   }

@@ -3,7 +3,11 @@ import { vi } from "vitest"
 import { runWireContract } from "../../acp/wire-contract"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenClawRuntime } from "./factory"
-import { fakeOpenClaw, fakeOpenClawClient } from "./test-utils/fake-openclaw"
+import {
+  AGENT_WORKSPACE,
+  fakeOpenClaw,
+  fakeOpenClawClient,
+} from "./test-utils/fake-openclaw"
 
 vi.mock("@openclaw/gateway-client", async (importOriginal) =>
   (await import("./test-utils/gateway-client-mock")).gatewayClientMock(
@@ -47,6 +51,7 @@ runWireContract(
           logger
         ),
       agentId: openclaw.scope.agentId,
+      folder: AGENT_WORKSPACE,
       turn: openclaw.turn,
     }
   },

@@ -348,6 +348,40 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("refuses the Sessions of an Agent with no folder, and lists every other Agent's in its own", async () => {
+    const test = await harness({
+      rows: [sessionRow(), sessionRow({ id: "session-2", agentId: "writer" })],
+      agentFolder: async (agentId) =>
+        agentId === AGENT ? undefined : "/srv/writer/",
+    })
+    const UNSUPPORTED = { code: AOS_JSONRPC_ERRORS.unsupported }
+    const onAgent = { _meta: { [AOS_META_KEY]: { agentId: AGENT } } }
+
+    const page = await test.list()
+
+    expect(page.sessions.map(({ sessionId, cwd }) => [sessionId, cwd])).toEqual(
+      [["session-2", "/srv/writer"]]
+    )
+    expect(test.logged()).toContainEqual(
+      expect.objectContaining({
+        event: "session.list.no_folder",
+        agentId: AGENT,
+      })
+    )
+    await expect(
+      test.agent.request(methods.agent.session.list, onAgent)
+    ).rejects.toMatchObject(UNSUPPORTED)
+    await expect(test.create()).rejects.toMatchObject(UNSUPPORTED)
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        ...onAgent,
+      })
+    ).rejects.toMatchObject(UNSUPPORTED)
+    test.close()
+  })
+
   it("offers no cursor past the catalog window", async () => {
     const test = await harness({ rows: [sessionRow()], total: 5_000 })
 

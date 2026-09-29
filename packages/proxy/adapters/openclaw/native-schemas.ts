@@ -38,6 +38,8 @@ export type OpenClawAgent = Readonly<{
   createdVia?: "operator" | "agent" | "claw"
   creatorAgentId?: string | null
   identity?: Readonly<{ name?: string; avatar?: string }>
+  /** The folder the Agent's Sessions run in. */
+  workspace?: string
 }>
 
 /** A Session's sparse tool overlay, exactly as the native schema defines it. */

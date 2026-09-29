@@ -35,6 +35,8 @@ import {
 } from "../client"
 
 const AGENT_ID = "research"
+/** The folder `agents.list` names for the Agent, as the release resolves it. */
+export const AGENT_WORKSPACE = "/srv/openclaw/research"
 const SESSION_KEY = "agent:research:main"
 const LOST_CLOSE_CODE = 1006
 
@@ -209,7 +211,14 @@ export function fakeOpenClaw() {
           defaultId: AGENT_ID,
           mainKey: "main",
           scope: "global",
-          agents: [{ id: AGENT_ID, name: "Research", kind: "agent" }],
+          agents: [
+            {
+              id: AGENT_ID,
+              name: "Research",
+              kind: "agent",
+              workspace: AGENT_WORKSPACE,
+            },
+          ],
         }
       case "sessions.list":
         return {

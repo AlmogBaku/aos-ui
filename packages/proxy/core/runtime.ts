@@ -294,6 +294,12 @@ export interface ServerRuntime {
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>
   /**
+   * The folder the Agent's Sessions run in, as an absolute path, or
+   * `undefined` when the runtime names none. A read of its own, because
+   * `listAgents` also serves runtime info, creation and updates.
+   */
+  agentFolder(agentId: string): Promise<string | undefined>
+  /**
    * Writes the patch's fields in one native write, refusing a stale
    * `observedRevision`. A field the runtime cannot store throws
    * `ServerAgentUpdateUnsupportedError`.

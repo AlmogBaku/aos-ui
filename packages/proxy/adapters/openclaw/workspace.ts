@@ -192,6 +192,8 @@ export function invitedOpenClawSessionKey(agentId: string, ref: string) {
 
 export type OpenClawWorkspace = Readonly<{
   listAgents(): Promise<AgentCatalogResponse>
+  /** The Agent's `agents.list` `workspace`, when it is absolute. */
+  agentFolder(agentId: string): Promise<string | undefined>
   updateAgent(
     agentId: string,
     patch: AgentUpdatePatch,
@@ -309,6 +311,10 @@ export function createOpenClawWorkspace(input: {
 
   return {
     listAgents,
+    async agentFolder(agentId) {
+      const { workspace } = await requireVisibleAgent(agentId)
+      return workspace?.startsWith("/") ? workspace : undefined
+    },
     async updateAgent(agentId, patch, observedRevision) {
       // A patch that touches visibility is unsupported as a whole, and the
       // avatar is re-checked so no caller reaches the native write unchecked.

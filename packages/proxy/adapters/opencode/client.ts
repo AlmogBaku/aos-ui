@@ -98,6 +98,8 @@ export type OpenCodeServerEvents = AsyncIterable<OpenCodeServerEvent> & {
 type OpenCodeRawDurableEvent = { id: string; event: string; data: string }
 
 export type OpenCodeClient = Readonly<{
+  /** The absolute project directory every route is confined to. */
+  directory: string
   catalog: Readonly<{
     agents(signal?: AbortSignal): Promise<unknown>
     models(signal?: AbortSignal): Promise<unknown>
@@ -525,6 +527,10 @@ class Facade implements OpenCodeClient {
       directory: options.directory,
       fetch: this.#fetch,
     })
+  }
+
+  get directory() {
+    return this.#directory
   }
 
   readonly catalog = {

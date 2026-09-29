@@ -94,8 +94,12 @@ function uncertainMutation() {
   )
 }
 
-function unsupported() {
-  return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
+/** `hint` says what the deployment lacks, for an operator client. */
+export function unsupported(hint?: string) {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.unsupported,
+    hint === undefined ? "unsupported" : `unsupported: ${hint}`
+  )
 }
 
 /** The error each kind of public failure travels as. */

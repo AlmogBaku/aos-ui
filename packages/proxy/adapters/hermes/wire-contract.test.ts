@@ -5,7 +5,11 @@ import {
 } from "../../acp/wire-contract"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeHermesRuntime } from "./factory"
-import { fakeHermes, fakeHermesGateway } from "./test-utils/fake-hermes"
+import {
+  fakeHermes,
+  fakeHermesGateway,
+  PROJECT_FOLDER,
+} from "./test-utils/fake-hermes"
 
 function hermesRuntime(): WireRuntime {
   // Every wire row creates its Session, so Hermes starts with none stored.
@@ -31,6 +35,8 @@ function hermesRuntime(): WireRuntime {
         logger
       ),
     agentId: hermes.scope.agentId,
+    // What `config.get` answers for `project`, never the profile row's `path`.
+    folder: PROJECT_FOLDER,
     turn: hermes,
   }
 }

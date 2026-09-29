@@ -33,6 +33,8 @@ export type Catalog = {
   readonly rows: SessionRows
   info(): Promise<RuntimeInfo>
   agents(): Promise<AgentCatalogResponse>
+  /** The absolute folder the Agent's Sessions run in, if the runtime names one. */
+  folder(agentId: string): Promise<string | undefined>
   updateAgent(
     agentId: string,
     patch: AgentUpdatePatch,
@@ -166,6 +168,7 @@ export function createCatalog({
     rows,
     info: () => runtime.runtimeInfo(),
     agents: () => runtime.listAgents(),
+    folder: (agentId) => runtime.agentFolder(agentId),
     updateAgent: (agentId, patch, revision) =>
       runtime.updateAgent(agentId, patch, revision),
     invited: (agentId, ref, create) =>

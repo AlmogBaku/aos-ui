@@ -487,6 +487,7 @@ function harness(options: HarnessOptions = {}) {
     link: READY_LINK,
     runtimeInfo,
     listAgents: unsupported,
+    agentFolder: unsupported,
     updateAgent: unsupported,
     listAllSessions,
     listSessions: unsupported,

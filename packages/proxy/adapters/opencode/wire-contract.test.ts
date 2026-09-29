@@ -1,7 +1,11 @@
 import { runWireContract } from "../../acp/wire-contract"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenCodeRuntime } from "./factory"
-import { fakeOpenCode, fakeOpenCodeClient } from "./test-utils/fake-opencode"
+import {
+  fakeOpenCode,
+  fakeOpenCodeClient,
+  PROJECT_DIRECTORY,
+} from "./test-utils/fake-opencode"
 
 runWireContract(
   "OpenCode",
@@ -12,7 +16,7 @@ runWireContract(
         id: "opencode-contract",
         kind: "opencode",
         baseUrl: "http://127.0.0.1:4096",
-        directory: "/workspaces/contract",
+        directory: PROJECT_DIRECTORY,
         username: "operator",
         passwordFile: "/run/secrets/opencode-password",
       },
@@ -28,6 +32,7 @@ runWireContract(
           logger
         ),
       agentId: opencode.scope.agentId,
+      folder: PROJECT_DIRECTORY,
       turn: opencode.turn,
     }
   },

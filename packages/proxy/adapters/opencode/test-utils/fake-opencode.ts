@@ -24,6 +24,8 @@ import * as ids from "../../../core/ids"
 import { createOpenCodeClient, OpenCodeClientError } from "../client"
 
 const AGENT_ID = "writer"
+/** The one project directory the server serves. */
+export const PROJECT_DIRECTORY = "/workspaces/contract"
 const SESSION_ID = "session-1"
 const SESSION = {
   id: SESSION_ID,
@@ -88,7 +90,7 @@ function serverFrame(event: ServerEvent) {
 export function fakeOpenCodeClient(opencode: FakeOpenCode) {
   return createOpenCodeClient({
     baseUrl: "http://127.0.0.1:4096",
-    directory: "/workspaces/contract",
+    directory: PROJECT_DIRECTORY,
     username: "operator",
     password: async () => "test-password",
     fetcher: opencode.fetcher,

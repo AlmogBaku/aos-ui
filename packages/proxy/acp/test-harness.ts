@@ -593,6 +593,8 @@ export type HarnessOptions = {
   onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
+  /** Each Agent's working folder; defaults to `/` for every Agent. */
+  agentFolder?: ServerRuntime["agentFolder"]
   /** The provider's Agent write; refuses as untested by default. */
   updateAgent?: ServerRuntime["updateAgent"]
   /**
@@ -768,6 +770,7 @@ export async function harness(options: HarnessOptions = {}) {
     link: READY_LINK,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
+    agentFolder: options.agentFolder ?? (async () => "/"),
     updateAgent,
     listAllSessions,
     listSessions: async (_agentId, limit, offset) =>

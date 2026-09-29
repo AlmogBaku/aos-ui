@@ -308,6 +308,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
         ? { kind: "unavailable", code: "temporarily_unavailable", cause }
         : undefined,
     runtimeInfo: async () => RUNTIME_INFO,
+    agentFolder: async () => "/srv/agents/alpha",
     listAgents: async () => ({
       revision: "revision-1",
       agents: [

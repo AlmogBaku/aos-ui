@@ -1074,6 +1074,24 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
+  /**
+   * The folder Hermes resolves for the profile's project: `config.get
+   * project`, never the profile row's `path`, which is its home.
+   */
+  async agentFolder(agentId: string): Promise<string | undefined> {
+    try {
+      const payload = await this.transport.request("config.get", {
+        key: "project",
+        profile: agentId,
+      })
+      if (!isRecord(payload)) throw new HermesUnavailableError()
+      const folder = trimmedText(payload.cwd)
+      return folder?.startsWith("/") ? folder : undefined
+    } catch (error) {
+      throwUnavailable(error)
+    }
+  }
+
   async runtimeInfo(): Promise<RuntimeInfo> {
     let visibilityAvailable = false
     try {

@@ -53,6 +53,9 @@ function modelOption(currentValue: string): SessionConfigOption {
   }
 }
 
+/** The folder the catalog names for the Agent, the one `cwd` it takes. */
+const FOLDER = "/srv/research"
+
 function catalogEntry() {
   return {
     summary: { kind: "ready", id: AGENT_ID, name: "Research" },
@@ -60,6 +63,7 @@ function catalogEntry() {
     selectable: true,
     editable: true,
     avatarEditable: true,
+    folder: FOLDER,
     revision: "revision-1",
   }
 }
@@ -141,7 +145,7 @@ function createProxyAgent(
         sessions: [
           {
             sessionId: SESSION_ID,
-            cwd: "/workspace",
+            cwd: FOLDER,
             updatedAt: UPDATED_AT,
             _meta: { [AOS_META_KEY]: sessionInfoMeta() },
           },
@@ -407,7 +411,7 @@ describe("ACP connection", () => {
     })
     expect(created).toEqual({ sessionId: SESSION_ID })
     expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
-      cwd: "/",
+      cwd: FOLDER,
       _meta: { [AOS_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
     })
 
@@ -786,6 +790,7 @@ describe("ACP connection", () => {
       await connection.initialized
       const live: SessionUpdate[] = []
       connection.subscribe(SESSION_ID, {
+        agentId: AGENT_ID,
         update: (update) => live.push(update),
       })
       await connection.joined(SESSION_ID)
@@ -799,7 +804,7 @@ describe("ACP connection", () => {
 
       expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
         sessionId: SESSION_ID,
-        cwd: "/",
+        cwd: FOLDER,
         replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
       })
       expect(page.history).toEqual({ nextCursor: "cursor-older" })
