@@ -35,8 +35,8 @@ import {
 /** One assistant message that publishes `data` as an Artifact. */
 const artifactMessage = (id: string, data: unknown) => ({
   id,
-  role: "assistant",
-  content: [{ type: "data", name: "aos.artifact", data }],
+  role: "assistant" as const,
+  content: [{ type: "data" as const, name: "aos.artifact", data }],
 })
 
 const messages = [

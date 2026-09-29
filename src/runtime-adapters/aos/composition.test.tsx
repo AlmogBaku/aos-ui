@@ -2,7 +2,9 @@ import {
   agent,
   methods,
   RequestError,
+  type AgentApp,
   type AgentContext,
+  type AnyWireMessage,
   type PromptRequest,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -23,9 +25,7 @@ import { AosUiWorkspace } from "../../components/aos-ui-workspace"
 import { Thread } from "../../components/assistant-ui/elements/thread.aui"
 import { en } from "../../lib/i18n/dictionaries/en"
 import type { HarnessRuntime } from "../contracts"
-import { pipedSockets } from "./acp/test-socket"
 import { runtimeAdapter } from "./composition"
-import { sessionCapabilities } from "./test-capabilities"
 
 vi.mock("react-router", () => ({
   useLocation: () => ({ pathname: window.location.pathname }),
@@ -58,6 +58,34 @@ const SESSION_TITLES: Readonly<Record<string, string>> = {
   [SESSION_ID]: "Older",
   [SECOND_SESSION_ID]: "Newer",
   [BOOKMARKED_SESSION_ID]: "Bookmarked",
+}
+
+const unavailable = { status: "unavailable", reason: "not-supported" } as const
+
+/** The capability snapshot `session/resume` reports for the opened Session. */
+function capabilities() {
+  return {
+    workspace: {
+      slashCommands: unavailable,
+      models: unavailable,
+      context: unavailable,
+      todos: unavailable,
+      activity: unavailable,
+    },
+    interactions: {
+      steering: unavailable,
+      approvals: unavailable,
+      questions: unavailable,
+      reactions: unavailable,
+    },
+    content: {
+      attachments: unavailable,
+      artifacts: unavailable,
+      mcpApps: unavailable,
+      transcription: unavailable,
+      speech: unavailable,
+    },
+  }
 }
 
 const sessionInfo = {
@@ -185,7 +213,7 @@ function createProxyAgent() {
           {
             sessionUpdate: "available_commands_update",
             availableCommands: [],
-            _meta: { [AOS_META_KEY]: { capabilities: sessionCapabilities() } },
+            _meta: { [AOS_META_KEY]: { capabilities: capabilities() } },
           },
           {
             sessionUpdate: "session_info_update",
@@ -286,9 +314,52 @@ const CONFIG = {
   composerFeatures: { modelSelectorEnabled: true, contextEnabled: true },
 } as const
 
+/** A WebSocket-shaped pipe to the in-process proxy agent. */
+function pipedSocket(app: AgentApp) {
+  return class PipedSocket extends EventTarget {
+    readyState = 0
+    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
+
+    constructor() {
+      super()
+      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+      app.connect({
+        readable: this.#inbound.readable,
+        writable: outbound.writable,
+      })
+      this.#writer = this.#inbound.writable.getWriter()
+      void this.#pump(outbound.readable.getReader())
+      queueMicrotask(() => {
+        this.readyState = 1
+        this.dispatchEvent(new Event("open"))
+      })
+    }
+
+    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) return
+        this.dispatchEvent(
+          new MessageEvent("message", { data: JSON.stringify(value) })
+        )
+      }
+    }
+
+    send(data: string) {
+      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
+    }
+
+    close() {
+      this.readyState = 3
+      this.dispatchEvent(new Event("close"))
+    }
+  }
+}
+
 function mount() {
   const proxy = createProxyAgent()
-  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
+  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
   render(
@@ -417,7 +488,7 @@ describe("provider-neutral AOS runtime composition", () => {
 function mountWorkspace(pathname: string) {
   window.history.replaceState(null, "", pathname)
   const proxy = createProxyAgent()
-  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
+  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   const Provider = runtimeAdapter.Provider
   const view = render(
     <Provider config={CONFIG} locale="en">
@@ -482,8 +553,17 @@ describe("the workspace over one ACP connection", () => {
 
   it("opens one ACP socket when React discards the provider's render", async () => {
     const proxy = createProxyAgent()
-    const { WebSocket, sockets } = pipedSockets(() => proxy.app)
-    vi.stubGlobal("WebSocket", WebSocket)
+    const sockets: { readyState: number }[] = []
+    const socket = pipedSocket(proxy.app)
+    vi.stubGlobal(
+      "WebSocket",
+      class extends socket {
+        constructor() {
+          super()
+          sockets.push(this)
+        }
+      }
+    )
     // The app renders the workspace behind `lazy`, so the provider's first
     // render suspends on its own child and React throws that render away.
     let loadWorkspace = () => {}

@@ -6,7 +6,8 @@ const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
 /**
  * A Session's capability snapshot as `session/resume` reports it: every
- * capability unavailable except the ones a test names.
+ * capability unavailable except the ones a test names. Approvals and
+ * questions have no unavailable form, so each test names its own.
  */
 export function sessionCapabilities({
   workspace,
@@ -14,9 +15,10 @@ export function sessionCapabilities({
   content,
 }: {
   workspace?: Partial<Capabilities["workspace"]>
-  interactions?: Partial<Capabilities["interactions"]>
+  interactions: Pick<Capabilities["interactions"], "approvals" | "questions"> &
+    Partial<Capabilities["interactions"]>
   content?: Partial<Capabilities["content"]>
-} = {}): Capabilities {
+}): Capabilities {
   return {
     workspace: {
       slashCommands: unavailable,
@@ -28,8 +30,6 @@ export function sessionCapabilities({
     },
     interactions: {
       steering: unavailable,
-      approvals: unavailable,
-      questions: unavailable,
       reactions: unavailable,
       ...interactions,
     },
