@@ -40,6 +40,7 @@ import {
 import type { Locale } from "@/lib/i18n/config"
 import type { BrowserSettingsView } from "./activity"
 import { useInstallPrompt } from "./use-install-prompt"
+import { useStableHandlers } from "@/hooks/use-stable-handlers"
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { sameData } from "@/lib/utils"
 import type {
@@ -459,25 +460,10 @@ export function useActivityCoordinator(
       )
     ).catch(() => setError(true))
   }
-  const view: ActivityView = {
-    items: records.map((record) => ({
-      ...record,
-      agentName: options.agents.find(({ id }) => id === record.agentId)?.name,
-      sessionTitle: options.titles.get(record.sessionId),
-      available:
-        !unavailableIds.has(record.id) &&
-        options.agents.some(({ id }) => id === record.agentId) &&
-        !options.sessions.some(
-          (session) =>
-            session.sessionId === record.sessionId &&
-            session.agentId !== record.agentId
-        ),
-    })),
-    unreadCount,
-    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
-    error,
-    supported: !!workspace.subscribeActivity,
-    async openActivity(id) {
+  // One identity per method, so a render that changes no Activity data hands
+  // the bell, the panel, and the settings the same object.
+  const actions = useStableHandlers({
+    async openActivity(id: string) {
       const store = storeRef.current
       const record = store?.records().find((item) => item.id === id)
       if (!record || !store) return false
@@ -526,9 +512,49 @@ export function useActivityCoordinator(
     dismissNotice() {
       setNotice(null)
     },
+    onEnabledChange(enabled: boolean) {
+      void browserRef.current?.setEnabled(enabled)
+    },
+    onCategoryChange(
+      category: Parameters<BrowserSettingsView["onCategoryChange"]>[0],
+      enabled: boolean
+    ) {
+      browserRef.current?.setCategory(category, enabled)
+    },
+    onSoundChange(enabled: boolean) {
+      browserRef.current?.setSound(enabled)
+    },
+    onAcceptAsk() {
+      void browserRef.current?.acceptAsk()
+    },
+    onDeclineAsk() {
+      browserRef.current?.declineAsk()
+    },
+  })
+  const view: ActivityView = {
+    items: records.map((record) => ({
+      ...record,
+      agentName: options.agents.find(({ id }) => id === record.agentId)?.name,
+      sessionTitle: options.titles.get(record.sessionId),
+      available:
+        !unavailableIds.has(record.id) &&
+        options.agents.some(({ id }) => id === record.agentId) &&
+        !options.sessions.some(
+          (session) =>
+            session.sessionId === record.sessionId &&
+            session.agentId !== record.agentId
+        ),
+    })),
+    unreadCount,
+    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
+    error,
+    supported: !!workspace.subscribeActivity,
+    openActivity: actions.openActivity,
+    markAllRead: actions.markAllRead,
+    dismissNotice: actions.dismissNotice,
   }
   useEffect(() => {
-    openRef.current = view.openActivity
+    openRef.current = actions.openActivity
   })
   return {
     ...view,
@@ -538,16 +564,11 @@ export function useActivityCoordinator(
       installable: install.installable,
       iosInstallHint: install.iosInstallHint,
       onInstall: install.install,
-      onEnabledChange: (enabled) => {
-        void browserRef.current?.setEnabled(enabled)
-      },
-      onCategoryChange: (category, enabled) =>
-        browserRef.current?.setCategory(category, enabled),
-      onSoundChange: (enabled) => browserRef.current?.setSound(enabled),
-      onAcceptAsk: () => {
-        void browserRef.current?.acceptAsk()
-      },
-      onDeclineAsk: () => browserRef.current?.declineAsk(),
+      onEnabledChange: actions.onEnabledChange,
+      onCategoryChange: actions.onCategoryChange,
+      onSoundChange: actions.onSoundChange,
+      onAcceptAsk: actions.onAcceptAsk,
+      onDeclineAsk: actions.onDeclineAsk,
     },
   }
 }
