@@ -937,6 +937,8 @@ export async function harness(options: HarnessOptions = {}) {
           protocolVersion: ACP_PROTOCOL_VERSION,
           info: { name: "aos-browser", version: "1" },
           capabilities: {
+            // The harness answers questions, so it declares it can.
+            elicitation: { form: {} },
             _meta: {
               [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
             },

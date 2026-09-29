@@ -42,6 +42,8 @@ export interface HermesWorkspaceTransport {
   history?(scope: HermesWorkspaceSession): Promise<readonly unknown[]>
   /** A server-side current Session-info reader when the connection retains one. */
   sessionInfo?(scope: HermesWorkspaceSession): Promise<unknown>
+  /** The Session's stored `sessions` row, as the dashboard serves it. */
+  storedSession?(scope: HermesWorkspaceSession): Promise<unknown>
   /**
    * Writes a Session-info change this server just applied back into the
    * retained record, so a read taken before Hermes pushes its own
@@ -134,6 +136,7 @@ export type HermesContext = {
     toolTokens: number
     messageTokens: number
   }
+  cost?: { amount: number; currency: string }
 }
 
 export type HermesActivity =
@@ -215,6 +218,19 @@ function projectContext(value: unknown): HermesContext | undefined {
       ? { breakdown: projectBreakdown(value.categories) }
       : {}),
   }
+}
+
+/**
+ * The Session's cost from its stored row, as Hermes totals it: the provider's
+ * actual cost, else its estimate (`hermes_state_maintenance.py:20`). A row
+ * that reports neither has no cost.
+ */
+function projectCost(row: unknown): HermesContext["cost"] {
+  if (!isRecord(row)) return undefined
+  const amount = row.actual_cost_usd ?? row.estimated_cost_usd
+  return typeof amount === "number" && Number.isFinite(amount) && amount >= 0
+    ? { amount, currency: "USD" }
+    : undefined
 }
 
 type NativeModel = HermesModelChoice & { provider: string; model: string }
@@ -640,15 +656,20 @@ export function createHermesWorkspaceOperations(input: {
     async context(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)
       if (!session.resumed) throw new HermesWorkspaceUnavailableError()
-      const observed = projectContext(session.usage)
-      if (observed) return observed
-      const context = projectContext(
-        await request("session.context_breakdown", {
-          session_id: session.liveSessionId,
-        })
-      )
+      const context =
+        projectContext(session.usage) ??
+        projectContext(
+          await request("session.context_breakdown", {
+            session_id: session.liveSessionId,
+          })
+        )
       if (!context) throw new HermesWorkspaceUnavailableError()
-      return context
+      // Hermes' live usage carries no cost (`tui_gateway/server.py:1988`);
+      // only the stored row does, and a row it cannot read costs nothing here.
+      const cost = projectCost(
+        await input.transport.storedSession?.(session).catch(() => undefined)
+      )
+      return cost ? { ...context, cost } : context
     },
     async todos(agentId, sessionId) {
       const session = await requireScope(agentId, sessionId)

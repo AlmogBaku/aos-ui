@@ -976,7 +976,7 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
-  it("keeps a stored edit's kind, location, and diff", () => {
+  it("keeps a stored edit's kind, location, and change", () => {
     const path = "/home/operator/project/notes.md"
     const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
     const secret = "/workspace/token=ghp_leaked.md"
@@ -993,7 +993,7 @@ describe("server-side Hermes history projection", () => {
     expect(edit).toMatchObject({
       kind: ToolKind.Edit,
       locations: [{ path }],
-      diffs: [{ changes: [{ operation: "modify", path }], patch: diff }],
+      diffs: [{ changes: [{ operation: "modify", path }] }],
     })
     expect(write).toMatchObject({ kind: ToolKind.Edit })
     expect(write).not.toHaveProperty("locations")

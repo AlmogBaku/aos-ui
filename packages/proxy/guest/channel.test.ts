@@ -106,7 +106,10 @@ async function connectGuest(
   await connection.agent.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
-    capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+    capabilities: {
+      elicitation: { form: {} },
+      _meta: { [AOS_META_KEY]: { historyPages: true } },
+    },
   })
   await connection.agent.request(methods.agent.auth.login, {
     methodId: AOS_AUTH_METHOD_INVITE,

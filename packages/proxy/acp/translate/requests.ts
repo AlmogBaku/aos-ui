@@ -136,14 +136,15 @@ function questionsOf(request: PendingRequest): AosQuestion[] {
 }
 
 /**
- * A single-choice question is a plain string field: its choices ride in
- * `_meta.aos.questions[].options`, and omitting the schema `enum` is what keeps
- * the free-text answer every question accepts valid against `requestedSchema`.
- * A multi-select must declare `items.enum`, which ACP requires of a reserved
- * `"string"` item type and the SDK rejects the whole elicitation without; the
- * response schema does not constrain values to it, so a free-text answer still
- * travels. A question with no choices stays a string field even when it takes
- * several values; `_meta.aos` keeps `multiple`.
+ * A single-choice question is a string field: its choices ride in
+ * `_meta.aos.questions[].options`, and it declares them as its `enum` only
+ * when it takes no other answer, so the free-text answer a `custom` question
+ * accepts stays valid against `requestedSchema`. A multi-select must declare
+ * `items.enum`, which ACP requires of a reserved `"string"` item type and the
+ * SDK rejects the whole elicitation without; the response schema does not
+ * constrain values to it, so a free-text answer still travels. A question with
+ * no choices stays a string field even when it takes several values;
+ * `_meta.aos` keeps `multiple`.
  */
 function propertyOf(question: AosQuestion): ElicitationPropertySchema {
   const values = question.options.map((option) => option.value ?? option.label)
@@ -158,6 +159,7 @@ function propertyOf(question: AosQuestion): ElicitationPropertySchema {
     type: "string",
     ...(question.header ? { title: question.header } : {}),
     description: question.prompt,
+    ...(!question.custom && values.length > 0 ? { enum: values } : {}),
   }
 }
 

@@ -219,6 +219,10 @@ export function fakeOpenClaw() {
                 {
                   key: SESSION_KEY,
                   agentId: AGENT_ID,
+                  // `SessionRowSchema` carries the usage the gateway recorded.
+                  totalTokens: 1_200,
+                  contextTokens: 200_000,
+                  estimatedCostUsd: 0.42,
                   toolOverrides: { mcpServers: { "aos-ui": true } },
                 },
               ],
@@ -277,8 +281,9 @@ export function fakeOpenClaw() {
           })
         return { approval: open.approval }
       case "approval.resolve": {
+        // A deny ends the approval denied, the only terminal carrying it.
         const approval = endApproval({
-          status: "allowed",
+          status: params.decision === "deny" ? "denied" : "allowed",
           decision: params.decision,
           reason: "user",
         })

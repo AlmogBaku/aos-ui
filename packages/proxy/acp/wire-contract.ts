@@ -22,6 +22,8 @@ import { join } from "node:path"
 import {
   client,
   methods,
+  RequestError,
+  SessionConfigOption,
   SessionUpdate,
   type AnyWireMessage,
   type ContentBlock,
@@ -61,11 +63,19 @@ export type WireContractRow =
   | "questionsDuringOwnTurn"
   | "reloadMidTurn"
   | "catchUpWithStandardUpdates"
+  | "questionsOnlyToCapableClients"
+  | "failedSendEndsWait"
+  | "choiceOnlyQuestion"
+  | "diffAddedWithGitPatchOrNone"
+  | "costInUsageUpdate"
+  | "unsavedSessionUndated"
+  | "thoughtLevelDefault"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
  * runtime's release does. Every turn the rows play has these two model
- * responses.
+ * responses. A Session that played one has cost 0.42 USD, where the runtime
+ * reports cost.
  */
 export type WireTurn = Readonly<{
   /**
@@ -75,6 +85,11 @@ export type WireTurn = Readonly<{
   firstResponse(): Promise<void>
   /** The text "The file lists three names." or `text`, stored; the turn ends. */
   secondResponse(text?: string): Promise<void>
+  /**
+   * In place of the first response: a call that creates `/tmp/notes.txt`
+   * holding "alpha" and completes, stored. Absent when its row is a gap.
+   */
+  createFile?(): Promise<void>
   /** Absent only when every row that asks a question is a gap. */
   questions?: WireQuestions
 }>
@@ -82,8 +97,9 @@ export type WireTurn = Readonly<{
 /** The questions a running turn asks, and its Stop, as the release has them. */
 export type WireQuestions = Readonly<{
   /**
-   * Asks "Proceed?" with the choices "yes" and "no" inside the running turn;
-   * settles once the runtime holds an answer or stopped waiting for one.
+   * Asks "Proceed?" with the choices "yes" and "no", taking no other answer
+   * where the runtime can ask so, inside the running turn; settles once the
+   * runtime holds an answer or stopped waiting for one.
    */
   ask(): Promise<void>
   /** The runtime withdraws the open question; its turn runs on. */
@@ -144,9 +160,15 @@ type WireHarness = Readonly<{
   connect(
     service: BridgedAcpService,
     origin: string,
-    path: string
+    path: string,
+    options?: ClientOptions
   ): ReturnType<typeof connectClient>
 }>
+
+type ClientOptions = {
+  /** Whether the client declares it answers form elicitations; it does. */
+  elicits?: boolean
+}
 
 /**
  * The real proxy over `runtime`, an operator and a guest listener, with its
@@ -204,22 +226,25 @@ async function composeProxy(runtime: WireRuntime, limits: SubscriberLimits) {
 function connectClient(
   service: BridgedAcpService,
   origin: string,
-  path: string
+  path: string,
+  { elicits = true }: ClientOptions = {}
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
   const timeline: TimelineEntry[] = []
-  const stateWaiters = new Set<(update: SessionUpdate) => void>()
+  const updateWaiters = new Set<(update: SessionUpdate) => void>()
   const askWaiters = new Set<(ask: WireAsk) => void>()
   /** Holds one request open until the case answers it or the proxy withdraws it. */
-  function hold<T>(signal: AbortSignal, reply: T) {
+  function hold<T>(signal: AbortSignal, params: unknown, reply: T) {
     timeline.push("asked")
     return new Promise<T>((resolve, reject) => {
       const ask: WireAsk = {
+        params,
         withdrawn: new Promise((settle) =>
           signal.addEventListener("abort", () => settle(), { once: true })
         ),
         answer: () => resolve(reply),
+        fail: () => reject(RequestError.internalError()),
       }
       signal.addEventListener("abort", () => reject(new Error("withdrawn")), {
         once: true,
@@ -231,18 +256,21 @@ function connectClient(
     .onNotification(methods.client.session.update, ({ params }) => {
       updates.push(params.update)
       timeline.push(params.update)
-      for (const settle of stateWaiters) settle(params.update)
+      for (const settle of updateWaiters) settle(params.update)
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
-      hold(signal, {
+      hold(signal, params, {
         outcome: {
           outcome: "selected" as const,
           optionId: params.options[0]!.optionId,
         },
       })
     )
-    .onRequest(methods.client.elicitation.create, ({ signal }) =>
-      hold(signal, { action: "accept" as const, content: { q0: "yes" } })
+    .onRequest(methods.client.elicitation.create, ({ params, signal }) =>
+      hold(signal, params, {
+        action: "accept" as const,
+        content: { q0: "yes" },
+      })
     )
   const connection = app.connect(
     createWebSocketStream<AnyWireMessage>(
@@ -253,17 +281,25 @@ function connectClient(
       }
     )
   )
-  /** Settles at the next update that says a turn is in `state`. */
-  const nextState = (state: string) =>
-    new Promise<void>((resolve) => {
+  /** Settles with the next update `matches` accepts. */
+  const next = <T extends SessionUpdate>(
+    matches: (update: SessionUpdate) => update is T
+  ) =>
+    new Promise<T>((resolve) => {
       const settle = (update: SessionUpdate) => {
-        if (!SessionUpdate.isStateUpdate(update) || update.state !== state)
-          return
-        stateWaiters.delete(settle)
-        resolve()
+        if (!matches(update)) return
+        updateWaiters.delete(settle)
+        resolve(update)
       }
-      stateWaiters.add(settle)
+      updateWaiters.add(settle)
     })
+  /** Settles at the next update that says a turn is in `state`. */
+  const nextState = async (state: string) => {
+    await next(
+      (update): update is SessionUpdate =>
+        SessionUpdate.isStateUpdate(update) && update.state === state
+    )
+  }
   return {
     connection,
     bridge,
@@ -275,6 +311,7 @@ function connectClient(
     answered: () => {
       timeline.push("answer")
     },
+    next,
     nextState,
     /** Settles at the next update that says a turn went idle. */
     nextIdle: () => nextState("idle"),
@@ -293,7 +330,7 @@ function connectClient(
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: 2,
         info: { name: "wire-contract", version: "1.0.0" },
-        capabilities: {},
+        capabilities: elicits ? { elicitation: { form: {} } } : {},
       }),
   }
 }
@@ -306,10 +343,14 @@ type TimelineEntry = SessionUpdate | "asked" | "answer"
 
 /** One request the proxy sent this client, held open until answered. */
 type WireAsk = Readonly<{
+  /** The request's params, as the client read them. */
+  params: unknown
   /** Settles once the proxy withdraws the request with `$/cancel_request`. */
   withdrawn: Promise<void>
   /** Answers "yes", or allows with the first option offered. */
   answer(): void
+  /** Answers with an error, as a client that could not show it does. */
+  fail(): void
 }>
 
 type WireClient = ReturnType<typeof connectClient>
@@ -556,6 +597,32 @@ function rebuildNotices(client: WireClient) {
   )
 }
 
+/** The values each field of an elicitation's form takes, when it limits them. */
+function formChoices(params: unknown) {
+  type Field = { enum?: string[]; oneOf?: Array<{ const: string }> }
+  const { requestedSchema } = params as {
+    requestedSchema?: { properties?: Record<string, Field> }
+  }
+  return Object.values(requestedSchema?.properties ?? {}).map(
+    (field) => field.enum ?? field.oneOf?.map(({ const: value }) => value)
+  )
+}
+
+/** Each file change a reader holds, and each patch that came with one. */
+function fileChanges(updates: readonly SessionUpdate[]) {
+  const diffs = Object.values(toolCalls(updates)).flatMap(({ content }) =>
+    content.flatMap((block) =>
+      (block as { type?: string }).type === "diff"
+        ? [block as { changes: unknown[]; patch?: unknown }]
+        : []
+    )
+  )
+  return {
+    changes: diffs.flatMap(({ changes }) => changes),
+    patches: diffs.flatMap(({ patch }) => (patch == null ? [] : [patch])),
+  }
+}
+
 /** A fake with no turn driver fails the row that plays one, never skips it. */
 const NO_TURN: WireTurn = {
   firstResponse: () =>
@@ -596,8 +663,8 @@ function wireCase(
         agentId: runtime.agentId,
         turn: runtime.turn ?? NO_TURN,
         clock,
-        connect(service, origin, path) {
-          const opened = connectClient(service, origin, path)
+        connect(service, origin, path, options) {
+          const opened = connectClient(service, origin, path, options)
           clients.push(opened)
           return opened
         },
@@ -991,6 +1058,207 @@ export function runWireContract(
           expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("resync")
         },
         TIGHT_LIMITS
+      )
+
+      row(
+        "questionsOnlyToCapableClients",
+        "asks a question only of a client that declared it answers one, and shows the rest the wait",
+        async ({ proxy, agentId, clock, turn, connect }) => {
+          const bare = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH,
+            { elicits: false }
+          )
+          await until(clock, bare.initialize())
+          const sessionId = await until(clock, newSession(bare, agentId))
+          await until(clock, prompt(bare, sessionId, "list the files"))
+          const waiting = bare.nextState("requires_action")
+          await until(clock, Promise.race([waiting, questionsOf(turn).ask()]))
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          const asked = reader.nextAsked()
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, asked)
+
+          expect(states(bare.updates).at(-1)).toBe("requires_action")
+          expect(bare.timeline).not.toContain("asked")
+        }
+      )
+
+      row(
+        "failedSendEndsWait",
+        "ends the wait on a question the client answered with an error, and runs on",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const from = plain.updates.length
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          const { ask, settled } = await askQuestion(
+            clock,
+            plain,
+            questionsOf(turn)
+          )
+          const running = plain.nextState("running")
+          ask.fail()
+          await until(clock, settled)
+          await until(clock, running)
+
+          expect(states(plain.updates.slice(from))).toEqual([
+            "running",
+            "requires_action",
+            "running",
+          ])
+        }
+      )
+
+      row(
+        "choiceOnlyQuestion",
+        "asks a question that takes only its choices as a list of those choices",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          const { ask } = await askQuestion(clock, plain, questionsOf(turn))
+
+          expect(formChoices(ask.params)).toEqual([["yes", "no"]])
+        }
+      )
+
+      row(
+        "diffAddedWithGitPatchOrNone",
+        "reports a created file as added, with a git patch or none, the same after a reload",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const createFile =
+            turn.createFile ??
+            (() =>
+              Promise.reject(
+                new Error("this fake creates no file; name the row a gap")
+              ))
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "write the notes"))
+          await until(clock, createFile())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          for (const client of [plain, reader]) {
+            const { changes, patches } = fileChanges(client.updates)
+            expect(changes).toEqual([
+              { operation: "add", path: "/tmp/notes.txt" },
+            ])
+            for (const patch of patches)
+              expect(patch).toMatchObject({
+                format: "git_patch",
+                text: expect.stringMatching(/^diff --git /u),
+              })
+          }
+        }
+      )
+
+      row(
+        "costInUsageUpdate",
+        "reports the Session's cost in its usage update",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          const usage = reader.next(SessionUpdate.isUsageUpdate)
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          await expect(until(clock, usage)).resolves.toMatchObject({
+            cost: { amount: 0.42, currency: "USD" },
+          })
+        }
+      )
+
+      row(
+        "unsavedSessionUndated",
+        "gives a Session its runtime has not stored no title and no date",
+        async ({ proxy, agentId, clock, connect }) => {
+          const plain = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, plain.initialize())
+          const sessionId = await until(clock, newSession(plain, agentId))
+          // A member joining the Session reads its row.
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          const info = reader.next(SessionUpdate.isSessionInfoUpdate)
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, info)
+          const listed = await until(
+            clock,
+            plain.connection.agent.request(methods.agent.session.list, {
+              _meta: { [AOS_META_KEY]: { agentId } },
+            })
+          )
+
+          const read = [
+            ...[plain, reader].flatMap((client) =>
+              client.updates.filter(SessionUpdate.isSessionInfoUpdate)
+            ),
+            ...listed.sessions.filter((row) => row.sessionId === sessionId),
+          ].map(({ title, updatedAt }) => ({ title, updatedAt }))
+          for (const row of read)
+            expect(row).toEqual({ title: undefined, updatedAt: undefined })
+        }
+      )
+
+      row(
+        "thoughtLevelDefault",
+        "offers a thought level whose current value is one of its choices",
+        async ({ proxy, agentId, clock, connect }) => {
+          const plain = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, plain.initialize())
+          const configured = plain.next(SessionUpdate.isConfigOptionUpdate)
+          await until(clock, newSession(plain, agentId))
+          const { configOptions } = await until(clock, configured)
+
+          const selects = configOptions.filter(SessionConfigOption.isSelect)
+          expect(selects.map(({ category }) => category)).toContain(
+            "thought_level"
+          )
+          for (const option of selects) {
+            // A select lists its values flat or in groups.
+            const entries: ReadonlyArray<{
+              value?: string
+              options?: ReadonlyArray<{ value: string }>
+            }> = option.options
+            const values = entries.flatMap(
+              (entry) => entry.options?.map(({ value }) => value) ?? entry.value
+            )
+            expect(values).toContain(option.currentValue)
+          }
+        }
       )
     })
   )

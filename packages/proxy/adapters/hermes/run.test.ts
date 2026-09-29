@@ -6739,8 +6739,9 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
-  it("names, kinds, locates, and times a file edit and carries its diff", async () => {
+  it("names, kinds, locates, and times a file edit and carries its change without the non-git diff", async () => {
     const path = "/workspace/app/notes.md"
+    // Hermes' difflib text (`tools/patch_parser.py:261`), which is no git patch.
     const diff = `--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`
     const events = await turnEvents((t) => [
       t.messageStart("m1"),
@@ -6774,17 +6775,14 @@ describe("Hermes native provider facts", () => {
         toolCallId: "edit-1",
         failed: false,
         durationMs: 1235,
-        diffs: [
-          {
-            changes: [{ operation: "modify", path }],
-            patch: diff,
-          },
-        ],
       },
+    ])
+    expect(ofKind(events, TurnEventKind.ToolCallFinished)[0]?.diffs).toEqual([
+      { changes: [{ operation: "modify", path }] },
     ])
   })
 
-  it("locates and diffs an edit under the operator's home directory", async () => {
+  it("locates and lists an edit under the operator's home directory", async () => {
     const path = "/home/operator/project/notes.md"
     const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
     const events = await turnEvents((t) => [
@@ -6804,7 +6802,7 @@ describe("Hermes native provider facts", () => {
     expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
       {
         toolCallId: "edit-1",
-        diffs: [{ changes: [{ operation: "modify", path }], patch: diff }],
+        diffs: [{ changes: [{ operation: "modify", path }] }],
       },
     ])
   })

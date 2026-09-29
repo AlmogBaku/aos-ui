@@ -174,6 +174,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       steerAck: context.steerAck,
       describe: (cause) => errorNotificationOf(context.publicError, cause),
       replied,
+      elicits: (mode) => elicitationModes.has(mode),
       report: (sessionId, cause) =>
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
@@ -267,6 +268,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
+  /** The elicitation modes this client declared it answers (`initialize`). */
+  let elicitationModes = new Set<string>()
 
   /**
    * One older page of a Session this connection resumed, however it did, as
@@ -370,6 +373,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       params.capabilities?._meta?.[AOS_META_KEY] ?? {}
     )
     clientPagesHistory = client.success && client.data.historyPages
+    const { elicitation } = params.capabilities ?? {}
+    elicitationModes = new Set(
+      (["form", "url"] as const).filter((mode) => elicitation?.[mode] != null)
+    )
     // A connection still to authenticate learns nothing about the deployment
     // it reached.
     const { authentication } = context

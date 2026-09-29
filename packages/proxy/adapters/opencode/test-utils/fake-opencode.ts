@@ -463,6 +463,8 @@ export function fakeOpenCode() {
                     { label: "yes", description: "Go on" },
                     { label: "no", description: "Stop here" },
                   ],
+                  // `QuestionInfo.custom`: no typed answer beside the choices.
+                  custom: false,
                 },
               ],
             }

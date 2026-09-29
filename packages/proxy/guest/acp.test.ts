@@ -589,12 +589,16 @@ function harness(options: HarnessOptions = {}) {
       if (!catalogChanged) throw new Error("Nothing watches the catalog")
       catalogChanged()
     },
-    /** Advertises paging older history, as the AOS browser does, by default. */
+    /**
+     * Advertises paging older history, as the AOS browser does, by default,
+     * and answering questions.
+     */
     initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-guest-browser", version: "1" },
         capabilities: {
+          elicitation: { form: {} },
           _meta: { [AOS_META_KEY]: { historyPages: pagesHistory } },
         },
       }),

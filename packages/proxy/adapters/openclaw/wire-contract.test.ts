@@ -62,6 +62,17 @@ runWireContract(
       // presents it again rather than losing it.
       heldAndLostQuestions:
         "OpenClaw holds no approval back and replays every pending one on subscribe",
+      // The release pushes no question, so the in-turn prompt is a plugin
+      // approval, which ACP's `session/request_permission` offers every client
+      // as options rather than an elicitation form.
+      questionsOnlyToCapableClients:
+        "OpenClaw asks only approvals, which every client answers",
+      choiceOnlyQuestion: "OpenClaw asks only approvals, not questions",
+      // The adapter projects no file change from an OpenClaw tool result.
+      diffAddedWithGitPatchOrNone: "the adapter maps no OpenClaw file change",
+      // `ModelChoiceSchema.thinkingLevels` is not mapped to efforts yet, so no
+      // thought level is offered.
+      thoughtLevelDefault: "the adapter offers no OpenClaw thought level",
     },
   }
 )

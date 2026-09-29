@@ -169,11 +169,13 @@ export const SessionStatusSchema = z.enum([
 export const SessionSchema = z.strictObject({
   id: IdentifierSchema,
   agentId: IdentifierSchema,
-  title: z.string().min(1).max(4096),
+  /** Absent while the provider has not stored the Session. */
+  title: z.string().min(1).max(4096).optional(),
   archived: z.boolean(),
   /** Absent when the provider does not report it. */
   createdAt: z.string().datetime().optional(),
-  updatedAt: z.string().datetime(),
+  /** Absent while the provider has not stored the Session. */
+  updatedAt: z.string().datetime().optional(),
   status: SessionStatusSchema,
   /** Provider read state; absent when untracked or unknowable on this read. */
   unread: z.boolean().optional(),
@@ -181,6 +183,16 @@ export const SessionSchema = z.strictObject({
   pinned: z.boolean().optional(),
 })
 export type Session = z.infer<typeof SessionSchema>
+
+/** Orders Sessions newest first, an undated one last, then by id. */
+export function newestSessionFirst(
+  left: Pick<Session, "id" | "updatedAt">,
+  right: Pick<Session, "id" | "updatedAt">
+) {
+  const time = ({ updatedAt }: Pick<Session, "updatedAt">) =>
+    updatedAt === undefined ? -Infinity : Date.parse(updatedAt)
+  return time(right) - time(left) || left.id.localeCompare(right.id)
+}
 export const SessionCatalogResponseSchema = z.strictObject({
   sessions: z.array(SessionSchema).max(100),
   total: z.number().int().min(0),
@@ -774,6 +786,13 @@ export const SessionContextResponseSchema = z.strictObject({
       systemTokens: z.number().int().min(0),
       toolTokens: z.number().int().min(0),
       messageTokens: z.number().int().min(0),
+    })
+    .optional(),
+  /** What the Session has cost so far, where the runtime reports it. */
+  cost: z
+    .strictObject({
+      amount: z.number().finite().min(0),
+      currency: z.string().min(1),
     })
     .optional(),
 })

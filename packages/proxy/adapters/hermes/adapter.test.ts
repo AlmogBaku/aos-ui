@@ -1401,11 +1401,10 @@ describe("Hermes server adapter", () => {
 
     await expect(adapter.getSession("researcher", "stored/1")).resolves.toEqual(
       {
+        // Hermes stores no title or date before the first turn.
         id: "stored/1",
         agentId: "researcher",
-        title: "stored/1",
         archived: false,
-        updatedAt: "1970-01-01T00:00:00.000Z",
         status: "idle",
       }
     )
@@ -1686,7 +1685,6 @@ describe("Hermes server adapter", () => {
         title: "One",
         archived: true,
         pinned: true,
-        updatedAt: "1970-01-01T00:00:00.000Z",
         status: "idle",
       }
     )

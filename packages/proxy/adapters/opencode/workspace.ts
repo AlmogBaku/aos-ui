@@ -1,5 +1,6 @@
 import {
   AgentCatalogResponseSchema,
+  newestSessionFirst,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionSchema,
@@ -150,11 +151,7 @@ export function createOpenCodeWorkspaceOperations(input: {
     return (await allSessions())
       .filter((session) => session.agent === agentId)
       .map((session) => projectSession(session, agentId))
-      .sort(
-        (left, right) =>
-          Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-          left.id.localeCompare(right.id)
-      )
+      .sort(newestSessionFirst)
   }
 
   /** One authoritative read that both projects and proves exact ownership. */
@@ -322,11 +319,7 @@ export function createOpenCodeWorkspaceOperations(input: {
       const sessions = (await allSessions())
         .filter((session) => !!session.agent)
         .map((session) => projectSession(session, session.agent!))
-        .sort(
-          (left, right) =>
-            Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-            left.id.localeCompare(right.id)
-        )
+        .sort(newestSessionFirst)
       return SessionCatalogResponseSchema.parse({
         sessions: sessions.slice(offset, offset + limit),
         total: sessions.length,

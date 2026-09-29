@@ -80,6 +80,7 @@ describe("configOptionsOf", () => {
   it("carries the name a provider gave an effort", () => {
     const named: SessionModelsResponse = {
       selectedId: "sonnet",
+      effortId: "low",
       options: [
         {
           id: "sonnet",
@@ -98,13 +99,19 @@ describe("configOptionsOf", () => {
     })
   })
 
-  it("leaves the thought level unset while the provider default applies", () => {
+  it("offers the provider default as the current thought level while it applies", () => {
     const { effortId, ...withoutEffort } = models
     void effortId
 
     expect(configOptionsOf(withoutEffort)[1]).toMatchObject({
       configId: "thought_level",
       currentValue: "",
+      options: [
+        { value: "", name: "Default" },
+        { value: "low", name: "low" },
+        { value: "medium", name: "medium" },
+        { value: "high", name: "high" },
+      ],
     })
   })
 

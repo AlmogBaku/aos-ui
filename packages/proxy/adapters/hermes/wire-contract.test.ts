@@ -8,7 +8,8 @@ import { composeHermesRuntime } from "./factory"
 import { fakeHermes, fakeHermesGateway } from "./test-utils/fake-hermes"
 
 function hermesRuntime(): WireRuntime {
-  const hermes = fakeHermes()
+  // Every wire row creates its Session, so Hermes starts with none stored.
+  const hermes = fakeHermes({ stored: false })
   return {
     config: {
       id: "hermes-contract",
@@ -34,5 +35,12 @@ function hermesRuntime(): WireRuntime {
   }
 }
 
-runWireContract("Hermes", hermesRuntime)
+runWireContract("Hermes", hermesRuntime, {
+  gaps: {
+    // Every clarify question takes a typed answer beside its choices
+    // (`tools/clarify_tool.py:9`), so none takes its choices alone.
+    choiceOnlyQuestion:
+      "Hermes always offers a typed answer beside the choices",
+  },
+})
 runWireListenerContract("Hermes", hermesRuntime)

@@ -94,12 +94,21 @@ export function fakeHermesGateway(hermes: FakeHermes, log: Logger) {
 
 export type FakeHermes = ReturnType<typeof fakeHermes>
 
-export function fakeHermes() {
+/**
+ * `stored: false` starts Hermes with no stored Session, so its one Session is
+ * a draft `session.create` hands out; by default it is already stored.
+ */
+export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const turn = nativeTurn(LIVE_ID)
   const frames: NativeFrame[] = []
   const sockets: HermesFakeSocket[] = []
   let fault: Fault = "none"
   let deleted = false
+  /**
+   * Whether the Session has its `sessions` row: a created draft has none until
+   * its first prompt stores one (`tui_gateway/methods_session.py:394`).
+   */
+  let saved = stored
   let running = false
   let streaming = false
   let calls = 0
@@ -162,6 +171,7 @@ export function fakeHermes() {
   /** Stores a row of the running turn as the release's `messages` table does. */
   function store(row: Record<string, unknown>) {
     const id = nextRowId++
+    saved = true
     rows.push({
       id,
       session_id: STORED_ID,
@@ -208,6 +218,22 @@ export function fakeHermes() {
         return { result: { profiles: [{ name: PROFILE }] } }
       case "session.resume":
         if (deleted) return { error: SESSION_NOT_FOUND }
+        // A live draft with no stored row reattaches lazy
+        // (`tui_gateway/methods_session.py:628`).
+        if (!saved)
+          return {
+            result: {
+              session_id: LIVE_ID,
+              stored_session_id: STORED_ID,
+              message_count: 0,
+              messages: [],
+              info: {
+                model: "contract-model",
+                lazy: true,
+                profile_name: PROFILE,
+              },
+            },
+          }
         return {
           result: {
             session_id: LIVE_ID,
@@ -260,9 +286,44 @@ export function fakeHermes() {
         const userRowId = store({ role: "user", content: text })
         return { result: { status: "streaming", user_row_id: userRowId } }
       }
+      case "model.options":
+        // One reasoning model, as `ModelOptionsResult` carries it
+        // (`tui_gateway/contracts/config_free_tier_control.py:273`).
+        return {
+          result: {
+            providers: [
+              {
+                slug: "contract",
+                name: "Contract",
+                models: ["contract-model"],
+                capabilities: {
+                  "contract-model": { fast: false, reasoning: true },
+                },
+              },
+            ],
+            model: "contract-model",
+            provider: "contract",
+          },
+        }
+      case "session.context_breakdown":
+        // A Session with no agent built yet reads its usage snapshot
+        // (`tui_gateway/methods_session.py:1297`).
+        return {
+          result: {
+            categories: [],
+            context_max: 200_000,
+            context_percent: 1,
+            context_used: 1_200,
+            estimated_total: 0,
+            context_estimated: false,
+            context_source: "provider_usage",
+            model: "contract-model",
+          },
+        }
       case "session.create":
         // The release answers a new draft with its live and stored ids; this
         // fake's one Session stands for it.
+        saved = false
         return {
           result: {
             session_id: LIVE_ID,
@@ -292,16 +353,23 @@ export function fakeHermes() {
 
   function route(url: URL) {
     const base = `/api/sessions/${encodeURIComponent(STORED_ID)}`
+    const listed = saved && !deleted
     if (url.pathname === "/api/sessions")
       return json(200, {
-        sessions: deleted
-          ? []
-          : [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }],
-        total: deleted ? 0 : 1,
+        sessions: listed
+          ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
+          : [],
+        total: listed ? 1 : 0,
       })
-    if (deleted) return json(404)
+    if (!listed) return json(404)
+    // `db.get_session` serves the whole stored row, its cost included.
     if (url.pathname === base)
-      return json(200, { id: STORED_ID, profile: PROFILE, title: "Contract" })
+      return json(200, {
+        id: STORED_ID,
+        profile: PROFILE,
+        title: "Contract",
+        estimated_cost_usd: 0.42,
+      })
     if (url.pathname === `${base}/messages`) {
       const limit = Number(url.searchParams.get("limit"))
       const offset = Number(url.searchParams.get("offset"))
@@ -388,6 +456,47 @@ export function fakeHermes() {
         tool_call_id: "call-read",
         tool_name: "read_file",
         content: result,
+      })
+    },
+
+    /**
+     * A `patch` call adding `/tmp/notes.txt`, with the result the release's
+     * `patch_tool` returns for it (`tools/file_tools.py:1002`,
+     * `tools/patch_parser.py:333`), which `tool.complete` carries parsed.
+     */
+    async createFile() {
+      const path = "/tmp/notes.txt"
+      const args = {
+        mode: "patch",
+        patch: `*** Begin Patch\n*** Add File: ${path}\n+alpha\n*** End Patch`,
+      }
+      const result = {
+        success: true,
+        diff: `--- /dev/null\n+++ b/${path}\n+alpha`,
+        files_created: [path],
+        files_modified: [path],
+        resolved_path: path,
+      }
+      startStreaming()
+      emit(turn.toolStart("call-write", "patch", args))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: "call-write",
+            type: "function",
+            function: { name: "patch", arguments: JSON.stringify(args) },
+          },
+        ],
+      })
+      emit(turn.toolComplete("call-write", "patch", result))
+      store({
+        role: "tool",
+        tool_call_id: "call-write",
+        tool_name: "patch",
+        content: JSON.stringify(result),
       })
     },
 
