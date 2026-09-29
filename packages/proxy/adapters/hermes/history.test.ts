@@ -326,6 +326,7 @@ describe("server-side Hermes history projection", () => {
       "[Heartbeat — recurring instruction, fires every 1h]\nCheck the inbox",
       '[IMPORTANT: Background process proc_1 matched watch pattern "ERR".\nCommand: make]',
       "[System note: Your previous turn was interrupted mid-run. Resume it.]",
+      "[Background process proc_1 heartbeat #3 — still running after 5m]",
     ].map((text) => [
       text.split("\n")[0],
       untagged(text),
@@ -338,7 +339,6 @@ describe("server-side Hermes history projection", () => {
       "[Your active task list was preserved across context compression]\n- [>] Draft",
       "[Skills pruned during compression — reload before acting on these tasks]",
       "Continue from the compressed conversation context above. No human turn.",
-      "[Background process proc_1 heartbeat #3 — still running after 5m]",
     ].map((text) => [
       text.split("\n")[0],
       untagged(text),

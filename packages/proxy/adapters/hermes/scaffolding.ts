@@ -38,9 +38,10 @@ export const MODEL_ONLY_PREFIXES: readonly string[] = [
 ]
 
 /**
- * A background process's still-running heartbeat, persisted untyped before
- * Hermes tagged the wake `hidden`: `tools/process_registry_notifications.py`
- * `_format_process_notification` (newer than the pinned commit).
+ * A background process's still-running heartbeat wake, persisted untyped
+ * before Hermes tagged it `hidden`: `tools/process_registry_notifications.py`
+ * `_format_process_notification` (newer than the pinned commit). Like the
+ * tagged wake, it opens a turn.
  */
 const LEGACY_PROCESS_HEARTBEAT = /^\[Background process \S+ heartbeat #/u
 
@@ -188,12 +189,12 @@ export function classifyHermesRow(
     return { kind: "automation", text }
   if (kind && kind !== "skill_invocation") return { kind: "skip", text }
   const opening = text.trimStart()
+  if (MODEL_ONLY_PREFIXES.some((prefix) => opening.startsWith(prefix)))
+    return { kind: "skip", text }
   if (
-    MODEL_ONLY_PREFIXES.some((prefix) => opening.startsWith(prefix)) ||
+    AUTOMATION_PREFIXES.some((prefix) => opening.startsWith(prefix)) ||
     LEGACY_PROCESS_HEARTBEAT.test(opening)
   )
-    return { kind: "skip", text }
-  if (AUTOMATION_PREFIXES.some((prefix) => opening.startsWith(prefix)))
     return { kind: "automation", text }
   const shown = stripMergedScaffolding(text)
   if (isRedirect(row)) return { kind: "correction", text: shown }
