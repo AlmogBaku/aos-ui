@@ -29,6 +29,7 @@ import { readTitleBarColors } from "./shared/theme-color.ts"
 import { FIXTURE_AOS_UI_MCP_PATH } from "./shared/presentation/views.ts"
 import { buildViews } from "./packages/tools-mcp/views/build.ts"
 import { snapshotToolsServer } from "./packages/tools-mcp/snapshot.ts"
+import { reactCompiler } from "./react-compiler.config.ts"
 
 function runtimeConfigurationFromEnvironment(environment: NodeJS.ProcessEnv) {
   return resolveRuntimeConfiguration({
@@ -339,6 +340,7 @@ export default defineConfig(({ mode }) => {
     ),
     plugins: [
       react(),
+      reactCompiler(),
       runtimeConfigurationPlugin(environment),
       e2eReadinessPlugin(environment),
       mcpAppSandboxPlugin(),

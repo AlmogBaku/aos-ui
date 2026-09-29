@@ -3,7 +3,7 @@
 import { cn } from "@/lib/utils"
 import {
   ThreadPrimitive,
-  unstable_useThreadMessageIds,
+  unstable_useThreadMessageIds as useThreadMessageIds,
 } from "@assistant-ui/react"
 import {
   defaultRangeExtractor,
@@ -161,7 +161,7 @@ export function ThreadMessageList({
   className?: string
   ref?: Ref<ThreadMessageListHandle>
 }) {
-  const messageIds = unstable_useThreadMessageIds()
+  const messageIds = useThreadMessageIds()
   const listRef = useRef<HTMLDivElement>(null)
   // What sits above the list in the viewport (padding, the search bar) offsets
   // every message, so the window and `getOffsetForIndex` count it in.

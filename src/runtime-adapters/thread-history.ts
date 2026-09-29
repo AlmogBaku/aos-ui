@@ -24,3 +24,10 @@ export type ThreadHistoryExtras = {
  */
 export const threadHistoryExtras =
   createRuntimeExtras<ThreadHistoryExtras>("threadHistory")
+
+/**
+ * `threadHistoryExtras.use` under a hook name: React Compiler takes only a
+ * `use`-prefixed call for a hook, and would cache a member `.use` call as a
+ * plain value.
+ */
+export const useThreadHistoryExtras = threadHistoryExtras.use

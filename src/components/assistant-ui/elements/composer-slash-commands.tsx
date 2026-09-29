@@ -1,7 +1,7 @@
 import {
   ComposerPrimitive,
   useAuiState,
-  unstable_useTriggerPopoverScopeContext,
+  unstable_useTriggerPopoverScopeContext as useTriggerPopoverScopeContext,
   type Unstable_DirectiveFormatter,
 } from "@assistant-ui/react"
 import { useLayoutEffect, useMemo, useRef, type RefObject } from "react"
@@ -17,7 +17,7 @@ function KeepHighlightedCommandVisible({
 }: {
   menuRef: RefObject<HTMLDivElement | null>
 }) {
-  const { highlightedItemId } = unstable_useTriggerPopoverScopeContext()
+  const { highlightedItemId } = useTriggerPopoverScopeContext()
   useLayoutEffect(() => {
     const menu = menuRef.current
     const option =

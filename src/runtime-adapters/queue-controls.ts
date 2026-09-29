@@ -32,3 +32,10 @@ export type QueueControlsExtras = {
  */
 export const queueControlsExtras =
   createRuntimeExtras<QueueControlsExtras>("queueControls")
+
+/**
+ * `queueControlsExtras.use` under a hook name: React Compiler takes only a
+ * `use`-prefixed call for a hook, and would cache a member `.use` call as a
+ * plain value.
+ */
+export const useQueueControlsExtras = queueControlsExtras.use

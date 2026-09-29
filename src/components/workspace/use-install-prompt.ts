@@ -36,8 +36,10 @@ export function useInstallPrompt() {
     /** Call directly from the click event; the prompt is a one-shot gesture. */
     install() {
       setPrompt(null)
+      // Checked outside `try`: React Compiler cannot compile conditionals there.
+      if (!prompt) return
       try {
-        void prompt?.prompt().catch(() => {})
+        void prompt.prompt().catch(() => {})
       } catch {
         /* A withdrawn prompt leaves the workspace unchanged. */
       }

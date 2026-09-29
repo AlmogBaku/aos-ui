@@ -319,13 +319,21 @@ function ArchivedSection({
   )
 }
 
+const sessionDateFormatters = new Map<Locale, Intl.DateTimeFormat>()
+
+/** One formatter per locale: building an `Intl.DateTimeFormat` is costly. */
 function sessionDateFormatter(locale: Locale) {
-  return new Intl.DateTimeFormat(locale, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  })
+  let formatter = sessionDateFormatters.get(locale)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    })
+    sessionDateFormatters.set(locale, formatter)
+  }
+  return formatter
 }
 
 export function AgentSessionHistory({

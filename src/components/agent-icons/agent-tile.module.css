@@ -1,6 +1,26 @@
 .tile {
+  position: relative;
   display: block;
   flex: none;
+}
+
+.tile > svg {
+  display: block;
+}
+
+/* The 48-unit view box, scaled onto the tile by an inline transform. The
+   coordinates are the SVG's physical ones, so they do not mirror in RTL. */
+.stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 48px;
+  height: 48px;
+  transform-origin: 0 0;
+}
+
+.clip {
+  overflow: hidden;
 }
 
 .draft {
@@ -13,13 +33,21 @@
 
 /* The pointer tracking in `pointer-tracking.ts` sets the inline transform. */
 .sensor {
+  position: absolute;
   transition: transform 160ms ease-out;
+}
+
+.bar {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 6px;
+  border-radius: 0.5px;
+  background: currentColor;
 }
 
 /* Scales each bar about its own centre, like the brief's 6 → 1 → 6 height. */
 .blink {
-  transform-box: fill-box;
-  transform-origin: center;
   animation: pair-blink 1.6s linear infinite;
 }
 
@@ -52,8 +80,6 @@
 }
 
 .attentionBlink {
-  transform-box: fill-box;
-  transform-origin: center;
   animation: attention-blink 5s linear infinite;
 }
 
@@ -147,4 +173,17 @@
     animation: none;
     transform: translateX(calc(var(--glance) * var(--side) * 1px)) !important;
   }
+}
+
+/* While composing (see the composer's `data-composing` effect), the tile
+   rests; the waiting pair still holds its aside pose. */
+:global([data-composing]) .blink,
+:global([data-composing]) .hop,
+:global([data-composing]) .attentionBlink {
+  animation: none;
+}
+
+:global([data-composing]) .sensor.look {
+  animation: none;
+  transform: translateX(calc(var(--glance) * var(--side) * 1px)) !important;
 }

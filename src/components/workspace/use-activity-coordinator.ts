@@ -40,6 +40,7 @@ import {
 import type { Locale } from "@/lib/i18n/config"
 import type { BrowserSettingsView } from "./activity"
 import { useInstallPrompt } from "./use-install-prompt"
+import { useStableHandlers } from "@/hooks/use-stable-handlers"
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import { sameData } from "@/lib/utils"
 import type {
@@ -84,6 +85,18 @@ type Options = {
     copy: { completion: string; failure: string; input: string }
   }
 }
+/**
+ * Runs a provider call whose failure the workspace outlives. It lives outside
+ * the hook because React Compiler cannot compile optional chaining inside `try`.
+ */
+function ignoreFailure(action: () => void) {
+  try {
+    action()
+  } catch {
+    /* A provider that cannot accept the call keeps the workspace usable. */
+  }
+}
+
 /**
  * State re-read from a store on every focus change and activity event. The
  * setter keeps the value it has when the re-read carries the same data, so an
@@ -282,7 +295,9 @@ export function useActivityCoordinator(
     async function openPushed(target?: PushOpenTarget) {
       // Without ids the worker already focused this tab and nothing more is owed.
       if (!target) return
-      try {
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      await (async () => {
         const validated = await validateOwner(target.sessionId, true)
         if (!active || validated !== target.agentId) return
         await current.current.onOpenTarget(target.agentId, target.sessionId)
@@ -292,9 +307,9 @@ export function useActivityCoordinator(
         ).catch(() => {})
         setRecords(store.records())
         setNotice(null)
-      } catch {
+      })().catch(() => {
         if (active) setError(true)
-      }
+      })
     }
     const stopPushListening = push?.listen({
       onChange: () =>
@@ -360,12 +375,15 @@ export function useActivityCoordinator(
           if (active) setError(true)
         })
     }
-    try {
-      unsubscribe = workspace.subscribeActivity?.(ingest, () => {
+    // Outside `try`: React Compiler cannot compile optional chaining there.
+    const subscribe = () =>
+      workspace.subscribeActivity?.(ingest, () => {
         queueMicrotask(() => {
           if (active) setError(true)
         })
       })
+    try {
+      unsubscribe = subscribe()
     } catch {
       queueMicrotask(() => {
         if (active) setError(true)
@@ -392,11 +410,10 @@ export function useActivityCoordinator(
     return () => {
       active = false
       reported.current = undefined
-      try {
+      // A provider that cannot accept the report keeps the workspace usable.
+      ignoreFailure(() =>
         workspace.reportFocus?.(null, { foreground: false, idle: false })
-      } catch {
-        /* A provider that cannot accept the report keeps the workspace usable. */
-      }
+      )
       heartbeat.stop()
       stopWatchingIdle()
       idleTracker.stop()
@@ -410,11 +427,8 @@ export function useActivityCoordinator(
       window.removeEventListener("focus", onFocus)
       window.removeEventListener("blur", refresh)
       document.removeEventListener("visibilitychange", refresh)
-      try {
-        unsubscribe?.()
-      } catch {
-        /* Subscription teardown cannot break the workspace. */
-      }
+      // Subscription teardown cannot break the workspace.
+      ignoreFailure(() => unsubscribe?.())
     }
   }, [setBrowserState, setRecords, workspace])
 
@@ -446,29 +460,16 @@ export function useActivityCoordinator(
       )
     ).catch(() => setError(true))
   }
-  const view: ActivityView = {
-    items: records.map((record) => ({
-      ...record,
-      agentName: options.agents.find(({ id }) => id === record.agentId)?.name,
-      sessionTitle: options.titles.get(record.sessionId),
-      available:
-        !unavailableIds.has(record.id) &&
-        options.agents.some(({ id }) => id === record.agentId) &&
-        !options.sessions.some(
-          (session) =>
-            session.sessionId === record.sessionId &&
-            session.agentId !== record.agentId
-        ),
-    })),
-    unreadCount,
-    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
-    error,
-    supported: !!workspace.subscribeActivity,
-    async openActivity(id) {
+  // One identity per method, so a render that changes no Activity data hands
+  // the bell, the panel, and the settings the same object.
+  const actions = useStableHandlers({
+    async openActivity(id: string) {
       const store = storeRef.current
       const record = store?.records().find((item) => item.id === id)
       if (!record || !store) return false
-      try {
+      // A promise `catch`, not `try`: React Compiler cannot compile the
+      // conditionals inside a `try` yet.
+      return (async () => {
         const validatedOwner = await validateOwnerRef.current(
           record.sessionId,
           true
@@ -495,10 +496,10 @@ export function useActivityCoordinator(
         browserRef.current?.publish()
         setNotice(null)
         return true
-      } catch {
+      })().catch(() => {
         setError(true)
         return false
-      }
+      })
     },
     markAllRead() {
       markSessionsRead(
@@ -511,9 +512,49 @@ export function useActivityCoordinator(
     dismissNotice() {
       setNotice(null)
     },
+    onEnabledChange(enabled: boolean) {
+      void browserRef.current?.setEnabled(enabled)
+    },
+    onCategoryChange(
+      category: Parameters<BrowserSettingsView["onCategoryChange"]>[0],
+      enabled: boolean
+    ) {
+      browserRef.current?.setCategory(category, enabled)
+    },
+    onSoundChange(enabled: boolean) {
+      browserRef.current?.setSound(enabled)
+    },
+    onAcceptAsk() {
+      void browserRef.current?.acceptAsk()
+    },
+    onDeclineAsk() {
+      browserRef.current?.declineAsk()
+    },
+  })
+  const view: ActivityView = {
+    items: records.map((record) => ({
+      ...record,
+      agentName: options.agents.find(({ id }) => id === record.agentId)?.name,
+      sessionTitle: options.titles.get(record.sessionId),
+      available:
+        !unavailableIds.has(record.id) &&
+        options.agents.some(({ id }) => id === record.agentId) &&
+        !options.sessions.some(
+          (session) =>
+            session.sessionId === record.sessionId &&
+            session.agentId !== record.agentId
+        ),
+    })),
+    unreadCount,
+    notice: notice ? { count: unreadCount, urgent: notice.urgent } : null,
+    error,
+    supported: !!workspace.subscribeActivity,
+    openActivity: actions.openActivity,
+    markAllRead: actions.markAllRead,
+    dismissNotice: actions.dismissNotice,
   }
   useEffect(() => {
-    openRef.current = view.openActivity
+    openRef.current = actions.openActivity
   })
   return {
     ...view,
@@ -523,16 +564,11 @@ export function useActivityCoordinator(
       installable: install.installable,
       iosInstallHint: install.iosInstallHint,
       onInstall: install.install,
-      onEnabledChange: (enabled) => {
-        void browserRef.current?.setEnabled(enabled)
-      },
-      onCategoryChange: (category, enabled) =>
-        browserRef.current?.setCategory(category, enabled),
-      onSoundChange: (enabled) => browserRef.current?.setSound(enabled),
-      onAcceptAsk: () => {
-        void browserRef.current?.acceptAsk()
-      },
-      onDeclineAsk: () => browserRef.current?.declineAsk(),
+      onEnabledChange: actions.onEnabledChange,
+      onCategoryChange: actions.onCategoryChange,
+      onSoundChange: actions.onSoundChange,
+      onAcceptAsk: actions.onAcceptAsk,
+      onDeclineAsk: actions.onDeclineAsk,
     },
   }
 }

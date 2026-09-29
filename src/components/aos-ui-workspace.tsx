@@ -24,6 +24,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
+import { useLocation } from "react-router"
 
 import {
   Thread,
@@ -66,6 +67,7 @@ import type { Dictionary } from "@/lib/i18n/dictionary"
 import type {
   AgentSummary,
   HarnessRuntime,
+  RuntimeInteractionAdapter,
   TodoItem,
 } from "@/runtime-adapters/contracts"
 import type { ArtifactMessage } from "@/artifacts/artifacts"
@@ -85,27 +87,35 @@ type AosUiWorkspaceProps = {
   browserNotificationPort?: BrowserNotificationPort
 }
 
+/**
+ * Built outside the component that memoizes it: React Compiler cannot compile
+ * a component that declares a hook-calling function in its body.
+ */
+function createPendingComposer(
+  interactions: RuntimeInteractionAdapter,
+  locale: Locale
+): NonNullable<ThreadComponents["Composer"]> {
+  return function PendingComposer({ fallback }) {
+    const sessionId = useAuiState(
+      (state) => state.threadListItem.remoteId ?? state.threadListItem.id
+    )
+    return (
+      <PendingInteractionComposer
+        locale={locale}
+        sessionId={sessionId}
+        interactions={interactions}
+        fallback={fallback}
+      />
+    )
+  }
+}
+
 export function AosUiWorkspace({ runtime, ...props }: AosUiWorkspaceProps) {
   const interactions = runtime.interactions
   const locale = props.locale
   const composer = useMemo<ThreadComponents["Composer"]>(
     () =>
-      interactions
-        ? function PendingComposer({ fallback }) {
-            const sessionId = useAuiState(
-              (state) =>
-                state.threadListItem.remoteId ?? state.threadListItem.id
-            )
-            return (
-              <PendingInteractionComposer
-                locale={locale}
-                sessionId={sessionId}
-                interactions={interactions}
-                fallback={fallback}
-              />
-            )
-          }
-        : undefined,
+      interactions ? createPendingComposer(interactions, locale) : undefined,
     [interactions, locale]
   )
   const workspace = (
@@ -460,6 +470,7 @@ function WorkspaceContent({
   composer?: ThreadComponents["Composer"]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
+  const location = useLocation()
   const {
     environmentLabel,
     activityCoverage,
@@ -623,13 +634,19 @@ function WorkspaceContent({
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
+  // The resolver follows the URL text, not the router's location object, which
+  // is replaced by navigations that leave the URL as it was.
+  const currentPath = `${location.pathname}${location.search}${location.hash}`
   const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
     const agentId = sessions.find(
       (session) => session.sessionId === sessionId
     )?.agentId
     if (!agentId) return undefined
     return {
-      href: workspaceHref(window.location.href, { agentId, sessionId }),
+      href: workspaceHref(`${window.location.origin}${currentPath}`, {
+        agentId,
+        sessionId,
+      }),
       open: () => {
         setPreferredAgentId(agentId)
         openSession(sessionId, agentId).catch((reason: unknown) =>

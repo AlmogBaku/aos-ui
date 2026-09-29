@@ -69,7 +69,7 @@ import {
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
-import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
+import { useQueueControlsExtras } from "@/runtime-adapters/queue-controls"
 import {
   matchLocalCommand,
   menuSlashCommands,
@@ -126,7 +126,7 @@ import {
   useAui,
   useAuiEvent,
   useAuiState,
-  unstable_useTriggerPopoverRootContextOptional,
+  unstable_useTriggerPopoverRootContextOptional as useTriggerPopoverRootContextOptional,
 } from "@assistant-ui/react"
 import {
   ArrowDownIcon,
@@ -151,6 +151,7 @@ import {
   useState,
   useSyncExternalStore,
   type ComponentType,
+  type CSSProperties,
   type FC,
   type KeyboardEvent,
   type PropsWithChildren,
@@ -517,6 +518,12 @@ function escapeAimsAtConversation(event: KeyboardEvent<HTMLDivElement>) {
   return true
 }
 
+const threadRootStyle = {
+  "--thread-max-width": "96rem",
+  "--thread-content-max-width": "clamp(52rem, 80cqi, 96rem)",
+  "--composer-bg": "var(--color-card)",
+} as CSSProperties
+
 const ThreadRoot: FC<{
   isEmpty: boolean
   autoFocus: boolean
@@ -575,11 +582,7 @@ const ThreadRoot: FC<{
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-background [--composer-padding:0.25rem] [--composer-radius:0.75rem] @md:[--composer-padding:0.5rem] @md:[--composer-radius:1.5rem]"
-      style={{
-        ["--thread-max-width" as string]: "96rem",
-        ["--thread-content-max-width" as string]: "clamp(52rem, 80cqi, 96rem)",
-        ["--composer-bg" as string]: "var(--color-card)",
-      }}
+      style={threadRootStyle}
     >
       <VoiceReplyReader />
       <span
@@ -834,6 +837,18 @@ const Composer: FC<{
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
   const historyBrowseRef = useRef<HistoryBrowse | null>(null)
   const [inputFocused, setInputFocused] = useState(false)
+  // While the composer has focus, the status dot and Agent tile stop their
+  // idle animations: any running CSS animation restyles every animated
+  // element each frame, which slows typing. The page-level attribute is a
+  // plain selector for their CSS (`:has()` measured slower) and also reaches
+  // portaled tiles; setting it causes no render.
+  useEffect(() => {
+    if (!inputFocused) return
+    document.documentElement.dataset.composing = ""
+    return () => {
+      delete document.documentElement.dataset.composing
+    }
+  }, [inputFocused])
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
@@ -849,8 +864,8 @@ const Composer: FC<{
   const historyEntries = useAuiState((s) =>
     selectHistoryEntries(s.thread.messages)
   )
-  const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
-  const queueControls = queueControlsExtras.use(
+  const triggerPopover = useTriggerPopoverRootContextOptional()
+  const queueControls = useQueueControlsExtras(
     (extras) => extras.queueControls,
     undefined
   )
