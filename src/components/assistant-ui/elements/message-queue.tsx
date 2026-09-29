@@ -413,17 +413,14 @@ export function MessageQueue({
   )
   const hintId = useId()
   const ids = items.map((item) => item.id)
-  const placeOf = useCallback(
-    (id: string): QueuePlace => {
-      const index = items.findIndex((item) => item.id === id)
-      return {
-        position: index + 1,
-        previousId: items[index - 1]?.id,
-        nextId: items[index + 1]?.id,
-      }
-    },
-    [items]
-  )
+  const placeOf = (id: string): QueuePlace => {
+    const index = ids.indexOf(id)
+    return {
+      position: index + 1,
+      previousId: ids[index - 1],
+      nextId: ids[index + 1],
+    }
+  }
   // The announcement is fixed as the move happens, and a repeat of the same
   // words toggles a trailing space so the live region reads it again.
   // A message joining or leaving the queue makes the last announcement stale,
