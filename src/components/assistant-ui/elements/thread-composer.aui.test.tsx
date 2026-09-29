@@ -1527,9 +1527,8 @@ describe("Thread accessibility", () => {
     await user.dblClick(within(rowA!).getByText("A"))
     rowA!.focus()
     await user.keyboard("{Enter}")
-    expect(
-      screen.queryByRole("textbox", { name: "Edit queued message" })
-    ).not.toBeInTheDocument()
+    expect(input).toHaveValue("")
+    expect(order()).toEqual(["A", "B", "C"])
 
     await user.keyboard("{Alt>}{ArrowDown}{/Alt}")
     await waitFor(() => expect(order()).toEqual(["B", "A", "C"]))

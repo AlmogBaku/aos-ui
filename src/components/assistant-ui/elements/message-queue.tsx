@@ -40,13 +40,7 @@ import {
 
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import { TooltipIconButton } from "@/components/assistant-ui/elements/tooltip-icon-button"
-import { Textarea } from "@/components/ui/textarea"
-import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import { cn } from "@/lib/utils"
-import {
-  type QueueControls,
-  useQueueControlsExtras,
-} from "@/runtime-adapters/queue-controls"
 
 export type MessageQueueLabels = {
   readonly region: string
@@ -59,13 +53,6 @@ export type MessageQueueLabels = {
   readonly steering: string
   readonly failed: string
   readonly moved: (position: number, count: number) => string
-  readonly editor: string
-}
-
-/** The queued message open for editing, and where focus returns after. */
-export type QueueEditing = {
-  readonly id: string
-  readonly returnTo: "row" | "composer"
 }
 
 export type UnconfirmedDelivery = {
@@ -95,61 +82,6 @@ export function isUncertainDelivery(error: unknown) {
 const plainKey = (event: KeyboardEvent) =>
   !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
 
-/**
- * The row's text as a field. It holds the queue while it is open, so a turn
- * ending meanwhile sends nothing until the edit is saved or dropped. Leaving
- * the field saves it; Escape drops the edit.
- */
-function QueueEditor({
-  labels,
-  initialText,
-  hold,
-  onClose,
-}: {
-  labels: MessageQueueLabels
-  initialText: string
-  hold: QueueControls["hold"]
-  onClose(text: string | undefined, refocus: boolean): void
-}) {
-  const [text, setText] = useState(initialText)
-  const fieldRef = useRef<HTMLTextAreaElement>(null)
-  const closedRef = useRef(false)
-  useEffect(() => hold(), [hold])
-  useLayoutEffect(() => {
-    const field = fieldRef.current
-    field?.focus()
-    field?.setSelectionRange(field.value.length, field.value.length)
-  }, [])
-  const close = (save: boolean, refocus: boolean) => {
-    if (closedRef.current) return
-    closedRef.current = true
-    onClose(save && text.trim() !== "" ? text : undefined, refocus)
-  }
-  return (
-    <Textarea
-      ref={fieldRef}
-      dir="auto"
-      rows={1}
-      aria-label={labels.editor}
-      value={text}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={() => close(true, false)}
-      onKeyDown={(event) => {
-        if (keyboardEventSafetyReason(event)) return
-        if (event.key === "Escape") {
-          event.preventDefault()
-          event.stopPropagation()
-          close(false, true)
-        } else if (event.key === "Enter" && plainKey(event)) {
-          event.preventDefault()
-          close(true, true)
-        }
-      }}
-      className="[field-sizing:content] max-h-32 min-h-7 min-w-0 flex-1 resize-none rounded-md border-transparent bg-background px-2 py-1 text-sm shadow-none dark:bg-popover"
-    />
-  )
-}
-
 /** Where a row sits in the queue, and its neighbours to move around. */
 type QueuePlace = {
   readonly position: number
@@ -164,9 +96,7 @@ function QueueRow({
   onUnconfirmed,
   placeOf,
   onMoved,
-  controls,
-  editing,
-  onEditingChange,
+  onEdit,
 }: {
   labels: MessageQueueLabels
   hintId: string
@@ -174,9 +104,7 @@ function QueueRow({
   onUnconfirmed(delivery: UnconfirmedDelivery): void
   placeOf(id: string): QueuePlace
   onMoved(position: number): void
-  controls: QueueControls | undefined
-  editing: QueueEditing | undefined
-  onEditingChange(editing: QueueEditing | undefined): void
+  onEdit: (() => void) | undefined
 }) {
   const aui = useAui()
   const originThreadId = useAuiState((state) => state.threads.mainThreadId)
@@ -218,7 +146,6 @@ function QueueRow({
     }
   }, [aui, onUnconfirmed, originThreadId, requestId, status, steer, text])
 
-  const isEditing = editing?.id === requestId
   const pending = status === "pending"
   const {
     setNodeRef,
@@ -227,10 +154,9 @@ function QueueRow({
     transition,
     isDragging,
     isSorting,
-  } = useSortable({ id: requestId, disabled: isEditing || pending })
+  } = useSortable({ id: requestId, disabled: pending })
 
   const { position, previousId, nextId } = placeOf(requestId)
-  const rowRef = useRef<HTMLLIElement | null>(null)
   // React moves a keyed row's node, which drops focus: whatever held focus
   // in the row takes it back once the row lands.
   const refocusRef = useRef<HTMLElement | null>(null)
@@ -247,12 +173,11 @@ function QueueRow({
     )
     onMoved(position + by)
   }
+  // Editing a row edits the whole queue, in the composer.
   const edit = () => {
-    if (controls && !pending)
-      onEditingChange({ id: requestId, returnTo: "row" })
+    if (!pending) onEdit?.()
   }
   const onKeyDown = (event: KeyboardEvent<HTMLLIElement>) => {
-    if (isEditing) return
     if (
       event.altKey &&
       !event.ctrlKey &&
@@ -281,17 +206,14 @@ function QueueRow({
   const canSteer = running && steer !== undefined
   return (
     <li
-      ref={(node) => {
-        setNodeRef(node)
-        rowRef.current = node
-      }}
+      ref={setNodeRef}
       data-slot="aui_message-queue-item"
-      tabIndex={isEditing ? -1 : 0}
-      aria-describedby={controls ? hintId : undefined}
+      tabIndex={0}
+      aria-describedby={onEdit ? hintId : undefined}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
         "group/queue-row flex min-h-9 min-w-0 items-center gap-1.5 rounded-xl py-0.5 ps-1.5 pe-1 text-sm outline-none select-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none",
-        !isEditing && "cursor-grab hover:bg-foreground/[0.04]",
+        "cursor-grab hover:bg-foreground/[0.04]",
         isSorting && !isDragging && "hover:bg-transparent",
         isDragging &&
           "relative z-10 cursor-grabbing bg-background shadow-[0_6px_16px_-6px] shadow-foreground/25 dark:bg-popover"
@@ -302,7 +224,7 @@ function QueueRow({
           return
         edit()
       }}
-      {...(isEditing ? {} : listeners)}
+      {...listeners}
     >
       <span
         aria-hidden="true"
@@ -313,29 +235,16 @@ function QueueRow({
         </span>
         <GripVerticalIcon className="hidden size-3.5 group-hover/queue-row:block group-focus-visible/queue-row:block [@media(pointer:coarse)]:hidden" />
       </span>
-      {isEditing && controls ? (
-        <QueueEditor
-          labels={labels}
-          initialText={text}
-          hold={controls.hold}
-          onClose={(edited, refocus) => {
-            if (edited !== undefined) controls.editText(requestId, edited)
-            onEditingChange(undefined)
-            if (refocus) queueMicrotask(() => rowRef.current?.focus())
-          }}
-        />
-      ) : (
-        <QueueItemPrimitive.Text
-          dir="auto"
-          className="min-w-0 flex-1 truncate py-1 text-start text-foreground/75"
-        />
-      )}
+      <QueueItemPrimitive.Text
+        dir="auto"
+        className="min-w-0 flex-1 truncate py-1 text-start text-foreground/75"
+      />
       {status === "error" ? (
         <span className="shrink-0 text-xs text-destructive" role="status">
           {labels.failed}
         </span>
       ) : null}
-      {canSteer && !isEditing ? (
+      {canSteer ? (
         <TooltipIconButton
           type="button"
           tooltip={labels.steerLabel}
@@ -354,21 +263,19 @@ function QueueRow({
           )}
         </TooltipIconButton>
       ) : null}
-      {isEditing ? null : (
-        <QueueItemPrimitive.Remove
-          render={
-            <TooltipIconButton
-              type="button"
-              tooltip={labels.removeLabel}
-              aria-label={labels.removeLabel}
-              disabled={pending}
-              className="size-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:size-11"
-            />
-          }
-        >
-          <XIcon aria-hidden="true" />
-        </QueueItemPrimitive.Remove>
-      )}
+      <QueueItemPrimitive.Remove
+        render={
+          <TooltipIconButton
+            type="button"
+            tooltip={labels.removeLabel}
+            aria-label={labels.removeLabel}
+            disabled={pending}
+            className="size-7 shrink-0 text-muted-foreground hover:text-foreground [@media(pointer:coarse)]:size-11"
+          />
+        }
+      >
+        <XIcon aria-hidden="true" />
+      </QueueItemPrimitive.Remove>
       <span className="sr-only" role="status" aria-live="polite">
         {pending ? labels.steering : status === "error" ? labels.failed : ""}
       </span>
@@ -395,21 +302,16 @@ export function MessageQueue({
   labels,
   steer,
   onUnconfirmed,
-  editing,
-  onEditingChange,
+  onEdit,
 }: {
   labels: MessageQueueLabels
   steer: ComposerFeatureViewModel["steer"]
   onUnconfirmed(delivery: UnconfirmedDelivery): void
-  editing: QueueEditing | undefined
-  onEditingChange(editing: QueueEditing | undefined): void
+  /** Takes the whole queue into the composer; absent when it cannot. */
+  onEdit: (() => void) | undefined
 }) {
   const aui = useAui()
   const items = useAuiState((state) => state.composer.queue)
-  const controls = useQueueControlsExtras(
-    (extras) => extras.queueControls,
-    undefined
-  )
   const hintId = useId()
   const ids = items.map((item) => item.id)
   const placeOf = (id: string): QueuePlace => {
@@ -484,7 +386,7 @@ export function MessageQueue({
           </span>
           <span aria-hidden="true">·</span>
           <span className="min-w-0">{labels.sendsCombined}</span>
-          {controls ? (
+          {onEdit ? (
             <span className="ms-auto flex shrink-0 items-center gap-1 [@media(pointer:coarse)]:hidden">
               <kbd className="grid h-4 min-w-4 place-items-center rounded border border-border/80 bg-background px-1 font-sans text-[0.625rem] text-foreground/70 dark:bg-popover">
                 Esc
@@ -511,9 +413,7 @@ export function MessageQueue({
                     onUnconfirmed={onUnconfirmed}
                     placeOf={placeOf}
                     onMoved={announceMove}
-                    controls={controls}
-                    editing={editing}
-                    onEditingChange={onEditingChange}
+                    onEdit={onEdit}
                   />
                 )}
               </ComposerPrimitive.Queue>

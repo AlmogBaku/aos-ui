@@ -3,10 +3,6 @@ import { createRuntimeExtras } from "@assistant-ui/core/react"
 
 /** What a runtime lets the thread do to a message still waiting in its queue. */
 export type QueueControls = {
-  /** Replaces a waiting message's text; its attachments stay. False when it is no longer queued. */
-  readonly editText: (queueItemId: string, text: string) => boolean
-  /** Keeps every queued message waiting until the returned call releases it. */
-  readonly hold: () => () => void
   /**
    * Empties the queue into one draft: every text in queue order, a blank line
    * apart, and every attachment. Undefined, leaving the queue as it was, when

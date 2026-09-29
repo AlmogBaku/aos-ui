@@ -29,7 +29,9 @@ question or approval is not an active model turn, so new messages queue and the
 Steer action is unavailable.
 
 Queued messages stay with their Session. Stop parks queued follow-ups until the
-next explicit send. Switching away detaches or parks browser work according to
+next explicit send. Editing the queue (Esc, Up from an empty composer, or
+double-click or Enter on a queued message) takes all of it into the composer as
+one draft; a draft you had written returns once that edit is sent or cleared. Switching away detaches or parks browser work according to
 the runtime adapter; it never transfers a queue to another Agent.
 
 ## Read Plans, Todos, and Subagents

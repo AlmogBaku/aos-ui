@@ -44,7 +44,6 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     queuedMessageRowHint:
       "Double-click or press Enter to edit. Alt+Up or Alt+Down moves it.",
     queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
-    queuedMessageEditor: "Edit queued message",
     deliveryUnconfirmed: "Delivery unconfirmed",
     previous: "Previous branch",
     next: "Next branch",
@@ -144,7 +143,6 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
       "לעריכה: לחיצה כפולה או Enter. להזזה: Alt עם חץ למעלה או למטה.",
     queuedMessageMoved: (position, count) =>
       `הועברה למקום ${position} מתוך ${count}`,
-    queuedMessageEditor: "עריכת הודעה בתור",
     deliveryUnconfirmed: "מסירת ההודעה לא אושרה",
     previous: "הסתעפות קודמת",
     next: "הסתעפות הבאה",

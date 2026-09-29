@@ -79,7 +79,6 @@ import {
 import {
   isUncertainDelivery,
   MessageQueue,
-  type QueueEditing,
   type UnconfirmedDelivery,
 } from "@/components/assistant-ui/elements/message-queue"
 import {
@@ -241,7 +240,6 @@ export type ThreadLabels = {
   queuedMessageRowHint: string
   /** Announces where a moved message now waits, counted from one. */
   queuedMessageMoved: (position: number, count: number) => string
-  queuedMessageEditor: string
   deliveryUnconfirmed?: string | undefined
   previous: string
   next: string
@@ -344,7 +342,6 @@ const DEFAULT_LABELS: ThreadLabels = {
   queuedMessageRowHint:
     "Double-click or press Enter to edit. Alt+Up or Alt+Down moves it.",
   queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
-  queuedMessageEditor: "Edit queued message",
   deliveryUnconfirmed: "Delivery unconfirmed",
   previous: "Previous",
   next: "Next",
@@ -836,6 +833,8 @@ const Composer: FC<{
   const clearUndoRef = useRef<RecoverableDraft | null>(null)
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
   const historyBrowseRef = useRef<HistoryBrowse | null>(null)
+  // Per Session, the draft that stepped aside for a queue edit.
+  const queueEditStashRef = useRef(new Map<string, RecoverableDraft>())
   const [inputFocused, setInputFocused] = useState(false)
   // While the composer has focus, the status dot and Agent tile stop their
   // idle animations: any running CSS animation restyles every animated
@@ -853,7 +852,6 @@ const Composer: FC<{
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
   const [steeringError, setSteeringError] = useState<string>()
-  const [queueEditing, setQueueEditing] = useState<QueueEditing>()
   const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
     UnconfirmedDeliveryReceipt[]
   >([])
@@ -880,7 +878,6 @@ const Composer: FC<{
     setHistorySearchIndex(0)
     setSteeringError(undefined)
     setUnconfirmedDeliveries([])
-    setQueueEditing(undefined)
   })
 
   const submitOrdinary = useCallback(() => {
@@ -974,6 +971,52 @@ const Composer: FC<{
     [aui, focusInput]
   )
 
+  // Editing the queue takes all of it into the composer as one draft. A draft
+  // already written steps aside and returns once that edit is sent or
+  // cleared; the queue pulled in meanwhile joins ahead of the edit.
+  const pullQueueIn = useCallback(() => {
+    const taken = queueControls?.takeAll()
+    if (!taken) return false
+    escapeRef.current = null
+    historyBrowseRef.current = null
+    const threadId = aui.threads.getState().mainThreadId
+    const stashes = queueEditStashRef.current
+    const { text, attachments } = aui.composer.getState()
+    let pulled: Pick<RecoverableDraft, "text" | "attachments"> = taken
+    if (stashes.has(threadId) || (!text && attachments.length === 0)) {
+      pulled = {
+        text: [taken.text, text].filter(Boolean).join("\n\n"),
+        attachments: [...attachments, ...taken.attachments],
+      }
+    } else {
+      const input = inputRef.current
+      stashes.set(threadId, {
+        text,
+        attachments,
+        selectionStart: input?.selectionStart ?? text.length,
+        selectionEnd: input?.selectionEnd ?? text.length,
+      })
+      void aui.composer.reset()
+    }
+    restoreDraft({
+      ...pulled,
+      selectionStart: pulled.text.length,
+      selectionEnd: pulled.text.length,
+    })
+    return true
+  }, [aui, queueControls, restoreDraft])
+
+  // The pulled-in queue is never empty, as its attachments are complete, so
+  // an empty composer means the edit went out or was cleared.
+  const composerEmpty = useAuiState((s) => s.composer.isEmpty)
+  const mainThreadId = useAuiState((s) => s.threads.mainThreadId)
+  useEffect(() => {
+    const stash = queueEditStashRef.current.get(mainThreadId)
+    if (!composerEmpty || !stash) return
+    queueEditStashRef.current.delete(mainThreadId)
+    restoreDraft(stash)
+  }, [composerEmpty, mainThreadId, restoreDraft])
+
   const openHistorySearch = useCallback(
     (input: HTMLTextAreaElement) => {
       const state = aui.composer.getState()
@@ -1063,9 +1106,9 @@ const Composer: FC<{
 
       if (clearUndoRef.current) clearUndoRef.current = null
 
-      // Esc, or Up from an empty composer, pulls the whole queue back in as
-      // one draft ahead of any draft already written; the turn runs on. Sent
-      // prompts come back on Up, and Esc stops the turn, once it is empty.
+      // Esc, or Up from an empty composer, pulls the whole queue in for
+      // editing; the turn runs on. Sent prompts come back on Up, and Esc stops
+      // the turn, once it is empty.
       if (
         (event.key === "Escape" || event.key === "ArrowUp") &&
         !event.shiftKey &&
@@ -1076,22 +1119,12 @@ const Composer: FC<{
         queueControls
       ) {
         const { text, attachments, queue } = aui.composer.getState()
-        const draft =
+        if (
           queue.length > 0 &&
-          (event.key === "Escape" || (!text && attachments.length === 0))
-            ? queueControls.takeAll()
-            : undefined
-        if (draft) {
+          (event.key === "Escape" || (!text && attachments.length === 0)) &&
+          pullQueueIn()
+        ) {
           event.preventDefault()
-          escapeRef.current = null
-          historyBrowseRef.current = null
-          const joined = [draft.text, text].filter(Boolean).join("\n\n")
-          restoreDraft({
-            text: joined,
-            attachments: [...attachments, ...draft.attachments],
-            selectionStart: joined.length,
-            selectionEnd: joined.length,
-          })
           return
         }
       }
@@ -1290,6 +1323,7 @@ const Composer: FC<{
       features,
       hasPendingInteraction,
       labels.steeringFailed,
+      pullQueueIn,
       queueControls,
       rememberUnconfirmed,
       restoreDraft,
@@ -1427,12 +1461,10 @@ const Composer: FC<{
             steering: labels.steeringQueuedMessage ?? "Steering queued message",
             failed: labels.steeringFailed ?? "Could not steer",
             moved: labels.queuedMessageMoved,
-            editor: labels.queuedMessageEditor,
           }}
           steer={hasPendingInteraction ? undefined : features.steer}
           onUnconfirmed={rememberUnconfirmed}
-          editing={queueEditing}
-          onEditingChange={setQueueEditing}
+          onEdit={queueControls ? () => void pullQueueIn() : undefined}
         />
       </AuiIf>
       <ComposerPrimitive.AttachmentDropzone

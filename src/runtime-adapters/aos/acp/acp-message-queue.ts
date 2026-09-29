@@ -47,7 +47,7 @@ type Dispatch = {
 const BUSY_RETRY_MS = 60_000
 const busyRetryDelay = (tries: number) => Math.min(250 * 2 ** tries, 2_000)
 
-/** A queued message with its text parts replaced by one holding `text`. */
+/** A message with its text parts replaced by one holding `text`. */
 const withText = (message: AppendMessage, text: string): AppendMessage =>
   ({
     ...message,
@@ -103,53 +103,20 @@ const composable = (message: AppendMessage) =>
  * start only after the next send had already gone out.
  *
  * Every send carries all that waits, combined into one message. Its controls
- * edit a waiting message's text, hold the whole queue while an editor is
- * open, so an edit never races the send it changes, and hand the whole queue
- * back to the composer.
+ * hand the whole queue back to the composer.
  */
 export function createQueue(session: QueueSession) {
   const execution = () => session.getState().execution
   let busy = false
   let dispatch: Dispatch | undefined
   let retry: ReturnType<typeof setTimeout> | undefined
-  // Open holds; whether the first one marked the queue busy itself, and
-  // whether a turn ended under them.
-  let holds = 0
-  let heldBusy = false
-  let advanceDue = false
-  // Stop paused the queue and nothing has re-armed it since. A hold marks
-  // the queue busy, which un-pauses it, so its release pauses it again.
-  let stopped = false
-  // The stopped turn still owes the queue its idle.
-  let cancelOwed = false
-  const notifyIdle = () => {
-    cancelOwed = false
-    queue.notifyIdle()
-  }
-  const notifyBusy = () => {
-    cancelOwed = false
-    queue.notifyBusy()
-  }
-  const idle = () => {
-    if (holds === 0) return notifyIdle()
-    if (!cancelOwed) {
-      advanceDue = true
-      return
-    }
-    // Settle the stopped turn's idle now, without sending: left owed, a later
-    // turn's busy signal would count it against that turn's own idle, and the
-    // queue would never advance again. The hold keeps the queue busy.
-    notifyBusy()
-    notifyIdle()
-    heldBusy = true
-  }
   // A turn that failed before it ran, or ran while a replay held the telling,
   // settles under a turn the Session had not reported before.
   const settle = () => {
     if (!dispatch?.accepted || busy) return
     if (!dispatch.ran && execution().turnId === dispatch.before) return
     dispatch = undefined
-    idle()
+    queue.notifyIdle()
   }
   const queue: MessageQueueController = createMessageQueue({
     run: (head) => {
@@ -177,7 +144,7 @@ export function createQueue(session: QueueSession) {
           (error: unknown) => {
             if (holdBusy && isBusyRefusal(error)) return again()
             dispatch = undefined
-            if (!busy) idle()
+            if (!busy) queue.notifyIdle()
           }
         )
       }
@@ -185,15 +152,13 @@ export function createQueue(session: QueueSession) {
     },
   })
 
-  // Each waiting message as it was queued, so an edit keeps its attachments.
+  // Each waiting message as it was queued, so the composer can take it back.
   // The adapter is wrapped in place: the runtime recomputes a message's
   // parent through this very object as it leaves the queue.
   const queued = new Map<string, AppendMessage>()
   const { adapter } = queue
   const remember =
     (push: (message: AppendMessage) => void) => (message: AppendMessage) => {
-      // A new send re-arms a queue Stop paused.
-      stopped = false
       push(message)
       const added = adapter.items.find((item) => !queued.has(item.id))
       if (added) queued.set(added.id, message)
@@ -221,10 +186,7 @@ export function createQueue(session: QueueSession) {
   // reaches the queue: before the dispatched turn reports running, the queue
   // would count its start against the cancel and never see its idle.
   const notifyCancelled = () => {
-    if (busy) {
-      stopped = cancelOwed = true
-      cancelled()
-    } else if (dispatch) stopped = true
+    if (busy) cancelled()
   }
   queue.notifyCancelled = notifyCancelled
   adapter.__internal_notifyCancelled = notifyCancelled
@@ -233,16 +195,10 @@ export function createQueue(session: QueueSession) {
     const wasBusy = busy
     busy = isBusy(execution())
     if (busy) {
-      if (!wasBusy) {
-        notifyBusy()
-        // As the queue's own busy signal does, a started turn re-arms it and
-        // owns the next idle.
-        advanceDue = false
-        stopped = false
-      }
+      if (!wasBusy) queue.notifyBusy()
       if (dispatch) dispatch.ran = true
     } else if (dispatch) settle()
-    else if (wasBusy) idle()
+    else if (wasBusy) queue.notifyIdle()
   }
   /** Follows the Session's execution until the returned call stops it. */
   const watch = () => {
@@ -255,14 +211,6 @@ export function createQueue(session: QueueSession) {
   }
 
   const controls: QueueControls = {
-    editText: (queueItemId, text) => {
-      const message = queued.get(queueItemId)
-      if (!message) return false
-      const edited = withText(message, text)
-      adapter.edit(queueItemId, edited)
-      queued.set(queueItemId, edited)
-      return true
-    },
     takeAll: () => {
       const waiting = adapter.items.map(({ id }) => queued.get(id))
       if (waiting.length === 0) return undefined
@@ -272,26 +220,6 @@ export function createQueue(session: QueueSession) {
       return {
         text: joinedText(messages),
         attachments: messages.flatMap((message) => message.attachments ?? []),
-      }
-    },
-    hold: () => {
-      if (holds++ === 0 && !busy && !dispatch) {
-        notifyBusy()
-        heldBusy = true
-      }
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        if (--holds > 0) return
-        const due = advanceDue || heldBusy
-        advanceDue = false
-        heldBusy = false
-        // A live turn or a pending send advances the queue as it settles.
-        if (busy || dispatch || !due) return
-        // The queue has no `cancel`, so one idle stands for every one held.
-        if (stopped) cancelled()
-        notifyIdle()
       }
     },
   }
