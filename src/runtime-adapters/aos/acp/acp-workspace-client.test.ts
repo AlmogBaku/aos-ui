@@ -1117,23 +1117,15 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("invalidates a Session and the Agent catalog from proxy notifications", async () => {
+  it("invalidates the Agent catalog from its proxy notification", async () => {
     const { client, emitNotification } = createClient()
-    let sessionInvalidations = 0
     let catalogInvalidations = 0
-    client.subscribeSessionInvalidation(SESSION_ID, () => {
-      sessionInvalidations += 1
-    })
     client.subscribeAgentCatalog(() => {
       catalogInvalidations += 1
     })
 
-    emitNotification(AOS_METHODS.notify.sessionInvalidated, {
-      sessionId: SESSION_ID,
-    })
     emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
 
-    expect(sessionInvalidations).toBe(1)
     expect(catalogInvalidations).toBe(1)
   })
 

@@ -21,7 +21,6 @@ import {
   AOS_REPLAY_BEFORE,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
-  AosSteerAcceptedNotificationSchema,
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "../../protocol/acp"
@@ -488,6 +487,7 @@ function harness(options: HarnessOptions = {}) {
     link: READY_LINK,
     runtimeInfo,
     listAgents: unsupported,
+    agentFolder: unsupported,
     updateAgent: unsupported,
     listAllSessions,
     listSessions: unsupported,
@@ -590,12 +590,16 @@ function harness(options: HarnessOptions = {}) {
       if (!catalogChanged) throw new Error("Nothing watches the catalog")
       catalogChanged()
     },
-    /** Advertises paging older history, as the AOS browser does, by default. */
+    /**
+     * Advertises paging older history, as the AOS browser does, by default,
+     * and answering questions.
+     */
     initialize: (pagesHistory = true) =>
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         info: { name: "aos-guest-browser", version: "1" },
         capabilities: {
+          elicitation: { form: {} },
           _meta: { [AOS_META_KEY]: { historyPages: pagesHistory } },
         },
       }),
@@ -767,7 +771,7 @@ describe("guest ACP listener", () => {
 
     expect(initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      capabilities: { session: { prompt: { image: {} } } },
+      capabilities: { session: {} },
       authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
       _meta: {
         [AOS_META_KEY]: {
@@ -2027,13 +2031,19 @@ describe("guest scope and commands", () => {
       requestId: "steer-1",
       text: "Shorter, please",
     })
+    // The turn shows the steer it took as a user message under its requestId.
     const accepted = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
-      "the steer's acknowledgement"
+      (entry) => JSON.stringify(entry.params).includes('"messageId":"steer-1"'),
+      "the steer's user message"
     )
-    expect(
-      AosSteerAcceptedNotificationSchema.safeParse(accepted.params).data
-    ).toMatchObject({ sessionId: REF, requestId: "steer-1" })
+    expect(accepted.params).toMatchObject({
+      sessionId: REF,
+      update: {
+        sessionUpdate: "user_message",
+        messageId: "steer-1",
+        content: [{ type: "text", text: "Shorter, please" }],
+      },
+    })
 
     // Another connection on the same invitation steers only once it joins.
     const other = await loggedInWire(test.listener, token)

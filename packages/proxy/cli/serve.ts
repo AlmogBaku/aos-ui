@@ -166,6 +166,8 @@ export async function serveProxy(
     sockets: [
       {
         path: AOS_ACP_OPERATOR_PATH,
+        // Each Agent's own address sits below the shared one.
+        subpaths: true,
         service: configured.acpService,
         maxPeers: configured.config.limits.operatorEventPeers,
       },

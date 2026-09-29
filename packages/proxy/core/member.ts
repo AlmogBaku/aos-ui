@@ -77,6 +77,11 @@ export type SessionEvent =
       event: TurnEvent
       /** Stop was acknowledged for this stream and the provider has not settled. */
       stopping: boolean
+      /**
+       * Buffered before a view being rebuilt joined: its past state is no
+       * longer the turn's, which the view is told once caught up.
+       */
+      replayed?: true
     }
   /** A user prompt: another member's, or this member's own echo. */
   | {
@@ -105,14 +110,16 @@ export type SessionEvent =
       state: SessionExecutionState
       turnId?: string
       sequence: number
+      /** The running turn waits on a prompt only Stop ends. */
+      awaitingStop?: true
+      /** When the live turn began, as its stream's first state dated it. */
+      startedAt?: string
     }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }
   /** The Session's row, whose status is the one its live execution overlays. */
   | { kind: "session-info"; row: SessionRow }
   | { kind: "commands"; capabilities: WorkspaceCapabilities }
-  /** The member's view is incomplete and must be rebuilt from history. */
-  | { kind: "invalidated" }
   /** A failure that has no request to answer. */
   | { kind: "error"; cause: unknown }
 
@@ -246,9 +253,7 @@ export type CommandKind = keyof MemberCommands
 /** What each command answers, before a transport encodes it. */
 export type CommandResults = {
   resume: {
-    /** The view must rebuild itself from history. */
-    resync?: true
-    /** The page a from-start resume replayed. */
+    /** The page the resume replayed, from its start or to rebuild the view. */
     history?: SessionHistoryResponse
   }
   "older-page": { page: SessionHistoryResponse }

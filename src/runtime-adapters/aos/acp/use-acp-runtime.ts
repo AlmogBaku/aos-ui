@@ -61,7 +61,6 @@ import { subscribeAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 import {
   applyApprovals,
-  applyNotification,
   applyUpdate,
   clearTranscript,
   failedWithoutReply,
@@ -333,11 +332,6 @@ function createAcpController({
     announce()
   }
 
-  const observe = (params: unknown, method: string) => {
-    if (!isRecord(params) || params.sessionId !== bound) return
-    commit(applyNotification(state, method, params))
-  }
-
   /** The provider's suggested next turn, for the bound Session's composer. */
   const observePrefill = (params: unknown) => {
     const parsed = AosComposerPrefillNotificationSchema.safeParse(params)
@@ -417,8 +411,6 @@ function createAcpController({
     const generation = bindings
     /** The provider reported the Session gone, so a restored transcript is. */
     let gone = false
-    const { steerAccepted, composerPrefill, sessionInvalidated } =
-      AOS_METHODS.notify
     // What is already pending was sent before this thread bound the Session.
     const takeApprovals = () => {
       if (approvals) commit(applyApprovals(state, approvals.list(next)))
@@ -474,19 +466,10 @@ function createAcpController({
           }
         },
       }),
-      connection.subscribeNotification(steerAccepted, (params) => {
-        observe(params, steerAccepted)
-      }),
-      connection.subscribeNotification(composerPrefill, observePrefill),
-      // The proxy has dropped this Session's live subscriber, so whatever it
-      // streamed while unobserved is missing: only a replay from the start can
-      // say what the Session holds now.
-      connection.subscribeNotification(sessionInvalidated, (params) => {
-        if (isRecord(params) && params.sessionId === bound)
-          replaySession(next, generation).catch((err: unknown) =>
-            runtimeLog().warn({ err }, "session.replay_failed")
-          )
-      }),
+      connection.subscribeNotification(
+        AOS_METHODS.notify.composerPrefill,
+        observePrefill
+      ),
       // The provider no longer holds the Session, so nothing runs in it again.
       subscribeAosNotification(
         connection,

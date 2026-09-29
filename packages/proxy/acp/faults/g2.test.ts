@@ -46,8 +46,8 @@ async function running(test: Test, members: readonly Test[]) {
 /**
  * Each Session command, failing as the provider finds its Session gone, on a
  * turn every member follows when it acts on one. A command with an answer
- * answers not found; a stop and an answer to the provider's own request have
- * none to give.
+ * answers not found, save a delete, which succeeds; a stop and an answer to
+ * the provider's own request have none to give.
  */
 const COMMANDS: {
   command: string
@@ -140,13 +140,14 @@ const COMMANDS: {
   })),
   {
     command: "delete",
+    // A delete finds what it asked for: the Session is gone.
     async fail(test) {
       test.faults.failOnce("deleteSession", gone())
       await expect(
         test.agent.request(methods.agent.session.delete, {
           sessionId: SESSION,
         })
-      ).rejects.toMatchObject({ code: -32002 })
+      ).resolves.toEqual({})
     },
   },
 ]

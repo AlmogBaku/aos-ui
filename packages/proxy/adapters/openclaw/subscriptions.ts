@@ -106,9 +106,24 @@ function validNativeEvent(frame: unknown): frame is EventFrame {
   if (frame.event === "chat") return Check(ChatEventSchema, frame.payload)
   if (frame.event === "session.approval")
     return Check(SessionApprovalEventSchema, frame.payload)
-  if (frame.event !== "agent" && frame.event !== "session.tool") return false
+  const sessionMessage = frame.event === "session.message"
+  if (
+    !sessionMessage &&
+    frame.event !== "agent" &&
+    frame.event !== "session.tool"
+  )
+    return false
   if (!frame.payload || typeof frame.payload !== "object") return false
   const payload = frame.payload as Record<string, unknown>
+  const sessionScoped =
+    validIdentity(payload.sessionKey) &&
+    (payload.agentId === undefined || validIdentity(payload.agentId))
+  // The protocol names no schema for a stored row's push; its reader is the
+  // official client's `readSessionMessageIdentity`.
+  if (sessionMessage)
+    return (
+      sessionScoped && !!payload.message && typeof payload.message === "object"
+    )
   const core = {
     runId: payload.runId,
     seq: payload.seq,
@@ -122,11 +137,7 @@ function validNativeEvent(frame: unknown): frame is EventFrame {
       : { isHeartbeat: payload.isHeartbeat }),
     data: payload.data,
   }
-  return (
-    Check(AgentEventSchema, core) &&
-    validIdentity(payload.sessionKey) &&
-    (payload.agentId === undefined || validIdentity(payload.agentId))
-  )
+  return sessionScoped && Check(AgentEventSchema, core)
 }
 
 function eventMatchesScope(

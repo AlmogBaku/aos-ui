@@ -9,7 +9,9 @@ import {
   type PromptTurnInput,
   type RepliesTurnInput,
   type RequestReply,
+  type TurnEvent,
 } from "../../core/events"
+import { ServerTurnConflictError } from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../../../test/support/fake-clock"
@@ -130,19 +132,29 @@ function observation() {
  */
 function pendingRequests() {
   const listeners = new Set<(request: PendingRequest) => void>()
+  const holders = new Set<() => void>()
   return {
     subscribePendingRequests: (
       _scope: HermesTurnScope,
-      listener: (request: PendingRequest) => void
+      listener: (request: PendingRequest) => void,
+      held?: () => void
     ) => {
       listeners.add(listener)
-      return () => listeners.delete(listener)
+      if (held) holders.add(held)
+      return () => {
+        listeners.delete(listener)
+        if (held) holders.delete(held)
+      }
     },
     subscribed() {
       return listeners.size
     },
     raise(request: PendingRequest) {
       for (const listener of [...listeners]) listener(request)
+    },
+    /** Hermes asks through a prompt AOS never renders, such as `sudo`. */
+    hold() {
+      for (const held of [...holders]) held()
     },
   }
 }
@@ -169,6 +181,16 @@ function messageIds(events: readonly unknown[]) {
 async function collect(handle: { events: AsyncIterable<unknown> }) {
   const events: unknown[] = []
   for await (const event of handle.events) events.push(event)
+  return events
+}
+
+/** A turn's events up to the wait it pauses on; the turn runs on after it. */
+async function collectToWait(handle: { events: AsyncIterable<unknown> }) {
+  const events: unknown[] = []
+  for await (const event of handle.events) {
+    events.push(event)
+    if ((event as TurnEvent).kind === TurnEventKind.TurnRequiresAction) break
+  }
   return events
 }
 
@@ -219,9 +241,12 @@ describe("HermesRunEngine", () => {
     expect(redirect).toHaveBeenCalledWith("live-secret", "Correction")
     expect(ofKind(events, TurnEventKind.TurnStarted)).toHaveLength(1)
     expect(ofKind(events, TurnEventKind.TurnEnded)).toHaveLength(1)
-    expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
+    expect(messageIds(events)).toEqual([
+      "run-1:assistant-1",
+      "run-1:assistant-2",
+    ])
     expect(ofKind(events, TurnEventKind.ToolCallStarted)).toMatchObject([
-      { toolCallId: "tool-1", parentMessageId: "reply-before" },
+      { toolCallId: "tool-1", parentMessageId: "run-1:assistant-1" },
     ])
     expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
       { toolCallId: "tool-1" },
@@ -310,7 +335,7 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
-  describe("the ids Hermes saved the turn under", () => {
+  describe("the id Hermes stored the prompt under", () => {
     const receipt = {
       row_ids: [7, 8, 9, 10],
       complete: true,
@@ -318,7 +343,7 @@ describe("HermesRunEngine", () => {
       final_assistant_row_id: 10,
     }
 
-    async function eventsOf(
+    async function turnOf(
       persisted_turn: unknown,
       {
         userRowId,
@@ -351,57 +376,32 @@ describe("HermesRunEngine", () => {
         })
       )
       publish(t.idle())
-      return collect(handle)
+      return handle
     }
 
-    async function endOf(
-      persisted_turn: unknown,
-      options?: Parameters<typeof eventsOf>[1]
-    ) {
-      return ofKind(
-        await eventsOf(persisted_turn, options),
-        TurnEventKind.TurnEnded
-      )[0]
-    }
-
-    it("names a stopped prompt by the row Hermes saved it under at submit", async () => {
+    it("proves the prompt stored by the submit's row, or else by the turn's receipt", async () => {
       // A stopped turn never earns a complete receipt, so only the submit
-      // answer proves where the prompt was saved; its reply has no proven row.
-      const ended = await endOf(
-        { ...receipt, complete: false },
-        { userRowId: 7, status: "interrupted" }
-      )
-      expect(ended).toMatchObject({
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-      expect(ended).not.toHaveProperty("saved.replyId")
+      // answer proves where the prompt was saved.
+      await expect(
+        (
+          await turnOf(
+            { ...receipt, complete: false },
+            { userRowId: 3, status: "interrupted" }
+          )
+        ).stored
+      ).resolves.toBe("hermes-row-3")
+      await expect((await turnOf(receipt)).stored).resolves.toBe("hermes-row-7")
     })
 
-    it("names a failed prompt by the row Hermes saved it under at submit", async () => {
-      const events = await eventsOf(undefined, {
-        userRowId: 7,
-        status: "error",
-      })
-      expect(ofKind(events, TurnEventKind.TurnFailed)[0]).toMatchObject({
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-    })
-
-    it("prefers a complete receipt to the submit answer", async () => {
-      await expect(endOf(receipt, { userRowId: 7 })).resolves.toMatchObject({
-        saved: {
-          user: { messageId: "user-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
-      })
-    })
-
-    it("names the prompt and its reply by the rows a complete receipt committed", async () => {
-      await expect(endOf(receipt)).resolves.toMatchObject({
-        saved: {
-          user: { messageId: "user-1", savedId: "hermes-row-7" },
-          replyId: "hermes-row-8",
-        },
+    it("ends the receipt of a stopped or failed turn unproven, as it ended", async () => {
+      await expect(
+        (await turnOf(undefined, { status: "interrupted" })).stored
+      ).rejects.toMatchObject({ ending: "stopped" })
+      await expect(
+        (await turnOf(undefined, { status: "error" })).stored
+      ).rejects.toMatchObject({
+        ending: "failed",
+        code: "AOS_PROVIDER_RUN_FAILED",
       })
     })
 
@@ -421,10 +421,12 @@ describe("HermesRunEngine", () => {
       ["a fractional row", { ...receipt, row_ids: [7, 8.5, 9, 10] }],
       ["no reply row", { ...receipt, row_ids: [7], final_assistant_row_id: 7 }],
       ["no receipt", undefined],
-    ])("claims no saved ids from %s", async (_, persisted) => {
-      const ended = await endOf(persisted)
-      expect(ended).toBeDefined()
-      expect(ended).not.toHaveProperty("saved")
+    ])("ends the receipt unproven by %s", async (_, persisted) => {
+      const handle = await turnOf(persisted)
+      expect(
+        ofKind(await collect(handle), TurnEventKind.TurnEnded)
+      ).toHaveLength(1)
+      await expect(handle.stored).rejects.toMatchObject({ ending: "ended" })
     })
   })
 
@@ -525,12 +527,12 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant",
+        messageId: "run-1:assistant-1",
         text: "Final",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant",
+        messageId: "run-1:assistant-1",
         text: " answer",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -564,7 +566,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Checked the evidence.",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -600,7 +602,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.ThoughtChunk)).toEqual([
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Checked the evidence.",
       },
     ])
@@ -623,7 +625,7 @@ describe("HermesRunEngine", () => {
             type: "message.start",
             session_id: "live-secret",
             seq: 1,
-            payload: { message_id: "native-message-secret" },
+            payload: {},
           })
           publish({
             type: "message.delta",
@@ -654,7 +656,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "native-message-secret",
+        messageId: "run-1:assistant-1",
         text: "Hi",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -709,14 +711,10 @@ describe("HermesRunEngine", () => {
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const interrupt = pendingRequests()
     let submits = 0
-    // Hermes' own watermark: the resumed run attaches after the first turn's
-    // frames and continues their sequence.
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
         subscribePendingRequests: interrupt.subscribePendingRequests,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         submit: async () => {
           submits += 1
           interrupt.raise({
@@ -741,19 +739,19 @@ describe("HermesRunEngine", () => {
           publish({
             type: "message.start",
             session_id: "live-secret",
-            seq: 2,
+            seq: 1,
             payload: { message_id: "continued" },
           })
           publish({
             type: "message.delta",
             session_id: "live-secret",
-            seq: 3,
+            seq: 2,
             payload: { text: "Done" },
           })
           publish({
             type: "message.complete",
             session_id: "live-secret",
-            seq: 4,
+            seq: 3,
             payload: {},
           })
           return [{ status: "resolved" }]
@@ -761,7 +759,9 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
+    await expect(
+      collectToWait(await engine.start(scope, input()))
+    ).resolves.toEqual([
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.TurnRequiresAction,
@@ -776,7 +776,7 @@ describe("HermesRunEngine", () => {
       },
     ])
 
-    watermark = 1
+    // The answer resumes the same run, which reads on from the turn's frames.
     await expect(
       collect(
         await engine.start(
@@ -792,7 +792,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "continued",
+        messageId: "run-2:assistant-1",
         text: "Done",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -830,7 +830,7 @@ describe("HermesRunEngine", () => {
         },
       })
     )
-    const events = await collect(await engine.start(scope, input()))
+    const events = await collectToWait(await engine.start(scope, input()))
     return ofKind(events, TurnEventKind.TurnRequiresAction).flatMap(
       (event) => (event as { requests: PendingRequest[] }).requests
     )
@@ -901,17 +901,51 @@ describe("HermesRunEngine", () => {
     await vi.waitFor(() => expect(interrupt.subscribed()).toBe(0))
   })
 
+  it("runs a turn on once Hermes withdraws a prompt AOS holds", async () => {
+    const attachment = observation()
+    const publish = (event: unknown) => attachment.publish("live-secret", event)
+    const questions = pendingRequests()
+    const turn = nativeTurn()
+    const engine = new HermesTurnEngine(
+      runtime({
+        subscribeLive: attachment.subscribeLive,
+        subscribePendingRequests: questions.subscribePendingRequests,
+      })
+    )
+
+    const handle = await engine.start(scope, input())
+    publish(turn.messageStart("msg-1"))
+    questions.hold()
+    // `server_requests` withdraws the sudo prompt its timeout ended.
+    publish(
+      turn.frame("request.cancel", {
+        id: "srq-000000000001",
+        method: "sudo",
+        reason: "timeout",
+      })
+    )
+    publish(turn.complete("msg-1", "Done"))
+    publish(turn.idle())
+
+    const events = await collect(handle)
+    expect(eventKinds(events).slice(0, 3)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.TurnFailed,
+      TurnEventKind.TurnStarted,
+    ])
+    expect(events.at(-1)).toEqual({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.EndTurn,
+    })
+  })
+
   it("streams a resumed interaction when Hermes continues without another message start", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
     const interrupt = pendingRequests()
-    // Hermes' own watermark: the resumed run attaches after the first turn's
-    // frames and continues their sequence.
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
         subscribePendingRequests: interrupt.subscribePendingRequests,
         submit: async () => {
           interrupt.raise({
@@ -928,7 +962,7 @@ describe("HermesRunEngine", () => {
           publish({
             type: "tool.complete",
             session_id: "live-secret",
-            seq: 2,
+            seq: 1,
             payload: {
               tool_id: "clarify-call",
               name: "clarify",
@@ -955,13 +989,13 @@ describe("HermesRunEngine", () => {
           publish({
             type: "message.delta",
             session_id: "live-secret",
-            seq: 3,
+            seq: 2,
             payload: { text: "No answers selected." },
           })
           publish({
             type: "message.complete",
             session_id: "live-secret",
-            seq: 4,
+            seq: 3,
             payload: { text: "No answers selected." },
           })
           return [{ status: "resolved" }]
@@ -969,8 +1003,7 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await collect(await engine.start(scope, input()))
-    watermark = 1
+    await collectToWait(await engine.start(scope, input()))
     const resumed = await collect(
       await engine.start(
         scope,
@@ -989,7 +1022,7 @@ describe("HermesRunEngine", () => {
         title: "question",
         name: "question",
         toolKind: ToolKind.Other,
-        parentMessageId: "run-2:assistant",
+        parentMessageId: "run-2:assistant-1",
       },
       {
         kind: TurnEventKind.ToolCallInputChunk,
@@ -1019,7 +1052,7 @@ describe("HermesRunEngine", () => {
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-2:assistant",
+        messageId: "run-2:assistant-2",
         text: "No answers selected.",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1027,40 +1060,24 @@ describe("HermesRunEngine", () => {
   })
 
   /**
-   * A Session that asked one native question, then the run that answers it. The
-   * resumed run attaches past the first turn's frames, so a test publishes
-   * whatever Hermes does next through the returned `publish`.
+   * The run that answers a question no run of this engine asked, as after a
+   * proxy restart. It attaches past the frames Hermes already sent, so a test
+   * publishes whatever Hermes does next through the returned `publish`.
    */
   async function resumedRun(
     overrides: Partial<HermesTurnNative> = {},
     options: { log?: HermesLog } = {}
   ) {
     const attachment = observation()
-    const interrupt = pendingRequests()
-    let watermark = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
-        subscribePendingRequests: interrupt.subscribePendingRequests,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: watermark }),
-        submit: async () => {
-          interrupt.raise({
-            requestId: "question-1",
-            kind: PendingRequestKind.Elicitation,
-            message: "Which screenshot?",
-          })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
+        cursor: async () => ({ epoch: "epoch-1", latestSeq: 1 }),
         respondInteractions: async () => [{ status: "resolved" as const }],
         ...overrides,
       }),
       options
     )
-    await collect(await engine.start(scope, input()))
-    watermark = 1
     const handle = await engine.start(
       scope,
       replies("run-2", {
@@ -1092,7 +1109,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-2:assistant",
+        messageId: "run-2:assistant-2",
         text: "It is a bar chart.",
       },
     ])
@@ -1317,7 +1334,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1-thought",
         text: "Consider",
       },
       {
@@ -1326,7 +1343,7 @@ describe("HermesRunEngine", () => {
         title: "delegate_subagent",
         name: "delegate_subagent",
         toolKind: ToolKind.Other,
-        parentMessageId: "message-42",
+        parentMessageId: "run-1:assistant-1",
       },
       {
         kind: TurnEventKind.ToolCallInputChunk,
@@ -1344,7 +1361,7 @@ describe("HermesRunEngine", () => {
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-2",
         text: "Done",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1629,7 +1646,7 @@ describe("HermesRunEngine", () => {
     )
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "message-42",
+      messageId: "run-1:assistant-2",
       text: "Recovered response",
     })
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
@@ -1790,7 +1807,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-43",
+        messageId: "run-1:assistant-1",
         text: "Current",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1859,7 +1876,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-43",
+        messageId: "run-1:assistant-1",
         text: "Current",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -1961,7 +1978,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Recovered",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -2203,7 +2220,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Recovered",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -2568,7 +2585,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: "The completed response retained by Hermes",
       },
       {
@@ -2629,12 +2646,12 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: "Retained while streaming",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "partial-reply",
+        messageId: "run-1:assistant-1",
         text: " and at completion",
       },
       {
@@ -2821,12 +2838,12 @@ describe("HermesRunEngine", () => {
     ).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply",
+        messageId: "run-1:assistant-1",
         text: "Checking the next boundary.",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant:2",
+        messageId: "run-1:assistant-2",
         text: "Final answer",
       },
     ])
@@ -2868,7 +2885,7 @@ describe("HermesRunEngine", () => {
     ).rejects.toThrow()
   })
 
-  it("does not submit when Hermes authoritatively reports the Session busy", async () => {
+  it("refuses a prompt, unsent, while Hermes authoritatively reports the Session busy", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
@@ -2883,14 +2900,9 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message: "Hermes is already running this Session.",
-        code: "AOS_SESSION_BUSY",
-      },
-    ])
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnConflictError
+    )
     expect(submissions).toBe(0)
   })
 
@@ -3055,10 +3067,7 @@ describe("HermesRunEngine", () => {
     try {
       const { engine, questions } = waitingOnQuestion()
       const discovered = await engine.discover(scope, "recovered-run")
-      const events: unknown[] = []
-      const reading = (async () => {
-        for await (const event of discovered!.handle.events) events.push(event)
-      })()
+      const reading = collectToWait(discovered!.handle)
       const question = {
         requestId: "question-1",
         kind: PendingRequestKind.Elicitation,
@@ -3069,7 +3078,7 @@ describe("HermesRunEngine", () => {
       await vi.advanceTimersByTimeAsync(1_000)
       questions.raise(question)
       await vi.advanceTimersByTimeAsync(2_000)
-      await reading
+      const events = await reading
 
       expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
       expect(events.at(-1)).toEqual({
@@ -3167,7 +3176,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4188,7 +4197,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "new-message",
+        messageId: "recovered-run:assistant-1",
         text: "new",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4288,7 +4297,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(discovered!.handle)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "new-message",
+      messageId: "recovered-run:assistant-1",
       text: "new",
     })
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
@@ -4347,7 +4356,7 @@ describe("HermesRunEngine", () => {
     ).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-2",
         text: "Hello",
       },
     ])
@@ -4385,7 +4394,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4518,7 +4527,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       {
@@ -4543,7 +4552,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: " world",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4619,7 +4628,7 @@ describe("HermesRunEngine", () => {
     ).toHaveLength(1)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "message-media",
+      messageId: "run-1:assistant-2",
       text: "Your brief is ready.\n",
     })
     expect(JSON.stringify(events)).not.toContain("Media unavailable")
@@ -4674,7 +4683,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-a",
+        messageId: "run-a:assistant-1",
         text: "alpha",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4683,7 +4692,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-b",
+        messageId: "run-b:assistant-1",
         text: "beta",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4748,7 +4757,7 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "Hello",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
@@ -4884,19 +4893,19 @@ describe("HermesRunEngine", () => {
       { kind: TurnEventKind.TurnStarted },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "missed ",
       },
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "message-42",
+        messageId: "run-1:assistant-1",
         text: "held",
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
   })
 
-  it("settles a busy rejection as busy and admits the next run", async () => {
+  it("refuses a prompt Hermes rejects as busy and still submits the next one", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
@@ -4907,29 +4916,16 @@ describe("HermesRunEngine", () => {
       })
     )
 
-    const handle = await engine.start(scope, input())
-
-    await expect(collect(handle)).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message: "Hermes is already running this Session.",
-        code: "AOS_SESSION_BUSY",
-      },
-    ])
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnConflictError
+    )
     await expect(
       engine.start(scope, input({ turnId: "run-2" }))
-    ).resolves.toBeDefined()
+    ).rejects.toBeInstanceOf(ServerTurnConflictError)
     expect(submissions).toBe(2)
   })
 
   it.each([
-    [
-      "busy",
-      "AOS_SESSION_BUSY",
-      "Hermes is already running this Session.",
-      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo.",
-    ],
     [
       "in-use",
       "AOS_SESSION_IN_USE",
@@ -5415,7 +5411,10 @@ describe("HermesRunEngine", () => {
       ]).toEqual([
         { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
       ])
-      expect(messageIds(events)).toEqual(["reply-before", "reply-after"])
+      expect(messageIds(events)).toEqual([
+        "run-1:assistant-1",
+        "run-1:assistant-2",
+      ])
     } finally {
       vi.useRealTimers()
     }
@@ -5448,7 +5447,7 @@ describe("HermesRunEngine", () => {
       publish(turn.idle())
 
       const events = await collect(handle)
-      expect(messageIds(events)).toEqual(["queued-reply"])
+      expect(messageIds(events)).toEqual(["run-1:assistant-1"])
       expect(JSON.stringify(events)).not.toContain("Previous answer")
       expect([
         ...ofKind(events, TurnEventKind.TurnEnded),
@@ -5606,7 +5605,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([
       {
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply",
+        messageId: "run-1:assistant-1",
         text: "I read the filing and then",
       },
     ])
@@ -5805,7 +5804,7 @@ describe("HermesRunEngine", () => {
     )
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "msg-ftr",
+      messageId: "run-1:assistant-2",
       text: "I will try another approach.",
     })
   })
@@ -5843,7 +5842,7 @@ describe("HermesRunEngine", () => {
     const events = await collect(handle)
     expect(events).toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "msg-tei",
+      messageId: "run-1:assistant-1",
       text: "Partial response before",
     })
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
@@ -5942,7 +5941,7 @@ describe("HermesRunEngine", () => {
       ])
       expect(events).toContainEqual({
         kind: TurnEventKind.MessageChunk,
-        messageId: "reply-after",
+        messageId: "run-1:assistant-2",
         text: "After",
       })
     } finally {
@@ -6742,7 +6741,7 @@ describe("Hermes native provider facts", () => {
         name: "patch",
         toolKind: ToolKind.Edit,
         locations: [{ path }],
-        parentMessageId: "m1",
+        parentMessageId: "run-1:assistant-1",
       },
     ])
     expect(ofKind(events, TurnEventKind.ToolCallFinished)).toMatchObject([
@@ -7202,9 +7201,7 @@ describe("Hermes turn watch", () => {
     publish(turn.messageStart("delegation-result"))
 
     expect(onTurn).toHaveBeenCalledOnce()
-    await expect(collect(await second)).resolves.toContainEqual(
-      expect.objectContaining({ kind: TurnEventKind.TurnFailed })
-    )
+    await expect(second).rejects.toBeInstanceOf(ServerTurnConflictError)
   })
 })
 
@@ -7275,7 +7272,7 @@ describe("Hermes discovery of its own turns", () => {
     publish(turn.complete("delegation-result", "Result"))
     await expect(collect(discovered!.handle)).resolves.toContainEqual({
       kind: TurnEventKind.MessageChunk,
-      messageId: "delegation-result",
+      messageId: "adopted:assistant-1",
       text: "Result",
     })
   })

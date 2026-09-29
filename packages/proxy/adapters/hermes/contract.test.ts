@@ -1,8 +1,7 @@
 import { captureLogs } from "../../../../test/support/log-capture"
 import { runServerRuntimeContract } from "../../core/runtime-contract"
 import { composeHermesRuntime } from "./factory"
-import { HermesGateway } from "./gateway"
-import { fakeHermes } from "./test-utils/fake-hermes"
+import { fakeHermes, fakeHermesGateway } from "./test-utils/fake-hermes"
 
 runServerRuntimeContract(
   "Hermes",
@@ -10,13 +9,7 @@ runServerRuntimeContract(
     const hermes = fakeHermes()
     const { logger } = captureLogs()
     const { runtime, close } = composeHermesRuntime({
-      transport: new HermesGateway({
-        baseUrl: "http://127.0.0.1:9119",
-        credentials: async () => ({ "X-Hermes-Session-Token": "test-token" }),
-        log: logger,
-        socketFactory: hermes.socketFactory,
-        fetcher: hermes.fetcher,
-      }),
+      transport: fakeHermesGateway(hermes, logger),
       logger,
       sessionIdleMs: 300_000,
     })

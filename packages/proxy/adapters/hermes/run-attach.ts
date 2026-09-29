@@ -87,17 +87,23 @@ export async function attachTurn(
   let reattached = false
   let lost: LostReason | undefined
   let asked: PendingRequest | undefined
+  let held = false
   let unsubscribe: (() => void) | undefined
   let liveSessionId: string
   let cursor: AttachCursor
   safelyUnsubscribe(active.unsubscribe)
   // Hermes asks the user through server→client requests, not through the
-  // event stream: a request ends this segment wherever it landed.
+  // event stream: a request pauses this turn wherever it landed. A prompt AOS
+  // holds unrendered pauses it too, and only Stop ends that wait.
   const stopRequests = host.native.subscribePendingRequests(
     active.scope,
     (request) => {
       if (accepting) host.requireAction(active, [request])
       else asked = request
+    },
+    () => {
+      if (accepting) host.awaitStop(active)
+      else held = true
     }
   )
   try {
@@ -178,6 +184,7 @@ export async function attachTurn(
     host.accept(active, event, true)
   if (reattached) scheduleCatchUp(host, active)
   if (asked) host.requireAction(active, [asked])
+  if (held) host.awaitStop(active)
   return cursor.fromStart === true
 }
 

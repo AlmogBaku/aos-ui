@@ -36,6 +36,7 @@ import {
   type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
+import { storageReceipt } from "../../core/storage-receipt"
 import * as ids from "../../core/ids"
 import { createLink, type LinkOptions } from "../../core/link"
 import { defaultClock } from "../../../lifecycle"
@@ -74,9 +75,7 @@ const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
   signal?: AbortSignal
-  expectFinal?: boolean
   onSent?: () => void
-  onAccepted?: (payload: unknown) => void
 }>
 
 export interface OpenClawRunRequestClient {
@@ -108,6 +107,11 @@ export type OpenClawBoundReplies = Readonly<{
     scope: SessionScope & { nativeRunId: string },
     approvalReplay: unknown
   ): Promise<{ requests: PendingRequest[] } | undefined>
+  /** Remembers one approval the Session raised while the bound run runs. */
+  accept?(
+    scope: SessionScope & { nativeRunId: string },
+    approval: unknown
+  ): PendingRequest
 }>
 
 export class OpenClawTurnPublicError extends Error {
@@ -243,6 +247,15 @@ type ActiveRun = {
   nativeSessionId: string
   queue: EventQueue
   lease: OpenClawSessionLease
+  /**
+   * The approvals the native run blocks on inside itself: the run keeps its
+   * stream and observer while OpenClaw waits, and runs on once they end.
+   */
+  waitingOn?: Set<string>
+  /** The Session key those approvals were raised under. */
+  approvalSessionKey?: string
+  /** Called once OpenClaw ends every approval of the wait without an answer. */
+  resumed?: () => void
   terminal: boolean
   stopping: boolean
   uncertain: boolean
@@ -264,6 +277,11 @@ type ActiveRun = {
   planFingerprint?: string
   usage?: TokenUsage[]
   cost?: Cost
+  /**
+   * A prompt's storage receipt, resolved by OpenClaw's `session.message` of it
+   * and rejected once the run ends without one.
+   */
+  stored?: ReturnType<typeof storageReceipt>
   settled: Promise<void>
   resolveSettled(): void
 }
@@ -681,21 +699,21 @@ function validateHistory(
   }
 }
 
-function acceptedRunId(value: unknown) {
-  if (!value || typeof value !== "object") return undefined
-  const record = value as Record<string, unknown>
-  return record.status === "accepted" && validId(record.runId)
-    ? record.runId
-    : undefined
-}
-
-function finalAcknowledgement(value: unknown) {
-  if (!value || typeof value !== "object") return false
-  const record = value as Record<string, unknown>
-  return (
-    record.status === "ok" &&
-    (record.runId === undefined || validId(record.runId))
+/**
+ * The run a `chat.send` answer admitted: one it started, one already in flight
+ * under the same key, or one it already finished (`ok`).
+ */
+function admittedRun(value: unknown) {
+  const answer = record(value)
+  if (
+    !answer ||
+    (answer.status !== "started" &&
+      answer.status !== "in_flight" &&
+      answer.status !== "ok") ||
+    !validId(answer.runId)
   )
+    return undefined
+  return { runId: answer.runId, finished: answer.status === "ok" }
 }
 
 /**
@@ -766,6 +784,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     this.#replies = options.replies
     this.#mcpToolNames = options.mcpToolNames
     this.#watch = options.watch
+    // A send is answered as its run starts, so no open request hears the link
+    // drop: each bound run reads its history, and one it cannot read is lost.
+    options.watch.upstream?.subscribe((state) => {
+      if (state !== "lost") return
+      for (const active of this.#active.values())
+        if (!active.terminal)
+          this.#reconcile(active).catch(() => this.#markStreamLost(active))
+    })
   }
 
   async start(
@@ -805,12 +831,16 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
     const key = scopeKey(scope)
     const waiting = this.#waiting.get(key)
-    const interactionScope = waiting
+    // OpenClaw holds its run open on its own approval, so the answer
+    // continues the run that asked it.
+    const kept = replies ? this.#active.get(key) : undefined
+    const interactionSessionKey = kept?.waitingOn
+      ? kept.approvalSessionKey
+      : waiting?.nativeInteractionSessionKey
+    const interactionScope = interactionSessionKey
       ? {
           ...scope,
-          providerSessionId: ids.providerSessionId(
-            waiting.nativeInteractionSessionKey
-          ),
+          providerSessionId: ids.providerSessionId(interactionSessionKey),
         }
       : scope
     const repliesBinding = replies
@@ -819,6 +849,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (repliesBinding && !validId(repliesBinding.runId))
       throw new Error("OpenClaw returned an invalid interaction binding")
 
+    if (kept?.waitingOn && repliesBinding?.runId === kept.nativeRunId) {
+      kept.turnId = input.turnId
+      kept.waitingOn = undefined
+      kept.resumed = undefined
+      await this.#respond(kept, interactionScope, replies!)
+      return this.#handle(kept)
+    }
     if (this.#active.has(key)) throw new ServerTurnConflictError()
     if (waiting && repliesBinding?.runId !== waiting.nativeRunId)
       throw new ServerTurnConflictError()
@@ -922,6 +959,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         textStarted: false,
         reasoning: "",
         tools: new Map(),
+        ...(replies ? {} : { stored: storageReceipt() }),
         ...settlement(),
       }
       holder.active = active
@@ -937,92 +975,31 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       }
 
       if (replies) {
-        if (active.terminal) return this.#handle(active)
-        let result: OpenClawBoundRepliesResult
-        try {
-          result = await this.#replies!.dispatch(interactionScope, replies)
-        } catch {
-          this.#fail(
-            active,
-            "AOS_INTERACTION_FAILED",
-            "OpenClaw could not apply this interaction response."
-          )
-          return this.#handle(active)
-        }
-        if (active.terminal) return this.#handle(active)
-        if (result.status === "uncertain") {
-          this.#markUncertain(
-            active,
-            "AOS_INTERACTION_UNCERTAIN",
-            "OpenClaw may have accepted this interaction response."
-          )
-          return this.#handle(active)
-        }
-        if (result.status === "expired") {
-          this.#fail(
-            active,
-            "AOS_INTERACTION_EXPIRED",
-            "This OpenClaw interaction is no longer pending."
-          )
-          return this.#handle(active)
-        }
-        await this.#reconcile(active).catch(() => this.#markStreamLost(active))
+        await this.#respond(active, interactionScope, replies)
         return this.#handle(active)
       }
 
       let sent = false
-      let admitted = false
-      let resolveAdmission = () => {}
-      let rejectAdmission: (error: unknown) => void = () => {}
-      const admission = new Promise<void>((resolve, reject) => {
-        resolveAdmission = resolve
-        rejectAdmission = reject
-      })
-      this.#client
-        .request<unknown>("chat.send", sendParams!, {
-          // An abandoned admission stops the native request until it is accepted.
-          signal,
-          expectFinal: true,
-          onSent: () => {
-            sent = true
-          },
-          onAccepted: (payload) => {
-            sent = true
-            const runId = acceptedRunId(payload)
-            if (runId !== active?.nativeRunId) {
-              rejectAdmission(
-                new OpenClawTurnPublicError(
-                  "AOS_SEND_UNCERTAIN",
-                  "OpenClaw may have accepted this turn."
-                )
-              )
-              return
-            }
-            admitted = true
-            resolveAdmission()
-          },
-        })
-        .then((result) => {
-          if (!finalAcknowledgement(result))
-            throw new Error("Invalid OpenClaw final acknowledgement")
-          const runId = (result as Record<string, unknown>).runId
-          if (runId !== undefined && runId !== active?.nativeRunId)
-            throw new Error("OpenClaw acknowledged a different run")
-          if (!admitted) {
-            admitted = true
-            resolveAdmission()
-          }
-          if (active && !active.terminal)
-            this.#reconcile(active).catch(() => this.#markStreamLost(active))
-        })
-        .catch((error: unknown) => {
-          if (!admitted) rejectAdmission(error)
-          else if (active && !active.terminal)
-            this.#reconcile(active).catch(() => this.#markStreamLost(active))
-        })
-
+      let admitted: ReturnType<typeof admittedRun>
       try {
-        await admission
+        const answer = await this.#client.request<unknown>(
+          "chat.send",
+          sendParams!,
+          {
+            // An abandoned admission stops the native request until it is answered.
+            signal,
+            onSent: () => {
+              sent = true
+            },
+          }
+        )
+        sent = true
+        admitted = admittedRun(answer)
+        if (admitted?.runId !== active.nativeRunId)
+          throw new OpenClawTurnPublicError(
+            "AOS_SEND_UNCERTAIN",
+            "OpenClaw may have accepted this turn."
+          )
       } catch (error) {
         if (mayHaveLanded(error, sent)) {
           active.uncertain = true
@@ -1043,6 +1020,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         active.resolveSettled()
         throw providerUnavailable(error)
       }
+      // A run OpenClaw already finished ends from its history.
+      if (admitted.finished && !active.terminal)
+        this.#reconcile(active).catch(() => this.#markStreamLost(active))
       return this.#handle(active)
     } catch (error) {
       if (lease && !this.#active.has(key))
@@ -1545,8 +1525,75 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   /** Delivers a subscribed event to a bound run, or defers it to reconciliation. */
   #observe(active: ActiveRun, event: EventFrame) {
+    if (event.event === "session.message")
+      return this.#acceptStored(active, event)
+    if (event.event === "session.approval")
+      return this.#acceptApproval(active, event)
     if (active.reconciling) active.reconciliationDirty = true
     else this.#accept(active, event)
+  }
+
+  /** OpenClaw pushes each transcript row it stores; the prompt's is its receipt. */
+  #acceptStored(active: ActiveRun, event: EventFrame) {
+    const payload = event.payload as Record<string, unknown>
+    const identity = readSessionMessageIdentity(payload.message, payload)
+    if (
+      identity?.role === "user" &&
+      identity.sendId === active.nativeRunId &&
+      validId(identity.id)
+    )
+      active.stored?.resolve(identity.id)
+  }
+
+  /**
+   * OpenClaw blocks its run on an approval inside the run, so the run keeps
+   * its calls, stream and observer: the stream pauses here and, read on once
+   * the wait ends, starts the turn's next segment.
+   */
+  #acceptApproval(active: ActiveRun, event: EventFrame) {
+    if (active.terminal || !this.#replies?.accept) return
+    const payload = record(event.payload)
+    const approval = record(payload?.approval)
+    if (!approval || !validId(approval.id)) return
+    if (payload?.phase !== "pending")
+      return this.#withdrawn(active, approval.id)
+    const sessionKey = approval.sourceSessionKey
+    if (
+      !validId(sessionKey) ||
+      (sessionKey !== active.nativeSessionKey &&
+        sessionKey !== active.lease.approvalReplayKey) ||
+      active.waitingOn?.has(approval.id)
+    )
+      return
+    let request: PendingRequest
+    try {
+      request = this.#replies.accept(
+        {
+          ...active.scope,
+          providerSessionId: ids.providerSessionId(sessionKey),
+          nativeRunId: active.nativeRunId,
+        },
+        approval
+      )
+    } catch (err) {
+      this.#watch.logger.warn({ err }, "openclaw.approval.rejected")
+      return
+    }
+    active.approvalSessionKey = sessionKey
+    active.waitingOn = new Set([...(active.waitingOn ?? []), approval.id])
+    active.queue.push({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [request],
+    })
+    active.queue.push({ kind: TurnEventKind.TurnStarted })
+  }
+
+  /** OpenClaw ended one approval the run waited on, answered by no one here. */
+  #withdrawn(active: ActiveRun, approvalId: string) {
+    const waiting = active.waitingOn
+    if (!waiting?.delete(approvalId) || waiting.size > 0) return
+    active.waitingOn = undefined
+    active.resumed?.()
   }
 
   /** Reconciles a bound run after its subscription was replaced. */
@@ -1572,7 +1619,54 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           generation: this.#subscriptions.generation,
           lastSeen: active.lastSeen,
         }),
+      ...(active.stored ? { stored: active.stored.promise } : {}),
+      wait: {
+        continue: (turnId) => {
+          active.turnId = turnId
+          active.waitingOn = undefined
+          active.resumed = undefined
+        },
+        onResumed: (listener) => {
+          // OpenClaw may have ended the wait before anyone listened for it.
+          if (active.waitingOn) active.resumed = listener
+          else listener()
+        },
+      },
     }
+  }
+
+  /** Sends the answers the run waits on; a failed send ends the run. */
+  async #respond(
+    active: ActiveRun,
+    interactionScope: SessionScope,
+    replies: readonly RequestReply[]
+  ) {
+    if (active.terminal) return
+    let result: OpenClawBoundRepliesResult
+    try {
+      result = await this.#replies!.dispatch(interactionScope, replies)
+    } catch {
+      this.#fail(
+        active,
+        "AOS_INTERACTION_FAILED",
+        "OpenClaw could not apply this interaction response."
+      )
+      return
+    }
+    if (active.terminal) return
+    if (result.status === "uncertain")
+      return this.#markUncertain(
+        active,
+        "AOS_INTERACTION_UNCERTAIN",
+        "OpenClaw may have accepted this interaction response."
+      )
+    if (result.status === "expired")
+      return this.#fail(
+        active,
+        "AOS_INTERACTION_EXPIRED",
+        "This OpenClaw interaction is no longer pending."
+      )
+    await this.#reconcile(active).catch(() => this.#markStreamLost(active))
   }
 
   #acceptWaiting(waiting: WaitingRun, event: EventFrame) {
@@ -1829,7 +1923,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     active.reasoning += delta
     active.queue.push({
       kind: TurnEventKind.ThoughtChunk,
-      messageId: this.#messageId(active),
+      // A thought is its own message, named after the response it leads to.
+      messageId: `${this.#messageId(active)}:thought`,
       text: delta,
     })
   }
@@ -2189,8 +2284,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   #markUncertain(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     active.uncertain = true
-    active.queue.push({ kind: TurnEventKind.TurnFailed, code, message })
+    const failed: TurnEvent = { kind: TurnEventKind.TurnFailed, code, message }
+    active.queue.push(failed)
     active.queue.close()
+    active.stored?.end(failed)
   }
 
   #finish(active: ActiveRun, stopReason?: StopReason) {
@@ -2201,12 +2298,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       safeJson({ status: active.stopping ? "stopped" : "completed" }),
       false
     )
-    active.queue.terminal({
+    const ended: TurnEvent = {
       kind: TurnEventKind.TurnEnded,
       ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
       ...(active.cost ? { cost: active.cost } : {}),
-    })
+    }
+    active.queue.terminal(ended)
+    active.stored?.end(ended)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()
@@ -2225,12 +2324,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (active.terminal) return
     active.terminal = true
     this.#endOpenTools(active, safeJson({ status: "error" }), true)
-    active.queue.terminal({
+    const failed: TurnEvent = {
       kind: TurnEventKind.TurnFailed,
       code,
       message,
       ...origin,
-    })
+    }
+    active.queue.terminal(failed)
+    active.stored?.end(failed)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()

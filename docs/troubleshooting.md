@@ -193,6 +193,24 @@ To trace a live ACP connection in any build, add `?debug=acp` to the page URL on
 
 Match browser log lines to proxy log lines by the `sessionId`, `turnId`, and `requestId` fields that appear in both. Raise the proxy log level to `debug` with `AOS_UI_PROXY_LOG_LEVEL=debug` or `log.level: debug` in the private proxy configuration to see owner state changes on the server side. `debug` is never the production default.
 
+### ACP upgrade log entries
+
+| Log line                          | Meaning and fix                                                                                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acp.upgrade.origin_refused`      | The `Origin` header was present but did not match `publicOrigin`. Update the reverse-proxy configuration or the `publicOrigin` field.                                                     |
+| `acp.upgrade.agent_unknown`       | The Agent id in the path is not in the catalog; the Agent may be deleted or hidden. Check the Agent id and confirm it is visible.                                                         |
+| `acp.upgrade.catalog_failed`      | The catalog query during upgrade threw; the socket was refused with 503. The line carries the public `errorCode`. Check runtime connectivity.                                             |
+| `turn.receipt.deadline_passed`    | The storage receipt for the prompt did not arrive within 30 s; the answer was sent as `uncertainMutation`. Check runtime latency and storage health.                                      |
+| `session.list.no_folder`          | (info) A list across Agents met an Agent whose runtime names no folder; that Agent's Sessions are omitted. Configure the Agent's folder (for Hermes, an absolute `terminal.cwd`).         |
+| `session.list.folder_read_failed` | A list across Agents could not read one Agent's folder; that Agent's Sessions are omitted and the others still list. The line carries the public `errorCode`. Check runtime connectivity. |
+| `agents.folder.read_failed`       | The proxy could not read a folder for an Agent in `_aos/agents/list`; that Agent's row carries no folder. Check runtime connectivity and that the Agent's folder is configured.           |
+
+**Folder refusal on `session/new` or `session/resume`:** the proxy returns
+invalid params when `cwd` does not match the Agent's folder exactly, or
+unsupported when the Agent has no folder. Supply the folder that
+`_aos/agents/list` or the session list row reports, or confirm the Agent's
+folder is configured in the runtime.
+
 ## Renamed proxy log fields
 
 If you have log queries that filter on these field values, update them:

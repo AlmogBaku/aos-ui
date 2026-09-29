@@ -125,9 +125,12 @@ export interface AcpConnection {
    */
   login(token: string): Promise<void>
 
-  /** The new Session's row, capabilities and config options follow as updates. */
+  /**
+   * The new Session's row, capabilities and config options follow as updates.
+   * The browser holds the shared address, so it names the Agent.
+   */
   newSession(
-    meta: z.infer<typeof AosSessionNewMetaSchema>
+    meta: z.infer<typeof AosSessionNewMetaSchema> & { agentId: string }
   ): Promise<{ sessionId: string }>
   listSessions(
     meta: z.infer<typeof AosSessionListMetaSchema>,
@@ -137,8 +140,8 @@ export interface AcpConnection {
    * Opens the Session while any listener subscribes. The connection joins it,
    * replaying it from the start the first time, rejoins it from its own
    * position after a reconnect, and retries a refused join on backoff. It
-   * parts, with `session/close`, 2 s after the last listener leaves, so a
-   * listener back within that grace costs neither a close nor a resume. A
+   * parts, with `_aos/session/part`, 2 s after the last listener leaves, so a
+   * listener back within that grace costs neither a part nor a resume. A
    * listener that subscribes before anything of a from-start replay under way
    * has arrived takes part in that replay.
    */

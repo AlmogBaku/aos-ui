@@ -1401,11 +1401,10 @@ describe("Hermes server adapter", () => {
 
     await expect(adapter.getSession("researcher", "stored/1")).resolves.toEqual(
       {
+        // Hermes stores no title or date before the first turn.
         id: "stored/1",
         agentId: "researcher",
-        title: "stored/1",
         archived: false,
-        updatedAt: "1970-01-01T00:00:00.000Z",
         status: "idle",
       }
     )
@@ -1686,7 +1685,6 @@ describe("Hermes server adapter", () => {
         title: "One",
         archived: true,
         pinned: true,
-        updatedAt: "1970-01-01T00:00:00.000Z",
         status: "idle",
       }
     )
@@ -1833,12 +1831,15 @@ describe("Hermes server adapter", () => {
           createdAt: "1970-01-01T00:00:01.000Z",
         },
         {
-          id: "assistant-1",
+          id: "user-1-1-thought",
           role: "assistant",
-          content: [
-            { type: "reasoning", text: "thinking" },
-            { type: "text", text: "second" },
-          ],
+          content: [{ type: "reasoning", text: "thinking" }],
+          createdAt: "1970-01-01T00:00:02.000Z",
+        },
+        {
+          id: "user-1-1",
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
           createdAt: "1970-01-01T00:00:02.000Z",
           completedAt: "1970-01-01T00:00:02.000Z",
         },
@@ -1920,7 +1921,7 @@ describe("Hermes server adapter", () => {
 
       expect(history.messages.map(({ id }) => id)).toEqual([
         "user-new",
-        "assistant-new",
+        "user-new-1",
       ])
     })
 
@@ -2130,7 +2131,7 @@ describe("Hermes server adapter", () => {
 
       expect(history.messages.map(({ id }) => id)).toEqual([
         "user-old",
-        "assistant-old",
+        "user-old-1",
       ])
       expect(history).toMatchObject({ offset: 0, nextOffset: 4, total: 5 })
       expect(offsets).toEqual([0, 2])
@@ -2309,11 +2310,15 @@ describe("Hermes server adapter", () => {
       const middle = await adapter.history("researcher", "stored", 4, 2)
       const oldest = await adapter.history("researcher", "stored", 4, 6)
 
-      expect(newest.messages.map(({ id }) => id)).toEqual(["u3", "a3"])
+      expect(newest.messages.map(({ id }) => id)).toEqual(["u3", "u3-1"])
       expect(newest).toMatchObject({ nextOffset: 2, total: 8 })
-      expect(middle.messages.map(({ id }) => id)).toEqual(["u2", "a2"])
+      expect(middle.messages.map(({ id }) => id)).toEqual([
+        "u2",
+        "u2-1",
+        "u2-2",
+      ])
       expect(middle).toMatchObject({ nextOffset: 6, total: 8 })
-      expect(oldest.messages.map(({ id }) => id)).toEqual(["u1", "a1"])
+      expect(oldest.messages.map(({ id }) => id)).toEqual(["u1", "u1-1"])
       expect(oldest).toMatchObject({ nextOffset: 8, total: 8 })
     })
 
@@ -2329,7 +2334,7 @@ describe("Hermes server adapter", () => {
       expect(history.messages.map(({ id }) => id)).toEqual([
         "greeting",
         "u1",
-        "a1",
+        "u1-1",
       ])
       expect(history).toMatchObject({ nextOffset: 3, total: 3 })
     })
@@ -3321,8 +3326,7 @@ describe("Hermes server adapter", () => {
       const history = await adapter.history("researcher", "stored", 200, 0)
 
       expect(history.messages.at(-1)).toMatchObject({
-        id: "assistant-1",
-        role: "assistant",
+        content: [{ type: "text", text: "Here is the summary." }],
       })
       expect(history.messages.at(-1)).not.toHaveProperty("status")
       expect(request).not.toHaveBeenCalled()

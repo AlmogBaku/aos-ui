@@ -31,6 +31,12 @@ export type SocketUpgrade = {
   headers?: Readonly<Record<string, string>>
 }
 
+/**
+ * An upgrade the service answers with a status instead: 404 for an address it
+ * does not serve, 503 when it cannot tell now.
+ */
+export type SocketRefusal = { refused: 404 | 503 }
+
 /** The transport-neutral socket a mounted service owns for one peer. */
 export type ProxySocket = {
   receive(raw: string | Uint8Array): void | Promise<void>
@@ -50,19 +56,28 @@ export type ProxySocketPeer = {
 }
 
 export type ProxySocketService<Upgrade extends SocketUpgrade> = {
-  authorizeUpgrade(request: Request): Promise<Upgrade | undefined>
+  /** The upgrade, its refusal, or `undefined` for an unauthorized one. */
+  authorizeUpgrade(
+    request: Request
+  ): Promise<Upgrade | SocketRefusal | undefined>
   open(upgrade: Upgrade, peer: ProxySocketPeer): ProxySocket
 }
 
 /** One WebSocket path hosted beside the HTTP app, with its own peer budget. */
 export type ProxySocketMount<Upgrade extends SocketUpgrade> = {
   path: string
+  /**
+   * Also routes every path below `path` to the service, which refuses one it
+   * does not serve.
+   */
+  subpaths?: boolean
   service: ProxySocketService<Upgrade>
   maxPeers?: number
 }
 
 type MountState<Upgrade extends SocketUpgrade> = {
   path: string
+  subpaths: boolean
   service: ProxySocketService<Upgrade>
   maxPeers: number
   peers: Set<SocketPeer<Upgrade>>
@@ -70,10 +85,10 @@ type MountState<Upgrade extends SocketUpgrade> = {
 }
 type SocketData<Upgrade extends SocketUpgrade> = {
   mount: MountState<Upgrade>
-  authorization: Upgrade
+  /** Absent for a peer past the budget, which is closed as soon as it opens. */
+  authorization?: Upgrade
   socket?: ProxySocket
   failed?: boolean
-  overloaded?: boolean
   /** Bun ran this peer's close handler, which it does inside the close call. */
   closed?: boolean
 }
@@ -147,6 +162,14 @@ function bunServe(): Serve {
   return bun.serve.bind(bun)
 }
 
+/** A request asking to upgrade to a WebSocket, as RFC 6455 §4.2.1 has it. */
+function isWebSocketHandshake(request: Request) {
+  return (
+    request.headers.get("upgrade")?.toLowerCase() === "websocket" &&
+    request.headers.has("sec-websocket-key")
+  )
+}
+
 function mountState<Upgrade extends SocketUpgrade>(
   mount: ProxySocketMount<Upgrade>
 ): MountState<Upgrade> {
@@ -155,6 +178,7 @@ function mountState<Upgrade extends SocketUpgrade>(
     throw new Error("Invalid socket peer limit")
   return {
     path: mount.path,
+    subpaths: mount.subpaths ?? false,
     service: mount.service,
     maxPeers,
     peers: new Set(),
@@ -192,14 +216,15 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
           backpressureLimit: WS_BACKPRESSURE_LIMIT,
           closeOnBackpressureLimit: true,
           open(peer: SocketPeer<Upgrade>) {
-            const mount = peer.data.mount
-            if (mount.reserved > 0) mount.reserved -= 1
-            if (peer.data.overloaded) {
+            const { mount, authorization } = peer.data
+            // An over-budget peer holds no slot and was never authorized.
+            if (authorization === undefined) {
               peer.close(1013, "Event peer capacity exceeded")
               return
             }
+            mount.reserved -= 1
             try {
-              const socket = mount.service.open(peer.data.authorization, {
+              const socket = mount.service.open(authorization, {
                 send: (raw) => peer.send(raw),
                 isOpen: () => peer.readyState === WS_OPEN,
                 close: (code, reason) => peer.close(code, reason),
@@ -239,25 +264,46 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
       : undefined
   const fetch: FetchHandler = async (request, rawServer) => {
     const url = new URL(request.url)
-    const mount = mounts.find((candidate) => candidate.path === url.pathname)
+    const mount = mounts.find(
+      ({ path, subpaths }) =>
+        url.pathname === path ||
+        (subpaths && url.pathname.startsWith(`${path}/`))
+    )
     if (mount) {
       if (request.method !== "GET") return new Response(null, { status: 405 })
-      const authorization = await mount.service.authorizeUpgrade(request)
-      if (!authorization) return new Response(null, { status: 401 })
+      // RFC 6455 §4.2.1: anything short of a WebSocket handshake is refused
+      // before the service reads it.
+      if (!isWebSocketHandshake(request))
+        return new Response(null, { status: 400 })
       const upgrade = rawServer as UpgradeServer | undefined
-      const overloaded = mount.peers.size + mount.reserved >= mount.maxPeers
-      if (!overloaded) mount.reserved += 1
+      // The slot is held before the service authorizes, so the lookups an
+      // upgrade makes (an Agent's address) stay within the peer budget.
+      if (mount.peers.size + mount.reserved >= mount.maxPeers)
+        return upgrade?.upgrade(request, { data: { mount } })
+          ? undefined
+          : new Response(null, { status: 500 })
+      mount.reserved += 1
+      const refuse = (status: number) => {
+        mount.reserved -= 1
+        return new Response(null, { status })
+      }
+      const authorization = await mount.service
+        .authorizeUpgrade(request)
+        .catch((cause: unknown) => {
+          mount.reserved -= 1
+          throw cause
+        })
+      if (!authorization) return refuse(401)
+      if ("refused" in authorization) return refuse(authorization.refused)
       if (
         !upgrade?.upgrade(request, {
-          data: { mount, authorization, overloaded },
+          data: { mount, authorization },
           ...(authorization.headers === undefined
             ? {}
             : { headers: authorization.headers }),
         })
-      ) {
-        if (!overloaded) mount.reserved -= 1
-        return new Response(null, { status: 500 })
-      }
+      )
+        return refuse(500)
       return undefined
     }
     return options.app.fetch(request, rawServer)

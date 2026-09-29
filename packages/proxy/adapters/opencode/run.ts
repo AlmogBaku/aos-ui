@@ -68,6 +68,7 @@ type OpenCodeTurnClient = Readonly<{
     OpenCodeClient["sessions"],
     "get" | "active" | "history" | "events" | "prompt" | "interrupt" | "wait"
   >
+  events: OpenCodeClient["events"]
   credentialRefused: OpenCodeClient["credentialRefused"]
 }>
 
@@ -99,10 +100,28 @@ type ActiveTurn = {
   reconcileAgain: boolean
   expectedAdmission?: string
   admissionObserved: boolean
+  /**
+   * The questions and permissions the native turn blocks on inside itself:
+   * the run keeps its stream while OpenCode waits, and runs on once they end.
+   */
+  waitingOn?: Set<string>
+  /** Every request the run presented, so none is presented twice. */
+  presented: Set<string>
+  /** Called once OpenCode ends every request of the wait without an answer. */
+  resumed?: () => void
   settle(): void
   settled: Promise<void>
   nativeSettlement: ScopedNativeSettlement
 }
+
+/** The server events that ask or end a Session's question or permission. */
+const REQUEST_EVENTS = new Set([
+  "question.v2.asked",
+  "question.v2.replied",
+  "question.v2.rejected",
+  "permission.v2.asked",
+  "permission.v2.replied",
+])
 
 type Settlement = Readonly<{
   settled: Promise<void>
@@ -563,8 +582,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   }
 
   async #discoverWait(scope: SessionScope) {
-    const discover = this.#options.replies?.discover
-    if (!discover) return undefined
+    const replies = this.#options.replies
+    if (!replies?.discover) return undefined
     const history = await this.#readHistory(scope.providerSessionId)
     const after = history.at(-1)?.seq ?? -1
     const controller = new AbortController()
@@ -598,7 +617,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         dirty = false
         reading = true
         try {
-          discovered = await discover(scope)
+          discovered = await replies.discover(scope)
         } finally {
           reading = false
         }
@@ -610,6 +629,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         { kind: TurnEventKind.TurnStarted },
         { kind: TurnEventKind.TurnRequiresAction, requests },
       ]
+      let interrupted = false
       return {
         state: "waiting-for-input" as const,
         requests,
@@ -618,7 +638,21 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
             yield* events
           })(),
           settled: Promise.resolve(),
-          stop: async () => "idle" as const,
+          // Stop interrupts the waiting turn once, then rechecks it: the wait
+          // is over only once OpenCode reports the Session idle.
+          stop: async () => {
+            if (!interrupted) {
+              await this.#client.sessions.interrupt(scope.providerSessionId)
+              interrupted = true
+            }
+            try {
+              if (!(await this.#active(scope.providerSessionId)))
+                return "idle" as const
+            } catch {
+              // A failed status read cannot prove the Session idle.
+            }
+            return "stopping" as const
+          },
           // A restored wait was never streamed, so it holds no native position
           // a later recovery could continue from.
           recoveryPosition: () => undefined,
@@ -662,6 +696,10 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (!this.#options.replies)
         throw new Error("OpenCode interaction replies are unavailable")
       await this.#options.replies.validate(scope, replies)
+      // OpenCode holds its turn open on its own request, so the answer
+      // continues the run that asked it.
+      const kept = this.#turns.get(turnKey(scope))
+      if (kept?.waitingOn) return this.#answer(kept, replies)
     } else if (await this.#active(scope.providerSessionId, signal)) {
       // The native Session owns a turn AOS did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
@@ -677,12 +715,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     const expectedAdmission = replies
       ? undefined
       : admissionId(scope, input.turnId)
-    const run = this.#createRun(
-      scope,
-      baseline,
-      expectedAdmission,
-      isRepliesTurn(input) ? undefined : input.messageId
-    )
+    const run = this.#createRun(scope, baseline, expectedAdmission)
 
     try {
       await this.#attach(run, baseline)
@@ -831,9 +864,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   #createRun(
     scope: SessionScope,
     after: number,
-    expectedAdmission?: string,
-    /** The live id of the prompt the admission saves. */
-    userMessageId?: string
+    expectedAdmission?: string
   ): ActiveTurn {
     const queue = new EventQueue(this.#maxQueueEvents)
     const segmentSettlement = settlement()
@@ -859,7 +890,6 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       after,
       {
         admissionId: expectedAdmission,
-        userMessageId,
         resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
       }
     )
@@ -880,6 +910,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       reconcileAgain: false,
       expectedAdmission,
       admissionObserved: expectedAdmission === undefined,
+      presented: new Set(),
       settled: segmentSettlement.settled,
       settle: segmentSettlement.settle,
       nativeSettlement,
@@ -1075,6 +1106,82 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     run.controller.signal.addEventListener("abort", () => watch?.dispose(), {
       once: true,
     })
+    this.#watchRequests(run)
+  }
+
+  /**
+   * Follows the server's push for the questions and permissions the run's
+   * Session asks, which its durable stream does not carry. OpenCode blocks
+   * its turn on each inside the turn, so the run keeps its stream: it pauses
+   * at the ask and reads on once the wait ends.
+   */
+  #watchRequests(run: ActiveTurn) {
+    const replies = this.#options.replies
+    if (!replies?.discover) return
+    const sessionId = run.scope.providerSessionId
+    const refresh = async () =>
+      this.#pending(run, (await replies.discover!(run.scope)) ?? [])
+    const watch = this.#retry(run.scope, "turn-requests", {
+      attempt: async (signal, recovered) => {
+        const source = await this.#client.events(signal)
+        try {
+          recovered()
+          // What OpenCode asked before the push was open is read here.
+          await refresh()
+          for await (const event of source)
+            if (
+              REQUEST_EVENTS.has(event.type) &&
+              event.properties.sessionID === sessionId
+            )
+              await refresh()
+        } finally {
+          source.abort()
+        }
+      },
+    })
+    run.controller.signal.addEventListener("abort", () => watch?.dispose(), {
+      once: true,
+    })
+  }
+
+  /** The run meets the requests OpenCode lists as pending for its Session. */
+  #pending(run: ActiveTurn, pending: readonly PendingRequest[]) {
+    if (run.nativeTerminal || run.abandoned || run.segmentClosed) return
+    const open = new Set(pending.map(({ requestId }) => requestId))
+    if (run.waitingOn) {
+      for (const id of run.waitingOn)
+        if (!open.has(id)) run.waitingOn.delete(id)
+      if (run.waitingOn.size) return
+      // OpenCode ended the wait, answered by no one here.
+      run.waitingOn = undefined
+      run.resumed?.()
+      return
+    }
+    if ([...open].every((id) => run.presented.has(id))) return
+    for (const id of open) run.presented.add(id)
+    // A reply answers the whole batch OpenCode lists, so the wait holds it all.
+    run.waitingOn = open
+    run.queue.push({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: structuredClone([...pending]),
+    })
+    run.queue.push({ kind: TurnEventKind.TurnStarted })
+  }
+
+  /** Sends the answers the run waits on; a failed send ends its segment. */
+  async #answer(run: ActiveTurn, replies: readonly RequestReply[]) {
+    run.waitingOn = undefined
+    run.resumed = undefined
+    try {
+      await this.#options.replies!.dispatch(run.scope, replies)
+    } catch {
+      this.#segmentFail(
+        run,
+        "AOS_INTERACTION_FAILED",
+        "OpenCode could not apply this interaction response."
+      )
+    }
+    return this.#handle(run)
   }
 
   #reconciliationFailed(run: ActiveTurn, error: unknown) {
@@ -1096,6 +1203,22 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       stop: () => this.#stop(run),
       recoveryPosition: () =>
         openCodeRecoveryToken.mint(run.projector.recoveryPosition()),
+      // OpenCode stores a prompt within its answer, under the id AOS sent.
+      ...(run.expectedAdmission === undefined
+        ? {}
+        : { stored: Promise.resolve(run.expectedAdmission) }),
+      wait: {
+        // OpenCode names its own messages, so a continued turn needs no id.
+        continue: () => {
+          run.waitingOn = undefined
+          run.resumed = undefined
+        },
+        onResumed: (listener) => {
+          // OpenCode may have ended the wait before anyone listened for it.
+          if (run.waitingOn) run.resumed = listener
+          else listener()
+        },
+      },
     }
   }
 

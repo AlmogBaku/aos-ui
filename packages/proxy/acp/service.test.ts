@@ -114,16 +114,19 @@ function peer() {
 }
 
 describe("ACP WebSocket service", () => {
-  it("authorizes only the public origin and mints a connection id", async () => {
+  it("authorizes the public origin or none, and mints a connection id", async () => {
     const { acp } = service()
 
+    for (const origin of ["https://attacker.example.test", "null"])
+      await expect(
+        acp.authorizeUpgrade(
+          new Request(`${ORIGIN}${PATH}`, { headers: { origin } })
+        )
+      ).resolves.toBeUndefined()
+    // A client that is no browser sends no Origin at all.
     await expect(
-      acp.authorizeUpgrade(
-        new Request(`${ORIGIN}${PATH}`, {
-          headers: { origin: "https://attacker.example.test" },
-        })
-      )
-    ).resolves.toBeUndefined()
+      acp.authorizeUpgrade(new Request(`${ORIGIN}${PATH}`))
+    ).resolves.toMatchObject({ principalId: "operator" })
 
     const upgrade = await acp.authorizeUpgrade(
       new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
@@ -135,6 +138,34 @@ describe("ACP WebSocket service", () => {
     expect(upgrade?.headers).toEqual({
       "Acp-Connection-Id": upgrade?.connectionId,
     })
+  })
+
+  it("refuses an Agent's address as unavailable while the catalog cannot say", async () => {
+    const logs = captureLogs()
+    const acp = createAcpService({
+      publicOrigin: ORIGIN,
+      role: "operator",
+      principalId: OPERATOR_PRINCIPAL,
+      agent: testAgent,
+      connection: connectionContext,
+      agentAddress: {
+        path: PATH,
+        exists: () => Promise.reject(new Error("internal detail 7f3a")),
+        publicError: () => undefined,
+      },
+      logger: logs.logger,
+    })
+
+    await expect(
+      acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}/agents/researcher`, {
+          headers: { origin: ORIGIN },
+        })
+      )
+    ).resolves.toEqual({ refused: 503 })
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual([["acp.upgrade.catalog_failed", { errorCode: "internal_error" }]])
   })
 
   it("answers the first initialize frame through the prepared connection", async () => {

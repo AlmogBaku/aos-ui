@@ -79,6 +79,14 @@ export function openCodeStopReason(finish: string): StopReason {
   return StopReason.EndTurn
 }
 
+/**
+ * The id of a model response's thought, its own message: named after the
+ * response, since OpenCode stores reasoning as parts of the response itself.
+ */
+export function openCodeThoughtId(assistantMessageId: string) {
+  return `${assistantMessageId}:thought`
+}
+
 /** A native timestamp, in seconds or milliseconds, as a UTC ISO string. */
 export function openCodeTimestamp(value: number) {
   return new Date(value < 10_000_000_000 ? value * 1_000 : value).toISOString()

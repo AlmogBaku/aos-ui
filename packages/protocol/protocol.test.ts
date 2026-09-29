@@ -1063,6 +1063,7 @@ describe("AOS v1 normalized protocol", () => {
         update: "_aos/session/update",
         steer: "_aos/session/steer",
         focus: "_aos/session/focus",
+        part: "_aos/session/part",
       },
       agents: {
         list: "_aos/agents/list",
@@ -1070,18 +1071,16 @@ describe("AOS v1 normalized protocol", () => {
       },
       notify: {
         activity: "_aos/activity",
-        steerAccepted: "_aos/steer_accepted",
         composerPrefill: "_aos/composer_prefill",
         catalogInvalidated: "_aos/catalog_invalidated",
-        sessionInvalidated: "_aos/session_invalidated",
         error: "_aos/error",
       },
     })
     const codes = Object.values(AOS_JSONRPC_ERRORS)
     expect(new Set(codes).size).toBe(codes.length)
     for (const code of codes) {
-      expect(code).toBeGreaterThanOrEqual(-32015)
-      expect(code).toBeLessThanOrEqual(-32010)
+      expect(code).toBeGreaterThanOrEqual(-31015)
+      expect(code).toBeLessThanOrEqual(-31010)
     }
   })
 

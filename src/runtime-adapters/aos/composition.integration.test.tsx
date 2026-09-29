@@ -308,6 +308,7 @@ function createProxyAgentApp(stored: readonly SessionMessage[]) {
         ? { kind: "unavailable", code: "temporarily_unavailable", cause }
         : undefined,
     runtimeInfo: async () => RUNTIME_INFO,
+    agentFolder: async () => "/srv/agents/alpha",
     listAgents: async () => ({
       revision: "revision-1",
       agents: [
@@ -883,7 +884,7 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     await proxy.close()
   })
 
-  it("keeps a turn's reasoning and prose on one assistant message", async () => {
+  it("shows a turn's responses and thoughts as one assistant message, live and after a reload", async () => {
     const user = userEvent.setup()
     const { proxy, runtime } = await mount()
     const assistantParts = () =>
@@ -912,48 +913,61 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     expect(screen.getAllByRole("button", { name: /Worked/ })).toHaveLength(1)
     expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
 
-    // The reasoning half of a turn names the assistant message it reasons
-    // toward, and streams before the prose it belongs to.
+    // The provider streams each model response as its own message, and the
+    // thought before it as another.
     act(() => {
       segment.emit({
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "assistant-1",
-        text: "Weigh ",
-      })
-      segment.emit({
-        kind: TurnEventKind.ThoughtChunk,
-        messageId: "assistant-1",
-        text: "the options.",
+        messageId: "assistant-1-thought",
+        text: "Weigh the options.",
       })
       segment.emit({
         kind: TurnEventKind.MessageChunk,
         messageId: "assistant-1",
-        text: "Shipping ",
+        text: "Checking.",
+      })
+      segment.emit({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "call-1",
+        title: "grep",
+        name: "grep",
+        parentMessageId: "assistant-1",
+      })
+      segment.emit({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "call-1",
+        output: "found",
+        failed: false,
       })
       segment.emit({
         kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "it.",
+        messageId: "assistant-2",
+        text: "Shipping it.",
       })
+    })
+    const TURN = ["reasoning", "text", "tool-call", "text"]
+    await waitFor(() =>
+      expect(assistantParts()).toEqual([["reasoning", "text"], TURN])
+    )
+    // One message for the turn, open until the run goes idle.
+    expect(
+      runtime().assistantRuntime.thread.getState().messages.at(-1)?.status
+    ).toEqual({ type: "running" })
+
+    act(() => {
       segment.emit({ kind: TurnEventKind.TurnEnded })
       segment.finish()
     })
-
-    expect(await screen.findByText("Shipping it.")).toBeVisible()
     await waitFor(() =>
-      expect(assistantParts()).toEqual([
-        ["reasoning", "text"],
-        ["reasoning", "text"],
-      ])
+      expect(runtime().assistantRuntime.thread.getState().isRunning).toBe(false)
     )
     expect(messageTexts(runtime())).toEqual([
       "Open it",
       "Ready",
       "Think it through",
-      "Shipping it.",
+      "Checking.Shipping it.",
     ])
-    expect(screen.getAllByText("Shipping it.")).toHaveLength(1)
-    // Both turns have settled, so each folds the work it did before answering.
+    // Both turns have settled, so each folds the work it did once.
     const folds = screen.getAllByRole("button", { name: /Worked/ })
     expect(folds).toHaveLength(2)
     for (const fold of folds) await user.click(fold)
@@ -962,5 +976,59 @@ describe("AOS operator browser over the real proxy ACP agent", () => {
     expect(screen.getAllByRole("button", { name: "Reasoning" })).toHaveLength(2)
     expect(screen.queryAllByRole("button", { name: "Running" })).toEqual([])
     await proxy.close()
+    cleanup()
+
+    // The provider stored the turn one row per response, and a reload rebuilds
+    // the same one message for it.
+    const reloaded = await mount([
+      ...STORED_MESSAGES,
+      {
+        id: "native-user-2",
+        role: "user",
+        content: [{ type: "text", text: "Think it through" }],
+        createdAt: NOW,
+      },
+      {
+        id: "native-assistant-2",
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Weigh the options." },
+          { type: "text", text: "Checking." },
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "grep",
+            args: {},
+            argsText: "{}",
+            result: "found",
+          },
+        ],
+        createdAt: NOW,
+      },
+      {
+        id: "native-assistant-3",
+        role: "assistant",
+        content: [{ type: "text", text: "Shipping it." }],
+        createdAt: NOW,
+      },
+    ])
+    expect(await screen.findByText("Shipping it.")).toBeVisible()
+    await waitFor(() =>
+      expect(messageTexts(reloaded.runtime())).toEqual([
+        "Open it",
+        "Ready",
+        "Think it through",
+        "Checking.Shipping it.",
+      ])
+    )
+    expect(
+      reloaded
+        .runtime()
+        .assistantRuntime.thread.getState()
+        .messages.filter((message) => message.role === "assistant")
+        .map((message) => message.content.map((part) => part.type))
+    ).toEqual([["reasoning", "text"], TURN])
+    expect(screen.getAllByRole("button", { name: /Worked/ })).toHaveLength(2)
+    await reloaded.proxy.close()
   })
 })

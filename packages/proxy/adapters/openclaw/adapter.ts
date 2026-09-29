@@ -221,6 +221,11 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.listAgents()
   }
 
+  async agentFolder(agentId: string) {
+    await this.#start()
+    return this.#workspace.agentFolder(agentId)
+  }
+
   async updateAgent(
     agentId: string,
     patch: AgentUpdatePatch,

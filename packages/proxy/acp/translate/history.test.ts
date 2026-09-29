@@ -9,7 +9,7 @@ import {
   AosStateMetaSchema,
   AosToolCallMetaSchema,
 } from "../../../protocol/acp"
-import { beforeLiveTurn, persistedCorrections } from "../../core/replay-page"
+import { persistedCorrections, withoutLiveRows } from "../../core/replay-page"
 import type { AcpOutbound } from "../types"
 import { translateHistory } from "./history"
 
@@ -139,7 +139,7 @@ function updatesOf(outbound: readonly AcpOutbound[]) {
 
 describe("translateHistory", () => {
   it("replays a published artifact as a link on the message that stored it", () => {
-    expect(translateHistory(history)[6]).toEqual(
+    expect(translateHistory(history)[7]).toEqual(
       artifactLink("agent_message_chunk", "a1", ARTIFACT)
     )
   })
@@ -185,52 +185,31 @@ describe("translateHistory", () => {
     )
   })
 
-  it("brackets the turn with the states its run reported, and their moments", () => {
-    const updates = updatesOf(translateHistory(history))
-    const states = updates.filter(
-      (update) => update.sessionUpdate === "state_update"
-    )
-
-    expect(states).toHaveLength(2)
-    expect(states[0]).toMatchObject({ state: "running" })
-    expect(states[1]).toMatchObject({ state: "idle", stopReason: "end_turn" })
-    // The turn started when its prompt landed and ended where the transcript
-    // last recorded it; a page without a stored completion has the turn itself.
-    expect(AosStateMetaSchema.parse(aosMeta(states[0]!)).at).toBe(
-      "2026-09-19T09:00:00.000Z"
-    )
-    expect(AosStateMetaSchema.parse(aosMeta(states[1]!)).at).toBe(
-      "2026-09-19T09:00:01.000Z"
-    )
+  it("starts each agent message from empty content, and replays no past state", () => {
+    // A view rebuilt in place already holds these messages; each upsert
+    // empties one before its chunks, so it shows once. No stored turn's
+    // state still stands, and the live turn's follows the replay.
+    expect(kinds(translateHistory(history))).toEqual([
+      "user_message",
+      "agent_thought",
+      "agent_thought_chunk",
+      "agent_message",
+      "agent_message_chunk",
+      "tool_call_update",
+      "tool_call_update",
+      "agent_message_chunk",
+      "plan_update",
+      "agent_message",
+      "agent_message_chunk",
+    ])
+    expect(updatesOf(translateHistory(history))[3]).toMatchObject({
+      messageId: "a1",
+      content: [],
+    })
   })
 
-  it("ends the turn where the provider recorded its last part", () => {
-    const updates = updatesOf(
-      translateHistory({
-        ...history,
-        messages: [
-          {
-            id: "a4",
-            role: "assistant",
-            content: [{ type: "text", text: "Shipped." }],
-            createdAt: "2026-09-19T09:00:01.000Z",
-            completedAt: "2026-09-19T09:00:42.000Z",
-          },
-        ],
-      })
-    )
-
-    // A page that opens on the turn has only the turn's own moment to start it.
-    expect(AosStateMetaSchema.parse(aosMeta(updates[0]!)).at).toBe(
-      "2026-09-19T09:00:01.000Z"
-    )
-    expect(AosStateMetaSchema.parse(aosMeta(updates.at(-1)!)).at).toBe(
-      "2026-09-19T09:00:42.000Z"
-    )
-  })
-
-  it("replays a settled tool call with parseable history metadata", () => {
-    const update = updatesOf(translateHistory(history))[4]
+  it("replays a settled tool call with its output and parseable history metadata", () => {
+    const update = updatesOf(translateHistory(history))[5]
 
     expect(update).toMatchObject({
       sessionUpdate: "tool_call_update",
@@ -240,6 +219,10 @@ describe("translateHistory", () => {
       status: "completed",
       rawInput: { path: "a.txt" },
       rawOutput: { ok: true },
+      // The content the live call settles with.
+      content: [
+        { type: "content", content: { type: "text", text: '{"ok":true}' } },
+      ],
     })
     expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 0,
@@ -281,7 +264,7 @@ describe("translateHistory", () => {
   })
 
   it("replays a failed tool call without an output", () => {
-    const update = updatesOf(translateHistory(history))[5]
+    const update = updatesOf(translateHistory(history))[6]
 
     expect(update).toMatchObject({ toolCallId: "c2", status: "failed" })
     expect(update).not.toHaveProperty("rawOutput")
@@ -330,6 +313,7 @@ describe("translateHistory", () => {
       kind: "edit",
       locations: [{ path: "/work/a.ts", line: 3 }],
       content: [
+        { type: "content", content: { type: "text", text: "ok" } },
         {
           type: "diff",
           changes: [{ operation: "modify", path: "/work/a.ts" }],
@@ -344,29 +328,6 @@ describe("translateHistory", () => {
       startedAt: "2026-09-19T09:00:05.000Z",
       completedAt: "2026-09-19T09:00:06.500Z",
       durationMs: 1500,
-    })
-  })
-
-  it("ends a turn with the stop reason the provider stored for it", () => {
-    const updates = updatesOf(
-      translateHistory({
-        ...history,
-        messages: [
-          {
-            id: "a7",
-            role: "assistant",
-            content: [{ type: "text", text: "The list goes on" }],
-            createdAt: "2026-09-19T09:00:07.000Z",
-            stopReason: "max-tokens",
-          },
-        ],
-      })
-    )
-
-    expect(updates.at(-1)).toMatchObject({
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: "max_tokens",
     })
   })
 
@@ -422,31 +383,6 @@ describe("translateHistory", () => {
         (idle as { _meta: Record<string, unknown> })._meta[AOS_META_KEY]
       ).message
     ).toBe("The model provider rejected this turn.")
-  })
-
-  it("ends a turn still waiting on an answer as an ordinary end of turn", () => {
-    // The wait itself is reissued as the pending request the browser answers,
-    // so the replayed turn only says the turn stopped here.
-    const updates = updatesOf(
-      translateHistory({
-        ...history,
-        messages: [
-          {
-            id: "a5",
-            role: "assistant",
-            content: [{ type: "text", text: "Which branch?" }],
-            createdAt: "2026-09-19T09:00:05.000Z",
-            status: { type: "requires-action", reason: "interrupt" },
-          },
-        ],
-      })
-    )
-
-    expect(updates.at(-1)).toMatchObject({
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: "end_turn",
-    })
   })
 
   it("replays a message with no renderable content and no artifact as nothing", () => {
@@ -516,8 +452,7 @@ describe("persistedCorrections", () => {
   })
 })
 
-describe("beforeLiveTurn", () => {
-  const started = Date.parse(PROMPTED_AT)
+describe("withoutLiveRows", () => {
   const page = (messages: SessionHistoryResponse["messages"]) => ({
     ...history,
     messages,
@@ -528,48 +463,40 @@ describe("beforeLiveTurn", () => {
     activityType: "PLAN" as const,
     content: { todos: [] },
   }
+  const called = (id: string, toolCallId: string) => ({
+    ...agent,
+    id,
+    content: [
+      {
+        type: "tool-call" as const,
+        toolCallId,
+        toolName: "read_file",
+        args: { path: "/tmp/demo.txt" },
+        argsText: '{"path":"/tmp/demo.txt"}',
+      },
+    ],
+  })
 
-  it("keeps the prompt and drops what the turn stored from its start", () => {
-    const earlier = {
-      ...agent,
-      id: "a1",
-      createdAt: "2026-09-19T08:00:00.000Z",
-    }
+  it("drops the rows the replay names by message or tool call id, keeping the prompt", () => {
     const stored = page([
-      earlier,
-      user("u1", "Summarize"),
-      user("u2", "Shorter", true),
+      user("u1", "list the files"),
       agent,
+      called("a10", "call-read"),
       plan,
+      { ...agent, id: "a11" },
     ])
 
-    expect(beforeLiveTurn(stored, started)?.messages).toEqual([
-      earlier,
-      user("u1", "Summarize"),
-      plan,
-    ])
+    expect(
+      withoutLiveRows(stored, new Set(["u1", "a9", "call-read"])).messages
+    ).toEqual([user("u1", "list the files"), plan, { ...agent, id: "a11" }])
   })
 
-  it("keeps what a continued turn stored before the answer resumed it", () => {
-    const stored = page([user("u1", "Summarize"), agent])
+  it("keeps an earlier turn's row whose tool call id the live turn reused", () => {
+    const earlier = called("a1", "call-read")
+    const stored = page([earlier, user("u1", "list the files")])
 
-    expect(beforeLiveTurn(stored, started + 60_000)?.messages).toEqual([
-      user("u1", "Summarize"),
-      agent,
-    ])
-  })
-
-  it("allows a provider clock a moment behind the proxy's", () => {
-    const stored = page([user("u1", "Summarize"), agent])
-
-    expect(beforeLiveTurn(stored, started + 2_000)?.messages).toEqual([
-      user("u1", "Summarize"),
-    ])
-  })
-
-  it("finds no clean cut in a turn's rows without a time", () => {
-    const stored = page([user("u1", "Summarize"), { ...agent, createdAt: "" }])
-
-    expect(beforeLiveTurn(stored, started)).toBeUndefined()
+    expect(withoutLiveRows(stored, new Set(["call-read"])).messages).toEqual(
+      stored.messages
+    )
   })
 })

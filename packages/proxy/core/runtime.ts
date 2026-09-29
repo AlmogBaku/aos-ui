@@ -55,6 +55,26 @@ export type ServerTurnHandle = {
    * naming an epoch no provider can match.
    */
   recoveryPosition(): string | undefined
+  /**
+   * The prompt's storage receipt: resolves with the message id the provider
+   * stored the prompt under, at once when the start's own answer named it, and
+   * stays pending while the provider has not proven it stored, and rejects with
+   * a `ServerTurnEndedError` once the turn ends unproven. Absent when the turn
+   * stores no prompt of its own, such as an answer to a request.
+   */
+  stored?: Promise<string>
+  /**
+   * Present when the provider's turn runs on through its waits, as a turn
+   * blocked on its own question does: once it pauses on a request, `events`
+   * read again continue it. An answer continues it through `start`; a wait
+   * that ends without one continues through this.
+   */
+  wait?: {
+    /** The paused turn continues as `turnId`, no answer given. */
+    continue(turnId: string): void
+    /** Calls `listener` once the provider ends the wait without an answer. */
+    onResumed(listener: () => void): void
+  }
 }
 
 export type RecoveryRequest = {
@@ -162,6 +182,21 @@ export class ServerTurnUncertainError extends Error {
   constructor() {
     super("The AOS turn may have started")
     this.name = "ServerTurnUncertainError"
+  }
+}
+
+/**
+ * A prompt's turn ended before its provider proved it stored the prompt, so
+ * `stored` never resolves: it was `stopped`, it `failed` with the turn's own
+ * `code`, or it `ended` otherwise.
+ */
+export class ServerTurnEndedError extends Error {
+  constructor(
+    readonly ending: "stopped" | "failed" | "ended",
+    readonly code?: string
+  ) {
+    super("The AOS turn ended before its prompt was stored")
+    this.name = "ServerTurnEndedError"
   }
 }
 
@@ -274,6 +309,12 @@ export interface ServerRuntime {
   readonly link: ServerLink
   runtimeInfo(): Promise<RuntimeInfo>
   listAgents(): Promise<AgentCatalogResponse>
+  /**
+   * The folder the Agent's Sessions run in, as an absolute path, or
+   * `undefined` when the runtime names none. A read of its own, because
+   * `listAgents` also serves runtime info, creation and updates.
+   */
+  agentFolder(agentId: string): Promise<string | undefined>
   /**
    * Writes the patch's fields in one native write, refusing a stale
    * `observedRevision`. A field the runtime cannot store throws

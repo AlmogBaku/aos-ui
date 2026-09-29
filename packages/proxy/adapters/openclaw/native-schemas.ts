@@ -38,6 +38,8 @@ export type OpenClawAgent = Readonly<{
   createdVia?: "operator" | "agent" | "claw"
   creatorAgentId?: string | null
   identity?: Readonly<{ name?: string; avatar?: string }>
+  /** The folder the Agent's Sessions run in. */
+  workspace?: string
 }>
 
 /** A Session's sparse tool overlay, exactly as the native schema defines it. */
@@ -65,6 +67,8 @@ export type OpenClawSession = Readonly<{
   modelProvider?: string
   totalTokens?: number
   contextTokens?: number
+  /** `SessionRowSchema.estimatedCostUsd`: what the Session has cost so far. */
+  estimatedCostUsd?: number
   toolOverrides?: OpenClawToolOverrides
 }>
 
@@ -458,6 +462,12 @@ export function parseOpenClawSessions(
         : {}),
       ...(number(value.contextTokens) !== undefined
         ? { contextTokens: number(value.contextTokens) }
+        : {}),
+      // A cost is a fraction of a dollar; one out of range reads as unknown.
+      ...(typeof value.estimatedCostUsd === "number" &&
+      Number.isFinite(value.estimatedCostUsd) &&
+      value.estimatedCostUsd >= 0
+        ? { estimatedCostUsd: value.estimatedCostUsd }
         : {}),
       ...(value.toolOverrides === undefined
         ? {}

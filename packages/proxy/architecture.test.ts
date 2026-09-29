@@ -31,9 +31,9 @@ function escapeRegExp(value: string) {
 
 /** A module only tests may import, by its path under the proxy. */
 const TEST_ONLY_MODULE =
-  /(?:^|\/)(?:test-harness|test-faults|runtime-contract)\.ts$|(?:^|\/)test-utils\//u
+  /(?:^|\/)(?:test-harness|test-faults|runtime-contract|wire-contract)\.ts$|(?:^|\/)test-utils\//u
 const TEST_ONLY_IMPORT =
-  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|test-utils\/)/u
+  /(?:from\s+|import\s*\()["'][^"']*\/(?:test-harness|test-faults|runtime-contract|wire-contract|test-utils\/)/u
 
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
@@ -412,7 +412,8 @@ describe("member boundary", () => {
    * The member encoder alone turns member events into ACP updates and
    * notifications, from the event it is given: it reaches neither a
    * membership nor the runtime. The translators the encoder writes with are
-   * its own pure helpers, and the test harness stands in for a provider.
+   * its own pure helpers, the test harness stands in for a provider, and the
+   * wire suite for a client.
    */
   it("builds every ACP update in the member encoder alone", async () => {
     const encoder = stripComments(
@@ -425,7 +426,10 @@ describe("member boundary", () => {
     const notifiers: string[] = []
     for (const path of await productionFiles(proxyRoot)) {
       const file = relative(proxyRoot, path)
-      if (file.startsWith("acp/translate/") || /\/test-[\w-]+\.ts$/u.test(file))
+      if (
+        file.startsWith("acp/translate/") ||
+        /\/(?:test-[\w-]+|wire-contract)\.ts$/u.test(file)
+      )
         continue
       const source = stripComments(await readFile(path, "utf8"))
       if (/\bsessionUpdate\s*:/u.test(source)) builders.push(file)

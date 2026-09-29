@@ -13,7 +13,6 @@ import {
   AosActivityNotificationSchema,
   AosElicitationMetaSchema,
   AosPlanMetaSchema,
-  AosPromptResponseMetaSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -181,7 +180,7 @@ async function runningTurn(test: Harness, text: string) {
   if (!source) throw new Error("The engine opened no run segment")
   return {
     source,
-    messageId: AosPromptResponseMetaSchema.parse(aosMetaOf(accepted)).messageId,
+    messageId: accepted.messageId,
   }
 }
 
@@ -314,10 +313,32 @@ async function drainedReplay(test: Harness, source: EventSource) {
   )
 }
 
+/** The steers a turn took, as the user messages its stream showed them as. */
 function steerAccepted(recorder: Recorder) {
-  return recorder
-    .of(AOS_METHODS.notify.steerAccepted)
-    .map(({ params }) => params)
+  const Steer = z.object({
+    sessionId: z.string(),
+    update: z.object({
+      sessionUpdate: z.literal("user_message"),
+      messageId: z.string(),
+      content: z.tuple([z.object({ text: z.string() })]),
+      _meta: z.object({
+        [AOS_META_KEY]: z.object({ turnId: z.string(), delivery: z.string() }),
+      }),
+    }),
+  })
+  return updates(recorder).flatMap((params) => {
+    const steer = Steer.safeParse(params)
+    if (!steer.success) return []
+    const { sessionId, update } = steer.data
+    return [
+      {
+        sessionId,
+        ...update._meta[AOS_META_KEY],
+        requestId: update.messageId,
+        text: update.content[0].text,
+      },
+    ]
+  })
 }
 
 function turnEnded(): TurnEvent {
@@ -386,7 +407,7 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
-  it("asks the browser to resync a run its stream was dropped from", async () => {
+  it("rebuilds from history a run its stream was dropped from", async () => {
     // One event of queue, so the burst below outruns the send the pump awaits.
     const test = await harness({ maxSubscriberEvents: 1 })
     const { source } = await runningTurn(test, "Summarize")
@@ -404,13 +425,24 @@ describe("operator ACP listener", () => {
       })
     source.emit(turnEnded())
 
-    const invalidated = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.sessionInvalidated,
-      "the Session invalidation"
+    // The view is owed the Session as standard updates, from history, closed
+    // by the state the Session is in.
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"idle"'),
+      "the closing state"
     )
-    expect(invalidated.params).toEqual({ sessionId: CREATED })
+    const shown = turnUpdates(test.recorder).map(
+      ({ update }) => update.sessionUpdate
+    )
+    expect(shown.slice(shown.indexOf("user_message"))).toEqual([
+      "user_message",
+      "user_message",
+      "agent_message",
+      "agent_message_chunk",
+      "state_update",
+    ])
     // A dropped stream is not an outcome: the run failed nowhere, the turn this
-    // browser half-saw never ends for it, and the window it did not read stays
+    // browser half-saw does not end in it, and the window it did not read stays
     // at the one reading the Session opened with.
     expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
     expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
@@ -634,9 +666,9 @@ describe("operator ACP listener", () => {
       _meta: { [AOS_META_KEY]: { agentId: AGENT } },
     })
 
-    // The stored turn replays as the stream its run sent: the states that
-    // bracket it, and its prose as the chunk it arrived as.
-    expect(updates(test.recorder).slice(0, 4)).toMatchObject([
+    // The stored turn replays as its messages, each from empty content, and no
+    // state it passed; the Session's own state closes it.
+    expect(updates(test.recorder).slice(0, 5)).toMatchObject([
       {
         sessionId: SESSION,
         update: {
@@ -647,7 +679,11 @@ describe("operator ACP listener", () => {
       },
       {
         sessionId: SESSION,
-        update: { sessionUpdate: "state_update", state: "running" },
+        update: {
+          sessionUpdate: "agent_message",
+          messageId: "message-agent",
+          content: [],
+        },
       },
       {
         sessionId: SESSION,
@@ -659,13 +695,12 @@ describe("operator ACP listener", () => {
       },
       {
         sessionId: SESSION,
-        update: {
-          sessionUpdate: "state_update",
-          state: "idle",
-          stopReason: "end_turn",
-        },
+        update: { sessionUpdate: "state_update", state: "idle" },
       },
     ])
+    expect(JSON.stringify(updates(test.recorder))).not.toContain(
+      '"state":"running"'
+    )
     test.close()
   })
 

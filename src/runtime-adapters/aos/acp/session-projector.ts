@@ -9,14 +9,12 @@ import type { MessageStatus, ThreadMessageLike } from "@assistant-ui/core"
 import type { z } from "zod"
 
 import {
-  AOS_METHODS,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
   AosChunkMetaSchema,
   AosPlanMetaSchema,
   AosStateMetaSchema,
-  AosSteerAcceptedNotificationSchema,
   AosToolCallMetaSchema,
   AosTurnMetaSchema,
   parseArtifactUri,
@@ -25,7 +23,6 @@ import {
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import {
   COMPACTION_DATA_PART_NAME,
-  steerMessageId,
   type AosCompaction,
 } from "@/lib/message-parts"
 import type { SessionStatus, TodoItem } from "@/runtime-adapters/contracts"
@@ -67,10 +64,11 @@ import {
 } from "./projector-terminals"
 
 /**
- * Folds one Session's ACP `session/update` stream and its extension
- * notifications into the state the Assistant UI store reads: a `resource_link`
- * naming an `artifact://` id lands as a message data part, `_aos/steer_accepted`
- * as an ordinary user turn.
+ * Folds one Session's ACP `session/update` stream into the state the Assistant
+ * UI store reads: one projected message per wire message id, where a
+ * `resource_link` naming an `artifact://` id lands as a message data part. The
+ * thread reads each turn whole: the agent messages and thoughts between two
+ * user messages show as one assistant message, in arrival order.
  * Pure and React-free: a replay starts from `initialProjectorState` and applies
  * the same reducer the live stream does.
  */
@@ -102,13 +100,6 @@ export type ProjectorState = {
   readonly execution: ProjectorExecution
   /** The turn the running run opened, and the only one its state settles. */
   readonly activeAssistantId?: string
-  /**
-   * Turns a correction closed, mapped to the turn that carries what the
-   * provider writes next. A provider may keep addressing the turn the operator
-   * interrupted; arrival order is what the transcript shows, so that content
-   * belongs below the correction rather than inside the answer above it.
-   */
-  readonly supersededAssistants?: ReadonlyMap<string, string>
   readonly todos: readonly TodoItem[]
   readonly title?: string
   readonly configOptions?: readonly SessionConfigOption[]
@@ -182,7 +173,7 @@ function withMessages(
 }
 
 /**
- * Upserts the addressed turn, creating it with `role` when it is new, and the
+ * Upserts the named message, creating it with `role` when it is new, and the
  * one place a turn's status is opened. An assistant turn a running run creates
  * is born running, and either way the turn the run creates becomes the one its
  * later state settles — so a run that has written nothing yet never re-opens the
@@ -237,11 +228,6 @@ function opening(
   const running = withStatus(message, { type: "running" })
   const { startedAt } = execution
   return startedAt === undefined ? running : startTiming(running, startedAt)
-}
-
-/** The turn that carries what a superseded turn's id addresses from now on. */
-function addressed(state: ProjectorState, messageId: string) {
-  return state.supersededAssistants?.get(messageId) ?? messageId
 }
 
 /** The turn the run opened, while it is still part of the projection. */
@@ -304,9 +290,8 @@ function applyToolCall(
     )
   const named =
     owner?.id ?? (aos ? aos.messageId : latestAssistantId(state.messages))
-  const messageId = named === undefined ? undefined : addressed(state, named)
-  if (messageId === undefined) return state
-  return onMessage(state, messageId, "assistant", (message) =>
+  if (named === undefined) return state
+  return onMessage(state, named, "assistant", (message) =>
     patchToolCall(message, patch, toolMeta)
   )
 }
@@ -353,7 +338,7 @@ function applyChild(
   const spawnId = spawn?.toolCallId ?? `${SUBAGENT_CALL_PREFIX}${subagentId}`
   const hosted = spawn
     ? state
-    : onMessage(state, addressed(state, hostId), "assistant", (message) =>
+    : onMessage(state, hostId, "assistant", (message) =>
         patchToolCall(
           message,
           { toolCallId: spawnId, name: "subagent", status: "in_progress" },
@@ -611,14 +596,12 @@ function applyIdle(
   const completedAt = epochOf(aos?.at)
   const id = activeAssistantId(state)
   // A run that wrote no turn settles the Session alone: the history before it
-  // keeps the status it was projected with. Only the run a correction
-  // interrupted can address the turn it superseded, so that mapping ends here.
-  // Whatever still waits for a call the run never announced is dropped with it.
+  // keeps the status it was projected with. Whatever still waits for a call
+  // the run never announced is dropped with it.
   const settled: ProjectorState = {
     ...state,
     execution,
     activeAssistantId: undefined,
-    supersededAssistants: undefined,
     early: undefined,
   }
   return id === undefined
@@ -720,41 +703,57 @@ function applyState(
     }
   }
   if (next !== "idle") return state
-  return withSavedIds(
-    applyIdle(state, carried, text(update.stopReason), aos),
-    aos?.savedIds
-  )
+  return applyIdle(state, carried, text(update.stopReason), aos)
 }
 
 /**
- * Re-keys the turns a run streamed under live ids onto the ids the provider
- * saved them under, so an edit and a later replay address the saved rows. The
- * provider may save consecutive replies as one message, so the turns that share
- * a saved id fold into one, in order, where the first of them stood; a turn
- * already projected under that id is the saved one and stands alone.
+ * The thread's turns: each user message alone, and each run of agent messages
+ * and thoughts between two of them as one, in arrival order, as Hermes Desktop
+ * groups a turn. The group goes by its first message's id.
  */
-function withSavedIds(
-  state: ProjectorState,
-  savedIds: Readonly<Record<string, string>> | undefined
-): ProjectorState {
-  if (!savedIds) return state
-  const saved = new Map(Object.entries(savedIds))
-  if (!state.messages.some((message) => saved.has(message.id))) return state
-  const groups = new Map<string, ProjectedMessage[]>()
-  for (const message of state.messages) {
-    const id = saved.get(message.id) ?? message.id
-    groups.set(id, [...(groups.get(id) ?? []), message])
+function turnsOf(
+  messages: readonly ProjectedMessage[]
+): readonly (readonly ProjectedMessage[])[] {
+  const turns: ProjectedMessage[][] = []
+  for (const message of messages) {
+    const last = turns.at(-1)
+    if (message.role === "assistant" && last?.[0]?.role === "assistant")
+      last.push(message)
+    else turns.push([message])
   }
-  return withMessages(
-    state,
-    [...groups].map(
-      ([id, members]) =>
-        members.find((message) => message.id === id) ?? merged(id, members)
-    )
-  )
+  return turns
 }
 
-/** One saved message out of the turns it folds, spanning all of them. */
+const grouped = new WeakMap<
+  ProjectedMessage,
+  { members: readonly ProjectedMessage[]; value: ProjectedMessage }
+>()
+
+/**
+ * One turn's messages as the one message the thread shows, memoized by its
+ * members, so a turn nothing touched keeps its identity.
+ */
+function turnMessage(members: readonly ProjectedMessage[]): ProjectedMessage {
+  const [first] = members
+  if (members.length === 1) return first!
+  const cached = grouped.get(first!)
+  if (cached && sameMembers(cached.members, members)) return cached.value
+  const value = merged(first!.id, members)
+  grouped.set(first!, { members, value })
+  return value
+}
+
+const sameMembers = (
+  left: readonly ProjectedMessage[],
+  right: readonly ProjectedMessage[]
+) =>
+  left.length === right.length &&
+  left.every((message, index) => message === right[index])
+
+/**
+ * One turn out of the messages it groups, spanning all of them: it runs while
+ * its latest message does, so it stays open until the run's `idle`.
+ */
 function merged(
   id: string,
   members: readonly ProjectedMessage[]
@@ -806,9 +805,8 @@ function applyWhole(
   kind: string,
   update: UpdatePayload
 ): ProjectorState {
-  const named = text(update.messageId)
-  if (named === undefined) return state
-  const messageId = addressed(state, named)
+  const messageId = text(update.messageId)
+  if (messageId === undefined) return state
   const blocks = blockPatch(update.content)
   // A prompt echo names the images it attached as artifacts, which show the
   // way the same turn does once history replays it.
@@ -866,7 +864,7 @@ function applyChunk(
       appendBlock(message, sourceOf(kind), block)
     )
   const artifact = linkedArtifact(block)
-  return onMessage(state, addressed(state, named), roleOf(kind), (message) =>
+  return onMessage(state, named, roleOf(kind), (message) =>
     artifact === undefined
       ? countChunk(appendBlock(message, sourceOf(kind), block))
       : carriesArtifact(message, artifact.id)
@@ -998,52 +996,6 @@ function carriesArtifact(message: ProjectedMessage, id: string) {
 }
 
 /**
- * A mid-turn correction reads as what it is: an ordinary user turn at the tail,
- * in arrival order. Appending it seals the streaming turn, so the output the
- * redirected run writes next opens a fresh assistant turn below the correction.
- * The id is derived from the request, so a replay grants one correction once.
- */
-function applyCorrection(
-  state: ProjectorState,
-  params: unknown
-): ProjectorState {
-  const parsed = AosSteerAcceptedNotificationSchema.safeParse(params)
-  if (!parsed.success) return state
-  const id = steerMessageId(parsed.data.requestId)
-  if (state.messages.some((message) => message.id === id)) return state
-  // The turn the correction interrupts has written all it will here: the run's
-  // idle settles only the turn it opens next, so this one settles now, and
-  // whatever the provider still addresses to it lands in the turn below.
-  const supersededId = activeAssistantId(state)
-  const sealed =
-    supersededId === undefined
-      ? state
-      : {
-          ...onMessage(state, supersededId, "assistant", (message) =>
-            withStatus(message, { type: "complete", reason: "stop" })
-          ),
-          supersededAssistants: new Map([
-            ...(state.supersededAssistants ?? []),
-            [supersededId, `${supersededId}:after:${parsed.data.requestId}`],
-          ]),
-        }
-  const messages = withMessage(sealed.messages, id, "user", (message) =>
-    appendBlock(message, "message", { type: "text", text: parsed.data.text })
-  )
-  return { ...withMessages(sealed, messages), activeAssistantId: undefined }
-}
-
-/** The extension notifications the projection folds beside `session/update`. */
-export function applyNotification(
-  state: ProjectorState,
-  method: string,
-  params: unknown
-): ProjectorState {
-  if (method !== AOS_METHODS.notify.steerAccepted) return state
-  return applyCorrection(state, params)
-}
-
-/**
  * Re-keys the optimistic user turn onto the id the proxy assigned it. The echo
  * may arrive first, in which case the local copy is dropped instead.
  */
@@ -1096,7 +1048,6 @@ export function clearTranscript(
     ...state,
     messages: kept,
     activeAssistantId: undefined,
-    supersededAssistants: undefined,
     terminals: undefined,
     early: undefined,
   }
@@ -1118,13 +1069,18 @@ export function prependMessages(
     : withMessages(state, [...unseen, ...state.messages])
 }
 
-/** Keeps the listed turns in order; the runtime's removals flow back here. */
+/**
+ * Keeps the listed turns in order; the runtime's removals flow back here. A
+ * turn goes by its first message's id, and keeps every message it groups.
+ */
 export function retainMessages(
   state: ProjectorState,
   ids: readonly string[]
 ): ProjectorState {
   const keep = new Set(ids)
-  const messages = state.messages.filter((message) => keep.has(message.id))
+  const messages = turnsOf(state.messages).flatMap((members) =>
+    keep.has(members[0]!.id) ? members : []
+  )
   return messages.length === state.messages.length
     ? state
     : { ...state, messages }
@@ -1246,7 +1202,8 @@ function approvalsByTurn(state: ProjectorState) {
 
 export function toThreadMessages(state: ProjectorState): ThreadMessageLike[] {
   const approvals = approvalsByTurn(state)
-  return state.messages.map((message) =>
-    toThreadMessage(message, approvals.get(message.id))
-  )
+  return turnsOf(state.messages).map((members) => {
+    const laid = members.flatMap((message) => approvals.get(message.id) ?? [])
+    return toThreadMessage(turnMessage(members), laid)
+  })
 }

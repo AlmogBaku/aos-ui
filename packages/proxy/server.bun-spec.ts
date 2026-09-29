@@ -116,10 +116,11 @@ describe("real Bun WebSocket upgrade", () => {
     lifecycles.push(lifecycle)
     const port = portOf(lifecycle)
 
+    // A plain request is no WebSocket handshake.
     const denied = await fetch(
       `http://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`
     )
-    expect(denied.status).toBe(401)
+    expect(denied.status).toBe(400)
     expect(opened).toBe(0)
 
     const frames: unknown[] = []
@@ -149,10 +150,11 @@ describe("real Bun WebSocket upgrade", () => {
   it("answers an ACP initialize first frame over the hosted socket", async () => {
     const port = portOf(acpProxy())
 
+    // A plain request is no WebSocket handshake.
     const denied = await fetch(
       `http://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`
     )
-    expect(denied.status).toBe(401)
+    expect(denied.status).toBe(400)
 
     const socket = new WebSocket(
       `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,

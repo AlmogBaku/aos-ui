@@ -31,7 +31,17 @@ import {
 
 export const ACP_PROTOCOL_VERSION = 2 as const
 export const AOS_ACP_OPERATOR_PATH = "/api/aos/v1/acp" as const
+/**
+ * Below the operator path, each Agent's own address: its Sessions alone, with
+ * no `_meta.aos.agentId` to name.
+ */
+export const AOS_ACP_AGENTS_PATH = `${AOS_ACP_OPERATOR_PATH}/agents` as const
 export const AOS_ACP_GUEST_PATH = "/api/guest/v1/acp" as const
+
+/** One Agent's own ACP address, its id one path segment. */
+export function aosAcpAgentPath(agentId: string) {
+  return `${AOS_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
+}
 export const AOS_META_KEY = "aos" as const
 export const AOS_EXTENSION_VERSION = 1 as const
 export const AOS_AUTH_METHOD_INVITE = "aos-invite" as const
@@ -43,6 +53,7 @@ export const AOS_METHODS = {
     update: "_aos/session/update",
     steer: "_aos/session/steer",
     focus: "_aos/session/focus",
+    part: "_aos/session/part",
   },
   agents: {
     list: "_aos/agents/list",
@@ -50,10 +61,8 @@ export const AOS_METHODS = {
   },
   notify: {
     activity: "_aos/activity",
-    steerAccepted: "_aos/steer_accepted",
     composerPrefill: "_aos/composer_prefill",
     catalogInvalidated: "_aos/catalog_invalidated",
-    sessionInvalidated: "_aos/session_invalidated",
     error: "_aos/error",
   },
 } as const
@@ -73,15 +82,15 @@ export const AOS_PLAN_ID = "todos" as const
 /**
  * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
  * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
- * these sit in their own block from -32010, clear of the codes ACP uses.
+ * these sit in their own block from -31010, clear of the codes ACP uses.
  */
 export const AOS_JSONRPC_ERRORS = {
-  turnInProgress: -32010,
-  staleRequest: -32011,
-  revisionConflict: -32012,
-  temporarilyUnavailable: -32013,
-  uncertainMutation: -32014,
-  unsupported: -32015,
+  turnInProgress: -31010,
+  staleRequest: -31011,
+  revisionConflict: -31012,
+  temporarilyUnavailable: -31013,
+  uncertainMutation: -31014,
+  unsupported: -31015,
 } as const
 export type AosJsonRpcErrorCode =
   (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
@@ -155,7 +164,11 @@ const ClientIdSchema = IdentifierSchema.optional()
 
 /** `NewSessionRequest._meta.aos` */
 export const AosSessionNewMetaSchema = z.strictObject({
-  agentId: IdentifierSchema,
+  /**
+   * Required on the shared address; on an Agent's own address it is that
+   * Agent, or absent.
+   */
+  agentId: IdentifierSchema.optional(),
   title: z.string().min(1).max(4096).optional(),
   clientId: ClientIdSchema,
 })
@@ -188,15 +201,6 @@ export const AosSessionResumeMetaSchema = z.strictObject({
   /** Last `_meta.aos.sequence` the client saw for `turnId`. */
   after: SequenceSchema.optional(),
   turnId: IdentifierSchema.optional(),
-})
-
-/**
- * `PromptResponse._meta.aos`. The pinned SDK's v2 `PromptResponse` has no
- * `messageId` field and its client parser strips unknown keys, so the proxy's
- * minted user message id travels here.
- */
-export const AosPromptResponseMetaSchema = readObject({
-  messageId: IdentifierSchema,
 })
 
 /**
@@ -245,16 +249,14 @@ export const AosHistoryPageTagSchema = readObject({
 /**
  * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
- * `resync: true` means `after` was beyond bounded replay; the client must
- * resume again with `replayFrom: { type: "start" }`. The Session's row,
- * execution, models and capabilities follow the answer as updates.
+ * The Session's row, execution, models and capabilities follow the answer as
+ * updates.
  */
 export const AosSessionResumeResponseMetaSchema = readObject({
   position: readObject({
     turnId: IdentifierSchema,
     sequence: SequenceSchema,
   }).optional(),
-  resync: z.literal(true).optional(),
   /** Present whenever this resume replayed history. */
   history: AosHistoryCursorSchema.optional(),
 })
@@ -284,6 +286,14 @@ export const AosSessionUpdateRequestSchema = z
       ).length === 1,
     "Exactly one of title, archived, unread, pinned"
   )
+
+/**
+ * `_aos/session/part` params, answered `{}`: this connection stops following
+ * the Session, whose work runs on. `session/close` also stops that work.
+ */
+export const AosSessionPartRequestSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+})
 
 /** `_aos/session/steer` params and response. */
 export const AosSteerRequestSchema = z.strictObject({
@@ -411,14 +421,6 @@ export const AosStateMetaSchema = readObject({
    * cumulative spend, on a `usage_update` that also needs the context window.
    */
   cost: AosCostSchema.optional(),
-  /**
-   * On a turn's `idle` update: each message id the turn streamed under, mapped
-   * to the id the provider saved that message under. The browser re-keys those
-   * messages, so an edit and a later history replay address the saved rows.
-   */
-  savedIds: z
-    .record(z.string().min(1).max(512), z.string().min(1).max(512))
-    .optional(),
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
@@ -549,25 +551,11 @@ export function parseArtifactUri(uri: string): string | undefined {
 // extension notifications (agent → client)
 // ---------------------------------------------------------------------------
 
-/** `_aos/steer_accepted` */
-export const AosSteerAcceptedNotificationSchema = readObject({
-  sessionId: IdentifierSchema,
-  ...TurnMetaBase,
-  requestId: IdentifierSchema,
-  text: z.string(),
-  delivery: TurnSteerResponseSchema.shape.status,
-})
-
 /** `_aos/composer_prefill` */
 export const AosComposerPrefillNotificationSchema = readObject({
   sessionId: IdentifierSchema,
   turnId: IdentifierSchema,
   text: z.string(),
-})
-
-/** `_aos/catalog_invalidated` (no params) and `_aos/session_invalidated`. */
-export const AosSessionInvalidatedNotificationSchema = readObject({
-  sessionId: IdentifierSchema,
 })
 
 /** `_aos/error`: a failure with no request to answer, e.g. a rejected cancel. */

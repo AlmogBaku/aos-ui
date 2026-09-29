@@ -520,6 +520,9 @@ export function createOpenClawHistory(input: {
         usedTokens: session.totalTokens,
         maxTokens: session.contextTokens,
         source: "provider-usage" as const,
+        ...(session.estimatedCostUsd === undefined
+          ? {}
+          : { cost: { amount: session.estimatedCostUsd, currency: "USD" } }),
       }
     },
     publishedArtifact: (agentId, sessionKey, artifactId) =>

@@ -10,11 +10,7 @@ credentials, and durable history. The browser connects over ACP v2 WebSocket at 
 - A Hermes server token in a private, owner-readable file
 - Bun, or Docker with Compose
 
-The minimum supported Hermes revision is
-`47685348eaca9d673719003b9e03a71becfa6423`; the vendored gateway client and the
-interactions protocol both require the server-to-client request behavior present
-at that pin. The separately tested compatibility revision is
-`b29b352c9eeec261fc17b09bd5402b5a8a0c4a8b` (`v2026.9.7`).
+The minimum supported Hermes revision is `v2026.9.24`.
 
 ## Start Hermes independently
 
@@ -321,6 +317,10 @@ visibility uses.
   and continues under the same logical AOS run until Hermes is authoritatively
   idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present. The `aos-ui` tools appear only in profiles that register the MCP server.
+- AOS needs `display.tool_progress` left at its default (`all`). With `off`, live tool calls are withheld from the tui gateway stream and appear only after a reload. `display.show_reasoning` gates nothing AOS reads; it only makes the messaging gateway prepend reasoning to chat replies.
+- Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the proxy reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
+- The listed folder is the Agent's. A resumed Session runs in the folder Hermes stored on its own row, which can differ.
+- When Hermes compacts a conversation, the carried-forward messages receive new row ids. History reads after a compaction return the new ids; live ids before it remain in the browser until the page reloads.
 - Session rename, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
 - Voice controls appear for native STT/TTS interfaces and when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
 - The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
@@ -334,8 +334,9 @@ visibility uses.
   problem and check the Hermes server log.
 - Hermes refusals keep Hermes' own words as the failure's second line. A
   Session another Hermes window owns fails with `AOS_SESSION_IN_USE`; Hermes'
-  active-Session limit fails with `AOS_SESSION_LIMIT`; a turn still running
-  fails with `AOS_SESSION_BUSY`. A reattach Hermes fences while it settles a
+  active-Session limit fails with `AOS_SESSION_LIMIT`; a prompt sent while a
+  turn still runs is refused with the ACP turn-in-progress error, before
+  Hermes stores it. A reattach Hermes fences while it settles a
   disconnect, and an unreadable ownership registry, are retried for a few
   seconds without a visible error, then fail with `AOS_PROVIDER_UNAVAILABLE`.
   A question Hermes no longer holds open fails with `AOS_INTERACTION_EXPIRED`.

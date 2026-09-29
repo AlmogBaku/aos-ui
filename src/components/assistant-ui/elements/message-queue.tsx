@@ -32,7 +32,6 @@ import { Button } from "@/components/ui/button"
 import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
 import { Textarea } from "@/components/ui/textarea"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
-import { steerMessageId } from "@/lib/message-parts"
 import { cn } from "@/lib/utils"
 import {
   queueControlsExtras,
@@ -200,10 +199,9 @@ function QueueRow({
   const parts = useAuiState((state) => state.queueItem.parts)
   const text = queueItemText(parts)
   const running = useAuiState((state) => state.thread.isRunning)
+  // An accepted steer is a user message under the steer's own request id.
   const acknowledged = useAuiState((state) =>
-    state.thread.messages.some(
-      (message) => message.id === steerMessageId(requestId)
-    )
+    state.thread.messages.some((message) => message.id === requestId)
   )
   const acknowledgedRef = useRef(false)
   const [status, setStatus] = useState<"idle" | "pending" | "error">("idle")

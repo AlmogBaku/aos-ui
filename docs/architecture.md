@@ -30,12 +30,13 @@ implement the same normalized server boundary without adding provider branches
 to the browser. Each native adapter keeps its own transport, credentials,
 recovery positions, and provider payloads private.
 
-Each browser tab opens one ACP v2 WebSocket at `/api/aos/v1/acp`. That single
-socket carries run streams, session lifecycle, agent catalog, active-run
-controls, `_aos/*` notifications (focus, activity, invalidation),
-Artifact `resource_link` content blocks,
-`usage_update`, and `session/set_config_option`. The `initialize` response
-negotiates optional extensions including `activity`, `readState`, and `focus`.
+Each browser tab opens one ACP v2 WebSocket at `/api/aos/v1/acp` (or the
+per-Agent address `/api/aos/v1/acp/agents/<agentId>`). That single socket
+carries run streams, session lifecycle, agent catalog, active-run controls,
+`_aos/*` notifications (focus, activity, invalidation), Artifact `resource_link`
+content blocks, `usage_update`, and `session/set_config_option`. The
+`initialize` response always answers version 2 and negotiates optional
+extensions including `activity`, `readState`, and `focus`.
 `packages/proxy/acp` is the server-side translation point. Normalized AOS REST
 handles bytes and discovery. Fixture mode remains explicit synthetic data for
 evaluation and tests; invalid real-runtime configuration renders an unavailable

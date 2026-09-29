@@ -3,7 +3,7 @@ import type { SessionHistoryResponse } from "../../protocol"
 /**
  * How a history page sits beside the live turn a resume replays: where its
  * prompt is, how many of its steer acknowledgements the page already carries,
- * and where the page is cut so the turn shows once.
+ * and which rows it leaves to the replay so the turn shows once.
  */
 
 /** A user turn the provider persisted as a mid-turn correction. */
@@ -34,32 +34,32 @@ export function persistedCorrections(history: SessionHistoryResponse) {
     .filter((message) => message.role === "user").length
 }
 
-/** How far a provider's clock may run behind the proxy's for a stored row. */
-const PROMPT_CLOCK_SKEW_MS = 5_000
-
 /**
- * The page a view shows beside a live turn replayed from `startedAt`: the
- * stream owns every row the turn stored from then on, corrections included,
- * so they are dropped and the turn shows once. The page's last prompt stays,
- * since the provider stores no other prompt while a turn runs and the stream
- * carries none. `undefined` when a row after that prompt has no time to cut
- * it by, so only a reset can show the turn once.
+ * The page a view shows beside a live turn whose replay carries the rows
+ * `live` names: the replay owns each of them, so the page drops them and the
+ * turn shows once. The rows are joined by id, the one a message or tool call
+ * carries both stored and streamed; the prompt and every row the replay does
+ * not name stay. Only rows after the page's last prompt can be the live
+ * turn's, as for its corrections, so an earlier turn that reused a tool
+ * call's id keeps its row.
  */
-export function beforeLiveTurn(
+export function withoutLiveRows(
   history: SessionHistoryResponse,
-  startedAt: number
-): SessionHistoryResponse | undefined {
-  const threshold = startedAt - PROMPT_CLOCK_SKEW_MS
+  live: ReadonlySet<string>
+): SessionHistoryResponse {
   const prompt = lastPromptIndex(history)
-  const messages = []
-  for (const [index, message] of history.messages.entries()) {
-    if (index <= prompt || message.role === "activity") {
-      messages.push(message)
-      continue
-    }
-    const createdAt = Date.parse(message.createdAt)
-    if (Number.isNaN(createdAt)) return undefined
-    if (createdAt < threshold) messages.push(message)
+  return {
+    ...history,
+    messages: history.messages.filter(
+      (message, index) =>
+        index <= prompt ||
+        message.role === "activity" ||
+        !(
+          live.has(message.id) ||
+          message.content.some(
+            (part) => part.type === "tool-call" && live.has(part.toolCallId)
+          )
+        )
+    ),
   }
-  return { ...history, messages }
 }

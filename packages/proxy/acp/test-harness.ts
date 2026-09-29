@@ -593,6 +593,8 @@ export type HarnessOptions = {
   onReplay?: () => void
   /** Stands for a provider with no catalog change signal. */
   withoutCatalogChanges?: boolean
+  /** Each Agent's working folder; defaults to `/` for every Agent. */
+  agentFolder?: ServerRuntime["agentFolder"]
   /** The provider's Agent write; refuses as untested by default. */
   updateAgent?: ServerRuntime["updateAgent"]
   /**
@@ -768,6 +770,7 @@ export async function harness(options: HarnessOptions = {}) {
     link: READY_LINK,
     runtimeInfo: async () => RUNTIME_INFO,
     listAgents: async () => ({ revision: "rev-1", agents: [] }),
+    agentFolder: options.agentFolder ?? (async () => "/"),
     updateAgent,
     listAllSessions,
     listSessions: async (_agentId, limit, offset) =>
@@ -937,6 +940,8 @@ export async function harness(options: HarnessOptions = {}) {
           protocolVersion: ACP_PROTOCOL_VERSION,
           info: { name: "aos-browser", version: "1" },
           capabilities: {
+            // The harness answers questions, so it declares it can.
+            elicitation: { form: {} },
             _meta: {
               [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
             },
@@ -1096,9 +1101,7 @@ export async function prompt(
       typeof content === "string" ? [{ type: "text", text: content }] : content,
     _meta: { [AOS_META_KEY]: meta },
   })
-  return z
-    .object({ _meta: z.object({ aos: z.object({ messageId: z.string() }) }) })
-    .parse(accepted)._meta.aos.messageId
+  return accepted.messageId
 }
 
 /** Opens a Session and waits for the execution report its resume owes. */
@@ -1196,33 +1199,29 @@ export async function liveTurn(
 }
 
 /**
- * What Hermes stores of a turn still running: its prompt, then the rows it
- * folded into one message so far. Stored by default as the turn is admitted.
+ * What Hermes stores of a turn still running: its prompt under `promptId`,
+ * the id the live turn's prompt carries, then the rows it folded into one
+ * message so far, under the id its stream's `chunk` carries. Stored by
+ * default as the turn is admitted.
  */
-export function storedLiveTurn(
+export function storedLiveTurn({
+  promptId = "user-1",
+  replyId = "assistant-1",
   createdAt = new Date().toISOString(),
-  correction?: string
-): SessionHistoryResponse["messages"] {
+}: {
+  promptId?: string
+  replyId?: string
+  createdAt?: string
+} = {}): SessionHistoryResponse["messages"] {
   return [
     {
-      id: "user-1",
+      id: promptId,
       role: "user",
       content: [{ type: "text", text: " Summarize " }],
       createdAt,
     },
-    ...(correction === undefined
-      ? []
-      : [
-          {
-            id: "correction-1",
-            role: "user" as const,
-            content: [{ type: "text" as const, text: correction }],
-            createdAt,
-            correction: true as const,
-          },
-        ]),
     {
-      id: "assistant-0",
+      id: replyId,
       role: "assistant",
       content: [{ type: "text", text: "Live" }],
       createdAt,

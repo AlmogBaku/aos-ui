@@ -239,7 +239,7 @@ describe("OpenCodeEventProjector", () => {
     expect(events.slice(0, -1)).toEqual([
       {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: "assistant-1",
+        messageId: "assistant-1:thought",
         text: "think",
       },
       {
@@ -674,31 +674,6 @@ describe("OpenCodeEventProjector", () => {
       admissionId: "next-admission",
       admissionBoundary: true,
     })
-  })
-
-  it("names the prompt by the admission OpenCode saved it under", () => {
-    const admitted = live(1, "session.next.prompt.admitted", {
-      timestamp: 1,
-      messageID: "aos-admission",
-      prompt: { text: "Hello" },
-      delivery: "queue",
-    })
-    const matched = new OpenCodeEventProjector(sessionId, 0, {
-      admissionId: "aos-admission",
-      userMessageId: "user-1",
-    })
-    const unmatched = new OpenCodeEventProjector(sessionId, 0, {
-      admissionId: "aos-admission",
-      userMessageId: "user-1",
-    })
-
-    matched.accept(admitted)
-
-    expect(matched.finish().events.at(-1)).toMatchObject({
-      kind: TurnEventKind.TurnEnded,
-      saved: { user: { messageId: "user-1", savedId: "aos-admission" } },
-    })
-    expect(unmatched.finish().events.at(-1)).not.toHaveProperty("saved")
   })
 
   it("repairs missed non-durable text deltas from a real durable ended event", () => {

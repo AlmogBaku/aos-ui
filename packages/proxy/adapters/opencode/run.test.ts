@@ -34,8 +34,6 @@ const admission = {
   "run-recovered":
     "aos_957d880ef3fdbdf4c7672021817c07ee7a619ed7e18b557da7e9b07adad0b12c",
 }
-/** The first run's prompt, saved under the admission OpenCode stored it as. */
-const saved = { user: { messageId: "user-1", savedId: admission["run-1"] } }
 
 function input(overrides: Partial<PromptTurnInput> = {}): TurnInput {
   return {
@@ -385,7 +383,7 @@ describe("OpenCodeRunEngine", () => {
     expect(state.observation.abort).toHaveBeenCalledOnce()
   })
 
-  it("repeats interaction discovery when a scoped event overlaps its read", async () => {
+  it("repeats interaction discovery when a scoped event overlaps its read, and Stop interrupts the wait", async () => {
     const firstRead = deferred()
     const request = {
       requestId: "question-current",
@@ -429,12 +427,18 @@ describe("OpenCodeRunEngine", () => {
     await until(() => expect(state.observation.delivered).toBe(1))
     firstRead.resolve()
 
-    await expect(discovered).resolves.toMatchObject({
+    const wait = await discovered
+    expect(wait).toMatchObject({
       state: "waiting-for-input",
       requests: [request],
     })
     expect(discover).toHaveBeenCalledTimes(2)
     expect(state.observation.abort).toHaveBeenCalledOnce()
+
+    await expect(wait!.handle.stop()).resolves.toBe("idle")
+    expect(state.sessions.interrupt).toHaveBeenCalledExactlyOnceWith(
+      scope.providerSessionId
+    )
   })
 
   it("subscribes before prompt admission and finishes only after wait plus authoritative idle reconciliation", async () => {
@@ -499,7 +503,7 @@ describe("OpenCodeRunEngine", () => {
         messageId: "assistant-1",
         text: "Done",
       },
-      { kind: TurnEventKind.TurnEnded, saved },
+      { kind: TurnEventKind.TurnEnded },
     ])
     for (const value of events)
       expect(TurnEventSchema.safeParse(value).success).toBe(true)
@@ -1084,7 +1088,6 @@ describe("OpenCodeRunEngine", () => {
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     expect((await collect(handle)).at(-1)).toEqual({
       kind: TurnEventKind.TurnEnded,
-      saved,
     })
   })
 
@@ -1178,7 +1181,7 @@ describe("OpenCodeRunEngine", () => {
     const [events] = terminal
     expect(events).toEqual([
       { kind: TurnEventKind.TurnStarted, startedAt: expect.any(String) },
-      { kind: TurnEventKind.TurnEnded, saved },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(next.turnId).toBe("run-2")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()

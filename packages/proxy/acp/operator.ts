@@ -1,4 +1,5 @@
 import type { Logger } from "../../lifecycle"
+import { AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
@@ -56,9 +57,19 @@ export function createOperatorAcpService({
     role,
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
-    connection: (connectionId, principalId): AcpConnectionContext => ({
+    agentAddress: {
+      path: AOS_ACP_OPERATOR_PATH,
+      exists: async (agentId) =>
+        (await catalog.agents()).agents.some(
+          ({ summary }) => summary.id === agentId
+        ),
+      publicError: (cause) => runtimeInstance.runtime.publicError(cause),
+    },
+    logger,
+    connection: (connectionId, principalId, agentId): AcpConnectionContext => ({
       connectionId,
       principalId,
+      ...(agentId === undefined ? {} : { agentId }),
       role,
       publicError: (cause) => runtimeInstance.runtime.publicError(cause),
       steerAck: runtimeInstance.runtime.translation?.steerAck,

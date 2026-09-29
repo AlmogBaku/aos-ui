@@ -106,7 +106,7 @@ function causeChain(error: unknown): unknown[] {
 }
 
 /** Advance the clock until `promise` settles, as a runtime waiting on it would. */
-async function until<T>(clock: Clock, promise: Promise<T>): Promise<T> {
+export async function until<T>(clock: Clock, promise: Promise<T>): Promise<T> {
   let settled = false
   void promise.then(
     () => (settled = true),
@@ -128,6 +128,25 @@ function unreachable(name: string) {
   return function unreachableTransport() {
     throw new Error(`The runtime contract reached the global ${name}`)
   }
+}
+
+/**
+ * Stubs the global `fetch` and `WebSocket` with transports that throw, until
+ * `vi.unstubAllGlobals()`.
+ */
+export function stubUnreachableTransports() {
+  // A vendored client reads the ready states off the global class.
+  const { CONNECTING, OPEN, CLOSING, CLOSED } = WebSocket
+  vi.stubGlobal("fetch", unreachable("fetch"))
+  vi.stubGlobal(
+    "WebSocket",
+    Object.assign(unreachable("WebSocket"), {
+      CONNECTING,
+      OPEN,
+      CLOSING,
+      CLOSED,
+    })
+  )
 }
 
 /** Every event the handle streams, gathered as it arrives. */
@@ -195,20 +214,7 @@ export function runServerRuntimeContract(
   }
 
   describe(`${name} server runtime contract`, () => {
-    beforeEach(() => {
-      // A vendored client reads the ready states off the global class.
-      const { CONNECTING, OPEN, CLOSING, CLOSED } = WebSocket
-      vi.stubGlobal("fetch", unreachable("fetch"))
-      vi.stubGlobal(
-        "WebSocket",
-        Object.assign(unreachable("WebSocket"), {
-          CONNECTING,
-          OPEN,
-          CLOSING,
-          CLOSED,
-        })
-      )
-    })
+    beforeEach(stubUnreachableTransports)
     afterEach(() => {
       vi.unstubAllGlobals()
     })

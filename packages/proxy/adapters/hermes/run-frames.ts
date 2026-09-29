@@ -133,18 +133,13 @@ export function usageCost(value: unknown): Cost | undefined {
 }
 
 /**
- * The rows a turn's user message and its reply were committed under, from the
+ * The row a turn's user message was committed under, from the
  * `persisted_turn` receipt on `message.complete`. Hermes marks a receipt
  * `complete` only when every row the turn appended was committed, in order,
  * with one user row opening them and the final assistant row closing them, and
- * with no compaction or redirect in between. The row after the user row is
- * then the reply's first, the one history names the reply by: a tool row only
- * follows an assistant row, and Hermes writes no system row mid-turn. Any
- * other receipt proves nothing.
+ * with no compaction or redirect in between. Any other receipt proves nothing.
  */
-export function persistedTurnRows(
-  value: unknown
-): { user: number; reply: number } | undefined {
+export function persistedTurnRows(value: unknown): number | undefined {
   if (!isRecord(value) || value.complete !== true) return undefined
   const rows = value.row_ids
   if (
@@ -161,7 +156,7 @@ export function persistedTurnRows(
     value.final_assistant_row_id !== rows.at(-1)
   )
     return undefined
-  return { user: rows[0]!, reply: rows[1]! }
+  return rows[0]!
 }
 
 /** Hermes reports a span in seconds; AOS carries whole milliseconds. */

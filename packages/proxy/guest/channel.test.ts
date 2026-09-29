@@ -106,7 +106,10 @@ async function connectGuest(
   await connection.agent.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
-    capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+    capabilities: {
+      elicitation: { form: {} },
+      _meta: { [AOS_META_KEY]: { historyPages: true } },
+    },
   })
   await connection.agent.request(methods.agent.auth.login, {
     methodId: AOS_AUTH_METHOD_INVITE,
@@ -136,10 +139,12 @@ describe("guest in a Session channel", () => {
   })
 
   it("shows a guest a live turn history already stored once", async () => {
-    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    const history: ReturnType<typeof storedLiveTurn> = []
+    const test = await harness({ providerIds: true, history })
     await test.list()
     const guest = await connectGuest(test)
-    await liveTurn(test, [test])
+    const messageId = await liveTurn(test, [test])
+    history.push(...storedLiveTurn({ promptId: messageId }))
 
     await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")

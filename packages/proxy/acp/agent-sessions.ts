@@ -1,3 +1,5 @@
+import { posix } from "node:path"
+
 import type {
   AgentContext,
   SessionInfo,
@@ -37,8 +39,19 @@ import {
  * which Sessions this connection has joined.
  */
 
-/** A durable Session's `cwd`: AOS Sessions are not workspace-rooted. */
-const SESSION_CWD = "/"
+/**
+ * A folder as the proxy compares it, on its string alone: `.`, `..` and
+ * repeated or trailing separators fold, and nothing asks the filesystem. A
+ * relative path has no reading and is refused.
+ */
+export function normalizeFolder(folder: string) {
+  if (!folder.startsWith("/"))
+    throw invalidParams("cwd must be an absolute path")
+  const normalized = posix.normalize(folder)
+  return normalized.length > 1 && normalized.endsWith("/")
+    ? normalized.slice(0, -1)
+    : normalized
+}
 
 /** A Session row's `_meta.aos`, on a listed row and on its update alike. */
 export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
@@ -52,10 +65,11 @@ export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
   }
 }
 
-export function sessionInfoOf(row: SessionRow): SessionInfo {
+/** A listed row, under the folder its Agent's Sessions run in. */
+export function sessionInfoOf(row: SessionRow, cwd: string): SessionInfo {
   return {
     sessionId: row.id,
-    cwd: SESSION_CWD,
+    cwd,
     title: row.title,
     updatedAt: row.updatedAt,
     _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },

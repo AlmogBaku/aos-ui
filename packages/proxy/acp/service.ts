@@ -2,11 +2,18 @@ import { randomUUID } from "node:crypto"
 
 import { AcpServer } from "@agentclientprotocol/sdk/experimental/server"
 
-import { Deadline, defaultClock, type Clock } from "../../lifecycle"
+import {
+  Deadline,
+  defaultClock,
+  type Clock,
+  type Logger,
+} from "../../lifecycle"
 import { withinGrace } from "../grace"
+import type { SocketRefusal } from "../server"
 import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { createAcpSocket, type PublicErrors } from "./socket"
 import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
+import { errorNotificationOf } from "./validation"
 import type { Role } from "../core/member"
 
 /**
@@ -24,12 +31,17 @@ const CONNECTION_ID_HEADER = "Acp-Connection-Id"
  */
 const SERVER_CLOSE_GRACE_MS = 1_000
 
+const NOT_SERVED: SocketRefusal = { refused: 404 }
+const CATALOG_UNAVAILABLE: SocketRefusal = { refused: 503 }
+
 /** One authorized ACP upgrade, carried to `open` through the peer's data. */
 export type AcpUpgrade = {
   principalId: string
   role: Role
   connectionId: string
   headers: Readonly<Record<string, string>>
+  /** The Agent the upgrade's address names; absent on the shared address. */
+  agentId?: string
 }
 
 export type AcpPeer = {
@@ -49,8 +61,27 @@ export type AcpServiceOptions = {
   role: Role
   /** Builds the per-connection ACP agent app. */
   agent: AosAcpAgentFactory
-  /** Builds the per-connection proxy state the agent app runs against. */
-  connection(connectionId: string, principalId: string): AcpConnectionContext
+  /**
+   * Builds the per-connection proxy state the agent app runs against, for the
+   * Agent its address names, if any.
+   */
+  connection(
+    connectionId: string,
+    principalId: string,
+    agentId?: string
+  ): AcpConnectionContext
+  /**
+   * Serves each Agent at `path/agents/<agentId>` beside `path` itself, for an
+   * Agent the catalog holds; absent, the listener serves its one path.
+   */
+  agentAddress?: {
+    path: string
+    exists(agentId: string): Promise<boolean>
+    /** Classifies a failed lookup, as a connection's `publicError` does. */
+    publicError: AcpConnectionContext["publicError"]
+  }
+  /** Where a refused upgrade writes its one line. */
+  logger?: Logger
   /**
    * Who every connection on this listener belongs to. It keys per-operator
    * state the proxy holds outside one connection, so each listener states it
@@ -85,16 +116,56 @@ export function createAcpService(options: AcpServiceOptions) {
    */
   const handshaking = new Map<string, () => void>()
 
+  /**
+   * The Agent an upgrade's path names, none for the shared address, or the
+   * refusal of a path this listener does not serve. The id is one path
+   * segment, decoded once, and exactly an Agent the catalog holds.
+   */
+  async function addressed(
+    pathname: string
+  ): Promise<{ agentId?: string } | SocketRefusal> {
+    const address = options.agentAddress
+    if (!address || pathname === address.path) return {}
+    const prefix = `${address.path}/agents/`
+    const segment = pathname.startsWith(prefix)
+      ? pathname.slice(prefix.length)
+      : ""
+    let agentId: string
+    try {
+      agentId = decodeURIComponent(segment)
+    } catch {
+      return NOT_SERVED
+    }
+    if (!agentId || agentId.includes("/")) return NOT_SERVED
+    try {
+      if (await address.exists(agentId)) return { agentId }
+    } catch (cause) {
+      const { code } = errorNotificationOf(address.publicError, cause)
+      options.logger?.warn({ errorCode: code }, "acp.upgrade.catalog_failed")
+      return CATALOG_UNAVAILABLE
+    }
+    options.logger?.info({ agentId }, "acp.upgrade.agent_unknown")
+    return NOT_SERVED
+  }
+
   async function authorizeUpgrade(
     request: Request
-  ): Promise<AcpUpgrade | undefined> {
-    if (request.headers.get("origin") !== options.publicOrigin) return undefined
+  ): Promise<AcpUpgrade | SocketRefusal | undefined> {
+    // A client that is no browser sends no Origin; a browser's must be ours.
+    const origin = request.headers.get("origin")
+    if (origin !== null && origin !== options.publicOrigin) {
+      options.logger?.info({}, "acp.upgrade.origin_refused")
+      return undefined
+    }
+    const target = await addressed(new URL(request.url).pathname)
+    if ("refused" in target) return target
     const connectionId = randomUUID()
     return {
       principalId,
       role: options.role,
       connectionId,
       headers: { [CONNECTION_ID_HEADER]: connectionId },
+      ...target,
     }
   }
 
@@ -109,7 +180,8 @@ export function createAcpService(options: AcpServiceOptions) {
     }
     const context = options.connection(
       upgrade.connectionId,
-      upgrade.principalId
+      upgrade.principalId,
+      upgrade.agentId
     )
     // Thread the clock into the context so the connection machine and the
     // handshake deadline share the same injected clock.

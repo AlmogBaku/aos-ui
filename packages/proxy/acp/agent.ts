@@ -5,6 +5,7 @@ import {
   type AgentApp,
   type AgentContext,
   type JsonRpcId,
+  type NewSessionRequest,
   type ResumeSessionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
@@ -19,6 +20,7 @@ import {
 import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
+  AOS_ACP_AGENTS_PATH,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
@@ -30,6 +32,7 @@ import {
   AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
+  AosSessionPartRequestSchema,
   AosSessionResumeMetaSchema,
   AosSessionUpdateRequestSchema,
   AosSteerRequestSchema,
@@ -45,6 +48,7 @@ import {
   decodeHistoryCursor,
   encodeCursor,
   historyCursor,
+  normalizeFolder,
 } from "./agent-sessions"
 import {
   echoedParts,
@@ -75,6 +79,7 @@ import {
   publicCodeOf,
   publicRequestError,
   refusalError,
+  unsupported,
 } from "./validation"
 
 /**
@@ -174,6 +179,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       steerAck: context.steerAck,
       describe: (cause) => errorNotificationOf(context.publicError, cause),
       replied,
+      elicits: (mode) => elicitationModes.has(mode),
       report: (sessionId, cause) =>
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
@@ -265,8 +271,49 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
   }
 
+  /**
+   * The Agent a request addresses: the connection's own, which a request may
+   * name but not replace, or on the shared address the one it names.
+   */
+  function agentOf(named: string | undefined) {
+    if (context.agentId === undefined) return named
+    if (named !== undefined && named !== context.agentId) throw invalidParams()
+    return context.agentId
+  }
+
+  /** The Agent's folder as the proxy compares it, or `undefined`. */
+  async function folderOf(agentId: string) {
+    const folder = await catalog.folder(agentId)
+    return folder === undefined ? undefined : normalizeFolder(folder)
+  }
+
+  /**
+   * Refuses a Session of this connection's catalog rooted anywhere but its
+   * Agent's folder, and anything the client asks the runtime to attach:
+   * every runtime works out its own folder and servers, and never gets the
+   * client's. A Session its stack scopes, as an invitation's, names none.
+   */
+  async function requireFolder(
+    agentId: string,
+    params: Pick<
+      NewSessionRequest,
+      "cwd" | "mcpServers" | "additionalDirectories"
+    >
+  ) {
+    if (params.mcpServers?.length)
+      throw invalidParams("mcpServers must be empty")
+    if (params.additionalDirectories?.length)
+      throw invalidParams("additionalDirectories must be empty")
+    const folder = await folderOf(agentId)
+    if (folder === undefined) throw unsupported("no working folder")
+    if (normalizeFolder(params.cwd) !== folder)
+      throw invalidParams(`cwd must be ${folder}`)
+  }
+
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
+  /** The elicitation modes this client declared it answers (`initialize`). */
+  let elicitationModes = new Set<string>()
 
   /**
    * One older page of a Session this connection resumed, however it did, as
@@ -291,19 +338,18 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    */
   async function resume(
     command: MemberCommands["resume"],
-    client: AgentContext
+    client: AgentContext,
+    params: ResumeSessionRequest
   ): Promise<CommandResults["resume"]> {
     if (!command.scope && command.agentId !== undefined)
       sessions.adopt(command.sessionId, command.agentId)
-    const membership = sessions.join(
-      client,
-      command.scope ?? sessions.scope(command.sessionId)
-    )
-    return context.channels.resume(
-      membership,
-      command,
-      command.fromStart ? { paged: clientPagesHistory } : undefined
-    )
+    const scope = command.scope ?? sessions.scope(command.sessionId)
+    if (!command.scope) await requireFolder(scope.agentId, params)
+    const membership = sessions.join(client, scope)
+    return context.channels.resume(membership, command, {
+      fromStart: command.fromStart,
+      paged: clientPagesHistory,
+    })
   }
 
   /**
@@ -371,6 +417,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       params.capabilities?._meta?.[AOS_META_KEY] ?? {}
     )
     clientPagesHistory = client.success && client.data.historyPages
+    const { elicitation } = params.capabilities ?? {}
+    elicitationModes = new Set(
+      (["form", "url"] as const).filter((mode) => elicitation?.[mode] != null)
+    )
     // A connection still to authenticate learns nothing about the deployment
     // it reached.
     const { authentication } = context
@@ -389,10 +439,9 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
       },
       capabilities: {
-        session: {
-          prompt: { image: {}, embeddedContext: {} },
-          ...(authentication ? {} : { delete: {} }),
-        },
+        // Text and resource links are every agent's baseline; no runtime port
+        // takes an image or embedded context, so neither is advertised.
+        session: authentication ? {} : { delete: {} },
       },
       authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {
@@ -428,14 +477,20 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, requestId }) => {
       admit(methods.agent.session.new, "new")
       const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
+      const agentId = agentOf(meta.agentId)
+      if (agentId === undefined)
+        throw invalidParams(
+          `name the Agent, or connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`
+        )
       const { sessionId } = await perform(
         "new",
         {
-          agentId: meta.agentId,
+          agentId,
           ...(meta.title === undefined ? {} : { title: meta.title }),
           ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
         },
         async ({ agentId, ...input }) => {
+          await requireFolder(agentId, params)
           // A repeat of a client id answers the Session its first create made.
           const created = SessionCreateResponseSchema.parse(
             await context.channels.createSession(
@@ -460,21 +515,59 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.list, async ({ params, requestId }) => {
     admit(methods.agent.session.list, "list")
     const meta = parseMeta(AosSessionListMetaSchema, params._meta)
+    const agentId = agentOf(meta.agentId)
+    const filter = params.cwd == null ? undefined : normalizeFolder(params.cwd)
+    /** Each listed Agent's folder, read once for this request. */
+    const folders = new Map<string, string | undefined>()
     const listed = await perform(
       "list",
       {
-        ...(meta.agentId === undefined ? {} : { agentId: meta.agentId }),
+        ...(agentId === undefined ? {} : { agentId }),
         offset: decodeCursor(params.cursor),
       },
       async ({ agentId, offset }) => {
+        if (agentId !== undefined) {
+          const folder = await folderOf(agentId)
+          if (folder === undefined) throw unsupported("no working folder")
+          if (filter !== undefined && filter !== folder) return { rows: [] }
+          folders.set(agentId, folder)
+        }
         const page = await catalog.list(agentId, offset)
-        sessions.remember(page.rows)
-        return page
+        const others = [...new Set(page.rows.map((row) => row.agentId))].filter(
+          (id) => !folders.has(id)
+        )
+        await Promise.all(
+          others.map(async (id) => {
+            // A Session with no folder cannot be resumed, so it is not listed;
+            // one Agent's unreadable folder leaves every other Agent's rows.
+            const folder = await folderOf(id).catch((cause: unknown) => {
+              const { code } = errorNotificationOf(context.publicError, cause)
+              context.logger.warn(
+                { agentId: id, errorCode: code },
+                "session.list.folder_read_failed"
+              )
+              return null
+            })
+            if (folder === undefined)
+              context.logger.info({ agentId: id }, "session.list.no_folder")
+            folders.set(id, folder ?? undefined)
+          })
+        )
+        const rows = page.rows.filter((row) => {
+          const folder = folders.get(row.agentId)
+          return (
+            folder !== undefined && (filter === undefined || filter === folder)
+          )
+        })
+        sessions.remember(rows)
+        return { ...page, rows }
       },
       requestId
     )
     return {
-      sessions: listed.rows.map(sessionInfoOf),
+      sessions: listed.rows.map((row) =>
+        sessionInfoOf(row, folders.get(row.agentId)!)
+      ),
       ...(listed.nextOffset === undefined
         ? {}
         : { nextCursor: encodeCursor(listed.nextOffset) }),
@@ -492,28 +585,34 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const { page } = await perform(
           "older-page",
           { sessionId: params.sessionId, cursor },
-          replayOlder,
+          async (command) => {
+            // Only a Session of this connection's catalog has an owner here.
+            const agentId = sessions.owner(command.sessionId)
+            if (agentId !== undefined) await requireFolder(agentId, params)
+            return replayOlder(command)
+          },
           requestId
         )
         return { _meta: { [AOS_META_KEY]: { history: historyCursor(page) } } }
       }
       admit(method, "resume")
       const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+      const agentId = agentOf(meta.agentId)
       const resumed = await perform(
         "resume",
         {
           sessionId: params.sessionId,
           ...meta,
+          ...(agentId === undefined ? {} : { agentId }),
           fromStart: params.replayFrom?.type === "start",
         },
-        (command) => resume(command, client),
+        (command) => resume(command, client, params),
         requestId
       )
       const { history } = resumed
       return {
         _meta: {
           [AOS_META_KEY]: {
-            ...(resumed.resync ? { resync: true } : {}),
             ...(history === undefined
               ? {}
               : { history: historyCursor(history) }),
@@ -555,7 +654,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         ),
         signal
       )
-      return { _meta: { [AOS_META_KEY]: { messageId } } }
+      return { messageId }
     }
   )
 
@@ -603,8 +702,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     await perform(
       "close",
       { sessionId: params.sessionId },
+      // As ACP closes a Session: its work stops, for every member, and then
+      // this connection leaves it.
       async (command) => {
-        sessions.part(command.sessionId)
+        const membership = sessions.membership(command.sessionId)
+        if (!membership) throw notFound()
+        try {
+          await membership.cancel()
+        } finally {
+          sessions.part(command.sessionId)
+        }
       },
       requestId
     )
@@ -617,13 +724,40 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       "delete",
       { sessionId: params.sessionId },
       async (command) => {
-        await catalog.delete(sessions.scope(command.sessionId))
+        const agentId = sessions.owner(command.sessionId) ?? context.agentId
+        if (agentId === undefined)
+          throw invalidParams(`connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`)
+        const scope = catalog.scope(agentId, command.sessionId)
+        // A Session its Agent cannot find is already gone.
+        if (scope) {
+          try {
+            await catalog.delete(scope)
+          } catch (cause) {
+            if (
+              publicCodeOf(publicRequestError(context.publicError, cause)) !==
+              "not_found"
+            )
+              throw cause
+          }
+        }
         sessions.forget(command.sessionId)
       },
       requestId
     )
     return {}
   })
+
+  // Leaves a Session this connection joined, whose work goes on for the rest.
+  app.onRequest(
+    AOS_METHODS.session.part,
+    undecoded,
+    async ({ params: raw }) => {
+      stack()
+      const { sessionId } = AosSessionPartRequestSchema.parse(raw)
+      sessions.part(sessionId)
+      return {}
+    }
+  )
 
   app.onRequest(
     AOS_METHODS.session.update,
@@ -723,7 +857,30 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     withoutParams,
     async ({ requestId }) => {
       admit(AOS_METHODS.agents.list, "agents")
-      return await perform("agents", {}, () => catalog.agents(), requestId)
+      return await perform(
+        "agents",
+        {},
+        async () => {
+          const listed = await catalog.agents()
+          const agents = await Promise.all(
+            listed.agents.map(async (entry) => {
+              const agentId = entry.summary.id
+              // An unread folder only means the row names none.
+              const folder = await folderOf(agentId).catch((cause: unknown) => {
+                const { code } = errorNotificationOf(context.publicError, cause)
+                context.logger.warn(
+                  { agentId, errorCode: code },
+                  "agents.folder.read_failed"
+                )
+                return undefined
+              })
+              return folder === undefined ? entry : { ...entry, folder }
+            })
+          )
+          return { ...listed, agents }
+        },
+        requestId
+      )
     }
   )
 

@@ -49,10 +49,7 @@ import {
   AosHistoryPageResponseMetaSchema,
   AosHistoryPageTagSchema,
   AosInitializeMetaSchema,
-  AosPromptResponseMetaSchema,
-  AosSessionInvalidatedNotificationSchema,
   AosSessionResumeResponseMetaSchema,
-  AosSteerAcceptedNotificationSchema,
   AosSteerResponseSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
@@ -100,11 +97,10 @@ const SILENT_LOGGER: Logger = {
 }
 
 /**
- * ACP requires a workspace root on `session/new` and `session/resume`. Agent
- * worktrees are server-owned, so the browser sends the root and the proxy
- * resolves the Session's real cwd from the Agent.
+ * A guest's `cwd`: the proxy roots its invitation's Session itself. An
+ * operator's names its Agent's folder instead, which the proxy checks.
  */
-const SERVER_OWNED_CWD = "/"
+const GUEST_CWD = "/"
 
 /** An ACP payload's `_meta`, keyed by extension; only AOS's half is read. */
 const AosEnvelopeSchema = z.object({
@@ -116,10 +112,7 @@ const ElicitationScopeSchema = z.object({ sessionId: z.string().min(1) })
 
 const NOTIFICATION_PARSERS: Readonly<Record<string, ParamsParser<unknown>>> = {
   [AOS_METHODS.notify.activity]: AosActivityNotificationSchema,
-  [AOS_METHODS.notify.steerAccepted]: AosSteerAcceptedNotificationSchema,
   [AOS_METHODS.notify.composerPrefill]: AosComposerPrefillNotificationSchema,
-  [AOS_METHODS.notify.sessionInvalidated]:
-    AosSessionInvalidatedNotificationSchema,
   [AOS_METHODS.notify.catalogInvalidated]: z.unknown().optional(),
   [AOS_METHODS.notify.error]: AosErrorNotificationSchema,
 }
@@ -607,7 +600,7 @@ export function createAcpConnection(
     page?: PageUpdates
     /** Whether a join has replayed it from the start yet. */
     replayed: boolean
-    /** A from-start replay is owed: asked for, or a rejoin's resync. */
+    /** A from-start replay is owed: asked for, or one that did not complete. */
     replayOwed: boolean
     /** The from-start replay in flight and the settle callbacks it owes. */
     replaying?: {
@@ -623,6 +616,10 @@ export function createAcpConnection(
   // The proxy answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
+  /** Each Agent's folder, as `_aos/agents/list` last named it. */
+  const folders = new Map<string, string | undefined>()
+  /** Each listed Session's folder, for one whose Agent this tab never named. */
+  const listedCwds = new Map<string, string>()
 
   let status: AcpConnectionStatus = "connecting"
   let outage: AcpConnectionOutage | undefined
@@ -923,9 +920,13 @@ export function createAcpConnection(
         // the proxy's version acts as the AOS extension version instead.
         version: buildId ?? clientInfo.version,
       },
-      // This client pages older history itself, so a from-start resume may
-      // replay only the newest page.
-      capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+      // The question composer answers form elicitations, so the proxy asks
+      // this client its Session's questions. This client pages older history
+      // itself, so a from-start resume may replay only the newest page.
+      capabilities: {
+        elicitation: { form: {} },
+        _meta: { [AOS_META_KEY]: { historyPages: true } },
+      },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
     // Both sides carry a build id: a mismatch means the proxy serves another
@@ -1002,6 +1003,8 @@ export function createAcpConnection(
     open.replaying = replaying
     let replayed = false
     try {
+      const cwd = await cwdOf(sessionId, agentId)
+      if (signal.aborted) return
       const response = await requestOn(
         transport,
         fromStart ? "long" : "medium",
@@ -1010,7 +1013,7 @@ export function createAcpConnection(
             methods.agent.session.resume,
             {
               sessionId,
-              cwd: SERVER_OWNED_CWD,
+              cwd,
               ...(fromStart ? { replayFrom: { type: "start" } } : {}),
               _meta: {
                 [AOS_META_KEY]: {
@@ -1035,7 +1038,6 @@ export function createAcpConnection(
         open.replayed = true
         replayed = true
       }
-      if (meta.resync) open.replayOwed = true
     } finally {
       // A from-start replay that did not complete is still owed: its
       // listeners may already hold part of it.
@@ -1043,6 +1045,34 @@ export function createAcpConnection(
       if (open.replaying === replaying) open.replaying = undefined
       for (const settle of replaying?.settles ?? []) settle(replayed)
     }
+  }
+
+  async function listAgents() {
+    const listed = AosAgentsListResponseSchema.parse(
+      await request("short", (agent, options) =>
+        agent.request(AOS_METHODS.agents.list, undefined, options)
+      )
+    )
+    folders.clear()
+    for (const entry of listed.agents)
+      folders.set(entry.summary.id, entry.folder)
+    return listed
+  }
+
+  /**
+   * The `cwd` a new or resumed Session names: its Agent's folder, read from
+   * the Agents list again whenever this tab holds none for it, since a list
+   * can miss a folder it reads next time. Still none fails the call here.
+   */
+  async function cwdOf(sessionId: string | undefined, agentId?: string) {
+    if ((await initialized).role === "guest") return GUEST_CWD
+    if (agentId === undefined)
+      return (sessionId && listedCwds.get(sessionId)) ?? ""
+    if (folders.get(agentId) === undefined) await listAgents()
+    const folder = folders.get(agentId)
+    if (folder === undefined)
+      throw new Error("The Agent's folder could not be read")
+    return folder
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1163,7 +1193,10 @@ export function createAcpConnection(
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
   }
 
-  /** Drops a Session no listener came back to, and tells the proxy so. */
+  /**
+   * Drops a Session no listener came back to, and tells the proxy so. Its
+   * work goes on: `session/close` would stop it.
+   */
   function part(sessionId: string, open: OpenSession) {
     sessions.delete(sessionId)
     owners.delete(sessionId)
@@ -1173,9 +1206,9 @@ export function createAcpConnection(
     settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
-      agent.request(methods.agent.session.close, { sessionId }, options)
+      agent.request(AOS_METHODS.session.part, { sessionId }, options)
     ).catch((err: unknown) => {
-      logger.debug({ err, sessionId }, "acp.session.close.failed")
+      logger.debug({ err, sessionId }, "acp.session.part.failed")
     })
   }
 
@@ -1191,12 +1224,13 @@ export function createAcpConnection(
     const updates: PageUpdates = []
     open.page = updates
     try {
+      const cwd = await cwdOf(sessionId, owners.get(sessionId))
       const response = await request("medium", (agent, options) =>
         agent.request(
           methods.agent.session.resume,
           {
             sessionId,
-            cwd: SERVER_OWNED_CWD,
+            cwd,
             replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
           },
           options
@@ -1416,10 +1450,11 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
+      const cwd = await cwdOf(undefined, meta.agentId)
       const { sessionId } = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
-          { cwd: SERVER_OWNED_CWD, _meta: { [AOS_META_KEY]: meta } },
+          { cwd, _meta: { [AOS_META_KEY]: meta } },
           options
         )
       )
@@ -1446,6 +1481,8 @@ export function createAcpConnection(
           options
         )
       )
+      for (const { sessionId, cwd } of response.sessions)
+        listedCwds.set(sessionId, cwd)
       return {
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
@@ -1467,7 +1504,7 @@ export function createAcpConnection(
           options
         )
       )
-      return AosPromptResponseMetaSchema.parse(aosMetaOf(response._meta))
+      return { messageId: response.messageId }
     },
 
     cancel(sessionId) {
@@ -1524,13 +1561,7 @@ export function createAcpConnection(
       })
     },
 
-    async listAgents() {
-      return AosAgentsListResponseSchema.parse(
-        await request("short", (agent, options) =>
-          agent.request(AOS_METHODS.agents.list, undefined, options)
-        )
-      )
-    },
+    listAgents,
 
     async updateAgent(update) {
       const response = await request("short", (agent, options) =>

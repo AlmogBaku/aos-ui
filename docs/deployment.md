@@ -81,10 +81,15 @@ serves static assets and the private TypeScript proxy on separate operator and
 guest listeners. External ingress owns TLS; the browser uses the normalized
 `/api/aos/v1` API for catalogs, history, and ACP v2 WebSocket run streams at
 `/api/aos/v1/acp`. External reverse proxies must pass WebSocket upgrades on
-`/api/*/acp`.
+`/api/*/acp` and must pass the `Origin` header through unchanged; a proxy that
+rewrites or strips it will cause the ACP service to refuse every browser
+connection.
+
 The operator listener has no application authentication: anyone who can reach
-it has full operator access. The operator listener has no guest API route, and
-the guest listener has no operator API route.
+it has full operator access. The per-Agent address
+`/api/aos/v1/acp/agents/<agentId>` scopes a connection to one Agent; it is not
+an access boundary and must never be exposed publicly. The operator listener has
+no guest API route, and the guest listener has no operator API route.
 
 Start from [`deploy/proxy.hermes.example.yaml`](../deploy/proxy.hermes.example.yaml)
 and customize its listener origins and Hermes address. Its `mcpApps` block

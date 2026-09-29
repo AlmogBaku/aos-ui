@@ -4,6 +4,7 @@ import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
+  StopReason,
   TurnEventKind,
   type ExecutionEvent,
   type TurnEvent,
@@ -15,6 +16,7 @@ import {
   ServerSessionNotFoundError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
+  ServerTurnEndedError,
   ServerTurnStopNotDispatchedError,
   ServerTurnUncertainError,
   type ServerTurnEngine,
@@ -1071,8 +1073,11 @@ describe("SessionCoordinator", () => {
       access("reload")
     )
     const readReload = reader(reload)
-    await expect(readReload()).resolves.toMatchObject({
+    // A reset names only its code: no message the browser would show.
+    await expect(readReload()).resolves.toEqual({
+      done: false,
       value: {
+        sequence: expect.any(Number),
         event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
       },
     })
@@ -1121,10 +1126,7 @@ describe("SessionCoordinator", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000)
     try {
       const own = await sessions.start(scope, input("run-1"), access("own"))
-      expect(sessions.replayStart(scope)).toEqual({
-        turnId: "run-1",
-        at: 1_000,
-      })
+      expect(sessions.replayStart(scope)).toMatchObject({ turnId: "run-1" })
 
       // Emitted long after admission, the start still reads as the admission.
       clock.mockReturnValue(61_000)
@@ -1150,39 +1152,11 @@ describe("SessionCoordinator", () => {
       own.close()
 
       // A continued turn's journal starts at the answer, not at the prompt.
-      clock.mockReturnValue(90_000)
       const turnId = await continueTurn(sessions)
-      expect(sessions.replayStart(scope)).toEqual({ turnId, at: 90_000 })
+      expect(sessions.replayStart(scope)).toMatchObject({ turnId })
     } finally {
       clock.mockRestore()
     }
-  })
-
-  it("resets a reload that holds part of the turn it cannot position", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
-    }
-    const sessions = coordinator(engine)
-    const own = await sessions.start(scope, input("run-1"), access("own"))
-    source.emit(turnStarted)
-    await reader(own)()
-
-    const reload = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", reset: true },
-      access("reload")
-    )
-
-    // A reset names only its code: no message the browser would show.
-    const head = await reader(reload)()
-    expect(head.value?.event).toEqual({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
-    })
-    expect(sessions.state(scope)).toBe("running")
-    own.close()
   })
 
   it("serves the redial after a reset from the live segment of a pruned run", async () => {
@@ -2574,30 +2548,23 @@ describe("SessionCoordinator", () => {
       member.close()
     })
 
-    it("starts the replay where the runtime says the adopted turn began", async () => {
+    it("dates the adopted turn's start where the runtime says it began", async () => {
       const startedAt = Date.now() - 60_000
-      const reported = await afterOneTurn(async () => ({
-        handle: new EventSource(),
+      const adopted = new EventSource()
+      const { sessions } = await afterOneTurn(async () => ({
+        handle: adopted,
         state: "running",
         fromStart: true,
         startedAt,
       }))
-      const unreported = await afterOneTurn(async () => ({
-        handle: new EventSource(),
-        state: "running",
-        fromStart: true,
-      }))
 
-      await reported.sessions.discover(scope)
-      await unreported.sessions.discover(scope)
+      await sessions.discover(scope)
+      adopted.emit(turnStarted)
 
-      expect(reported.sessions.replayStart(scope)).toEqual({
-        turnId: reported.sessions.snapshot(scope).turnId,
-        at: startedAt,
-      })
-      expect(unreported.sessions.replayStart(scope)).toEqual({
-        turnId: unreported.sessions.snapshot(scope).turnId,
-        at: undefined,
+      await expect(
+        reloadedHead(sessions, scope, sessions.snapshot(scope).turnId!)
+      ).resolves.toMatchObject({
+        event: { startedAt: new Date(startedAt).toISOString() },
       })
     })
 
@@ -3125,6 +3092,82 @@ describe("SessionCoordinator", () => {
     ).resolves.toMatchObject({ turnId: "run-2" })
   })
 
+  it("answers a start at its prompt's storage receipt, or leaves it uncertain at the deadline", async () => {
+    const { advance } = useFakeClock()
+    let store!: (messageId: string) => void
+    const receipted = Object.assign(new EventSource(), {
+      stored: new Promise<string>((resolve) => (store = resolve)),
+    })
+    const unreceipted = Object.assign(new EventSource(), {
+      stored: new Promise<string>(() => {}),
+    })
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(receipted)
+        .mockResolvedValueOnce(unreceipted),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine)
+
+    const first = sessions.start(scope, input("run-1"), access("one"))
+    await advance(ADMISSION_DEADLINE_MS - 1)
+    store("stored-1")
+    await expect(first).resolves.toMatchObject({
+      turnId: "run-1",
+      messageId: "stored-1",
+    })
+    receipted.emit(turnEnded)
+    receipted.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    const second = expect(
+      sessions.start(scope, input("run-2"), access("one"))
+    ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+    await advance(ADMISSION_DEADLINE_MS)
+    await second
+    // The provider took the prompt, so its turn runs on and is not withdrawn.
+    expect(sessions.state(scope)).toBe("running")
+    expect(unreceipted.stop).not.toHaveBeenCalled()
+  })
+
+  it("answers a start at once when its turn ends before its prompt's storage receipt", async () => {
+    useFakeClock()
+    const ending = (error: ServerTurnEndedError) => {
+      const stored = Promise.reject(error)
+      stored.catch(() => undefined)
+      return Object.assign(new EventSource(), { stored })
+    }
+    const stop = new ServerTurnEndedError("stopped")
+    const stopped = ending(stop)
+    const ended = ending(new ServerTurnEndedError("ended"))
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(stopped)
+        .mockResolvedValueOnce(ended),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine)
+
+    // No clock advances: the answer never waits out the admission deadline.
+    await expect(
+      sessions.start(scope, input("run-1"), access("one"))
+    ).rejects.toBe(stop)
+    stopped.emit({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.Cancelled,
+    })
+    stopped.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    // A turn that ended otherwise is answered with no stored id to name.
+    const answer = await sessions.start(scope, input("run-2"), access("one"))
+    expect(answer).toMatchObject({ turnId: "run-2" })
+    expect(answer).not.toHaveProperty("messageId")
+    ended.emit(turnEnded)
+    ended.finish()
+  })
+
   it("keeps the journal of a turn whose Stop could not be confirmed", async () => {
     const { advance } = useFakeClock()
     const stopped = new EventSource()
@@ -3368,7 +3411,7 @@ describe("SessionCoordinator", () => {
       expect(onTerminal).not.toHaveBeenCalled()
     }
 
-    // A resumed segment gets a fresh journal.
+    // A resumed segment carries on its turn's journal.
     {
       const interrupted = new EventSource()
       const resumed = new EventSource()
@@ -3415,15 +3458,22 @@ describe("SessionCoordinator", () => {
       )
       const readLive = reader(live)
       resumed.emit(turnStarted)
-      // A resumed turn is a fresh segment: its own journal and sequence.
+      // A resumed turn carries on its turn's journal and sequence, so a reload
+      // still reads what it streamed before its question.
       await expect(readLive()).resolves.toMatchObject({
-        value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
+        value: {
+          sequence: 1,
+          event: { kind: TurnEventKind.TurnRequiresAction },
+        },
+      })
+      await expect(readLive()).resolves.toMatchObject({
+        value: { sequence: 2, event: { kind: TurnEventKind.TurnStarted } },
       })
       await expect(
         reloadedHead(sessions, scope, turnId)
       ).resolves.toMatchObject({
         sequence: 1,
-        event: { kind: TurnEventKind.TurnStarted },
+        event: { kind: TurnEventKind.TurnRequiresAction },
       })
       await expect(reloadNeighbor()).resolves.toMatchObject({
         sequence: 1,

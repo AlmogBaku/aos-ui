@@ -45,7 +45,17 @@ as `'\''`.
 
    Change `model.default` only when the operator named a model.
 
-7. Verify: `hermes profile show <id>` and `hermes -p <id> skills list`.
+7. Leave tool progress on, which AOS needs: with `display.tool_progress` set
+   to `off`, Hermes streams no tool calls live, and they appear in AOS only
+   after a reload. It defaults to `all`; set it back only if it was changed:
+
+   ```bash
+   hermes -p <id> config set display.tool_progress all
+   ```
+
+8. Verify: `hermes profile show <id>`, `hermes -p <id> skills list`, and
+   `hermes -p <id> config get display.tool_progress`, which prints `all` or
+   nothing.
 
 A new profile is visible in AOS by default. `hermes profile create` tells a
 running gateway to serve it; if AOS does not list it within a minute, tell the

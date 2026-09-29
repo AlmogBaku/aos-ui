@@ -235,9 +235,12 @@ Only Sessions listed, created, or resumed on this connection are addressable.
 `adopt` trusts a client-supplied `agentId` for `session/resume` until the
 provider read confirms it.
 
-**Upgrade rules**: the server checks the Origin header and refuses upgrades
-that do not match `publicOrigin`. A cap of `operatorEventPeers` is enforced per
-socket mount (`cli/serve.ts:123,139`).
+**Upgrade rules**: an absent `Origin` is admitted (non-browser clients send
+none); a present `Origin` that does not equal `publicOrigin` is refused with 401
+and logged as `acp.upgrade.origin_refused`. The per-Agent path
+`/api/aos/v1/acp/agents/<agentId>` scopes a connection to one Agent and must
+never be exposed publicly. A cap of `operatorEventPeers` is enforced per socket
+mount (`cli/serve.ts:123,139`).
 
 For the full method table see [`docs/runtimes/acp.md`](../runtimes/acp.md).
 
@@ -260,7 +263,6 @@ cursor-bearing reconnects.
 
 | Turn event kind      | Wire form                                                            |
 | -------------------- | -------------------------------------------------------------------- |
-| `steer-accepted`     | `_aos/steer_accepted` notification                                   |
 | `artifact-published` | `resource_link` block, `uri: "artifact://<id>"`, on the turn's chunk |
 
 Mapping source: `acp/translate/turn-events.ts`.
@@ -411,9 +413,9 @@ Guest connections carry no activity feed (`acp/types.ts:85-90`).
 | `session_info_update` (`_meta.aos`) | `SessionRows` subscriber on a changed row (`acp/agent.ts:641-647`; `core/session-rows.ts:12-17`)                                              |
 | `_aos/activity`                     | Activity feed push (execution events, unread changes)                                                                                         |
 
-`_aos/session_invalidated` tells one connection that its live subscriber for a
-Session was dropped for falling behind the fanout bounds (`membership.detached`
-in the log); the browser answers by resuming that Session from the start.
+A subscriber that falls behind the fanout bounds is detached (`membership.detached`
+in the log); catch-up happens through a standard `session/resume` with
+`replayFrom: { type: "start" }`, not through `_aos/session_invalidated`.
 
 ---
 
@@ -424,27 +426,28 @@ in the log); the browser answers by resuming that Session from the start.
 **Browser**: exponential backoff 250 ms → 5 000 ms
 (`src/runtime-adapters/aos/acp/connection.ts:59-60`). The browser rejoins each
 resumed Session via `session/resume` with `_meta.aos.after` (last sequence)
-and `turnId` (`protocol/acp.ts:168-174`). `resync: true` in the response → re-resume with
-`replayFrom:{type:"start"}` (`connection.ts:329-338`). Guest re-logins before
+and `turnId` (`protocol/acp.ts:168-174`); a cursor the proxy can no longer
+answer is rebuilt from history in that same resume. Guest re-logins before
 resuming (`connection.ts:374-377`).
 
 **Proxy**: coordinator journal holds every event of a turn segment, bounded by
 the subscriber limits (`limits.subscriberEvents`/`limits.subscriberBytes`). Adjacent text
 deltas merge on read to save replay size while keeping cursors exact
-(`session-coordinator.ts:73-77,141-145,310-320`). `resync` is set when the
-journal cannot answer the cursor (`acp/agent.ts:287-307`).
+(`session-coordinator.ts:73-77,141-145,310-320`). When the journal cannot
+answer the cursor, the coordinator throws `ReplayCursorLostError` and the
+channel rebuilds the member's view from history with standard `session/update`s
+before the resume answers (`core/channel.ts`).
 
 The `discover` preamble reconstructs authoritative state before replay
 (`acp/agent.ts:506-513`). `reissuePending` re-delivers pending requests after
 reconnect (`core/channel.ts:953-956`). Adapter-private
 `{epoch,lastSeen}` positions the native stream (`core/runtime.ts:56-63`).
 
-**Accepted steering survives replay exactly once.** The browser projects
-`_aos/steer_accepted` as a user turn appended in arrival order. A provider that
-persists the correction the moment it accepts it makes that turn part of
-authoritative history, so a from-start resume announces each persisted
-correction exactly once: the history row wins and the journal's acknowledgement
-of it is dropped, in acceptance order.
+**Accepted steering survives replay exactly once.** A provider that persists the
+correction the moment it accepts it makes that turn part of authoritative
+history, so a from-start resume announces each persisted correction exactly once:
+the history row wins and the journal's acknowledgement of it is dropped, in
+acceptance order.
 
 ---
 
@@ -538,9 +541,9 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 **JSON-RPC extension codes** (`protocol/acp.ts:69-85`, `AOS_JSONRPC_ERRORS`):
 ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
-AOS block `-32010` turnInProgress, `-32011` staleRequest, `-32012`
-revisionConflict, `-32013` temporarilyUnavailable, `-32014` uncertainMutation,
-`-32015` unsupported. Codes `-32001` through `-32009` are no longer used.
+AOS block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
+revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
+`-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
 `_aos_uncertain` (`protocol/acp.ts:53-57`).

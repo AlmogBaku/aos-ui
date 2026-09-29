@@ -336,6 +336,11 @@ export class OpenClawInteractions {
       ],
     }
   }
+  /** An approval the Session raised while the run `scope` names runs. */
+  accept(scope: OpenClawInteractionDiscoveryScope, approval: unknown) {
+    const { nativeRunId, ...session } = scope
+    return this.acceptApproval({ ...session, runId: nativeRunId }, approval)
+  }
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
     const r = record(scope, raw),
       request: PendingRequest = {

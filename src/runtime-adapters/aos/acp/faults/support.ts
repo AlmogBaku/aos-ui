@@ -5,6 +5,8 @@
  */
 import { onTestFinished, vi } from "vitest"
 
+import type { AgentCatalogResponse } from "@aos/protocol"
+
 import { createAcpConnection } from "../connection"
 import {
   applyUpdate,
@@ -16,13 +18,33 @@ import type { AcpConnection } from "../types"
 import { PipedSocket, pipedSockets } from "../test-socket"
 
 /** What a browser connection needs of the harness proxy. */
-type Harness = { agentApp: Parameters<typeof pipedSockets>[0]; close(): void }
+type Harness = {
+  agentApp: Parameters<typeof pipedSockets>[0]
+  catalog: { agents(): Promise<AgentCatalogResponse> }
+  scope: { agentId: string }
+  close(): void
+}
 
 /**
  * A browser connection to the harness proxy over piped sockets, not started.
- * The test fakes the clock first, so every deadline runs on it.
+ * The test fakes the clock first, so every deadline runs on it. The catalog
+ * lists the harness's Agent, as the roster a browser opens a Session from
+ * does, so the browser names that Agent's folder.
  */
 export function connectBrowser<T extends Harness>(test: T) {
+  vi.spyOn(test.catalog, "agents").mockResolvedValue({
+    revision: "rev-1",
+    agents: [
+      {
+        summary: { kind: "ready", id: test.scope.agentId, name: "Agent" },
+        visibility: "visible",
+        selectable: true,
+        editable: false,
+        avatarEditable: false,
+        revision: "rev-1",
+      },
+    ],
+  })
   const pipe = pipedSockets(test.agentApp)
   const connection = createAcpConnection({
     clientInfo: { name: "aos-ui", version: "1" },

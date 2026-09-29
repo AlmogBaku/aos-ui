@@ -43,6 +43,8 @@ export type AgentCatalogEntry = {
   editable: boolean
   /** Whether the runtime can store this Agent's avatar. */
   avatarEditable: boolean
+  /** The absolute folder the Agent's Sessions run in, when it names one. */
+  folder?: string
 }
 
 /** Fields an operator changes on an Agent; `avatar: null` clears it. */

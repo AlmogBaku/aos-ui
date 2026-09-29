@@ -3,6 +3,7 @@ import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { publicJsonValue, type JsonValue } from "../json-value"
 import {
   openCodeStopReason,
+  openCodeThoughtId,
   openCodeTimestamp,
   OpenCodeNativeMessageSchema,
   parseOpenCodeMessageCatalog,
@@ -80,6 +81,33 @@ export function publishedOpenCodeArtifact(
     }
   }
   return undefined
+}
+
+/**
+ * A native message as the messages a client reads: a response's reasoning is
+ * its own thought, ahead of the response, as it streamed live.
+ */
+function projectMessages(
+  message: NativeMessage,
+  resolve?: McpToolNameResolver
+): SessionMessage[] {
+  const projected = projectMessage(message, resolve)
+  if (projected?.role !== "assistant") return projected ? [projected] : []
+  const thought = projected.content.filter(({ type }) => type === "reasoning")
+  const response = projected.content.filter(({ type }) => type !== "reasoning")
+  return [
+    ...(thought.length
+      ? [
+          {
+            id: openCodeThoughtId(projected.id),
+            role: "assistant" as const,
+            createdAt: projected.createdAt,
+            content: thought,
+          },
+        ]
+      : []),
+    ...(response.length ? [{ ...projected, content: response }] : []),
+  ]
 }
 
 function projectMessage(
@@ -220,13 +248,12 @@ export function projectOpenCodeHistory(input: {
   const native = Array.isArray(parsedMessages.data)
     ? parsedMessages.data
     : parsedMessages.data.data
-  const messages: ProjectedHistory = native
-    .map((message) => projectMessage(message, input.resolve))
-    .flatMap((message) => (message ? [message] : []))
+  const created = (message: NativeMessage) =>
+    Date.parse(openCodeTimestamp(message.time.created))
+  return [...native]
     .sort(
       (left, right) =>
-        Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-        left.id.localeCompare(right.id)
+        created(left) - created(right) || left.id.localeCompare(right.id)
     )
-  return messages
+    .flatMap((message) => projectMessages(message, input.resolve))
 }

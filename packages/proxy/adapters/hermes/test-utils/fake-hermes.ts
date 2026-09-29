@@ -1,29 +1,35 @@
 /**
- * fakeHermes — one in-memory Hermes holding one Session, for the runtime
- * contract: the socket RPCs and dashboard routes a turn and a read reach, and
- * the faults the contract drives. Pair it with the real `HermesGateway`, so the
- * gateway's own dial, heal and refusal handling is what the contract proves.
+ * fakeHermes — one in-memory Hermes holding one Session, for the runtime and
+ * wire contracts: the socket RPCs and dashboard routes a create, a turn and a
+ * read reach, and the faults the runtime contract drives. Pair it with the
+ * real `HermesGateway` through `fakeHermesGateway`, so the gateway's own dial,
+ * heal and refusal handling is what the contracts prove.
+ *
+ * It copies Hermes v2026.9.24 (`f97608f178d1`), its `tui_gateway` socket and
+ * dashboard API, with `close_on_disconnect: false` Sessions under one profile.
+ * As the release does, it stores a prompt's row at `prompt.submit` and answers
+ * with its `user_row_id`, streams `message.start` with no payload, and closes a
+ * turn with the `persisted_turn` receipt of the rows it stored.
  *
  * Usage:
  *
  *   const hermes = fakeHermes()
- *   const gateway = new HermesGateway({
- *     baseUrl: "http://127.0.0.1:9119",
- *     credentials: async () => ({ "X-Hermes-Session-Token": "test-token" }),
- *     socketFactory: hermes.socketFactory,
- *     fetcher: hermes.fetcher,
- *   })
+ *   const transport = fakeHermesGateway(hermes, logger)
  *   hermes.progress() // stream a reply fragment into the running turn
  */
+import type { Logger } from "../../../../lifecycle"
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
-import { HermesRpcRejectedError } from "../gateway"
+import { HermesGateway, HermesRpcRejectedError } from "../gateway"
 import { HermesHttpError } from "../http"
 import { FakeSocket } from "./fake-socket"
 import { assistantText, userRow } from "./history-rows"
 import { nativeTurn, type NativeFrame } from "./native-events"
 
 const PROFILE = "researcher"
+const PROFILE_HOME = `/home/hermes/.hermes/profiles/${PROFILE}`
+/** Where the profile's Sessions run: its `terminal.cwd`. */
+export const PROJECT_FOLDER = "/srv/research"
 const STORED_ID = "stored-1"
 const LIVE_ID = "live-1"
 const EPOCH = "e1"
@@ -78,21 +84,92 @@ function json(status: number, body: unknown = {}) {
   })
 }
 
-export function fakeHermes() {
+/** The real gateway over `hermes`, as every contract dials it. */
+export function fakeHermesGateway(hermes: FakeHermes, log: Logger) {
+  return new HermesGateway({
+    baseUrl: "http://127.0.0.1:9119",
+    credentials: async () => ({ "X-Hermes-Session-Token": "test-token" }),
+    log,
+    socketFactory: hermes.socketFactory,
+    fetcher: hermes.fetcher,
+  })
+}
+
+export type FakeHermes = ReturnType<typeof fakeHermes>
+
+/**
+ * `stored: false` starts Hermes with no stored Session, so its one Session is
+ * a draft `session.create` hands out; by default it is already stored.
+ */
+export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const turn = nativeTurn(LIVE_ID)
   const frames: NativeFrame[] = []
   const sockets: HermesFakeSocket[] = []
   let fault: Fault = "none"
   let deleted = false
+  /**
+   * Whether the Session has its `sessions` row: a created draft has none until
+   * its first prompt stores one (`tui_gateway/methods_session.py:394`).
+   */
+  let saved = stored
+  /**
+   * `display.tool_progress` is not "off": Hermes streams an ordinary tool
+   * call only then (`tui_gateway/tool_progress.py:253` and `:319`), and its
+   * thoughts either way (`tui_gateway/agent_callbacks.py:139`).
+   */
+  let toolProgress = true
   let running = false
-  let replyId: string | undefined
-  let replies = 0
+  let streaming = false
   let calls = 0
   let rows: unknown[] = []
+  let nextRowId = 1
+  /** The rows the running turn stored, its prompt's first. */
+  let turnRows: number[] = []
   let inflight: Record<string, unknown> | undefined
+  /** The server request the running turn blocks on, as `server_requests` holds it. */
+  let open:
+    | {
+        id: string
+        method: string
+        params: Record<string, unknown>
+        settle: () => void
+      }
+    | undefined
+  let nextRequest = 1
+  /** The Session waits on a request no socket can be sent any more. */
+  let lost = false
+  let interrupted: (() => void) | undefined
 
   const socket = () => sockets.at(-1)
   const latestSeq = () => frames.at(-1)?.seq ?? 0
+  /** `_open_requests`: what a resume or a replay re-delivers. */
+  const openRequests = () =>
+    open ? [{ id: open.id, method: open.method, params: open.params }] : []
+
+  /**
+   * One blocking server→client request of the running turn, as `_ask` and
+   * `_clarify_block` send it; settles once Hermes stops waiting on it.
+   */
+  function request(
+    method: string,
+    fields: Record<string, unknown>,
+    settle: () => void = () => {}
+  ) {
+    startStreaming()
+    const id = `srq-${String(nextRequest++).padStart(12, "0")}`
+    const params = { session_id: LIVE_ID, ...fields }
+    open = { id, method, params, settle }
+    socket()?.deliver({ id, method, params })
+  }
+
+  /** `server_requests.cancel`: the open request ends with a `request.cancel`. */
+  function cancelOpen(reason: string) {
+    if (!open) return
+    const { id, method, settle } = open
+    open = undefined
+    emit(turn.frame("request.cancel", { id, method, reason }))
+    settle()
+  }
 
   function emit(frame: NativeFrame) {
     frames.push(frame)
@@ -100,18 +177,116 @@ export function fakeHermes() {
     if (current?.readyState === FakeSocket.OPEN) current.deliverEvent(frame)
   }
 
+  /** Stores a row of the running turn as the release's `messages` table does. */
+  function store(row: Record<string, unknown>) {
+    const id = nextRowId++
+    saved = true
+    rows.push({
+      id,
+      session_id: STORED_ID,
+      timestamp: Date.now() / 1000,
+      ...row,
+    })
+    turnRows.push(id)
+    return id
+  }
+
+  /** One `patch` call of its own response, streamed and stored. */
+  function patchCall(
+    id: string,
+    args: Record<string, unknown>,
+    result: Record<string, unknown>
+  ) {
+    emit(turn.toolStart(id, "patch", args))
+    store({
+      role: "assistant",
+      content: "",
+      finish_reason: "tool_calls",
+      tool_calls: [
+        {
+          id,
+          type: "function",
+          function: { name: "patch", arguments: JSON.stringify(args) },
+        },
+      ],
+    })
+    emit(turn.toolComplete(id, "patch", result))
+    store({
+      role: "tool",
+      tool_call_id: id,
+      tool_name: "patch",
+      content: JSON.stringify(result),
+    })
+  }
+
+  function startStreaming() {
+    if (streaming) return
+    streaming = true
+    emit(turn.frame("message.start"))
+  }
+
+  /** The reply's final body, stored, then the receipt and the idle frame. */
+  function complete(text: string) {
+    const final = store({
+      role: "assistant",
+      content: text,
+      finish_reason: "stop",
+    })
+    running = false
+    streaming = false
+    emit(
+      turn.frame("message.complete", {
+        text,
+        status: "complete",
+        persisted_turn: {
+          row_ids: turnRows,
+          complete: true,
+          user_row_id: turnRows[0],
+          final_assistant_row_id: final,
+        },
+      })
+    )
+    emit(turn.idle())
+  }
+
   function rpc(method: string, params: Record<string, unknown>): Reply {
     switch (method) {
+      // A row's `path` is the profile's home, never where its Sessions run
+      // (`tui_gateway/methods_profiles.py:275`).
       case "profiles.list":
-        return { result: { profiles: [{ name: PROFILE }] } }
+        return { result: { profiles: [{ name: PROFILE, path: PROFILE_HOME }] } }
+      // The profile's `terminal.cwd` is an existing folder, so the project
+      // folder is the one `session.create` runs in
+      // (`tui_gateway/methods_config.py:139`, `session_workdir.py:23`).
+      case "config.get":
+        return params.key === "project" && params.profile === PROFILE
+          ? { result: { cwd: PROJECT_FOLDER, branch: null } }
+          : { error: NATIVE_FAILURE }
       case "session.resume":
         if (deleted) return { error: SESSION_NOT_FOUND }
+        // A live draft with no stored row reattaches lazy
+        // (`tui_gateway/methods_session.py:628`).
+        if (!saved)
+          return {
+            result: {
+              session_id: LIVE_ID,
+              stored_session_id: STORED_ID,
+              message_count: 0,
+              messages: [],
+              info: {
+                model: "contract-model",
+                lazy: true,
+                profile_name: PROFILE,
+              },
+            },
+          }
         return {
           result: {
             session_id: LIVE_ID,
             stored_session_id: STORED_ID,
             running,
             ...(inflight ? { inflight } : {}),
+            open_requests: openRequests(),
           },
         }
       case "session.events.since":
@@ -121,17 +296,93 @@ export function fakeHermes() {
             latest_seq: latestSeq(),
             truncated: false,
             events: frames.filter(({ seq }) => seq > Number(params.last_seen)),
+            open_requests: openRequests(),
           },
         }
       case "session.active_list":
         return {
           result: {
-            sessions: [{ id: LIVE_ID, status: running ? "working" : "idle" }],
+            sessions: [
+              {
+                id: LIVE_ID,
+                // `_session_live_status`: a pending request is `waiting`.
+                status: open || lost ? "waiting" : running ? "working" : "idle",
+              },
+            ],
           },
         }
-      case "prompt.submit":
+      case "request.answer": {
+        const answered = open
+        if (!answered || answered.id !== params.id)
+          return { result: { status: "expired" } }
+        open = undefined
+        answered.settle()
+        return { result: { status: "ok" } }
+      }
+      case "session.interrupt":
+        // `_interrupt_session_turn` withdraws the open requests at once; the
+        // turn ends interrupted only once its thread stops.
+        cancelOpen("interrupted")
+        interrupted?.()
+        return { result: { status: "interrupted" } }
+      case "prompt.submit": {
         running = true
-        return { result: { status: "streaming" } }
+        turnRows = []
+        const text = typeof params.text === "string" ? params.text : ""
+        const userRowId = store({ role: "user", content: text })
+        return { result: { status: "streaming", user_row_id: userRowId } }
+      }
+      case "model.options":
+        // One reasoning model, as `ModelOptionsResult` carries it
+        // (`tui_gateway/contracts/config_free_tier_control.py:273`).
+        return {
+          result: {
+            providers: [
+              {
+                slug: "contract",
+                name: "Contract",
+                models: ["contract-model"],
+                capabilities: {
+                  "contract-model": { fast: false, reasoning: true },
+                },
+              },
+            ],
+            model: "contract-model",
+            provider: "contract",
+          },
+        }
+      case "session.context_breakdown":
+        // A Session with no agent built yet reads its usage snapshot
+        // (`tui_gateway/methods_session.py:1297`).
+        return {
+          result: {
+            categories: [],
+            context_max: 200_000,
+            context_percent: 1,
+            context_used: 1_200,
+            estimated_total: 0,
+            context_estimated: false,
+            context_source: "provider_usage",
+            model: "contract-model",
+          },
+        }
+      case "session.create":
+        // The release answers a new draft with its live and stored ids; this
+        // fake's one Session stands for it.
+        saved = false
+        return {
+          result: {
+            session_id: LIVE_ID,
+            stored_session_id: STORED_ID,
+            message_count: 0,
+            messages: [],
+            info: {
+              model: "contract-model",
+              lazy: true,
+              profile_name: PROFILE,
+            },
+          },
+        }
       case "session.close":
         return { result: {} }
       default:
@@ -148,16 +399,23 @@ export function fakeHermes() {
 
   function route(url: URL) {
     const base = `/api/sessions/${encodeURIComponent(STORED_ID)}`
+    const listed = saved && !deleted
     if (url.pathname === "/api/sessions")
       return json(200, {
-        sessions: deleted
-          ? []
-          : [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }],
-        total: deleted ? 0 : 1,
+        sessions: listed
+          ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
+          : [],
+        total: listed ? 1 : 0,
       })
-    if (deleted) return json(404)
+    if (!listed) return json(404)
+    // `db.get_session` serves the whole stored row, its cost included.
     if (url.pathname === base)
-      return json(200, { id: STORED_ID, profile: PROFILE, title: "Contract" })
+      return json(200, {
+        id: STORED_ID,
+        profile: PROFILE,
+        title: "Contract",
+        estimated_cost_usd: 0.42,
+      })
     if (url.pathname === `${base}/messages`) {
       const limit = Number(url.searchParams.get("limit"))
       const offset = Number(url.searchParams.get("offset"))
@@ -205,19 +463,164 @@ export function fakeHermes() {
     }) as unknown as typeof fetch,
 
     async progress() {
-      if (replyId === undefined) {
-        replies += 1
-        replyId = `assistant-${replies}`
-        emit(turn.messageStart(replyId))
-      }
+      startStreaming()
       emit(turn.delta("Contract reply"))
     },
 
     async finish() {
-      running = false
-      emit(turn.complete(replyId ?? `assistant-${replies}`, "Contract reply"))
-      emit(turn.idle())
-      replyId = undefined
+      complete("Contract reply")
+    },
+
+    /** The wire contract's first model response: a thought, text, a tool. */
+    async firstResponse() {
+      const thought = "I should read the file."
+      const text = "Reading the file."
+      const args = { path: "/tmp/demo.txt" }
+      const result = "alpha\nbeta\ngamma"
+      startStreaming()
+      emit(turn.frame("reasoning.delta", { text: thought }))
+      emit(turn.delta(text))
+      // The model's text beside its tool call is sealed as interim commentary.
+      emit(turn.interim(text, true))
+      if (toolProgress) emit(turn.toolStart("call-read", "read_file", args))
+      store({
+        role: "assistant",
+        content: text,
+        reasoning: thought,
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: "call-read",
+            type: "function",
+            function: { name: "read_file", arguments: JSON.stringify(args) },
+          },
+        ],
+      })
+      if (toolProgress)
+        emit(turn.toolComplete("call-read", "read_file", result))
+      store({
+        role: "tool",
+        tool_call_id: "call-read",
+        tool_name: "read_file",
+        content: result,
+      })
+    },
+
+    /**
+     * A `patch` call adding `/tmp/notes.txt`, then one replacing "alpha" in
+     * `/tmp/names.txt`, each with the result the release's `patch_tool`
+     * returns for it (`tools/file_tools.py:1002`; the add's diff from
+     * `tools/patch_parser.py:333`, the edit's from
+     * `tools/file_operations.py:446`), which `tool.complete` carries parsed.
+     */
+    async editFile() {
+      startStreaming()
+      const added = "/tmp/notes.txt"
+      patchCall(
+        "call-write",
+        {
+          mode: "patch",
+          patch: `*** Begin Patch\n*** Add File: ${added}\n+alpha\n*** End Patch`,
+        },
+        {
+          success: true,
+          diff: `--- /dev/null\n+++ b/${added}\n+alpha`,
+          files_created: [added],
+          files_modified: [added],
+          resolved_path: added,
+        }
+      )
+      const edited = "/tmp/names.txt"
+      patchCall(
+        "call-edit",
+        {
+          mode: "replace",
+          path: edited,
+          old_string: "alpha",
+          new_string: "beta",
+        },
+        {
+          success: true,
+          diff: `--- a/${edited}\n+++ b/${edited}\n@@ -1 +1 @@\n-alpha\n+beta\n`,
+          files_modified: [edited],
+          resolved_path: edited,
+        }
+      )
+    },
+
+    /**
+     * `config.set` of `verbose` to "off", which sets the Session's tool
+     * progress (`tui_gateway/methods_config_set.py:214`). Hermes' "show
+     * reasoning" is no such setting: it only records a display choice
+     * (`:308`) that nothing streaming reads.
+     */
+    async quiet() {
+      toolProgress = false
+    },
+
+    /** The wire contract's second model response: the final text. */
+    async secondResponse(text = "The file lists three names.") {
+      emit(turn.delta(text))
+      complete(text)
+    },
+
+    /** The wire contract's questions, as `server_requests` asks and ends them. */
+    questions: {
+      ask: () =>
+        new Promise<void>((settle) =>
+          request(
+            "clarify",
+            { question: "Proceed?", choices: ["yes", "no"] },
+            settle
+          )
+        ),
+      /** The clarify wait timed out: the tool returns and the turn runs on. */
+      async withdraw() {
+        cancelOpen("timeout")
+      },
+      interrupted: () =>
+        new Promise<void>((resolve) => {
+          interrupted = () => {
+            interrupted = undefined
+            resolve()
+          }
+        }),
+      /** The interrupted turn's thread stops: it completes interrupted. */
+      async confirmInterrupt() {
+        running = false
+        streaming = false
+        lost = false
+        emit(
+          turn.frame("message.complete", { text: "", status: "interrupted" })
+        )
+        emit(turn.idle())
+      },
+      held: {
+        sudo: async () => {
+          const command = "sudo ls /tmp/demo.txt"
+          request("sudo", { command })
+          return command
+        },
+        secret: async () => {
+          const prompt = "Enter the demo token"
+          request("secret", { env_var: "DEMO_TOKEN", prompt })
+          return prompt
+        },
+        vault: async () => {
+          const display = "Demo Vault"
+          request("vault.unlock_prompt", {
+            backend: "demo-vault",
+            display_name: display,
+          })
+          return display
+        },
+      },
+      /** Hermes runs a turn of its own, blocked on a request nobody holds. */
+      async lose() {
+        running = true
+        lost = true
+        startStreaming()
+      },
     },
 
     deleteSession() {

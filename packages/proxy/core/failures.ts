@@ -15,6 +15,7 @@ import {
   ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
   ServerTurnCapacityError,
+  ServerTurnEndedError,
   ServerTurnSteerUnavailableError,
   ServerTurnSteerUncertainError,
   ServerTurnUncertainError,
@@ -99,5 +100,11 @@ export function coreFailure(cause: unknown): PublicFailure | undefined {
     cause instanceof ServerTurnUncertainError
   )
     return failureOf("uncertain", cause)
+  // A prompt whose turn failed before it was stored: a failure that leaves the
+  // turn alive is uncertain by its code, any other left nothing to reconcile.
+  if (cause instanceof ServerTurnEndedError && cause.ending === "failed")
+    return (
+      publicFailure(cause, TURN_FAILURES) ?? failureOf("unavailable", cause)
+    )
   return undefined
 }

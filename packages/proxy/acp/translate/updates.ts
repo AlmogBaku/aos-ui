@@ -169,6 +169,21 @@ export const ACP_STOP_REASON = {
   [StopReason.Cancelled]: "cancelled",
 } as const satisfies Record<StopReason, string>
 
+/** A call's text output as ACP tool content. */
+export function textContent(text: string): ToolCallContent {
+  return { type: "content", content: { type: "text", text } }
+}
+
+/**
+ * A settled call's output as the text its content shows, live and stored
+ * alike: a string as itself, any other value as its JSON.
+ */
+export function outputContent(output: unknown): ToolCallContent {
+  return textContent(
+    typeof output === "string" ? output : JSON.stringify(output)
+  )
+}
+
 /** A call's changed files and patch as ACP diff content. */
 export function diffContent({ changes, patch }: ToolDiff): ToolCallContent {
   return {

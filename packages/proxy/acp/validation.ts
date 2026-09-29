@@ -5,6 +5,7 @@ import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
+  ServerTurnEndedError,
 } from "../core/runtime"
 import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
 import { MembershipDetachedError } from "../core/channel"
@@ -36,8 +37,9 @@ export function parseMeta<Schema extends z.ZodType>(
   return parsed.data
 }
 
-export function invalidParams() {
-  return RequestError.invalidParams()
+/** `hint` says what a valid request looks like, for an operator client. */
+export function invalidParams(hint?: string) {
+  return RequestError.invalidParams(undefined, hint)
 }
 
 /**
@@ -93,8 +95,12 @@ function uncertainMutation() {
   )
 }
 
-function unsupported() {
-  return new RequestError(AOS_JSONRPC_ERRORS.unsupported, "unsupported")
+/** `hint` says what the deployment lacks, for an operator client. */
+export function unsupported(hint?: string) {
+  return new RequestError(
+    AOS_JSONRPC_ERRORS.unsupported,
+    hint === undefined ? "unsupported" : `unsupported: ${hint}`
+  )
 }
 
 /** The error each kind of public failure travels as. */
@@ -143,14 +149,15 @@ const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
  * unavailable, and any other notice code as an internal error.
  */
 export const PUBLIC_ERRORS: PublicErrors = {
-  reply({ code }) {
-    const name = PUBLIC_ERROR_NAMES.get(code)
+  reply(code) {
+    const name =
+      typeof code === "number" ? PUBLIC_ERROR_NAMES.get(code) : undefined
     return name === undefined
       ? {
           code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
           message: "temporarily_unavailable",
         }
-      : { code, message: name }
+      : { code: code as number, message: name }
   },
   notice: (code) =>
     typeof code === "string" && PUBLIC_NOTICE_CODES.has(code)
@@ -178,6 +185,8 @@ export function publicRequestError(
 ) {
   if (cause instanceof ServerTurnConflictError) return turnInProgress()
   if (cause instanceof ServerRequestStaleError) return staleRequest()
+  if (cause instanceof ServerTurnEndedError && cause.ending === "stopped")
+    return RequestError.requestCancelled()
   const failure = channelFailure(cause) ?? publicError(cause)
   return failure ? KIND_ERRORS[failure.kind]() : cause
 }

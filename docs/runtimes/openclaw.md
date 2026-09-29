@@ -165,6 +165,11 @@ Session `createdAt` comes from the native millisecond timestamp in `createdAt`.
 The first workspace open after the proxy is upgraded saves an icon for every
 Agent with an authored entry.
 
+## Folder
+
+Each Agent's folder is the `workspace` field on its `agents.list` row. AOS
+uses it as the required `cwd` for `session/new` and `session/resume`.
+
 ## Capability limits
 
 - AOS reads provider Agents, Sessions, history, model catalog, context usage, runs, questions, permissions, and supported image/file attachments through the negotiated Gateway policy.

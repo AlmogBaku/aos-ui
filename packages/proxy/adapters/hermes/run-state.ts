@@ -7,15 +7,10 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type {
-  Cost,
-  PendingRequest,
-  TokenUsage,
-  TurnEventKind,
-  TurnEventOf,
-} from "../../core/events"
+import type { Cost, PendingRequest, TokenUsage } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
+import type { storageReceipt } from "../../core/storage-receipt"
 import type { Todo } from "../todos"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
@@ -32,10 +27,6 @@ import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
 import type { SessionModelChoice } from "./session-model"
 
 export type HermesTurnScope = SessionScope
-
-type TurnSaved = NonNullable<
-  TurnEventOf<typeof TurnEventKind.TurnEnded>["saved"]
->
 
 /** The native turn outcome; `open` means Hermes has not ended the turn yet. */
 export type TurnOutcome = "open" | "complete" | "failed" | "interrupted"
@@ -65,9 +56,22 @@ export type ActiveTurn = {
   unsubscribe: () => void
   epoch: string
   lastSeen: number
+  /**
+   * The model response streaming now: `<base>-<n>` for the turn's n-th
+   * response, the id history gives it too. Its thought is `<id>-thought`.
+   */
   messageId?: string
+  /** The prompt's row id the response ids number from, once Hermes names it. */
+  messageBase?: string
+  /** How many model responses this run opened. */
+  responses: number
+  /**
+   * The current response ended, by a finished call or its interim prose, so
+   * new text is a new response.
+   */
+  toolsDone: boolean
+  /** How many times the run sealed its streaming message. */
   generation: number
-  sealedMessageIds: Set<string>
   textStarted: boolean
   streamedText?: string
   mediaFilter: HermesMediaTextFilter
@@ -93,6 +97,15 @@ export type ActiveTurn = {
    * whose completion frame already passed: Hermes idling is the only end it has.
    */
   resumedInteraction: boolean
+  /**
+   * The requests the native turn blocks on inside itself: the run keeps its
+   * stream and observer while Hermes waits, and runs on once they end.
+   */
+  waitingOn?: Set<string>
+  /** Called once Hermes ends every request of the wait without an answer. */
+  resumed?: () => void
+  /** The turn waits on a prompt AOS holds or lost, which only Stop ends here. */
+  awaitingStop?: boolean
   /** Live frames waiting behind the one in-flight `session.events.since`. */
   catchUp?: BufferedNativeEvents
   /** A settlement edge a catch-up deferred; re-decided once the page drained. */
@@ -104,10 +117,12 @@ export type ActiveTurn = {
    */
   promptMessageId?: string
   /**
-   * The ids Hermes proved the turn was saved under: the prompt's row from the
-   * submit answer, both rows from a complete completion receipt.
+   * The storage receipt of a prompt Hermes accepted: resolved with its row's
+   * message id by the submit answer that names the row or, failing that, by
+   * the completion receipt of the turn this run owns; rejected once the run
+   * ends without either.
    */
-  saved?: TurnSaved
+  stored?: ReturnType<typeof storageReceipt>
   usage?: TokenUsage[]
   cost?: Cost
   /** The model the Session last reported; a change is published. */
@@ -147,6 +162,8 @@ export type TurnEngineHost = {
   sealGeneration(active: ActiveTurn): void
   finish(active: ActiveTurn, ending?: TurnEnding, confirmedIdle?: boolean): void
   requireAction(active: ActiveTurn, requests: PendingRequest[]): void
+  /** The turn waits on a prompt no client here can answer. */
+  awaitStop(active: ActiveTurn): void
   fail(active: ActiveTurn, failure: TurnFailure): void
   detach(active: ActiveTurn, failure: DetachedTurnFailure): void
   settle(active: ActiveTurn): void
@@ -173,9 +190,9 @@ export function failReset(
 }
 
 /** A promise and its resolver: the one shape for AOS' own settlement edges. */
-export function deferred() {
-  let resolve!: () => void
-  const promise = new Promise<void>((settle) => {
+export function deferred<T = void>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((settle) => {
     resolve = settle
   })
   return { promise, resolve }
@@ -208,8 +225,9 @@ export function createActiveTurn(
     unsubscribe: () => undefined,
     epoch: "",
     lastSeen: 0,
+    responses: 0,
+    toolsDone: false,
     generation: 0,
-    sealedMessageIds: new Set(),
     ...generationState(),
     tools: new Map(),
     turn: "open",

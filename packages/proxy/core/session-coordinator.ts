@@ -30,6 +30,7 @@ import {
   ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnCapacityError,
+  ServerTurnEndedError,
   ServerTurnStopNotDispatchedError,
   ServerTurnSteerUnavailableError,
   ServerTurnUncertainError,
@@ -94,6 +95,10 @@ export type SessionSnapshot = {
   requests: PendingRequest[]
   /** The principal that admitted the turn, when this proxy admitted it. */
   startedBy?: string
+  /** The running turn waits on a prompt no client here answers: only Stop ends it. */
+  awaitingStop?: true
+  /** When the live turn began, where the runtime or this proxy dated it. */
+  startedAt?: string
 }
 
 export type SequencedTurnEvent = {
@@ -114,14 +119,16 @@ export type CoordinatorRecoveryRequest = Pick<
   "sessionId" | "turnId"
 > & {
   after?: number
-  /** The reader holds part of the turn it cannot position, so it reloads. */
-  reset?: true
 }
 
 export type CoordinatedTurnSubscription = {
   turnId: string
   events: AsyncIterable<SequencedTurnEvent>
   close(): void
+  /** The id the provider stored the turn's prompt under, once it did. */
+  messageId?: string
+  /** How many of `events` the journal buffered before the live ones. */
+  replayed?: number
 }
 
 /**
@@ -512,6 +519,13 @@ type Segment = {
   /** The turn generation its admission landed as. */
   generation: number
   handle: ServerTurnHandle
+  /**
+   * Where this segment reads `handle.events`. A wait its turn runs on through
+   * leaves the reader open, so the segment that continues it reads on.
+   */
+  reader?: AsyncIterator<TurnEvent>
+  /** Its last word was a failure only Stop ends, and it has not run on since. */
+  awaitingStop?: boolean
   fanout: SubscriberFanout<SequencedTurnEvent>
   journal?: SegmentJournal
   nextSequence: number
@@ -521,11 +535,16 @@ type Segment = {
   answers: Map<string, RequestReply>
   onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
-   * Epoch ms the turn's replay starts from: its admission, the answer that
-   * continued it, or the native start an adopted turn reported. Absent for a
+   * Epoch ms the turn's replay starts from: its admission, which a wait's end
+   * carries on, or the native start an adopted turn reported. Absent for a
    * turn joined midway, or adopted without a start.
    */
   startedAt?: number
+  /**
+   * The segment a wait's end continued under a fresh turnId, as a cursor into
+   * this one's journal: a member that followed it holds the journal that far.
+   */
+  continues?: { turnId: string; after: number }
 }
 
 /** How a segment relates to the replayable history of its turn. */
@@ -694,6 +713,19 @@ function compactedEvent(
   )
     return { ...previous, text: previous.text + next.text }
   return undefined
+}
+
+/** The message and tool call ids one event names, which history keys rows by. */
+function rowIds({ event }: SequencedTurnEvent): string[] {
+  return [
+    ...("messageId" in event ? [event.messageId] : []),
+    ...("parentMessageId" in event && event.parentMessageId !== undefined
+      ? [event.parentMessageId]
+      : []),
+    ...("toolCallId" in event && event.toolCallId !== undefined
+      ? [event.toolCallId]
+      : []),
+  ]
 }
 
 /**
@@ -1165,19 +1197,41 @@ export class SessionCoordinator {
       turnId: segment?.turnId ?? turnId,
       requests: segment ? structuredClone(openRequests(segment)) : [],
       ...(startedBy === undefined ? {} : { startedBy }),
+      ...(segment?.awaitingStop ? { awaitingStop: true as const } : {}),
+      ...(segment?.startedAt === undefined
+        ? {}
+        : { startedAt: new Date(segment.startedAt).toISOString() }),
     }
   }
 
   /**
-   * The live turn a cursorless follow replays from its first event, and when
-   * that start was if it is known: a view rebuilt from history reads the turn
-   * from there.
+   * The live turn a cursorless follow replays from its first event, and the
+   * ids of the messages and tool calls that replay carries: a view rebuilt
+   * from history leaves those rows to the replay, so each shows once.
    */
   replayStart(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
-    if (!segment || replayPlan(segment, undefined) !== "history")
+    if (!segment?.journal || replayPlan(segment, undefined) !== "history")
       return undefined
-    return { turnId: segment.turnId, at: segment.startedAt }
+    return {
+      turnId: segment.turnId,
+      ...(segment.continues ? { continues: segment.continues } : {}),
+      ids: new Set(
+        segment.journal.entries.flatMap(({ value }) => rowIds(value))
+      ),
+    }
+  }
+
+  /**
+   * Whether a view `after` events into the Session's latest turn holds all
+   * of it, which no further event of that turn changes.
+   */
+  holds(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    after: number
+  ) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    return !segment || after >= segment.nextSequence
   }
 
   /**
@@ -1228,11 +1282,13 @@ export class SessionCoordinator {
   async discover(scope: SessionScope) {
     const key = scopeKey(scope)
     const existing = this.#executions.get(key)
-    // A turn in flight, or one being reconciled, is not the runtime's own.
+    // A turn in flight, or one being reconciled, is not the runtime's own, and
+    // nor is a wait whose turn runs on through it.
     const { state } = this.#turnExecution(key)
     if (
       !this.options.engine.discover ||
-      (state !== "waiting-for-input" && state !== "idle")
+      (state !== "waiting-for-input" && state !== "idle") ||
+      (state === "waiting-for-input" && existing?.segment.handle.wait)
     )
       return existing
     const inFlight = this.#discoveries.get(key)
@@ -1335,13 +1391,13 @@ export class SessionCoordinator {
     return created
   }
 
-  start(
+  async start(
     scope: SessionScope,
     input: SendInput,
     access: CoordinatorAccess,
     options: StartOptions = {}
   ): Promise<CoordinatedTurnSubscription> {
-    return this.#command(scope, async () => {
+    const admitted = await this.#command(scope, async () => {
       if (this.#closed) throw new Error("Session coordinator is closed")
       if (!("clientId" in input))
         return this.#startTurn(scope, input, access, options)
@@ -1374,12 +1430,48 @@ export class SessionCoordinator {
       }
       await repeated
       const execution = this.#executions.get(scopeKey(scope))
-      if (execution?.segment.turnId === ids.turnId)
-        return this.#repeat(execution, access)
+      if (execution?.segment.turnId === ids.turnId) return execution
       // The Session no longer holds the turn, so nothing of it is left to replay;
       // the repeat's reader follows the Session from its history.
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
+    return "segment" in admitted
+      ? this.#atStorage(admitted, access, options.signal)
+      : admitted
+  }
+
+  /**
+   * Subscribes to an admitted turn once its provider stored the prompt, under
+   * the id it stored it as. Waited for outside the Session's commands, so a
+   * Stop or a steer meanwhile is not held. A receipt still missing at the
+   * admission deadline leaves the turn running and its start uncertain; a turn
+   * that ended first is answered by how it ended.
+   */
+  async #atStorage(
+    execution: Execution,
+    access: CoordinatorAccess,
+    signal: AbortSignal | undefined
+  ): Promise<CoordinatedTurnSubscription> {
+    const { stored } = execution.segment.handle
+    if (!stored) return this.#repeat(execution, access)
+    const deadline = this.#deadline(signal)
+    let messageId: string
+    try {
+      messageId = await deadline.run(() => stored)
+    } catch (error) {
+      // A turn over before any receipt is answered as it ended, at once: a
+      // stop or a failure is the answer, and any other end names no stored id.
+      if (error instanceof ServerTurnEndedError && error.ending === "ended")
+        return this.#repeat(execution, access)
+      if (!deadline.signal.aborted) throw error
+      const { agentId, sessionId } = execution.scope
+      this.#logger.warn(
+        { agentId, sessionId, turnId: execution.segment.turnId },
+        "turn.receipt.deadline_passed"
+      )
+      throw new ServerTurnUncertainError()
+    }
+    return { ...this.#repeat(execution, access), messageId }
   }
 
   /**
@@ -1427,7 +1519,7 @@ export class SessionCoordinator {
     access: CoordinatorAccess,
     { signal, quota }: StartOptions,
     stage?: ServerAttachmentStage
-  ): Promise<CoordinatedTurnSubscription> {
+  ): Promise<Execution> {
     signal?.throwIfAborted()
     const key = scopeKey(scope)
     // A discovery holds the admission while it asks the provider, and every
@@ -1445,7 +1537,7 @@ export class SessionCoordinator {
     if (existing?.segment.turnId === input.turnId) {
       if (existing.admissionFingerprint !== admissionFingerprint(input))
         throw new ServerTurnConflictError()
-      return this.#repeat(existing, access)
+      return existing
     }
 
     // An uncertain turn holds its Session until a reconcile settles it.
@@ -1483,7 +1575,7 @@ export class SessionCoordinator {
       this.#executions.set(key, execution)
       this.#trackJournal(execution.segment)
       this.#consume(execution, execution.segment)
-      return this.#subscribe(execution.segment, 0, access)
+      return execution
     } catch (error) {
       if (!deadline.signal.aborted) throw error
       throw this.#unanswered(key, turn, generation, input.turnId, stage)
@@ -1555,10 +1647,9 @@ export class SessionCoordinator {
       existing?.segment.turnId === request.turnId &&
       existing.state !== "uncertain"
     ) {
-      const plan = request.reset
-        ? "reset"
-        : replayPlan(existing.segment, request.after)
-      if (plan === "reset") return this.#unreplayable(existing.segment, request)
+      const plan = replayPlan(existing.segment, request.after)
+      if (plan === "reset")
+        return this.#unreplayable(existing.segment, request.after)
       this.#touchJournal(existing.segment)
       return this.#subscribe(existing.segment, request.after ?? 0, access, plan)
     }
@@ -1574,8 +1665,8 @@ export class SessionCoordinator {
     // browser cursor still applies. A recovery of a turn this coordinator never
     // streamed numbers the segment from one, and that cursor means nothing.
     const after = existing ? request.after : undefined
-    const plan = request.reset ? "reset" : replayPlan(recovered.segment, after)
-    if (plan === "reset") return this.#unreplayable(recovered.segment, request)
+    const plan = replayPlan(recovered.segment, after)
+    if (plan === "reset") return this.#unreplayable(recovered.segment, after)
     return this.#subscribe(recovered.segment, after ?? 0, access, plan)
   }
 
@@ -1758,6 +1849,13 @@ export class SessionCoordinator {
     if (execution.state === "idle") return "idle" as const
     return this.#withControl(execution, async () => {
       const { turn } = execution
+      // A wait inside a turn that runs on through it is stopped as that turn:
+      // Stop interrupts it, and its stream reports how it ended.
+      if (
+        execution.state === "waiting-for-input" &&
+        execution.segment.handle.wait
+      )
+        this.#continueWait(execution)
       const { generation } = execution.segment
       try {
         const status = await execution.segment.handle.stop()
@@ -2103,7 +2201,6 @@ export class SessionCoordinator {
     const { turn, generation } = this.#admit(execution.scope, input.turnId)
     const deadline = this.#deadline()
     try {
-      const at = Date.now()
       const handle = await this.#startNative(
         execution.scope,
         input,
@@ -2121,7 +2218,8 @@ export class SessionCoordinator {
           input.turnId
         ),
         handle,
-        history: { journal: "start", at },
+        // The answer continues the turn, whose journal it carries on.
+        history: { journal: "continue", previous: execution.segment },
       })
       this.#forgetJournal(execution.segment)
       // A continued turn is a fresh admission on the same execution record.
@@ -2181,11 +2279,58 @@ export class SessionCoordinator {
         }
   }
 
+  /**
+   * Continues a wait its turn runs on through, no answer given: the same
+   * handle streams on as a fresh segment, which every member follows as it
+   * follows an answer's, and the requests it waited on are resolved.
+   */
+  #continueWait(execution: Execution) {
+    const paused = execution.segment
+    const turnId = crypto.randomUUID()
+    const { turn, generation } = this.#admit(execution.scope, turnId)
+    try {
+      const segment = this.#createSegment({
+        cacheKey: scopeKey(execution.scope),
+        turnId,
+        generation: this.#landed(turn, generation, "running", turnId),
+        handle: paused.handle,
+        history: { journal: "continue", previous: paused },
+      })
+      this.#forgetJournal(paused)
+      segment.reader = paused.reader
+      paused.handle.wait?.continue(turnId)
+      // A command running on the execution keeps its place in line.
+      const { control } = execution
+      Object.assign(
+        execution,
+        admittedTurn({ turnId, request: { turnId }, segment }),
+        { control }
+      )
+      this.#trackJournal(segment)
+      this.#consume(execution, segment)
+      this.#resolveAttention(execution, paused)
+    } finally {
+      this.#endAdmission(turn, generation)
+    }
+  }
+
+  /** The provider ended the wait `paused` holds without an answer. */
+  #resumed(execution: Execution, paused: Segment) {
+    if (execution.segment !== paused || execution.state !== "waiting-for-input")
+      return
+    try {
+      this.#continueWait(execution)
+    } catch (err) {
+      const { agentId, sessionId } = execution.scope
+      this.#logger.warn({ err, agentId, sessionId }, "turn.wait.resume.failed")
+    }
+  }
+
   /** A wait ended or cleared resolves the requests nobody answered. */
-  #resolveAttention(execution: Execution) {
-    const requests = openRequests(execution.segment)
+  #resolveAttention(execution: Execution, segment = execution.segment) {
+    const requests = openRequests(segment)
     if (requests.length === 0) return
-    const origin = this.#origin(execution.scope, execution.segment.turnId)
+    const origin = this.#origin(execution.scope, segment.turnId)
     for (const { requestId } of requests)
       this.#announce(execution.scope, {
         ...origin,
@@ -2215,6 +2360,14 @@ export class SessionCoordinator {
         : previous?.startedAt === undefined
           ? {}
           : { startedAt: previous.startedAt }),
+      ...(previous && previous.turnId !== init.turnId
+        ? {
+            continues: {
+              turnId: previous.turnId,
+              after: previous.nextSequence,
+            },
+          }
+        : {}),
       nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
       requests: [],
@@ -2238,9 +2391,21 @@ export class SessionCoordinator {
       })
     }
     const { agentId, sessionId } = execution.scope
+    const reader = (segment.reader ??=
+      segment.handle.events[Symbol.asyncIterator]())
+    // `drained`: the stream ended by itself. `kept`: the turn runs on past the
+    // wait it paused on, so the segment continuing it reads on.
+    let drained = false
+    let kept = false
     const readStream = async () => {
       try {
-        for await (const raw of segment.handle.events) {
+        for (;;) {
+          const next = await reader.next()
+          if (next.done) {
+            drained = true
+            break
+          }
+          const raw = next.value
           // A turn whose outcome went unknown takes no more of its stream.
           if (execution.segment !== segment || segment.terminal) return
           // Dated where the replay starts, so a reload counts from there.
@@ -2251,6 +2416,9 @@ export class SessionCoordinator {
           // A failure awaiting Stop leaves the turn active: its settlement, not
           // this event, is the terminal one.
           const awaitingStop = isAwaitingStopFailure(event)
+          if (awaitingStop) segment.awaitingStop = true
+          else if (event.kind === TurnEventKind.TurnStarted)
+            segment.awaitingStop = false
           const ended =
             event.kind === TurnEventKind.TurnEnded ||
             event.kind === TurnEventKind.TurnRequiresAction
@@ -2277,12 +2445,14 @@ export class SessionCoordinator {
           if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           if (ended) {
-            this.#forgetJournal(segment)
             segment.terminal = true
             segment.requests = pendingRequestsOf(event)
+            // A wait keeps its journal, so a view rebuilt while it waits reads
+            // the turn so far and the wait from it.
+            if (!segment.requests.length) this.#forgetJournal(segment)
             outcome(segment.requests.length ? "paused" : "ended")
             const origin = this.#origin(execution.scope, segment.turnId)
-            if (segment.requests.length)
+            if (segment.requests.length) {
               for (const request of segment.requests)
                 this.#announce(execution.scope, {
                   ...origin,
@@ -2292,7 +2462,13 @@ export class SessionCoordinator {
                     ? {}
                     : { startedBy: execution.turn.startedBy }),
                 })
-            else
+              if (segment.handle.wait) {
+                kept = true
+                segment.handle.wait.onResumed(() =>
+                  this.#resumed(execution, segment)
+                )
+              }
+            } else
               this.#announce(execution.scope, {
                 ...origin,
                 kind: "turn-finished",
@@ -2322,6 +2498,7 @@ export class SessionCoordinator {
         // A stream that throws ended like any other stream without a terminal
         // event: the provider's settlement below is what decides the turn.
       } finally {
+        if (!drained && !kept) await reader.return?.().catch(() => undefined)
         segment.fanout.close()
         if (!segment.terminal && !turn.owner.stale(segment.generation))
           outcome((await settledNow(segment.handle.settled)) ? "ended" : "lost")
@@ -2524,6 +2701,7 @@ export class SessionCoordinator {
     return {
       turnId: segment.turnId,
       events,
+      replayed: replay.length,
       close: () => {
         closed = true
         live.close()
@@ -2532,14 +2710,13 @@ export class SessionCoordinator {
   }
 
   /**
-   * Answers a reader the journal cannot. One with a cursor is refused, and its
-   * resume answers `resync`: that is its one signal to rebuild from history.
-   * A cursorless reader, or one that holds part of the turn it cannot position,
-   * is sent one reset instead, since nothing else tells it.
+   * Answers a reader the journal cannot. One with a cursor is refused with
+   * `ReplayCursorLostError`, and its channel rebuilds the view from history.
+   * A cursorless reader, which follows a recovered turn the journal does not
+   * hold from its start, is sent one reset instead, since nothing else tells it.
    */
-  #unreplayable(segment: Segment, request: CoordinatorRecoveryRequest) {
-    if (request.after !== undefined && !request.reset)
-      throw new ReplayCursorLostError()
+  #unreplayable(segment: Segment, after: number | undefined) {
+    if (after !== undefined) throw new ReplayCursorLostError()
     return this.#resetSubscription(segment)
   }
 

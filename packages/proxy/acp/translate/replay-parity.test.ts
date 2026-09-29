@@ -164,29 +164,28 @@ type Item = { kind: string; value: Record<string, unknown> }
 
 const CHUNKS = new Set(["agent_message_chunk", "agent_thought_chunk"])
 
+const REPLAY_OR_LIVE_ONLY = new Set([
+  "user_message",
+  "agent_message",
+  "agent_thought",
+  "state_update",
+])
+
 const UNSHARED_META = new Set(["sequence", "turnId", "argsTextDelta"])
 
 /**
- * One update without the run identity and the moment no two streams of one turn
- * can share. `argsTextDelta` is the streaming half of `argsText`, which a settled
- * call already carries whole, and a tool result's textual copy exists only while
- * the run streams it: the transcript keeps the parsed output the same update
- * carries as `rawOutput`.
+ * One update without the run identity no two streams of one turn can share.
+ * `argsTextDelta` is the streaming half of `argsText`, which a settled call
+ * already carries whole.
  */
 function anonymous(update: SessionUpdate): Record<string, unknown> {
-  const { _meta, content, ...rest } = update as Record<string, unknown>
+  const { _meta, ...rest } = update as Record<string, unknown>
   const wrapper = isRecord(_meta) ? _meta[AOS_META_KEY] : undefined
   const aos = isRecord(wrapper) ? wrapper : {}
   const meta = Object.fromEntries(
-    Object.entries(aos)
-      .filter(([key]) => !UNSHARED_META.has(key))
-      .map(([key, value]) => [key, key === "at" ? "<at>" : value])
+    Object.entries(aos).filter(([key]) => !UNSHARED_META.has(key))
   )
-  return {
-    ...rest,
-    ...(update.sessionUpdate === "tool_call_update" ? {} : { content }),
-    meta,
-  }
+  return { ...rest, meta }
 }
 
 const isText = (value: Record<string, unknown>) =>
@@ -243,9 +242,10 @@ function stream(outbound: readonly AcpOutbound[]): Item[] {
       continue
     }
     const kind = outgoing.update.sessionUpdate
-    // Live never restates the operator's prompt: the composer shows it, and only
-    // a replay has to send it.
-    if (kind === "user_message") continue
+    // Only a replay restates the operator's prompt, which the composer shows
+    // live, and empties each message a view already holds. Only live reports
+    // the turn's states: none a stored turn passed still stands.
+    if (REPLAY_OR_LIVE_ONLY.has(kind)) continue
     const item: Item = { kind, value: anonymous(outgoing.update) }
     const merged = folded(flow.at(-1), item)
     if (merged) flow[flow.length - 1] = { kind, value: merged }
@@ -272,7 +272,6 @@ describe("replay parity", () => {
 
   it("keeps the execution order the turn was produced in", () => {
     expect(stream(live()).map((item) => item.kind)).toEqual([
-      "state_update",
       "agent_thought_chunk",
       "agent_message_chunk",
       "tool_call_update",
@@ -280,7 +279,6 @@ describe("replay parity", () => {
       "tool_call_update",
       "agent_message_chunk",
       "agent_message_chunk",
-      "state_update",
     ])
   })
 })

@@ -250,7 +250,7 @@ function createProxyAgent() {
           _meta: { [AOS_META_KEY]: { turnId: "run-1", sequence: 2 } },
         })
       })
-      return { _meta: { [AOS_META_KEY]: { messageId } } }
+      return { messageId }
     })
     .onRequest(AOS_METHODS.agents.list, z.unknown().optional(), () => ({
       revision: "revision-1",
@@ -261,6 +261,7 @@ function createProxyAgent() {
           selectable: true,
           editable: true,
           avatarEditable: true,
+          folder: "/srv/research",
           revision: "revision-1",
         },
       ],

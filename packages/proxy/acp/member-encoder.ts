@@ -1,5 +1,6 @@
 import {
   methods,
+  RequestError,
   SessionUpdate,
   StateUpdate,
   type AgentContext,
@@ -23,7 +24,6 @@ import {
   type TurnStream,
   type WorkspaceEvent,
 } from "../core/member"
-import type { SessionExecutionState } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import { sessionInfoMeta } from "./agent-sessions"
 import { promptBlocks } from "./prompt-content"
@@ -104,6 +104,7 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
     sessionUpdate: "usage_update",
     used: usage.usedTokens,
     size: usage.maxTokens,
+    ...(usage.cost ? { cost: usage.cost } : {}),
     _meta: {
       [AOS_META_KEY]: {
         source: usage.source,
@@ -118,11 +119,15 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
  * The Session's execution as one `state_update`: the out-of-band report a
  * resume or an acknowledged Stop owes the client.
  */
-function executionUpdate(
-  state: SessionExecutionState,
-  turnId: string | undefined,
-  sequence: number
-): SessionUpdate {
+function executionUpdate({
+  state,
+  turnId,
+  sequence,
+  awaitingStop,
+  startedAt,
+}: Extract<MemberEvent, { kind: "execution" }>): SessionUpdate {
+  const live =
+    state === "running" || state === "stopping" || state === "waiting-for-input"
   const meta =
     turnId === undefined
       ? {}
@@ -134,10 +139,12 @@ function executionUpdate(
               ...(state === "stopping"
                 ? { execution: "stopping" as const }
                 : {}),
+              // A live turn is dated where it began, as its stream dated it.
+              ...(startedAt === undefined || !live ? {} : { at: startedAt }),
             },
           },
         }
-  if (state === "waiting-for-input")
+  if (state === "waiting-for-input" || (state === "running" && awaitingStop))
     return { sessionUpdate: "state_update", state: "requires_action", ...meta }
   if (state === "running" || state === "stopping")
     return { sessionUpdate: "state_update", state: "running", ...meta }
@@ -211,6 +218,8 @@ export type MemberEncoderOptions = {
     requestId: string,
     reply: ClientReply
   ): Promise<void>
+  /** Whether the client declared it answers elicitations in `mode`. */
+  elicits(mode: string): boolean
   /** Reports a failure that has no request to answer to the Session's member. */
   report(sessionId: string, cause: unknown): unknown
   /** Whether the connection's credential still holds. */
@@ -223,6 +232,7 @@ export function createMemberEncoder({
   steerAck,
   describe,
   replied,
+  elicits,
   report,
   live,
 }: MemberEncoderOptions): MemberConnection {
@@ -250,14 +260,19 @@ export function createMemberEncoder({
     switch (outbound.kind) {
       case "update":
         return update(sessionId, outbound.update)
+      // A steer the turn took is a user message on it, as any client reads one.
       case "steer-accepted":
-        return client.notify(AOS_METHODS.notify.steerAccepted, {
-          sessionId,
-          sequence,
-          turnId: outbound.turnId,
-          requestId: outbound.requestId,
-          text: outbound.text,
-          delivery: outbound.delivery,
+        return update(sessionId, {
+          sessionUpdate: "user_message",
+          messageId: outbound.requestId,
+          content: [{ type: "text", text: outbound.text }],
+          _meta: {
+            [AOS_META_KEY]: {
+              turnId: outbound.turnId,
+              sequence,
+              delivery: outbound.delivery,
+            },
+          },
         })
       case "composer-prefill":
         return client.notify(AOS_METHODS.notify.composerPrefill, {
@@ -275,61 +290,73 @@ export function createMemberEncoder({
     return unhandledKind(outbound)
   }
 
+  /**
+   * A client that answered with an error cannot answer, so it declines, as a
+   * cancel, and the Session stops waiting on it. A lost connection is no
+   * answer, and a withdrawn request is refused as cancelled already.
+   */
+  function declined<T>(signal: AbortSignal, cancel: T) {
+    return (cause: unknown) => {
+      if (cause instanceof RequestError && !signal.aborted) return cancel
+      throw cause
+    }
+  }
+
   async function askPermission(
     sessionId: string,
     request: PendingRequest,
     signal: AbortSignal
-  ) {
+  ): Promise<ClientReply | undefined> {
     const outbound = translators.pendingRequestToOutbound(request)
-    if (outbound.kind !== "request-permission") return
-    const response = await client.request(
-      methods.client.session.requestPermission,
-      { ...outbound.request, sessionId },
-      { cancellationSignal: signal }
-    )
-    // An answer that crossed its withdrawal is no longer this member's to give.
-    if (signal.aborted) return
-    asked.delete(askedKey(sessionId, request.requestId))
-    await replied(sessionId, request.requestId, {
-      kind: "permission",
-      response,
-    })
+    if (outbound.kind !== "request-permission") return undefined
+    const response = await client
+      .request(
+        methods.client.session.requestPermission,
+        { ...outbound.request, sessionId },
+        { cancellationSignal: signal }
+      )
+      .catch(declined(signal, { outcome: { outcome: "cancelled" as const } }))
+    return { kind: "permission", response }
   }
 
   async function askElicitation(
     sessionId: string,
     request: PendingRequest,
     signal: AbortSignal
-  ) {
+  ): Promise<ClientReply | undefined> {
     const outbound = translators.pendingRequestToOutbound(request)
-    if (outbound.kind !== "elicitation") return
+    if (outbound.kind !== "elicitation") return undefined
     if (!hasMode(outbound.request))
       throw new Error("The elicitation carries no mode")
+    // A client that cannot answer is not asked; its state shows the wait.
+    if (!elicits(outbound.request.mode)) return undefined
     // An elicitation is scoped to a Session or to one request; this one is
     // both, so a client that reads either scope can still route it.
-    const response = await client.request(
-      methods.client.elicitation.create,
-      { ...outbound.request, sessionId, requestId: request.requestId },
-      { cancellationSignal: signal }
-    )
-    if (signal.aborted) return
-    asked.delete(askedKey(sessionId, request.requestId))
-    await replied(sessionId, request.requestId, {
-      kind: "elicitation",
-      response,
-    })
+    const response = await client
+      .request(
+        methods.client.elicitation.create,
+        { ...outbound.request, sessionId, requestId: request.requestId },
+        { cancellationSignal: signal }
+      )
+      .catch(declined(signal, { action: "cancel" as const }))
+    return { kind: "elicitation", response }
   }
 
   /** Issues one server→client request and hands its reply back. */
   function ask(sessionId: string, request: PendingRequest) {
     const controller = new AbortController()
     const { signal } = controller
-    asked.set(askedKey(sessionId, request.requestId), controller)
-    void (
-      request.kind === PendingRequestKind.Permission
+    const key = askedKey(sessionId, request.requestId)
+    asked.set(key, controller)
+    void (async () => {
+      const reply = await (request.kind === PendingRequestKind.Permission
         ? askPermission(sessionId, request, signal)
-        : askElicitation(sessionId, request, signal)
-    ).catch((cause: unknown) =>
+        : askElicitation(sessionId, request, signal))
+      // An answer that crossed its withdrawal is no longer this member's to give.
+      if (signal.aborted) return
+      asked.delete(key)
+      if (reply) await replied(sessionId, request.requestId, reply)
+    })().catch((cause: unknown) =>
       // A withdrawn request is refused as cancelled, which is no failure.
       signal.aborted ? undefined : report(sessionId, cause)
     )
@@ -362,6 +389,13 @@ export function createMemberEncoder({
     states.set(stream, translated.state)
     for (const outbound of translated.outbound) {
       if (stream.dropped) return
+      // A replayed state has passed; the view is told the turn's own after.
+      if (
+        event.replayed &&
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate === "state_update"
+      )
+        continue
       await send(sessionId, outbound, sequence)
     }
   }
@@ -440,10 +474,7 @@ export function createMemberEncoder({
         return
       }
       case "execution":
-        return update(
-          sessionId,
-          executionUpdate(event.state, event.turnId, event.sequence)
-        )
+        return update(sessionId, executionUpdate(event))
       case "usage":
         return update(sessionId, usageUpdate(event.usage))
       case "model":
@@ -456,10 +487,6 @@ export function createMemberEncoder({
         return update(sessionId, sessionInfoUpdate(event.row))
       case "commands":
         return update(sessionId, commandsUpdate(event.capabilities))
-      case "invalidated":
-        return client.notify(AOS_METHODS.notify.sessionInvalidated, {
-          sessionId,
-        })
       case "error": {
         const failure = describe(event.cause)
         logger.error(

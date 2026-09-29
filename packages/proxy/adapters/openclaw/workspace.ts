@@ -9,6 +9,7 @@ import type {
 import {
   AgentAvatarSchema,
   AgentUpdateResponseSchema,
+  newestSessionFirst,
   SessionCreateResponseSchema,
 } from "../../../protocol"
 import { openClawInviteSessionKey } from "../../core/invite-key"
@@ -129,9 +130,18 @@ function isBoundedSessionKey(value: string) {
   )
 }
 
+/** When the row was last active; a row that carries no time has none. */
 function updatedAt(row: OpenClawSession) {
-  const timestamp = row.lastInteractionAt ?? row.updatedAt ?? 0
-  return new Date(timestamp).toISOString()
+  const timestamp = row.lastInteractionAt ?? row.updatedAt
+  return timestamp === undefined
+    ? {}
+    : { updatedAt: new Date(timestamp).toISOString() }
+}
+
+/** `SessionRowSchema` names a Session only by an optional label. */
+function title(row: OpenClawSession) {
+  const name = row.label ?? row.displayName
+  return name === undefined ? {} : { title: name }
 }
 
 function sessionStatus(row: OpenClawSession): Session["status"] {
@@ -145,12 +155,12 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
   return {
     id: row.key,
     agentId,
-    title: row.label ?? row.displayName ?? row.key,
+    ...title(row),
     archived: row.archived ?? false,
     ...(row.createdAt === undefined
       ? {}
       : { createdAt: new Date(row.createdAt).toISOString() }),
-    updatedAt: updatedAt(row),
+    ...updatedAt(row),
     status: sessionStatus(row),
     // Absent pin state stays absent: it never overwrites a known value.
     ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
@@ -182,6 +192,8 @@ export function invitedOpenClawSessionKey(agentId: string, ref: string) {
 
 export type OpenClawWorkspace = Readonly<{
   listAgents(): Promise<AgentCatalogResponse>
+  /** The Agent's `agents.list` `workspace`, when it is absolute. */
+  agentFolder(agentId: string): Promise<string | undefined>
   updateAgent(
     agentId: string,
     patch: AgentUpdatePatch,
@@ -299,6 +311,10 @@ export function createOpenClawWorkspace(input: {
 
   return {
     listAgents,
+    async agentFolder(agentId) {
+      const { workspace } = await requireVisibleAgent(agentId)
+      return workspace?.startsWith("/") ? workspace : undefined
+    },
     async updateAgent(agentId, patch, observedRevision) {
       // A patch that touches visibility is unsupported as a whole, and the
       // avatar is re-checked so no caller reaches the native write unchecked.
@@ -368,11 +384,7 @@ export function createOpenClawWorkspace(input: {
       const sessions = pages
         .flat()
         .flatMap((page) => page.sessions)
-        .sort(
-          (left, right) =>
-            Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-            left.id.localeCompare(right.id)
-        )
+        .sort(newestSessionFirst)
       return {
         sessions: sessions.slice(offset, offset + limit),
         total: sessions.length + (pages.some((page) => page.hasMore) ? 1 : 0),

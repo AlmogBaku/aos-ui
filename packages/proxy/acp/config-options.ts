@@ -9,6 +9,8 @@ import type { ConfigOptionsOf, ConfigWriteOf } from "./types"
 
 const MODEL_CONFIG_ID = "model"
 const THOUGHT_CONFIG_ID = "thought_level"
+/** The thought level a Session runs at while the provider reports none. */
+const DEFAULT_EFFORT = ""
 
 /** One ACP group per provider, in the order the catalog first names them. */
 function modelGroupsOf(
@@ -48,11 +50,18 @@ export const configOptionsOf = ((models) => {
       configId: THOUGHT_CONFIG_ID,
       name: "Thought level",
       category: "thought_level",
-      // ACP requires a current value; the provider's own default reports no
-      // effort, which stays unset rather than claiming one of the ladder's ids.
-      currentValue: models.effortId ?? "",
-      // ACP requires a name; an effort the provider left unnamed goes by its id.
-      options: efforts.map(({ id, name }) => ({ value: id, name: name ?? id })),
+      // ACP requires a current value that is one of the choices; the
+      // provider's own default reports no effort, so it is a choice of its own
+      // rather than a claim to one of the ladder's ids. It is offered only
+      // while it holds, so choosing it asks the provider for no change.
+      currentValue: models.effortId ?? DEFAULT_EFFORT,
+      options: [
+        ...(models.effortId === undefined
+          ? [{ value: DEFAULT_EFFORT, name: "Default" }]
+          : []),
+        // ACP requires a name; an effort the provider left unnamed goes by its id.
+        ...efforts.map(({ id, name }) => ({ value: id, name: name ?? id })),
+      ],
     })
   return options
 }) satisfies ConfigOptionsOf

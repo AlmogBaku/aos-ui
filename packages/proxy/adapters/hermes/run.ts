@@ -21,6 +21,7 @@ import {
   TurnEventKind,
   TurnInputSchema,
   type PendingRequest,
+  type RequestReply,
   type TurnEvent,
 } from "../../core/events"
 import {
@@ -30,6 +31,7 @@ import {
   type ServerTurnHandle,
   type ServerTurnListener,
 } from "../../core/runtime"
+import { storageReceipt } from "../../core/storage-receipt"
 import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
@@ -114,10 +116,12 @@ export type HermesReconnectRequest = RecoveryRequest
 
 /** The public failure each refused submit reports, with Hermes' own words. */
 const REFUSAL_FAILURES: Record<
-  Exclude<HermesSubmitRejection, "command-with-attachments" | "session-gone">,
+  Exclude<
+    HermesSubmitRejection,
+    "busy" | "command-with-attachments" | "session-gone"
+  >,
   TurnFailure
 > = {
-  busy: TURN_FAILURES.sessionBusy,
   "in-use": TURN_FAILURES.sessionInUse,
   "session-limit": TURN_FAILURES.sessionLimit,
   storage: TURN_FAILURES.commandRejected,
@@ -211,6 +215,7 @@ export class HermesTurnEngine {
         this.#finish(active, ending, confirmedIdle),
       requireAction: (active, requests) =>
         this.#requireAction(active, requests),
+      awaitStop: (active) => this.#awaitStop(active),
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
@@ -253,6 +258,14 @@ export class HermesTurnEngine {
       )
     const key = sessionKey(scope)
     const stale = this.#active.get(key)
+    // Hermes holds its turn open on its own question, so the answer continues
+    // the run that asked it.
+    if (replies && stale?.waitingOn) {
+      stale.turnId = input.turnId
+      stale.waitingOn = undefined
+      await this.#respond(stale, replies)
+      return this.#handle(stale)
+    }
     if (this.#admissions.has(key) || (stale && !stale.uncertain))
       throw new ServerTurnConflictError()
     this.#admissions.add(key)
@@ -276,21 +289,7 @@ export class HermesTurnEngine {
       // The answer resumes a native turn whose completion frame already passed,
       // so settlement may end this run on Hermes' own idle edge.
       active.resumedInteraction = true
-      let results: readonly { status: string }[]
-      try {
-        results = await this.#native.respondInteractions(
-          { ...scope, turnId: input.turnId },
-          replies
-        )
-      } catch {
-        this.#fail(active, TURN_FAILURES.interactionFailed)
-        return this.#handle(active)
-      }
-      if (active.terminal) return this.#handle(active)
-      if (results.some(({ status }) => status === "uncertain"))
-        this.#detach(active, TURN_FAILURES.interactionUncertain)
-      else if (results.some(({ status }) => status === "expired"))
-        this.#fail(active, TURN_FAILURES.interactionExpired)
+      await this.#respond(active, replies)
       return this.#handle(active)
     }
     const status = await readStatus(this.#host, active.liveSessionId)
@@ -301,9 +300,11 @@ export class HermesTurnEngine {
     }
     // Only a Session running a turn is authoritatively busy; one that is still
     // building its Agent, or that Hermes does not list, accepts the turn.
+    // Hermes would queue or steer a busy prompt rather than refuse it, so this
+    // run refuses it before it is sent.
     if (status === "working" || status === "waiting") {
-      this.#fail(active, TURN_FAILURES.sessionBusy)
-      return this.#handle(active)
+      this.#settle(active)
+      throw new ServerTurnConflictError()
     }
     await this.#submit(
       active,
@@ -538,14 +539,7 @@ export class HermesTurnEngine {
       if (!unchanged()) return
       const status = await readStatus(this.#host, liveSessionId)
       if (status !== "waiting" || !unchanged()) return
-      const { code, message } = TURN_FAILURES.interactionLost
-      this.#log.warn({ publicCode: code }, TURN_FAILED_LOG)
-      this.#emit(active, {
-        kind: TurnEventKind.TurnFailed,
-        message,
-        code,
-        awaitingStop: true,
-      })
+      this.#awaitStop(active)
     }
     const timer = setTimeout(() => {
       checkLost().catch((err: unknown) =>
@@ -554,6 +548,39 @@ export class HermesTurnEngine {
     }, this.#lostInteractionGraceMs)
     // Detection is reconciliation, never a reason to keep the process alive.
     if (typeof timer !== "number") timer.unref()
+  }
+
+  /** The turn waits on a prompt no client here can answer: only Stop ends it. */
+  #awaitStop(active: ActiveTurn) {
+    if (active.terminal) return
+    active.awaitingStop = true
+    const { code, message } = TURN_FAILURES.interactionLost
+    this.#log.warn({ publicCode: code }, TURN_FAILED_LOG)
+    this.#emit(active, {
+      kind: TurnEventKind.TurnFailed,
+      message,
+      code,
+      awaitingStop: true,
+    })
+  }
+
+  /** Sends the answers the run's turn waits on; a failed send ends the run. */
+  async #respond(active: ActiveTurn, replies: readonly RequestReply[]) {
+    let results: readonly { status: string }[]
+    try {
+      results = await this.#native.respondInteractions(
+        { ...active.scope, turnId: active.turnId },
+        replies
+      )
+    } catch {
+      this.#fail(active, TURN_FAILURES.interactionFailed)
+      return
+    }
+    if (active.terminal) return
+    if (results.some(({ status }) => status === "uncertain"))
+      this.#detach(active, TURN_FAILURES.interactionUncertain)
+    else if (results.some(({ status }) => status === "expired"))
+      this.#fail(active, TURN_FAILURES.interactionExpired)
   }
 
   /** The same run continues on a new stream from the browser's own cursor. */
@@ -609,15 +636,17 @@ export class HermesTurnEngine {
       // frame is a `message.start`, not the current turn's idle boundary; an
       // in-place `steered`/`redirected` prompt joins the turn already running.
       if (outcome.status === "queued") active.awaitingStart = true
+      // A prompt is answered once Hermes proves it stored: by this answer's
+      // row, or failing that by the completion receipt of the turn it runs.
+      if (active.promptMessageId && !outcome.completion)
+        active.stored = storageReceipt()
       // Hermes saves the prompt before the turn runs, so its row stands even
       // when the turn is stopped, fails, or compacts and proves nothing more.
-      if (outcome.userRowId !== undefined && active.promptMessageId)
-        active.saved = {
-          user: {
-            messageId: active.promptMessageId,
-            savedId: hermesRowMessageId(outcome.userRowId),
-          },
-        }
+      // The turn's model responses number from it, as history numbers them.
+      if (outcome.userRowId !== undefined) {
+        active.messageBase = hermesRowMessageId(outcome.userRowId)
+        active.stored?.resolve(active.messageBase)
+      }
       if (!outcome.completion) return
       if (outcome.completion.output) {
         active.messageId = `aos-command:${prompt.turnId}`
@@ -634,6 +663,10 @@ export class HermesTurnEngine {
         composerPrefill === undefined ? undefined : { composerPrefill }
       )
       return
+    }
+    if (outcome.reason === "busy") {
+      this.#settle(active)
+      throw new ServerTurnConflictError()
     }
     if (outcome.reason === "command-with-attachments")
       return this.#fail(active, TURN_FAILURES.commandWithAttachments)
@@ -667,12 +700,29 @@ export class HermesTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
+      // Gap: Hermes answers `session.redirect` with `{status, text}` alone
+      // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
+      // the correction's row, so a live steer keeps its `requestId` while a
+      // reload shows the stored row's id.
       steer: (request) => steerTurn(this.#host, active, request.text),
       recoveryPosition: () =>
         hermesRecoveryToken.mint({
           epoch: active.epoch,
           lastSeen: active.lastSeen,
         }),
+      ...(active.stored ? { stored: active.stored.promise } : {}),
+      wait: {
+        continue: (turnId) => {
+          active.turnId = turnId
+          active.waitingOn = undefined
+          active.resumed = undefined
+        },
+        onResumed: (listener) => {
+          // Hermes may have ended the wait before anyone listened for it.
+          if (active.waitingOn) active.resumed = listener
+          else listener()
+        },
+      },
     }
   }
 
@@ -744,10 +794,6 @@ export class HermesTurnEngine {
         active.turn = "open"
         active.failure = undefined
         active.errorObserved = false
-        if (active.messageId) return
-        const messageId = stableNativeId(payload.message_id ?? payload.id)
-        if (messageId && active.sealedMessageIds.has(messageId)) return
-        active.messageId = messageId ?? this.#fallbackMessageId(active)
         return
       }
       case "message.delta": {
@@ -758,15 +804,17 @@ export class HermesTurnEngine {
       case "message.interim": {
         const delta = boundedText(payload.text)
         if (!delta) return
-        this.#ensureMessageId(active)
+        this.#responseId(active)
         if (
           !this.#appendSuffix(active, delta) &&
           payload.already_streamed !== true
         )
           this.#appendText(active, delta)
-        // Interim commentary is a message boundary inside the native turn:
-        // more tools and text may follow, and only message.complete settles.
-        this.#sealGeneration(active)
+        // Interim commentary ends the response's prose: its tool calls follow
+        // in the same message, text after it is the next response even when
+        // no call of this one streamed, and only message.complete settles.
+        this.#closeGeneration(active, { media: true })
+        Object.assign(active, generationState(), { toolsDone: true })
         return
       }
       // Hermes uses thinking.delta for transient spinner/status copy. It is not
@@ -775,18 +823,18 @@ export class HermesTurnEngine {
         return
       case "reasoning.delta":
       case "reasoning.available": {
-        // Reasoning is model thought, so it belongs only ahead of any assistant
+        // Reasoning is model thought, so it belongs only ahead of a response's
         // text, and an available frame only where nothing streamed already.
         const delta = boundedText(payload.text)
+        if (delta === undefined) return
+        const messageId = this.#responseId(active)
         if (
-          delta === undefined ||
           active.textStarted ||
           (event.type === "reasoning.available" &&
             active.streamedReasoning.length > 0)
         )
           return
-        this.#ensureMessageId(active)
-        this.#appendReasoning(active, delta)
+        this.#appendReasoning(active, messageId, delta)
         return
       }
       case "tool.start":
@@ -818,6 +866,9 @@ export class HermesTurnEngine {
       }
       case "message.complete":
         return this.#acceptComplete(active, payload)
+      // A request timed out or was interrupted: the turn runs on without it.
+      case "request.cancel":
+        return this.#withdrawn(active, stableNativeId(payload.id))
     }
   }
 
@@ -825,6 +876,7 @@ export class HermesTurnEngine {
     const tool = this.#startTool(active, payload)
     if (!tool || tool.ended) return
     tool.ended = true
+    active.toolsDone = true
     const toolCallId = stableNativeId(payload.tool_id)
     if (!toolCallId) return
     const outcome = projectHermesToolOutcome(
@@ -1007,39 +1059,26 @@ export class HermesTurnEngine {
   #acceptComplete(active: ActiveTurn, payload: Record<string, unknown>) {
     if (active.awaitingStart) return this.#sealGeneration(active)
     this.#acceptUsage(active, payload.usage)
-    const completedMessageId = stableNativeId(payload.message_id ?? payload.id)
     // Hermes ended the turn; how it ended decides what settlement does.
     active.turn = turnOutcome(payload.status)
     if (active.turn === "failed") active.failure = nativeFailure(payload)
     const redirecting = active.redirect.chain || active.redirect.pending
-    // A completion for a generation this run already sealed belongs to the turn
-    // a correction superseded, not to the text the run is streaming.
-    if (
-      redirecting &&
-      completedMessageId &&
-      active.sealedMessageIds.has(completedMessageId)
-    )
-      return
-    if (!active.messageId && completedMessageId)
-      active.messageId = completedMessageId
-    const rows = active.promptMessageId
+    // An acknowledged correction sealed the message the run was streaming, so
+    // a completion before the corrected turn streams belongs to the turn it
+    // superseded, not to this run.
+    if (redirecting && active.messageId === undefined) return
+    const userRow = active.promptMessageId
       ? persistedTurnRows(payload.persisted_turn)
       : undefined
-    if (rows)
-      active.saved = {
-        user: {
-          messageId: active.promptMessageId!,
-          savedId: hermesRowMessageId(rows.user),
-        },
-        replyId: hermesRowMessageId(rows.reply),
-      }
+    if (userRow !== undefined)
+      active.stored?.resolve(hermesRowMessageId(userRow))
     const finalText = boundedText(payload.text)
     // A failed turn's `text` is the model's own prose only while `partial` marks
     // it as such. Without that flag Hermes composed the copy explaining the
     // failure, which AOS publishes as a failure and never as an assistant
     // message.
     if (finalText && (active.turn !== "failed" || payload.partial === true)) {
-      this.#ensureMessageId(active)
+      this.#responseId(active)
       this.#appendSuffix(active, finalText)
     }
     // A failed turn is not settled from its own frame: seal the assistant
@@ -1053,6 +1092,7 @@ export class HermesTurnEngine {
 
   /** Stream a text delta: recorded for suffix matching, then media-filtered. */
   #appendText(active: ActiveTurn, delta: string) {
+    this.#responseId(active)
     this.#appendStreamedText(active, delta)
     this.#emitMediaFilteredText(active, active.mediaFilter.write(delta))
   }
@@ -1077,7 +1117,7 @@ export class HermesTurnEngine {
   /** Publish filtered prose, then the artifacts its MEDIA lines delivered. */
   #emitMediaFilteredText(active: ActiveTurn, delta: string) {
     if (delta) {
-      const messageId = this.#ensureMessageId(active)
+      const messageId = this.#responseId(active)
       active.textStarted = true
       this.#emit(active, {
         kind: TurnEventKind.MessageChunk,
@@ -1121,15 +1161,27 @@ export class HermesTurnEngine {
       active.plan = structuredClone(todos)
   }
 
-  #ensureMessageId(active: ActiveTurn) {
-    active.messageId ??= this.#fallbackMessageId(active)
+  /**
+   * The message prose or thought streams into. Hermes names no message on its
+   * frames, so a model response is known by what it streams: prose or thought
+   * after one of its calls finished is the next response. Each is born as the
+   * prompt row's `-<n>`, the id history gives the n-th response; a run whose
+   * prompt row Hermes never named numbers from its turn instead.
+   */
+  #responseId(active: ActiveTurn) {
+    if (active.messageId !== undefined && !active.toolsDone)
+      return active.messageId
+    active.toolsDone = false
+    if (active.messageId !== undefined) {
+      // What the finished response held back lands in it before the next,
+      // which still trusts the media its calls returned.
+      this.#closeGeneration(active, { media: true })
+      const { mediaFilter } = active
+      Object.assign(active, generationState(), { mediaFilter })
+    }
+    active.responses += 1
+    active.messageId = `${active.messageBase ?? `${active.turnId}:assistant`}-${active.responses}`
     return active.messageId
-  }
-
-  #fallbackMessageId(active: ActiveTurn) {
-    return active.generation === 0
-      ? `${active.turnId}:assistant`
-      : `${active.turnId}:assistant:${active.generation + 1}`
   }
 
   #startTool(active: ActiveTurn, payload: Record<string, unknown>) {
@@ -1137,7 +1189,8 @@ export class HermesTurnEngine {
     if (!toolCallId) return undefined
     const existing = active.tools.get(toolCallId)
     if (existing) return existing
-    const messageId = this.#ensureMessageId(active)
+    // A call belongs to the response that made it, which may be all calls.
+    const messageId = active.messageId ?? this.#responseId(active)
     const nativeName = stableNativeId(payload.name)
     if (!nativeName) return undefined
     const projected = projectHermesToolCall(
@@ -1168,12 +1221,13 @@ export class HermesTurnEngine {
     return tool
   }
 
-  #appendReasoning(active: ActiveTurn, delta: string) {
-    if (delta.length === 0 || !active.messageId) return
+  /** A thought is its own message, named after the response it leads to. */
+  #appendReasoning(active: ActiveTurn, messageId: string, delta: string) {
+    if (delta.length === 0) return
     if (
       this.#emit(active, {
         kind: TurnEventKind.ThoughtChunk,
-        messageId: active.messageId,
+        messageId: `${messageId}-thought`,
         text: delta,
       })
     )
@@ -1196,8 +1250,8 @@ export class HermesTurnEngine {
 
   #sealGeneration(active: ActiveTurn) {
     this.#closeGeneration(active, { media: true })
-    if (active.messageId) active.sealedMessageIds.add(active.messageId)
     active.messageId = undefined
+    active.toolsDone = false
     active.generation += 1
     Object.assign(active, generationState())
   }
@@ -1221,18 +1275,18 @@ export class HermesTurnEngine {
         : active.turn === "complete"
           ? StopReason.EndTurn
           : undefined
-    this.#emit(active, {
+    const ended: TurnEvent = {
       kind: TurnEventKind.TurnEnded,
       ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
       ...(active.cost ? { cost: active.cost } : {}),
-      ...(active.saved ? { saved: active.saved } : {}),
       ...(ending.composerPrefill === undefined
         ? {}
         : { composerPrefill: ending.composerPrefill }),
-    })
+    }
+    this.#emit(active, ended)
     if (!confirmedIdle) watchSettling(this.#host, active)
-    this.#settle(active)
+    this.#settle(active, ended)
   }
 
   #requireAction(active: ActiveTurn, requests: PendingRequest[]) {
@@ -1249,20 +1303,43 @@ export class HermesTurnEngine {
         ? { ...request, toolCallId }
         : request
     )
-    this.#closeGeneration(active, { tools: "unresolved" })
+    // Hermes blocks its turn on the request inside the turn, so the run keeps
+    // its calls, stream and observer: the stream pauses here and, read on once
+    // the wait ends, starts the turn's next segment.
+    active.waitingOn = new Set([
+      ...(active.waitingOn ?? []),
+      ...linked.map(({ requestId }) => requestId),
+    ])
     this.#emit(active, {
       kind: TurnEventKind.TurnRequiresAction,
       requests: linked,
     })
-    this.#settle(active)
+    this.#emit(active, { kind: TurnEventKind.TurnStarted })
+  }
+
+  /** Hermes ended one request the turn waited on, answered by no one here. */
+  #withdrawn(active: ActiveTurn, requestId: string | undefined) {
+    if (!requestId) return
+    const waiting = active.waitingOn
+    if (waiting?.delete(requestId)) {
+      if (waiting.size > 0) return
+      active.waitingOn = undefined
+      active.resumed?.()
+      return
+    }
+    // A prompt AOS holds or lost ended too, unless a Stop withdrew it.
+    if (!active.awaitingStop || active.stopping) return
+    active.awaitingStop = false
+    this.#emit(active, { kind: TurnEventKind.TurnStarted })
   }
 
   #fail(active: ActiveTurn, failure: TurnFailure) {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
-    this.#emit(active, this.#failed(active, failure))
-    this.#settle(active)
+    const failed = this.#failed(active, failure)
+    this.#emit(active, failed)
+    this.#settle(active, failed)
   }
 
   /**
@@ -1272,7 +1349,9 @@ export class HermesTurnEngine {
    */
   #detach(active: ActiveTurn, failure: DetachedTurnFailure) {
     if (active.terminal || active.detached) return
-    this.#emit(active, this.#failed(active, failure))
+    const failed = this.#failed(active, failure)
+    this.#emit(active, failed)
+    active.stored?.end(failed)
     active.uncertain = true
     active.detached = true
     active.catchUp = undefined
@@ -1289,7 +1368,6 @@ export class HermesTurnEngine {
       ...(active.model
         ? { provider: active.model.provider, model: active.model.model }
         : {}),
-      ...(active.saved?.user ? { saved: { user: active.saved.user } } : {}),
     }
   }
 
@@ -1305,8 +1383,9 @@ export class HermesTurnEngine {
 
   #overflow(active: ActiveTurn) {
     if (active.terminal) return
-    active.queue.terminal(this.#failed(active, TURN_FAILURES.streamOverflow))
-    this.#settle(active)
+    const failed = this.#failed(active, TURN_FAILURES.streamOverflow)
+    active.queue.terminal(failed)
+    this.#settle(active, failed)
   }
 
   #isSubmitEligible(active: ActiveTurn) {
@@ -1319,9 +1398,11 @@ export class HermesTurnEngine {
     )
   }
 
-  #settle(active: ActiveTurn) {
+  /** `ending` is the event that ended the run, when one did. */
+  #settle(active: ActiveTurn, ending?: TurnEvent) {
     if (active.terminal) return
     active.terminal = true
+    active.stored?.end(ending)
     // A settling watcher keeps the native observation until Hermes reports the
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)

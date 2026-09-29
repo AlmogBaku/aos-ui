@@ -30,7 +30,6 @@ export function createFeedsMiddleware(): Middleware {
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":
-        case "invalidated":
         case "error":
           return event
       }

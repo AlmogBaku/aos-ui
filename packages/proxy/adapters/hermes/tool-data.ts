@@ -112,11 +112,19 @@ export function hermesToolLocations(
     : undefined
 }
 
+/** A result's list of paths; a list naming a non-public path taints it. */
+function pathList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return []
+  return value.every(publicPath) ? value : undefined
+}
+
 /**
- * The files a successful edit changed, from its native result. Hermes reports
- * every file an edit touched, moves and deletes included, as modified, and the
- * `patch` tool adds a unified diff of them; the diff travels only when every
- * file it names is public.
+ * The files a successful edit changed, from its native result. Hermes' `patch`
+ * tool names the files it added and deleted (`tools/patch_parser.py:308`), and
+ * then reports every file it touched as modified (`tools/file_tools.py:1002`),
+ * so a file only modified is one named in neither. The changes travel only
+ * when every file they name is public, and the diff with them only when it is
+ * a git patch carrying no credential.
  */
 export function hermesToolDiffs(
   canonicalName: string,
@@ -125,19 +133,37 @@ export function hermesToolDiffs(
   if (canonicalName !== "write_file" && canonicalName !== "patch")
     return undefined
   const parsed = parseJsonOrValue(result)
-  if (!isRecord(parsed) || !Array.isArray(parsed.files_modified))
-    return undefined
-  const paths = parsed.files_modified
-  if (paths.length === 0 || !paths.every(publicPath)) return undefined
-  const diff = parsed.diff
-  return [
-    {
-      changes: paths.map((path) => ({ operation: DiffOperation.Modify, path })),
-      ...(typeof diff === "string" && diff && !stringContainsCredential(diff)
-        ? { patch: diff }
-        : {}),
-    },
+  if (!isRecord(parsed)) return undefined
+  const added = pathList(parsed.files_created)
+  const deleted = pathList(parsed.files_deleted)
+  const touched = pathList(parsed.files_modified)
+  if (!added || !deleted || !touched) return undefined
+  const changes = [
+    ...added.map((path) => ({ operation: DiffOperation.Add, path })),
+    ...deleted.map((path) => ({ operation: DiffOperation.Delete, path })),
+    ...touched
+      .filter((path) => !added.includes(path) && !deleted.includes(path))
+      .map((path) => ({ operation: DiffOperation.Modify, path })),
   ]
+  if (changes.length === 0) return undefined
+  const patch = added.length === 0 ? gitPatch(parsed.diff) : undefined
+  return [{ changes, ...(patch ? { patch } : {}) }]
+}
+
+/**
+ * Hermes' diff when `git apply` takes it: an edit's and a delete's unified
+ * diff from `a/<path>` (`tools/patch_parser.py:261`,
+ * `tools/file_operations.py:446`). An added file's has no hunk header
+ * (`tools/patch_parser.py:333`), and a move or an empty file's delete is a
+ * `# ` note (`:343`, `:350`), so neither is one.
+ */
+function gitPatch(diff: unknown) {
+  return typeof diff === "string" &&
+    diff.startsWith("--- a/") &&
+    !/^# /mu.test(diff) &&
+    !stringContainsCredential(diff)
+    ? diff
+    : undefined
 }
 
 export type HermesPublicJsonValue =

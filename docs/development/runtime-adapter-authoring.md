@@ -202,13 +202,15 @@ native identities; matching an older row by text can truncate the wrong
 conversation. If history changed incompatibly, reconcile and return a
 normalized conflict rather than guessing.
 
-A message sent in the current page carries its live id until the browser
-learns the id history saved it under, and only then can it be edited. When
-the native runtime proves those ids at the turn's end, report them on
-`TurnEnded.saved`: the prompt's input `messageId` with its saved id, and the
-one id history gives the whole reply. The translator sends them as ACP
-`_meta.aos.savedIds`. Omit an id the runtime does not prove; never derive one
-from text or position.
+A prompt's answer names the id history stored the prompt under, so the browser
+can edit it at once. The adapter proves that id through
+`ServerTurnHandle.stored`, a receipt made by `storageReceipt()` in
+`core/storage-receipt.ts`. Resolve it with the stored id once the native
+runtime proves it, and call its `end(event)` with the terminal event on every
+path a turn ends by: finish, failure, stop, and detach. A turn that ends
+unproven then rejects the receipt, and the coordinator answers the prompt at
+once with what happened instead of waiting out its deadline. Never derive an id
+the runtime does not prove, from text or position.
 
 ## Preserve requests
 
@@ -358,7 +360,12 @@ An adapter is ready when:
 - focused adapter tests and provider-neutral conformance tests pass;
 - `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) passes
   in the adapter's own `contract.test.ts` — this suite is the gate for the
-  adapter's failure taxonomy, recovery token, and link contract.
+  adapter's failure taxonomy, recovery token, and link contract;
+- `runWireContract` (`packages/proxy/acp/wire-contract.ts`) passes in the
+  adapter's own `wire-contract.test.ts` — this suite drives the real proxy over
+  the adapter's native fake via an in-memory WebSocket and proves what a plain
+  ACP v2 client reads; rows the adapter cannot express are named in `gaps`.
+  Each adapter's fake lives beside its source, not in a shared test helper.
 
 When a runtime's native client is open source and the AOS server-side
 requirements (bounded decoding, credential isolation, uncertain-mutation

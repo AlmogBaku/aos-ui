@@ -11,6 +11,7 @@ import {
   SessionHistoryResponseSchema,
   SessionSchema,
   SESSION_CATALOG_MAX_WINDOW,
+  newestSessionFirst,
   type AgentCatalogEntry,
   type AgentCatalogResponse,
   type AgentUpdatePatch,
@@ -90,13 +91,7 @@ import {
   retryTransient,
   type HermesRetrySchedule,
 } from "./transient-rejections"
-import {
-  isRecord,
-  nativeId,
-  timestamp,
-  timestampMs,
-  trimmedText,
-} from "./native"
+import { isRecord, nativeId, timestampMs, trimmedText } from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
@@ -356,6 +351,18 @@ function createdAt(startedAt: unknown) {
   return ms === undefined ? {} : { createdAt: new Date(ms).toISOString() }
 }
 
+/** When a stored row was last active; a row that stored no time has none. */
+function updatedAt(row: Record<string, unknown>) {
+  const ms = timestampMs(row.last_active ?? row.started_at)
+  return ms === undefined ? {} : { updatedAt: new Date(ms).toISOString() }
+}
+
+/** A stored row's title; Hermes stores an untitled Session's as `""`. */
+function titled(row: Record<string, unknown>) {
+  const title = trimmedText(row.title)
+  return title === undefined ? {} : { title }
+}
+
 function sessionId(_profile: string, storedId: string) {
   return storedId
 }
@@ -468,6 +475,8 @@ export class HermesServerAdapter implements ServerRuntime {
             return isRecord(retained.info) ? retained.info : retained
           return (scope as HermesWorkspaceSession & { info?: unknown }).info
         },
+        storedSession: async (scope) =>
+          this.#dashboard?.getSession(scope.agentId, scope.providerSessionId),
         recordSessionInfo: (scope, patch) =>
           this.#recordSessionInfo(
             scope.agentId,
@@ -1065,6 +1074,24 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
+  /**
+   * The folder Hermes resolves for the profile's project: `config.get
+   * project`, never the profile row's `path`, which is its home.
+   */
+  async agentFolder(agentId: string): Promise<string | undefined> {
+    try {
+      const payload = await this.transport.request("config.get", {
+        key: "project",
+        profile: agentId,
+      })
+      if (!isRecord(payload)) throw new HermesUnavailableError()
+      const folder = trimmedText(payload.cwd)
+      return folder?.startsWith("/") ? folder : undefined
+    } catch (error) {
+      throwUnavailable(error)
+    }
+  }
+
   async runtimeInfo(): Promise<RuntimeInfo> {
     let visibilityAvailable = false
     try {
@@ -1359,10 +1386,10 @@ export class HermesServerAdapter implements ServerRuntime {
       return {
         id: sessionId(profile, storedId),
         agentId: profile,
-        title: trimmedText(row.title) ?? storedId,
+        ...titled(row),
         archived: row.archived === true,
         ...createdAt(row.started_at),
-        updatedAt: timestamp(row.last_active ?? row.started_at),
+        ...updatedAt(row),
         status: SETTLED,
         // Read state is derived per catalog row; an older Hermes omits it, and
         // absent must stay absent rather than collapse to "read".
@@ -1450,11 +1477,7 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     const merged = profilePages
       .flatMap(({ sessions }) => sessions)
-      .sort(
-        (left, right) =>
-          Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-          left.id.localeCompare(right.id)
-      )
+      .sort(newestSessionFirst)
     const result = SessionCatalogResponseSchema.safeParse({
       sessions: merged.slice(offset, prefixLength),
       total: profilePages.reduce((sum, page) => sum + page.total, 0),
@@ -1657,12 +1680,12 @@ export class HermesServerAdapter implements ServerRuntime {
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
       agentId: profile,
-      title: trimmedText(payload.title) ?? storedId,
+      ...titled(payload),
       // This read reports the stored flags as SQLite integers, so an archived
       // Session arrives as `1`; an unreadable flag stays the archive default.
       archived: nativeFlag(payload.archived) ?? false,
       ...createdAt(payload.started_at),
-      updatedAt: timestamp(payload.last_active ?? payload.started_at),
+      ...updatedAt(payload),
       status: SETTLED,
       ...(pinned === undefined ? {} : { pinned }),
       // `unread` is omitted: the Session detail read carries no derived
@@ -1695,12 +1718,11 @@ export class HermesServerAdapter implements ServerRuntime {
       )
     )
       throw new HermesSessionNotFoundError()
+    // Hermes stores no title or date before the first turn, so it has neither.
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
       agentId: profile,
-      title: storedId,
       archived: false,
-      updatedAt: timestamp(undefined),
       status: "idle" as const,
       // `unread` is omitted: an unpersisted draft has no derived activity
       // timestamp for Hermes to compare a read marker against.

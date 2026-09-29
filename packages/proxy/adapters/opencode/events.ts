@@ -15,6 +15,7 @@ import { openCodeArtifactReceipt } from "./content"
 import {
   openCodeModelOptionId,
   openCodeStopReason,
+  openCodeThoughtId,
   openCodeTimestamp,
 } from "./native-schemas"
 import { OPENCODE_TODO_TOOL } from "./todos"
@@ -545,11 +546,6 @@ export class OpenCodeEventProjector {
   readonly #fingerprints = new Map<number, string>()
   readonly #admissionId?: string
   #admissionMatched: boolean
-  /**
-   * The live id of the prompt the admission saves. OpenCode stores the user
-   * message under the admission's own id, so a matched admission proves it.
-   */
-  readonly #userMessageId?: string
   #lastSeen: number
   #closed = false
   #stopping = false
@@ -574,7 +570,6 @@ export class OpenCodeEventProjector {
     lastSeen: number,
     options: Readonly<{
       admissionId?: string
-      userMessageId?: string
       resolveMcpTool?: McpToolNameResolver
     }> = {}
   ) {
@@ -589,7 +584,6 @@ export class OpenCodeEventProjector {
     this.#lastSeen = lastSeen
     this.#admissionId = options.admissionId
     this.#admissionMatched = options.admissionId === undefined
-    this.#userMessageId = options.userMessageId
     this.#resolveMcpTool = options.resolveMcpTool
   }
 
@@ -655,7 +649,6 @@ export class OpenCodeEventProjector {
     const events = this.#closeOpenTools(
       this.#stopping ? "stopped" : "completed"
     )
-    const savedId = this.#admissionMatched ? this.#admissionId : undefined
     events.push({
       kind: TurnEventKind.TurnEnded,
       // A stop the operator asked for outranks how the last step ended.
@@ -668,9 +661,6 @@ export class OpenCodeEventProjector {
       ...(this.#cost === undefined
         ? {}
         : { cost: { amount: this.#cost, currency: "USD" } }),
-      ...(savedId && this.#userMessageId
-        ? { saved: { user: { messageId: this.#userMessageId, savedId } } }
-        : {}),
     })
     return { events, terminal: "finished" }
   }
@@ -707,15 +697,17 @@ export class OpenCodeEventProjector {
       type === "session.next.text.ended"
     ) {
       const text = data.text as string
+      const messageId = data.assistantMessageID as string
       if (text)
-        events.push({
-          kind:
-            type === "session.next.text.ended"
-              ? TurnEventKind.MessageChunk
-              : TurnEventKind.ThoughtChunk,
-          messageId: data.assistantMessageID as string,
-          text,
-        })
+        events.push(
+          type === "session.next.text.ended"
+            ? { kind: TurnEventKind.MessageChunk, messageId, text }
+            : {
+                kind: TurnEventKind.ThoughtChunk,
+                messageId: openCodeThoughtId(messageId),
+                text,
+              }
+        )
     } else if (type === "session.next.tool.input.started") {
       this.#openTool(
         events,
