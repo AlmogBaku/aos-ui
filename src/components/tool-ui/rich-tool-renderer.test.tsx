@@ -1123,85 +1123,76 @@ describe("provider permission renderer", () => {
     expect(screen.getByText("Answered: Run in a sandbox")).toBeInTheDocument()
   })
 
-  it("confirms a persistent permission and shows its provider scope", async () => {
-    const user = userEvent.setup()
-    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+  it.each([
+    {
+      scope: "datasets/market/**",
+      options: [
+        { id: "once", kind: "allow-once", label: "Allow once" },
+        {
+          id: "always-dataset",
+          kind: "allow-always",
+          label: "Always for this dataset",
+          grants: ["datasets/market/**"],
+        },
+        { id: "reject", kind: "reject-once", label: "Reject" },
+      ],
+      button: "Always for this dataset",
+      optionId: "always-dataset",
+    },
+    {
+      scope: undefined,
+      options: [
+        { id: "once", kind: "allow-once" },
+        { id: "always", kind: "allow-always" },
+      ],
+      button: "Always allow",
+      optionId: "always",
+    },
+  ] satisfies {
+    scope?: string
+    options: NonNullable<RichToolPart["approval"]>["options"]
+    button: string
+    optionId: string
+  }[])(
+    "confirms a persistent permission behind one step (scope $scope)",
+    async ({ scope, options, button, optionId }) => {
+      const user = userEvent.setup()
+      const respondToApproval = vi.fn().mockResolvedValue(undefined)
 
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "request_permission",
-          args: { action: "Read the shared market dataset" },
-          status: { type: "requires-action", reason: "tool-calls" },
-          approval: {
-            id: "permission-1",
-            prompt: "Allow Aster to read the shared market dataset?",
-            options: [
-              { id: "once", kind: "allow-once", label: "Allow once" },
-              {
-                id: "always-dataset",
-                kind: "allow-always",
-                label: "Always for this dataset",
-                grants: ["datasets/market/**"],
-              },
-              { id: "reject", kind: "reject-once", label: "Reject" },
-            ],
-          },
-          respondToApproval,
-        })}
-      />
-    )
+      await renderTool(
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "request_permission",
+            args: { action: "Read the shared market dataset" },
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "permission-always",
+              prompt: "Allow Aster to read the shared market dataset?",
+              options,
+            },
+            respondToApproval,
+          })}
+        />
+      )
 
-    expect(screen.getByText("datasets/market/**")).toBeInTheDocument()
+      if (scope) {
+        expect(screen.getByText(scope)).toBeInTheDocument()
+      } else {
+        expect(
+          screen.queryByRole("list", { name: "Persistent permission scope" })
+        ).not.toBeInTheDocument()
+      }
 
-    await user.click(
-      screen.getByRole("button", { name: "Always for this dataset" })
-    )
-    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Confirm always" }))
+      await user.click(screen.getByRole("button", { name: button }))
+      expect(respondToApproval).not.toHaveBeenCalled()
+      expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Confirm always" }))
 
-    await waitFor(() =>
-      expect(respondToApproval).toHaveBeenCalledWith({
-        optionId: "always-dataset",
-      })
-    )
-  })
-
-  it("offers a persistent permission without a scope behind the confirm step", async () => {
-    const user = userEvent.setup()
-    const respondToApproval = vi.fn().mockResolvedValue(undefined)
-
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "request_permission",
-          args: { action: "Run the deploy script" },
-          status: { type: "requires-action", reason: "tool-calls" },
-          approval: {
-            id: "permission-always",
-            prompt: "Run the deploy script?",
-            options: [
-              { id: "once", kind: "allow-once" },
-              { id: "always", kind: "allow-always" },
-            ],
-          },
-          respondToApproval,
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "Always allow" }))
-    expect(respondToApproval).not.toHaveBeenCalled()
-    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
-    expect(
-      screen.queryByRole("list", { name: "Persistent permission scope" })
-    ).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Confirm always" }))
-
-    await waitFor(() =>
-      expect(respondToApproval).toHaveBeenCalledWith({ optionId: "always" })
-    )
-  })
+      await waitFor(() =>
+        expect(respondToApproval).toHaveBeenCalledWith({ optionId })
+      )
+    }
+  )
 
   it.each([
     ["en", "Allow for this session"],
