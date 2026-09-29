@@ -835,6 +835,18 @@ const Composer: FC<{
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
   const historyBrowseRef = useRef<HistoryBrowse | null>(null)
   const [inputFocused, setInputFocused] = useState(false)
+  // While the composer has focus, stop the idle CSS animations so the browser
+  // does not restyle animated elements on every keystroke frame. The attribute
+  // is a direct DOM write — no React state, no re-renders — so the CSS rules
+  // in status-dots.module.css and agent-tile.module.css can use [data-composing]
+  // as a simple, fast selector. The effect cleans up the attribute on unmount.
+  useEffect(() => {
+    if (!inputFocused) return
+    document.documentElement.dataset.composing = ""
+    return () => {
+      delete document.documentElement.dataset.composing
+    }
+  }, [inputFocused])
   const [historySearchOpen, setHistorySearchOpen] = useState(false)
   const [historySearchQuery, setHistorySearchQuery] = useState("")
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
