@@ -167,19 +167,22 @@ export type ResumePosition = { turnId?: string; after?: number }
  */
 export type ResumeView = { fromStart: boolean; paged: boolean }
 
-/** The bounded history one from-start read or one older page reads. */
-const HISTORY_REPLAY_LIMIT = 500
+/**
+ * How history is read: the bounded `pageSize` one from-start read or one
+ * older page reads, and the `maxOffset` pages reach back to; older history
+ * reads as truncated.
+ */
+export type HistoryReach = { pageSize: number; maxOffset: number }
 
-/** How far back history pages reach; older history reads as truncated. */
-export const HISTORY_MAX_OFFSET = 100_000
+export const HISTORY_REACH: HistoryReach = { pageSize: 500, maxOffset: 100_000 }
 
 /** Whether an older page exists within the reach, past the one just read. */
-export function hasOlderPage(page: SessionHistoryResponse) {
+export function hasOlderPage(page: SessionHistoryResponse, maxOffset: number) {
   return (
     !page.truncated &&
     page.nextOffset < page.total &&
     page.nextOffset > page.offset &&
-    page.nextOffset < HISTORY_MAX_OFFSET
+    page.nextOffset < maxOffset
   )
 }
 
@@ -603,6 +606,8 @@ type CreateChannelsOptions = Omit<
   /** Where a resume and an older page read the Session's history. */
   runtime: Pick<ServerRuntime, "history">
   clock?: Clock
+  /** Defaults to `HISTORY_REACH`; a small one stands for a long Session. */
+  historyReach?: HistoryReach
 }
 
 /** How a transport joins one member to one Session. */
@@ -704,6 +709,7 @@ export function unlessAborted<T>(work: Promise<T>, signal: AbortSignal) {
 export function createChannels(options: CreateChannelsOptions) {
   const { coordinator, runtime, logger } = options
   const clock = options.clock ?? defaultClock
+  const historyReach = options.historyReach ?? HISTORY_REACH
   const channels = createChannelTable({
     ...options,
     clock,
@@ -718,7 +724,7 @@ export function createChannels(options: CreateChannelsOptions) {
     return runtime.history(
       scope.agentId,
       scope.providerSessionId,
-      HISTORY_REPLAY_LIMIT,
+      historyReach.pageSize,
       offset
     )
   }
@@ -737,7 +743,7 @@ export function createChannels(options: CreateChannelsOptions) {
     // can come back on the next older page.
     const seen = new Set(newest.messages.map(({ id }) => id))
     let page = newest
-    while (hasOlderPage(page)) {
+    while (hasOlderPage(page, historyReach.maxOffset)) {
       page = await readHistory(scope, page.nextOffset)
       older.unshift(page.messages.filter(({ id }) => !seen.has(id)))
       for (const { id } of page.messages) seen.add(id)
@@ -752,6 +758,7 @@ export function createChannels(options: CreateChannelsOptions) {
 
   return {
     ...channels,
+    historyReach,
     /** Joins one member to one Session until the membership detaches. */
     join(member: Member, scope: MemberScope, membership: MembershipOptions) {
       const owner = createOwner(machine, {

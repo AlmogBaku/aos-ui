@@ -109,6 +109,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   mcp?: OpenCodeMcpCatalog
   /** The turn engine's watches' link; without one, the runtime is always up. */
   link?: ServerLink
+  /** How many native pages one history read reaches; defaults to 100. */
+  maxHistoryPages?: number
 }>
 
 /**
@@ -560,7 +562,8 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const seenCursors = new Set<string>()
     let cursor: string | undefined
     let messages: ReturnType<typeof projectOpenCodeHistory> = []
-    for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+    const pages = this.options.maxHistoryPages ?? MAX_HISTORY_PAGES
+    for (let page = 0; page < pages; page += 1) {
       const options: OpenCodePageOptions = cursor
         ? { limit: MAX_HISTORY_PAGE_SIZE, cursor }
         : { limit: MAX_HISTORY_PAGE_SIZE, order }

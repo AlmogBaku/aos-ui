@@ -361,20 +361,22 @@ describe("OpenCode server adapter", () => {
     it("reports older history as truncated past the native read reach", async () => {
       const adapter = new OpenCodeServerAdapter({
         client: transcriptClient(
-          Array.from({ length: 10_100 }, (_, index) =>
+          Array.from({ length: 400 }, (_, index) =>
             message(`m${index}`, index + 1)
           )
         ),
         turns: turnEngine,
+        // Three native pages of 100 reach the newest 300 messages.
+        maxHistoryPages: 3,
       })
 
-      const edge = await adapter.history("research", "session-1", 1, 9_999)
-      const beyond = await adapter.history("research", "session-1", 1, 10_000)
+      const edge = await adapter.history("research", "session-1", 1, 299)
+      const beyond = await adapter.history("research", "session-1", 1, 300)
 
       expect(edge.messages.map(({ id }) => id)).toEqual(["m100"])
-      expect(edge).toMatchObject({ nextOffset: 10_000, truncated: true })
+      expect(edge).toMatchObject({ nextOffset: 300, truncated: true })
       expect(beyond).toMatchObject({ messages: [], truncated: true })
-    }, 30_000)
+    })
   })
 
   it("renames, archives, pins, and deletes an owned Session through the native routes", async () => {
