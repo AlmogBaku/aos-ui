@@ -40,6 +40,7 @@ import {
 } from "./content"
 import {
   openCodeHistoryToolNames,
+  openCodeProjectedCount,
   projectOpenCodeHistory,
   publishedOpenCodeArtifact,
   type NativeMessage,
@@ -109,6 +110,8 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   mcp?: OpenCodeMcpCatalog
   /** The turn engine's watches' link; without one, the runtime is always up. */
   link?: ServerLink
+  /** How many native pages one history read reaches; defaults to 100. */
+  maxHistoryPages?: number
 }>
 
 /**
@@ -559,8 +562,19 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     const seenMessages = new Set<string>()
     const seenCursors = new Set<string>()
     let cursor: string | undefined
-    let messages: ReturnType<typeof projectOpenCodeHistory> = []
-    for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+    let projected = 0
+    // Projection and name loading run once, over the whole read.
+    const project = async () =>
+      projectOpenCodeHistory({
+        messages: raw,
+        sessionId,
+        resolve: await this.options.mcp?.names.load(
+          agentId,
+          openCodeHistoryToolNames(raw)
+        ),
+      })
+    const pages = this.options.maxHistoryPages ?? MAX_HISTORY_PAGES
+    for (let page = 0; page < pages; page += 1) {
       const options: OpenCodePageOptions = cursor
         ? { limit: MAX_HISTORY_PAGE_SIZE, cursor }
         : { limit: MAX_HISTORY_PAGE_SIZE, order }
@@ -574,24 +588,28 @@ export class OpenCodeServerAdapter implements ServerRuntime {
         seenMessages.add(message.id)
         raw.push(message)
       }
-      messages = projectOpenCodeHistory({
-        messages: raw,
-        sessionId,
-        resolve: await this.options.mcp?.names.load(
-          agentId,
-          openCodeHistoryToolNames(parsed.data.data)
-        ),
-      })
+      projected += openCodeProjectedCount(parsed.data.data)
       const next = parsed.data.cursor.next
-      if (!next) return { messages, raw, hasMore: false, truncated: false }
-      if (messages.length >= required)
-        return { messages, raw, hasMore: true, truncated: false }
+      if (!next)
+        return {
+          messages: await project(),
+          raw,
+          hasMore: false,
+          truncated: false,
+        }
+      if (projected >= required)
+        return {
+          messages: await project(),
+          raw,
+          hasMore: true,
+          truncated: false,
+        }
       if (seenCursors.has(next)) throw new OpenCodeWorkspaceUnavailableError()
       seenCursors.add(next)
       cursor = next
     }
     if (order === "desc")
-      return { messages, raw, hasMore: true, truncated: true }
+      return { messages: await project(), raw, hasMore: true, truncated: true }
     throw new OpenCodeWorkspaceUnavailableError()
   }
 

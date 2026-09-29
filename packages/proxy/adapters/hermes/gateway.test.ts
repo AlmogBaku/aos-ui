@@ -146,15 +146,22 @@ describe("Hermes gateway dial and authentication", () => {
   )
 
   it("keeps the server token out of every error message and log field", async () => {
+    const clock = useFakeClock()
     const { gateway, sockets, log } = harness()
     await gateway.connect()
     const failures: unknown[] = []
     const capture = (error: unknown) => failures.push(error)
+    /** Runs the fake clock past `request`'s redial and timeout. */
+    const failed = async (request: Promise<unknown>) => {
+      const captured = request.catch(capture)
+      await clock.advance(5_000)
+      await captured
+    }
 
-    await gateway.request("prompt.submit", { text: "x" }).catch(capture)
+    await failed(gateway.request("prompt.submit", { text: "x" }))
     sockets[0]!.deliverText("{")
     sockets[0]!.close(4401)
-    await gateway.request("profiles.list", {}).catch(capture)
+    await failed(gateway.request("profiles.list", {}))
     await gateway.close()
 
     const serialized = JSON.stringify([
@@ -163,6 +170,7 @@ describe("Hermes gateway dial and authentication", () => {
         error instanceof Error ? [error.name, error.message] : String(error)
       ),
     ])
+    expect(failures).toHaveLength(2)
     expect(serialized).not.toContain(TOKEN)
     expect(serialized).not.toContain("127.0.0.1")
     expect(serialized).not.toContain("api/ws")
