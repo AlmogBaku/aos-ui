@@ -10,16 +10,7 @@ import type {
 } from "@/runtime-adapters/contracts"
 import { useWorkspaceNavigation } from "./use-workspace-navigation"
 
-vi.mock("react-router", () => ({
-  useLocation: () => ({ pathname: window.location.pathname }),
-  useNavigate: () => (href: string, options?: { replace?: boolean }) => {
-    window.history[options?.replace ? "replaceState" : "pushState"](
-      null,
-      "",
-      href
-    )
-  },
-}))
+vi.mock("react-router", () => import("../test-utils/window-router"))
 
 beforeEach(() => window.history.replaceState({}, "", "/"))
 afterEach(cleanup)
