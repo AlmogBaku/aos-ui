@@ -1301,7 +1301,11 @@ describe("useAcpRuntime", () => {
       act(() => {
         draft = controlsOf(result.current)?.takeAll()
       })
-      expect(draft).toEqual({ text: "First\n\nSecond", attachments: [image] })
+      expect(draft).toEqual({
+        text: "First\n\nSecond",
+        attachments: [image],
+        restore: expect.any(Function),
+      })
       expect(queuedIds(result.current)).toEqual([])
       await ends(fake)
       expect(fake.prompt).not.toHaveBeenCalled()
@@ -2179,12 +2183,27 @@ describe("the queue row editor", () => {
     expect(fake.cancel).not.toHaveBeenCalled()
   })
 
-  it("pulls the whole queue into an empty composer with Up, as one draft", async () => {
+  it("pulls the whole queue into an empty composer with Up, and Escape puts it back", async () => {
     const { user, fake, input, region } = await queued("First")
     await user.type(input, "Second{Enter}")
     await user.keyboard("{ArrowUp}")
     await waitFor(() => expect(input).toHaveValue("First\n\nSecond"))
     expect(region).not.toBeInTheDocument()
+    expect(screen.getByText("Editing 2 queued messages")).toBeInTheDocument()
+
+    await user.type(input, " changed")
+    await user.keyboard("{Escape}")
+    await waitFor(() => expect(input).toHaveValue(""))
+    const restored = await screen.findByRole("region", {
+      name: "Queued messages",
+    })
+    expect(
+      within(restored)
+        .getAllByRole("listitem")
+        .map((row) => within(row).queryByText(/First|Second/)?.textContent)
+    ).toEqual(["First", "Second"])
+    expect(fake.cancel).not.toHaveBeenCalled()
+
     await act(async () => {
       fake.emit({
         sessionUpdate: "state_update",
@@ -2193,7 +2212,13 @@ describe("the queue row editor", () => {
       })
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
-    expect(fake.prompt).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(fake.prompt).toHaveBeenCalledWith(
+        SESSION_ID,
+        [{ type: "text", text: "First\n\nSecond" }],
+        expect.objectContaining({})
+      )
+    )
   })
 
   it("restores a just-cleared draft on Up before opening the queue", async () => {

@@ -240,6 +240,9 @@ export type ThreadLabels = {
   /** Announces where a moved message now waits, counted from one. */
   queuedMessageMoved: (position: number, count: number) => string
   queuedMessageEditor: string
+  /** Leads the status line of a queue pulled into the composer. */
+  queuedMessagesEditing: (count: number) => string
+  queuedMessagesDiscard: string
   deliveryUnconfirmed?: string | undefined
   previous: string
   next: string
@@ -343,6 +346,11 @@ const DEFAULT_LABELS: ThreadLabels = {
     "Double-click or press Enter to edit. Alt+Up or Alt+Down moves it.",
   queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
   queuedMessageEditor: "Edit queued message",
+  queuedMessagesEditing: (count) =>
+    count === 1
+      ? "Editing 1 queued message"
+      : `Editing ${count} queued messages`,
+  queuedMessagesDiscard: "to discard changes",
   deliveryUnconfirmed: "Delivery unconfirmed",
   previous: "Previous",
   next: "Next",
@@ -837,6 +845,19 @@ const Composer: FC<{
   const [historySearchIndex, setHistorySearchIndex] = useState(0)
   const [steeringError, setSteeringError] = useState<string>()
   const [queueEditing, setQueueEditing] = useState<QueueEditing>()
+  // The queue Up pulled into the composer, until the draft goes or Escape
+  // puts the queue back as it was.
+  const [pulledIn, setPulledIn] = useState<{
+    readonly count: number
+    readonly restore: () => void
+  }>()
+  // A draft emptied by any means, sent or queued included, ends it.
+  const composerEmpty = useAuiState((s) => s.composer.isEmpty)
+  const [wasEmpty, setWasEmpty] = useState(composerEmpty)
+  if (composerEmpty !== wasEmpty) {
+    setWasEmpty(composerEmpty)
+    if (composerEmpty) setPulledIn(undefined)
+  }
   const [unconfirmedDeliveries, setUnconfirmedDeliveries] = useState<
     UnconfirmedDeliveryReceipt[]
   >([])
@@ -864,6 +885,7 @@ const Composer: FC<{
     setSteeringError(undefined)
     setUnconfirmedDeliveries([])
     setQueueEditing(undefined)
+    setPulledIn(undefined)
   })
 
   const submitOrdinary = useCallback(() => {
@@ -1067,6 +1089,7 @@ const Composer: FC<{
           historyBrowseRef.current = null
           const end = draft.text.length
           restoreDraft({ ...draft, selectionStart: end, selectionEnd: end })
+          setPulledIn({ count: queue.length, restore: draft.restore })
           return
         }
       }
@@ -1146,6 +1169,16 @@ const Composer: FC<{
       if (event.key === "Escape") {
         if (triggerPopover && triggerPopover.getActiveAria() !== null) {
           escapeRef.current = null
+          return
+        }
+        // Discarding a pulled-in queue comes before clearing a draft or
+        // stopping the turn.
+        if (pulledIn) {
+          event.preventDefault()
+          escapeRef.current = null
+          setPulledIn(undefined)
+          pulledIn.restore()
+          void aui.composer.reset()
           return
         }
         const now = Date.now()
@@ -1256,6 +1289,7 @@ const Composer: FC<{
       features,
       hasPendingInteraction,
       labels.steeringFailed,
+      pulledIn,
       queueControls,
       rememberUnconfirmed,
       restoreDraft,
@@ -1401,6 +1435,26 @@ const Composer: FC<{
           onEditingChange={setQueueEditing}
         />
       </AuiIf>
+      {pulledIn ? (
+        <div
+          role="status"
+          className="w-full self-stretch @min-[64rem]/workspace:mx-auto @min-[64rem]/workspace:max-w-(--thread-content-max-width)"
+        >
+          {/* Inset as the tray's header, whose place it takes. */}
+          <div className="mx-3 flex min-w-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-muted-foreground">
+            <span className="shrink-0 font-medium text-foreground/70 tabular-nums">
+              {labels.queuedMessagesEditing(pulledIn.count)}
+            </span>
+            <span className="flex min-w-0 items-center gap-1.5 [@media(pointer:coarse)]:hidden">
+              <span aria-hidden="true">·</span>
+              <kbd className="grid h-4 min-w-4 place-items-center rounded border border-border/80 bg-background px-1 font-sans text-[0.625rem] text-foreground/70 dark:bg-popover">
+                Esc
+              </kbd>
+              {labels.queuedMessagesDiscard}
+            </span>
+          </div>
+        </div>
+      ) : null}
       <ComposerPrimitive.AttachmentDropzone
         render={
           <div

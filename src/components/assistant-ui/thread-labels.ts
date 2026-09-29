@@ -45,6 +45,11 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
       "Double-click or press Enter to edit. Alt+Up or Alt+Down moves it.",
     queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
     queuedMessageEditor: "Edit queued message",
+    queuedMessagesEditing: (count) =>
+      count === 1
+        ? "Editing 1 queued message"
+        : `Editing ${count} queued messages`,
+    queuedMessagesDiscard: "to discard changes",
     deliveryUnconfirmed: "Delivery unconfirmed",
     previous: "Previous branch",
     next: "Next branch",
@@ -145,6 +150,9 @@ export const threadLabels: Record<Locale, ThreadLabels> = {
     queuedMessageMoved: (position, count) =>
       `הועברה למקום ${position} מתוך ${count}`,
     queuedMessageEditor: "עריכת הודעה בתור",
+    queuedMessagesEditing: (count) =>
+      count === 1 ? "עריכת הודעה אחת מהתור" : `עריכת ${count} הודעות מהתור`,
+    queuedMessagesDiscard: "לביטול השינויים",
     deliveryUnconfirmed: "מסירת ההודעה לא אושרה",
     previous: "הסתעפות קודמת",
     next: "הסתעפות הבאה",
