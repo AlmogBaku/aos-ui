@@ -54,7 +54,7 @@ describe("conversation search", () => {
     const search = await screen.findByRole("searchbox", {
       name: "Search in conversation",
     })
-    await user.type(search, "launch")
+    fireEvent.change(search, { target: { value: "launch" } })
     expect(await screen.findByText("1 of 2")).toBeVisible()
     await user.keyboard("{Enter}")
     expect(screen.getByText("2 of 2")).toBeVisible()
@@ -389,7 +389,6 @@ describe("virtualized thread", () => {
   layoutIt(
     "finds a message outside the mounted window and reveals it",
     async ({ settle }) => {
-      const user = userEvent.setup()
       render(
         <LocalThread
           initialMessages={longThread({
@@ -407,7 +406,7 @@ describe("virtualized thread", () => {
       const search = await screen.findByRole("searchbox", {
         name: "Search in conversation",
       })
-      await user.type(search, "zephyr")
+      fireEvent.change(search, { target: { value: "zephyr" } })
 
       expect(await screen.findByText("1 of 1")).toBeVisible()
       expect(
@@ -597,9 +596,12 @@ describe("virtualized thread", () => {
       }
     )
 
-    layoutIt(
-      "keeps the reader's place at the top of a short thread as older messages land above",
-      async ({ settle }) => {
+    layoutIt.for([
+      { page: 8, outcome: "older messages land above" },
+      { page: 15, outcome: "a page makes it long enough to window" },
+    ])(
+      "keeps the reader's place at the top of a short thread as $outcome",
+      async ({ page }, { settle }) => {
         const thread = createRef<PagedThreadHandle>()
         render(
           <PagedThread
@@ -614,37 +616,14 @@ describe("virtualized thread", () => {
         await settle()
         const top = topOf("Long thread message 0")
 
-        act(() => thread.current?.prepend(olderMessages(8)))
+        act(() => thread.current?.prepend(olderMessages(page)))
 
         expect(topOf("Long thread message 0")).toBe(top)
         await settle()
         expect(topOf("Long thread message 0")).toBe(top)
-        expect(screen.getByText("Older message 7")).toBeInTheDocument()
-      }
-    )
-
-    layoutIt(
-      "keeps the reader's place as a page makes a short thread long enough to window",
-      async ({ settle }) => {
-        const thread = createRef<PagedThreadHandle>()
-        render(
-          <PagedThread
-            initialMessages={longThread().slice(0, 20)}
-            history={historyState()}
-            ref={thread}
-          />
-        )
-        await settle()
-        fireEvent.wheel(viewport())
-        viewport().scrollTop = 0
-        await settle()
-        const top = topOf("Long thread message 0")
-
-        act(() => thread.current?.prepend(olderMessages(15)))
-
-        expect(topOf("Long thread message 0")).toBe(top)
-        await settle()
-        expect(topOf("Long thread message 0")).toBe(top)
+        expect(
+          screen.getByText(`Older message ${page - 1}`)
+        ).toBeInTheDocument()
       }
     )
 
