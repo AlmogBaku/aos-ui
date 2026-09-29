@@ -35,20 +35,17 @@ const correction = (
 })
 
 describe("lastPromptIndex", () => {
-  it("skips a typed correction message and lands on the last plain user turn", () => {
-    // A correction is not a prompt — lastPromptIndex returns the prompt's index
+  it("lands on the last plain user turn past any trailing corrections", () => {
+    // A correction is not a prompt, however many of them follow the prompt.
     expect(lastPromptIndex(history([user("u1"), correction("c1")]))).toBe(0)
+    expect(
+      lastPromptIndex(history([user("u1"), correction("c1"), correction("c2")]))
+    ).toBe(0)
   })
 
   it("returns -1 when every user turn is a correction", () => {
     expect(lastPromptIndex(history([correction("c1"), correction("c2")]))).toBe(
       -1
     )
-  })
-
-  it("returns the index of the last plain user turn ignoring trailing corrections", () => {
-    expect(
-      lastPromptIndex(history([user("u1"), correction("c1"), correction("c2")]))
-    ).toBe(0)
   })
 })
