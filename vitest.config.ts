@@ -85,6 +85,8 @@ export default defineConfig({
     // cores keeps a concurrent sweep survivable; a machine running one sweep
     // alone can raise it.
     maxWorkers: Number(process.env.AOS_UI_TEST_WORKERS) || "50%",
+    // Lists the slowest tests past their project's budget after every run.
+    reporters: ["default", "./test/support/slow-tests-reporter.ts"],
     // Tests that need no DOM skip jsdom and the Testing Library setup. Each
     // test file lands in exactly one project: `.tsx` files and `domTests` in
     // `dom`, `gateTests` in `gate`, every other `.test.ts` in `node`.

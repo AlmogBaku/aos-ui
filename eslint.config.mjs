@@ -46,6 +46,13 @@ const componentImports = [
   "../**/components/**",
 ]
 
+const styleAssertionMessage =
+  "Tests never assert styling (classes, data-slot, computed styles, geometry, screenshots); look at the rendered app instead. See AGENTS.md › Writing tests."
+
+/** A read of styling or geometry, banned as the subject of an `expect`. */
+const styleRead =
+  ":matches(CallExpression[callee.name='getComputedStyle'], CallExpression[callee.property.name=/^(getComputedStyle|boundingBox|getBoundingClientRect)$/], MemberExpression[property.name=/^(className|classList|style|offsetWidth|offsetHeight|clientWidth|clientHeight)$/])"
+
 export default defineConfig([
   globalIgnores([
     "dist/**",
@@ -267,6 +274,35 @@ export default defineConfig([
     },
   },
   {
+    // Tests assert behavior, never styling. Geometry and computed styles stay
+    // available for driving the page (pointer coordinates, finding the
+    // scroller); only asserting on them is banned.
+    files: ["e2e/**/*.ts", "test/**/*.ts", "**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(toHaveClass|toHaveStyle|toHaveCSS|toHaveScreenshot)$/]",
+          message: styleAssertionMessage,
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name='toHaveAttribute'] > Literal.arguments:first-child[value=/^(class|style|data-slot)$/]",
+          message: styleAssertionMessage,
+        },
+        {
+          selector: `CallExpression[callee.name='expect'] > ${styleRead}`,
+          message: styleAssertionMessage,
+        },
+        {
+          selector: `CallExpression[callee.name='expect'] > * ${styleRead}`,
+          message: styleAssertionMessage,
+        },
+      ],
+    },
+  },
+  {
     // Type-aware promise rules for the proxy, lifecycle, and browser ACP adapter.
     files: [
       "packages/proxy/**/*.{ts,tsx}",
@@ -295,7 +331,7 @@ export default defineConfig([
             "packages/tools-mcp/views/example.tsx",
             "shared/example.ts",
           ],
-        }
+        },
       },
     },
     rules: {
