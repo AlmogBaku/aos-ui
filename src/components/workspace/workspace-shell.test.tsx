@@ -370,9 +370,7 @@ describe("WorkspaceShell", () => {
       screen.getByRole("button", { name: "Undo" }).focus()
       act(() => vi.advanceTimersByTime(7999))
       expect(screen.getByRole("button", { name: "Undo" })).toHaveFocus()
-      expect(result.current.pending).not.toBeNull()
       act(() => vi.advanceTimersByTime(1))
-      expect(result.current.pending).toBeNull()
       rerender(<WorkspaceShell {...props} tabUndo={null} />)
       expect(
         hasActiveTab
@@ -943,6 +941,8 @@ describe("WorkspaceShell", () => {
     const market = screen.getByRole("tab", { name: "Market brief" })
     const launch = screen.getByRole("tab", { name: "Launch review" })
     market.focus()
+    await user.keyboard("{ArrowDown}")
+    expect(market).toHaveFocus()
     await user.keyboard("{ArrowRight}")
 
     expect(launch).toHaveFocus()

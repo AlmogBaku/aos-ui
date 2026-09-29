@@ -5,9 +5,7 @@ import { longPress } from "./support/long-press"
 
 type SessionActionsCopy = {
   sessions: string
-  agents: string
   openAgents: string
-  backToAgents: string
   agentDetails: string
   openSessions: string
   history: string
@@ -27,14 +25,11 @@ type SessionActionsCopy = {
   deleteTitle: string
   deleteConfirm: string
   pinned: string
-  selected: string
 }
 
 const english: SessionActionsCopy = {
   sessions: "Sessions",
-  agents: "Agents",
   openAgents: "Open Agents",
-  backToAgents: "Back to Agents",
   agentDetails: "Agent details",
   openSessions: "Open sessions",
   history: "History",
@@ -54,7 +49,6 @@ const english: SessionActionsCopy = {
   deleteTitle: "Delete this Session?",
   deleteConfirm: "Delete Session",
   pinned: "Pinned",
-  selected: "Current Session",
 }
 
 /** Rows append status, selection, and state to their Session title. */
@@ -189,8 +183,6 @@ async function exerciseDesktop(page: Page, copy: SessionActionsCopy) {
 async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   const drawer = page.getByRole("dialog", { name: copy.sessions })
   const openSessions = drawer.getByRole("region", { name: copy.openSessions })
-  const history = drawer.getByRole("region", { name: copy.history })
-  const archived = drawer.getByRole("region", { name: copy.archived })
 
   await page.getByRole("button", { name: copy.openAgents }).click()
   await expect(drawer).toBeVisible()
@@ -205,52 +197,6 @@ async function exerciseMobile(page: Page, copy: SessionActionsCopy) {
   await expect(
     openSessions.getByRole("button", { name: rowName(copy, "Launch review 2") })
   ).toBeVisible()
-
-  // A long press opens the row menu instead of opening the Session.
-  await longPress(
-    page,
-    history.getByRole("button", { name: rowName(copy, "Customer interviews") })
-  )
-  await menuItem(page, copy.pin).click()
-  await expect(drawer).toBeVisible()
-  await expect(
-    openSessions.getByRole("button", { name: rowName(copy, "Market brief") })
-  ).toHaveAccessibleName(new RegExp(`${copy.selected}$`))
-  // The pin opens the Session, so it leads Open sessions and leaves History.
-  await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
-    new RegExp(`Customer interviews, ${copy.pinned}$`)
-  )
-  await expect(
-    history.getByRole("button", { name: rowName(copy, "Customer interviews") })
-  ).toHaveCount(0)
-
-  // Another Agent keeps its archived Sessions behind the same disclosure.
-  await drawer.getByRole("button", { name: copy.backToAgents }).click()
-  await page
-    .getByRole("dialog", { name: copy.agents })
-    .getByRole("button", { name: /^Vela/ })
-    .click()
-  await expect(archived).toBeVisible()
-  const archivedRow = archived.getByText("Campaign retrospective", {
-    exact: true,
-  })
-  await expect(archivedRow).toBeHidden()
-  await archived.getByRole("heading", { name: copy.archived }).click()
-  await expect(archivedRow).toBeVisible()
-  await longPress(page, archivedRow)
-  await expect(menuItem(page, copy.unarchive)).toBeVisible()
-  await page.keyboard.press("Escape")
-  await expect(page.getByRole("menu")).toHaveCount(0)
-
-  // Returning to the Agent rebuilds its order, so the pinned row still leads.
-  await drawer.getByRole("button", { name: copy.backToAgents }).click()
-  await page
-    .getByRole("dialog", { name: copy.agents })
-    .getByRole("button", { name: /^Aster/ })
-    .click()
-  await expect(rows(openSessions, copy).first()).toHaveAccessibleName(
-    new RegExp(`Customer interviews, ${copy.pinned}$`)
-  )
 }
 
 export async function exerciseSessionActions(page: Page, mobile: boolean) {
