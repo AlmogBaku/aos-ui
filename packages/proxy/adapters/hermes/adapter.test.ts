@@ -228,6 +228,7 @@ describe("Hermes server adapter", () => {
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions/stored?"))
         return { id: "stored", profile: "researcher", title: "Owned" }
+      // Hermes saves the image's user row only once its turn starts.
       if (path.includes("/messages?"))
         return {
           session_id: "stored",
@@ -269,6 +270,14 @@ describe("Hermes server adapter", () => {
         filename: "image.png",
       },
       { maxResponseBytes: 65_536 }
+    )
+
+    const [imageId] = staged.artifactIds?.() ?? []
+    await expect(
+      adapter.artifact("researcher", sessionId, imageId!)
+    ).resolves.toMatchObject({ filename: "image.png" })
+    expect(http.mock.calls.at(-1)?.[0]).toContain(
+      `path=${encodeURIComponent("/private/image.png")}`
     )
 
     await expect(

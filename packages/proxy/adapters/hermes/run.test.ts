@@ -26,6 +26,7 @@ import {
   type HermesTurnScope,
 } from "./run"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
+import { HermesPublishedArtifacts } from "./published-artifacts"
 import type {
   HermesNativeStatus,
   HermesTurnNative,
@@ -6384,6 +6385,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
   it("publishes an assistant MEDIA line as the artifact history restores", async () => {
     const text = "Your chart:\nMEDIA:/home/alice/reports/chart.png\nDone."
     const attachment = observation()
+    const published = new HermesPublishedArtifacts()
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
@@ -6402,7 +6404,8 @@ describe("live and refreshed Hermes tool projection agree", () => {
             status: "streaming" as const,
           }
         },
-      })
+      }),
+      { publishedArtifacts: published }
     )
     const events = await collect(await engine.start(scope, input()))
     const live = ofKind(events, TurnEventKind.ArtifactPublished).map(
@@ -6423,6 +6426,11 @@ describe("live and refreshed Hermes tool projection agree", () => {
     expect(live).toMatchObject([
       { filename: "chart.png", mimeType: "image/png" },
     ])
+    // Readable before Hermes saves the assistant row that names it.
+    expect(published.find(scope, (live[0] as { id: string }).id)).toEqual({
+      reference: "/home/alice/reports/chart.png",
+      filename: "chart.png",
+    })
     expect(JSON.stringify(events)).not.toContain("/home/alice")
   })
 
