@@ -291,13 +291,7 @@ describe("ACP WebSocket service", () => {
 
   it("closes the peer with 4408 when initialize is not received within 15 s", async () => {
     const clock = useFakeClock()
-    const acp = createAcpService({
-      publicOrigin: ORIGIN,
-      role: "operator",
-      principalId: OPERATOR_PRINCIPAL,
-      agent: testAgent,
-      connection: connectionContext,
-    })
+    const { acp } = service()
     const upgrade = await acp.authorizeUpgrade(
       new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
     )
@@ -314,13 +308,7 @@ describe("ACP WebSocket service", () => {
 
   it("keeps the connection when initialize arrives before the 15 s deadline", async () => {
     const clock = useFakeClock()
-    const acp = createAcpService({
-      publicOrigin: ORIGIN,
-      role: "operator",
-      principalId: OPERATOR_PRINCIPAL,
-      agent: testAgent,
-      connection: connectionContext,
-    })
+    const { acp } = service()
     const upgrade = await acp.authorizeUpgrade(
       new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
     )
@@ -333,16 +321,9 @@ describe("ACP WebSocket service", () => {
     const initialized = transport.nextFrame()
     socket.receive(initializeFrame(1))
     await initialized
-    // Let the agent's onConnect continuation clear the handshake deadline.
-    // The SDK calls afterResponse → state.complete → initialized resolves →
-    // onConnect continuation → context.handshakeComplete?.().
-    // Each arrow is one microtask step; four flushes cover the chain.
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
 
-    // Advance past the 15 s mark — the deadline was already cleared.
+    // Advance past the 15 s mark. The clock drains microtasks before it fires
+    // a timer, so the onConnect continuation has cleared the deadline by then.
     await clock.advance(2_000)
 
     expect(transport.closed).toEqual([])

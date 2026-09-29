@@ -168,6 +168,20 @@ function useUsageTimers() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 }
 
+/** Prompts a Session, and has the turn it starts ask `requests` and end. */
+async function promptAsking(
+  test: Awaited<ReturnType<typeof harness>>,
+  text: string,
+  requests: PendingRequest[],
+  sessionId = SESSION
+) {
+  await prompt(test, text, sessionId)
+  await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  test.sources[0]?.emit(turnStarted())
+  test.sources[0]?.emit({ kind: TurnEventKind.TurnRequiresAction, requests })
+  test.sources[0]?.finish()
+}
+
 describe("AOS ACP agent", () => {
   it("reports the AOS extension contract on initialize", async () => {
     const test = await harness()
@@ -198,23 +212,27 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers the build it serves as its version, so a tab on another reloads", async () => {
-    const test = await harness({ buildId: "b1" })
-
-    expect(test.initialize).toMatchObject({ info: { version: "b1" } })
-    test.close()
-  })
-
-  it("advertises no catalog invalidation for a runtime that cannot signal one", async () => {
-    const test = await harness({ withoutCatalogChanges: true })
-
-    expect(test.initialize).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          extensions: { invalidation: false, steer: true, readState: true },
+  it.each([
+    [
+      "the build it serves as its version, so a tab on another reloads",
+      { buildId: "b1" },
+      { info: { version: "b1" } },
+    ],
+    [
+      "no catalog invalidation for a runtime that cannot signal one",
+      { withoutCatalogChanges: true },
+      {
+        _meta: {
+          [AOS_META_KEY]: {
+            extensions: { invalidation: false, steer: true, readState: true },
+          },
         },
       },
-    })
+    ],
+  ])("initializes with %s", async (_case, options, expected) => {
+    const test = await harness(options)
+
+    expect(test.initialize).toMatchObject(expected)
     test.close()
   })
 
@@ -583,25 +601,7 @@ describe("AOS ACP agent", () => {
   it("answers a permission request and starts the reply segment", async () => {
     const test = await harness()
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
 
     const asked = await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
@@ -1188,55 +1188,42 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("records the presence an exposed Session implies", async () => {
-    const test = await harness()
-    await test.list()
+  it.each([
+    [
+      "an exposed Session",
+      { sessionId: SESSION },
+      { sessionId: SESSION, foreground: true, idle: false },
+      "focus",
+    ],
+    [
+      "a background, idle workspace as reported",
+      { sessionId: SESSION, foreground: false, idle: true },
+      { sessionId: SESSION, foreground: false, idle: true },
+      "focus",
+    ],
+    [
+      "a foreground workspace showing no Session, and still blurs",
+      { sessionId: null, foreground: true },
+      { sessionId: null, foreground: true, idle: false },
+      "blur",
+    ],
+  ] as const)(
+    "records the presence of %s",
+    async (_case, params, presence, readState) => {
+      const test = await harness()
+      await test.list()
 
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+      await test.agent.request(AOS_METHODS.session.focus, params)
 
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: SESSION,
-      foreground: true,
-      idle: false,
-    })
-    test.close()
-  })
-
-  it("records a reported background or idle workspace as reported", async () => {
-    const test = await harness()
-    await test.list()
-
-    await test.agent.request(AOS_METHODS.session.focus, {
-      sessionId: SESSION,
-      foreground: false,
-      idle: true,
-    })
-
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: SESSION,
-      foreground: false,
-      idle: true,
-    })
-    test.close()
-  })
-
-  it("records a foreground workspace showing no Session, and still blurs", async () => {
-    const test = await harness()
-    await test.list()
-
-    await test.agent.request(AOS_METHODS.session.focus, {
-      sessionId: null,
-      foreground: true,
-    })
-
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: null,
-      foreground: true,
-      idle: false,
-    })
-    expect(test.readState.blur).toHaveBeenCalled()
-    test.close()
-  })
+      expect(test.presence.set).toHaveBeenCalledWith(
+        PRINCIPAL,
+        CONNECTION,
+        presence
+      )
+      expect(test.readState[readState]).toHaveBeenCalled()
+      test.close()
+    }
+  )
 
   it("acknowledges an exposure once, however often its heartbeat repeats it", async () => {
     const test = await harness()
@@ -1372,25 +1359,7 @@ describe("AOS ACP agent", () => {
       subscribeTurns: () => () => undefined,
     })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
       "the permission request"
@@ -1420,25 +1389,7 @@ describe("AOS ACP agent", () => {
     const answer = Promise.withResolvers<RequestPermissionResponse>()
     const test = await harness({ permission: () => answer.promise })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
       "the permission request"
@@ -1456,25 +1407,7 @@ describe("AOS ACP agent", () => {
   it("logs the connection, its Session's membership, the Stop it received, and the reply it settled", async () => {
     const test = await harness()
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
 
     await test.agent.notify(methods.agent.session.cancel, {
@@ -1807,14 +1740,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Delete it")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [APPROVAL],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL])
     const asked = (entry: Recorded) =>
       entry.method === methods.client.session.requestPermission
     await other.recorder.wait(asked, "the request both browsers are asked")
@@ -1855,14 +1781,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Pick one")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [QUESTION],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Pick one", [QUESTION])
     const asked = (entry: Recorded) =>
       entry.method === methods.client.elicitation.create
     await other.recorder.wait(asked, "the request both browsers are asked")
@@ -1953,14 +1872,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Pick two")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [QUESTION, SECOND],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Pick two", [QUESTION, SECOND])
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
@@ -2023,14 +1935,7 @@ describe("Session rooms", () => {
     const other = await test.connect("connection-2")
     await other.list()
     await open(other)
-    await prompt(test, "Delete it")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [APPROVAL],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL])
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [test, other])

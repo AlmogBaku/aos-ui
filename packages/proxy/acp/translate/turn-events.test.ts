@@ -218,23 +218,6 @@ describe("translateTurnEvent lifecycle", () => {
 })
 
 describe("translateTurnEvent messages", () => {
-  it("streams assistant prose as message chunks and keeps the message id", () => {
-    const { state, outbound } = translate([messageChunk("m1", "he")])
-    const [update] = updatesOf(outbound)
-
-    expect(updatesOf(outbound)).toHaveLength(1)
-    expect(update).toMatchObject({
-      sessionUpdate: "agent_message_chunk",
-      messageId: "m1",
-      content: { type: "text", text: "he" },
-    })
-    expect(AosChunkMetaSchema.parse(aosMeta(update!))).toEqual({
-      sequence: 7,
-      turnId: "run-1",
-    })
-    expect(state.messageId).toBe("m1")
-  })
-
   it("collapses a reasoning-first segment onto one assistant message", () => {
     const { state, outbound } = translate([
       { kind: TurnEventKind.ThoughtChunk, messageId: "m1", text: "think" },
@@ -286,8 +269,8 @@ describe("translateTurnEvent messages", () => {
     })
   })
 
-  it("passes each chunk's own message id through", () => {
-    const { outbound } = translate([
+  it("streams assistant prose as message chunks, passing each chunk's own message id through", () => {
+    const { state, outbound } = translate([
       messageChunk("m1", "he"),
       messageChunk("m2", "more"),
     ])
@@ -306,6 +289,7 @@ describe("translateTurnEvent messages", () => {
         _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
     ])
+    expect(state.messageId).toBe("m2")
   })
 })
 
