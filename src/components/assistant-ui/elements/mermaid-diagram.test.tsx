@@ -178,40 +178,36 @@ describe("MermaidDiagram", () => {
     ).toHaveAttribute("dir", "ltr")
   })
 
-  it("rejects oversized source without importing or rendering Mermaid", async () => {
-    render(
-      <TestDiagram
-        code={`flowchart LR\n${"A-->B\n".repeat(MERMAID_MAX_SOURCE_CHARS)}`}
-      />
-    )
+  it.each([
+    {
+      limit: "character",
+      code: `flowchart LR\n${"A-->B\n".repeat(MERMAID_MAX_SOURCE_CHARS)}`,
+      underCharacterLimit: false,
+    },
+    {
+      limit: "401-line",
+      code: Array.from({ length: 401 }, (_, index) => `A${index}`).join("\n"),
+      underCharacterLimit: true,
+    },
+  ])(
+    "rejects source over the $limit limit without importing or rendering Mermaid",
+    async ({ code, underCharacterLimit }) => {
+      expect(code.length < MERMAID_MAX_SOURCE_CHARS).toBe(underCharacterLimit)
+      render(<TestDiagram code={code} />)
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Diagram source is too large"
-    )
-    expect(mermaid.initialize).not.toHaveBeenCalled()
-    expect(mermaid.render).not.toHaveBeenCalled()
-  })
-
-  it("rejects a 401-line source below the character limit without rendering Mermaid", async () => {
-    const code = Array.from({ length: 401 }, (_, index) => `A${index}`).join(
-      "\n"
-    )
-
-    expect(code.length).toBeLessThan(MERMAID_MAX_SOURCE_CHARS)
-    render(<TestDiagram code={code} />)
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Diagram source is too large"
-    )
-    expect(
-      screen.getByText(
-        (_, element) =>
-          element?.tagName === "CODE" && element.textContent === code
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Diagram source is too large"
       )
-    ).toBeVisible()
-    expect(mermaid.initialize).not.toHaveBeenCalled()
-    expect(mermaid.render).not.toHaveBeenCalled()
-  })
+      expect(
+        screen.getByText(
+          (_, element) =>
+            element?.tagName === "CODE" && element.textContent === code
+        )
+      ).toBeVisible()
+      expect(mermaid.initialize).not.toHaveBeenCalled()
+      expect(mermaid.render).not.toHaveBeenCalled()
+    }
+  )
 
   it("serializes initialization with rendering so themes cannot cross-contaminate", async () => {
     let finishFirst: ((value: { svg: string }) => void) | undefined

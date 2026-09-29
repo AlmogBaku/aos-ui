@@ -302,31 +302,24 @@ describe("Activity store", () => {
     expect(store.ingest(finish)?.id).toBe("finish-1")
   })
 
-  it("preserves the first valid failure when completion arrives before a delayed start", () => {
-    const store = makeStore()
-    store.ingest({ ...finish, id: "failure", type: "turn-failed" })
-    store.ingest({
-      ...finish,
-      id: "later-completion",
-      occurredAt: "2026-09-05T12:00:02.000Z",
-    })
-    expect(store.ingest(start)?.type).toBe("turn-failed")
-    expect(store.records().map((record) => record.type)).toEqual([
-      "turn-failed",
-    ])
-  })
-
-  it("preserves the first valid completion when failure arrives before a delayed start", () => {
-    const store = makeStore()
-    store.ingest(finish)
-    store.ingest({
-      ...finish,
-      id: "later-failure",
-      type: "turn-failed",
-      occurredAt: "2026-09-05T12:00:02.000Z",
-    })
-    expect(store.ingest(start)?.type).toBe("turn-finished")
-  })
+  it.each([
+    ["turn-failed", "turn-finished"],
+    ["turn-finished", "turn-failed"],
+  ] as const)(
+    "preserves the first valid %s when %s arrives before a delayed start",
+    (first, later) => {
+      const store = makeStore()
+      store.ingest({ ...finish, id: "first", type: first })
+      store.ingest({
+        ...finish,
+        id: "later",
+        type: later,
+        occurredAt: "2026-09-05T12:00:02.000Z",
+      })
+      expect(store.ingest(start)?.type).toBe(first)
+      expect(store.records().map((record) => record.type)).toEqual([first])
+    }
+  )
 
   it("corrects a duplicate terminal timestamp without moving its closing order", () => {
     const store = makeStore()

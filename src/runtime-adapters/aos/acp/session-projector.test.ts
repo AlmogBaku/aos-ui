@@ -914,66 +914,60 @@ describe("applyUpdate execution", () => {
     expect(toThreadMessages(ended)[1]).toMatchObject(COMPLETE)
   })
 
-  it("fails the Session on a vendor error stop reason", () => {
-    const failed = fold(
-      [
-        stateUpdate(
-          { state: "idle", stopReason: AOS_STOP_REASONS.error },
-          {
-            ...TURN_META,
-            code: "provider_error",
-            message: "Broke",
-          }
-        ),
-      ],
-      answering
-    )
-    expect(failed.execution).toEqual({
-      status: "failed",
-      turnId: "run-1",
-      stopReason: AOS_STOP_REASONS.error,
-      error: { code: "provider_error", message: "Broke" },
-    })
-    expect(toThreadMessages(failed)[3]).toMatchObject({
-      status: {
+  // Nothing stringifies the failure on its way to the UI, so whatever the run
+  // named arrives as the one shape the notice localizes.
+  it.each([
+    [
+      "its code and message",
+      { code: "provider_error", message: "Broke" },
+      { code: "provider_error", message: "Broke" },
+    ],
+    [
+      "the provider and model it ran on",
+      {
+        code: "provider_error",
+        message: "Broke",
+        provider: "openai",
+        model: "gpt-9",
+      },
+      {
+        code: "provider_error",
+        message: "Broke",
+        provider: "openai",
+        model: "gpt-9",
+      },
+    ],
+    [
+      "a normalized code alone",
+      { code: "AOS_PROVIDER_RUN_FAILED" },
+      { code: "AOS_PROVIDER_RUN_FAILED" },
+    ],
+    ["no failure detail when it named neither", {}, undefined],
+  ])(
+    "fails the Session on a vendor error stop reason, carrying %s",
+    (_, named, error) => {
+      const failed = fold(
+        [
+          stateUpdate(
+            { state: "idle", stopReason: AOS_STOP_REASONS.error },
+            { ...TURN_META, ...named }
+          ),
+        ],
+        answering
+      )
+      expect(failed.execution).toEqual({
+        status: "failed",
+        turnId: "run-1",
+        stopReason: AOS_STOP_REASONS.error,
+        error,
+      })
+      expect(toThreadMessages(failed)[3]?.status).toEqual({
         type: "incomplete",
         reason: "error",
-        error: { code: "provider_error", message: "Broke" },
-      },
-    })
-  })
-
-  it("keeps the normalized code alone as the turn's failure shape", () => {
-    const failed = fold(
-      [
-        stateUpdate(
-          { state: "idle", stopReason: AOS_STOP_REASONS.error },
-          { ...TURN_META, code: "AOS_PROVIDER_RUN_FAILED" }
-        ),
-      ],
-      answering
-    )
-    // Nothing stringifies the failure on its way to the UI, so a code with no
-    // provider description still arrives as the one shape the notice localizes.
-    expect(toThreadMessages(failed)[3]?.status).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: { code: "AOS_PROVIDER_RUN_FAILED" },
-    })
-    expect(failed.execution.error).toEqual({ code: "AOS_PROVIDER_RUN_FAILED" })
-  })
-
-  it("carries no failure detail when the run named neither code nor message", () => {
-    const failed = fold(
-      [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.error })],
-      answering
-    )
-    expect(toThreadMessages(failed)[3]?.status).toEqual({
-      type: "incomplete",
-      reason: "error",
-    })
-    expect(failed.execution.error).toBeUndefined()
-  })
+        ...(error ? { error } : {}),
+      })
+    }
+  )
 
   it("fails the Session on an uncertain stop reason", () => {
     const uncertain = fold(
@@ -1936,30 +1930,6 @@ describe("applyUpdate stop reasons", () => {
     )
     expect(settled.execution.status).toBe("idle")
     expect(toThreadMessages(settled)[0]?.status).toEqual(status)
-  })
-
-  it("names the provider and model a failed turn ran on", () => {
-    const failed = fold(
-      [
-        stateUpdate(
-          { state: "idle", stopReason: AOS_STOP_REASONS.error },
-          {
-            ...TURN_META,
-            code: "provider_error",
-            message: "Broke",
-            provider: "openai",
-            model: "gpt-9",
-          }
-        ),
-      ],
-      answering
-    )
-    expect(failed.execution.error).toEqual({
-      code: "provider_error",
-      message: "Broke",
-      provider: "openai",
-      model: "gpt-9",
-    })
   })
 })
 

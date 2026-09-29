@@ -217,22 +217,6 @@ describe("projectDraftAgents", () => {
     ])
   })
 
-  it("omits the pending draft when the provider has no creator", () => {
-    const projected = projectDraftAgents({
-      creator: undefined,
-      agents: roster,
-      sessions: [],
-      resolvedThreadIds: new Set(),
-      now,
-      ...copy,
-      titles: new Map(),
-      pendingDraftAgentId: PENDING_DRAFT_AGENT_ID,
-    })
-
-    expect(projected.agents).toEqual(roster)
-    expect(projected.sessions).toEqual([])
-  })
-
   it("keeps one row when the pending interview names its own listed Session", () => {
     const sessions = [session("interview", creator.id, 0)]
 
@@ -268,22 +252,29 @@ describe("projectDraftAgents", () => {
     expect(projected.sessions).toEqual([])
   })
 
-  it("passes the catalog through unchanged without a creator", () => {
-    const sessions = [session("orphan", "aos-creator", 0)]
+  it.each([
+    ["", undefined],
+    [", omitting the pending draft", PENDING_DRAFT_AGENT_ID],
+  ])(
+    "passes the catalog through unchanged without a creator%s",
+    (_, pendingDraftAgentId) => {
+      const sessions = [session("orphan", "aos-creator", 0)]
 
-    const projected = projectDraftAgents({
-      creator: undefined,
-      agents: roster,
-      sessions,
-      resolvedThreadIds: new Set(),
-      now,
-      ...copy,
-      titles: new Map(),
-    })
+      const projected = projectDraftAgents({
+        creator: undefined,
+        agents: roster,
+        sessions,
+        resolvedThreadIds: new Set(),
+        now,
+        ...copy,
+        titles: new Map(),
+        pendingDraftAgentId,
+      })
 
-    expect(projected.agents).toEqual(roster)
-    expect(projected.sessions).toEqual(sessions)
-  })
+      expect(projected.agents).toEqual(roster)
+      expect(projected.sessions).toEqual(sessions)
+    }
+  )
 })
 
 describe("nextDraftExpiry", () => {

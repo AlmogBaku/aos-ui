@@ -15,121 +15,88 @@ const state = (overrides: Partial<ComposerEnterState> = {}) => ({
 })
 
 describe("composer keyboard decisions", () => {
-  it("sends a desktop draft on plain Enter", () => {
-    expect(resolveComposerEnterAction({ key: "Enter" }, state())).toBe("send")
-  })
-
-  it("keeps plain Enter as a native newline on touch-primary devices", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter" },
-        state({ plainEnterSends: false })
-      )
-    ).toBe("newline")
-  })
-
-  it("submits a non-empty draft on idle Command/Ctrl+Enter", () => {
-    expect(
-      resolveComposerEnterAction({ key: "Enter", metaKey: true }, state())
-    ).toBe("send")
-    expect(
-      resolveComposerEnterAction({ key: "Enter", ctrlKey: true }, state())
-    ).toBe("send")
-  })
-
-  it("submits the steering shortcut normally while idle", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", metaKey: true, shiftKey: true },
-        state()
-      )
-    ).toBe("send")
-  })
-
-  it("queues a non-empty draft on busy Command/Ctrl+Enter without steering", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", ctrlKey: true },
-        state({ isRunning: true, hasQueue: true })
-      )
-    ).toBe("queue")
-  })
-
-  it("queues a busy desktop draft on plain Enter", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter" },
-        state({ isRunning: true, hasQueue: true })
-      )
-    ).toBe("queue")
-  })
-
-  it("steers a text-only draft into the active turn", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", ctrlKey: true, shiftKey: true },
-        state({ isRunning: true, canSteer: true })
-      )
-    ).toBe("steer")
-  })
-
-  it("queues steering shortcuts when steering or text-only delivery is unavailable", () => {
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", metaKey: true, shiftKey: true },
-        state({ isRunning: true, hasQueue: true, canSteer: false })
-      )
-    ).toBe("queue")
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", ctrlKey: true, shiftKey: true },
-        state({
-          isRunning: true,
-          hasQueue: true,
-          canSteer: true,
-          hasAttachments: true,
-        })
-      )
-    ).toBe("queue")
-  })
-
-  it("keeps Shift+Enter as a native newline", () => {
-    expect(
-      resolveComposerEnterAction({ key: "Enter", shiftKey: true }, state())
-    ).toBe("newline")
-  })
-
-  it("does not submit an empty draft or a busy send shortcut without queue support", () => {
-    expect(
-      resolveComposerEnterAction({ key: "Enter" }, state({ isEmpty: true }))
-    ).toBe("noop")
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", ctrlKey: true },
-        state({ isRunning: true, hasQueue: false })
-      )
-    ).toBe("noop")
-  })
-
-  it("lets IME, native editing, and an already-consumed event win", () => {
-    expect(
-      resolveComposerEnterAction({ key: "Enter", isComposing: true }, state())
-    ).toBe("noop")
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", defaultPrevented: true },
-        state()
-      )
-    ).toBe("noop")
-    expect(
-      resolveComposerEnterAction(
-        { key: "Enter", nativeEvent: { keyCode: 229 } },
-        state()
-      )
-    ).toBe("noop")
-    expect(
-      resolveComposerEnterAction({ key: "Enter", keyCode: 229 }, state())
-    ).toBe("noop")
+  it.each<
+    [
+      string,
+      Parameters<typeof resolveComposerEnterAction>[0],
+      Partial<ComposerEnterState>,
+      ReturnType<typeof resolveComposerEnterAction>,
+    ]
+  >([
+    ["a desktop draft on plain Enter", { key: "Enter" }, {}, "send"],
+    [
+      "plain Enter on a touch-primary device",
+      { key: "Enter" },
+      { plainEnterSends: false },
+      "newline",
+    ],
+    ["idle Command+Enter", { key: "Enter", metaKey: true }, {}, "send"],
+    ["idle Ctrl+Enter", { key: "Enter", ctrlKey: true }, {}, "send"],
+    [
+      "the steering shortcut while idle",
+      { key: "Enter", metaKey: true, shiftKey: true },
+      {},
+      "send",
+    ],
+    [
+      "busy Ctrl+Enter, without steering",
+      { key: "Enter", ctrlKey: true },
+      { isRunning: true, hasQueue: true },
+      "queue",
+    ],
+    [
+      "a busy desktop draft on plain Enter",
+      { key: "Enter" },
+      { isRunning: true, hasQueue: true },
+      "queue",
+    ],
+    [
+      "the steering shortcut into the active turn",
+      { key: "Enter", ctrlKey: true, shiftKey: true },
+      { isRunning: true, canSteer: true },
+      "steer",
+    ],
+    [
+      "the steering shortcut when steering is unavailable",
+      { key: "Enter", metaKey: true, shiftKey: true },
+      { isRunning: true, hasQueue: true, canSteer: false },
+      "queue",
+    ],
+    [
+      "the steering shortcut for a draft with attachments",
+      { key: "Enter", ctrlKey: true, shiftKey: true },
+      { isRunning: true, hasQueue: true, canSteer: true, hasAttachments: true },
+      "queue",
+    ],
+    ["Shift+Enter", { key: "Enter", shiftKey: true }, {}, "newline"],
+    ["an empty draft", { key: "Enter" }, { isEmpty: true }, "noop"],
+    [
+      "busy Ctrl+Enter without queue support",
+      { key: "Enter", ctrlKey: true },
+      { isRunning: true, hasQueue: false },
+      "noop",
+    ],
+    ["an IME composition", { key: "Enter", isComposing: true }, {}, "noop"],
+    [
+      "an already-consumed event",
+      { key: "Enter", defaultPrevented: true },
+      {},
+      "noop",
+    ],
+    [
+      "native editing (native keyCode 229)",
+      { key: "Enter", nativeEvent: { keyCode: 229 } },
+      {},
+      "noop",
+    ],
+    [
+      "native editing (keyCode 229)",
+      { key: "Enter", keyCode: 229 },
+      {},
+      "noop",
+    ],
+  ])("resolves %s", (_case, event, overrides, action) => {
+    expect(resolveComposerEnterAction(event, state(overrides))).toBe(action)
   })
 
   it("gates navigation on a collapsed first or last visual line caret", () => {

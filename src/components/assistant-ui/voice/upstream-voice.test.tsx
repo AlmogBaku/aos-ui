@@ -1,17 +1,27 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import type { ComponentProps } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import { ReadAloud } from "../elements/read-aloud"
 import { ComposerVoice } from "../elements/composer-voice"
 
 afterEach(cleanup)
 
-it("renders upstream ReadAloud with no word highlighting and independent real time", () => {
+/** A paused ReadAloud at the start, before any timing is known. */
+const READ_ALOUD = {
+  words: ["Read", "aloud"],
+  spokenIndex: -1,
+  playing: false,
+  rate: 1,
+  elapsed: "0:00",
+  duration: "0:00",
+} satisfies ComponentProps<typeof ReadAloud>
+
+it("renders upstream ReadAloud progress and controls with localized labels", () => {
   const toggle = vi.fn()
   const rate = vi.fn()
   render(
     <ReadAloud
-      words={["Hello", "world"]}
-      spokenIndex={-1}
+      {...READ_ALOUD}
       playing
       rate={1.25}
       elapsed="0:12"
@@ -45,17 +55,7 @@ it.each([
   [-10, "0"],
   [125, "100"],
 ])("clamps supplied read-aloud progress %s to %s", (progress, expected) => {
-  render(
-    <ReadAloud
-      words={["No", "timestamps"]}
-      spokenIndex={-1}
-      playing={false}
-      progress={progress}
-      rate={1}
-      elapsed="0:00"
-      duration="0:00"
-    />
-  )
+  render(<ReadAloud {...READ_ALOUD} progress={progress} />)
 
   expect(screen.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
@@ -65,18 +65,7 @@ it.each([
 
 it("shows synthesis in the play control and prevents playback until ready", () => {
   const toggle = vi.fn()
-  render(
-    <ReadAloud
-      words={["Preparing", "audio"]}
-      spokenIndex={-1}
-      playing={false}
-      loading
-      rate={1}
-      elapsed="0:00"
-      duration="0:00"
-      onToggle={toggle}
-    />
-  )
+  render(<ReadAloud {...READ_ALOUD} loading onToggle={toggle} />)
 
   const play = screen.getByRole("button", { name: "Generating audio" })
   expect(play).toBeDisabled()
@@ -88,12 +77,8 @@ it("keeps the timeline read-only while audio is generating", () => {
   const seek = vi.fn()
   render(
     <ReadAloud
-      words={["Preparing", "audio"]}
-      spokenIndex={-1}
-      playing={false}
+      {...READ_ALOUD}
       loading
-      rate={1}
-      elapsed="0:00"
       duration="0:24"
       elapsedSeconds={0}
       durationSeconds={24}
@@ -109,11 +94,9 @@ it("seeks from the timeline with pointer and keyboard controls", () => {
   const seek = vi.fn()
   render(
     <ReadAloud
-      words={["Seekable", "audio"]}
-      spokenIndex={-1}
+      {...READ_ALOUD}
       playing
       progress={25}
-      rate={1}
       elapsed="0:06"
       duration="0:24"
       elapsedSeconds={6}
@@ -149,7 +132,7 @@ it("seeks from the timeline with pointer and keyboard controls", () => {
   expect(seek).toHaveBeenNthCalledWith(4, 24)
 })
 
-it("drives the supplied ComposerVoice bars from microphone levels", () => {
+it("shows the ComposerVoice recording time, then the transcribing label", () => {
   const levels = [
     0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 0.8, 0.4, 0,
   ]

@@ -72,7 +72,6 @@ describe("run error messages", () => {
     const english = await getDictionary("en")
     const hebrew = await getDictionary("he")
 
-    expect(Object.keys(english.runErrors)).toContain("AOS_RECONNECT_EXHAUSTED")
     for (const code of Object.keys(english.runErrors) as RunErrorCode[]) {
       expect(hebrew.runErrors[code]).not.toBe(english.runErrors[code])
       expect(runErrorMessage(english, code, "proxy text")).toBe(

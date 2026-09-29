@@ -133,25 +133,23 @@ describe("ACP remote thread-list adapter", () => {
     const pinned = sessionInfo({ sessionId: "aster-pinned", agentId: "aster" })
     // Every Agent's page one and Aster's own pages, as the proxy serves them.
     function scopedCatalog(asterPages: SessionInfo[][]) {
-      return vi.fn(
-        async (meta: { agentId?: string }, cursor?: string) => {
-          if (meta.agentId === undefined)
-            return {
-              sessions: [
-                sessionInfo({ sessionId: "willow-1", agentId: "willow" }),
-                pinned,
-              ],
-              nextCursor: "every-agent-2",
-            }
-          const index = cursor === undefined ? 0 : Number(cursor)
+      return vi.fn(async (meta: { agentId?: string }, cursor?: string) => {
+        if (meta.agentId === undefined)
           return {
-            sessions: asterPages[index] ?? [],
-            ...(index + 1 < asterPages.length
-              ? { nextCursor: String(index + 1) }
-              : {}),
+            sessions: [
+              sessionInfo({ sessionId: "willow-1", agentId: "willow" }),
+              pinned,
+            ],
+            nextCursor: "every-agent-2",
           }
+        const index = cursor === undefined ? 0 : Number(cursor)
+        return {
+          sessions: asterPages[index] ?? [],
+          ...(index + 1 < asterPages.length
+            ? { nextCursor: String(index + 1) }
+            : {}),
         }
-      )
+      })
     }
 
     it("loads more of that Agent's Sessions only, with the Agent in the list meta", async () => {
@@ -204,33 +202,28 @@ describe("ACP remote thread-list adapter", () => {
       expect(second.nextCursor).toBeUndefined()
     })
 
-    it("offers no further page to an Agent whose Sessions all fit", async () => {
+    it.each([
+      [
+        "to an Agent whose Sessions all fit",
+        scopedCatalog([
+          [sessionInfo({ sessionId: "aster-1", agentId: "aster" })],
+        ]),
+        undefined,
+      ],
+      [
+        "past a page that adds no Session",
+        vi.fn(async () => ({ sessions: [], nextCursor: "still-more" })),
+        "more",
+      ],
+    ])("offers no further page %s", async (_, listSessions, after) => {
       const { adapter } = harness(
-        {
-          listSessions: scopedCatalog([
-            [sessionInfo({ sessionId: "aster-1", agentId: "aster" })],
-          ]),
-        },
+        { listSessions },
         { agentScope: () => "aster" }
       )
 
-      await expect(adapter.list()).resolves.not.toHaveProperty("nextCursor")
-    })
-
-    it("ends the cursor at a page that adds no Session", async () => {
-      const { adapter } = harness(
-        {
-          listSessions: vi.fn(async () => ({
-            sessions: [],
-            nextCursor: "still-more",
-          })),
-        },
-        { agentScope: () => "aster" }
+      await expect(adapter.list({ after })).resolves.not.toHaveProperty(
+        "nextCursor"
       )
-
-      await expect(
-        adapter.list({ after: "more" })
-      ).resolves.not.toHaveProperty("nextCursor")
     })
 
     it("resolves an unlisted Session from that Agent's own pages", async () => {

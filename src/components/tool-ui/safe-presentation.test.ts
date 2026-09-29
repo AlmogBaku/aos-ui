@@ -71,23 +71,20 @@ describe("safe tool presentation", () => {
     )
   })
 
-  it("never exceeds its byte budget when a bounded object is still large", () => {
-    const presentation = safeToolPresentation(
-      Array.from({ length: 100 }, () => "x".repeat(4_000))
-    )
+  it.each([
+    ["single-byte", "x"],
+    ["multibyte", "א"],
+  ])(
+    "never exceeds its byte budget for large %s provider text",
+    (_kind, character) => {
+      const presentation = safeToolPresentation(
+        Array.from({ length: 100 }, () => character.repeat(4_000))
+      )
 
-    expect(presentation.text.length).toBeLessThanOrEqual(24_000)
-    expect(presentation.text).toContain("[Truncated]")
-  })
-
-  it("applies the byte budget to multibyte provider text", () => {
-    const presentation = safeToolPresentation(
-      Array.from({ length: 100 }, () => "א".repeat(4_000))
-    )
-
-    expect(
-      new TextEncoder().encode(presentation.text).byteLength
-    ).toBeLessThanOrEqual(24_000)
-    expect(presentation.text).toContain("[Truncated]")
-  })
+      expect(
+        new TextEncoder().encode(presentation.text).byteLength
+      ).toBeLessThanOrEqual(24_000)
+      expect(presentation.text).toContain("[Truncated]")
+    }
+  )
 })
