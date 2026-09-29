@@ -229,19 +229,16 @@ export type ThreadLabels = {
   historySearchPlaceholder?: string | undefined
   historyCancel?: string | undefined
   queuedMessages?: string | undefined
-  steerQueuedMessage?: string | undefined
   steerQueuedMessageLabel?: string | undefined
   removeQueuedMessage?: string | undefined
   steeringQueuedMessage?: string | undefined
   steeringFailed?: string | undefined
-  queuedMessageActions: string
-  moveQueuedMessageUp: string
-  moveQueuedMessageDown: string
+  queuedMessageCount: (count: number) => string
+  queuedMessagesSendCombined: string
+  queuedMessagesEditAll: string
+  queuedMessageRowHint: string
   /** Announces where a moved message now waits, counted from one. */
   queuedMessageMoved: (position: number, count: number) => string
-  editQueuedMessage: string
-  saveQueuedMessage: string
-  cancelQueuedMessageEdit: string
   queuedMessageEditor: string
   deliveryUnconfirmed?: string | undefined
   previous: string
@@ -335,18 +332,16 @@ const DEFAULT_LABELS: ThreadLabels = {
   historySearchPlaceholder: "Filter sent messages…",
   historyCancel: "Cancel history search",
   queuedMessages: "Queued messages",
-  steerQueuedMessage: "Steer",
   steerQueuedMessageLabel: "Steer queued message",
   removeQueuedMessage: "Remove queued message",
   steeringQueuedMessage: "Steering queued message",
   steeringFailed: "Could not steer",
-  queuedMessageActions: "Queued message actions",
-  moveQueuedMessageUp: "Move up",
-  moveQueuedMessageDown: "Move down",
+  queuedMessageCount: (count) => `${count} queued`,
+  queuedMessagesSendCombined: "Sends as one message when this turn ends",
+  queuedMessagesEditAll: "to edit",
+  queuedMessageRowHint:
+    "Double-click or press Enter to edit. Alt+Up or Alt+Down moves it.",
   queuedMessageMoved: (position, count) => `Moved to ${position} of ${count}`,
-  editQueuedMessage: "Edit",
-  saveQueuedMessage: "Save",
-  cancelQueuedMessageEdit: "Cancel",
   queuedMessageEditor: "Edit queued message",
   deliveryUnconfirmed: "Delivery unconfirmed",
   previous: "Previous",
@@ -1355,36 +1350,6 @@ const Composer: FC<{
           </div>
         </div>
       ) : null}
-      <AuiIf
-        condition={(s) =>
-          s.thread.capabilities.queue && s.composer.queue.length > 0
-        }
-      >
-        <MessageQueue
-          labels={{
-            region: queuedMessagesLabel,
-            steer: labels.steerQueuedMessage ?? "Steer",
-            steerLabel:
-              labels.steerQueuedMessageLabel ?? "Steer queued message",
-            removeLabel: labels.removeQueuedMessage ?? "Remove queued message",
-            steering: labels.steeringQueuedMessage ?? "Steering queued message",
-            failed: labels.steeringFailed ?? "Could not steer",
-            actions: labels.queuedMessageActions,
-            moveUp: labels.moveQueuedMessageUp,
-            moveDown: labels.moveQueuedMessageDown,
-            moved: labels.queuedMessageMoved,
-            edit: labels.editQueuedMessage,
-            save: labels.saveQueuedMessage,
-            cancel: labels.cancelQueuedMessageEdit,
-            editor: labels.queuedMessageEditor,
-          }}
-          steer={hasPendingInteraction ? undefined : features.steer}
-          onUnconfirmed={rememberUnconfirmed}
-          direction={direction}
-          editing={queueEditing}
-          onEditingChange={setQueueEditing}
-        />
-      </AuiIf>
       {visibleUnconfirmedDeliveries.map((delivery) => (
         <div
           key={delivery.requestId}
@@ -1410,6 +1375,32 @@ const Composer: FC<{
           {steeringError}
         </div>
       ) : null}
+      <AuiIf
+        condition={(s) =>
+          s.thread.capabilities.queue && s.composer.queue.length > 0
+        }
+      >
+        <MessageQueue
+          labels={{
+            region: queuedMessagesLabel,
+            count: labels.queuedMessageCount,
+            sendsCombined: labels.queuedMessagesSendCombined,
+            editAll: labels.queuedMessagesEditAll,
+            rowHint: labels.queuedMessageRowHint,
+            steerLabel:
+              labels.steerQueuedMessageLabel ?? "Steer queued message",
+            removeLabel: labels.removeQueuedMessage ?? "Remove queued message",
+            steering: labels.steeringQueuedMessage ?? "Steering queued message",
+            failed: labels.steeringFailed ?? "Could not steer",
+            moved: labels.queuedMessageMoved,
+            editor: labels.queuedMessageEditor,
+          }}
+          steer={hasPendingInteraction ? undefined : features.steer}
+          onUnconfirmed={rememberUnconfirmed}
+          editing={queueEditing}
+          onEditingChange={setQueueEditing}
+        />
+      </AuiIf>
       <ComposerPrimitive.AttachmentDropzone
         render={
           <div
