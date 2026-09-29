@@ -19,6 +19,7 @@ import {
 import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
+  AOS_ACP_AGENTS_PATH,
   AOS_EXTENSION_VERSION,
   AOS_METHODS,
   AOS_META_KEY,
@@ -30,6 +31,7 @@ import {
   AosReplayBeforeSchema,
   AosSessionListMetaSchema,
   AosSessionNewMetaSchema,
+  AosSessionPartRequestSchema,
   AosSessionResumeMetaSchema,
   AosSessionUpdateRequestSchema,
   AosSteerRequestSchema,
@@ -266,6 +268,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     )
   }
 
+  /**
+   * The Agent a request addresses: the connection's own, which a request may
+   * name but not replace, or on the shared address the one it names.
+   */
+  function agentOf(named: string | undefined) {
+    if (context.agentId === undefined) return named
+    if (named !== undefined && named !== context.agentId) throw invalidParams()
+    return context.agentId
+  }
+
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
   /** The elicitation modes this client declared it answers (`initialize`). */
@@ -433,10 +445,15 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, requestId }) => {
       admit(methods.agent.session.new, "new")
       const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
+      const agentId = agentOf(meta.agentId)
+      if (agentId === undefined)
+        throw invalidParams(
+          `name the Agent, or connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`
+        )
       const { sessionId } = await perform(
         "new",
         {
-          agentId: meta.agentId,
+          agentId,
           ...(meta.title === undefined ? {} : { title: meta.title }),
           ...(meta.clientId === undefined ? {} : { clientId: meta.clientId }),
         },
@@ -465,10 +482,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(methods.agent.session.list, async ({ params, requestId }) => {
     admit(methods.agent.session.list, "list")
     const meta = parseMeta(AosSessionListMetaSchema, params._meta)
+    const agentId = agentOf(meta.agentId)
     const listed = await perform(
       "list",
       {
-        ...(meta.agentId === undefined ? {} : { agentId: meta.agentId }),
+        ...(agentId === undefined ? {} : { agentId }),
         offset: decodeCursor(params.cursor),
       },
       async ({ agentId, offset }) => {
@@ -504,11 +522,13 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       }
       admit(method, "resume")
       const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+      const agentId = agentOf(meta.agentId)
       const resumed = await perform(
         "resume",
         {
           sessionId: params.sessionId,
           ...meta,
+          ...(agentId === undefined ? {} : { agentId }),
           fromStart: params.replayFrom?.type === "start",
         },
         (command) => resume(command, client),
@@ -607,8 +627,16 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     await perform(
       "close",
       { sessionId: params.sessionId },
+      // As ACP closes a Session: its work stops, for every member, and then
+      // this connection leaves it.
       async (command) => {
-        sessions.part(command.sessionId)
+        const membership = sessions.membership(command.sessionId)
+        if (!membership) throw notFound()
+        try {
+          await membership.cancel()
+        } finally {
+          sessions.part(command.sessionId)
+        }
       },
       requestId
     )
@@ -621,13 +649,38 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       "delete",
       { sessionId: params.sessionId },
       async (command) => {
-        await catalog.delete(sessions.scope(command.sessionId))
+        const agentId = sessions.owner(command.sessionId) ?? context.agentId
+        const scope = agentId && catalog.scope(agentId, command.sessionId)
+        // A Session nobody can find is already gone.
+        if (scope) {
+          try {
+            await catalog.delete(scope)
+          } catch (cause) {
+            if (
+              publicCodeOf(publicRequestError(context.publicError, cause)) !==
+              "not_found"
+            )
+              throw cause
+          }
+        }
         sessions.forget(command.sessionId)
       },
       requestId
     )
     return {}
   })
+
+  // Leaves a Session this connection joined, whose work goes on for the rest.
+  app.onRequest(
+    AOS_METHODS.session.part,
+    undecoded,
+    async ({ params: raw }) => {
+      stack()
+      const { sessionId } = AosSessionPartRequestSchema.parse(raw)
+      sessions.part(sessionId)
+      return {}
+    }
+  )
 
   app.onRequest(
     AOS_METHODS.session.update,

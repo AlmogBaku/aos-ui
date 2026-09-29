@@ -1063,6 +1063,7 @@ describe("AOS v1 normalized protocol", () => {
         update: "_aos/session/update",
         steer: "_aos/session/steer",
         focus: "_aos/session/focus",
+        part: "_aos/session/part",
       },
       agents: {
         list: "_aos/agents/list",

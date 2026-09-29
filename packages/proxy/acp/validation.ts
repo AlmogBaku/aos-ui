@@ -36,8 +36,9 @@ export function parseMeta<Schema extends z.ZodType>(
   return parsed.data
 }
 
-export function invalidParams() {
-  return RequestError.invalidParams()
+/** `hint` says what a valid request looks like, for an operator client. */
+export function invalidParams(hint?: string) {
+  return RequestError.invalidParams(undefined, hint)
 }
 
 /**

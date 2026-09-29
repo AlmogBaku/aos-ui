@@ -31,6 +31,12 @@ export type SocketUpgrade = {
   headers?: Readonly<Record<string, string>>
 }
 
+/**
+ * An upgrade the service answers with a status instead: 404 for an address it
+ * does not serve, 503 when it cannot tell now.
+ */
+export type SocketRefusal = { refused: 404 | 503 }
+
 /** The transport-neutral socket a mounted service owns for one peer. */
 export type ProxySocket = {
   receive(raw: string | Uint8Array): void | Promise<void>
@@ -50,19 +56,28 @@ export type ProxySocketPeer = {
 }
 
 export type ProxySocketService<Upgrade extends SocketUpgrade> = {
-  authorizeUpgrade(request: Request): Promise<Upgrade | undefined>
+  /** The upgrade, its refusal, or `undefined` for an unauthorized one. */
+  authorizeUpgrade(
+    request: Request
+  ): Promise<Upgrade | SocketRefusal | undefined>
   open(upgrade: Upgrade, peer: ProxySocketPeer): ProxySocket
 }
 
 /** One WebSocket path hosted beside the HTTP app, with its own peer budget. */
 export type ProxySocketMount<Upgrade extends SocketUpgrade> = {
   path: string
+  /**
+   * Also routes every path below `path` to the service, which refuses one it
+   * does not serve.
+   */
+  subpaths?: boolean
   service: ProxySocketService<Upgrade>
   maxPeers?: number
 }
 
 type MountState<Upgrade extends SocketUpgrade> = {
   path: string
+  subpaths: boolean
   service: ProxySocketService<Upgrade>
   maxPeers: number
   peers: Set<SocketPeer<Upgrade>>
@@ -155,6 +170,7 @@ function mountState<Upgrade extends SocketUpgrade>(
     throw new Error("Invalid socket peer limit")
   return {
     path: mount.path,
+    subpaths: mount.subpaths ?? false,
     service: mount.service,
     maxPeers,
     peers: new Set(),
@@ -239,11 +255,17 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
       : undefined
   const fetch: FetchHandler = async (request, rawServer) => {
     const url = new URL(request.url)
-    const mount = mounts.find((candidate) => candidate.path === url.pathname)
+    const mount = mounts.find(
+      ({ path, subpaths }) =>
+        url.pathname === path ||
+        (subpaths && url.pathname.startsWith(`${path}/`))
+    )
     if (mount) {
       if (request.method !== "GET") return new Response(null, { status: 405 })
       const authorization = await mount.service.authorizeUpgrade(request)
       if (!authorization) return new Response(null, { status: 401 })
+      if ("refused" in authorization)
+        return new Response(null, { status: authorization.refused })
       const upgrade = rawServer as UpgradeServer | undefined
       const overloaded = mount.peers.size + mount.reserved >= mount.maxPeers
       if (!overloaded) mount.reserved += 1

@@ -31,7 +31,17 @@ import {
 
 export const ACP_PROTOCOL_VERSION = 2 as const
 export const AOS_ACP_OPERATOR_PATH = "/api/aos/v1/acp" as const
+/**
+ * Below the operator path, each Agent's own address: its Sessions alone, with
+ * no `_meta.aos.agentId` to name.
+ */
+export const AOS_ACP_AGENTS_PATH = `${AOS_ACP_OPERATOR_PATH}/agents` as const
 export const AOS_ACP_GUEST_PATH = "/api/guest/v1/acp" as const
+
+/** One Agent's own ACP address, its id one path segment. */
+export function aosAcpAgentPath(agentId: string) {
+  return `${AOS_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
+}
 export const AOS_META_KEY = "aos" as const
 export const AOS_EXTENSION_VERSION = 1 as const
 export const AOS_AUTH_METHOD_INVITE = "aos-invite" as const
@@ -43,6 +53,7 @@ export const AOS_METHODS = {
     update: "_aos/session/update",
     steer: "_aos/session/steer",
     focus: "_aos/session/focus",
+    part: "_aos/session/part",
   },
   agents: {
     list: "_aos/agents/list",
@@ -155,7 +166,11 @@ const ClientIdSchema = IdentifierSchema.optional()
 
 /** `NewSessionRequest._meta.aos` */
 export const AosSessionNewMetaSchema = z.strictObject({
-  agentId: IdentifierSchema,
+  /**
+   * Required on the shared address; on an Agent's own address it is that
+   * Agent, or absent.
+   */
+  agentId: IdentifierSchema.optional(),
   title: z.string().min(1).max(4096).optional(),
   clientId: ClientIdSchema,
 })
@@ -275,6 +290,14 @@ export const AosSessionUpdateRequestSchema = z
       ).length === 1,
     "Exactly one of title, archived, unread, pinned"
   )
+
+/**
+ * `_aos/session/part` params, answered `{}`: this connection stops following
+ * the Session, whose work runs on. `session/close` also stops that work.
+ */
+export const AosSessionPartRequestSchema = z.strictObject({
+  sessionId: IdentifierSchema,
+})
 
 /** `_aos/session/steer` params and response. */
 export const AosSteerRequestSchema = z.strictObject({

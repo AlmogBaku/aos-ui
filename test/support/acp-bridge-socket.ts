@@ -1,10 +1,13 @@
 import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
 
 import type { AcpPeer, AcpUpgrade } from "../../packages/proxy/acp/service"
+import type { SocketRefusal } from "../../packages/proxy/server"
 
 /** The calls a network listener makes on one ACP service. */
 export type BridgedAcpService = {
-  authorizeUpgrade(request: Request): Promise<AcpUpgrade | undefined>
+  authorizeUpgrade(
+    request: Request
+  ): Promise<AcpUpgrade | SocketRefusal | undefined>
   open(
     upgrade: AcpUpgrade,
     peer: AcpPeer
@@ -64,7 +67,7 @@ export function acpBridge(service: BridgedAcpService) {
 
     async #upgrade(request: Request) {
       const upgrade = await service.authorizeUpgrade(request)
-      if (!upgrade) {
+      if (!upgrade || "refused" in upgrade) {
         refusals.push(request)
         this.readyState = CLOSED
         this.dispatchEvent(new Event("error"))

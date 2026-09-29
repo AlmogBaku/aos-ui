@@ -42,6 +42,11 @@ type AcpConnectionBase = {
   connectionId: string
   principalId: string
   /**
+   * The Agent this connection's address names, whose Sessions alone it
+   * lists, creates and resumes; absent on the shared address.
+   */
+  agentId?: string
+  /**
    * The runtime's classifier of a failure's kind, a function of the failure
    * alone. The connection reaches a provider only through the catalog and the
    * channels.

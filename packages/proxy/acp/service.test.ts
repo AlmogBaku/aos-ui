@@ -137,6 +137,33 @@ describe("ACP WebSocket service", () => {
     })
   })
 
+  it("refuses an Agent's address as unavailable while the catalog cannot say", async () => {
+    const logs = captureLogs()
+    const acp = createAcpService({
+      publicOrigin: ORIGIN,
+      role: "operator",
+      principalId: OPERATOR_PRINCIPAL,
+      agent: testAgent,
+      connection: connectionContext,
+      agentAddress: {
+        path: PATH,
+        exists: () => Promise.reject(new Error("internal detail 7f3a")),
+      },
+      logger: logs.logger,
+    })
+
+    await expect(
+      acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}/agents/researcher`, {
+          headers: { origin: ORIGIN },
+        })
+      )
+    ).resolves.toEqual({ refused: 503 })
+    expect(logs.records().map(({ message }) => message)).toEqual([
+      "acp.upgrade.catalog_failed",
+    ])
+  })
+
   it("answers the first initialize frame through the prepared connection", async () => {
     const { acp, contexts } = service()
     const upgrade = await acp.authorizeUpgrade(

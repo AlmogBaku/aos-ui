@@ -185,9 +185,11 @@ describe("Bun proxy server lifecycle", () => {
     const acpSocket = { receive: vi.fn(), close: vi.fn() }
     const acpService = {
       authorizeUpgrade: vi.fn(async (request: Request) =>
-        request.headers.get("origin") === "https://aos.example.test"
-          ? { principalId: "operator", connectionId: "connection-1" }
-          : undefined
+        new URL(request.url).pathname.endsWith("/unknown")
+          ? { refused: 404 as const }
+          : request.headers.get("origin") === "https://aos.example.test"
+            ? { principalId: "operator", connectionId: "connection-1" }
+            : undefined
       ),
       open: vi.fn(() => acpSocket),
     }
@@ -197,9 +199,12 @@ describe("Bun proxy server lifecycle", () => {
       served = options
       return { stop: vi.fn() }
     })
+    const app = { fetch: vi.fn(() => new Response(null, { status: 204 })) }
     startProxyServer({
-      app: { fetch: vi.fn() },
-      sockets: [{ path: "/api/aos/v1/acp", service: acpService }],
+      app,
+      sockets: [
+        { path: "/api/aos/v1/acp", subpaths: true, service: acpService },
+      ],
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,
@@ -217,6 +222,20 @@ describe("Bun proxy server lifecycle", () => {
       { upgrade }
     )
     expect(denied?.status).toBe(401)
+    // A path below the mount reaches its service, which may refuse it; a
+    // path that only shares its prefix is the app's.
+    const refused = await fetch(
+      new Request("https://aos.example.test/api/aos/v1/acp/unknown", {
+        headers: { origin: "https://aos.example.test" },
+      }),
+      { upgrade }
+    )
+    expect(refused?.status).toBe(404)
+    const beside = await fetch(
+      new Request("https://aos.example.test/api/aos/v1/acpx"),
+      { upgrade }
+    )
+    expect(beside?.status).toBe(204)
     expect(upgrade).not.toHaveBeenCalled()
     expect(acpService.open).not.toHaveBeenCalled()
 

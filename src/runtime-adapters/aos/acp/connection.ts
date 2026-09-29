@@ -1162,7 +1162,10 @@ export function createAcpConnection(
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
   }
 
-  /** Drops a Session no listener came back to, and tells the proxy so. */
+  /**
+   * Drops a Session no listener came back to, and tells the proxy so. Its
+   * work goes on: `session/close` would stop it.
+   */
   function part(sessionId: string, open: OpenSession) {
     sessions.delete(sessionId)
     owners.delete(sessionId)
@@ -1172,9 +1175,9 @@ export function createAcpConnection(
     settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
-      agent.request(methods.agent.session.close, { sessionId }, options)
+      agent.request(AOS_METHODS.session.part, { sessionId }, options)
     ).catch((err: unknown) => {
-      logger.debug({ err, sessionId }, "acp.session.close.failed")
+      logger.debug({ err, sessionId }, "acp.session.part.failed")
     })
   }
 

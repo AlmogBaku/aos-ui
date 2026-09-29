@@ -7,11 +7,11 @@
  * through `acpBridge`, the calls the network listener makes. A row the runtime
  * cannot express is named in `gaps` with its reason and listed as skipped.
  *
- * The client is plain: it sends no `_meta` of its own, registers no `_aos/*`
- * handler, and reads standard fields only. Only its Session setup names the
- * Agent in `_meta.aos.agentId`. A case that tests an extra on purpose uses an
- * extras client, and a case no runtime changes runs in
- * `runWireListenerContract`, over one runtime.
+ * The client is plain: it reaches the Agent at the Agent's own address,
+ * sends no `_meta` of its own, registers no `_aos/*` handler, and reads
+ * standard fields only. A case that tests an extra on purpose uses an extras
+ * client, and a case no runtime changes runs in `runWireListenerContract`,
+ * over one runtime.
  *
  * Test-only: the architecture guard keeps production code from importing it.
  */
@@ -38,12 +38,14 @@ import {
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
+  AOS_ACP_AGENTS_PATH,
   AOS_ACP_GUEST_PATH,
   AOS_ACP_OPERATOR_PATH,
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
   AOS_STOP_REASONS,
+  aosAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredProxy } from "../composition"
@@ -174,6 +176,8 @@ type WireHarness = Readonly<{
     path: string,
     options?: ClientOptions
   ): ReturnType<typeof connectClient>
+  /** Connects a plain operator client at the Agent's own address. */
+  connectPlain(options?: ClientOptions): ReturnType<typeof connectClient>
 }>
 
 type ClientOptions = {
@@ -367,25 +371,20 @@ type WireAsk = Readonly<{
 type WireClient = ReturnType<typeof connectClient>
 
 /** A Session on `agentId`, created as the plain client's one setup step. */
-async function newSession({ connection }: WireClient, agentId: string) {
+async function newSession({ connection }: WireClient) {
   const { sessionId } = await connection.agent.request(
     methods.agent.session.new,
-    { cwd: "/", _meta: { [AOS_META_KEY]: { agentId } } }
+    { cwd: "/" }
   )
   return sessionId
 }
 
 /** `sessionId` joined on a fresh connection, its history read from the start. */
-function resumeFromStart(
-  { connection }: WireClient,
-  sessionId: string,
-  agentId: string
-) {
+function resumeFromStart({ connection }: WireClient, sessionId: string) {
   return connection.agent.request(methods.agent.session.resume, {
     sessionId,
     cwd: "/",
     replayFrom: { type: "start" },
-    _meta: { [AOS_META_KEY]: { agentId } },
   })
 }
 
@@ -412,19 +411,10 @@ function prompt({ connection }: WireClient, sessionId: string, text: string) {
 }
 
 /** A plain operator client, and one new Session it made on the Agent. */
-async function operatorSession({
-  proxy,
-  agentId,
-  clock,
-  connect,
-}: WireHarness) {
-  const plain = connect(
-    proxy.acpService,
-    OPERATOR_ORIGIN,
-    AOS_ACP_OPERATOR_PATH
-  )
+async function operatorSession({ clock, connectPlain }: WireHarness) {
+  const plain = connectPlain()
   await until(clock, plain.initialize())
-  const sessionId = await until(clock, newSession(plain, agentId))
+  const sessionId = await until(clock, newSession(plain))
   return { plain, sessionId }
 }
 
@@ -672,17 +662,30 @@ function wireCase(
     const runtime = createRuntime()
     const { proxy, release } = await composeProxy(runtime, limits)
     const clients: WireClient[] = []
+    const connect: WireHarness["connect"] = (
+      service,
+      origin,
+      path,
+      options
+    ) => {
+      const opened = connectClient(service, origin, path, options)
+      clients.push(opened)
+      return opened
+    }
     try {
       await body({
         proxy,
         agentId: runtime.agentId,
         turn: runtime.turn ?? NO_TURN,
         clock,
-        connect(service, origin, path, options) {
-          const opened = connectClient(service, origin, path, options)
-          clients.push(opened)
-          return opened
-        },
+        connect,
+        connectPlain: (options) =>
+          connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            aosAcpAgentPath(runtime.agentId),
+            options
+          ),
       })
     } finally {
       for (const { connection } of clients) connection.close()
@@ -723,14 +726,10 @@ export function runWireContract(
       row(
         "promptAnswerCarriesMessageId",
         "answers a prompt with a message id the SDK's own client reads",
-        async ({ proxy, agentId, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
 
           const answer = await until(
             clock,
@@ -744,12 +743,8 @@ export function runWireContract(
       row(
         "onlyAdvertisedContentIn",
         "takes a resource link in a prompt, and an image or embedded context exactly where it advertises one",
-        async ({ proxy, agentId, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
           const { capabilities } = await until(clock, plain.initialize())
           const advertised = capabilities?.session?.prompt ?? {}
           const blocks = {
@@ -771,7 +766,7 @@ export function runWireContract(
           const read: Record<string, unknown> = {}
           for (const [kind, block] of Object.entries(blocks)) {
             // Each on its own Session, so one taken leaves the next unbusied.
-            const sessionId = await until(clock, newSession(plain, agentId))
+            const sessionId = await until(clock, newSession(plain))
             read[kind] = await until(
               clock,
               plain.connection.agent.request(methods.agent.session.prompt, {
@@ -800,25 +795,17 @@ export function runWireContract(
       row(
         "promptAnsweredAtStorage",
         "answers a prompt once stored, under the id it was stored as, and refuses one while its turn runs",
-        async ({ proxy, agentId, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
           const answer = await until(
             clock,
             prompt(plain, sessionId, "list the files")
           )
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           await expect(
             until(clock, prompt(plain, sessionId, "and their sizes"))
@@ -832,22 +819,14 @@ export function runWireContract(
       row(
         "sameIdsLiveAndAfterReload",
         "gives each thought and model response its own id, the same after a reload",
-        async ({ proxy, agentId, turn, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ turn, clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
           await playTurn(clock, plain, sessionId, turn, "list the files")
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           const live = agentSide(plain.updates)
           expect(
@@ -864,14 +843,10 @@ export function runWireContract(
       row(
         "historyAndLiveJoinedById",
         "shows a turn stored just before a resume exactly once beside the live one",
-        async ({ proxy, agentId, turn, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ turn, clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
           await playTurn(clock, plain, sessionId, turn, "list the files")
           // The next turn starts 3 s after the first was stored, inside the
           // window a join by time would mistake for the live turn's own.
@@ -879,13 +854,9 @@ export function runWireContract(
           const idle = plain.nextIdle()
           await until(clock, prompt(plain, sessionId, "and their sizes"))
           await until(clock, turn.firstResponse())
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
           await until(clock, turn.secondResponse())
           await until(clock, idle)
 
@@ -901,7 +872,7 @@ export function runWireContract(
         "oneTurnThroughQuestion",
         "keeps one turn through a question it asks",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
           const from = plain.updates.length
           const idle = plain.nextIdle()
@@ -916,13 +887,9 @@ export function runWireContract(
           await until(clock, settled)
           await until(clock, turn.secondResponse())
           await until(clock, idle)
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           expect(states(plain.updates.slice(from))).toEqual([
             "running",
@@ -990,7 +957,7 @@ export function runWireContract(
         "heldAndLostQuestions",
         "reports a question it holds back or lost as waiting, and sends none of its fields",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const questions = questionsOf(turn)
           const { plain, sessionId } = await operatorSession(harness)
           const held: Record<string, string | undefined> = {}
@@ -1007,13 +974,9 @@ export function runWireContract(
           const lost = plain.nextState("requires_action")
           await until(clock, questions.lose())
           await until(clock, lost)
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
           held.lost = states(reader.updates).at(-1)
 
           expect(Object.keys(held)).not.toHaveLength(0)
@@ -1043,21 +1006,17 @@ export function runWireContract(
         "reloadMidTurn",
         "rebuilds a turn waiting on a question from history, then its state and question, then answers",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
           await until(clock, prompt(plain, sessionId, "list the files"))
           await until(clock, turn.firstResponse())
           await askQuestion(clock, plain, questionsOf(turn))
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
           const asked = reader.nextAsked()
           await until(
             clock,
-            resumeFromStart(reader, sessionId, agentId).then(reader.answered)
+            resumeFromStart(reader, sessionId).then(reader.answered)
           )
           await until(clock, asked)
 
@@ -1081,7 +1040,7 @@ export function runWireContract(
         "catchUpWithStandardUpdates",
         "rebuilds a view that fell behind or lost its place from history in standard updates, then states the turn",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
           const idle = plain.nextIdle()
           await until(clock, prompt(plain, sessionId, "list the files"))
@@ -1090,27 +1049,19 @@ export function runWireContract(
           await until(clock, turn.secondResponse(LONG_RESPONSE))
           await until(clock, idle)
           // A cursor the replay no longer holds.
-          const stale = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const stale = connectPlain()
           await until(clock, stale.initialize())
           const resumed = await until(
             clock,
             stale.connection.agent.request(methods.agent.session.resume, {
               sessionId,
               cwd: "/",
-              _meta: { [AOS_META_KEY]: { agentId, after: 1 } },
+              _meta: { [AOS_META_KEY]: { after: 1 } },
             })
           )
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           const stored = agentSide(reader.updates)
           expect(stored.messages.map(({ text }) => text)).toContain(
@@ -1134,26 +1085,17 @@ export function runWireContract(
       row(
         "questionsOnlyToCapableClients",
         "asks a question only of a client that declared it answers one, and shows the rest the wait",
-        async ({ proxy, agentId, clock, turn, connect }) => {
-          const bare = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH,
-            { elicits: false }
-          )
+        async ({ clock, turn, connectPlain }) => {
+          const bare = connectPlain({ elicits: false })
           await until(clock, bare.initialize())
-          const sessionId = await until(clock, newSession(bare, agentId))
+          const sessionId = await until(clock, newSession(bare))
           await until(clock, prompt(bare, sessionId, "list the files"))
           const waiting = bare.nextState("requires_action")
           await until(clock, Promise.race([waiting, questionsOf(turn).ask()]))
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
           const asked = reader.nextAsked()
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
           await until(clock, asked)
 
           expect(states(bare.updates).at(-1)).toBe("requires_action")
@@ -1204,7 +1146,7 @@ export function runWireContract(
         "diffAddedWithGitPatchOrNone",
         "reports a created file as added with a git patch or none, and an edit's git patch, the same after a reload",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const editFile =
             turn.editFile ??
             (() =>
@@ -1217,13 +1159,9 @@ export function runWireContract(
           await until(clock, editFile())
           await until(clock, turn.secondResponse())
           await until(clock, idle)
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           for (const client of [plain, reader]) {
             const [added, edited, ...rest] = fileDiffs(client.updates)
@@ -1244,17 +1182,13 @@ export function runWireContract(
         "costInUsageUpdate",
         "reports the Session's cost in its usage update",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
           await playTurn(clock, plain, sessionId, turn, "list the files")
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
           const usage = reader.next(SessionUpdate.isUsageUpdate)
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           await expect(until(clock, usage)).resolves.toMatchObject({
             cost: { amount: 0.42, currency: "USD" },
@@ -1265,29 +1199,19 @@ export function runWireContract(
       row(
         "unsavedSessionUndated",
         "gives a Session its runtime has not stored no title and no date",
-        async ({ proxy, agentId, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
           // A member joining the Session reads its row.
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
           const info = reader.next(SessionUpdate.isSessionInfoUpdate)
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
           await until(clock, info)
           const listed = await until(
             clock,
-            plain.connection.agent.request(methods.agent.session.list, {
-              _meta: { [AOS_META_KEY]: { agentId } },
-            })
+            plain.connection.agent.request(methods.agent.session.list, {})
           )
 
           const read = [
@@ -1304,15 +1228,11 @@ export function runWireContract(
       row(
         "thoughtLevelDefault",
         "offers a thought level whose current value is one of its choices, and takes that choice",
-        async ({ proxy, agentId, clock, connect }) => {
-          const plain = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+        async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
           await until(clock, plain.initialize())
           const configured = plain.next(SessionUpdate.isConfigOptionUpdate)
-          const sessionId = await until(clock, newSession(plain, agentId))
+          const sessionId = await until(clock, newSession(plain))
           const { configOptions } = await until(clock, configured)
           const selects = configOptions.filter(SessionConfigOption.isSelect)
           const thought = selects.find(
@@ -1382,7 +1302,7 @@ export function runWireContract(
         "quietStreamPassedThrough",
         "streams only what the runtime streams, filling in nothing it stored",
         async (harness) => {
-          const { proxy, agentId, clock, turn, connect } = harness
+          const { clock, turn, connectPlain } = harness
           const quiet =
             turn.quiet ??
             (() =>
@@ -1392,13 +1312,9 @@ export function runWireContract(
           const { plain, sessionId } = await operatorSession(harness)
           await until(clock, quiet())
           await playTurn(clock, plain, sessionId, turn, "list the files")
-          const reader = connect(
-            proxy.acpService,
-            OPERATOR_ORIGIN,
-            AOS_ACP_OPERATOR_PATH
-          )
+          const reader = connectPlain()
           await until(clock, reader.initialize())
-          await until(clock, resumeFromStart(reader, sessionId, agentId))
+          await until(clock, resumeFromStart(reader, sessionId))
 
           const live = agentSide(plain.updates)
           expect(
@@ -1598,6 +1514,159 @@ export function runWireListenerContract(
 
           // The SDK refuses it by closing the socket, answering nothing.
           expect(await until(clock, raw.next())).toEqual({ closed: 1002 })
+        })
+      )
+
+      it(
+        "serves each Agent at its own address, and no address it does not know",
+        wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
+          const answers: Record<string, unknown> = {}
+          for (const path of [
+            AOS_ACP_OPERATOR_PATH,
+            aosAcpAgentPath(agentId),
+            aosAcpAgentPath("writer"),
+            aosAcpAgentPath(`${agentId}/x`),
+            `${aosAcpAgentPath(agentId)}/x`,
+            `${AOS_ACP_AGENTS_PATH}/`,
+            `${AOS_ACP_OPERATOR_PATH}/sessions`,
+          ]) {
+            const upgrade = await until(
+              clock,
+              proxy.acpService.authorizeUpgrade(
+                new Request(`${OPERATOR_ORIGIN}${path}`, {
+                  headers: { Origin: OPERATOR_ORIGIN },
+                })
+              )
+            )
+            answers[path] =
+              upgrade === undefined
+                ? 401
+                : "refused" in upgrade
+                  ? upgrade.refused
+                  : "admitted"
+          }
+
+          expect(Object.values(answers)).toEqual([
+            "admitted",
+            "admitted",
+            404,
+            404,
+            404,
+            404,
+            404,
+          ])
+        })
+      )
+
+      it(
+        "scopes an Agent's address to that Agent, and asks the shared one to name it",
+        wireCase(
+          createRuntime,
+          async ({ proxy, agentId, clock, connect, connectPlain }) => {
+            const plain = connectPlain()
+            await until(clock, plain.initialize())
+            const sessionId = await until(clock, newSession(plain))
+            await until(clock, prompt(plain, sessionId, "list the files"))
+            const listed = await until(
+              clock,
+              plain.connection.agent.request(methods.agent.session.list, {})
+            )
+            const shared = connect(
+              proxy.acpService,
+              OPERATOR_ORIGIN,
+              AOS_ACP_OPERATOR_PATH
+            )
+            await until(clock, shared.initialize())
+            const other = { _meta: { [AOS_META_KEY]: { agentId: "writer" } } }
+            const refused = await Promise.all(
+              (
+                [
+                  plain.connection.agent.request(methods.agent.session.new, {
+                    cwd: "/",
+                    ...other,
+                  }),
+                  plain.connection.agent.request(
+                    methods.agent.session.list,
+                    other
+                  ),
+                  shared.connection.agent.request(methods.agent.session.new, {
+                    cwd: "/",
+                  }),
+                ] as Promise<unknown>[]
+              ).map((request) =>
+                until(clock, request).then(
+                  () => "answered",
+                  (error: { code?: unknown }) => error.code
+                )
+              )
+            )
+
+            expect(listed.nextCursor ?? undefined).toBeUndefined()
+            expect(
+              listed.sessions.map((row) => ({
+                sessionId: row.sessionId,
+                agentId: row._meta?.[AOS_META_KEY],
+              }))
+            ).toEqual([
+              { sessionId, agentId: expect.objectContaining({ agentId }) },
+            ])
+            expect(refused).toEqual(
+              Array.from({ length: 3 }, () => RequestError.invalidParams().code)
+            )
+          }
+        )
+      )
+
+      it(
+        "closes a joined Session by stopping its work for every member, and parts only the closer",
+        wireCase(createRuntime, async ({ clock, turn, connectPlain }) => {
+          const questions = questionsOf(turn)
+          const plain = connectPlain()
+          await until(clock, plain.initialize())
+          const sessionId = await until(clock, newSession(plain))
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const reader = connectPlain()
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId))
+          const close = (client: WireClient) =>
+            until(
+              clock,
+              client.connection.agent.request(methods.agent.session.close, {
+                sessionId,
+              })
+            ).then(
+              () => "closed",
+              (error: { code?: unknown }) => error.code
+            )
+          const interrupted = questions.interrupted()
+          const idle = reader.nextIdle()
+          const closed = close(plain)
+          await until(clock, interrupted)
+          await until(clock, questions.confirmInterrupt())
+          await until(clock, idle)
+
+          expect(await closed).toBe("closed")
+          expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
+          expect(await close(plain)).toBe(RequestError.resourceNotFound().code)
+          expect(await close(reader)).toBe("closed")
+        })
+      )
+
+      it(
+        "deletes a Session it does not know as one already gone",
+        wireCase(createRuntime, async ({ clock, connectPlain }) => {
+          const plain = connectPlain()
+          await until(clock, plain.initialize())
+
+          await expect(
+            until(
+              clock,
+              plain.connection.agent.request(methods.agent.session.delete, {
+                sessionId: "ses-alpha",
+              })
+            )
+          ).resolves.toEqual({})
         })
       )
 
