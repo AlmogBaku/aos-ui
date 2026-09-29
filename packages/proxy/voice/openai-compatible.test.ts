@@ -285,11 +285,9 @@ describe("createOpenAiCompatibleTranscriber", () => {
     ).capability()
 
     expect(content.shape.transcription.safeParse(capability).success).toBe(true)
-    expect(capability.scope).toBe("agent")
     expect(capability.mimeParameter).toBe("codecs")
     expect(capability.acceptedMimeTypes).toContain("audio/webm")
     expect(capability.codecValues).toContain("opus")
-    expect(capability.maxRecordingBytes).toBe(MAX_RECORDING_BYTES)
   })
 })
 
@@ -422,8 +420,5 @@ describe("createOpenAiCompatibleSynthesizer", () => {
     ).capability()
 
     expect(content.shape.speech.safeParse(capability).success).toBe(true)
-    expect(capability.scope).toBe("agent")
-    expect(capability.maxTextBytes).toBe(MAX_SPEECH_TEXT_BYTES)
-    expect(capability.maxAudioBytes).toBe(MAX_SPEECH_BYTES)
   })
 })

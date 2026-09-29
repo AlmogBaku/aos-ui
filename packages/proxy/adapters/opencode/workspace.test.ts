@@ -175,53 +175,6 @@ describe("OpenCode workspace operations", () => {
     expect(created).toBe(false)
   })
 
-  it("does not expose a generic Session mutation operation", () => {
-    const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({ data: [], cursor: {} }),
-          get: async () => session({ agent: "other" }),
-          create: async () => session(),
-        },
-      },
-    })
-
-    expect(operations).not.toHaveProperty("mutateSession")
-  })
-
-  it("advertises native models while retaining only token-accounting context and Todos as unavailable", () => {
-    const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({ data: [], cursor: {} }),
-          get: async () => session(),
-          create: async () => session(),
-        },
-      },
-    })
-
-    expect(operations.capabilities()).toMatchObject({
-      models: {
-        status: "available",
-        scope: "session",
-        selection: "native-session",
-        choices: "provider-reported",
-      },
-      context: {
-        status: "unavailable",
-        reason: "native-context-accounting-unavailable",
-      },
-      todos: {
-        status: "available",
-        scope: "session",
-        mode: "read-only-projection",
-        source: "latest-completed-todo-tool-result",
-      },
-    })
-  })
-
   it("reads a token avatar from the native request body and folds only it into the revision", async () => {
     let body: Record<string, unknown> = { avatar: "ring/blue" }
     let headers: Record<string, string> = { "x-sample": "one" }

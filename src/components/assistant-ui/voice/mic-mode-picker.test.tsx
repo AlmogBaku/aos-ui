@@ -34,12 +34,6 @@ function setup(
 }
 
 describe("single microphone mode button", () => {
-  it("exposes a single operable recording control", () => {
-    const { mic } = setup()
-
-    expect(mic).toBeEnabled()
-    expect(mic).toHaveAccessibleName(/Record:/)
-  })
   it("records on tap without opening a selector", () => {
     const h = setup()
     fireEvent.click(h.mic)
@@ -48,13 +42,16 @@ describe("single microphone mode button", () => {
   })
   it("uses distinct accessible labels for the recording modes", () => {
     const transcription = setup()
+    expect(transcription.mic).toBeEnabled()
     expect(transcription.mic).toHaveAccessibleName(/Record:/)
     expect(transcription.mic).toHaveAccessibleDescription(
       "Press to record. Hold to switch mode."
     )
+    const transcriptionName = transcription.mic.getAttribute("aria-label")
     cleanup()
     const voiceTurn = setup(undefined, "voice-turn")
     expect(voiceTurn.mic).toHaveAccessibleName(/Record:/)
+    expect(voiceTurn.mic).not.toHaveAccessibleName(transcriptionName ?? "")
   })
   it("toggles mode after a pointer hold without recording or opening a selector", async () => {
     vi.useFakeTimers()

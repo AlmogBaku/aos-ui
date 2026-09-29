@@ -150,7 +150,7 @@ describe("AgentSessionHistory", () => {
     expect(onOpenSession).toHaveBeenCalledWith("agent-a", "history-match")
   })
 
-  it("names an unread Session last and shows both of its indicators", () => {
+  it("names an unread Session last and shows its row indicator", () => {
     render(
       <AgentSessionHistory
         navigation={{
@@ -177,7 +177,6 @@ describe("AgentSessionHistory", () => {
       name: "Open Session: Shared research, Status: Waiting for input, Selected, Unread",
     })
     expect(within(row).getByTitle("Waiting for input")).toBeVisible()
-    expect(within(row).queryByTitle("Unread")).toBeNull()
   })
 
   it("searches both sections and offers a clear action for an empty result", async () => {

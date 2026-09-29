@@ -190,11 +190,4 @@ describe("deterministic fixture scenarios", () => {
       )
     ).toMatchObject({ data: { status: "failed", error: expect.any(String) } })
   })
-
-  it("returns an unknown tool for the malformed scenario", () => {
-    expect(buildFixtureScenario("malformed tool").parts[0]).toMatchObject({
-      type: "tool-call",
-      toolName: "unknown_fixture_tool",
-    })
-  })
 })

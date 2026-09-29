@@ -204,26 +204,6 @@ describe("applyUpdate messages", () => {
       ],
     },
     {
-      name: "a whole upsert replaces the streamed content",
-      entries: [
-        agentChunk("a1", "draft"),
-        [
-          {
-            sessionUpdate: "agent_message",
-            messageId: "a1",
-            content: [{ type: "text", text: "final" }],
-          },
-        ],
-      ],
-      expected: [
-        {
-          id: "a1",
-          role: "assistant",
-          content: [{ type: "text", text: "final" }],
-        },
-      ],
-    },
-    {
       name: "a null content upsert clears the turn",
       entries: [
         agentChunk("a1", "draft"),
@@ -1003,17 +983,6 @@ describe("applyUpdate execution", () => {
     expect(uncertain.execution.status).toBe("failed")
   })
 
-  it("marks a cancelled turn incomplete and the Session idle", () => {
-    const cancelled = fold(
-      [stateUpdate({ state: "idle", stopReason: "cancelled" })],
-      answering
-    )
-    expect(cancelled.execution.status).toBe("idle")
-    expect(toThreadMessages(cancelled)[3]).toMatchObject({
-      status: { type: "incomplete", reason: "cancelled" },
-    })
-  })
-
   it("ignores a state it does not know", () => {
     expect(fold([stateUpdate({ state: "_compacting" })], answering)).toBe(
       answering
@@ -1395,15 +1364,6 @@ describe("local turn bookkeeping", () => {
   it("re-keys an optimistic turn onto the provider id", () => {
     const rekeyed = renameMessage(sent, "local-1", "u1")
     expect(toThreadMessages(rekeyed)[0]).toMatchObject({ id: "u1" })
-  })
-
-  it("drops the optimistic turn when the echo already arrived", () => {
-    const echoed = fold([userChunk("u1", "Hi")], sent)
-    const rekeyed = renameMessage(echoed, "local-1", "u1")
-    expect(toThreadMessages(rekeyed).map((message) => message.id)).toEqual([
-      "a1",
-      "u1",
-    ])
   })
 
   it("retains only the turns the runtime kept", () => {

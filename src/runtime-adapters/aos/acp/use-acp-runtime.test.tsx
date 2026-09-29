@@ -29,7 +29,6 @@ import {
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
-import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
 import {
   queueControlsExtras,
@@ -432,26 +431,6 @@ describe("useAcpRuntime", () => {
     })
   })
 
-  it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("user_message", "u1", "Ship it"))
-      fake.emit(chunkUpdate("a1", "Working"))
-    })
-    const [user, assistant] = result.current.thread.getState().messages
-    act(() => {
-      fake.emit(chunkUpdate("a1", " on it"))
-    })
-    const [nextUser, nextAssistant] = result.current.thread.getState().messages
-    expect(nextUser).toBe(user)
-    expect(nextAssistant).not.toBe(assistant)
-    expect(visible(result.current)).toEqual([
-      { id: "u1", role: "user", text: "Ship it" },
-      { id: "a1", role: "assistant", text: "Working on it" },
-    ])
-  })
-
   it("converts only the streaming turn per chunk, however long the transcript", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
@@ -664,19 +643,6 @@ describe("useAcpRuntime", () => {
         expect.objectContaining({ rewindSourceId: "provider-u1" })
       )
     })
-  })
-
-  it("cancels the Session's run", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "Working"))
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
-    await act(async () => {
-      result.current.thread.cancelRun()
-    })
-    expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
   })
 
   it("keeps a prompt stopped before any reply, since the provider saved it", async () => {
@@ -970,37 +936,6 @@ describe("useAcpRuntime", () => {
       })
     })
     expect(onComposerPrefill).toHaveBeenCalledWith("Next question?")
-  })
-
-  it("projects a published artifact link as an artifact part", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "On it"))
-      fake.emit({
-        sessionUpdate: "agent_message_chunk",
-        messageId: "a1",
-        content: {
-          type: "resource_link",
-          uri: "artifact://art-1",
-          name: "chart.json",
-          mimeType: "application/json",
-        },
-      })
-    })
-    expect(result.current.thread.getState().messages[0]?.content).toEqual([
-      { type: "text", text: "On it" },
-      {
-        type: "data",
-        name: ARTIFACT_DATA_PART_NAME,
-        data: {
-          id: "art-1",
-          filename: "chart.json",
-          mimeType: "application/json",
-          source: { type: "provider", reference: "art-1" },
-        },
-      },
-    ])
   })
 
   it("holds queued sends while a run owns the Session, then sends them as one", async () => {

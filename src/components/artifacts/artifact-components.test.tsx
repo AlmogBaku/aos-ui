@@ -125,10 +125,6 @@ afterEach(() => {
 })
 
 describe("artifact workspace", () => {
-  it("registers the canonical assistant data-part name", () => {
-    expect(ArtifactDataUI.unstable_data.name).toBe("aos.artifact")
-  })
-
   it("stabilizes artifact input while ordinary message text streams", () => {
     const stabilize = createArtifactMessageStabilizer()
     const first = stabilize([

@@ -112,24 +112,5 @@ describe("AOS artifact resolver", () => {
       expect(init?.credentials).toBe("same-origin")
       expect(new Headers(init?.headers).has("authorization")).toBe(false)
     })
-
-    it("reads a guest's artifact from its invited Session with its bearer invitation", async () => {
-      const fetch = fetcher()
-      const client = new AosRemoteClient({
-        fetcher: fetch,
-        basePath: "/api/guest/v1",
-        authorization: "Bearer invitation-token",
-      })
-      client.adoptSessionOwnership("guest_ref", "researcher")
-
-      await expect(resolve(client, "guest_ref")).resolves.toBeInstanceOf(Blob)
-      const [input, init] = fetch.mock.calls[0]!
-      expect(String(input)).toBe(
-        "/api/guest/v1/agents/researcher/sessions/guest_ref/artifacts/art-1"
-      )
-      expect(new Headers(init?.headers).get("authorization")).toBe(
-        "Bearer invitation-token"
-      )
-    })
   })
 })

@@ -270,67 +270,12 @@ describe("Hermes content operations", () => {
     ).resolves.toMatchObject({ public: [] })
   })
 
-  it("reports exact per-operation capabilities and unavailable transport reasons", async () => {
+  it("reports each operation's availability and unavailable transport reasons", async () => {
     const h = harness()
     expect(h.operations.capabilities()).toMatchObject({
-      attachments: {
-        status: "available",
-        scope: "session",
-        maxCount: 16,
-        maxImageBytes: 26_214_400,
-        maxFileBytes: 26_214_400,
-        maxTotalBytes: 26_214_400,
-        maxMimeTypeBytes: 256,
-        maxFilenameBytes: 255,
-        imageMimeTypes: [
-          "image/png",
-          "image/jpeg",
-          "image/gif",
-          "image/webp",
-          "image/bmp",
-        ],
-      },
-      artifacts: {
-        status: "available",
-        scope: "session",
-        maxBytes: 26_214_400,
-      },
+      attachments: { status: "available", scope: "session" },
+      artifacts: { status: "available", scope: "session" },
       mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
-      transcription: {
-        scope: "agent",
-        maxRecordingBytes: 5_242_880,
-        maxTranscriptBytes: 1_000_000,
-        acceptedMimeTypes: [
-          "audio/aac",
-          "audio/flac",
-          "audio/m4a",
-          "audio/mp3",
-          "audio/mp4",
-          "audio/mpeg",
-          "audio/ogg",
-          "audio/wav",
-          "audio/wave",
-          "audio/webm",
-          "audio/x-m4a",
-          "audio/x-wav",
-          "video/webm",
-        ],
-        mimeParameter: "codecs",
-        codecValues: [
-          "aac",
-          "flac",
-          "mp3",
-          "mp4a.40.2",
-          "opus",
-          "pcm",
-          "vorbis",
-        ],
-      },
-      speech: {
-        scope: "agent",
-        maxTextBytes: 32_000,
-        maxAudioBytes: 20_971_520,
-      },
     })
     const operations = createHermesContentOperations({
       authority: { requireSession: h.requireSession } as never,

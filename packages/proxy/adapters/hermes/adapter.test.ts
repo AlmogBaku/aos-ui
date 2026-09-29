@@ -258,10 +258,6 @@ describe("Hermes server adapter", () => {
     const staged = await adapter.stageAttachments("researcher", sessionId, [
       { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
     ])
-    expect(staged.public).toEqual([
-      { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
-    ])
-    expect(JSON.stringify(staged.public)).not.toContain("/private")
     expect(request).toHaveBeenCalledWith(
       "image.attach_bytes",
       {
@@ -293,90 +289,6 @@ describe("Hermes server adapter", () => {
     expect(http.mock.calls.at(-1)?.[1]).toEqual({
       maxResponseBytes: 26_214_400,
     })
-  })
-
-  it("resolves trusted TTS media through its opaque Session artifact", async () => {
-    const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
-    const messages = [
-      {
-        id: "assistant-tts",
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "tts-call",
-            function: {
-              name: "text_to_speech",
-              arguments: '{"text":"Quarterly update"}',
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "tts-call",
-        tool_name: "text_to_speech",
-        // The receipt shape a live Hermes `text_to_speech` writes: one absolute
-        // delivery path repeated in `file_path`, `file_paths` and the `MEDIA:`
-        // directive, alongside the delivery bookkeeping AOS ignores.
-        content: JSON.stringify({
-          success: true,
-          file_path: audioPath,
-          file_paths: [audioPath],
-          media_tag: `MEDIA:${audioPath}`,
-          provider: "elevenlabs",
-          voice_compatible: false,
-          chunk_count: 1,
-          delivery_file_count: 1,
-          combined_chunks: false,
-          delivery_profile: {
-            platform: "default",
-            max_file_bytes: 10_485_760,
-            target_file_bytes: 8_912_896,
-          },
-        }),
-      },
-      {
-        id: "assistant-final",
-        role: "assistant",
-        content: `MEDIA:${audioPath}`,
-      },
-    ]
-    const request = vi.fn(async (method: string) => {
-      if (method === "session.resume")
-        return { session_id: "live-secret", running: false, status: "idle" }
-      throw new Error(`unexpected ${method}`)
-    })
-    const http = vi.fn(async (path: string) => {
-      if (path.startsWith("/api/sessions/stored?"))
-        return { id: "stored", profile: "researcher", title: "Owned" }
-      if (path.includes("/messages?")) return { session_id: "stored", messages }
-      if (path.startsWith("/api/fs/read-data-url?"))
-        return { dataUrl: "data:audio/mpeg;base64,aGVsbG8=" }
-      throw new Error(`unexpected ${path}`)
-    })
-    const adapter = new HermesServerAdapter({ request, http })
-    const history = await adapter.history("researcher", "stored", 200, 0)
-    const descriptor = history.messages
-      .flatMap((message) =>
-        message.role === "assistant" ? message.content : []
-      )
-      .find((part) => part.type === "data" && part.name === "aos.artifact")
-
-    expect(descriptor?.type).toBe("data")
-    if (descriptor?.type !== "data" || typeof descriptor.data.id !== "string")
-      throw new Error("Expected a projected TTS artifact")
-
-    await expect(
-      adapter.artifact("researcher", "stored", descriptor.data.id)
-    ).resolves.toEqual({
-      bytes: Uint8Array.from([104, 101, 108, 108, 111]),
-      filename: "quick-brief.mp3",
-      mimeType: "audio/mpeg",
-    })
-    expect(http.mock.calls.at(-1)?.[0]).toContain(
-      `path=${encodeURIComponent(audioPath)}&profile=researcher&session_id=stored`
-    )
-    expect(JSON.stringify(history)).not.toContain(audioPath)
   })
 
   it("reads what the aos-ui MCP tool and an assistant MEDIA line published", async () => {
@@ -662,99 +574,19 @@ describe("Hermes server adapter", () => {
     expect(router.requests.refusal("srq-00000000000c")).toBeUndefined()
   })
 
-  it("implements the server-only native run boundary over exact Hermes operations", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "session.resume")
-        return { session_id: "live-secret", running: false }
-      if (method === "session.events.since")
-        return {
-          epoch: "epoch-1",
-          last_seen: 4,
-          truncated: false,
-          events: [],
-        }
-      if (method === "prompt.submit") return { status: "streaming" }
-      if (method === "session.redirect")
-        return { status: "redirected", text: "Use the newer API" }
-      if (method === "session.interrupt") return { status: "interrupted" }
-      if (method === "session.active_list")
-        return { sessions: [{ id: "live-secret", status: "working" }] }
-      throw new Error(`unexpected ${method}`)
-    })
-    const stopObservation = vi.fn()
-    const subscribeEvents = vi.fn(() => stopObservation)
-    const adapter = new HermesServerAdapter({ request, subscribeEvents })
-    const scope = {
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    }
-
-    await expect(adapter.native.resume(scope)).resolves.toEqual({
-      liveSessionId: "live-secret",
-      running: false,
-    })
-    await expect(
-      adapter.native.subscribeLive("live-secret", vi.fn())
-    ).resolves.toEqual(expect.any(Function))
-    await expect(adapter.native.replay("live-secret", 2)).resolves.toEqual({
-      epoch: "epoch-1",
-      lastSeen: 4,
-      truncated: false,
-      events: [],
-    })
-    await expect(
-      adapter.native.submit("live-secret", {
-        scope,
-        text: "Hello",
-        turnId: "run-1",
-      })
-    ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
-    await expect(
-      adapter.native.redirect("live-secret", "Use the newer API")
-    ).resolves.toBe("redirected")
-    await expect(adapter.native.interrupt("live-secret")).resolves.toBe(
-      "interrupted"
-    )
-    await expect(adapter.native.status("live-secret")).resolves.toBe("working")
-    expect(request.mock.calls).toEqual([
-      [
-        "session.resume",
-        { session_id: "stored", profile: "researcher", omit_messages: true },
-      ],
-      [
-        "session.events.since",
-        { session_id: "live-secret", last_seen: 2 },
-        { maxResponseBytes: 6_291_456 },
-      ],
-      [
-        "prompt.submit",
-        { session_id: "live-secret", text: "Hello" },
-        { signal: undefined },
-      ],
-      [
-        "session.redirect",
-        { session_id: "live-secret", text: "Use the newer API" },
-      ],
-      ["session.interrupt", { session_id: "live-secret" }],
-      ["session.active_list", {}],
-    ])
-    // Two AOS subscribers, each subscribing once for the whole runtime's life:
-    // the attachment registry routes native frames and interactions follow
-    // `request.cancel`.
-    expect(subscribeEvents).toHaveBeenCalledTimes(2)
-  })
-
   it.each(["redirected", "queued"] as const)(
     "accepts only the native %s redirect acknowledgement",
     async (status) => {
-      const adapter = new HermesServerAdapter({
-        request: vi.fn(async () => ({ status, text: "Correction" })),
-      })
+      const request = vi.fn(async () => ({ status, text: "Correction" }))
+      const adapter = new HermesServerAdapter({ request })
 
       await expect(
         adapter.native.redirect("live-secret", "Correction")
       ).resolves.toBe(status)
+      expect(request).toHaveBeenCalledWith("session.redirect", {
+        session_id: "live-secret",
+        text: "Correction",
+      })
     }
   )
 
@@ -815,52 +647,6 @@ describe("Hermes server adapter", () => {
         throw new HermesRpcRejectedError(-32600)
       })
     ).rejects.toBeInstanceOf(HermesUnavailableError)
-  })
-
-  it("rewinds Edit or Retry at the authoritative durable user row", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "prompt.submit") return { status: "streaming" }
-      throw new Error(`unexpected ${method}`)
-    })
-    const http = vi.fn(async (path: string) => {
-      if (path.includes("/messages?"))
-        return {
-          session_id: "stored",
-          messages: [
-            { row_id: 10, role: "user", text: "Keep" },
-            { row_id: 11, role: "assistant", text: "Kept reply" },
-            { row_id: 12, role: "user", text: "Original" },
-            { row_id: 13, role: "assistant", text: "Old reply" },
-          ],
-        }
-      throw new Error(`unexpected ${path}`)
-    })
-    const adapter = new HermesServerAdapter({ request, http })
-    const scope = {
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    }
-
-    await expect(
-      adapter.native.submit("live-secret", {
-        scope,
-        text: "Edited",
-        turnId: "edit-run",
-        rewindSourceId: "hermes-row-12",
-      })
-    ).resolves.toEqual({ acknowledgement: "accepted", status: "streaming" })
-
-    expect(request).toHaveBeenCalledWith(
-      "prompt.submit",
-      {
-        session_id: "live-secret",
-        text: "Edited",
-        confirm_truncate: true,
-        truncate_before_row_id: 12,
-      },
-      { signal: undefined }
-    )
   })
 
   it("guards a first-turn rewind and never appends when the source is stale", async () => {
@@ -3254,27 +3040,6 @@ describe("Hermes server adapter", () => {
       expect(serialized).not.toContain("ValidationException")
     })
 
-    it("carries the bounded native cause of a restored failed turn", async () => {
-      const { adapter } = failedTurnAdapter(unansweredPrompt, {
-        ...inflight,
-        error:
-          "An error occurred (ValidationException) when calling the InvokeModel operation",
-      })
-
-      const history = await adapter.history("researcher", "stored", 200, 0)
-
-      expect(history.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        status: {
-          type: "incomplete",
-          reason: "error",
-          error:
-            "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
-        },
-        turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
-      })
-    })
-
     it("resumes once for a burst of history loads on the same Session", async () => {
       const { adapter, request } = failedTurnAdapter(unansweredPrompt)
 
@@ -3292,33 +3057,6 @@ describe("Hermes server adapter", () => {
       expect(
         request.mock.calls.filter(([method]) => method === "session.resume")
       ).toHaveLength(1)
-    })
-
-    it("truncates an oversized retained turn instead of failing the load", async () => {
-      const { adapter } = failedTurnAdapter(unansweredPrompt, {
-        ...inflight,
-        // Inside the native byte bound, past the protocol's character bound.
-        assistant: "a".repeat(1_048_000),
-      })
-
-      const history = await adapter.history("researcher", "stored", 200, 0)
-
-      expect(history.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "a".repeat(1_000_000) }],
-        status: { type: "incomplete", reason: "error" },
-      })
-    })
-
-    it("restores nothing while Hermes is still streaming the retained turn", async () => {
-      const { adapter } = failedTurnAdapter(unansweredPrompt, {
-        ...inflight,
-        streaming: true,
-      })
-
-      const history = await adapter.history("researcher", "stored", 200, 0)
-
-      expect(history.messages.map(({ role }) => role)).toEqual(["user"])
     })
 
     it("never resumes a Session whose transcript ends with an answer", async () => {

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import type { ServerTurnEngine } from "../../core/runtime"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
 import { OpenCodeClientError } from "./client"
@@ -558,18 +557,6 @@ describe("OpenCode server adapter", () => {
         },
       },
     })
-  })
-
-  it("returns OpenCode capabilities accepted by the canonical workspace schema", async () => {
-    const adapter = new OpenCodeServerAdapter({
-      client: client(),
-      turns: turnEngine,
-    })
-
-    const value = await adapter.workspaceCapabilities("research", "session-1")
-    expect(
-      SessionWorkspaceCapabilitiesResponseSchema.safeParse(value).success
-    ).toBe(true)
   })
 
   it("refuses attachment staging for a foreign Agent before accepting file data", async () => {

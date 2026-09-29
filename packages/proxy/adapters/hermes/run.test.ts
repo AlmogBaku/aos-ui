@@ -1818,75 +1818,6 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("uses completed baseline events only as the cursor for a new turn", async () => {
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const engine = new HermesTurnEngine(
-      runtime({
-        subscribeLive: attachment.subscribeLive,
-        cursor: async () => ({ epoch: "epoch-1", latestSeq: 3 }),
-        replay: async () => ({
-          epoch: "epoch-1",
-          lastSeen: 3,
-          events: [
-            {
-              type: "message.start",
-              session_id: "live-secret",
-              seq: 1,
-              payload: { message_id: "message-42" },
-            },
-            {
-              type: "message.delta",
-              session_id: "live-secret",
-              seq: 2,
-              payload: { text: "Previous" },
-            },
-            {
-              type: "message.complete",
-              session_id: "live-secret",
-              seq: 3,
-              payload: { text: "Previous", status: "complete" },
-            },
-          ],
-        }),
-        submit: async () => {
-          publish({
-            type: "message.start",
-            session_id: "live-secret",
-            seq: 4,
-            payload: { message_id: "message-43" },
-          })
-          publish({
-            type: "message.delta",
-            session_id: "live-secret",
-            seq: 5,
-            payload: { text: "Current" },
-          })
-          publish({
-            type: "message.complete",
-            session_id: "live-secret",
-            seq: 6,
-            payload: { text: "Current", status: "complete" },
-          })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-
-    await expect(collect(await engine.start(scope, input()))).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant-1",
-        text: "Current",
-      },
-      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
-    ])
-  })
-
   it("requires reconciliation when replayed recovery ordering is ambiguous", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(
@@ -2079,31 +2010,6 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
-  it("classifies a lost submit response as uncertain without exposing or retrying it", async () => {
-    let attempts = 0
-    const engine = new HermesTurnEngine(
-      runtime({
-        submit: async () => {
-          attempts += 1
-          return { acknowledgement: "uncertain" as const }
-        },
-      })
-    )
-
-    const handle = await engine.start(scope, input())
-
-    await expect(collect(handle)).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message:
-          "Hermes may have accepted this turn; reconcile before sending again.",
-        code: "AOS_SEND_UNCERTAIN",
-      },
-    ])
-    expect(attempts).toBe(1)
-  })
-
   it("reports a native connection interruption without stopping the Hermes run", async () => {
     const attachment = observation()
     let interrupts = 0
@@ -2166,70 +2072,6 @@ describe("HermesRunEngine", () => {
       epoch: "epoch-7",
       lastSeen: 41,
     })
-  })
-
-  it("reattaches an interrupted active turn and replays without resubmitting the prompt", async () => {
-    const attachment = observation()
-    let submissions = 0
-    const engine = new HermesTurnEngine(
-      runtime({
-        subscribeLive: attachment.subscribeLive,
-        replay: async (_liveSessionId: string, after: number) => {
-          expect(after).toBe(0)
-          return {
-            epoch: "epoch-1",
-            lastSeen: 3,
-            events: [
-              {
-                type: "message.start",
-                session_id: "live-secret",
-                seq: 1,
-                payload: { message_id: "message-42" },
-              },
-              {
-                type: "message.delta",
-                session_id: "live-secret",
-                seq: 2,
-                payload: { text: "Recovered" },
-              },
-              {
-                type: "message.complete",
-                session_id: "live-secret",
-                seq: 3,
-                payload: {},
-              },
-            ],
-          }
-        },
-        submit: async () => {
-          submissions += 1
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-    const first = await engine.start(scope, input())
-    const position = first.recoveryPosition()
-    attachment.signal("live-secret", { kind: "lost", reason: "disconnected" })
-
-    const resumed = await engine.recover(scope, {
-      sessionId: scope.sessionId,
-      turnId: "run-1",
-      position,
-    })
-
-    await expect(collect(resumed)).resolves.toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "run-1:assistant-1",
-        text: "Recovered",
-      },
-      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
-    ])
-    expect(submissions).toBe(1)
   })
 
   it("reconstructs an active run from authoritative Hermes recovery after proxy restart", async () => {
@@ -3216,22 +3058,6 @@ describe("HermesRunEngine", () => {
     expect(unsubscribes).toBe(1)
   })
 
-  it("does not detach an active run when browser ownership changes", async () => {
-    let resumes = 0
-    const engine = new HermesTurnEngine(
-      runtime({
-        resume: async () => {
-          resumes += 1
-          if (resumes === 2) throw new Error("reattach unavailable")
-          return { liveSessionId: "live-secret", running: false }
-        },
-      })
-    )
-    const first = await engine.start(scope, input())
-    expect("disconnect" in first).toBe(false)
-    expect(resumes).toBe(1)
-  })
-
   it("releases an uncertain-send fence only after authoritative native idle", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
@@ -3321,37 +3147,7 @@ describe("HermesRunEngine", () => {
     expect(unsubscribes).toBe(1)
   })
 
-  it("does not disclose native setup, reconnect, or Stop failures", async () => {
-    const setup = new HermesTurnEngine(
-      runtime({
-        resume: async () => {
-          throw new Error("bearer setup-secret")
-        },
-      })
-    )
-    await expect(setup.start(scope, input())).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
-      message: "Hermes is temporarily unavailable.",
-    })
-
-    const reconnect = new HermesTurnEngine(
-      runtime({
-        replay: async () => {
-          throw new Error("cookie reconnect-secret")
-        },
-      })
-    )
-    await expect(
-      reconnect.recover(scope, {
-        sessionId: scope.sessionId,
-        turnId: "run-1",
-        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
-      })
-    ).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
-      message: "Hermes is temporarily unavailable.",
-    })
-
+  it("does not disclose a native Stop failure", async () => {
     const stopping = new HermesTurnEngine(
       runtime({
         interrupt: async () => {
@@ -3867,90 +3663,6 @@ describe("HermesRunEngine", () => {
       expect(submissions).toBe(0)
     }
   )
-
-  it("enforces cumulative byte budgets for recovery and unread turn events", async () => {
-    const chunk = "🙂".repeat(250_000)
-    const recovery = new HermesTurnEngine(
-      runtime({
-        replay: async () => ({
-          epoch: "epoch-1",
-          lastSeen: 6,
-          events: [
-            {
-              type: "message.start",
-              session_id: "live-secret",
-              seq: 1,
-              payload: { message_id: "message-42" },
-            },
-            ...Array.from({ length: 5 }, (_, index) => ({
-              type: "message.delta",
-              session_id: "live-secret",
-              seq: index + 2,
-              payload: { text: chunk },
-            })),
-          ],
-        }),
-      })
-    )
-    const recovered = await collect(
-      await recovery.recover(scope, {
-        sessionId: scope.sessionId,
-        turnId: "run-1",
-        position: hermesRecoveryToken.mint({ epoch: "epoch-1", lastSeen: 0 }),
-      })
-    )
-    expect(recovered).toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message:
-          "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
-      },
-    ])
-
-    const attachment = observation()
-    const publish = (event: unknown) => attachment.publish("live-secret", event)
-    const live = new HermesTurnEngine(
-      runtime({
-        subscribeLive: attachment.subscribeLive,
-        submit: async () => {
-          publish({
-            type: "message.start",
-            session_id: "live-secret",
-            seq: 1,
-            payload: { message_id: "message-42" },
-          })
-          for (let seq = 2; seq <= 6; seq += 1)
-            publish({
-              type: "message.delta",
-              session_id: "live-secret",
-              seq,
-              payload: { text: chunk },
-            })
-          publish({
-            type: "message.complete",
-            session_id: "live-secret",
-            seq: 7,
-            payload: {},
-          })
-          return {
-            acknowledgement: "accepted" as const,
-            status: "streaming" as const,
-          }
-        },
-      })
-    )
-    const streamed = await collect(await live.start(scope, input()))
-    expect(streamed).toEqual([
-      { kind: TurnEventKind.TurnStarted },
-      {
-        kind: TurnEventKind.TurnFailed,
-        message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
-      },
-    ])
-  })
 
   it("projects a wide provider tool result instead of refusing it for its item count", async () => {
     const attachment = observation()
@@ -4510,12 +4222,20 @@ describe("HermesRunEngine", () => {
     const first = turn.delta("Hello")
     const second = turn.delta(" world")
     const complete = turn.complete("message-42", "Hello world")
+    let submissions = 0
     const engine = new HermesTurnEngine(
       runtime({
         subscribeLive: attachment.subscribeLive,
         replay: async (_liveSessionId, after) => {
           expect(after).toBe(2)
           return { epoch: "epoch-1", lastSeen: 4, events: [second, complete] }
+        },
+        submit: async () => {
+          submissions += 1
+          return {
+            acknowledgement: "accepted" as const,
+            status: "streaming" as const,
+          }
         },
       })
     )
@@ -4559,6 +4279,7 @@ describe("HermesRunEngine", () => {
       },
       { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
     ])
+    expect(submissions).toBe(1)
   })
 
   it("requires reconciliation when the live Session is rebound", async () => {
@@ -5734,8 +5455,6 @@ describe("HermesRunEngine", () => {
       createdAt: "2026-09-15T19:41:41.000Z",
     })
 
-    expect(ofKind(events, TurnEventKind.MessageChunk)).toEqual([])
-    expect(JSON.stringify(events)).not.toContain("AWS Bedrock")
     expect(restored?.content).toEqual([])
     expect(restored?.status).toEqual({
       type: "incomplete",

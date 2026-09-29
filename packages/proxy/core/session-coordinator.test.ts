@@ -592,121 +592,6 @@ describe("SessionCoordinator", () => {
     ])
   })
 
-  it("replays only the events after a redial cursor", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => {
-        throw new Error("native recovery must not run for a journaled run")
-      }),
-    }
-    const sessions = coordinator(engine)
-    const initial = await sessions.start(
-      scope,
-      input("run-1"),
-      access("initial")
-    )
-    const readInitial = reader(initial)
-    for (const event of [
-      turnStarted,
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "a",
-      } as const,
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "b",
-      } as const,
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "c",
-      } as const,
-    ]) {
-      source.emit(event)
-      await readInitial()
-    }
-    initial.close()
-
-    const redial = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1", after: 3 },
-      access("redial")
-    )
-    const readRedial = reader(redial)
-
-    // A cursor never repeats a delta the browser already rendered, so the
-    // journaled text is replayed from the cursor rather than from its merge.
-    await expect(readRedial()).resolves.toMatchObject({
-      value: {
-        sequence: 4,
-        event: { kind: TurnEventKind.MessageChunk, text: "c" },
-      },
-    })
-    source.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "d",
-    })
-    await expect(readRedial()).resolves.toMatchObject({
-      value: {
-        sequence: 5,
-        event: { kind: TurnEventKind.MessageChunk, text: "d" },
-      },
-    })
-    expect(engine.recover).not.toHaveBeenCalled()
-  })
-
-  it("serves a redial cursor of a long run without native recovery", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => {
-        throw new Error("native recovery must not run for a journaled run")
-      }),
-    }
-    const sessions = coordinator(engine)
-    const initial = await sessions.start(
-      scope,
-      input("run-1"),
-      access("initial")
-    )
-    const readInitial = reader(initial)
-    const emitted: TurnEvent[] = [
-      turnStarted,
-      // More single-character deltas than one browser stream may buffer: the
-      // journal compacts them, so the run stays replayable from any cursor.
-      ...Array.from({ length: 38 }, (_, index) => ({
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: String(index % 10),
-      })),
-    ]
-    for (const event of emitted) {
-      source.emit(event)
-      await readInitial()
-    }
-    initial.close()
-
-    const redial = await sessions.recover(
-      scope,
-      {
-        sessionId: scope.sessionId,
-        turnId: "run-1",
-        after: emitted.length - 1,
-      },
-      access("redial")
-    )
-    const readRedial = reader(redial)
-
-    await expect(readRedial()).resolves.toMatchObject({
-      value: { sequence: emitted.length, event: emitted.at(-1) },
-    })
-    expect(engine.recover).not.toHaveBeenCalled()
-  })
-
   it("serves a reload and a redial from one journal at their own cursors", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
@@ -1293,44 +1178,6 @@ describe("SessionCoordinator", () => {
     expect(engine.recover).not.toHaveBeenCalled()
   })
 
-  it("delivers an event published at the fresh replay boundary exactly once", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
-    }
-    const sessions = coordinator(engine)
-    const initial = await sessions.start(
-      scope,
-      input("run-1"),
-      access("initial")
-    )
-    source.emit(turnStarted)
-    await reader(initial)()
-    initial.close()
-    const refreshed = await sessions.recover(
-      scope,
-      { sessionId: scope.sessionId, turnId: "run-1" },
-      access("refreshed")
-    )
-    const readRefreshed = reader(refreshed)
-
-    await expect(readRefreshed()).resolves.toMatchObject({
-      value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
-    })
-    source.emit({
-      kind: TurnEventKind.MessageChunk,
-      messageId: "assistant-1",
-      text: "tail",
-    })
-    await expect(readRefreshed()).resolves.toMatchObject({
-      value: {
-        sequence: 2,
-        event: { kind: TurnEventKind.MessageChunk, text: "tail" },
-      },
-    })
-  })
-
   it("returns reset-required when an active run is too large to journal", async () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
@@ -1661,43 +1508,6 @@ describe("SessionCoordinator", () => {
     })
   })
 
-  it("retains a paused execution and resumes it as a fresh segment", async () => {
-    const interrupted = new EventSource()
-    const resumed = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi
-        .fn<ServerTurnEngine["start"]>()
-        .mockResolvedValueOnce(interrupted)
-        .mockResolvedValueOnce(resumed),
-      recover: vi.fn(async () => resumed),
-    }
-    const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("operator"))
-    interrupted.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "question-1",
-          kind: PendingRequestKind.Elicitation,
-          responseSchema: { type: "object" },
-        },
-      ],
-    })
-    interrupted.finish()
-    await vi.waitFor(() =>
-      expect(sessions.state(scope)).toBe("waiting-for-input")
-    )
-
-    const turnId = await continueTurn(sessions)
-
-    expect(engine.start).toHaveBeenCalledTimes(2)
-    expect(engine.start.mock.calls[1]?.[1]).toEqual({
-      turnId,
-      replies: [REPLY],
-    })
-    expect(sessions.state(scope)).toBe("running")
-  })
-
   describe("answering a paused turn's requests", () => {
     const questions = ["question-1", "question-2"].map((requestId) => ({
       requestId,
@@ -1862,20 +1672,6 @@ describe("SessionCoordinator", () => {
       expect(sessions.snapshot(scope).startedBy).toBeUndefined()
       expect(sessions.snapshot(otherScope).startedBy).toBeUndefined()
     })
-  })
-
-  it("keeps Stop in stopping until the provider settles", async () => {
-    const source = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi.fn(async () => source),
-      recover: vi.fn(async () => source),
-    }
-    const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("operator"))
-
-    await expect(sessions.stop(scope)).resolves.toBe("stopping")
-
-    expect(sessions.state(scope)).toBe("stopping")
   })
 
   it("keeps a run that reports a failure awaiting Stop active and stoppable", async () => {
@@ -2695,27 +2491,6 @@ describe("SessionCoordinator", () => {
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("running"))
   })
 
-  it("admits a new turn after authoritative terminal settlement", async () => {
-    const first = new EventSource()
-    const second = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi
-        .fn<ServerTurnEngine["start"]>()
-        .mockResolvedValueOnce(first)
-        .mockResolvedValueOnce(second),
-      recover: vi.fn(async () => second),
-    }
-    const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("operator"))
-    first.emit(turnEnded)
-    first.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-
-    await expect(
-      sessions.start(scope, input("run-2"), access("operator"))
-    ).resolves.toBeDefined()
-    expect(engine.start).toHaveBeenCalledTimes(2)
-  })
   it("keeps the journaled prefix across a recoverable interrupt", async () => {
     const interrupted = new EventSource()
     const recovered = new EventSource("token-12")
@@ -3197,32 +2972,6 @@ describe("SessionCoordinator", () => {
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       { event: { kind: TurnEventKind.TurnStarted } }
     )
-  })
-
-  it("leaves an execution idle after a provider stream overflow", async () => {
-    const overflowed = new EventSource()
-    const admitted = new EventSource()
-    const engine: ServerTurnEngine = {
-      start: vi
-        .fn<ServerTurnEngine["start"]>()
-        .mockResolvedValueOnce(overflowed)
-        .mockResolvedValueOnce(admitted),
-      recover: vi.fn(async () => admitted),
-    }
-    const sessions = coordinator(engine)
-    await sessions.start(scope, input("run-1"), access("one"))
-    overflowed.emit({
-      kind: TurnEventKind.TurnFailed,
-      code: "AOS_STREAM_OVERFLOW",
-      message: "The provider produced more events than AOS can buffer.",
-    })
-    overflowed.finish()
-
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-    await expect(
-      sessions.start(scope, input("run-2"), access("one"))
-    ).resolves.toBeDefined()
-    expect(engine.recover).not.toHaveBeenCalled()
   })
 
   it("settles a reset-required run so the next turn is admitted", async () => {

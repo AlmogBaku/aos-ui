@@ -421,6 +421,9 @@ describe("reversible local Session tabs", () => {
         "true"
       )
     )
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveFocus()
+    )
     expect(
       await bundle!.workspace.getSessionMetadata(["thread-aster-market"])
     ).toEqual(before)

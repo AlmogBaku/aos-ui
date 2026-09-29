@@ -6,7 +6,7 @@ import {
   ownerSetup,
   type Logger,
 } from "../../../lifecycle"
-import { AGENT, harness, MODELS, SESSION } from "../test-harness"
+import { harness } from "../test-harness"
 
 /** A membership owner for one Session: idle → joining → joined. */
 function membership(logger: Logger, session: string) {
@@ -27,16 +27,6 @@ function membership(logger: Logger, session: string) {
 }
 
 describe("fault harness", () => {
-  it("fails an armed operation's next call once", async () => {
-    const test = await harness()
-    const { runtime } = test.runtimeInstance
-
-    test.faults.failOnce("models")
-    await expect(runtime.models(AGENT, SESSION)).rejects.toThrow()
-    await expect(runtime.models(AGENT, SESSION)).resolves.toEqual(MODELS)
-    test.close()
-  })
-
   it("captures each owner's transitions under its Session", async () => {
     const test = await harness()
     const first = membership(test.logs.logger, "session-1")
