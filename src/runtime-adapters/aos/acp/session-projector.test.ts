@@ -786,6 +786,29 @@ describe("applyUpdate execution", () => {
     })
   })
 
+  it("keeps a turn running when a fresh view resumes it mid-turn", () => {
+    // A resume sends the history, then what the running turn streamed, then
+    // the run's state dated where it began, so the turn exists before the
+    // view knows it runs.
+    const opened = fold([
+      userChunk("u1", "Long task"),
+      agentChunk("a1", "Step one"),
+      liveStart,
+    ])
+    expect(toThreadMessages(opened)[1]).toMatchObject({
+      id: "a1",
+      status: { type: "running" },
+      metadata: { timing: { streamStartTime: Date.parse(STARTED_AT) } },
+    })
+
+    // A stored turn is not the run's, even when the run starts right after it.
+    const stored = { ...TURN_META, turnId: "history" }
+    const history = fold([[agentChunk("a1", "Done")[0], stored], liveStart])
+    expect(toThreadMessages(history)[0]?.status).not.toEqual({
+      type: "running",
+    })
+  })
+
   it("reports a blocked run as waiting for input", () => {
     const blocked = fold([stateUpdate({ state: "requires_action" })], answering)
     expect(blocked.execution).toEqual({
