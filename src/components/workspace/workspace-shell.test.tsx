@@ -686,10 +686,13 @@ describe("WorkspaceShell", () => {
       )
     })
 
-    it("offers the same row menu before the interview owns a Session", async () => {
+    it("offers the same row menu before the interview owns a Session, and discards it without asking", async () => {
+      const user = userEvent.setup()
       const onDiscardDraft = vi.fn()
       renderDraftShell({
         onDiscardDraft,
+        agents: [...agents, { id: "draft-pending", name: "New Agent" }],
+        selectedAgentId: "draft-pending",
         activeThreadId: null,
         openSessions: [],
         navigationCatalog: new Map(),
@@ -699,9 +702,12 @@ describe("WorkspaceShell", () => {
         clientX: 16,
         clientY: 24,
       })
-      expect(
+      await user.click(
         await screen.findByRole("menuitem", { name: en.actions.discardDraft })
-      ).toBeVisible()
+      )
+      // Nothing but a local thread is lost, so there is nothing to confirm.
+      expect(screen.queryByRole("alertdialog")).toBeNull()
+      expect(onDiscardDraft).toHaveBeenCalledExactlyOnceWith("draft-pending")
     })
 
     it("localizes the draft row and its menu in Hebrew", async () => {

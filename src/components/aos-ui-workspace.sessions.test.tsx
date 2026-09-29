@@ -336,7 +336,23 @@ describe("reversible local Session tabs", () => {
     )
   })
 
-  // Undo's focus return to the selected tab is the shell's own test.
+  // Full mount: navigation focuses the restored tab by the shell's tab id once
+  // it renders, so only the two together prove focus lands on it.
+  it("returns focus to the restored tab after Undo", async () => {
+    const user = userEvent.setup()
+    renderWorkspace(useMarketWorkspace)
+    await user.click(
+      await screen.findByRole("button", { name: "Close session: Market brief" })
+    )
+    expect(screen.queryByRole("tab", { name: "Market brief" })).toBeNull()
+
+    await user.click(await screen.findByRole("button", { name: "Undo" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveFocus()
+    )
+  })
+
   it("restores the exact closed tab and selection without provider lifecycle mutations, and a background tab without selecting it", async () => {
     const view = renderNavigation(useMarketWorkspace)
     await waitFor(() =>
