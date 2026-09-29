@@ -4,7 +4,11 @@ import { ContextMenu } from "@base-ui/react/context-menu"
 import { EyeOff, Trash2 } from "lucide-react"
 import { useRef, type ReactElement } from "react"
 
-import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
+import {
+  MenuPopup,
+  useMenuPopupMount,
+  type MenuPopupEntry,
+} from "@/components/ui/menu-popup"
 import { getLocaleDirection, type Locale } from "@/lib/i18n/config"
 import type { Dictionary } from "@/lib/i18n/dictionary"
 import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
@@ -58,21 +62,24 @@ export function AgentRowContextMenu({
   ...menu
 }: AgentRowMenuProps & { children: ReactElement }) {
   const triggerRef = useRef<HTMLDivElement>(null)
+  const popup = useMenuPopupMount()
   const entry = agentMenuEntry(menu)
   if (!entry) return children
 
   return (
-    <ContextMenu.Root>
+    <ContextMenu.Root {...popup.rootProps}>
       <ContextMenu.Trigger ref={triggerRef} render={children} />
-      <MenuPopup
-        entries={
-          entry.destructive
-            ? { items: [], destructive: entry }
-            : { items: [entry] }
-        }
-        dir={getLocaleDirection(menu.locale)}
-        finalFocus={() => triggerRef.current}
-      />
+      {popup.mounted ? (
+        <MenuPopup
+          entries={
+            entry.destructive
+              ? { items: [], destructive: entry }
+              : { items: [entry] }
+          }
+          dir={getLocaleDirection(menu.locale)}
+          finalFocus={() => triggerRef.current}
+        />
+      ) : null}
     </ContextMenu.Root>
   )
 }

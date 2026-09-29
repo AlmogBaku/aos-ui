@@ -22,6 +22,7 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   MenuPopup,
+  useMenuPopupMount,
   type MenuPopupEntries,
   type MenuPopupEntry,
 } from "@/components/ui/menu-popup"
@@ -230,25 +231,28 @@ export function SessionRowContextMenu({
 }: SessionRowMenuProps & { children: ReactElement }) {
   const triggerRef = useRef<HTMLDivElement>(null)
   const { touchPress, onPointerDown } = useTouchPress()
+  const popup = useMenuPopupMount()
   const entries = sessionMenuEntries(menu)
   if (entries.items.length === 0 && !entries.destructive) return children
 
   return (
-    <ContextMenu.Root>
+    <ContextMenu.Root {...popup.rootProps}>
       <ContextMenu.Trigger
         ref={triggerRef}
         render={children}
         className={touchPress ? "select-none" : undefined}
         onPointerDown={onPointerDown}
       />
-      <MenuPopup
-        entries={menuPopupEntries(entries, menu.copy)}
-        dir={getLocaleDirection(menu.locale)}
-        finalFocus={() =>
-          triggerRef.current?.querySelector<HTMLElement>(ROW_CONTROL) ??
-          triggerRef.current
-        }
-      />
+      {popup.mounted ? (
+        <MenuPopup
+          entries={menuPopupEntries(entries, menu.copy)}
+          dir={getLocaleDirection(menu.locale)}
+          finalFocus={() =>
+            triggerRef.current?.querySelector<HTMLElement>(ROW_CONTROL) ??
+            triggerRef.current
+          }
+        />
+      ) : null}
     </ContextMenu.Root>
   )
 }
@@ -260,11 +264,12 @@ export function SessionRowMenuButton({
   ...menu
 }: SessionRowMenuProps &
   Pick<ComponentProps<typeof Button>, "className" | "size">) {
+  const popup = useMenuPopupMount()
   const entries = sessionMenuEntries(menu)
   if (entries.items.length === 0 && !entries.destructive) return null
 
   return (
-    <Menu.Root>
+    <Menu.Root {...popup.rootProps}>
       <Menu.Trigger
         render={<Button variant="ghost" size={size} className={className} />}
         aria-label={`${menu.copy.sessionActions}: ${menu.session.title}`}
@@ -272,10 +277,12 @@ export function SessionRowMenuButton({
       >
         <Ellipsis aria-hidden="true" />
       </Menu.Trigger>
-      <MenuPopup
-        entries={menuPopupEntries(entries, menu.copy)}
-        dir={getLocaleDirection(menu.locale)}
-      />
+      {popup.mounted ? (
+        <MenuPopup
+          entries={menuPopupEntries(entries, menu.copy)}
+          dir={getLocaleDirection(menu.locale)}
+        />
+      ) : null}
     </Menu.Root>
   )
 }

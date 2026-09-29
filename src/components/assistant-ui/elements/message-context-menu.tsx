@@ -14,7 +14,11 @@ import {
 import { useEffect, useRef, useState, type ReactElement } from "react"
 
 import { usePendingInteractionGate } from "@/components/runtime-interactions/pending-interaction-context"
-import { MenuPopup, type MenuPopupEntry } from "@/components/ui/menu-popup"
+import {
+  MenuPopup,
+  useMenuPopupMount,
+  type MenuPopupEntry,
+} from "@/components/ui/menu-popup"
 import type { LocaleDirection } from "@/lib/i18n/config"
 import { useTouchPress } from "@/lib/touch-press"
 
@@ -100,6 +104,13 @@ export function MessageContextMenu({
   const retry = useMessageRetry(messageRewind)
   const edit = useMessageEdit()
   const voice = useVoiceMessageAction()
+  const popup = useMenuPopupMount(() => {
+    const active = rootRef.current?.ownerDocument.activeElement
+    returnFocusTo.current =
+      active instanceof HTMLElement && rootRef.current?.contains(active)
+        ? active
+        : null
+  })
 
   useEffect(() => {
     const root = rootRef.current
@@ -183,14 +194,7 @@ export function MessageContextMenu({
       // Disabled rather than unmounted: remounting the message would replay its
       // entrance and collapse every tool disclosure the reader opened.
       disabled={selectable}
-      onOpenChange={(open) => {
-        if (!open) return
-        const active = rootRef.current?.ownerDocument.activeElement
-        returnFocusTo.current =
-          active instanceof HTMLElement && rootRef.current?.contains(active)
-            ? active
-            : null
-      }}
+      {...popup.rootProps}
     >
       <ContextMenu.Trigger
         ref={rootRef}
@@ -220,11 +224,13 @@ export function MessageContextMenu({
             event.preventBaseUIHandler()
         }}
       />
-      <MenuPopup
-        entries={{ items }}
-        dir={dir}
-        finalFocus={() => returnFocusTo.current ?? rootRef.current}
-      />
+      {popup.mounted ? (
+        <MenuPopup
+          entries={{ items }}
+          dir={dir}
+          finalFocus={() => returnFocusTo.current ?? rootRef.current}
+        />
+      ) : null}
     </ContextMenu.Root>
   )
 }
