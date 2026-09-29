@@ -634,16 +634,19 @@ function WorkspaceContent({
   })
 
   // A subagent's child Session opens in place when the catalog knows its Agent.
+  // The resolver follows the URL text, not the router's location object, which
+  // is replaced by navigations that leave the URL as it was.
+  const currentPath = `${location.pathname}${location.search}${location.hash}`
   const toolSessionLink: ToolUiSessionLinkResolver = (sessionId) => {
     const agentId = sessions.find(
       (session) => session.sessionId === sessionId
     )?.agentId
     if (!agentId) return undefined
     return {
-      href: workspaceHref(
-        `${window.location.origin}${location.pathname}${location.search}${location.hash}`,
-        { agentId, sessionId }
-      ),
+      href: workspaceHref(`${window.location.origin}${currentPath}`, {
+        agentId,
+        sessionId,
+      }),
       open: () => {
         setPreferredAgentId(agentId)
         openSession(sessionId, agentId).catch((reason: unknown) =>
