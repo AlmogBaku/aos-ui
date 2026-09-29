@@ -31,6 +31,7 @@ import { LazyVisualBoundary } from "./lazy-boundary"
 import { permissionProviderMetadata } from "@/lib/tool-artifact"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
+import { toolPart } from "./tool-part.test-helpers"
 
 afterEach(cleanup)
 
@@ -49,24 +50,6 @@ async function renderTool(ui: Parameters<typeof render>[0]) {
       view.rerender(next)
       await waitForDisplay()
     },
-  }
-}
-
-function toolPart(
-  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">
-): RichToolPart {
-  const args = overrides.args ?? {}
-
-  return {
-    type: "tool-call",
-    toolCallId: `test-${overrides.toolName}`,
-    args,
-    argsText: JSON.stringify(args),
-    status: { type: "complete" },
-    addResult: vi.fn(),
-    resume: vi.fn(),
-    respondToApproval: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
   }
 }
 
