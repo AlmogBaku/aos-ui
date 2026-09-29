@@ -2,10 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type {
-  RuntimeInteractionAdapter,
-  RuntimeQuestionRequest,
-} from "@/runtime-adapters/contracts"
+import type { RuntimeQuestionRequest } from "@/runtime-adapters/contracts"
 import { RuntimeQuestionComposer } from "./question-composer"
 
 afterEach(cleanup)
@@ -26,6 +23,28 @@ const request: RuntimeQuestionRequest = {
   ],
 }
 
+/** Mounts the composer for `request`; returns the adapter it answers through. */
+function renderComposer(
+  request: RuntimeQuestionRequest,
+  locale: "en" | "he" = "en"
+) {
+  const interactions = {
+    respond: vi.fn().mockResolvedValue(undefined),
+    reject: vi.fn().mockResolvedValue(undefined),
+  }
+  render(
+    <RuntimeQuestionComposer
+      locale={locale}
+      request={request}
+      interactions={interactions}
+      onResponsePending={vi.fn()}
+      onResolved={vi.fn()}
+      onDismissExpired={vi.fn()}
+    />
+  )
+  return interactions
+}
+
 describe("RuntimeQuestionComposer", () => {
   it.each([
     ["en", "Question", "Question 2"],
@@ -33,35 +52,25 @@ describe("RuntimeQuestionComposer", () => {
   ] as const)(
     "names an unlabeled question in %s, because the provider sent no label",
     (locale, single, second) => {
-      const unlabeled: RuntimeQuestionRequest = {
-        ...request,
-        questions: [{ prompt: "How should I proceed?", options: [] }],
-      }
-      const props = {
-        locale,
-        interactions: {
-          respond: vi.fn().mockResolvedValue(undefined),
-          reject: vi.fn().mockResolvedValue(undefined),
+      renderComposer(
+        {
+          ...request,
+          questions: [{ prompt: "How should I proceed?", options: [] }],
         },
-        onResponsePending: vi.fn(),
-        onResolved: vi.fn(),
-        onDismissExpired: vi.fn(),
-      }
-      render(<RuntimeQuestionComposer {...props} request={unlabeled} />)
+        locale
+      )
       expect(screen.getByText(single)).toBeInTheDocument()
 
       cleanup()
-      render(
-        <RuntimeQuestionComposer
-          {...props}
-          request={{
-            ...request,
-            questions: [
-              { prompt: "First?", options: [] },
-              { prompt: "Second?", options: [] },
-            ],
-          }}
-        />
+      renderComposer(
+        {
+          ...request,
+          questions: [
+            { prompt: "First?", options: [] },
+            { prompt: "Second?", options: [] },
+          ],
+        },
+        locale
       )
       expect(screen.getByRole("tab", { name: second })).toBeInTheDocument()
     }
@@ -93,20 +102,7 @@ describe("RuntimeQuestionComposer", () => {
           },
         ],
       }
-      const interactions = {
-        respond: vi.fn().mockResolvedValue(undefined),
-        reject: vi.fn().mockResolvedValue(undefined),
-      }
-      render(
-        <RuntimeQuestionComposer
-          locale="en"
-          request={duplicateLabels}
-          interactions={interactions}
-          onResponsePending={vi.fn()}
-          onResolved={vi.fn()}
-          onDismissExpired={vi.fn()}
-        />
-      )
+      const interactions = renderComposer(duplicateLabels)
       const first = screen.getByRole("option", { name: /First destination/ })
       const second = screen.getByRole("option", { name: /Second destination/ })
       await user.click(second)
@@ -122,22 +118,7 @@ describe("RuntimeQuestionComposer", () => {
   )
   it("submits selected labels through the neutral interaction adapter", async () => {
     const user = userEvent.setup()
-    const interactions: Pick<RuntimeInteractionAdapter, "respond" | "reject"> =
-      {
-        respond: vi.fn().mockResolvedValue(undefined),
-        reject: vi.fn().mockResolvedValue(undefined),
-      }
-
-    render(
-      <RuntimeQuestionComposer
-        locale="en"
-        request={request}
-        interactions={interactions}
-        onResponsePending={vi.fn()}
-        onResolved={vi.fn()}
-        onDismissExpired={vi.fn()}
-      />
-    )
+    const interactions = renderComposer(request)
 
     await user.click(screen.getByRole("option", { name: /Fast/ }))
     await user.click(screen.getByRole("button", { name: "Send answer" }))
@@ -150,21 +131,7 @@ describe("RuntimeQuestionComposer", () => {
 
   it("offers Other beside the provider's options and submits the typed text", async () => {
     const user = userEvent.setup()
-    const interactions = {
-      respond: vi.fn().mockResolvedValue(undefined),
-      reject: vi.fn().mockResolvedValue(undefined),
-    }
-
-    render(
-      <RuntimeQuestionComposer
-        locale="en"
-        request={request}
-        interactions={interactions}
-        onResponsePending={vi.fn()}
-        onResolved={vi.fn()}
-        onDismissExpired={vi.fn()}
-      />
-    )
+    const interactions = renderComposer(request)
 
     expect(screen.getByRole("option", { name: /Fast/ })).toBeVisible()
     expect(
@@ -200,21 +167,7 @@ describe("RuntimeQuestionComposer", () => {
         },
       ],
     }
-    const interactions = {
-      respond: vi.fn().mockResolvedValue(undefined),
-      reject: vi.fn().mockResolvedValue(undefined),
-    }
-
-    render(
-      <RuntimeQuestionComposer
-        locale="en"
-        request={multiSelect}
-        interactions={interactions}
-        onResponsePending={vi.fn()}
-        onResolved={vi.fn()}
-        onDismissExpired={vi.fn()}
-      />
-    )
+    const interactions = renderComposer(multiSelect)
 
     await user.click(screen.getByRole("option", { name: "Gym" }))
     await user.click(
@@ -235,19 +188,7 @@ describe("RuntimeQuestionComposer", () => {
   it("localizes the Other row and its input in Hebrew", async () => {
     const user = userEvent.setup()
 
-    render(
-      <RuntimeQuestionComposer
-        locale="he"
-        request={request}
-        interactions={{
-          respond: vi.fn().mockResolvedValue(undefined),
-          reject: vi.fn().mockResolvedValue(undefined),
-        }}
-        onResponsePending={vi.fn()}
-        onResolved={vi.fn()}
-        onDismissExpired={vi.fn()}
-      />
-    )
+    renderComposer(request, "he")
 
     const other = screen.getByRole("button", { name: "אחר (הקלידו תשובה)" })
     expect(other).toBeVisible()
@@ -259,21 +200,7 @@ describe("RuntimeQuestionComposer", () => {
 
   it("refuses to send an empty Other answer", async () => {
     const user = userEvent.setup()
-    const interactions = {
-      respond: vi.fn().mockResolvedValue(undefined),
-      reject: vi.fn().mockResolvedValue(undefined),
-    }
-
-    render(
-      <RuntimeQuestionComposer
-        locale="en"
-        request={request}
-        interactions={interactions}
-        onResponsePending={vi.fn()}
-        onResolved={vi.fn()}
-        onDismissExpired={vi.fn()}
-      />
-    )
+    const interactions = renderComposer(request)
 
     await user.click(
       screen.getByRole("button", { name: "Other (type your answer)" })
