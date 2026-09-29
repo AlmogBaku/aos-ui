@@ -61,7 +61,6 @@ export const AOS_METHODS = {
   },
   notify: {
     activity: "_aos/activity",
-    steerAccepted: "_aos/steer_accepted",
     composerPrefill: "_aos/composer_prefill",
     catalogInvalidated: "_aos/catalog_invalidated",
     sessionInvalidated: "_aos/session_invalidated",
@@ -563,25 +562,11 @@ export function parseArtifactUri(uri: string): string | undefined {
 // extension notifications (agent → client)
 // ---------------------------------------------------------------------------
 
-/** `_aos/steer_accepted` */
-export const AosSteerAcceptedNotificationSchema = readObject({
-  sessionId: IdentifierSchema,
-  ...TurnMetaBase,
-  requestId: IdentifierSchema,
-  text: z.string(),
-  delivery: TurnSteerResponseSchema.shape.status,
-})
-
 /** `_aos/composer_prefill` */
 export const AosComposerPrefillNotificationSchema = readObject({
   sessionId: IdentifierSchema,
   turnId: IdentifierSchema,
   text: z.string(),
-})
-
-/** `_aos/catalog_invalidated` (no params) and `_aos/session_invalidated`. */
-export const AosSessionInvalidatedNotificationSchema = readObject({
-  sessionId: IdentifierSchema,
 })
 
 /** `_aos/error`: a failure with no request to answer, e.g. a rejected cancel. */

@@ -1071,7 +1071,6 @@ describe("AOS v1 normalized protocol", () => {
       },
       notify: {
         activity: "_aos/activity",
-        steerAccepted: "_aos/steer_accepted",
         composerPrefill: "_aos/composer_prefill",
         catalogInvalidated: "_aos/catalog_invalidated",
         sessionInvalidated: "_aos/session_invalidated",
