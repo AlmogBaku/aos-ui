@@ -480,13 +480,12 @@ describe("proxy configuration defaults and merging", () => {
   })
 
   it("defaults the Hermes session idle window only for a Hermes runtime", async () => {
-    await expect(
-      loadProxyConfig({
-        flag: CONFIG_PATH,
-        getenv: env({}),
-        ...access({
-          [CONFIG_PATH]: {
-            source: `deploymentId: opencode-dev
+    const config = await loadProxyConfig({
+      flag: CONFIG_PATH,
+      getenv: env({}),
+      ...access({
+        [CONFIG_PATH]: {
+          source: `deploymentId: opencode-dev
 publicOrigin: http://127.0.0.1:3000
 runtime:
   id: opencode-main
@@ -496,12 +495,13 @@ runtime:
   username: operator
   passwordFile: /run/secrets/opencode-password
 `,
-          },
-        }),
-      })
-    ).resolves.toMatchObject({
+        },
+      }),
+    })
+    expect(config).toMatchObject({
       runtime: { kind: "opencode", directory: "/srv/worktree" },
     })
+    expect(config.runtime).not.toHaveProperty("sessionIdleMs")
   })
 
   it("names the listener and both of its shapes when a wildcard host has no exposure", async () => {
@@ -747,13 +747,10 @@ runtime:
         transcription: {
           model: "synthetic-transcribe",
           language: "en",
-          mode: "fallback",
-          timeoutMs: 60_000,
         },
         speech: {
           model: "synthetic-speak",
           voice: "synthetic-voice",
-          format: "mp3",
           timeoutMs: 30_000,
         },
       },
