@@ -216,9 +216,13 @@ export function useWorkspaceNavigation({
   >({})
   const tabUndo = useSessionTabUndo()
   const [actionError, setActionError] = useState<Error | null>(null)
-  // null until the runtime has answered; every action stays hidden meanwhile.
-  const [sessionActions, setSessionActions] =
-    useState<SessionActionCapabilities | null>(null)
+  // The runtime's answer for one workspace and refresh; any other pair still
+  // waits for its own, so its actions read null and stay hidden meanwhile.
+  const [sessionActionsAnswer, setSessionActionsAnswer] = useState<{
+    workspace: HarnessRuntime["workspace"]
+    refreshKey: number
+    actions: SessionActionCapabilities
+  } | null>(null)
   const reconciledDisagreement = useRef<string | null>(null)
   const [catalogSessionIds, setCatalogSessionIds] = useState<readonly string[]>(
     []
@@ -1010,24 +1014,25 @@ export function useWorkspaceNavigation({
   // actions; the workspace itself stays usable either way.
   useEffect(() => {
     const read = workspace.sessionActionCapabilities
-    if (!read) {
-      setSessionActions(noSessionActions)
-      return
-    }
+    if (!read) return
     let active = true
-    setSessionActions(null)
+    const answer = (actions: SessionActionCapabilities) => {
+      if (active) setSessionActionsAnswer({ workspace, refreshKey, actions })
+    }
     void read
       .call(workspace)
-      .then((next) => {
-        if (active) setSessionActions(next)
-      })
-      .catch(() => {
-        if (active) setSessionActions(noSessionActions)
-      })
+      .then(answer)
+      .catch(() => answer(noSessionActions))
     return () => {
       active = false
     }
   }, [refreshKey, workspace])
+  const sessionActions = !workspace.sessionActionCapabilities
+    ? noSessionActions
+    : sessionActionsAnswer?.workspace === workspace &&
+        sessionActionsAnswer.refreshKey === refreshKey
+      ? sessionActionsAnswer.actions
+      : null
 
   useEffect(() => {
     if (!workspace.subscribeSessionCatalog) return
