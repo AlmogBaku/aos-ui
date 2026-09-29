@@ -100,6 +100,11 @@ export type ProjectorState = {
   readonly execution: ProjectorExecution
   /** The turn the running run opened, and the only one its state settles. */
   readonly activeAssistantId?: string
+  /**
+   * The live turn that streamed while this view knew of no run: a resume sends
+   * a running turn's stream ahead of the state that names it.
+   */
+  readonly streamedTurnId?: string
   readonly todos: readonly TodoItem[]
   readonly title?: string
   readonly configOptions?: readonly SessionConfigOption[]
@@ -648,6 +653,33 @@ function resumed(before: ProjectorState, running: ProjectorState) {
   }
 }
 
+/**
+ * A resumed run's state, arriving after the stream it already sent: a
+ * transcript that ends on an assistant turn ends on this run's, which opens
+ * timed from where the run began.
+ */
+function announced(before: ProjectorState, running: ProjectorState) {
+  const last = before.messages.at(-1)
+  if (last?.role !== "assistant") return running
+  return {
+    ...onMessage(running, last.id, "assistant", (message) =>
+      opening(message, running.execution)
+    ),
+    activeAssistantId: last.id,
+  }
+}
+
+/** Notes a live turn streaming while this view knows of no run. */
+function noteStreamedTurn(state: ProjectorState, meta: unknown) {
+  const { status } = state.execution
+  if (status === "running" || status === "waiting-for-input") return state
+  const parsed = AosTurnMetaSchema.safeParse(meta)
+  const turnId = parsed.success ? parsed.data.turnId : undefined
+  return turnId === undefined || turnId === state.streamedTurnId
+    ? state
+    : { ...state, streamedTurnId: turnId }
+}
+
 function applyState(
   state: ProjectorState,
   update: UpdatePayload,
@@ -675,7 +707,8 @@ function applyState(
         ...(reported === undefined ? {} : { error: reported }),
       },
     }
-    return aos?.at === undefined ? resumed(state, running) : running
+    if (aos?.at === undefined) return resumed(state, running)
+    return state.streamedTurnId === turnId ? announced(state, running) : running
   }
   if (next === "requires_action") {
     const startedAt = ongoingStart(state, turnId)
@@ -937,6 +970,19 @@ function applyTitle(
 
 /** `meta` is the update's `_meta.aos`; unknown kinds and payloads are ignored. */
 export function applyUpdate(
+  state: ProjectorState,
+  update: SessionUpdate,
+  meta: unknown
+): ProjectorState {
+  const next = applyKind(state, update, meta)
+  if (update.sessionUpdate === "state_update")
+    return next.streamedTurnId === undefined
+      ? next
+      : { ...next, streamedTurnId: undefined }
+  return next.messages === state.messages ? next : noteStreamedTurn(next, meta)
+}
+
+function applyKind(
   state: ProjectorState,
   update: SessionUpdate,
   meta: unknown
