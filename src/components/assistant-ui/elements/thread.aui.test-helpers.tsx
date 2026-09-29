@@ -21,11 +21,7 @@ import {
   type ThreadComposerOverrideProps,
   type ThreadLabels,
 } from "./thread.aui"
-import {
-  RichToolRenderer,
-  ToolUiLocaleProvider,
-  type ToolUiLocale,
-} from "@/components/tool-ui"
+import { ToolUiLocaleProvider, type ToolUiLocale } from "@/components/tool-ui"
 import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import {
   threadHistoryExtras,
@@ -178,7 +174,7 @@ export function LocalThread({
   model?: ChatModelAdapter
   exposeRuntime?: (runtime: AssistantRuntime) => void
   initialMessages?: readonly ThreadMessageLike[]
-  toolFallback?: typeof RichToolRenderer
+  toolFallback?: ThreadComponents["ToolFallback"]
   composer?: ThreadComponents["Composer"]
   composerFeatures?: ComposerFeatureViewModel
   enableMessageQueue?: boolean
