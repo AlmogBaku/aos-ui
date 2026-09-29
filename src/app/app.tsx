@@ -29,10 +29,9 @@ import { stripLocaleFromPathname } from "@/lib/i18n/routing"
 import { captureInviteToken } from "@/lib/invite-fragment"
 import { HarnessRuntimeProvider } from "@/runtime-adapters/registry"
 import { createRuntimeClock } from "@shared/runtime-modes"
-import {
-  parsePublicApplicationConfiguration,
-  type ApplicationConfiguration,
-  type RuntimeConfiguration,
+import type {
+  ApplicationConfiguration,
+  RuntimeConfiguration,
 } from "@shared/runtime-config"
 
 const loadAosUiWorkspace = () =>
@@ -55,7 +54,13 @@ const invalidConfig: RuntimeConfiguration = {
 
 async function loadRuntimeConfiguration(): Promise<ApplicationConfiguration> {
   try {
-    const response = await fetch("/runtime-config.json", { cache: "no-store" })
+    // The parser brings zod, so it loads beside the fetch rather than in the
+    // entry chunk the first paint waits for.
+    const [{ parsePublicApplicationConfiguration }, response] =
+      await Promise.all([
+        import("@shared/runtime-config"),
+        fetch("/runtime-config.json", { cache: "no-store" }),
+      ])
     if (!response.ok) return invalidConfig
     return parsePublicApplicationConfiguration(await response.json())
   } catch {

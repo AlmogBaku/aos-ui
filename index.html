@@ -29,9 +29,48 @@
     <link rel="icon" href="/logo-adaptive.svg" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180x180.png" />
     <title>AOS</title>
+    <!--
+      The first paint, before any script or stylesheet arrives. It copies the
+      light tokens from `src/app/globals.css` and must stay visually identical
+      to `LoadingWorkspace` in `src/app/app.tsx`, which renders before the theme
+      does; React's first render replaces it. The `:has` rules stop matching then.
+    -->
+    <style>
+      html:has(#aos-first-paint),
+      body:has(#aos-first-paint) {
+        margin: 0;
+        overflow: hidden;
+        background: oklch(0.955 0.006 265);
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      #aos-first-paint {
+        display: flex;
+        min-height: 100dvh;
+        align-items: center;
+        justify-content: center;
+        background: oklch(0.99 0.002 265);
+        color: oklch(0.5 0.012 265);
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+      }
+      @media (min-width: 64rem) {
+        body:has(#aos-first-paint) {
+          padding: 1rem;
+        }
+      }
+      @media (display-mode: standalone),
+        (display-mode: minimal-ui),
+        (display-mode: window-controls-overlay) {
+        body:has(#aos-first-paint) {
+          padding: 0;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main id="aos-first-paint" role="status">Loading workspace…</main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

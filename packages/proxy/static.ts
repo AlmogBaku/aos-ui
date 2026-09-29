@@ -43,16 +43,24 @@ function safePath(root: string, pathname: string) {
     : undefined
 }
 
+async function isFile(path: string) {
+  try {
+    return (await stat(path)).isFile()
+  } catch {
+    return false
+  }
+}
+
 async function fileResponse(
   path: string,
   request: Request,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  // The file actually sent, when it is a compressed copy of `path`.
+  body = path
 ) {
   let file
   try {
-    const details = await stat(path)
-    if (!details.isFile()) return undefined
-    file = await readFile(path)
+    file = await readFile(body)
   } catch {
     return undefined
   }
@@ -62,6 +70,54 @@ async function fileResponse(
   return new Response(request.method === "HEAD" ? null : file, {
     headers: responseHeaders,
   })
+}
+
+/** The build writes these copies beside each text asset, best first. */
+const precompressed = [
+  { encoding: "br", suffix: ".br" },
+  { encoding: "gzip", suffix: ".gz" },
+] as const
+
+function acceptedEncodings(request: Request) {
+  const accepted = new Set<string>()
+  for (const part of (request.headers.get("accept-encoding") ?? "").split(
+    ","
+  )) {
+    const [token = "", ...parameters] = part.toLowerCase().split(";")
+    const refused = parameters.some((parameter) =>
+      /^\s*q\s*=\s*0(\.0*)?\s*$/u.test(parameter)
+    )
+    if (token.trim() && !refused) accepted.add(token.trim())
+  }
+  return accepted
+}
+
+/** Serves the best precompressed copy the client accepts, else the file itself. */
+async function assetResponse(
+  path: string,
+  request: Request,
+  headers: Record<string, string>
+) {
+  if (!(await isFile(path))) return undefined
+  const accepted = acceptedEncodings(request)
+  let hasCopy = false
+  for (const { encoding, suffix } of precompressed) {
+    if (!(await isFile(`${path}${suffix}`))) continue
+    hasCopy = true
+    if (!accepted.has(encoding)) continue
+    const copy = await fileResponse(
+      path,
+      request,
+      { ...headers, "content-encoding": encoding, vary: "Accept-Encoding" },
+      `${path}${suffix}`
+    )
+    if (copy) return copy
+  }
+  return fileResponse(
+    path,
+    request,
+    hasCopy ? { ...headers, vary: "Accept-Encoding" } : headers
+  )
 }
 
 export function createStaticHandler(
@@ -101,7 +157,7 @@ export function createStaticHandler(
     }
     const path = safePath(root, url.pathname)
     if (!path) return undefined
-    const requested = await fileResponse(path, request, {
+    const requested = await assetResponse(path, request, {
       "cache-control": url.pathname.startsWith("/assets/")
         ? "public, max-age=31536000, immutable"
         : "no-cache",
@@ -109,7 +165,7 @@ export function createStaticHandler(
     if (requested) return requested
     if (url.pathname.startsWith("/assets/") || url.pathname.includes("."))
       return undefined
-    return fileResponse(resolve(root, "index.html"), request, {
+    return assetResponse(resolve(root, "index.html"), request, {
       "cache-control": "no-cache",
     })
   }

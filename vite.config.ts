@@ -1,7 +1,9 @@
 import react from "@vitejs/plugin-react"
 import { readFileSync } from "node:fs"
-import { readFile } from "node:fs/promises"
+import { readdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { promisify } from "node:util"
+import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib"
 import {
   defineConfig,
   loadEnv,
@@ -251,6 +253,54 @@ function buildIdPlugin(): Plugin {
   }
 }
 
+/**
+ * Writes `.br` and `.gz` beside every text asset in the client build, which
+ * `packages/proxy/static.ts` serves to clients that accept them. It runs after
+ * every other plugin's `closeBundle`, `VitePWA`'s `sw.js` included, so no copy
+ * can describe a file that is still being written.
+ */
+function precompressPlugin(): Plugin {
+  const compressible = /\.(?:js|css|html|svg|json|webmanifest|wasm)$/u
+  const brotli = promisify(brotliCompress)
+  const gzipped = promisify(gzip)
+  let outDir = ""
+  return {
+    name: "aos-precompress",
+    apply: "build",
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir)
+    },
+    closeBundle: {
+      order: "post",
+      sequential: true,
+      async handler() {
+        const files = await readdir(outDir, { recursive: true })
+        await Promise.all(
+          files
+            .filter((file) => compressible.test(file))
+            .map(async (file) => {
+              const target = path.join(outDir, file)
+              const source = await readFile(target)
+              if (source.byteLength < 1024) return
+              await Promise.all([
+                brotli(source, {
+                  params: {
+                    [zlibConstants.BROTLI_PARAM_QUALITY]:
+                      zlibConstants.BROTLI_MAX_QUALITY,
+                    [zlibConstants.BROTLI_PARAM_SIZE_HINT]: source.byteLength,
+                  },
+                }).then((copy) => writeFile(`${target}.br`, copy)),
+                gzipped(source, { level: 9 }).then((copy) =>
+                  writeFile(`${target}.gz`, copy)
+                ),
+              ])
+            })
+        )
+      },
+    },
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const environment = {
     ...loadEnv(mode, process.cwd(), ""),
@@ -348,6 +398,7 @@ export default defineConfig(({ mode }) => {
           ],
         },
       }),
+      precompressPlugin(),
     ],
     resolve: {
       alias: {
