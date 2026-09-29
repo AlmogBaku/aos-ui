@@ -7068,11 +7068,17 @@ describe("Hermes turn watch", () => {
     await observed()
 
     const turn = nativeTurn("live-secret", 1)
-    publish(turn.frame("status.update", { kind: "heartbeat", text: "Pulse" }))
+    publish(
+      turn.frame("status.update", {
+        kind: "heartbeat",
+        text: "♥ heartbeat #1 firing…",
+      })
+    )
 
+    // The glyph Hermes leads with is dropped; the notice line has its own.
     expect(onNotice).toHaveBeenCalledExactlyOnceWith({
       severity: "info",
-      title: "Pulse",
+      title: "heartbeat #1 firing…",
       kind: "heartbeat",
     })
     expect(onTurn).not.toHaveBeenCalled()
