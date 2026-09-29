@@ -150,7 +150,8 @@ in-process ACP gate `e2e/support/provider-mock.ts` +
 Confirm: capability fidelity across both roles (guest projection in
 `packages/proxy/guest/acp.ts` and `packages/proxy/auth/guest-runtime-projection.ts`),
 `_meta.aos.sequence` monotonic on replay, reconnect via `session/resume`
-`after`/`resync` without prompt replay, and the `vendor/` + `UPSTREAM.md` +
+`after` without prompt replay (a lost cursor rebuilds from history in the same
+resume), and the `vendor/` + `UPSTREAM.md` +
 snapshot-test rule for vendored native clients. For attachments or delivered
 media, cover split stream markers, history restoration, exact receipt
 correlation, opaque retrieval, untrusted and mismatched paths both with and

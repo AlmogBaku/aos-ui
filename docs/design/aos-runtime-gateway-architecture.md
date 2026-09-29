@@ -426,15 +426,17 @@ in the log); catch-up happens through a standard `session/resume` with
 **Browser**: exponential backoff 250 ms → 5 000 ms
 (`src/runtime-adapters/aos/acp/connection.ts:59-60`). The browser rejoins each
 resumed Session via `session/resume` with `_meta.aos.after` (last sequence)
-and `turnId` (`protocol/acp.ts:168-174`). `resync: true` in the response → re-resume with
-`replayFrom:{type:"start"}` (`connection.ts:329-338`). Guest re-logins before
+and `turnId` (`protocol/acp.ts:168-174`); a cursor the proxy can no longer
+answer is rebuilt from history in that same resume. Guest re-logins before
 resuming (`connection.ts:374-377`).
 
 **Proxy**: coordinator journal holds every event of a turn segment, bounded by
 the subscriber limits (`limits.subscriberEvents`/`limits.subscriberBytes`). Adjacent text
 deltas merge on read to save replay size while keeping cursors exact
-(`session-coordinator.ts:73-77,141-145,310-320`). `resync` is set when the
-journal cannot answer the cursor (`acp/agent.ts:287-307`).
+(`session-coordinator.ts:73-77,141-145,310-320`). When the journal cannot
+answer the cursor, the coordinator throws `ReplayCursorLostError` and the
+channel rebuilds the member's view from history with standard `session/update`s
+before the resume answers (`core/channel.ts`).
 
 The `discover` preamble reconstructs authoritative state before replay
 (`acp/agent.ts:506-513`). `reissuePending` re-delivers pending requests after

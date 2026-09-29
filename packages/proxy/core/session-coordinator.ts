@@ -2710,8 +2710,8 @@ export class SessionCoordinator {
   }
 
   /**
-   * Answers a reader the journal cannot. One with a cursor is refused, and its
-   * resume answers `resync`: that is its one signal to rebuild from history.
+   * Answers a reader the journal cannot. One with a cursor is refused with
+   * `ReplayCursorLostError`, and its channel rebuilds the view from history.
    * A cursorless reader, which follows a recovered turn the journal does not
    * hold from its start, is sent one reset instead, since nothing else tells it.
    */

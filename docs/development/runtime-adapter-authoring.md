@@ -202,13 +202,15 @@ native identities; matching an older row by text can truncate the wrong
 conversation. If history changed incompatibly, reconcile and return a
 normalized conflict rather than guessing.
 
-A message sent in the current page carries its live id until the browser
-learns the id history saved it under, and only then can it be edited. When
-the native runtime proves those ids at the turn's end, report them on
-`TurnEnded.saved`: the prompt's input `messageId` with its saved id, and the
-one id history gives the whole reply. The translator sends them as ACP
-`_meta.aos.savedIds`. Omit an id the runtime does not prove; never derive one
-from text or position.
+A prompt's answer names the id history stored the prompt under, so the browser
+can edit it at once. The adapter proves that id through
+`ServerTurnHandle.stored`, a receipt made by `storageReceipt()` in
+`core/storage-receipt.ts`. Resolve it with the stored id once the native
+runtime proves it, and call its `end(event)` with the terminal event on every
+path a turn ends by: finish, failure, stop, and detach. A turn that ends
+unproven then rejects the receipt, and the coordinator answers the prompt at
+once with what happened instead of waiting out its deadline. Never derive an id
+the runtime does not prove, from text or position.
 
 ## Preserve requests
 

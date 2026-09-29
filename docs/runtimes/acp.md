@@ -25,9 +25,9 @@ The response carries an `Acp-Connection-Id` header. One socket per browser tab
 is the current topology; there is no SharedWorker multiplexing. The browser
 sends an `initialize` request and receives capabilities in `_meta.aos`. On
 reconnect, send `initialize` again and then `session/resume` with
-`_meta.aos.after` set to the last sequence cursor the browser observed. A
-`resync: true` response means the cursor is beyond bounded replay; send
-`session/resume` again with `replayFrom: { type: "start" }`.
+`_meta.aos.after` set to the last sequence cursor the browser observed. When
+the cursor is beyond bounded replay, the same resume rebuilds the Session from
+history, as described under [Response `_meta.aos` shapes](#response-_metaaos-shapes).
 
 Reconnect uses jittered backoff starting at 250 ms, capped at 5 000 ms, and
 resetting once every resumed Session has rejoined or the link has been stable
@@ -205,8 +205,8 @@ Agent's address a Session that is already gone deletes successfully.
 
 `agentId` is optional and used for deep links when the client knows the owning
 Agent before listing. `after` is the last `sequence` the client observed for
-`turnId`. `resync: true` on the response means `after` was beyond bounded
-replay; resume again with `replayFrom: { type: "start" }`.
+`turnId`. An `after` beyond bounded replay, or a `turnId` that is no longer the
+live turn, rebuilds the Session from history in the same resume.
 
 `replayFrom` is absent (resume without replay), `{ type: "start" }`, or the
 `_aos/before` older-page variant described under
@@ -232,13 +232,16 @@ the runtime confirms it stored the prompt. Attachment content referenced by
 as events after the answer.
 
 **`session/resume`** response (`AosSessionResumeResponseMetaSchema`, `acp.ts`):
-`{ position?, resync?, history? }` in `_meta.aos` — nothing else. `position` is
+`{ position?, history? }` in `_meta.aos` — nothing else. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
 capabilities (`available_commands_update._meta.aos.capabilities`), models, and
-usage arrive as events after the answer. `resync: true` means `after` was beyond
-bounded replay; resume again with `replayFrom: { type: "start" }`. A resume that
-replayed carries `history` (`AosHistoryCursorSchema`): `{ nextCursor?, truncated? }`.
+usage arrive as events after the answer. When the journal cannot answer `after`
+(`ReplayCursorLostError`, `core/channel.ts`), the proxy rebuilds the Session
+from history as a `start` resume does: the retained messages arrive as standard
+`session/update`s before the answer, the live turn follows them, and the answer
+carries `history`. A resume that replayed carries `history`
+(`AosHistoryCursorSchema`): `{ nextCursor?, truncated? }`.
 
 **`session_info_update`** `_meta.aos` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
 `{ agentId, status, archived, createdAt?, unread?, pinned? }`. `createdAt` is
@@ -284,7 +287,8 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   history, is invalid params.
 - An accepted rewind deletes the newest rows, so it marks the browser's cursor
   stale and drops a page still loading; the next load resumes from `start`
-  first. A resync likewise returns the thread to the newest page.
+  first. A resume rebuilt from history likewise returns the thread to the
+  newest page.
 
 ## Run stream
 
