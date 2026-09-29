@@ -135,13 +135,28 @@ describe("createToolTimelineModel", () => {
     expect(shouldRenderToolDetails("read_file")).toBe(true)
   })
 
-  it("derives one semantic state for a collapsed tool run", () => {
-    expect(toolRunState([{ status: { type: "complete" } }])).toBe("complete")
-    expect(toolRunState([{ status: { type: "requires-action" } }])).toBe(
-      "attention"
-    )
-    expect(toolRunState([{ status: { type: "incomplete" } }])).toBe("failed")
-    expect(toolRunState([{ status: { type: "running" } }])).toBe("running")
+  it.each<[string, Parameters<typeof toolRunState>[0], string]>([
+    ["complete", [{ status: { type: "complete" } }], "complete"],
+    ["waiting", [{ status: { type: "requires-action" } }], "attention"],
+    ["incomplete", [{ status: { type: "incomplete" } }], "failed"],
+    ["running", [{ status: { type: "running" } }], "running"],
+    [
+      "error-result",
+      [{ status: { type: "complete" }, isError: true }],
+      "failed",
+    ],
+    [
+      "non-zero-exit",
+      [
+        {
+          status: { type: "complete" },
+          result: { output: "[Command interrupted]", exit_code: 130 },
+        },
+      ],
+      "failed",
+    ],
+  ])("reads a collapsed %s tool run as %s", (_case, parts, state) => {
+    expect(toolRunState(parts)).toBe(state)
   })
 
   it("uses settled action verbs instead of provider tool identifiers", () => {
@@ -191,23 +206,6 @@ describe("createToolTimelineModel", () => {
       verb: "Deleted",
       chip: "notes/draft.md",
     })
-  })
-
-  it("reads a run as failed when a call's result is an error", () => {
-    expect(
-      toolRunState([{ status: { type: "complete" }, isError: true }])
-    ).toBe("failed")
-  })
-
-  it("reads a run as failed when a completed command exited non-zero", () => {
-    expect(
-      toolRunState([
-        {
-          status: { type: "complete" },
-          result: { output: "[Command interrupted]", exit_code: 130 },
-        },
-      ])
-    ).toBe("failed")
   })
 
   it("opens a run only while one of its terminals is still running", () => {
