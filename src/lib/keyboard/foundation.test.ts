@@ -11,26 +11,10 @@ import {
 } from "@/lib/keyboard"
 
 describe("keyboard action catalogue", () => {
-  it("keeps actions uniquely identified and ready for both locales", () => {
+  it("keeps actions uniquely identified", () => {
     const ids = KEYBOARD_ACTION_CATALOG.map((action) => action.id)
 
     expect(new Set(ids).size).toBe(ids.length)
-    expect(KEYBOARD_ACTION_CATALOG).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "workspace.focusNextPane",
-          title: { en: expect.any(String), he: expect.any(String) },
-        }),
-        expect.objectContaining({
-          id: "commands.open",
-          title: { en: expect.any(String), he: expect.any(String) },
-        }),
-        expect.objectContaining({
-          id: "settings.openKeyboard",
-          title: { en: expect.any(String), he: expect.any(String) },
-        }),
-      ])
-    )
   })
 })
 

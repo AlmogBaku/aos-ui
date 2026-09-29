@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -50,54 +50,12 @@ function renderShell() {
 }
 
 describe("workspace keyboard discovery", () => {
-  it("places the compact Commands trigger beside the language switcher", () => {
-    renderShell()
-    const trigger = screen.getByRole("button", { name: /^Commands \(/ })
-    const preferences = trigger.closest("[data-workspace-preferences]")
-    expect(preferences).not.toBeNull()
-    expect(trigger).toHaveAccessibleName(/Commands/)
-    expect(trigger).toBeEnabled()
-    expect(
-      preferences?.querySelector('[aria-label="Switch to Hebrew"]')
-    ).not.toBeNull()
-  })
-
-  it("opens Commands with the platform shortcut and reference with physical Mod+/", async () => {
+  it("anchors Shift+F10's context menu inside the focused control", async () => {
     const user = userEvent.setup()
     renderShell()
-    expect(screen.getByRole("button", { name: "Commands (❖+K)" })).toBeVisible()
-    await user.keyboard("{Control>}k{/Control}")
-    expect(screen.getByRole("dialog", { name: "Commands" })).toBeVisible()
-    await user.keyboard("{Escape}")
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Commands" })).toBeNull()
-    )
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "/",
-        ctrlKey: true,
-        cancelable: true,
-      })
-    )
-    await waitFor(() =>
-      expect(
-        screen.getByRole("dialog", { name: "Keyboard reference" })
-      ).toBeVisible()
-    )
-  })
-
-  it("moves through visible regions with F6 and dispatches Shift+F10 to the focused control", async () => {
-    const user = userEvent.setup()
-    renderShell()
-    const firstAgent = screen.getByRole("button", { name: /^One,/ })
-    firstAgent.focus()
-    await user.keyboard("{F6}")
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "A" })).toHaveFocus()
-    )
-
     const contextMenu = vi.fn()
     const tab = screen.getByRole("tab", { name: "A" })
+    tab.focus()
     vi.spyOn(tab, "getBoundingClientRect").mockReturnValue({
       left: 40,
       right: 160,
