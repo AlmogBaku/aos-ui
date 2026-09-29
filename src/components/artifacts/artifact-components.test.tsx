@@ -27,43 +27,31 @@ import {
   ArtifactToolResultCard,
   ArtifactViewerContent,
   ArtifactWorkspaceProvider,
+  type ArtifactWorkspaceProviderProps,
   createArtifactMessageStabilizer,
   MAX_TEXT_PREVIEW_BYTES,
 } from "./artifact-workspace"
 
+/** One assistant message that publishes `data` as an Artifact. */
+const artifactMessage = (id: string, data: unknown) => ({
+  id,
+  role: "assistant",
+  content: [{ type: "data", name: "aos.artifact", data }],
+})
+
 const messages = [
-  {
-    id: "older-message",
-    role: "assistant",
-    content: [
-      {
-        type: "data",
-        name: "aos.artifact",
-        data: {
-          id: "older",
-          filename: "older.txt",
-          mimeType: "text/plain",
-          source: { type: "inline", encoding: "utf8", data: "Older body" },
-        },
-      },
-    ],
-  },
-  {
-    id: "newer-message",
-    role: "assistant",
-    content: [
-      {
-        type: "data",
-        name: "aos.artifact",
-        data: {
-          id: "newer",
-          filename: "newer.txt",
-          mimeType: "text/plain",
-          source: { type: "inline", encoding: "utf8", data: "Newer body" },
-        },
-      },
-    ],
-  },
+  artifactMessage("older-message", {
+    id: "older",
+    filename: "older.txt",
+    mimeType: "text/plain",
+    source: { type: "inline", encoding: "utf8", data: "Older body" },
+  }),
+  artifactMessage("newer-message", {
+    id: "newer",
+    filename: "newer.txt",
+    mimeType: "text/plain",
+    source: { type: "inline", encoding: "utf8", data: "Newer body" },
+  }),
 ] as const
 
 const ArtifactTestSurface = () => (
@@ -71,6 +59,25 @@ const ArtifactTestSurface = () => (
     <ArtifactOutputs />
     <ArtifactViewerContent />
   </>
+)
+
+/**
+ * The Artifacts surface of Aster's market Session; a test passes the adapter
+ * and messages that matter, and any other provider prop it changes.
+ */
+const workspace = ({
+  children = <ArtifactTestSurface />,
+  ...props
+}: Pick<ArtifactWorkspaceProviderProps, "adapter" | "messages"> &
+  Partial<ArtifactWorkspaceProviderProps>) => (
+  <ArtifactWorkspaceProvider
+    locale="en"
+    agentId="agent-aster"
+    sessionId="thread-aster-market"
+    {...props}
+  >
+    {children}
+  </ArtifactWorkspaceProvider>
 )
 
 const noOpAdapter: ChatModelAdapter = {
@@ -147,21 +154,19 @@ describe("artifact workspace", () => {
 
   it("renders a validated present_artifact result as a message card", () => {
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: vi.fn<ArtifactAdapter["resolve"]>() }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={[]}
-      >
-        <ArtifactToolResultCard
-          result={{
-            id: "tool-output",
-            filename: "tool-output.txt",
-            source: { type: "inline", encoding: "utf8", data: "Output" },
-          }}
-        />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: vi.fn<ArtifactAdapter["resolve"]>() },
+        messages: [],
+        children: (
+          <ArtifactToolResultCard
+            result={{
+              id: "tool-output",
+              filename: "tool-output.txt",
+              source: { type: "inline", encoding: "utf8", data: "Output" },
+            }}
+          />
+        ),
+      })
     )
 
     expect(screen.getByText("tool-output.txt")).toBeInTheDocument()
@@ -175,15 +180,11 @@ describe("artifact workspace", () => {
 
   it("renders Artifacts collapsed by default and reveals them on request", () => {
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: vi.fn<ArtifactAdapter["resolve"]>() }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactOutputs />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: vi.fn<ArtifactAdapter["resolve"]>() },
+        messages,
+        children: <ArtifactOutputs />,
+      })
     )
 
     const summary = screen.getByText("Artifacts").closest("summary")
@@ -208,17 +209,7 @@ describe("artifact workspace", () => {
       )
     )
 
-    render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getByText("Artifacts"))
 
@@ -240,41 +231,20 @@ describe("artifact workspace", () => {
   })
 
   it("renders Markdown structure without loading embedded images", async () => {
-    const markdownMessages = [
-      {
-        id: "markdown-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "markdown",
-              filename: "report.md",
-              mimeType: "text/markdown",
-              source: {
-                type: "inline",
-                encoding: "utf8",
-                data: "# Report\n\n```ts\nconst report = true\n```\n\n![tracking pixel](https://example.com/pixel.png)",
-              },
-            },
-          },
-        ],
-      },
-    ]
+    const source =
+      "# Report\n\n```ts\nconst report = true\n```\n\n![tracking pixel](https://example.com/pixel.png)"
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{
-          resolve: async () =>
-            new Blob([markdownMessages[0]!.content[0]!.data.source.data]),
-        }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={markdownMessages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob([source]) },
+        messages: [
+          artifactMessage("markdown-message", {
+            id: "markdown",
+            filename: "report.md",
+            mimeType: "text/markdown",
+            source: { type: "inline", encoding: "utf8", data: source },
+          }),
+        ],
+      })
     )
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -293,35 +263,19 @@ describe("artifact workspace", () => {
     const clipboard = vi
       .spyOn(navigator.clipboard, "writeText")
       .mockResolvedValue()
-    const markdownMessages = [
-      {
-        id: "markdown-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "markdown",
-              filename: "report.md",
-              mimeType: "text/markdown",
-              source: { type: "inline", encoding: "utf8", data: source },
-            },
-          },
-        ],
-      },
-    ]
 
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob([source]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={markdownMessages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob([source]) },
+        messages: [
+          artifactMessage("markdown-message", {
+            id: "markdown",
+            filename: "report.md",
+            mimeType: "text/markdown",
+            source: { type: "inline", encoding: "utf8", data: source },
+          }),
+        ],
+      })
     )
 
     await user.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -332,40 +286,19 @@ describe("artifact workspace", () => {
   })
 
   it("highlights standalone code artifacts using their filename", async () => {
-    const codeMessages = [
-      {
-        id: "code-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "code",
-              filename: "worker.py",
-              mimeType: "text/x-python",
-              source: {
-                type: "inline",
-                encoding: "utf8",
-                data: "def run():\n    return True",
-              },
-            },
-          },
-        ],
-      },
-    ]
+    const source = "def run():\n    return True"
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{
-          resolve: async () => new Blob(["def run():\n    return True"]),
-        }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={codeMessages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob([source]) },
+        messages: [
+          artifactMessage("code-message", {
+            id: "code",
+            filename: "worker.py",
+            mimeType: "text/x-python",
+            source: { type: "inline", encoding: "utf8", data: source },
+          }),
+        ],
+      })
     )
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -384,30 +317,16 @@ describe("artifact workspace", () => {
       return new Promise(() => {})
     })
 
-    const { rerender } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    const { rerender } = render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     await waitFor(() => expect(signals).toHaveLength(1))
     rerender(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-pricing"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve },
+        sessionId: "thread-aster-pricing",
+        messages,
+      })
     )
     await waitFor(() =>
       expect(
@@ -422,17 +341,7 @@ describe("artifact workspace", () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>(async () =>
       Promise.resolve(new Blob(["Newer body"]))
     )
-    const { rerender } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    const { rerender } = render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     expect(
@@ -440,12 +349,9 @@ describe("artifact workspace", () => {
     ).toBeVisible()
 
     rerender(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={[
+      workspace({
+        adapter: { resolve },
+        messages: [
           ...messages,
           {
             id: "follow-up",
@@ -457,10 +363,8 @@ describe("artifact workspace", () => {
             role: "assistant",
             content: [{ type: "text", text: "Completed" }],
           },
-        ]}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+        ],
+      })
     )
 
     expect(screen.getByRole("region", { name: "Output preview" })).toBeVisible()
@@ -473,30 +377,12 @@ describe("artifact workspace", () => {
           signal.addEventListener("abort", () => reject(signal.reason))
         })
     )
-    const { rerender } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    const { rerender } = render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     await waitFor(() => expect(resolve).toHaveBeenCalledOnce())
     rerender(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages.slice(0, 1)}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({ adapter: { resolve }, messages: messages.slice(0, 1) })
     )
 
     await waitFor(() =>
@@ -508,15 +394,10 @@ describe("artifact workspace", () => {
 
   it("closes the viewer when an identical artifact replaces its publication on another branch", async () => {
     const { rerender } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob(["Newer body"]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob(["Newer body"]) },
+        messages,
+      })
     )
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
@@ -525,18 +406,13 @@ describe("artifact workspace", () => {
     ).toBeVisible()
 
     rerender(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob(["Newer body"]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={[
+      workspace({
+        adapter: { resolve: async () => new Blob(["Newer body"]) },
+        messages: [
           messages[0],
           { ...messages[1], id: "replacement-publication" },
-        ]}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+        ],
+      })
     )
 
     await waitFor(() =>
@@ -574,15 +450,10 @@ describe("artifact workspace", () => {
 
   it("restores focus to the control that opened the viewer", async () => {
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob(["Older body"]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages.slice(0, 1)}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob(["Older body"]) },
+        messages: messages.slice(0, 1),
+      })
     )
     const open = screen.getByRole("button", { name: /^Open:/ })
     open.focus()
@@ -600,30 +471,16 @@ describe("artifact workspace", () => {
       signals.push(signal)
       return new Promise(() => {})
     })
-    const { rerender } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    const { rerender } = render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getAllByRole("button", { name: "Download" })[0]!)
     await waitFor(() => expect(signals).toHaveLength(1))
     rerender(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-pricing"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve },
+        sessionId: "thread-aster-pricing",
+        messages,
+      })
     )
 
     expect(signals[0]?.aborted).toBe(true)
@@ -635,17 +492,7 @@ describe("artifact workspace", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValueOnce(new Blob(["Recovered body"]))
 
-    render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    render(workspace({ adapter: { resolve }, messages }))
 
     fireEvent.click(screen.getAllByRole("button", { name: /^Open:/ })[0]!)
     expect(
@@ -659,36 +506,20 @@ describe("artifact workspace", () => {
 
   it("blocks oversized text before asking the adapter to resolve it", async () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>()
-    const oversizedMessages = [
-      {
-        id: "large-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "large",
-              filename: "large.txt",
-              mimeType: "text/plain",
-              sizeBytes: MAX_TEXT_PREVIEW_BYTES + 1,
-              source: { type: "provider", reference: "large-file" },
-            },
-          },
-        ],
-      },
-    ]
 
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={oversizedMessages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve },
+        messages: [
+          artifactMessage("large-message", {
+            id: "large",
+            filename: "large.txt",
+            mimeType: "text/plain",
+            sizeBytes: MAX_TEXT_PREVIEW_BYTES + 1,
+            source: { type: "provider", reference: "large-file" },
+          }),
+        ],
+      })
     )
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -705,34 +536,18 @@ describe("artifact workspace", () => {
     const revokeObjectUrl = vi
       .spyOn(URL, "revokeObjectURL")
       .mockImplementation(() => undefined)
-    const pdfMessages = [
-      {
-        id: "pdf-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "pdf",
-              filename: "report.pdf",
-              mimeType: "application/pdf",
-              source: { type: "provider", reference: "report" },
-            },
-          },
-        ],
-      },
-    ]
     const { unmount } = render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob(["%PDF-1.7"]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={pdfMessages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob(["%PDF-1.7"]) },
+        messages: [
+          artifactMessage("pdf-message", {
+            id: "pdf",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            source: { type: "provider", reference: "report" },
+          }),
+        ],
+      })
     )
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -747,40 +562,24 @@ describe("artifact workspace", () => {
   })
 
   it("opens HTML beyond the text budget on a sandboxed Preview tab and keeps source inspectable", async () => {
-    const htmlMessages = [
-      {
-        id: "html-message",
-        role: "assistant",
-        content: [
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "html",
-              filename: "report.html",
-              mimeType: "text/html",
-              sizeBytes: MAX_TEXT_PREVIEW_BYTES + 1,
-              source: {
-                type: "inline",
-                encoding: "utf8",
-                data: "<h1>Report</h1>",
-              },
-            },
-          },
-        ],
-      },
-    ]
     render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={{ resolve: async () => new Blob(["<h1>Report</h1>"]) }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={htmlMessages}
-        artifactHtmlAssetOrigins={["https://assets.example/path"]}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        adapter: { resolve: async () => new Blob(["<h1>Report</h1>"]) },
+        messages: [
+          artifactMessage("html-message", {
+            id: "html",
+            filename: "report.html",
+            mimeType: "text/html",
+            sizeBytes: MAX_TEXT_PREVIEW_BYTES + 1,
+            source: {
+              type: "inline",
+              encoding: "utf8",
+              data: "<h1>Report</h1>",
+            },
+          }),
+        ],
+        artifactHtmlAssetOrigins: ["https://assets.example/path"],
+      })
     )
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
@@ -799,17 +598,7 @@ describe("artifact workspace", () => {
 
   it("renders localized RTL Artifacts controls", () => {
     const resolve = vi.fn<ArtifactAdapter["resolve"]>()
-    render(
-      <ArtifactWorkspaceProvider
-        locale="he"
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    render(workspace({ locale: "he", adapter: { resolve }, messages }))
 
     const summary = screen.getByText("ארטיפקטים").closest("summary")
     expect(summary?.closest("details")).toHaveAttribute("dir", "rtl")
@@ -820,17 +609,7 @@ describe("artifact workspace", () => {
   })
 
   it("opens an accessible unavailable state when the runtime has no resolver", async () => {
-    render(
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={undefined}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={messages.slice(0, 1)}
-      >
-        <ArtifactTestSurface />
-      </ArtifactWorkspaceProvider>
-    )
+    render(workspace({ adapter: undefined, messages: messages.slice(0, 1) }))
 
     fireEvent.click(screen.getByRole("button", { name: /^Open:/ }))
 
@@ -874,71 +653,60 @@ describe("artifact workspace", () => {
     messageId?: string
   }) =>
     render(
-      <ArtifactWorkspaceProvider
-        locale={locale}
-        adapter={{ resolve }}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={[
-          {
-            id: messageId,
-            role: "assistant",
-            content: [{ type: "data", name: "aos.artifact", data: artifact }],
-          },
-        ]}
-      >
-        <ArtifactToolResultCard
-          result={artifact}
-          occurrenceKey={`${messageId}:0`}
-        />
-        <ArtifactViewerContent />
-      </ArtifactWorkspaceProvider>
+      workspace({
+        locale,
+        adapter: { resolve },
+        messages: [artifactMessage(messageId, artifact)],
+        children: (
+          <>
+            <ArtifactToolResultCard
+              result={artifact}
+              occurrenceKey={`${messageId}:0`}
+            />
+            <ArtifactViewerContent />
+          </>
+        ),
+      })
     )
 
-  it("plays a published audio artifact inline with no download of its own", async () => {
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:audio-artifact")
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
-    renderPublishedArtifact({
+  it.each([
+    {
+      kind: "audio",
       artifact: audioArtifact,
-      resolve: async () => new Blob(["ID3"], { type: "audio/mpeg" }),
-    })
-
-    const player = await screen.findByLabelText("Audio output: intro.mp3")
-    expect(player).toBeInstanceOf(HTMLAudioElement)
-    expect(player).toHaveAttribute("src", "blob:audio-artifact")
-    expect(player).toHaveAttribute("controls")
-    expect(player).toHaveAttribute("preload", "metadata")
-    expect(
-      screen.queryByRole("button", { name: "Download" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: /^Open/ })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("region", { name: "Output preview" })
-    ).not.toBeInTheDocument()
-  })
-
-  it("plays a published video artifact inline", async () => {
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:video-artifact")
-    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
-    renderPublishedArtifact({
+      bytes: new Blob(["ID3"], { type: "audio/mpeg" }),
+      label: "Audio output: intro.mp3",
+      player: HTMLAudioElement,
+    },
+    {
+      kind: "video",
       artifact: videoArtifact,
-      resolve: async () => new Blob(["ftyp"], { type: "video/mp4" }),
-    })
+      bytes: new Blob(["ftyp"], { type: "video/mp4" }),
+      label: "Video output: walkthrough.mp4",
+      player: HTMLVideoElement,
+    },
+  ])(
+    "plays a published $kind artifact inline with no download or viewer of its own",
+    async ({ kind, artifact, bytes, label, player }) => {
+      vi.spyOn(URL, "createObjectURL").mockReturnValue(`blob:${kind}-artifact`)
+      vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined)
+      renderPublishedArtifact({ artifact, resolve: async () => bytes })
 
-    const player = await screen.findByLabelText("Video output: walkthrough.mp4")
-    expect(player).toBeInstanceOf(HTMLVideoElement)
-    expect(player).toHaveAttribute("src", "blob:video-artifact")
-    expect(player).toHaveAttribute("controls")
-    expect(player).toHaveAttribute("preload", "metadata")
-    expect(
-      screen.queryByRole("button", { name: "Download" })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("region", { name: "Output preview" })
-    ).not.toBeInTheDocument()
-  })
+      const element = await screen.findByLabelText(label)
+      expect(element).toBeInstanceOf(player)
+      expect(element).toHaveAttribute("src", `blob:${kind}-artifact`)
+      expect(element).toHaveAttribute("controls")
+      expect(element).toHaveAttribute("preload", "metadata")
+      expect(
+        screen.queryByRole("button", { name: "Download" })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: /^Open/ })
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("region", { name: "Output preview" })
+      ).not.toBeInTheDocument()
+    }
+  )
 
   it("reads an inline image's bytes once while the conversation keeps streaming", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image-artifact")
@@ -949,37 +717,24 @@ describe("artifact workspace", () => {
     // The workspace holds one adapter instance; what churns while an answer
     // streams is the projected descriptor, a new object for the same bytes.
     const adapter = { resolve }
-    const surface = (text: string) => (
-      <ArtifactWorkspaceProvider
-        locale="en"
-        adapter={adapter}
-        agentId="agent-aster"
-        sessionId="thread-aster-market"
-        messages={[
-          {
-            id: "media-message",
-            role: "assistant",
-            content: [
-              {
-                type: "data",
-                name: "aos.artifact",
-                data: { ...imageArtifact },
-              },
-            ],
-          },
+    const surface = (text: string) =>
+      workspace({
+        adapter,
+        messages: [
+          artifactMessage("media-message", { ...imageArtifact }),
           {
             id: "streaming",
             role: "assistant",
             content: [{ type: "text", text }],
           },
-        ]}
-      >
-        <ArtifactToolResultCard
-          result={{ ...imageArtifact }}
-          occurrenceKey="media-message:0"
-        />
-      </ArtifactWorkspaceProvider>
-    )
+        ],
+        children: (
+          <ArtifactToolResultCard
+            result={{ ...imageArtifact }}
+            occurrenceKey="media-message:0"
+          />
+        ),
+      })
 
     const { rerender } = render(surface("First token"))
     expect(
