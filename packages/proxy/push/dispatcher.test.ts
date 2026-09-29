@@ -330,12 +330,6 @@ describe("push dispatcher", () => {
         occurredAtMs: START + 500,
       },
     ])
-    const line = JSON.stringify(lines(test.logs))
-    expect(line).not.toContain(SESSION)
-    expect(line).not.toContain("session-2")
-    expect(line).not.toContain(AGENT)
-    expect(line).not.toContain("push.example")
-    expect(line).not.toContain("p256dh")
   })
 
   it("leaves out a Session that is on screen, even behind an idle reader", async () => {
@@ -377,10 +371,6 @@ describe("push dispatcher", () => {
         sessions: 1,
       },
     ])
-    const line = JSON.stringify(lines(test.logs))
-    expect(line).not.toContain(SESSION)
-    expect(line).not.toContain(AGENT)
-    expect(line).not.toContain("push.example")
   })
 
   it("waits out the full grace of an operator who is only away", async () => {

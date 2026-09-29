@@ -388,7 +388,7 @@ describe("proxy executable", () => {
     })
   })
 
-  it("preserves an explicit trimmed --ref without generating one", async () => {
+  it("preserves an explicit trimmed --ref, defaults to 72 hours, and needs no first-turn instruction", async () => {
     const { configFile } = await proxyConfig()
     let output = ""
 
@@ -404,8 +404,6 @@ describe("proxy executable", () => {
           "default",
           "--ref",
           " returning-guest ",
-          "--instruction",
-          "Continue.",
         ],
         {
           createLogger: () => captureLogs().logger,
@@ -429,30 +427,6 @@ describe("proxy executable", () => {
     ) as Record<string, unknown>
     expect(payload.ref).toBe("returning-guest")
     expect(payload.exp - payload.iat).toBe(72 * 60 * 60)
-  })
-
-  it("defaults to 72 hours and does not require a first-turn instruction", async () => {
-    const { configFile } = await proxyConfig()
-    let output = ""
-    await runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
-      createLogger: () => captureLogs().logger,
-      credentials: new CredentialValues(),
-      getenv: (name) =>
-        name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
-      randomBytes: (size) => Buffer.alloc(size, 1),
-      clock: () => Date.UTC(2026, 8, 15, 8),
-      writeOut: (value) => {
-        output += value
-      },
-    })
-
-    const token = new URLSearchParams(new URL(output.trim()).hash.slice(1)).get(
-      "invite"
-    )!
-    const payload = JSON.parse(
-      Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")
-    ) as Record<string, unknown>
-    expect(payload.exp).toBe(Date.UTC(2026, 8, 18, 8) / 1_000)
     expect(payload).not.toHaveProperty("firstTurn")
   })
 
