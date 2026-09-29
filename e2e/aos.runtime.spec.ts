@@ -363,7 +363,8 @@ const script = {
   standalonePermission: permissionRequest("permission-2"),
   /** `InitializeResponse._meta.aos` for the operator role. */
   initializeMeta: {
-    version: 2,
+    // The AOS extension's own version, not ACP's `protocolVersion`.
+    version: 1,
     role: "operator",
     extensions: {
       steer: true,
