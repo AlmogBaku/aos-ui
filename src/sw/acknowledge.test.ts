@@ -24,7 +24,10 @@ describe("the answer a window owes a notification click", () => {
     // The port the worker held is closed, so a late answer reaches nothing and
     // the click it belonged to -- already handled by an opened window -- is not
     // reopened by it.
-    expect(() => port.postMessage({ type: "aos:open-ack" })).not.toThrow()
-    await expect(answered).resolves.toBe(false)
+    port.postMessage({ type: "aos:open-ack" })
+    // Drain the microtask queue so any mistakenly live message handler would
+    // have had a chance to run before we verify the answer hasn't changed.
+    await Promise.resolve()
+    expect(await answered).toBe(false)
   })
 })
