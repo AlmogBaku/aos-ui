@@ -1,9 +1,10 @@
 // @vitest-environment node
 
-import { readdir, readFile } from "node:fs/promises"
+import { readFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
 
+import { productionSources } from "../../test/support/production-sources"
 import { CANONICAL_TOOL_NAMES } from "./adapters/hermes/tool-data"
 import { OPENCODE_CANONICAL_TOOL_NAMES } from "./adapters/opencode/tool-names"
 
@@ -38,23 +39,6 @@ const TEST_ONLY_IMPORT =
 const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
-async function productionFiles(root: string): Promise<string[]> {
-  const entries = await readdir(root, { withFileTypes: true })
-  return (
-    await Promise.all(
-      entries.flatMap((entry) => {
-        const path = join(root, entry.name)
-        if (entry.isDirectory()) return [productionFiles(path)]
-        return entry.isFile() &&
-          /\.tsx?$/u.test(entry.name) &&
-          !/\.(?:test|bun-spec)\.tsx?$/u.test(entry.name)
-          ? [Promise.resolve([path])]
-          : []
-      })
-    )
-  ).flat()
-}
-
 describe("runtime adapter boundary", () => {
   it("keeps runtime vocabulary out of browser, protocol, and common proxy modules", async () => {
     const proxyRoot = import.meta.dirname
@@ -69,21 +53,21 @@ describe("runtime adapter boundary", () => {
       "u"
     )
     const files = [
-      ...(await productionFiles(join(repositoryRoot, "src"))).filter(
-        (path) => !path.startsWith(fixtureRoot)
+      ...(await productionSources(join(repositoryRoot, "src"))).filter(
+        ([path]) => !path.startsWith(fixtureRoot)
       ),
-      ...(await productionFiles(join(repositoryRoot, "packages/protocol"))),
+      ...(await productionSources(join(repositoryRoot, "packages/protocol"))),
       ...(
         await Promise.all(
           COMMON_PROXY_DIRECTORIES.map((directory) =>
-            productionFiles(join(proxyRoot, directory))
+            productionSources(join(proxyRoot, directory))
           )
         )
       ).flat(),
     ]
 
-    for (const path of files) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of files) {
+      const source = stripComments(text)
       expect(
         source.match(RUNTIME_NAME_LITERAL)?.[0],
         `${path} names a runtime`
@@ -101,14 +85,13 @@ describe("runtime adapter boundary", () => {
     const commonProxyFiles = (
       await Promise.all(
         ["acp", "auth", "core", "guest", "mcp-apps", "routes", "voice"].map(
-          (directory) => productionFiles(join(proxyRoot, directory))
+          (directory) => productionSources(join(proxyRoot, directory))
         )
       )
     ).flat()
-    const browserFiles = await productionFiles(join(repositoryRoot, "src"))
+    const browserFiles = await productionSources(join(repositoryRoot, "src"))
 
-    for (const path of [...commonProxyFiles, ...browserFiles]) {
-      const source = await readFile(path, "utf8")
+    for (const [path, source] of [...commonProxyFiles, ...browserFiles]) {
       expect(source, path).not.toMatch(
         /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
       )
@@ -117,20 +100,18 @@ describe("runtime adapter boundary", () => {
   })
 
   it("keeps AG-UI out of the proxy", async () => {
-    const files = await productionFiles(import.meta.dirname)
+    const files = await productionSources(import.meta.dirname)
 
-    for (const path of files) {
-      const source = await readFile(path, "utf8")
+    for (const [path, source] of files) {
       expect(source, path).not.toMatch(/(?:from\s+|import\s*\()["']@ag-ui\//u)
     }
   })
 
   /** Adapters speak the proxy's turn vocabulary; only the translator knows ACP. */
   it("keeps the ACP wire out of the server adapters", async () => {
-    const files = await productionFiles(join(import.meta.dirname, "adapters"))
+    const files = await productionSources(join(import.meta.dirname, "adapters"))
 
-    for (const path of files) {
-      const source = await readFile(path, "utf8")
+    for (const [path, source] of files) {
       expect(source, path).not.toMatch(
         /(?:from\s+|import\s*\()["'](?:@agentclientprotocol\/|[^"']*protocol\/acp(?:\.ts)?["'])/u
       )
@@ -143,12 +124,11 @@ describe("runtime adapter boundary", () => {
    */
   it("keeps the configuration schema behind the configuration loader", async () => {
     const proxyRoot = import.meta.dirname
-    const files = await productionFiles(proxyRoot)
+    const files = await productionSources(proxyRoot)
     const importers: string[] = []
 
-    for (const path of files) {
+    for (const [path, source] of files) {
       if (path === join(proxyRoot, "config.ts")) continue
-      const source = await readFile(path, "utf8")
       const specifiers = source.matchAll(
         /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']\.\/config["']/gu
       )
@@ -161,13 +141,12 @@ describe("runtime adapter boundary", () => {
 
   it("selects every server adapter in exactly one production module", async () => {
     const proxyRoot = import.meta.dirname
-    const files = await productionFiles(proxyRoot)
+    const files = await productionSources(proxyRoot)
     const selector = join(proxyRoot, "adapters/create-runtime.ts")
 
     for (const provider of ["hermes", "opencode", "openclaw"]) {
       const selectors: string[] = []
-      for (const path of files) {
-        const source = await readFile(path, "utf8")
+      for (const [path, source] of files) {
         if (new RegExp(`case\\s+["']${provider}["']`, "u").test(source))
           selectors.push(path)
       }
@@ -183,10 +162,10 @@ describe("runtime adapter boundary", () => {
     const proxyRoot = import.meta.dirname
     const importers: string[] = []
 
-    for (const path of await productionFiles(proxyRoot)) {
+    for (const [path, text] of await productionSources(proxyRoot)) {
       const file = relative(proxyRoot, path)
       if (TEST_ONLY_MODULE.test(file)) continue
-      const source = stripComments(await readFile(path, "utf8"))
+      const source = stripComments(text)
       if (TEST_ONLY_IMPORT.test(source)) importers.push(file)
     }
 
@@ -219,9 +198,10 @@ describe("vocabulary", () => {
     {
       // Any identifier holding either word, in any case and position. A match
       // after a comment opener on its line, or inside a dotted string, is
-      // skipped: English prose and log event names are not identifiers.
+      // skipped: English prose and log event names are not identifiers. The
+      // lookahead only admits candidate words to the costly lookbehind.
       retired:
-        /(?<!(?:\/\/|\/\*|^[ \t]*\*).*|["'`][\w.]*)\b\w*(?:[Rr]oom|[Ss]eat)\w*/mu,
+        /\b(?=\w*(?:[Rr]oom|[Ss]eat))(?<!(?:\/\/|\/\*|^[ \t]*\*).*|["'`][\w.]*)\w*(?:[Rr]oom|[Ss]eat)\w*/mu,
       scope: "packages/proxy/**",
       reason:
         "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
@@ -284,8 +264,7 @@ describe("vocabulary", () => {
     const repositoryRoot = join(import.meta.dirname, "../..")
     for (const { retired, scope, reason } of retiredNames) {
       const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))
-      for (const path of await productionFiles(directory)) {
-        const source = await readFile(path, "utf8")
+      for (const [path, source] of await productionSources(directory)) {
         expect(
           source.match(retired)?.[0],
           `${relative(repositoryRoot, path)}: ${reason}`
@@ -328,17 +307,17 @@ describe("member boundary", () => {
    * the guest rules sit below every HTTP route rather than reaching into one.
    */
   it("keeps ACP and the routes out of the core and the guest middleware", async () => {
-    const core = await productionFiles(join(proxyRoot, "core"))
-    const middleware = await productionFiles(
+    const core = await productionSources(join(proxyRoot, "core"))
+    const middleware = await productionSources(
       join(proxyRoot, "guest/middleware")
     )
 
-    for (const path of [...core, ...middleware]) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of [...core, ...middleware]) {
+      const source = stripComments(text)
       expect(source, path).not.toMatch(ACP_IMPORT)
     }
-    for (const path of middleware) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of middleware) {
+      const source = stripComments(text)
       expect(source, path).not.toMatch(importsFrom("acp"))
       expect(source, path).not.toMatch(importsFrom("routes"))
     }
@@ -350,13 +329,13 @@ describe("member boundary", () => {
    */
   it("keeps guest code out of the core and the ACP transport", async () => {
     const files = [
-      ...(await productionFiles(join(proxyRoot, "acp"))),
-      ...(await productionFiles(join(proxyRoot, "core"))),
+      ...(await productionSources(join(proxyRoot, "acp"))),
+      ...(await productionSources(join(proxyRoot, "core"))),
     ]
     const roleReaders: string[] = []
 
-    for (const path of files) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of files) {
+      const source = stripComments(text)
       expect(source, path).not.toMatch(importsFrom("guest"))
       expect(source, path).not.toMatch(importsFrom("auth\\/guest-[\\w-]+"))
       expect(source, path).not.toMatch(/\bGuestPolicy\b|\bcontext\.guest\b/u)
@@ -424,14 +403,14 @@ describe("member boundary", () => {
 
     const builders: string[] = []
     const notifiers: string[] = []
-    for (const path of await productionFiles(proxyRoot)) {
+    for (const [path, text] of await productionSources(proxyRoot)) {
       const file = relative(proxyRoot, path)
       if (
         file.startsWith("acp/translate/") ||
         /\/(?:test-[\w-]+|wire-contract)\.ts$/u.test(file)
       )
         continue
-      const source = stripComments(await readFile(path, "utf8"))
+      const source = stripComments(text)
       if (/\bsessionUpdate\s*:/u.test(source)) builders.push(file)
       if (/\.notify\s*\(/u.test(source)) notifiers.push(file)
     }
@@ -445,8 +424,10 @@ describe("member boundary", () => {
    * connection's identity never compare it.
    */
   it("never branches the ACP transport on the role", async () => {
-    for (const path of await productionFiles(join(proxyRoot, "acp"))) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of await productionSources(
+      join(proxyRoot, "acp")
+    )) {
+      const source = stripComments(text)
       expect(source, path).not.toMatch(ROLE_BRANCH)
       const translates =
         relative(proxyRoot, path).startsWith("acp/translate/") ||
@@ -463,8 +444,8 @@ describe("logging", () => {
   it("writes every proxy line through the injected logger", async () => {
     const writers: string[] = []
 
-    for (const path of await productionFiles(proxyRoot)) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of await productionSources(proxyRoot)) {
+      const source = stripComments(text)
       if (/\bconsole\.\w+/u.test(source))
         writers.push(relative(proxyRoot, path))
     }
@@ -476,8 +457,10 @@ describe("logging", () => {
   it("names no core event after ACP", async () => {
     const named: string[] = []
 
-    for (const path of await productionFiles(join(proxyRoot, "core"))) {
-      const source = stripComments(await readFile(path, "utf8"))
+    for (const [path, text] of await productionSources(
+      join(proxyRoot, "core")
+    )) {
+      const source = stripComments(text)
       if (/["'`]acp\./u.test(source)) named.push(relative(proxyRoot, path))
     }
 

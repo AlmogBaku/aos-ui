@@ -18,8 +18,9 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.shared.json --noEmit && tsc -p tsconfig.test.json --noEmit && tsc -p tsconfig.tools.json --noEmit && tsc -p tsconfig.proxy.json --noEmit && tsc -p tsconfig.tools-mcp.json --noEmit && tsc -p tsconfig.tools-mcp-views.json --noEmit && tsc -p tsconfig.lifecycle.json --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --project !gate",
+    "test:gate": "vitest run --project gate",
+    "test:watch": "vitest --project !gate",
     "test:e2e": "playwright test"
   },
   "dependencies": {
