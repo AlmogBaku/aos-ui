@@ -365,6 +365,8 @@ describe("ACP connection", () => {
     expect(proxy.paramsOf("initialize")).toMatchObject({
       protocolVersion: 2,
       info: CLIENT_INFO,
+      // The question composer answers form elicitations.
+      capabilities: { elicitation: { form: {} } },
     })
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
     connection.close()

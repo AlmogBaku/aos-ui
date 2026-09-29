@@ -88,7 +88,7 @@ describe("browser connection faults", () => {
     await clock.advance(PART_GRACE_MS)
     expect(methodsOf(frames, SESSION)).toEqual([
       "session/resume",
-      "session/close",
+      AOS_METHODS.session.part,
     ])
   })
 

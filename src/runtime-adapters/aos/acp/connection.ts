@@ -49,9 +49,7 @@ import {
   AosHistoryPageResponseMetaSchema,
   AosHistoryPageTagSchema,
   AosInitializeMetaSchema,
-  AosSessionInvalidatedNotificationSchema,
   AosSessionResumeResponseMetaSchema,
-  AosSteerAcceptedNotificationSchema,
   AosSteerResponseSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
@@ -114,10 +112,7 @@ const ElicitationScopeSchema = z.object({ sessionId: z.string().min(1) })
 
 const NOTIFICATION_PARSERS: Readonly<Record<string, ParamsParser<unknown>>> = {
   [AOS_METHODS.notify.activity]: AosActivityNotificationSchema,
-  [AOS_METHODS.notify.steerAccepted]: AosSteerAcceptedNotificationSchema,
   [AOS_METHODS.notify.composerPrefill]: AosComposerPrefillNotificationSchema,
-  [AOS_METHODS.notify.sessionInvalidated]:
-    AosSessionInvalidatedNotificationSchema,
   [AOS_METHODS.notify.catalogInvalidated]: z.unknown().optional(),
   [AOS_METHODS.notify.error]: AosErrorNotificationSchema,
 }
@@ -925,9 +920,13 @@ export function createAcpConnection(
         // the proxy's version acts as the AOS extension version instead.
         version: buildId ?? clientInfo.version,
       },
-      // This client pages older history itself, so a from-start resume may
-      // replay only the newest page.
-      capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+      // The question composer answers form elicitations, so the proxy asks
+      // this client its Session's questions. This client pages older history
+      // itself, so a from-start resume may replay only the newest page.
+      capabilities: {
+        elicitation: { form: {} },
+        _meta: { [AOS_META_KEY]: { historyPages: true } },
+      },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
     // Both sides carry a build id: a mismatch means the proxy serves another

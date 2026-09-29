@@ -2,11 +2,11 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import type { ToolCallMessagePart } from "@assistant-ui/core"
 import { describe, expect, it } from "vitest"
 
-import { AOS_METHODS, AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
+import { AOS_PLAN_ID, AOS_STOP_REASONS } from "@aos/protocol/acp"
 
 import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { isMcpAppToolPart } from "@/components/mcp-apps/tool-part"
-import { COMPACTION_DATA_PART_NAME, steerMessageId } from "@/lib/message-parts"
+import { COMPACTION_DATA_PART_NAME } from "@/lib/message-parts"
 import {
   permissionProviderMetadata,
   readAosToolArtifact,
@@ -17,7 +17,6 @@ import { TERMINAL_TAIL_LIMIT } from "./projector-terminals"
 
 import {
   applyApprovals,
-  applyNotification,
   applyUpdate,
   clearTranscript,
   failLatestTurn,
@@ -463,9 +462,9 @@ describe("applyUpdate tool calls", () => {
             toolName: "grep",
             result: { status: "answered" },
           },
+          { type: "text", text: "Thanks" },
         ],
       },
-      { id: "a2", content: [{ type: "text", text: "Thanks" }] },
     ])
   })
 
@@ -699,12 +698,14 @@ describe("applyUpdate execution", () => {
     stateUpdate({ state: "idle", stopReason: "end_turn" }),
   ])
   const COMPLETE = { status: { type: "complete", reason: "stop" } }
+  /** The next prompt, which the next run answers. */
+  const asked = fold([userChunk("u2", "Again")], replayed)
   /** The next run, with the turn its first chunk opened. */
-  const answering = fold([liveStart, agentChunk("a2", "Sure")], replayed)
+  const answering = fold([liveStart, agentChunk("a2", "Sure")], asked)
   /** A run blocked before it wrote anything, and the turn hosting its ask. */
   const interrupted = fold(
     [liveStart, stateUpdate({ state: "requires_action" })],
-    replayed
+    asked
   )
 
   it("opens the turn the running run streams into", () => {
@@ -713,7 +714,7 @@ describe("applyUpdate execution", () => {
       turnId: "run-1",
       startedAt: Date.parse(STARTED_AT),
     })
-    expect(toThreadMessages(answering)[2]).toMatchObject({
+    expect(toThreadMessages(answering)[3]).toMatchObject({
       id: "a2",
       status: { type: "running" },
     })
@@ -725,9 +726,9 @@ describe("applyUpdate execution", () => {
         liveStart,
         toolCall({ title: "grep" }, { ...TURN_META, messageId: "a2" }),
       ],
-      replayed
+      asked
     )
-    expect(toThreadMessages(working)[2]).toMatchObject({
+    expect(toThreadMessages(working)[3]).toMatchObject({
       id: "a2",
       status: { type: "running" },
     })
@@ -767,16 +768,20 @@ describe("applyUpdate execution", () => {
       "totalStreamTime"
     )
 
-    // The run goes on in the stored turn, or in one of its own below it.
+    // The run goes on in the stored turn, whose next response joins it.
     const ended = fold(
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
       resumed
     )
     expect(toThreadMessages(ended)[1]).toMatchObject(COMPLETE)
     const moved = fold([agentChunk("a2", "Step two")], resumed)
-    expect(toThreadMessages(moved)[1]).toMatchObject(COMPLETE)
-    expect(toThreadMessages(moved)[2]).toMatchObject({
-      id: "a2",
+    expect(toThreadMessages(moved)).toHaveLength(2)
+    expect(toThreadMessages(moved)[1]).toMatchObject({
+      id: "a1",
+      content: [
+        { type: "text", text: "Step one" },
+        { type: "text", text: "Step two" },
+      ],
       status: { type: "running" },
     })
   })
@@ -788,15 +793,15 @@ describe("applyUpdate execution", () => {
       turnId: "run-1",
       startedAt: Date.parse(STARTED_AT),
     })
-    expect(toThreadMessages(blocked)[2]).toMatchObject({
+    expect(toThreadMessages(blocked)[3]).toMatchObject({
       status: { type: "requires-action", reason: "interrupt" },
     })
   })
 
   it("hosts an interrupt that arrives before the run's first turn", () => {
     const messages = toThreadMessages(interrupted)
-    expect(messages).toHaveLength(3)
-    expect(messages[2]).toMatchObject({
+    expect(messages).toHaveLength(4)
+    expect(messages[3]).toMatchObject({
       role: "assistant",
       content: [],
       status: { type: "requires-action", reason: "interrupt" },
@@ -807,7 +812,7 @@ describe("applyUpdate execution", () => {
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
       interrupted
     )
-    expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
+    expect(toThreadMessages(ended)[3]).toMatchObject(COMPLETE)
   })
 
   it("gives a replayed wait to the turn that asked instead of an empty one", () => {
@@ -830,8 +835,8 @@ describe("applyUpdate execution", () => {
       interrupted
     )
     const messages = toThreadMessages(resumed)
-    expect(messages).toHaveLength(3)
-    expect(messages[2]).toMatchObject({
+    expect(messages).toHaveLength(4)
+    expect(messages[3]).toMatchObject({
       id: "a2",
       role: "assistant",
       content: [{ type: "text", text: "Allowed" }],
@@ -842,13 +847,13 @@ describe("applyUpdate execution", () => {
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
       resumed
     )
-    expect(toThreadMessages(ended)[2]).toMatchObject(COMPLETE)
+    expect(toThreadMessages(ended)[3]).toMatchObject(COMPLETE)
 
     // A resumed run streams its answer without announcing a new running state,
     // so the host it takes over keeps the pending status until the run settles.
     const unannounced = fold([agentChunk("a2", "Allowed")], interrupted)
-    expect(toThreadMessages(unannounced)).toHaveLength(3)
-    expect(toThreadMessages(unannounced)[2]).toMatchObject({
+    expect(toThreadMessages(unannounced)).toHaveLength(4)
+    expect(toThreadMessages(unannounced)[3]).toMatchObject({
       id: "a2",
       content: [{ type: "text", text: "Allowed" }],
       status: { type: "requires-action", reason: "interrupt" },
@@ -857,7 +862,7 @@ describe("applyUpdate execution", () => {
       [stateUpdate({ state: "idle", stopReason: "end_turn" })],
       unannounced
     )
-    expect(toThreadMessages(settled)[2]).toMatchObject(COMPLETE)
+    expect(toThreadMessages(settled)[3]).toMatchObject(COMPLETE)
   })
 
   it("keeps an interrupt host the run has already written into", () => {
@@ -873,12 +878,11 @@ describe("applyUpdate execution", () => {
     )
     const messages = toThreadMessages(resumed)
     expect(messages).toHaveLength(4)
-    expect(messages[2]).toMatchObject({
-      content: [{ type: "tool-call", toolCallId: "t1" }],
-    })
     expect(messages[3]).toMatchObject({
-      id: "a2",
-      content: [{ type: "text", text: "Allowed" }],
+      content: [
+        { type: "tool-call", toolCallId: "t1" },
+        { type: "text", text: "Allowed" },
+      ],
       status: { type: "running" },
     })
   })
@@ -893,7 +897,7 @@ describe("applyUpdate execution", () => {
       turnId: "run-1",
       stopReason: "end_turn",
     })
-    expect(toThreadMessages(idle)[2]).toMatchObject(COMPLETE)
+    expect(toThreadMessages(idle)[3]).toMatchObject(COMPLETE)
   })
 
   it("leaves the history alone when a run ends without a turn", () => {
@@ -927,7 +931,7 @@ describe("applyUpdate execution", () => {
       stopReason: AOS_STOP_REASONS.error,
       error: { code: "provider_error", message: "Broke" },
     })
-    expect(toThreadMessages(failed)[2]).toMatchObject({
+    expect(toThreadMessages(failed)[3]).toMatchObject({
       status: {
         type: "incomplete",
         reason: "error",
@@ -948,7 +952,7 @@ describe("applyUpdate execution", () => {
     )
     // Nothing stringifies the failure on its way to the UI, so a code with no
     // provider description still arrives as the one shape the notice localizes.
-    expect(toThreadMessages(failed)[2]?.status).toEqual({
+    expect(toThreadMessages(failed)[3]?.status).toEqual({
       type: "incomplete",
       reason: "error",
       error: { code: "AOS_PROVIDER_RUN_FAILED" },
@@ -961,7 +965,7 @@ describe("applyUpdate execution", () => {
       [stateUpdate({ state: "idle", stopReason: AOS_STOP_REASONS.error })],
       answering
     )
-    expect(toThreadMessages(failed)[2]?.status).toEqual({
+    expect(toThreadMessages(failed)[3]?.status).toEqual({
       type: "incomplete",
       reason: "error",
     })
@@ -982,7 +986,7 @@ describe("applyUpdate execution", () => {
       answering
     )
     expect(cancelled.execution.status).toBe("idle")
-    expect(toThreadMessages(cancelled)[2]).toMatchObject({
+    expect(toThreadMessages(cancelled)[3]).toMatchObject({
       status: { type: "incomplete", reason: "cancelled" },
     })
   })
@@ -1289,161 +1293,6 @@ describe("artifact links", () => {
   })
 })
 
-describe("applyNotification", () => {
-  const answered = fold([userChunk("u1", "Hi"), agentChunk("a1", "Hello")])
-
-  const correction = {
-    sessionId: "s1",
-    ...TURN_META,
-    requestId: "steer-1",
-    text: "Also check the logs",
-    delivery: "steered",
-  }
-  const steer = (state: ProjectorState) =>
-    applyNotification(state, AOS_METHODS.notify.steerAccepted, correction)
-
-  it("appends an accepted correction as a user turn at the tail", () => {
-    const messages = toThreadMessages(steer(answered))
-
-    expect(messages).toHaveLength(3)
-    expect(messages[2]).toMatchObject({
-      id: steerMessageId("steer-1"),
-      role: "user",
-      content: [{ type: "text", text: "Also check the logs" }],
-    })
-  })
-
-  it("lands after the prompt of a run that has written nothing yet", () => {
-    const asked = fold(
-      [userChunk("u2", "And again"), stateUpdate({ state: "running" })],
-      answered
-    )
-    const messages = toThreadMessages(steer(asked))
-
-    expect(messages.map((message) => message.id)).toEqual([
-      "u1",
-      "a1",
-      "u2",
-      steerMessageId("steer-1"),
-    ])
-    expect(messages[1]).toMatchObject({
-      content: [{ type: "text", text: "Hello" }],
-    })
-  })
-
-  it("opens the redirected output in a fresh turn below the correction", () => {
-    const streaming = fold(
-      [
-        userChunk("u2", "And again"),
-        stateUpdate({ state: "running" }),
-        agentChunk("a2", "Partial"),
-      ],
-      answered
-    )
-    const redirected = fold(
-      [agentChunk("a3", "Checking the logs")],
-      steer(streaming)
-    )
-    const messages = toThreadMessages(redirected)
-
-    expect(messages.map((message) => message.id)).toEqual([
-      "u1",
-      "a1",
-      "u2",
-      "a2",
-      steerMessageId("steer-1"),
-      "a3",
-    ])
-    expect(messages[3]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial" }],
-    })
-    expect(messages[5]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Checking the logs" }],
-    })
-  })
-
-  it("moves what the interrupted turn is still addressed below the correction", () => {
-    const streaming = fold(
-      [
-        userChunk("u2", "And again"),
-        stateUpdate({ state: "running" }),
-        agentChunk("a2", "Partial"),
-      ],
-      answered
-    )
-    // The provider keeps naming the turn the correction interrupted.
-    const continued = fold(
-      [agentChunk("a2", "Checking the logs")],
-      steer(streaming)
-    )
-    const messages = toThreadMessages(continued)
-
-    expect(messages.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ])
-    expect(messages[3]).toMatchObject({
-      id: "a2",
-      content: [{ type: "text", text: "Partial" }],
-    })
-    expect(messages[4]).toMatchObject({ id: steerMessageId("steer-1") })
-    expect(messages[5]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Checking the logs" }],
-    })
-  })
-
-  it("settles the sealed turn at the correction and the fresh one at idle", () => {
-    const streaming = fold(
-      [
-        userChunk("u2", "And again"),
-        stateUpdate({ state: "running" }),
-        agentChunk("a2", "Partial"),
-      ],
-      answered
-    )
-    const corrected = toThreadMessages(steer(streaming))
-    expect(corrected[3]).toMatchObject({
-      id: "a2",
-      status: { type: "complete" },
-    })
-
-    const settled = toThreadMessages(
-      fold(
-        [agentChunk("a3", "Checking the logs"), stateUpdate({ state: "idle" })],
-        steer(streaming)
-      )
-    )
-    expect(settled[3]).toMatchObject({ id: "a2", status: { type: "complete" } })
-    expect(settled[5]).toMatchObject({ id: "a3", status: { type: "complete" } })
-  })
-
-  it("grants one correction once however often it is announced", () => {
-    const once = steer(answered)
-
-    expect(steer(once)).toBe(once)
-  })
-
-  it("ignores a malformed payload and an unknown method", () => {
-    expect(
-      applyNotification(answered, AOS_METHODS.notify.steerAccepted, {
-        sessionId: "s1",
-      })
-    ).toBe(answered)
-    expect(
-      applyNotification(answered, AOS_METHODS.notify.activity, {
-        sessionId: "s1",
-      })
-    ).toBe(answered)
-  })
-})
-
 describe("from-start replay", () => {
   const page: readonly Entry[] = [
     userChunk("u1", "Ship it"),
@@ -1560,73 +1409,93 @@ describe("local turn bookkeeping", () => {
   })
 })
 
-describe("saved ids", () => {
-  /** A turn streamed under the proxy's live ids, still running. */
-  const streamed = fold([
-    userChunk("u1", "Hi"),
-    stateUpdate({ state: "running" }),
-    agentChunk("run-1:assistant", "Checking"),
-    toolCall({ title: "grep" }, { ...TURN_META, messageId: "run-1:assistant" }),
-    agentChunk("run-1:assistant:2", "Done"),
+describe("one turn per user message", () => {
+  const STARTED_AT = "2026-09-22T10:00:00.000Z"
+  const COMPLETED_AT = "2026-09-22T10:00:04.500Z"
+  /** A run's responses and thoughts, each its own message, as the proxy streams them. */
+  const streaming = fold([
+    userChunk("u1", "Ship it"),
+    stateUpdate({ state: "running" }, { ...TURN_META, at: STARTED_AT }),
+    thoughtChunk("r1-thought", "Plan"),
+    agentChunk("r1", "Checking"),
+    toolCall({ title: "grep" }, { ...TURN_META, messageId: "r1" }),
+    agentChunk("r2", "Done"),
   ])
-  const ended = (savedIds: Record<string, string>, from = streamed) =>
-    fold(
-      [
-        stateUpdate(
-          { state: "idle", stopReason: "end_turn" },
-          { ...TURN_META, savedIds }
-        ),
-      ],
-      from
-    )
-  const ids = (state: ProjectorState) =>
-    toThreadMessages(state).map((message) => message.id)
+  const ended = fold(
+    [
+      stateUpdate(
+        { state: "idle", stopReason: "end_turn" },
+        { ...TURN_META, at: COMPLETED_AT }
+      ),
+    ],
+    streaming
+  )
 
-  it("re-keys each streamed turn onto the id the provider saved it under", () => {
-    const saved = ended({
-      u1: "hermes-row-1",
-      "run-1:assistant": "hermes-row-2",
-      "run-1:assistant:2": "hermes-row-3",
-    })
-    expect(ids(saved)).toEqual(["hermes-row-1", "hermes-row-2", "hermes-row-3"])
-    expect(toThreadMessages(saved)[2]).toMatchObject({
-      content: [{ type: "text", text: "Done" }],
-      status: { type: "complete", reason: "stop" },
-    })
-  })
-
-  it("folds the replies the provider saved as one message, in their order", () => {
-    const saved = ended({
-      u1: "hermes-row-1",
-      "run-1:assistant": "hermes-row-2",
-      "run-1:assistant:2": "hermes-row-2",
-    })
-    expect(ids(saved)).toEqual(["hermes-row-1", "hermes-row-2"])
-    expect(toThreadMessages(saved)[1]).toMatchObject({
+  it("shows a run's messages as one message, in arrival order, open until idle", () => {
+    const [user, turn, ...rest] = toThreadMessages(streaming)
+    expect(rest).toEqual([])
+    expect(user).toMatchObject({ id: "u1", role: "user" })
+    expect(turn).toMatchObject({
+      id: "r1-thought",
+      role: "assistant",
       content: [
+        { type: "reasoning", text: "Plan" },
         { type: "text", text: "Checking" },
         { type: "tool-call", toolCallId: "t1" },
         { type: "text", text: "Done" },
       ],
+      status: { type: "running" },
+    })
+    expect(toThreadMessages(ended)[1]).toMatchObject({
+      id: "r1-thought",
       status: { type: "complete", reason: "stop" },
+      metadata: {
+        timing: {
+          streamStartTime: Date.parse(STARTED_AT),
+          totalStreamTime: 4_500,
+          totalChunks: 3,
+          toolCallCount: 1,
+        },
+      },
     })
   })
 
-  it("keeps one message when the saved id is already projected", () => {
-    const replayed = fold([agentChunk("hermes-row-3", "Done")], streamed)
-    const saved = ended({ "run-1:assistant:2": "hermes-row-3" }, replayed)
-    expect(ids(saved)).toEqual(["u1", "run-1:assistant", "hermes-row-3"])
+  it("rebuilds the same turn from the provider's stored messages", () => {
+    const stored = fold(
+      [
+        userChunk("u1", "Ship it"),
+        thoughtChunk("r1-thought", "Plan"),
+        agentChunk("r1", "Checking"),
+        toolCall(
+          { title: "grep", status: "completed" },
+          { ...TURN_META, messageId: "r1" }
+        ),
+        agentChunk("r2", "Done"),
+        userChunk("u2", "Again"),
+        agentChunk("r3", "Again done"),
+      ],
+      clearTranscript(ended)
+    )
+    const messages = toThreadMessages(stored)
+    expect(messages.map(({ id, role }) => [id, role])).toEqual([
+      ["u1", "user"],
+      ["r1-thought", "assistant"],
+      ["u2", "user"],
+      ["r3", "assistant"],
+    ])
+    expect(messages[1]?.content).toEqual(toThreadMessages(ended)[1]?.content)
   })
 
-  it("leaves unlisted turns as they are and ignores an id it does not hold", () => {
-    const saved = ended({ u1: "hermes-row-1", missing: "hermes-row-9" })
-    expect(ids(saved)).toEqual([
-      "hermes-row-1",
-      "run-1:assistant",
-      "run-1:assistant:2",
-    ])
-    const plain = ended({})
-    expect(plain.messages[0]).toBe(streamed.messages[0])
+  it("keeps a turn nothing touched reference-equal", () => {
+    const later = fold([userChunk("u2", "Again")], ended)
+    expect(toThreadMessages(later)[1]).toBe(toThreadMessages(ended)[1])
+  })
+
+  it("retains a turn with every message it groups", () => {
+    expect(retainMessages(ended, ["u1", "r1-thought"])).toBe(ended)
+    expect(
+      toThreadMessages(retainMessages(ended, ["u1"])).map(({ id }) => id)
+    ).toEqual(["u1"])
   })
 })
 

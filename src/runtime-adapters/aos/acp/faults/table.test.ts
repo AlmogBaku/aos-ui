@@ -94,8 +94,8 @@ const ROWS: Row[] = [
   },
   {
     // The browser stops reading on a turn that has outgrown its journal, so
-    // its resume is answered with a resync, it replays the provider's store
-    // from the start once, and follows the turn from there.
+    // its one resume catches up from the provider's store, which it joins to
+    // what it holds by message id, and follows the turn from there.
     fault: "the journal prunes a slow reader's cursor",
     journal: 1,
     inject: (pipe) => pipe.sockets[0]!.halfOpen(),
@@ -106,7 +106,7 @@ const ROWS: Row[] = [
     bound: LIVENESS_SILENCE_MS + REQUEST_DEADLINE_MS.probe + baseMs,
     status: "ready",
     session: "joined",
-    resumes: 2,
+    resumes: 1,
     transcript: WHOLE,
   },
   {
@@ -157,7 +157,7 @@ const ROWS: Row[] = [
     bound: baseMs,
     status: "ready",
     session: "gone",
-    resumes: 2,
+    resumes: 1,
     transcript: HELD,
   },
 ]
@@ -187,7 +187,7 @@ describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
       { clientId: "client-1" }
     )
     await clock.advance(0)
-    await prompted
+    const { messageId: userMessageId } = await prompted
     test.sources[0]!.emit(turnStarted())
     chunk(test.sources[0], "Live")
     await clock.advance(0)
@@ -199,9 +199,10 @@ describe.each([0, 0.9999])("browser fault table (jitter %s)", (jitter) => {
 
     row.inject(pipe, test)
     chunk(test.sources[0], " reply")
-    // The provider stores the turn as it streams.
+    // The provider stores the turn as it streams, the prompt under the id its
+    // answer named.
     stored.push(
-      message("user-1", "user", "Go"),
+      message(userMessageId, "user", "Go"),
       message("assistant-1", "assistant", "Live reply")
     )
     let elapsed = 0

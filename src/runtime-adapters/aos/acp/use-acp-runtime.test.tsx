@@ -540,36 +540,6 @@ describe("useAcpRuntime", () => {
     expect(fake.replay).toHaveBeenCalledTimes(1)
   })
 
-  it("replays the Session again when the proxy invalidates it", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(chunkUpdate("a1", "On it"))
-    })
-
-    await act(async () => {
-      fake.notify(AOS_METHODS.notify.sessionInvalidated, {
-        sessionId: "other-session",
-      })
-    })
-    expect(fake.replay).toHaveBeenCalledTimes(1)
-
-    await act(async () => {
-      fake.notify(AOS_METHODS.notify.sessionInvalidated, {
-        sessionId: SESSION_ID,
-      })
-    })
-    expect(fake.replay).toHaveBeenCalledTimes(2)
-    expect(fake.replay).toHaveBeenLastCalledWith(SESSION_ID)
-    // The replay rebuilds the transcript it dropped, rather than doubling it.
-    act(() => {
-      fake.emit(chunkUpdate("a1", "On it"))
-    })
-    expect(visible(result.current)).toEqual([
-      { id: "a1", role: "assistant", text: "On it" },
-    ])
-  })
-
   it("ends the run of a Session the proxy reports gone", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
@@ -872,6 +842,7 @@ describe("useAcpRuntime", () => {
     it("does not reload a failure its reply already shows", async () => {
       const { fake, result } = await mountWithHistory()
       await act(async () => {
+        fake.emit(textUpdate("user_message", "u2", "Again"))
         fake.emit({ sessionUpdate: "state_update", state: "running" })
         fake.emit(chunkUpdate("a2", "Half"))
         fake.emit(
@@ -884,7 +855,7 @@ describe("useAcpRuntime", () => {
         )
       })
       expect(fake.replay).toHaveBeenCalledTimes(1)
-      expect(statusOf(result.current, 2)).toEqual({
+      expect(statusOf(result.current, 3)).toEqual({
         type: "incomplete",
         reason: "error",
         error: FAILURE,
@@ -1665,41 +1636,6 @@ describe("useAcpRuntime older history", () => {
     expect(ids(result.current).slice(0, 2)).toEqual(["a1", "u2"])
     expect(ids(result.current)).toHaveLength(3)
     expect(result.current.thread.getState().isRunning).toBe(true)
-  })
-
-  it("keeps a turn re-keyed onto its saved rows once when a page carries them", async () => {
-    const fake = createFakeConnection({ history: { nextCursor: "cursor-1" } })
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("user_message", "u2", "Newer question"))
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-      fake.emit(textUpdate("agent_message", "run-1:assistant", "Live answer"))
-      fake.emit(
-        {
-          sessionUpdate: "state_update",
-          state: "idle",
-          stopReason: "end_turn",
-        },
-        { ...TURN_META, savedIds: { "run-1:assistant": "hermes-row-3" } }
-      )
-    })
-
-    // The turn stored enough rows to shift the offsets, so the page reaches it.
-    await loadOlder(result.current)
-    await act(async () => {
-      fake.answerPage(
-        0,
-        pageOf(
-          [
-            textUpdate("user_message", "u1", "First question"),
-            textUpdate("agent_message", "hermes-row-3", "Live answer"),
-          ],
-          {}
-        )
-      )
-    })
-
-    expect(ids(result.current)).toEqual(["u1", "u2", "hermes-row-3"])
   })
 
   it("keeps a failed page failed until asked again, with no retry of its own", async () => {

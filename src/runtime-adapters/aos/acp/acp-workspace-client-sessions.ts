@@ -10,7 +10,6 @@ import {
   AosActivityNotificationSchema,
   AosPlanMetaSchema,
   AosSessionInfoMetaSchema,
-  AosSessionInvalidatedNotificationSchema,
   type AosActivityNotification,
   type AosSessionInfoMeta,
 } from "@aos/protocol/acp"
@@ -278,18 +277,10 @@ export function createAcpSessionStore({
     }
   )
 
-  const leaveInvalidations = subscribeAosNotification(
-    connection,
-    AOS_METHODS.notify.sessionInvalidated,
-    AosSessionInvalidatedNotificationSchema,
-    ({ sessionId }) => invalidate(sessionId)
-  )
-
   return {
     subscribe,
     dispose() {
       leaveActivity()
-      leaveInvalidations()
     },
     put,
     rowsFor,
