@@ -835,11 +835,11 @@ const Composer: FC<{
   const searchSnapshotRef = useRef<RecoverableDraft | null>(null)
   const historyBrowseRef = useRef<HistoryBrowse | null>(null)
   const [inputFocused, setInputFocused] = useState(false)
-  // While the composer has focus, stop the idle CSS animations so the browser
-  // does not restyle animated elements on every keystroke frame. The attribute
-  // is a direct DOM write — no React state, no re-renders — so the CSS rules
-  // in status-dots.module.css and agent-tile.module.css can use [data-composing]
-  // as a simple, fast selector. The effect cleans up the attribute on unmount.
+  // While the composer has focus, the status dot and Agent tile stop their
+  // idle animations: any running CSS animation restyles every animated
+  // element each frame, which slows typing. The page-level attribute is a
+  // plain selector for their CSS (`:has()` measured slower) and also reaches
+  // portaled tiles; setting it causes no render.
   useEffect(() => {
     if (!inputFocused) return
     document.documentElement.dataset.composing = ""

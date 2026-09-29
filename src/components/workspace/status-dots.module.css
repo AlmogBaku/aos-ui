@@ -95,13 +95,8 @@
   }
 }
 
-/* Pause the breathing animations while the composer has focus so the
-   browser does not restyle animated elements on every keystroke frame.
-   Mirrors the reduced-motion rules: animation off rather than paused so
-   elements rest at full opacity with the halo removed. The [data-composing]
-   attribute is set on the html element by a minimal focus/blur effect in the
-   thread composer; portal-rendered dots are covered because they also live
-   inside <html>. */
+/* While composing (see the composer's `data-composing` effect), the dot
+   rests as it does under reduced motion. */
 :global([data-composing]) .statusDot[data-status="active"],
 :global([data-composing]) .statusDot[data-status="running"] {
   animation: none;

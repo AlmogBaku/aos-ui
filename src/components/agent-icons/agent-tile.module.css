@@ -175,19 +175,15 @@
   }
 }
 
-/* Pause the idle animations while the composer has focus so the browser
-   does not restyle animated elements on every keystroke frame. Pointer
-   tracking (.sensor) keeps its CSS transition — only keyframe animations
-   are stopped. Mirrors the reduced-motion shape: animation: none so
-   elements settle at their rest pose (eyes open, tile grounded). The look
-   animation stops at translateX(0) rather than the aside pose because the
-   agent's attention is not the focus state's visual metaphor. The
-   [data-composing] attribute is set on the html element by a minimal
-   focus/blur effect in the thread composer; portal-rendered tiles are
-   covered because they also live inside <html>. */
+/* While composing (see the composer's `data-composing` effect), the tile
+   rests; the waiting pair still holds its aside pose. */
 :global([data-composing]) .blink,
 :global([data-composing]) .hop,
-:global([data-composing]) .attentionBlink,
-:global([data-composing]) .look {
+:global([data-composing]) .attentionBlink {
   animation: none;
+}
+
+:global([data-composing]) .sensor.look {
+  animation: none;
+  transform: translateX(calc(var(--glance) * var(--side) * 1px)) !important;
 }

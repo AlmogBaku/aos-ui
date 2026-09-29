@@ -516,7 +516,8 @@ assistant's answer.
   back, the tile hops, and the pair turns toward the conversation as it lands
   and holds there: the inline end, or the inline start from the inspector. Under reduced motion the pointer tracking, blink, and hop stop,
   the waiting pair keeps its aside pose, and the status indicator still states
-  either state.
+  either state. While the composer has focus, the tile and the running status
+  dot rest the same way (pointer tracking continues), so typing stays fast.
 
 **The Motion-Is-Optional Rule.** Motion may confirm a change, but the changed
 state must be legible without it. Do not make progress, errors, or focus depend
