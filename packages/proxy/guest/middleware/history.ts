@@ -10,7 +10,6 @@ import {
   isFirstTurnEnvelope,
   publicTurnError,
 } from "../../auth/guest-runtime-projection"
-import { TurnEventKind } from "../../core/events"
 import {
   CommandRefusedError,
   unhandledKind,
@@ -126,8 +125,9 @@ export function createHistoryMiddleware({
   grant,
 }: GuestHistoryOptions): Middleware {
   /**
-   * Every user message this guest was shown, by each id it may know it by, so
-   * an Edit or Retry never names the hidden setup turn or anything unseen.
+   * Every user message this guest was shown, in history or as a prompt under
+   * the id its provider stored it as, so an Edit or Retry never names the
+   * hidden setup turn or anything unseen.
    */
   const shown = new Set<string>()
   return {
@@ -154,16 +154,7 @@ export function createHistoryMiddleware({
         case "prompt":
           shown.add(event.messageId)
           return event
-        // A user message is saved under a new id only once it was shown.
-        case "turn": {
-          const user =
-            event.event.kind === TurnEventKind.TurnEnded ||
-            event.event.kind === TurnEventKind.TurnFailed
-              ? event.event.saved?.user
-              : undefined
-          if (user && shown.has(user.messageId)) shown.add(user.savedId)
-          return event
-        }
+        case "turn":
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":

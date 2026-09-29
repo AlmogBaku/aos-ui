@@ -4,6 +4,7 @@ import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
+  StopReason,
   TurnEventKind,
   type ExecutionEvent,
   type TurnEvent,
@@ -15,6 +16,7 @@ import {
   ServerSessionNotFoundError,
   ServerTurnCapacityError,
   ServerTurnConflictError,
+  ServerTurnEndedError,
   ServerTurnStopNotDispatchedError,
   ServerTurnUncertainError,
   type ServerTurnEngine,
@@ -3127,6 +3129,43 @@ describe("SessionCoordinator", () => {
     // The provider took the prompt, so its turn runs on and is not withdrawn.
     expect(sessions.state(scope)).toBe("running")
     expect(unreceipted.stop).not.toHaveBeenCalled()
+  })
+
+  it("answers a start at once when its turn ends before its prompt's storage receipt", async () => {
+    useFakeClock()
+    const ending = (error: ServerTurnEndedError) => {
+      const stored = Promise.reject(error)
+      stored.catch(() => undefined)
+      return Object.assign(new EventSource(), { stored })
+    }
+    const stop = new ServerTurnEndedError("stopped")
+    const stopped = ending(stop)
+    const ended = ending(new ServerTurnEndedError("ended"))
+    const engine: ServerTurnEngine = {
+      start: vi
+        .fn<ServerTurnEngine["start"]>()
+        .mockResolvedValueOnce(stopped)
+        .mockResolvedValueOnce(ended),
+      recover: vi.fn(async () => new EventSource()),
+    }
+    const sessions = coordinator(engine)
+
+    // No clock advances: the answer never waits out the admission deadline.
+    await expect(
+      sessions.start(scope, input("run-1"), access("one"))
+    ).rejects.toBe(stop)
+    stopped.emit({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.Cancelled,
+    })
+    stopped.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+    // A turn that ended otherwise is answered with no stored id to name.
+    const answer = await sessions.start(scope, input("run-2"), access("one"))
+    expect(answer).toMatchObject({ turnId: "run-2" })
+    expect(answer).not.toHaveProperty("messageId")
+    ended.emit(turnEnded)
+    ended.finish()
   })
 
   it("keeps the journal of a turn whose Stop could not be confirmed", async () => {

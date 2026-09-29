@@ -8,7 +8,6 @@ import {
   AOS_META_KEY,
   AosArtifactDescriptorSchema,
   AOS_STOP_REASONS,
-  AosStateMetaSchema,
   AosSubagentSchema,
 } from "../../../protocol/acp"
 import {
@@ -215,31 +214,11 @@ function steerStep(
   }
 }
 
-/**
- * The prompt's message id the browser saw this turn under, mapped to the id
- * the provider saved it as. An agent message needs no entry: the adapter set
- * its id where it was born, the one history gives it. An id the wire contract
- * refuses drops the map.
- */
-function savedIdsOf(
-  event: TurnEventOf<
-    typeof TurnEventKind.TurnEnded | typeof TurnEventKind.TurnFailed
-  >
-) {
-  const { user } = event.saved ?? {}
-  if (!user || user.messageId === user.savedId) return undefined
-  const savedIds = AosStateMetaSchema.shape.savedIds.safeParse({
-    [user.messageId]: user.savedId,
-  })
-  return savedIds.success ? savedIds.data : undefined
-}
-
 function endedOutbound(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.TurnEnded>
 ): AcpOutbound[] {
   const outbound: AcpOutbound[] = []
-  const savedIds = savedIdsOf(event)
   if (event.composerPrefill !== undefined)
     outbound.push({
       kind: "composer-prefill",
@@ -259,10 +238,7 @@ function endedOutbound(
             : "end_turn",
         ...(usage ? { usage } : {}),
       },
-      {
-        ...(event.cost ? { cost: event.cost } : {}),
-        ...(savedIds ? { savedIds } : {}),
-      }
+      event.cost ? { cost: event.cost } : {}
     )
   )
   return outbound
@@ -290,7 +266,6 @@ function failedOutbound(
     ...(event.provider ? { provider: event.provider } : {}),
     ...(event.model ? { model: event.model } : {}),
   }
-  const savedIds = savedIdsOf(event)
   return [
     stateOutbound(
       context,
@@ -304,7 +279,7 @@ function failedOutbound(
               ? AOS_STOP_REASONS.uncertain
               : AOS_STOP_REASONS.error,
           },
-      { ...failure, ...(savedIds ? { savedIds } : {}) }
+      failure
     ),
   ]
 }

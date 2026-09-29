@@ -44,6 +44,7 @@ import {
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
+  ServerTurnEndedError,
   ServerTurnUncertainError,
   type ServerRuntime,
   type ServerTurnListener,
@@ -1417,9 +1418,12 @@ class Membership {
         )
       if (cause instanceof ServerTurnConflictError)
         this.afterResponse(() => this.catchUp())
-      // A start the provider may have taken is shown to every member as the
-      // coordinator settles it.
-      if (cause instanceof ServerTurnUncertainError)
+      // A start the provider may have taken, or a turn that ended before its
+      // prompt was stored, is shown to every member as the coordinator holds it.
+      if (
+        cause instanceof ServerTurnUncertainError ||
+        cause instanceof ServerTurnEndedError
+      )
         this.afterResponse(() => this.#channels.sync(this.#scope))
       throw cause
     }

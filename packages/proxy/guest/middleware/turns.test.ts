@@ -20,8 +20,7 @@ const project = (event: TurnEvent) =>
   projectorOf()(TurnEventSchema.parse(event))
 
 describe("guest turn projection", () => {
-  it("keeps the stop reason, the prefill, and the saved ids but drops usage and cost", () => {
-    const saved = { user: { messageId: "user-1", savedId: "hermes-row-7" } }
+  it("keeps the stop reason and the prefill but drops usage and cost", () => {
     expect(
       project({
         kind: TurnEventKind.TurnEnded,
@@ -29,13 +28,11 @@ describe("guest turn projection", () => {
         usage: [{ provider: "private", totalTokens: 12 }],
         cost: { amount: 0.5, currency: "USD" },
         composerPrefill: "Try again with",
-        saved,
       })
     ).toEqual({
       kind: TurnEventKind.TurnEnded,
       stopReason: StopReason.Refusal,
       composerPrefill: "Try again with",
-      saved,
     })
     expect(
       project({
@@ -315,19 +312,6 @@ describe("guest turn projection", () => {
       message: guestErrorDescription("temporarily_unavailable"),
     })
     expect(JSON.stringify(projected)).not.toContain("ValidationException")
-  })
-
-  it("keeps the id a failed turn's prompt was saved under", () => {
-    expect(
-      project({
-        kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
-        message: "Hermes could not complete this turn.",
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-    ).toMatchObject({
-      saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-    })
   })
 
   it("keeps a guest run whose failure awaits Stop stoppable", () => {

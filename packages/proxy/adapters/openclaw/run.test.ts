@@ -2055,6 +2055,14 @@ describe("OpenClaw run engine", () => {
     const events: unknown[] = []
     for await (const event of handle.events) events.push(event)
     expect(events.at(-1)).toEqual(ended)
+    await expect(handle.stored).rejects.toMatchObject(
+      ended.kind === TurnEventKind.TurnFailed
+        ? { ending: "failed", code: ended.code }
+        : {
+            ending:
+              ended.stopReason === StopReason.Cancelled ? "stopped" : "ended",
+          }
+    )
   })
 
   it("streams no partial tool output when tool events were not negotiated", async () => {

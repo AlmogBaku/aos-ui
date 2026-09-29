@@ -64,16 +64,15 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
           kind: TurnEventKind.TurnStarted,
           ...(candidate.startedAt ? { startedAt: candidate.startedAt } : {}),
         }
-      // How the turn stopped, what it was saved as, and what the runtime asks
-      // the composer to start with are the guest's; what it spent is not.
+      // How the turn stopped and what the runtime asks the composer to start
+      // with are the guest's; what it spent is not.
       case TurnEventKind.TurnEnded: {
         hidden.clear()
-        const { stopReason, composerPrefill, saved } = candidate
+        const { stopReason, composerPrefill } = candidate
         return {
           kind: TurnEventKind.TurnEnded,
           ...(stopReason ? { stopReason } : {}),
           ...(composerPrefill === undefined ? {} : { composerPrefill }),
-          ...(saved ? { saved } : {}),
         }
       }
       // A subagent's prose is its tool call's output, which guests never see.
@@ -101,7 +100,6 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
           code,
           message: guestErrorDescription(code),
           ...(candidate.awaitingStop ? { awaitingStop: true as const } : {}),
-          ...(candidate.saved ? { saved: candidate.saved } : {}),
         }
       }
       // Only an MCP App's card, from its start to its settling: its name, no

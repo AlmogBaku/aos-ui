@@ -1069,7 +1069,7 @@ export function runWireContract(
           // A cursor the replay no longer holds.
           const stale = connectPlain()
           await until(clock, stale.initialize())
-          const resumed = await until(
+          await until(
             clock,
             stale.connection.agent.request(methods.agent.session.resume, {
               sessionId,
@@ -1095,7 +1095,6 @@ export function runWireContract(
             )
             expect(rebuildNotices(client)).toEqual([])
           }
-          expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("resync")
         },
         TIGHT_LIMITS
       )

@@ -335,7 +335,7 @@ describe("HermesRunEngine", () => {
     ).resolves.toBeDefined()
   })
 
-  describe("the ids Hermes saved the turn under", () => {
+  describe("the id Hermes stored the prompt under", () => {
     const receipt = {
       row_ids: [7, 8, 9, 10],
       complete: true,
@@ -379,57 +379,30 @@ describe("HermesRunEngine", () => {
       return handle
     }
 
-    async function eventsOf(
-      persisted_turn: unknown,
-      options?: Parameters<typeof turnOf>[1]
-    ) {
-      return collect(await turnOf(persisted_turn, options))
-    }
-
-    async function endOf(
-      persisted_turn: unknown,
-      options?: Parameters<typeof turnOf>[1]
-    ) {
-      return ofKind(
-        await eventsOf(persisted_turn, options),
-        TurnEventKind.TurnEnded
-      )[0]
-    }
-
-    it("names a stopped prompt by the row Hermes saved it under at submit", async () => {
-      // A stopped turn never earns a complete receipt, so only the submit
-      // answer proves where the prompt was saved; its reply has no proven row.
-      const ended = await endOf(
-        { ...receipt, complete: false },
-        { userRowId: 7, status: "interrupted" }
-      )
-      expect(ended).toMatchObject({
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-      expect(ended).not.toHaveProperty("saved.replyId")
-    })
-
-    it("names a failed prompt by the row Hermes saved it under at submit", async () => {
-      const events = await eventsOf(undefined, {
-        userRowId: 7,
-        status: "error",
-      })
-      expect(ofKind(events, TurnEventKind.TurnFailed)[0]).toMatchObject({
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-    })
-
-    it("names the prompt by the row a complete receipt committed", async () => {
-      await expect(endOf(receipt)).resolves.toMatchObject({
-        saved: { user: { messageId: "user-1", savedId: "hermes-row-7" } },
-      })
-    })
-
     it("proves the prompt stored by the submit's row, or else by the turn's receipt", async () => {
+      // A stopped turn never earns a complete receipt, so only the submit
+      // answer proves where the prompt was saved.
       await expect(
-        (await turnOf(undefined, { userRowId: 3 })).stored
+        (
+          await turnOf(
+            { ...receipt, complete: false },
+            { userRowId: 3, status: "interrupted" }
+          )
+        ).stored
       ).resolves.toBe("hermes-row-3")
       await expect((await turnOf(receipt)).stored).resolves.toBe("hermes-row-7")
+    })
+
+    it("ends the receipt of a stopped or failed turn unproven, as it ended", async () => {
+      await expect(
+        (await turnOf(undefined, { status: "interrupted" })).stored
+      ).rejects.toMatchObject({ ending: "stopped" })
+      await expect(
+        (await turnOf(undefined, { status: "error" })).stored
+      ).rejects.toMatchObject({
+        ending: "failed",
+        code: "AOS_PROVIDER_RUN_FAILED",
+      })
     })
 
     it.each([
@@ -448,10 +421,12 @@ describe("HermesRunEngine", () => {
       ["a fractional row", { ...receipt, row_ids: [7, 8.5, 9, 10] }],
       ["no reply row", { ...receipt, row_ids: [7], final_assistant_row_id: 7 }],
       ["no receipt", undefined],
-    ])("claims no saved ids from %s", async (_, persisted) => {
-      const ended = await endOf(persisted)
-      expect(ended).toBeDefined()
-      expect(ended).not.toHaveProperty("saved")
+    ])("ends the receipt unproven by %s", async (_, persisted) => {
+      const handle = await turnOf(persisted)
+      expect(
+        ofKind(await collect(handle), TurnEventKind.TurnEnded)
+      ).toHaveLength(1)
+      await expect(handle.stored).rejects.toMatchObject({ ending: "ended" })
     })
   })
 

@@ -5,6 +5,7 @@ import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
+  ServerTurnEndedError,
 } from "../core/runtime"
 import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
 import { MembershipDetachedError } from "../core/channel"
@@ -184,6 +185,8 @@ export function publicRequestError(
 ) {
   if (cause instanceof ServerTurnConflictError) return turnInProgress()
   if (cause instanceof ServerRequestStaleError) return staleRequest()
+  if (cause instanceof ServerTurnEndedError && cause.ending === "stopped")
+    return RequestError.requestCancelled()
   const failure = channelFailure(cause) ?? publicError(cause)
   return failure ? KIND_ERRORS[failure.kind]() : cause
 }

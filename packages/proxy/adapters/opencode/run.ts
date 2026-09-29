@@ -715,12 +715,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     const expectedAdmission = replies
       ? undefined
       : admissionId(scope, input.turnId)
-    const run = this.#createRun(
-      scope,
-      baseline,
-      expectedAdmission,
-      isRepliesTurn(input) ? undefined : input.messageId
-    )
+    const run = this.#createRun(scope, baseline, expectedAdmission)
 
     try {
       await this.#attach(run, baseline)
@@ -869,9 +864,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   #createRun(
     scope: SessionScope,
     after: number,
-    expectedAdmission?: string,
-    /** The live id of the prompt the admission saves. */
-    userMessageId?: string
+    expectedAdmission?: string
   ): ActiveTurn {
     const queue = new EventQueue(this.#maxQueueEvents)
     const segmentSettlement = settlement()
@@ -897,7 +890,6 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       after,
       {
         admissionId: expectedAdmission,
-        userMessageId,
         resolveMcpTool: this.#options.mcpToolNames?.resolver(scope.agentId),
       }
     )

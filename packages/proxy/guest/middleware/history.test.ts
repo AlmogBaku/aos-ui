@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
 import { guestErrorDescription } from "../../auth/guest-projection"
-import { TurnEventKind } from "../../core/events"
 import {
   CommandRefusedError,
   type MemberAct,
@@ -370,8 +369,6 @@ function guarded() {
   }
 }
 
-const STREAM = { turnId: "run-1", replayedCorrections: 0, dropped: false }
-
 describe("guest Edit and Retry", () => {
   it("refuses a message the guest was never shown, the setup turn among them", async () => {
     const test = guarded()
@@ -392,7 +389,7 @@ describe("guest Edit and Retry", () => {
     expect(test.next).not.toHaveBeenCalled()
   })
 
-  it("runs on a message the guest was shown, by any id it knows it by", async () => {
+  it("runs on a message the guest was shown in history or as a prompt", async () => {
     const test = guarded()
     test.show({
       sessionId: "ref",
@@ -407,45 +404,11 @@ describe("guest Edit and Retry", () => {
       content: [{ kind: "text", text: "Next" }],
       own: true,
     })
-    test.show({
-      sessionId: "ref",
-      kind: "prompt",
-      messageId: "failed-ask",
-      content: [{ kind: "text", text: "Again" }],
-      own: true,
-    })
-    const ended = (
-      messageId: string,
-      savedId: string,
-      failed = false
-    ): MemberEvent => ({
-      sessionId: "ref",
-      kind: "turn",
-      stream: STREAM,
-      sequence: 1,
-      stopping: false,
-      event: failed
-        ? {
-            kind: TurnEventKind.TurnFailed,
-            message: "failed",
-            saved: { user: { messageId, savedId } },
-          }
-        : {
-            kind: TurnEventKind.TurnEnded,
-            saved: { user: { messageId, savedId } },
-          },
-    })
-    test.show(ended("live-ask", "row-7"))
-    test.show(ended("failed-ask", "row-8", true))
-    test.show(ended("unseen-ask", "row-9"))
 
-    for (const id of ["stored-ask", "live-ask", "row-7", "row-8"])
+    for (const id of ["stored-ask", "live-ask"])
       await expect(test.rewind(id), id).resolves.toEqual({
         messageId: "sent",
       })
-    await expect(test.rewind("row-9")).rejects.toBeInstanceOf(
-      CommandRefusedError
-    )
-    expect(test.next).toHaveBeenCalledTimes(4)
+    expect(test.next).toHaveBeenCalledTimes(2)
   })
 })

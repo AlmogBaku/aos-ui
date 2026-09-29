@@ -31,6 +31,7 @@ import {
   type ServerTurnHandle,
   type ServerTurnListener,
 } from "../../core/runtime"
+import { storageReceipt } from "../../core/storage-receipt"
 import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
@@ -84,7 +85,6 @@ import {
 } from "./run-settlement"
 import {
   createActiveTurn,
-  deferred,
   failReset,
   generationState,
   readStatus,
@@ -639,20 +639,13 @@ export class HermesTurnEngine {
       // A prompt is answered once Hermes proves it stored: by this answer's
       // row, or failing that by the completion receipt of the turn it runs.
       if (active.promptMessageId && !outcome.completion)
-        active.stored = deferred<string>()
+        active.stored = storageReceipt()
       // Hermes saves the prompt before the turn runs, so its row stands even
       // when the turn is stopped, fails, or compacts and proves nothing more.
       // The turn's model responses number from it, as history numbers them.
       if (outcome.userRowId !== undefined) {
         active.messageBase = hermesRowMessageId(outcome.userRowId)
         active.stored?.resolve(active.messageBase)
-        if (active.promptMessageId)
-          active.saved = {
-            user: {
-              messageId: active.promptMessageId,
-              savedId: active.messageBase,
-            },
-          }
       }
       if (!outcome.completion) return
       if (outcome.completion.output) {
@@ -1077,11 +1070,8 @@ export class HermesTurnEngine {
     const userRow = active.promptMessageId
       ? persistedTurnRows(payload.persisted_turn)
       : undefined
-    if (userRow !== undefined) {
-      const savedId = hermesRowMessageId(userRow)
-      active.saved = { user: { messageId: active.promptMessageId!, savedId } }
-      active.stored?.resolve(savedId)
-    }
+    if (userRow !== undefined)
+      active.stored?.resolve(hermesRowMessageId(userRow))
     const finalText = boundedText(payload.text)
     // A failed turn's `text` is the model's own prose only while `partial` marks
     // it as such. Without that flag Hermes composed the copy explaining the
@@ -1285,18 +1275,18 @@ export class HermesTurnEngine {
         : active.turn === "complete"
           ? StopReason.EndTurn
           : undefined
-    this.#emit(active, {
+    const ended: TurnEvent = {
       kind: TurnEventKind.TurnEnded,
       ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
       ...(active.cost ? { cost: active.cost } : {}),
-      ...(active.saved ? { saved: active.saved } : {}),
       ...(ending.composerPrefill === undefined
         ? {}
         : { composerPrefill: ending.composerPrefill }),
-    })
+    }
+    this.#emit(active, ended)
     if (!confirmedIdle) watchSettling(this.#host, active)
-    this.#settle(active)
+    this.#settle(active, ended)
   }
 
   #requireAction(active: ActiveTurn, requests: PendingRequest[]) {
@@ -1347,8 +1337,9 @@ export class HermesTurnEngine {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
-    this.#emit(active, this.#failed(active, failure))
-    this.#settle(active)
+    const failed = this.#failed(active, failure)
+    this.#emit(active, failed)
+    this.#settle(active, failed)
   }
 
   /**
@@ -1358,7 +1349,9 @@ export class HermesTurnEngine {
    */
   #detach(active: ActiveTurn, failure: DetachedTurnFailure) {
     if (active.terminal || active.detached) return
-    this.#emit(active, this.#failed(active, failure))
+    const failed = this.#failed(active, failure)
+    this.#emit(active, failed)
+    active.stored?.end(failed)
     active.uncertain = true
     active.detached = true
     active.catchUp = undefined
@@ -1375,7 +1368,6 @@ export class HermesTurnEngine {
       ...(active.model
         ? { provider: active.model.provider, model: active.model.model }
         : {}),
-      ...(active.saved?.user ? { saved: { user: active.saved.user } } : {}),
     }
   }
 
@@ -1391,8 +1383,9 @@ export class HermesTurnEngine {
 
   #overflow(active: ActiveTurn) {
     if (active.terminal) return
-    active.queue.terminal(this.#failed(active, TURN_FAILURES.streamOverflow))
-    this.#settle(active)
+    const failed = this.#failed(active, TURN_FAILURES.streamOverflow)
+    active.queue.terminal(failed)
+    this.#settle(active, failed)
   }
 
   #isSubmitEligible(active: ActiveTurn) {
@@ -1405,9 +1398,11 @@ export class HermesTurnEngine {
     )
   }
 
-  #settle(active: ActiveTurn) {
+  /** `ending` is the event that ended the run, when one did. */
+  #settle(active: ActiveTurn, ending?: TurnEvent) {
     if (active.terminal) return
     active.terminal = true
+    active.stored?.end(ending)
     // A settling watcher keeps the native observation until Hermes reports the
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)

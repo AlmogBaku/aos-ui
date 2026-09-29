@@ -58,8 +58,9 @@ export type ServerTurnHandle = {
   /**
    * The prompt's storage receipt: resolves with the message id the provider
    * stored the prompt under, at once when the start's own answer named it, and
-   * stays pending while the provider has not proven it stored. Absent when the
-   * turn stores no prompt of its own, such as an answer to a request.
+   * stays pending while the provider has not proven it stored, and rejects with
+   * a `ServerTurnEndedError` once the turn ends unproven. Absent when the turn
+   * stores no prompt of its own, such as an answer to a request.
    */
   stored?: Promise<string>
   /**
@@ -181,6 +182,21 @@ export class ServerTurnUncertainError extends Error {
   constructor() {
     super("The AOS turn may have started")
     this.name = "ServerTurnUncertainError"
+  }
+}
+
+/**
+ * A prompt's turn ended before its provider proved it stored the prompt, so
+ * `stored` never resolves: it was `stopped`, it `failed` with the turn's own
+ * `code`, or it `ended` otherwise.
+ */
+export class ServerTurnEndedError extends Error {
+  constructor(
+    readonly ending: "stopped" | "failed" | "ended",
+    readonly code?: string
+  ) {
+    super("The AOS turn ended before its prompt was stored")
+    this.name = "ServerTurnEndedError"
   }
 }
 

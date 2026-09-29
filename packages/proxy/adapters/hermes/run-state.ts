@@ -7,15 +7,10 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type {
-  Cost,
-  PendingRequest,
-  TokenUsage,
-  TurnEventKind,
-  TurnEventOf,
-} from "../../core/events"
+import type { Cost, PendingRequest, TokenUsage } from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
+import type { storageReceipt } from "../../core/storage-receipt"
 import type { Todo } from "../todos"
 import type { HermesLog } from "./gateway"
 import { HermesMediaTextFilter } from "./media-artifacts"
@@ -32,10 +27,6 @@ import type { HermesNativeStatus, HermesTurnNative } from "./run-native"
 import type { SessionModelChoice } from "./session-model"
 
 export type HermesTurnScope = SessionScope
-
-type TurnSaved = NonNullable<
-  TurnEventOf<typeof TurnEventKind.TurnEnded>["saved"]
->
 
 /** The native turn outcome; `open` means Hermes has not ended the turn yet. */
 export type TurnOutcome = "open" | "complete" | "failed" | "interrupted"
@@ -126,16 +117,12 @@ export type ActiveTurn = {
    */
   promptMessageId?: string
   /**
-   * The ids Hermes proved the turn was saved under: the prompt's row from the
-   * submit answer, both rows from a complete completion receipt.
-   */
-  saved?: TurnSaved
-  /**
    * The storage receipt of a prompt Hermes accepted: resolved with its row's
    * message id by the submit answer that names the row or, failing that, by
-   * the completion receipt of the turn this run owns.
+   * the completion receipt of the turn this run owns; rejected once the run
+   * ends without either.
    */
-  stored?: ReturnType<typeof deferred<string>>
+  stored?: ReturnType<typeof storageReceipt>
   usage?: TokenUsage[]
   cost?: Cost
   /** The model the Session last reported; a change is published. */

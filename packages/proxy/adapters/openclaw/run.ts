@@ -36,6 +36,7 @@ import {
   type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
+import { storageReceipt } from "../../core/storage-receipt"
 import * as ids from "../../core/ids"
 import { createLink, type LinkOptions } from "../../core/link"
 import { defaultClock } from "../../../lifecycle"
@@ -276,8 +277,11 @@ type ActiveRun = {
   planFingerprint?: string
   usage?: TokenUsage[]
   cost?: Cost
-  /** A prompt's storage receipt, resolved by OpenClaw's `session.message` of it. */
-  stored?: { promise: Promise<string>; resolve(messageId: string): void }
+  /**
+   * A prompt's storage receipt, resolved by OpenClaw's `session.message` of it
+   * and rejected once the run ends without one.
+   */
+  stored?: ReturnType<typeof storageReceipt>
   settled: Promise<void>
   resolveSettled(): void
 }
@@ -323,12 +327,6 @@ function settlement() {
     resolveSettled = resolve
   })
   return { settled, resolveSettled }
-}
-
-function storageReceipt(): NonNullable<ActiveRun["stored"]> {
-  let resolve!: (messageId: string) => void
-  const promise = new Promise<string>((settle) => (resolve = settle))
-  return { promise, resolve }
 }
 
 function validId(value: unknown): value is string {
@@ -2286,8 +2284,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   #markUncertain(active: ActiveRun, code: string, message: string) {
     if (active.terminal) return
     active.uncertain = true
-    active.queue.push({ kind: TurnEventKind.TurnFailed, code, message })
+    const failed: TurnEvent = { kind: TurnEventKind.TurnFailed, code, message }
+    active.queue.push(failed)
     active.queue.close()
+    active.stored?.end(failed)
   }
 
   #finish(active: ActiveRun, stopReason?: StopReason) {
@@ -2298,12 +2298,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       safeJson({ status: active.stopping ? "stopped" : "completed" }),
       false
     )
-    active.queue.terminal({
+    const ended: TurnEvent = {
       kind: TurnEventKind.TurnEnded,
       ...(stopReason ? { stopReason } : {}),
       ...(active.usage ? { usage: active.usage } : {}),
       ...(active.cost ? { cost: active.cost } : {}),
-    })
+    }
+    active.queue.terminal(ended)
+    active.stored?.end(ended)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()
@@ -2322,12 +2324,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (active.terminal) return
     active.terminal = true
     this.#endOpenTools(active, safeJson({ status: "error" }), true)
-    active.queue.terminal({
+    const failed: TurnEvent = {
       kind: TurnEventKind.TurnFailed,
       code,
       message,
       ...origin,
-    })
+    }
+    active.queue.terminal(failed)
+    active.stored?.end(failed)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()

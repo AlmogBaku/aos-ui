@@ -34,8 +34,6 @@ const admission = {
   "run-recovered":
     "aos_957d880ef3fdbdf4c7672021817c07ee7a619ed7e18b557da7e9b07adad0b12c",
 }
-/** The first run's prompt, saved under the admission OpenCode stored it as. */
-const saved = { user: { messageId: "user-1", savedId: admission["run-1"] } }
 
 function input(overrides: Partial<PromptTurnInput> = {}): TurnInput {
   return {
@@ -505,7 +503,7 @@ describe("OpenCodeRunEngine", () => {
         messageId: "assistant-1",
         text: "Done",
       },
-      { kind: TurnEventKind.TurnEnded, saved },
+      { kind: TurnEventKind.TurnEnded },
     ])
     for (const value of events)
       expect(TurnEventSchema.safeParse(value).success).toBe(true)
@@ -1090,7 +1088,6 @@ describe("OpenCodeRunEngine", () => {
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()
     expect((await collect(handle)).at(-1)).toEqual({
       kind: TurnEventKind.TurnEnded,
-      saved,
     })
   })
 
@@ -1184,7 +1181,7 @@ describe("OpenCodeRunEngine", () => {
     const [events] = terminal
     expect(events).toEqual([
       { kind: TurnEventKind.TurnStarted, startedAt: expect.any(String) },
-      { kind: TurnEventKind.TurnEnded, saved },
+      { kind: TurnEventKind.TurnEnded },
     ])
     expect(next.turnId).toBe("run-2")
     expect(state.sessions.interrupt).toHaveBeenCalledOnce()

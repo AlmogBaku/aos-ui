@@ -2384,13 +2384,12 @@ describe("Session rooms", () => {
     messageId = await liveTurn(test, [test])
     const from = test.recorder.entries.length
 
-    const resumed = await test.agent.request(methods.agent.session.resume, {
+    await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
     })
 
-    expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("resync")
     expect(flow(test.recorder, SESSION, from)).toEqual([
       `history ${messageId}`,
       "history assistant-1",

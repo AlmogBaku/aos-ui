@@ -30,6 +30,7 @@ import {
   ServerRequestStaleError,
   ServerTurnConflictError,
   ServerTurnCapacityError,
+  ServerTurnEndedError,
   ServerTurnStopNotDispatchedError,
   ServerTurnSteerUnavailableError,
   ServerTurnUncertainError,
@@ -1443,7 +1444,8 @@ export class SessionCoordinator {
    * Subscribes to an admitted turn once its provider stored the prompt, under
    * the id it stored it as. Waited for outside the Session's commands, so a
    * Stop or a steer meanwhile is not held. A receipt still missing at the
-   * admission deadline leaves the turn running and its start uncertain.
+   * admission deadline leaves the turn running and its start uncertain; a turn
+   * that ended first is answered by how it ended.
    */
   async #atStorage(
     execution: Execution,
@@ -1457,6 +1459,10 @@ export class SessionCoordinator {
     try {
       messageId = await deadline.run(() => stored)
     } catch (error) {
+      // A turn over before any receipt is answered as it ended, at once: a
+      // stop or a failure is the answer, and any other end names no stored id.
+      if (error instanceof ServerTurnEndedError && error.ending === "ended")
+        return this.#repeat(execution, access)
       if (!deadline.signal.aborted) throw error
       const { agentId, sessionId } = execution.scope
       this.#logger.warn(
