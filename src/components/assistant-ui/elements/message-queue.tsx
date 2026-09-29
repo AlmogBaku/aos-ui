@@ -44,8 +44,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import { cn } from "@/lib/utils"
 import {
-  queueControlsExtras,
   type QueueControls,
+  useQueueControlsExtras,
 } from "@/runtime-adapters/queue-controls"
 
 export type MessageQueueLabels = {
@@ -406,7 +406,7 @@ export function MessageQueue({
 }) {
   const aui = useAui()
   const items = useAuiState((state) => state.composer.queue)
-  const controls = queueControlsExtras.use(
+  const controls = useQueueControlsExtras(
     (extras) => extras.queueControls,
     undefined
   )

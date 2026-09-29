@@ -6,7 +6,7 @@ import { useCallback, type RefObject } from "react"
 
 import { Button } from "@/components/ui/button"
 import { useLoadMoreSentinel } from "@/components/workspace/use-load-more-sentinel"
-import { threadHistoryExtras } from "@/runtime-adapters/thread-history"
+import { useThreadHistoryExtras } from "@/runtime-adapters/thread-history"
 
 export type ThreadHistoryLoadEarlierLabels = {
   loadEarlierMessages: string
@@ -33,7 +33,7 @@ export function ThreadHistoryLoadEarlier({
   viewportRef: RefObject<HTMLElement | null>
   labels: ThreadHistoryLoadEarlierLabels
 }) {
-  const history = threadHistoryExtras.use((extras) => extras.history, undefined)
+  const history = useThreadHistoryExtras((extras) => extras.history, undefined)
   const messageCount = useAuiState((state) => state.thread.messages.length)
   const loadOlder = history?.loadOlder
   const load = useCallback(() => void loadOlder?.(), [loadOlder])

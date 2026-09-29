@@ -68,7 +68,7 @@ import {
 } from "@/components/assistant-ui/elements/composer-keyboard"
 import { keyboardEventSafetyReason } from "@/lib/keyboard"
 import type { Locale, LocaleDirection } from "@/lib/i18n/config"
-import { queueControlsExtras } from "@/runtime-adapters/queue-controls"
+import { useQueueControlsExtras } from "@/runtime-adapters/queue-controls"
 import {
   matchLocalCommand,
   menuSlashCommands,
@@ -848,7 +848,7 @@ const Composer: FC<{
     selectHistoryEntries(s.thread.messages)
   )
   const triggerPopover = unstable_useTriggerPopoverRootContextOptional()
-  const queueControls = queueControlsExtras.use(
+  const queueControls = useQueueControlsExtras(
     (extras) => extras.queueControls,
     undefined
   )
