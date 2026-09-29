@@ -228,7 +228,16 @@ describe("Hermes server adapter", () => {
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions/stored?"))
         return { id: "stored", profile: "researcher", title: "Owned" }
-      // Hermes saves the image's user row only once its turn starts.
+      // Hermes saves the image's user row only once its turn starts, and the
+      // receipt sits one full page back.
+      if (path.includes("/messages?") && path.includes("offset=0"))
+        return {
+          session_id: "stored",
+          messages: Array.from({ length: 500 }, () => ({
+            role: "user",
+            content: "later",
+          })),
+        }
       if (path.includes("/messages?"))
         return {
           session_id: "stored",
