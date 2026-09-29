@@ -27,33 +27,22 @@ function registry() {
 const active = { sessionId: SESSION, foreground: true, idle: false }
 
 describe("workspace presence registry", () => {
-  it("counts a foreground, active connection as present at its Session", () => {
-    const { presence } = registry()
+  it.each([
+    ["a foreground, active connection", active, true, true],
+    ["an idle connection", { ...active, idle: true }, false, true],
+    ["a background connection", { ...active, foreground: false }, false, false],
+  ])(
+    "judges presence and exposure for %s",
+    (_case, report, present, exposed) => {
+      const { presence } = registry()
 
-    presence.set(OPERATOR, "connection-1", active)
+      presence.set(OPERATOR, "connection-1", report)
 
-    expect(presence.present(OPERATOR)).toBe(true)
-    expect(presence.exposed(OPERATOR, SESSION)).toBe(true)
-    expect(presence.exposed(OPERATOR, OTHER_SESSION)).toBe(false)
-  })
-
-  it("keeps an idle connection's Session exposed while presence lapses", () => {
-    const { presence } = registry()
-
-    presence.set(OPERATOR, "connection-1", { ...active, idle: true })
-
-    expect(presence.present(OPERATOR)).toBe(false)
-    expect(presence.exposed(OPERATOR, SESSION)).toBe(true)
-  })
-
-  it("exposes nothing from a background connection", () => {
-    const { presence } = registry()
-
-    presence.set(OPERATOR, "connection-1", { ...active, foreground: false })
-
-    expect(presence.present(OPERATOR)).toBe(false)
-    expect(presence.exposed(OPERATOR, SESSION)).toBe(false)
-  })
+      expect(presence.present(OPERATOR)).toBe(present)
+      expect(presence.exposed(OPERATOR, SESSION)).toBe(exposed)
+      expect(presence.exposed(OPERATOR, OTHER_SESSION)).toBe(false)
+    }
+  )
 
   it("drops a report that missed two heartbeats", () => {
     const { time, presence } = registry()

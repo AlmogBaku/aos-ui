@@ -749,50 +749,46 @@ describe("Hermes gateway heartbeat and redial", () => {
     await gateway.close()
   })
 
-  it("reports only an epoch change when Hermes restarted across a reconnect", async () => {
-    vi.useFakeTimers()
-    vi.spyOn(Math, "random").mockReturnValue(0.5)
-    const epochChanged = vi.fn()
-    const restored = vi.fn()
-    const { gateway, sockets } = harness()
-    gateway.subscribeConnection({ restored, epochChanged })
-    await gateway.connect()
-    sockets[0]!.deliverReady({ replay_epoch: "e1" })
-    await flush()
-    expect(restored).toHaveBeenCalledTimes(1)
+  it.each([
+    {
+      // Re-resuming every binding a restart already killed is pure churn, and
+      // a repeated ready frame reports the restart once.
+      reconnect: "only an epoch change when Hermes restarted",
+      readies: ["e2", "e2"],
+      epochChanges: 1,
+      restores: 1,
+    },
+    {
+      reconnect: "only restored when it carries the same epoch",
+      readies: ["e1"],
+      epochChanges: 0,
+      restores: 2,
+    },
+  ])(
+    "reports $reconnect across a reconnect",
+    async ({ readies, epochChanges, restores }) => {
+      vi.useFakeTimers()
+      vi.spyOn(Math, "random").mockReturnValue(0.5)
+      const epochChanged = vi.fn()
+      const restored = vi.fn()
+      const { gateway, sockets } = harness()
+      gateway.subscribeConnection({ restored, epochChanged })
+      await gateway.connect()
+      sockets[0]!.deliverReady({ replay_epoch: "e1" })
+      await flush()
+      expect(restored).toHaveBeenCalledTimes(1)
 
-    sockets[0]!.close(1006)
-    await vi.advanceTimersByTimeAsync(150)
-    sockets[1]!.deliverReady({ replay_epoch: "e2" })
-    sockets[1]!.deliverReady({ replay_epoch: "e2" })
-    await flush()
+      sockets[0]!.close(1006)
+      await vi.advanceTimersByTimeAsync(150)
+      for (const epoch of readies)
+        sockets[1]!.deliverReady({ replay_epoch: epoch })
+      await flush()
 
-    expect(epochChanged).toHaveBeenCalledTimes(1)
-    // Re-resuming every binding a restart already killed is pure churn.
-    expect(restored).toHaveBeenCalledTimes(1)
-    await gateway.close()
-  })
-
-  it("reports only restored when the reconnect carries the same epoch", async () => {
-    vi.useFakeTimers()
-    vi.spyOn(Math, "random").mockReturnValue(0.5)
-    const epochChanged = vi.fn()
-    const restored = vi.fn()
-    const { gateway, sockets } = harness()
-    gateway.subscribeConnection({ restored, epochChanged })
-    await gateway.connect()
-    sockets[0]!.deliverReady({ replay_epoch: "e1" })
-    await flush()
-
-    sockets[0]!.close(1006)
-    await vi.advanceTimersByTimeAsync(150)
-    sockets[1]!.deliverReady({ replay_epoch: "e1" })
-    await flush()
-
-    expect(restored).toHaveBeenCalledTimes(2)
-    expect(epochChanged).not.toHaveBeenCalled()
-    await gateway.close()
-  })
+      expect(epochChanged).toHaveBeenCalledTimes(epochChanges)
+      expect(restored).toHaveBeenCalledTimes(restores)
+      await gateway.close()
+    }
+  )
 
   it("reports restored when no ready frame announces an epoch in time", async () => {
     vi.useFakeTimers()

@@ -45,7 +45,7 @@ function stubInteractions() {
 
 function runtime(
   handlers: Partial<Record<string, RpcHandler>> = {},
-  history: readonly unknown[] = []
+  history: readonly unknown[] | (() => Promise<readonly unknown[]>) = []
 ) {
   const router = rpcRouter(handlers)
   const release = vi.fn()
@@ -65,7 +65,7 @@ function runtime(
     transport: router,
     attachments,
     interactions,
-    history: async () => history,
+    history: typeof history === "function" ? history : async () => history,
     log: { warn },
     retry: { delaysMs: [0, 0, 0], wait },
   })
@@ -155,22 +155,16 @@ describe("Hermes native submit outcomes", () => {
     }
   )
 
-  it("keeps Hermes' instruction on a busy refusal", async () => {
-    const message =
-      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo."
-    const { native } = runtime({
-      "prompt.submit": async () => {
-        throw new HermesRpcRejectedError(4009, message)
-      },
-    })
-
-    await expect(
-      native.submit("live-secret", { scope, text: "Hello", turnId: "run-1" })
-    ).resolves.toMatchObject({ reason: "busy", detail: message })
-  })
-
-  it("keeps refusal text that names a location for the operator", async () => {
-    const message = "session busy: /home/operator/.hermes/state.db is locked"
+  it.each([
+    [
+      "Hermes' instruction",
+      "session busy — Hermes is still replying. Stop the current reply first (Stop button, or Ctrl+C in a terminal), then run /undo.",
+    ],
+    [
+      "text that names a location for the operator",
+      "session busy: /home/operator/.hermes/state.db is locked",
+    ],
+  ])("keeps %s on a busy refusal", async (_case, message) => {
     const { native } = runtime({
       "prompt.submit": async () => {
         throw new HermesRpcRejectedError(4009, message)
@@ -304,20 +298,12 @@ describe("Hermes native submit outcomes", () => {
   })
 
   it("treats a failed pre-submit rewind history read as an outage and never submits", async () => {
-    const router = rpcRouter({ "prompt.submit": async () => ({}) })
-    const native = new HermesNativeRuntime({
-      transport: router,
-      attachments: {
-        ensure: async () => ({ liveSessionId: "live-secret", running: false }),
-        retain: async () => () => {},
-        subscribeLive: async () => () => {},
-        invalidate: () => {},
-      },
-      interactions: stubInteractions(),
-      history: async () => {
+    const { native, router } = runtime(
+      { "prompt.submit": async () => ({}) },
+      async () => {
         throw new Error("dashboard unavailable")
-      },
-    })
+      }
+    )
 
     await expect(
       native.submit("live-secret", {
@@ -782,20 +768,10 @@ describe("Hermes native replay cursor", () => {
 
 describe("Hermes native retention", () => {
   it("refuses to observe a live Session that was never attached", async () => {
-    const router = rpcRouter()
-    const native = new HermesNativeRuntime({
-      transport: router,
-      attachments: {
-        ensure: async () => ({ liveSessionId: "live-secret", running: false }),
-        retain: async () => () => {},
-        subscribeLive: async () => {
-          throw new Error("Hermes Session is not attached")
-        },
-        invalidate: () => {},
-      },
-      interactions: stubInteractions(),
-      history: async () => [],
-    })
+    const { native, attachments } = runtime()
+    attachments.subscribeLive.mockRejectedValue(
+      new Error("Hermes Session is not attached")
+    )
 
     await expect(
       native.subscribeLive("live-secret", () => {})

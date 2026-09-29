@@ -1055,26 +1055,20 @@ describe("Hermes workspace operations", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it("reports a Session the authority does not know as out of scope", async () => {
-    const { operations, request } = harness({
-      scopeFailure: new HermesSessionNotFoundError(),
-    })
+  it.each([
+    ["a Session", new HermesSessionNotFoundError()],
+    ["an Agent", new HermesAgentNotFoundError()],
+  ])(
+    "reports %s the authority does not know as out of scope",
+    async (_unknown, scopeFailure) => {
+      const { operations, request } = harness({ scopeFailure })
 
-    await expect(
-      operations.context("research", "hermes:research:stored-1")
-    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
-    expect(request).not.toHaveBeenCalled()
-  })
-
-  it("reports an Agent the authority does not know as out of scope", async () => {
-    const { operations } = harness({
-      scopeFailure: new HermesAgentNotFoundError(),
-    })
-
-    await expect(
-      operations.context("research", "hermes:research:stored-1")
-    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
-  })
+      await expect(
+        operations.context("research", "hermes:research:stored-1")
+      ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
+      expect(request).not.toHaveBeenCalled()
+    }
+  )
 
   it("reports a Session the authority cannot reach as unavailable", async () => {
     const { operations, request } = harness({

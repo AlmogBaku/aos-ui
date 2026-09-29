@@ -347,23 +347,20 @@ describe("voice configuration", () => {
     })
   })
 
-  it("accepts a voice block with only transcription", () => {
-    const parsed = parseProxyConfig({
-      ...validConfig(),
-      voice: { transcription: validTranscription() },
-    })
-    expect(parsed.voice?.transcription?.model).toBe("whisper-1")
-    expect(parsed.voice?.speech).toBeUndefined()
-  })
-
-  it("accepts a voice block with only speech", () => {
-    const parsed = parseProxyConfig({
-      ...validConfig(),
-      voice: { speech: validSpeech() },
-    })
-    expect(parsed.voice?.speech?.model).toBe("tts-1")
-    expect(parsed.voice?.transcription).toBeUndefined()
-  })
+  it.each([
+    ["transcription", "speech", validTranscription(), "whisper-1"],
+    ["speech", "transcription", validSpeech(), "tts-1"],
+  ] as const)(
+    "accepts a voice block with only %s",
+    (present, absent, child, model) => {
+      const parsed = parseProxyConfig({
+        ...validConfig(),
+        voice: { [present]: child },
+      })
+      expect(parsed.voice?.[present]?.model).toBe(model)
+      expect(parsed.voice?.[absent]).toBeUndefined()
+    }
+  )
 
   it.each([
     ["an empty voice block", {}],

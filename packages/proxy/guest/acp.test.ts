@@ -1015,51 +1015,26 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("refuses the methods an operator owns", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    const refused = { code: METHOD_NOT_FOUND }
-
-    await expect(
-      test.agent.request(methods.agent.session.new, { cwd: "/" })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.list, {})
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(AOS_METHODS.session.update, {
-        sessionId: REF,
-        title: "Renamed",
-      })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.delete, { sessionId: REF })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.setConfigOption, {
-        sessionId: REF,
-        configId: "model",
-        type: "id",
-        value: "opus",
-      })
-    ).rejects.toMatchObject(refused)
-    expect(test.updateSession).not.toHaveBeenCalled()
-    test.close()
-  })
-
-  it("refuses an operator's method as unknown however its params are spelled", async () => {
+  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
     const test = harness({ existing: true })
     const socket = await loggedInWire(
       test.listener,
       await invite(test.invitations)
     )
 
-    for (const method of [
-      AOS_METHODS.session.update,
-      AOS_METHODS.agents.update,
-    ])
-      expect(await socket.request(method, { sessionId: 5 })).toMatchObject({
+    for (const [method, params] of [
+      [methods.agent.session.new, { cwd: "/" }],
+      [methods.agent.session.list, {}],
+      [AOS_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
+      [methods.agent.session.delete, { sessionId: REF }],
+      [
+        methods.agent.session.setConfigOption,
+        { sessionId: REF, configId: "model", type: "id", value: "opus" },
+      ],
+      [AOS_METHODS.session.update, { sessionId: 5 }],
+      [AOS_METHODS.agents.update, { sessionId: 5 }],
+    ] as const)
+      expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
       })
     expect(test.updateSession).not.toHaveBeenCalled()
@@ -1301,39 +1276,6 @@ describe("guest ACP listener", () => {
 
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
-    test.close()
-  })
-
-  it("carries no activity from any Session of the invited Agent", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    const other = await test.coordinator.start(
-      {
-        agentId: AGENT,
-        providerSessionId: "operator-session",
-        sessionId: "operator",
-      },
-      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
-      {
-        membershipId: "operator",
-        principalId: "operator",
-      }
-    )
-    for await (const _ of other.events) void _
-    await test.prompt("Hello")
-    await test.recorder.wait(
-      (entry) =>
-        entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes('"idle"'),
-      'an update carrying "idle"'
-    )
-
-    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
-    // Nor does it list the deployment's Sessions to seed one.
-    expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
   })
 
@@ -1986,12 +1928,25 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest its command list and no Session row, usage, model, catalog signal or read state", async () => {
+  it("sends a guest its command list and no Session row, usage, model, catalog signal, read state, or activity of any Session", async () => {
     const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
 
+    const other = await test.coordinator.start(
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        membershipId: "operator",
+        principalId: "operator",
+      }
+    )
+    for await (const _ of other.events) void _
     await test.prompt("Start the interview")
     await test.recorder.wait(
       (entry) => JSON.stringify(entry.params).includes('"idle"'),
@@ -2010,6 +1965,9 @@ describe("guest scope and commands", () => {
     expect(kinds).not.toContain("config_option_update")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
+    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
+    // Nor does it list the deployment's Sessions to seed one.
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
   })
 })
