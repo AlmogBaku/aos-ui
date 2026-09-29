@@ -8,50 +8,50 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import type { RemoteThreadListAdapter } from "@assistant-ui/react"
+import type {
+  RemoteThreadListAdapter,
+  ThreadMessageLike,
+} from "@assistant-ui/react"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import type {
   ArtifactAdapter,
-  HarnessRuntime,
   RuntimeInteractionAdapter,
   RuntimeQuestionRequest,
 } from "@/runtime-adapters/contracts"
 
 import {
   ControlledWorkspaceFixture,
-  type WorkspaceFixtureRuntime,
+  useControlledWorkspace,
 } from "./test-utils/controlled-workspace-fixture"
 import { AosUiWorkspace } from "./aos-ui-workspace"
 import {
   asHarnessRuntime,
-  RegisteredDraftWorkspace,
-  DraftPromotionRaceWorkspace,
-  TabFixture,
+  registeredDraftRuntime,
   deferred,
-  ScopedArtifactWorkspace,
   FIXTURE_NOW,
   FixtureThreadListAdapter,
-  FixtureAosUiApp,
+  openTabIds,
+  renderedConversation,
+  renderNavigation,
+  renderWorkspace,
+  resetWorkspaceBetweenTests,
+  useDraftPromotionRaceRuntime,
+  useFixtureBundle,
 } from "./aos-ui-workspace.test-helpers"
 
-vi.mock("react-router", () => ({
-  useLocation: () => ({ pathname: window.location.pathname }),
-  useNavigate: () => (href: string, options?: { replace?: boolean }) => {
-    window.history[options?.replace ? "replaceState" : "pushState"](
-      null,
-      "",
-      href
-    )
-  },
-}))
+vi.mock("react-router", () => import("./test-utils/window-router"))
 
-beforeEach(() => {
-  window.history.replaceState({}, "", "/")
-  window.localStorage.clear()
-})
-afterEach(cleanup)
+resetWorkspaceBetweenTests()
 
+const useMarketWorkspace = () =>
+  useControlledWorkspace({ initialThreadId: "thread-aster-market" })
+/** The public fixture demo's runtime, which lists no creator. */
+const usePublicFixture = () => useFixtureBundle({ enableAgentCreator: false })
+const fixtureClock = { readNow: () => FIXTURE_NOW }
+
+// Full mount: a pending interaction replaces the composer through the
+// workspace's interaction provider, scoped to the thread on screen.
 it("renders pending provider interactions through the unified runtime and submits to their owning Session", async () => {
   const user = userEvent.setup()
   const request: RuntimeQuestionRequest = {
@@ -97,21 +97,15 @@ it("renders pending provider interactions through the unified runtime and submit
 
 describe("reversible local Session tabs", () => {
   it("keeps a provider-neutral local draft selected without creating a remote Session", async () => {
-    const user = userEvent.setup()
-    let bundle: WorkspaceFixtureRuntime | undefined
-    const capture = (value: WorkspaceFixtureRuntime) => {
-      bundle = value
-    }
-    render(
-      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
-        {(value) => (
-          <RegisteredDraftWorkspace bundle={value} capture={capture} />
-        )}
-      </ControlledWorkspaceFixture>
+    const view = renderNavigation(() =>
+      registeredDraftRuntime(useMarketWorkspace())
     )
-    await screen.findByRole("tab", { name: "Market brief" })
-    const create = vi.spyOn(bundle!.workspace, "createSession")
-    const threads = bundle!.assistantRuntime.threads
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
+    const { assistantRuntime, workspace } = view.runtime
+    const create = vi.spyOn(workspace, "createSession")
+    const threads = assistantRuntime.threads
     const originalSwitchToThread = threads.switchToThread.bind(threads)
     let clickStarted = false
     const switchesAfterClick: string[] = []
@@ -120,92 +114,58 @@ describe("reversible local Session tabs", () => {
       await originalSwitchToThread(id)
     })
     const switchToNew = vi.spyOn(threads, "switchToNewThread")
-    const button = await within(
-      await screen.findByRole("complementary", {
-        name: en.workspace.agentDetails,
-      })
-    ).findByRole("button", { name: en.actions.newSession })
 
     clickStarted = true
-    await user.click(button)
+    await act(() => view.nav.createSession("agent-aster"))
 
     await waitFor(() => expect(switchToNew).toHaveBeenCalledOnce())
     await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
     expect(switchesAfterClick).toEqual([])
     await waitFor(() => {
-      const state = bundle!.assistantRuntime.threads.getState()
+      const state = threads.getState()
       expect(state.mainThreadId).not.toBe("thread-aster-market")
       expect(state.threadItems[state.mainThreadId]).toMatchObject({
         remoteId: undefined,
         externalId: undefined,
       })
     })
-    const draftId = bundle!.assistantRuntime.threads.getState().mainThreadId
-    expect(bundle!.assistantRuntime.threads.getState().mainThreadId).toBe(
-      draftId
-    )
-    expect(
-      await screen.findByRole("heading", {
-        name: "What would you like to work on?",
-      })
-    ).toBeVisible()
-    expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
-    expect(screen.queryByText("Start your first session")).toBeNull()
+    const draftId = threads.getState().mainThreadId
+    // The workspace renders the empty draft's own thread, not a placeholder.
+    await waitFor(() => expect(renderedConversation(view.nav)).toBe(draftId))
+    expect(view.nav.selectedAgentId).toBe("agent-aster")
     expect(create).not.toHaveBeenCalled()
     expect(window.location.pathname).toBe("/agent-aster")
   })
 
   it("keeps a promoted draft selected until provider metadata confirms it", async () => {
-    const user = userEvent.setup()
-    let runtime: HarnessRuntime | undefined
-    render(
-      <DraftPromotionRaceWorkspace
-        capture={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    await user.click(
-      await within(
-        await screen.findByRole("complementary", {
-          name: en.workspace.agentDetails,
-        })
-      ).findByRole("button", { name: en.actions.newSession })
-    )
-    await screen.findByRole("textbox", { name: "Message input" })
-    const draftId = runtime!.assistantRuntime.threads.getState().mainThreadId
+    const view = renderNavigation(useDraftPromotionRaceRuntime)
+    await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-aster"))
+    await act(() => view.nav.createSession("agent-aster"))
+    const threads = view.runtime.assistantRuntime.threads
+    const draftId = threads.getState().mainThreadId
+    await waitFor(() => expect(renderedConversation(view.nav)).toBe(draftId))
 
     await act(async () => {
-      await runtime!.assistantRuntime.threads.mainItem.initialize()
+      await threads.mainItem.initialize()
     })
-    const promotedId =
-      runtime!.assistantRuntime.threads.getState().threadItems[draftId]
-        ?.remoteId
+    const promotedId = threads.getState().threadItems[draftId]?.remoteId
     expect(promotedId).toMatch(/^fixture-session-/u)
 
     await act(
       async () => await new Promise((resolve) => window.setTimeout(resolve, 50))
     )
-    expect(runtime!.assistantRuntime.threads.getState().mainThreadId).toBe(
-      draftId
-    )
+    expect(threads.getState().mainThreadId).toBe(draftId)
     expect(window.location.pathname).toBe(`/agent-aster/${promotedId}`)
-    expect(screen.getByRole("textbox", { name: "Message input" })).toBeVisible()
+    expect(renderedConversation(view.nav)).toBe(draftId)
   })
 
+  // Full mount: only the workspace's render branch proves the previous
+  // conversation leaves the screen while draft selection is pending.
   it("hides the previous conversation while local draft selection is pending", async () => {
     const user = userEvent.setup()
     const draftGate = deferred<void>()
-    render(
-      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
-        {(bundle) => (
-          <RegisteredDraftWorkspace
-            bundle={bundle}
-            capture={() => undefined}
-            beforeDraftSelection={() => draftGate.promise}
-          />
-        )}
-      </ControlledWorkspaceFixture>
+    renderWorkspace(() =>
+      registeredDraftRuntime(useMarketWorkspace(), () => draftGate.promise)
     )
 
     await screen.findByText("Test response")
@@ -225,14 +185,11 @@ describe("reversible local Session tabs", () => {
   })
 
   it("applies browser navigation while a previous Session switch is finishing", async () => {
-    const user = userEvent.setup()
-    let bundle: WorkspaceFixtureRuntime | undefined
-    const capture = (value: WorkspaceFixtureRuntime) => {
-      bundle = value
-    }
-    const view = render(<TabFixture capture={capture} />)
-    await screen.findByRole("tab", { name: "Market brief" })
-    const threads = bundle!.assistantRuntime.threads
+    const view = renderNavigation(useMarketWorkspace)
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
+    const threads = view.runtime.assistantRuntime.threads
     const switchToThread = threads.switchToThread.bind(threads)
     const pending = deferred<void>()
     vi.spyOn(threads, "switchToThread").mockImplementation(async (id) => {
@@ -241,36 +198,28 @@ describe("reversible local Session tabs", () => {
     })
 
     try {
-      await user.click(screen.getByRole("button", { name: "Mica" }))
-      await screen.findByRole("tab", { name: "Quarterly synthesis" })
+      act(() => void view.nav.selectAgent("agent-mica"))
+      await waitFor(() =>
+        expect(openTabIds(view.nav)).toContain("thread-mica-quarterly")
+      )
       // The router exposes Back before the previous adapter promise settles.
       window.history.replaceState({}, "", "/agent-aster/thread-aster-market")
-      view.rerender(<TabFixture capture={capture} />)
+      view.rerender()
       await waitFor(() =>
-        expect(
-          screen.getByRole("tab", { name: "Market brief" })
-        ).toHaveAttribute("aria-selected", "true")
+        expect(view.nav.visibleThreadId).toBe("thread-aster-market")
       )
     } finally {
       await act(async () => pending.resolve())
     }
-    expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
+    expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     expect(window.location.pathname).toBe("/agent-aster/thread-aster-market")
   })
 
   it("keeps the resolved conversation mounted during a background Session reload", async () => {
-    let bundle: WorkspaceFixtureRuntime | undefined
-    render(
-      <TabFixture
-        capture={(value) => {
-          bundle = value
-        }}
-      />
+    const view = renderNavigation(useMarketWorkspace)
+    await waitFor(() =>
+      expect(renderedConversation(view.nav)).toBe("thread-aster-market")
     )
-    await screen.findByText("Test response")
 
     const pendingList =
       deferred<Awaited<ReturnType<FixtureThreadListAdapter["list"]>>>()
@@ -280,12 +229,11 @@ describe("reversible local Session tabs", () => {
 
     let reload!: Promise<void>
     act(() => {
-      reload = bundle!.assistantRuntime.threads.reload()
+      reload = view.runtime.assistantRuntime.threads.reload()
     })
     await waitFor(() => expect(list).toHaveBeenCalledOnce())
 
-    expect(screen.queryByText("Loading workspace…")).toBeNull()
-    expect(screen.getByText("Test response")).toBeVisible()
+    expect(renderedConversation(view.nav)).toBe("thread-aster-market")
 
     // A reload that lists fewer Sessions, the open one among those dropped,
     // still leaves the conversation on screen.
@@ -293,35 +241,24 @@ describe("reversible local Session tabs", () => {
     await act(() => reload)
     list.mockRestore()
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
-    expect(screen.queryByText("Loading workspace…")).toBeNull()
-    expect(screen.getByText("Test response")).toBeVisible()
+    expect(renderedConversation(view.nav)).toBe("thread-aster-market")
   })
 
   it("reloads the thread list only when the catalog names a Session it lacks", async () => {
-    let bundle: WorkspaceFixtureRuntime | undefined
     let hearCatalog: (sessionIds: readonly string[]) => void = () => {}
-    render(
-      <ControlledWorkspaceFixture initialThreadId="thread-aster-market">
-        {(value) => {
-          bundle = value
-          // The fixture has no catalog feed, so the test plays one, in place
-          // before the workspace subscribes to it.
-          value.workspace.subscribeSessionCatalog ??= (listener) => {
-            hearCatalog = listener
-            return () => {}
-          }
-          return (
-            <AosUiWorkspace
-              runtime={asHarnessRuntime(value)}
-              locale="en"
-              dictionary={en}
-              now={FIXTURE_NOW}
-            />
-          )
-        }}
-      </ControlledWorkspaceFixture>
+    const view = renderNavigation(() => {
+      const bundle = useMarketWorkspace()
+      // The fixture has no catalog feed, so the test plays one, in place
+      // before navigation subscribes to it.
+      bundle.workspace.subscribeSessionCatalog ??= (listener) => {
+        hearCatalog = listener
+        return () => {}
+      }
+      return bundle
+    })
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
-    await screen.findByRole("tab", { name: "Market brief" })
     const list = vi.spyOn(FixtureThreadListAdapter.prototype, "list")
 
     act(() => hearCatalog(["thread-aster-market", "thread-aster-launch"]))
@@ -329,16 +266,20 @@ describe("reversible local Session tabs", () => {
     expect(list).not.toHaveBeenCalled()
 
     // Another tab creates a Session this one has never listed.
-    const { sessionId } = await bundle!.workspace.createSession("agent-aster", {
-      title: "Created elsewhere",
-    })
+    const { sessionId } = await view.runtime.workspace.createSession(
+      "agent-aster",
+      { title: "Created elsewhere" }
+    )
     act(() => hearCatalog(["thread-aster-market", sessionId]))
 
-    expect(
-      await screen.findAllByRole("button", {
-        name: "Open session: Created elsewhere",
-      })
-    ).not.toHaveLength(0)
+    await waitFor(() =>
+      expect([
+        ...view.nav.sessionView.openSessions,
+        ...view.nav.sessionView.allSessions,
+      ]).toContainEqual(
+        expect.objectContaining({ sessionId, title: "Created elsewhere" })
+      )
+    )
     expect(list).toHaveBeenCalledOnce()
     list.mockRestore()
   })
@@ -346,11 +287,12 @@ describe("reversible local Session tabs", () => {
   it("opens an older Session encoded in a direct URL", async () => {
     window.history.replaceState({}, "", "/agent-aster/thread-aster-pricing")
 
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
+    const view = renderNavigation(usePublicFixture, fixtureClock)
 
-    expect(
-      await screen.findByRole("tab", { name: "Pricing analysis" })
-    ).toHaveAttribute("aria-selected", "true")
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-pricing")
+    )
+    expect(openTabIds(view.nav)).toContain("thread-aster-pricing")
     expect(window.location.pathname).toBe("/agent-aster/thread-aster-pricing")
   })
 
@@ -358,9 +300,11 @@ describe("reversible local Session tabs", () => {
     window.history.replaceState({}, "", "/missing-agent/missing-session")
     const replaceState = vi.spyOn(window.history, "replaceState")
 
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
+    const view = renderNavigation(usePublicFixture, fixtureClock)
 
-    await screen.findByRole("tab", { name: "Market brief" })
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
     await waitFor(() =>
       expect(replaceState).toHaveBeenCalledWith(
         null,
@@ -371,92 +315,89 @@ describe("reversible local Session tabs", () => {
   })
 
   it("leaves no selected Session after the last open tab closes, even with older history", async () => {
-    const user = userEvent.setup()
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
-    await screen.findByRole("tab", { name: "Market brief" })
-    for (const title of ["Market brief", "Launch review", "Competitive scan"]) {
-      await user.click(
-        screen.getByRole("button", { name: `Close session: ${title}` })
-      )
-      await waitFor(() =>
-        expect(screen.queryByRole("tab", { name: title })).toBeNull()
-      )
-    }
-    await waitFor(() => expect(screen.queryAllByRole("tab")).toHaveLength(0))
-    await user.click(await screen.findByRole("button", { name: "Undo" }))
+    const view = renderNavigation(usePublicFixture, fixtureClock)
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Competitive scan" })
-      ).toHaveAttribute("aria-selected", "true")
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
+    for (const sessionId of [
+      "thread-aster-market",
+      "thread-aster-launch",
+      "thread-aster-scan",
+    ]) {
+      await act(() => view.nav.closeSession(sessionId))
+      await waitFor(() => expect(openTabIds(view.nav)).not.toContain(sessionId))
+    }
+    await waitFor(() => expect(openTabIds(view.nav)).toEqual([]))
+    expect(view.nav.visibleThreadId).toBeNull()
+    expect(view.nav.tabUndo.pending?.title).toBe("Competitive scan")
+    await act(() => view.nav.undoCloseSession())
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-scan")
     )
   })
-  it("restores the exact closed tab and selection without provider lifecycle mutations, and a background tab without selecting it", async () => {
+
+  // Full mount: navigation focuses the restored tab by the shell's tab id once
+  // it renders, so only the two together prove focus lands on it.
+  it("returns focus to the restored tab after Undo", async () => {
     const user = userEvent.setup()
-    let bundle: WorkspaceFixtureRuntime | undefined
-    render(
-      <TabFixture
-        capture={(value) => {
-          bundle = value
-        }}
-      />
+    renderWorkspace(useMarketWorkspace)
+    await user.click(
+      await screen.findByRole("button", { name: "Close session: Market brief" })
     )
-    await screen.findByRole("tab", { name: "Market brief" })
-    const runtime = bundle!.assistantRuntime
+    expect(screen.queryByRole("tab", { name: "Market brief" })).toBeNull()
+
+    await user.click(await screen.findByRole("button", { name: "Undo" }))
+
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveFocus()
+    )
+  })
+
+  it("restores the exact closed tab and selection without provider lifecycle mutations, and a background tab without selecting it", async () => {
+    const view = renderNavigation(useMarketWorkspace)
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
+    const { assistantRuntime: runtime, workspace } = view.runtime
     const item = runtime.threads.getItemById("thread-aster-market")
     const archive = vi.spyOn(item, "archive")
     const remove = vi.spyOn(item, "delete")
     const stop = vi.spyOn(runtime.thread, "cancelRun")
-    const create = vi.spyOn(bundle!.workspace, "createSession")
-    const before = await bundle!.workspace.getSessionMetadata([
-      "thread-aster-market",
-    ])
-    await user.click(
-      screen.getByRole("button", { name: "Close session: Market brief" })
-    )
-    expect(screen.queryByRole("tab", { name: "Market brief" })).toBeNull()
-    await user.click(await screen.findByRole("button", { name: "Undo" }))
+    const create = vi.spyOn(workspace, "createSession")
+    const before = await workspace.getSessionMetadata(["thread-aster-market"])
+    await act(() => view.nav.closeSession("thread-aster-market"))
+    expect(openTabIds(view.nav)).not.toContain("thread-aster-market")
+    expect(view.nav.tabUndo.pending?.title).toBe("Market brief")
+    await act(() => view.nav.undoCloseSession())
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-        "aria-selected",
-        "true"
-      )
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
-    await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveFocus()
+    expect(openTabIds(view.nav)).toContain("thread-aster-market")
+    expect(await workspace.getSessionMetadata(["thread-aster-market"])).toEqual(
+      before
     )
-    expect(
-      await bundle!.workspace.getSessionMetadata(["thread-aster-market"])
-    ).toEqual(before)
     for (const mutation of [archive, remove, stop, create])
       expect(mutation).not.toHaveBeenCalled()
 
     // History opens a second tab; closing it once Market brief leads again
     // closes a background tab.
-    await user.click(
-      screen.getByRole("button", { name: "Open session: Pricing analysis" })
-    )
-    await user.click(await screen.findByRole("tab", { name: "Market brief" }))
+    await act(() => view.nav.openSession("thread-aster-pricing"))
+    await act(() => view.nav.openSession("thread-aster-market"))
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-        "aria-selected",
-        "true"
-      )
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
-    await user.click(
-      screen.getByRole("button", { name: "Close session: Pricing analysis" })
+    await act(() => view.nav.closeSession("thread-aster-pricing"))
+    await act(() => view.nav.undoCloseSession())
+    await waitFor(() =>
+      expect(openTabIds(view.nav)).toContain("thread-aster-pricing")
     )
-    await user.click(await screen.findByRole("button", { name: "Undo" }))
-    expect(
-      await screen.findByRole("tab", { name: "Pricing analysis" })
-    ).toHaveAttribute("aria-selected", "false")
-    expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    )
+    expect(view.nav.visibleThreadId).toBe("thread-aster-market")
   })
 })
 
 describe("artifact Session scope", () => {
+  // Full mount: the artifact bridge pairs the rendered messages with their
+  // Session inside the workspace; nothing lower renders both.
   it("never reads an artifact against a Session that does not own it", async () => {
     // The provider authorizes an artifact read against the Session that
     // published it, so a read carrying another Session's id is refused
@@ -469,53 +410,44 @@ describe("artifact Session scope", () => {
         return Promise.resolve(new Blob(["bytes"], { type: "image/png" }))
       },
     }
-    let bundle: WorkspaceFixtureRuntime | undefined
-    const capture = (value: WorkspaceFixtureRuntime) => {
-      bundle = value
-    }
-    render(
-      <ControlledWorkspaceFixture
-        initialThreadId="thread-aster-market"
-        messagesByThread={{
-          "thread-aster-market": [
-            { id: "market-user", role: "user", content: "Chart it" },
+    const messagesByThread: Record<string, ThreadMessageLike[]> = {
+      "thread-aster-market": [
+        { id: "market-user", role: "user", content: "Chart it" },
+        {
+          id: "market-assistant",
+          role: "assistant",
+          content: [
             {
-              id: "market-assistant",
-              role: "assistant",
-              content: [
-                {
-                  type: "data",
-                  name: "aos.artifact",
-                  data: {
-                    id: "market-chart",
-                    filename: "market-chart.png",
-                    mimeType: "image/png",
-                    source: { type: "provider", reference: "market-chart" },
-                  },
-                },
-              ],
+              type: "data",
+              name: "aos.artifact",
+              data: {
+                id: "market-chart",
+                filename: "market-chart.png",
+                mimeType: "image/png",
+                source: { type: "provider", reference: "market-chart" },
+              },
             },
           ],
-          "thread-aster-launch": [
-            { id: "launch-user", role: "user", content: "Status?" },
-            { id: "launch-assistant", role: "assistant", content: "On track." },
-          ],
-        }}
-      >
-        {(value) => (
-          <ScopedArtifactWorkspace
-            bundle={{ ...value, artifacts }}
-            capture={capture}
-          />
-        )}
-      </ControlledWorkspaceFixture>
-    )
+        },
+      ],
+      "thread-aster-launch": [
+        { id: "launch-user", role: "user", content: "Status?" },
+        { id: "launch-assistant", role: "assistant", content: "On track." },
+      ],
+    }
+    const view = renderWorkspace(() => ({
+      ...useControlledWorkspace({
+        initialThreadId: "thread-aster-market",
+        messagesByThread,
+      }),
+      artifacts,
+    }))
 
     await screen.findByRole("tab", { name: "Market brief" })
     await waitFor(() => expect(reads.length).toBeGreaterThan(0))
 
     // The switch a tab performs, driven through the runtime that owns it.
-    const threads = bundle!.assistantRuntime.threads
+    const threads = view.runtime.assistantRuntime.threads
     for (const sessionId of ["thread-aster-launch", "thread-aster-market"]) {
       await act(async () => {
         await threads.switchToThread(sessionId)
@@ -594,23 +526,11 @@ describe("paged Session History", () => {
     vi.unstubAllGlobals()
   })
 
-  function PagedWorkspace() {
-    return (
-      <ControlledWorkspaceFixture
-        initialThreadId="thread-aster-0"
-        workspace={{ sessions: pagedSessions, sessionTitles }}
-      >
-        {(bundle) => (
-          <AosUiWorkspace
-            locale="en"
-            dictionary={en}
-            runtime={asHarnessRuntime(bundle)}
-            now={FIXTURE_NOW}
-          />
-        )}
-      </ControlledWorkspaceFixture>
-    )
-  }
+  const usePagedWorkspace = () =>
+    useControlledWorkspace({
+      initialThreadId: "thread-aster-0",
+      workspace: { sessions: pagedSessions, sessionTitles },
+    })
 
   const rowsIn = (section: string, title: string) =>
     screen
@@ -622,9 +542,11 @@ describe("paged Session History", () => {
       name: en.mobileNavigation.loadMoreSessions,
     })
 
+  // Full mount: the History list's sentinel and button drive the thread list's
+  // paging through navigation's merged catalog.
   it("appends the next page when the end of History scrolls into view, or from the keyboard-reachable button", async () => {
     const user = userEvent.setup()
-    render(<PagedWorkspace />)
+    renderWorkspace(usePagedWorkspace)
     await waitFor(() => expect(loadMoreButton()).not.toBeNull())
     expect(rowsIn(en.mobileNavigation.history, "thread-aster-9")).toBe(0)
 
@@ -648,7 +570,7 @@ describe("paged Session History", () => {
     expect(rowsIn(en.mobileNavigation.openSessions, "Pinned plan")).toBe(1)
 
     cleanup()
-    render(<PagedWorkspace />)
+    renderWorkspace(usePagedWorkspace)
     await waitFor(() => expect(loadMoreButton()).not.toBeNull())
 
     await user.click(loadMoreButton()!)

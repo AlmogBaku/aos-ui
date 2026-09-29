@@ -2,17 +2,22 @@ import { describe, expect, it, vi } from "vitest"
 
 import { FanoutOverflowError, SubscriberFanout } from "./subscriber-fanout"
 
+/** A fanout of strings, each costing its length in bytes. */
+function fanoutOf(maxEvents: number, maxBytes = 64) {
+  return new SubscriberFanout<string>({
+    maxEvents,
+    maxBytes,
+    sizeOf: (value) => value.length,
+  })
+}
+
 async function next<T>(events: AsyncIterable<T>) {
   return events[Symbol.asyncIterator]().next()
 }
 
 describe("SubscriberFanout", () => {
   it("delivers one source event independently to every subscriber", async () => {
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 4,
-      maxBytes: 64,
-      sizeOf: (value) => value.length,
-    })
+    const fanout = fanoutOf(4)
     const first = fanout.subscribe()
     const second = fanout.subscribe()
 
@@ -31,11 +36,7 @@ describe("SubscriberFanout", () => {
 
   it("detaches only a subscriber whose bounded queue overflows", async () => {
     const detached = vi.fn()
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 1,
-      maxBytes: 64,
-      sizeOf: (value) => value.length,
-    })
+    const fanout = fanoutOf(1)
     const slow = fanout.subscribe(detached)
     const fast = fanout.subscribe()
 
@@ -61,11 +62,7 @@ describe("SubscriberFanout", () => {
   })
 
   it("fails a waiting consumer when one event alone exceeds its bytes", async () => {
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 4,
-      maxBytes: 8,
-      sizeOf: (value) => value.length,
-    })
+    const fanout = fanoutOf(4, 8)
     const subscriber = fanout.subscribe()
     const waiting = next(subscriber.events)
 
@@ -76,11 +73,7 @@ describe("SubscriberFanout", () => {
   })
 
   it("ends a stream cleanly when the subscriber or the source closes it", async () => {
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 2,
-      maxBytes: 64,
-      sizeOf: (value) => value.length,
-    })
+    const fanout = fanoutOf(2)
     const first = fanout.subscribe()
     const second = fanout.subscribe()
 
@@ -98,11 +91,7 @@ describe("SubscriberFanout", () => {
   })
 
   it("closing one subscriber leaves every other subscriber attached", async () => {
-    const fanout = new SubscriberFanout<string>({
-      maxEvents: 2,
-      maxBytes: 64,
-      sizeOf: (value) => value.length,
-    })
+    const fanout = fanoutOf(2)
     const first = fanout.subscribe()
     const second = fanout.subscribe()
 

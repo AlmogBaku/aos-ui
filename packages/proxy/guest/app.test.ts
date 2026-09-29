@@ -617,9 +617,15 @@ describe("guest app", () => {
     expect(call.status).toBe(404)
   })
 
-  it("holds one invitation to a shared audio allowance in both directions", async () => {
+  it("holds one invitation to a shared audio allowance in both directions, apart from any other invitation", async () => {
     const subject = harness()
     const invite = await token(subject.invitationService)
+    const other = (
+      await subject.invitationService.issue({
+        agentId: AGENT,
+        ref: "other_guest_ref",
+      })
+    ).token
     const gate =
       Promise.withResolvers<Awaited<ReturnType<typeof subject.speak>>>()
     subject.speak
@@ -643,35 +649,13 @@ describe("guest app", () => {
     expect(crossed.status).toBe(503)
     expect(subject.runtime.transcribe).not.toHaveBeenCalled()
     expect(subject.speak).toHaveBeenCalledTimes(2)
+    // Another invitation spends its own allowance.
+    expect((await speakRequest(subject, other)).status).toBe(200)
 
     gate.resolve({ bytes: Uint8Array.of(1, 2, 3), mimeType: "audio/mpeg" })
     for (const response of held) expect((await response).status).toBe(200)
 
     expect((await speakRequest(subject, invite)).status).toBe(200)
-  })
-
-  it("budgets each invitation separately", async () => {
-    const subject = harness()
-    const invite = await token(subject.invitationService)
-    const other = (
-      await subject.invitationService.issue({
-        agentId: AGENT,
-        ref: "other_guest_ref",
-      })
-    ).token
-    const gate =
-      Promise.withResolvers<Awaited<ReturnType<typeof subject.speak>>>()
-    subject.speak
-      .mockImplementationOnce(() => gate.promise)
-      .mockImplementationOnce(() => gate.promise)
-    const held = [speakRequest(subject, invite), speakRequest(subject, invite)]
-    await vi.waitFor(() => expect(subject.speak).toHaveBeenCalledTimes(2))
-
-    expect((await speakRequest(subject, other)).status).toBe(200)
-    expect((await speakRequest(subject, invite)).status).toBe(503)
-
-    gate.resolve({ bytes: Uint8Array.of(1, 2, 3), mimeType: "audio/mpeg" })
-    for (const response of held) expect((await response).status).toBe(200)
   })
 
   it("frees the slot a rejected audio body never used", async () => {

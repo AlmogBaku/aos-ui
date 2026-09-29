@@ -1,20 +1,11 @@
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react"
+import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { useEffect, useState } from "react"
+import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
-import { he } from "@/lib/i18n/dictionaries/he"
 import type {
   HarnessRuntime,
-  WorkspaceAdapter,
+  SessionMetadata,
 } from "@/runtime-adapters/contracts"
 
 import { ControlledWorkspaceFixture } from "./test-utils/controlled-workspace-fixture"
@@ -22,64 +13,44 @@ import { AosUiWorkspace } from "./aos-ui-workspace"
 import {
   asHarnessRuntime,
   deferred,
-  EmptyAgentFixture,
-  StaleTodoFixture,
-  SessionMetadataSignalFixture,
-  ClockBoundaryFixture,
   FIXTURE_NOW,
   fixtureSessions,
-  useFixtureRuntimeBundle,
-  FixtureAosUiApp,
-  type FixtureWorkspace,
+  openTabIds,
+  renderNavigation,
+  renderWorkspace,
+  resetWorkspaceBetweenTests,
+  useEmptyAgentRuntime,
+  useFixtureBundle,
+  useSessionMetadataSignalRuntime,
+  useStaleTodoRuntime,
 } from "./aos-ui-workspace.test-helpers"
 
-vi.mock("react-router", () => ({
-  useLocation: () => ({ pathname: window.location.pathname }),
-  useNavigate: () => (href: string, options?: { replace?: boolean }) => {
-    window.history[options?.replace ? "replaceState" : "pushState"](
-      null,
-      "",
-      href
-    )
-  },
-}))
+vi.mock("react-router", () => import("./test-utils/window-router"))
 
-beforeEach(() => {
-  window.history.replaceState({}, "", "/")
-  window.localStorage.clear()
-})
-afterEach(cleanup)
+resetWorkspaceBetweenTests()
+
+/** The public fixture demo's runtime, which lists no creator. */
+const usePublicFixture = () => useFixtureBundle({ enableAgentCreator: false })
+const fixtureClock = { readNow: () => FIXTURE_NOW }
+
+/** Fixture metadata with Pricing analysis waiting on the operator. */
+const pricingWaiting = fixtureSessions.map((session) =>
+  session.sessionId === "thread-aster-pricing"
+    ? { ...session, status: "waiting-for-input" as const }
+    : session
+)
 
 describe("AosUiApp fixture composition", () => {
+  // Full mount: Activity reaches selection through the coordinator, the shell's
+  // bell, and navigation together.
   it("routes Activity to its owning Agent and Session while suppressing exact focused selection", async () => {
     const user = userEvent.setup()
     const focus = vi.spyOn(document, "hasFocus").mockReturnValue(true)
-    let provider: FixtureWorkspace | undefined
-    function ActivityFixture() {
-      const [sessionId, setThreadId] = useState<string | undefined>(
-        "thread-aster-market"
-      )
-      const bundle = useFixtureRuntimeBundle({
-        sessionId,
-        onThreadIdChange: setThreadId,
-      })
-      useEffect(() => {
-        provider = bundle.workspace
-      }, [bundle.workspace])
-      return (
-        <AosUiWorkspace
-          runtime={asHarnessRuntime(bundle)}
-          locale="en"
-          dictionary={en}
-          now={FIXTURE_NOW}
-          readNow={() => FIXTURE_NOW}
-        />
-      )
-    }
     try {
-      render(<ActivityFixture />)
+      const view = renderWorkspace(useFixtureBundle, fixtureClock)
+      const provider = () => view.runtime.workspace
       await screen.findByRole("tab", { name: "Market brief" })
-      act(() => provider!.publishActivityScenario("turn-completed"))
+      act(() => provider().publishActivityScenario("turn-completed"))
       // The bell counts the two unread fixture Sessions, not arrivals.
       const bell = (
         await screen.findAllByRole("button", { name: "Activity, 2 unread" })
@@ -87,7 +58,7 @@ describe("AosUiApp fixture composition", () => {
       await user.click(bell)
       expect(await screen.findByText("A turn finished")).toBeVisible()
       await user.keyboard("{Escape}")
-      act(() => provider!.publishActivityScenario("delayed-non-selected"))
+      act(() => provider().publishActivityScenario("delayed-non-selected"))
       expect(
         await screen.findAllByRole("button", { name: "Activity, 2 unread" })
       ).toHaveLength(2)
@@ -106,7 +77,7 @@ describe("AosUiApp fixture composition", () => {
       ).toHaveAttribute("aria-selected", "true")
 
       // Opening an unread Session's Activity acknowledges it with the provider.
-      act(() => provider!.publishActivityScenario("turn-failed"))
+      act(() => provider().publishActivityScenario("turn-failed"))
       await user.click(
         screen.getAllByRole("button", { name: "Activity, 2 unread" })[0]!
       )
@@ -120,84 +91,63 @@ describe("AosUiApp fixture composition", () => {
     }
   })
 
-  it.each([
-    ["en", { connectionStatus: "reconnecting" }, "Reconnecting to AOS…"],
-    ["he", { connectionStatus: "reconnecting" }, "מתחברים מחדש ל-AOS…"],
-    ["en", { connectionStatus: "reconnected" }, "Reconnected"],
-    ["he", { connectionStatus: "reconnected" }, "החיבור חזר"],
-    [
-      "en",
-      { connectionStatus: "capacity" },
-      "The AOS server is full. Reconnecting shortly.",
-    ],
-    [
-      "he",
-      { connectionStatus: "capacity" },
-      "שרת AOS מלא כרגע. מתחברים מחדש בקרוב.",
-    ],
-    [
-      "en",
-      { sessionStatus: "unavailable" },
-      "This Session is no longer available.",
-    ],
-    ["he", { sessionStatus: "unavailable" }, "השיחה הזו כבר אינה זמינה."],
-  ] as const)(
-    "tells the %s reader %o until it clears",
-    async (locale, status, statusText) => {
-      function StatusFixture(
-        props: Pick<HarnessRuntime, "connectionStatus" | "sessionStatus">
-      ) {
-        const bundle = useFixtureRuntimeBundle()
-        return (
-          <AosUiWorkspace
-            runtime={{ ...asHarnessRuntime(bundle), ...props }}
-            locale={locale}
-            dictionary={locale === "he" ? he : en}
-            now={FIXTURE_NOW}
-          />
-        )
-      }
-      const { rerender } = render(<StatusFixture {...status} />)
-
-      await waitFor(() =>
-        expect(
-          screen.getAllByRole("status").map(({ textContent }) => textContent)
-        ).toContain(statusText)
+  // Full mount: the harness's connection and Session status reach the notice
+  // through the workspace; the notice's copy is its own component's test.
+  it("passes the runtime's connection and Session status to the notice", async () => {
+    function StatusFixture(
+      props: Pick<HarnessRuntime, "connectionStatus" | "sessionStatus">
+    ) {
+      const bundle = useFixtureBundle()
+      return (
+        <AosUiWorkspace
+          runtime={{ ...asHarnessRuntime(bundle), ...props }}
+          locale="en"
+          dictionary={en}
+          now={FIXTURE_NOW}
+        />
       )
-      rerender(<StatusFixture />)
-      expect(screen.queryByText(statusText)).toBeNull()
     }
-  )
+    const statusTexts = () =>
+      screen.getAllByRole("status").map(({ textContent }) => textContent)
+    const { rerender } = render(
+      <StatusFixture connectionStatus="reconnecting" />
+    )
+    await waitFor(() => expect(statusTexts()).toContain("Reconnecting to AOS…"))
+    rerender(<StatusFixture sessionStatus="unavailable" />)
+    expect(statusTexts()).toContain("This Session is no longer available.")
+    rerender(<StatusFixture />)
+    expect(
+      screen.queryByText("This Session is no longer available.")
+    ).toBeNull()
+  })
 
   it("removes an idle Session tab when it reaches the exact 12-hour boundary", async () => {
     vi.useFakeTimers()
-    let clock = new Date("2026-09-03T18:59:59.000Z")
-
+    const start = new Date("2026-09-03T18:59:59.000Z")
+    let clock = start
     try {
-      render(<ClockBoundaryFixture readNow={() => clock} />)
+      const view = renderNavigation(useFixtureBundle, {
+        now: start,
+        readNow: () => clock,
+      })
       await act(async () => {
         await Promise.resolve()
         await Promise.resolve()
       })
-
-      expect(
-        screen.getByRole("tab", { name: "Launch review" })
-      ).toBeInTheDocument()
+      expect(openTabIds(view.nav)).toContain("thread-aster-launch")
 
       clock = new Date("2026-09-03T19:00:00.000Z")
       await act(() => vi.advanceTimersByTimeAsync(1_000))
 
-      expect(
-        screen.queryByRole("tab", { name: "Launch review" })
-      ).not.toBeInTheDocument()
-      expect(
-        screen.getByRole("tab", { name: "Market brief" })
-      ).toBeInTheDocument()
+      expect(openTabIds(view.nav)).not.toContain("thread-aster-launch")
+      expect(openTabIds(view.nav)).toContain("thread-aster-market")
     } finally {
       vi.useRealTimers()
     }
   })
 
+  // Full mount: Agents, tabs, the thread's messages, and the Todo dock are
+  // separate parts that only the workspace joins.
   it("joins provider Agents, Session tabs, the thread, and explicit todos", async () => {
     render(
       <ControlledWorkspaceFixture
@@ -287,112 +237,88 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("restores the last valid Session when switching Agents", async () => {
-    const user = userEvent.setup()
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
-
-    await screen.findByRole("tab", { name: "Market brief" })
-    await user.click(screen.getByRole("button", { name: "Mica" }))
+    const view = renderNavigation(usePublicFixture, fixtureClock)
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Quarterly synthesis" })
-      ).toHaveAttribute("aria-selected", "true")
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
 
-    await user.click(
-      screen.getByRole("button", { name: "Aster, Status: Running" })
-    )
+    await act(() => view.nav.selectAgent("agent-mica"))
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "Market brief" })).toHaveAttribute(
-        "aria-selected",
-        "true"
-      )
+      expect(view.nav.visibleThreadId).toBe("thread-mica-quarterly")
+    )
+
+    await act(() => view.nav.selectAgent("agent-aster"))
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
   })
 
   it("opens an older Session from Agent history as a closable tab, and reopens a closed recent tab from its row", async () => {
-    const user = userEvent.setup()
     const pushState = vi.spyOn(window.history, "pushState")
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
-
-    const historySession = await screen.findByRole("button", {
-      name: "Open session: Pricing analysis",
-    })
-    await user.click(historySession)
-
+    const view = renderNavigation(usePublicFixture, fixtureClock)
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Pricing analysis" })
-      ).toHaveAttribute("aria-selected", "true")
+      expect(openTabIds(view.nav)).toContain("thread-aster-market")
+    )
+    expect(openTabIds(view.nav)).not.toContain("thread-aster-pricing")
+
+    await act(() => view.nav.openSession("thread-aster-pricing"))
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-pricing")
     )
     expect(pushState).toHaveBeenCalledWith(
       null,
       "",
       "/agent-aster/thread-aster-pricing"
     )
-    expect(
-      screen.getByRole("button", { name: "Close session: Market brief" })
-    ).toBeInTheDocument()
-
-    await user.click(
-      screen.getByRole("button", { name: "Close session: Pricing analysis" })
-    )
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("tab", { name: "Pricing analysis" })
-      ).not.toBeInTheDocument()
+    expect(openTabIds(view.nav)).toEqual(
+      expect.arrayContaining(["thread-aster-market", "thread-aster-pricing"])
     )
 
-    await user.click(
-      screen.getByRole("button", { name: "Close session: Market brief" })
-    )
+    await act(() => view.nav.closeSession("thread-aster-pricing"))
     await waitFor(() =>
-      expect(
-        screen.queryByRole("tab", { name: "Market brief" })
-      ).not.toBeInTheDocument()
+      expect(openTabIds(view.nav)).not.toContain("thread-aster-pricing")
     )
-    await user.click(
-      screen.getByRole("button", {
-        name: "Open session: Market brief, Status: Running",
-      })
+    await act(() => view.nav.closeSession("thread-aster-market"))
+    await waitFor(() =>
+      expect(openTabIds(view.nav)).not.toContain("thread-aster-market")
     )
-    expect(
-      await screen.findByRole("tab", { name: "Market brief" })
-    ).toHaveAttribute("aria-selected", "true")
+
+    await act(() => view.nav.openSession("thread-aster-market"))
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
+    )
+    expect(openTabIds(view.nav)).toContain("thread-aster-market")
   })
 
   // Nori owns one stale Session that is neither live nor pinned, so only the
   // history fallback can put it in the tab strip.
-
   it("shows the fallback history Session as a tab for an Agent with only old history, and lets that sole tab close", async () => {
-    const user = userEvent.setup()
-    render(<FixtureAosUiApp locale="en" dictionary={en} />)
-
-    // Nori's unread Session marks its row unread once Session metadata lands.
-    await user.click(
-      await screen.findByRole("button", { name: /^Nori(, Unread)?$/ })
-    )
-
+    const view = renderNavigation(usePublicFixture, fixtureClock)
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Launch copy, Unread" })
-      ).toHaveAttribute("aria-selected", "true")
+      expect(view.nav.visibleThreadId).toBe("thread-aster-market")
     )
 
-    await user.click(
-      screen.getByRole("button", {
-        name: "Close session: Launch copy",
-      })
-    )
+    await act(() => view.nav.selectAgent("agent-nori"))
     await waitFor(() =>
-      expect(
-        screen.queryByRole("tab", { name: "Launch copy, Unread" })
-      ).not.toBeInTheDocument()
+      expect(view.nav.visibleThreadId).toBe("thread-nori-copy")
     )
+    expect(view.nav.shellOpenSessions).toEqual([
+      expect.objectContaining({
+        sessionId: "thread-nori-copy",
+        title: "Launch copy",
+        unread: true,
+      }),
+    ])
+
+    await act(() => view.nav.closeSession("thread-nori-copy"))
+    await waitFor(() => expect(openTabIds(view.nav)).toEqual([]))
   })
 
+  // Full mount: which of the conversation, the empty-Session welcome, and the
+  // Todo dock shows is the workspace's render branch, not navigation's.
   it("never exposes another Agent's conversation when the selected Agent has no Session, names that Agent in its details, and hides the Todo dock for a Session without Todos", async () => {
     const user = userEvent.setup()
-    render(<EmptyAgentFixture />)
+    renderWorkspace(() => useEmptyAgentRuntime())
 
     await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: "Empty" }))
@@ -434,9 +360,11 @@ describe("AosUiApp fixture composition", () => {
     expect(screen.queryByRole("region", { name: "Session todos" })).toBeNull()
   })
 
+  // Full mount: `/new` is a composer command the workspace defines from the
+  // thread's own emptiness; no lower seam exposes it.
   it("offers /new only once the Session has a conversation", async () => {
     const user = userEvent.setup()
-    render(<EmptyAgentFixture />)
+    renderWorkspace(() => useEmptyAgentRuntime())
 
     const input = await screen.findByRole("textbox", { name: "Message input" })
     await user.type(input, "/ne")
@@ -452,15 +380,14 @@ describe("AosUiApp fixture composition", () => {
     expect(screen.queryByText(en.actions.newSessionCommand)).toBeNull()
   })
 
+  // Full mount: the details panel's New Session failure reaches the
+  // workspace's error surface.
   it("surfaces new-Session failures from the empty state", async () => {
     const user = userEvent.setup()
-    render(
-      <EmptyAgentFixture
-        createSession={async () => {
-          throw new Error("Provider rejected the Session")
-        }}
-      />
-    )
+    const rejectSession = async (): Promise<never> => {
+      throw new Error("Provider rejected the Session")
+    }
+    renderWorkspace(() => useEmptyAgentRuntime(rejectSession))
 
     await screen.findByText(/Applied AI is accelerating fastest/)
     await user.click(screen.getByRole("button", { name: "Empty" }))
@@ -478,94 +405,58 @@ describe("AosUiApp fixture composition", () => {
   })
 
   it("ignores delayed todo events from the previously visible Session", async () => {
-    const user = userEvent.setup()
-    let emitStale: () => void = () => undefined
-    const captureStaleEmission = (emit: () => void) => {
-      emitStale = emit
-    }
-    render(<StaleTodoFixture captureStaleEmission={captureStaleEmission} />)
-
-    await user.click(await screen.findByText("Session todos"))
-    expect(await screen.findByText("Old Agent task")).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Mica" }))
+    const view = renderNavigation(useStaleTodoRuntime)
     await waitFor(() =>
-      expect(
-        screen.getByRole("tab", { name: "Quarterly synthesis" })
-      ).toHaveAttribute("aria-selected", "true")
+      expect(view.nav.todos.map(({ label }) => label)).toEqual([
+        "Old Agent task",
+      ])
     )
-    emitStale()
 
-    expect(screen.queryByText("Old Agent task")).not.toBeInTheDocument()
-    expect(screen.queryByText("Leaked delayed task")).not.toBeInTheDocument()
+    await act(() => view.nav.selectAgent("agent-mica"))
+    await waitFor(() =>
+      expect(view.nav.visibleThreadId).toBe("thread-mica-quarterly")
+    )
+    act(() => view.runtime.stale.emit())
+
+    expect(view.nav.todos.map(({ label }) => label)).not.toContain(
+      "Old Agent task"
+    )
+    expect(view.nav.todos.map(({ label }) => label)).not.toContain(
+      "Leaked delayed task"
+    )
   })
 
   it("updates old Session tab eligibility from authoritative metadata signals", async () => {
-    let publishMetadata: (
-      metadata: Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
-    ) => void = () => undefined
-    const captureSignal = (signal: {
-      publish: typeof publishMetadata
-      fail: (error: Error) => void
-    }) => {
-      publishMetadata = signal.publish
-    }
-    render(<SessionMetadataSignalFixture captureSignal={captureSignal} />)
-
-    await screen.findByRole("tab", { name: "Market brief" })
-    expect(
-      screen.queryByRole("tab", { name: "Pricing analysis" })
-    ).not.toBeInTheDocument()
-
-    const waiting = fixtureSessions.map((session) =>
-      session.sessionId === "thread-aster-pricing"
-        ? { ...session, status: "waiting-for-input" as const }
-        : session
-    )
-    act(() => publishMetadata(waiting))
-    expect(
-      await screen.findByRole("tab", { name: "Pricing analysis" })
-    ).toBeInTheDocument()
-
-    act(() => publishMetadata(fixtureSessions))
+    const view = renderNavigation(() => useSessionMetadataSignalRuntime())
     await waitFor(() =>
-      expect(
-        screen.queryByRole("tab", { name: "Pricing analysis" })
-      ).not.toBeInTheDocument()
+      expect(openTabIds(view.nav)).toContain("thread-aster-market")
+    )
+    expect(openTabIds(view.nav)).not.toContain("thread-aster-pricing")
+
+    act(() => view.runtime.feed.signal!.publish(pricingWaiting))
+    await waitFor(() =>
+      expect(openTabIds(view.nav)).toContain("thread-aster-pricing")
+    )
+
+    act(() => view.runtime.feed.signal!.publish(fixtureSessions))
+    await waitFor(() =>
+      expect(openTabIds(view.nav)).not.toContain("thread-aster-pricing")
     )
   })
 
   it("does not let an initial metadata fetch overwrite a newer signal", async () => {
-    const initial =
-      deferred<Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>>()
-    let subscribed = false
-    let publishMetadata: (
-      metadata: Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
-    ) => void = () => undefined
-    render(
-      <SessionMetadataSignalFixture
-        initialMetadata={initial.promise}
-        captureSignal={(signal) => {
-          subscribed = true
-          publishMetadata = signal.publish
-        }}
-      />
+    const initial = deferred<SessionMetadata[]>()
+    const view = renderNavigation(() =>
+      useSessionMetadataSignalRuntime(initial.promise)
     )
-    await waitFor(() => expect(subscribed).toBe(true))
+    await waitFor(() => expect(view.runtime.feed.signal).toBeDefined())
 
-    const waiting = fixtureSessions.map((session) =>
-      session.sessionId === "thread-aster-pricing"
-        ? { ...session, status: "waiting-for-input" as const }
-        : session
+    act(() => view.runtime.feed.signal!.publish(pricingWaiting))
+    await waitFor(() =>
+      expect(openTabIds(view.nav)).toContain("thread-aster-pricing")
     )
-    act(() => publishMetadata(waiting))
-    expect(
-      await screen.findByRole("tab", { name: "Pricing analysis" })
-    ).toBeInTheDocument()
 
     await act(async () => initial.resolve(fixtureSessions))
-    expect(
-      screen.getByRole("tab", { name: "Pricing analysis" })
-    ).toBeInTheDocument()
+    expect(openTabIds(view.nav)).toContain("thread-aster-pricing")
   })
 })

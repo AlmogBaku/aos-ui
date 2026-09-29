@@ -1,23 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { RichToolPart } from "./types"
-
-function toolPart(
-  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">
-): RichToolPart {
-  return {
-    type: "tool-call",
-    toolCallId: "lazy-tool",
-    args: {},
-    argsText: "{}",
-    status: { type: "complete" },
-    addResult: vi.fn(),
-    resume: vi.fn(),
-    respondToApproval: vi.fn(),
-    ...overrides,
-  }
-}
+import { toolPart } from "./tool-part.test-helpers"
 
 const questionPart = toolPart({
   toolName: "ask_user_question",

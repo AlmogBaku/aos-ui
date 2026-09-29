@@ -23,6 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { Thread } from "../elements/thread.aui"
 import { VoiceMediaController } from "./voice-media"
 import { VoiceMediaProvider } from "./voice-context"
+import { FakeAudio } from "./voice.test-helpers"
 
 class Recorder extends EventTarget {
   mimeType = "audio/webm"
@@ -41,24 +42,25 @@ class Recorder extends EventTarget {
   }
 }
 
-class Player extends EventTarget {
-  src = ""
-  currentTime = 0
-  duration = 30
-  playbackRate = 1
-  paused = true
-  play = vi.fn(async () => {
-    this.paused = false
-    this.dispatchEvent(new Event("play"))
-  })
-  pause = vi.fn(() => {
-    this.paused = true
-    this.dispatchEvent(new Event("pause"))
-  })
-  load = vi.fn()
-  removeAttribute = vi.fn(() => {
-    this.src = ""
-  })
+/** Object URLs for synthesized audio, which jsdom does not implement. */
+function stubBlobUrl() {
+  const OriginalURL = URL
+  vi.stubGlobal(
+    "URL",
+    class extends OriginalURL {
+      static createObjectURL() {
+        return "blob:audio"
+      }
+      static revokeObjectURL = vi.fn()
+    }
+  )
+}
+
+/** Records a push-to-talk voice turn and presses Send once it is recording. */
+async function recordAndSend(recording: Recorder) {
+  fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
+  await waitFor(() => expect(recording.state).toBe("recording"))
+  fireEvent.click(screen.getByRole("button", { name: "Send" }))
 }
 
 function setup({
@@ -77,7 +79,7 @@ function setup({
     run: vi.fn<ChatModelAdapter["run"]>(() => modelResult),
   }
   const recording = new Recorder()
-  const audio = new Player()
+  const audio = new FakeAudio()
   const track = {
     stop: vi.fn(),
     addEventListener: vi.fn(),
@@ -225,20 +227,9 @@ describe("real Assistant UI voice composer", () => {
     ])
   })
   it("automatically reads the new completed assistant prose after a PTT send", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
+    stubBlobUrl()
     const h = setup({ voiceTurn: true })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await recordAndSend(h.recording)
     await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
     await waitFor(() => expect(h.synthesize).toHaveBeenCalledOnce())
     expect(h.synthesize).toHaveBeenCalledWith("Done", expect.any(AbortSignal))
@@ -252,9 +243,7 @@ describe("real Assistant UI voice composer", () => {
         rejectRun = reject
       }),
     })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await recordAndSend(h.recording)
     await waitFor(() =>
       expect(h.runtime.thread.getState().isRunning).toBe(true)
     )
@@ -277,9 +266,7 @@ describe("real Assistant UI voice composer", () => {
         resolveRun = resolve
       }),
     })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await recordAndSend(h.recording)
     await waitFor(() =>
       expect(h.runtime.thread.getState().isRunning).toBe(true)
     )
@@ -306,9 +293,7 @@ describe("real Assistant UI voice composer", () => {
         resolveRun = resolve
       }),
     })
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await recordAndSend(h.recording)
     await waitFor(() =>
       expect(h.runtime.thread.getState().isRunning).toBe(true)
     )
@@ -368,17 +353,8 @@ describe("real Assistant UI voice composer", () => {
     media.dispose()
   })
   it("never treats assistant activity before the PTT user turn as its reply", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
-    const audio = new Player()
+    stubBlobUrl()
+    const audio = new FakeAudio()
     const synthesize = vi.fn(async () => new Blob(["audio"]))
     const media = new VoiceMediaController({
       createAudio: () => audio as unknown as HTMLAudioElement,
@@ -486,9 +462,7 @@ describe("real Assistant UI voice composer", () => {
         speech: "unverified",
       })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Record: Voice turn" }))
-    await waitFor(() => expect(h.recording.state).toBe("recording"))
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await recordAndSend(h.recording)
     await waitFor(() => expect(h.model.run).toHaveBeenCalledOnce())
   })
   it("keeps setup guidance on the microphone instead of below the composer", () => {
@@ -535,16 +509,7 @@ describe("real Assistant UI voice composer", () => {
 
   it("reads only the requested message when IndexedDB is unavailable", async () => {
     vi.stubGlobal("indexedDB", undefined)
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
+    stubBlobUrl()
     const h = setup({
       initialMessages: [
         {
@@ -570,16 +535,7 @@ describe("real Assistant UI voice composer", () => {
   })
 
   it("reads within the owning message, preserves non-text parts, and restores prose on Stop", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
+    stubBlobUrl()
     const h = setup({
       initialMessages: [
         {
@@ -697,17 +653,8 @@ describe("real Assistant UI voice composer", () => {
   it.each([false, true])(
     "keeps playback only for an explicitly reconciled message replacement (reconciled=%s)",
     async (reconciled) => {
-      const OriginalURL = URL
-      vi.stubGlobal(
-        "URL",
-        class extends OriginalURL {
-          static createObjectURL() {
-            return "blob:audio"
-          }
-          static revokeObjectURL = vi.fn()
-        }
-      )
-      const audio = new Player()
+      stubBlobUrl()
+      const audio = new FakeAudio()
       const media = new VoiceMediaController({
         createAudio: () => audio as unknown as HTMLAudioElement,
       })
@@ -793,16 +740,7 @@ describe("real Assistant UI voice composer", () => {
   )
 
   it("keeps Stop reading available while another turn is running", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
+    stubBlobUrl()
     const h = setup({
       modelResult: new Promise(() => {}),
       initialMessages: [
@@ -838,16 +776,7 @@ async function openMessageMenu(message: HTMLElement) {
 
 describe("read aloud from the message context menu", () => {
   it("offers Read aloud, then Stop reading while the answer plays", async () => {
-    const OriginalURL = URL
-    vi.stubGlobal(
-      "URL",
-      class extends OriginalURL {
-        static createObjectURL() {
-          return "blob:audio"
-        }
-        static revokeObjectURL = vi.fn()
-      }
-    )
+    stubBlobUrl()
     const h = setup({
       initialMessages: [
         {

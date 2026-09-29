@@ -10,33 +10,31 @@ const session = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
+type Client = Parameters<typeof createOpenCodeWorkspaceOperations>[0]["client"]
+
+/** A native client with an empty catalog whose Sessions all belong to `research`. */
+function stubClient(
+  sessions: Partial<Client["sessions"]> = {},
+  agents: Client["catalog"]["agents"] = async () => ({ data: [] })
+): Client {
+  return {
+    catalog: { agents },
+    sessions: {
+      list: async () => ({ data: [], cursor: {} }),
+      get: async () => session(),
+      create: async () => session(),
+      update: async () => {},
+      delete: async () => {},
+      ...sessions,
+    },
+  }
+}
+
 describe("OpenCode workspace operations", () => {
   it("hides the creator and returns only exact-Agent owned Sessions in stable recent order", async () => {
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: {
-          agents: async () => ({
-            data: [
-              {
-                id: "creator",
-                description: "private",
-                mode: "primary",
-                hidden: false,
-                permissions: [],
-                request: {},
-              },
-              {
-                id: "research",
-                description: "Research",
-                mode: "primary",
-                hidden: false,
-                permissions: [],
-                request: {},
-              },
-            ],
-          }),
-        },
-        sessions: {
+      client: stubClient(
+        {
           list: async () => ({
             data: [
               session({ id: "older", time: { created: 1, updated: 10 } }),
@@ -54,10 +52,28 @@ describe("OpenCode workspace operations", () => {
             ],
             cursor: {},
           }),
-          get: async () => session(),
-          create: async () => session(),
         },
-      },
+        async () => ({
+          data: [
+            {
+              id: "creator",
+              description: "private",
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+              request: {},
+            },
+            {
+              id: "research",
+              description: "Research",
+              mode: "primary",
+              hidden: false,
+              permissions: [],
+              request: {},
+            },
+          ],
+        })
+      ),
       creatorAgentId: "creator",
     })
 
@@ -93,20 +109,15 @@ describe("OpenCode workspace operations", () => {
 
   it("fails closed when an invite title has multiple exact-Agent matches", async () => {
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({
-            data: [
-              session({ id: "one", title: "aos-invite:guest-1" }),
-              session({ id: "two", title: "aos-invite:guest-1" }),
-            ],
-            cursor: {},
-          }),
-          get: async () => session(),
-          create: async () => session(),
-        },
-      },
+      client: stubClient({
+        list: async () => ({
+          data: [
+            session({ id: "one", title: "aos-invite:guest-1" }),
+            session({ id: "two", title: "aos-invite:guest-1" }),
+          ],
+          cursor: {},
+        }),
+      }),
     })
 
     await expect(
@@ -121,18 +132,13 @@ describe("OpenCode workspace operations", () => {
       release = resolve
     })
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => {
-            reads += 1
-            await listed
-            return { data: [], cursor: {} }
-          },
-          get: async () => session(),
-          create: async () => session(),
+      client: stubClient({
+        list: async () => {
+          reads += 1
+          await listed
+          return { data: [], cursor: {} }
         },
-      },
+      }),
     })
 
     const first = operations.resolveInvitedSession("research", "guest-3")
@@ -149,19 +155,14 @@ describe("OpenCode workspace operations", () => {
   it("fails closed for a missing invite even when an untrusted title-create callback is offered", async () => {
     let created = false
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({
-            data: created
-              ? [session({ id: "invited", title: "aos-invite:guest-2" })]
-              : [],
-            cursor: {},
-          }),
-          get: async () => session(),
-          create: async () => session(),
-        },
-      },
+      client: stubClient({
+        list: async () => ({
+          data: created
+            ? [session({ id: "invited", title: "aos-invite:guest-2" })]
+            : [],
+          cursor: {},
+        }),
+      }),
       createInvitedSession: async (agentId, title) => {
         created = agentId === "research" && title === "aos-invite:guest-2"
       },
@@ -179,28 +180,17 @@ describe("OpenCode workspace operations", () => {
     let body: Record<string, unknown> = { avatar: "ring/blue" }
     let headers: Record<string, string> = { "x-sample": "one" }
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: {
-          agents: async () => ({
-            data: [
-              {
-                id: "agent-a",
-                mode: "primary",
-                hidden: false,
-                permissions: [],
-                request: { headers, body },
-              },
-            ],
-          }),
-        },
-        sessions: {
-          list: async () => ({ data: [], cursor: {} }),
-          get: async () => session(),
-          create: async () => session(),
-          update: async () => {},
-          delete: async () => {},
-        },
-      },
+      client: stubClient({}, async () => ({
+        data: [
+          {
+            id: "agent-a",
+            mode: "primary",
+            hidden: false,
+            permissions: [],
+            request: { headers, body },
+          },
+        ],
+      })),
     })
 
     const tokened = await operations.listAgents()
@@ -226,23 +216,16 @@ describe("OpenCode workspace operations", () => {
 
   it("projects the native pin state only from Session metadata", async () => {
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({
-            data: [
-              session({ id: "pinned", metadata: { "aos.pinned": true } }),
-              session({ id: "unpinned", metadata: { "native.label": "keep" } }),
-              session({ id: "untracked" }),
-            ],
-            cursor: {},
-          }),
-          get: async () => session(),
-          create: async () => session(),
-          update: async () => {},
-          delete: async () => {},
-        },
-      },
+      client: stubClient({
+        list: async () => ({
+          data: [
+            session({ id: "pinned", metadata: { "aos.pinned": true } }),
+            session({ id: "unpinned", metadata: { "native.label": "keep" } }),
+            session({ id: "untracked" }),
+          ],
+          cursor: {},
+        }),
+      }),
     })
 
     const page = await operations.listSessions("research", 50, 0)
@@ -262,16 +245,11 @@ describe("OpenCode workspace operations", () => {
     const update = vi.fn(async () => {})
     const remove = vi.fn(async () => {})
     const operations = createOpenCodeWorkspaceOperations({
-      client: {
-        catalog: { agents: async () => ({ data: [] }) },
-        sessions: {
-          list: async () => ({ data: [], cursor: {} }),
-          get: async () => session({ agent: "other" }),
-          create: async () => session(),
-          update,
-          delete: remove,
-        },
-      },
+      client: stubClient({
+        get: async () => session({ agent: "other" }),
+        update,
+        delete: remove,
+      }),
     })
 
     await expect(

@@ -52,30 +52,20 @@ describe("RowIndicators", () => {
     expect(screen.queryByTitle("Unread")).toBeNull()
   })
 
-  it("lets unread outrank a run that is still in progress", () => {
+  it.each<[RowStatus, string]>([
+    ["running", "Running"],
+    ["idle", "Idle"],
+  ])("shows the unread dot alone for a %s Session", (status, label) => {
     render(
       <RowIndicators
-        status="running"
-        statusLabel="Running"
+        status={status}
+        statusLabel={label}
         unread
         unreadLabel="Unread"
       />
     )
     expect(screen.getByTitle("Unread")).toBeVisible()
-    expect(screen.queryByTitle("Running")).toBeNull()
-  })
-
-  it("shows the unread dot alone for an idle Session", () => {
-    render(
-      <RowIndicators
-        status="idle"
-        statusLabel="Idle"
-        unread
-        unreadLabel="Unread"
-      />
-    )
-    expect(screen.queryByTitle("Idle")).toBeNull()
-    expect(screen.getByTitle("Unread")).toBeVisible()
+    expect(screen.queryByTitle(label)).toBeNull()
   })
 
   it("shows nothing for an idle Session the operator has read", () => {

@@ -23,9 +23,13 @@
  */
 import { GatewayClientRequestError } from "@openclaw/gateway-client"
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol"
+import { vi } from "vitest"
 
+import type { TurnEvent } from "../../../core/events"
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
+import { READY_LINK } from "../../../core/link"
+import type { ServerTurnEngine, ServerTurnHandle } from "../../../core/runtime"
 import {
   OpenClawClient,
   type OpenClawClientOptions,
@@ -35,6 +39,47 @@ import {
 } from "../client"
 
 const AGENT_ID = "research"
+
+/**
+ * An `agents.list` answer holding only the `research` Agent, for a test that
+ * stubs the Gateway's answers one method at a time.
+ */
+export const RESEARCH_AGENTS = {
+  defaultId: AGENT_ID,
+  mainKey: "main",
+  scope: "global",
+  agents: [{ id: AGENT_ID, name: "Research", kind: "agent" }],
+}
+
+/**
+ * An `OpenClawClient` stand-in whose link is up and whose every Gateway call
+ * goes to `request`; `overrides` replace any member, the link included.
+ */
+export function stubOpenClawClient<
+  Request extends (method: string, params?: never) => Promise<unknown>,
+>(request: Request, overrides: Partial<OpenClawGatewayClient> = {}) {
+  return {
+    link: READY_LINK,
+    start: vi.fn(async () => undefined),
+    stopAndWait: vi.fn(async () => undefined),
+    request,
+    ...overrides,
+  } as unknown as OpenClawGatewayClient & {
+    request: Request
+    link: typeof READY_LINK
+  }
+}
+
+/** A turn engine whose every started or recovered turn is already idle. */
+export function idleTurns(): ServerTurnEngine {
+  const idle = (): ServerTurnHandle => ({
+    events: (async function* (): AsyncIterable<TurnEvent> {})(),
+    settled: Promise.resolve(),
+    stop: async () => "idle",
+    recoveryPosition: () => "token-1",
+  })
+  return { start: async () => idle(), recover: async () => idle() }
+}
 /** The folder `agents.list` names for the Agent, as the release resolves it. */
 export const AGENT_WORKSPACE = "/srv/openclaw/research"
 const SESSION_KEY = "agent:research:main"

@@ -12,6 +12,16 @@ const scope = {
   turnId: "run-1",
 }
 
+const settles = () => vi.fn(async (): Promise<void> => undefined)
+
+/** Interactions over a native client that answers every mutation. */
+function newInteractions(reply = settles(), permissionReply = settles()) {
+  return new OpenCodeInteractions({
+    questions: { reply, reject: settles() },
+    permissions: { reply: permissionReply },
+  })
+}
+
 describe("OpenCodeInteractions", () => {
   it("discovers and binds one complete authoritative exact-Session batch", async () => {
     const questions = vi.fn(async () => ({
@@ -103,12 +113,9 @@ describe("OpenCodeInteractions", () => {
     })
   })
 
-  it("validates a complete native question batch and maps its ordered response once", async () => {
+  it("validates a complete native question batch, keeps every multi-choice option, and maps its ordered response once", async () => {
     const reply = vi.fn(async () => undefined)
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
+    const interactions = newInteractions(reply)
 
     const requests = interactions.acceptQuestion(scope, {
       id: "native-question-id",
@@ -125,67 +132,6 @@ describe("OpenCodeInteractions", () => {
         {
           header: "Checks",
           question: "Which checks?",
-          options: [{ label: "Lint", description: "Static checks" }],
-          multiple: true,
-        },
-      ],
-    })
-
-    expect(requests).toMatchObject([
-      {
-        requestId: "native-question-id",
-        kind: PendingRequestKind.Elicitation,
-        message: "2 questions require answers",
-        questions: [
-          {
-            label: "Region",
-            text: "Where should this run?",
-            choices: ["Europe", "US"],
-            multiple: false,
-            custom: true,
-          },
-          {
-            label: "Checks",
-            text: "Which checks?",
-            choices: ["Lint"],
-            multiple: true,
-            custom: true,
-          },
-        ],
-      },
-    ])
-    await expect(
-      interactions.respond(scope, [
-        {
-          requestId: "native-question-id",
-          status: "resolved",
-          payload: { answers: [["Europe"], ["Lint"]] },
-        },
-      ])
-    ).resolves.toEqual({ status: "resolved" })
-    expect(reply).toHaveBeenCalledWith(
-      "native-session-1",
-      "native-question-id",
-      {
-        answers: [["Europe"], ["Lint"]],
-      }
-    )
-  })
-
-  it("keeps the choices of a multi-choice question and answers every one", async () => {
-    const reply = vi.fn(async () => undefined)
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
-
-    const [request] = interactions.acceptQuestion(scope, {
-      id: "question-1",
-      sessionID: "native-session-1",
-      questions: [
-        {
-          header: "Checks",
-          question: "Which checks?",
           options: [
             { label: "Lint", description: "Static checks" },
             { label: "Unit", description: "Unit tests" },
@@ -197,7 +143,21 @@ describe("OpenCodeInteractions", () => {
       ],
     })
 
-    expect(request?.questions).toEqual([
+    expect(requests).toMatchObject([
+      {
+        requestId: "native-question-id",
+        kind: PendingRequestKind.Elicitation,
+        message: "2 questions require answers",
+      },
+    ])
+    expect(requests[0]?.questions).toEqual([
+      {
+        label: "Region",
+        text: "Where should this run?",
+        choices: ["Europe", "US"],
+        multiple: false,
+        custom: true,
+      },
       {
         label: "Checks",
         text: "Which checks?",
@@ -206,24 +166,27 @@ describe("OpenCodeInteractions", () => {
         custom: false,
       },
     ])
-    await interactions.respond(scope, [
+    await expect(
+      interactions.respond(scope, [
+        {
+          requestId: "native-question-id",
+          status: "resolved",
+          payload: { answers: [["Europe"], ["Lint", "E2E"]] },
+        },
+      ])
+    ).resolves.toEqual({ status: "resolved" })
+    expect(reply).toHaveBeenCalledWith(
+      "native-session-1",
+      "native-question-id",
       {
-        requestId: "question-1",
-        status: "resolved",
-        payload: { answers: [["Lint", "E2E"]] },
-      },
-    ])
-    expect(reply).toHaveBeenCalledWith("native-session-1", "question-1", {
-      answers: [["Lint", "E2E"]],
-    })
+        answers: [["Europe"], ["Lint", "E2E"]],
+      }
+    )
   })
 
   it("rejects incomplete or choice-substituted responses before native dispatch", async () => {
     const reply = vi.fn(async () => undefined)
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
+    const interactions = newInteractions(reply)
     interactions.acceptQuestion(scope, {
       id: "native-question-id",
       sessionID: "native-session-1",
@@ -267,10 +230,7 @@ describe("OpenCodeInteractions", () => {
   it("maps complete session-scoped reply batches from a new segment back to exact native labels", async () => {
     const reply = vi.fn(async () => undefined)
     const permission = vi.fn(async () => undefined)
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: permission },
-    })
+    const interactions = newInteractions(reply, permission)
     const question = interactions.acceptQuestion(scope, {
       id: "question-1",
       sessionID: "native-session-1",
@@ -328,15 +288,6 @@ describe("OpenCodeInteractions", () => {
       enum: ["once", "always", "deny"],
     },
   }
-  const newInteractions = () =>
-    new OpenCodeInteractions({
-      questions: {
-        reply: vi.fn(async () => undefined),
-        reject: vi.fn(async () => undefined),
-      },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
-
   it("names the tool call a permission guards, its action, and its resources", () => {
     expect(newInteractions().acceptPermission(scope, permission)).toEqual([
       linkedPermission,
@@ -390,10 +341,7 @@ describe("OpenCodeInteractions", () => {
 
   it("removes externally resolved interactions during authoritative reconciliation without dispatch", async () => {
     const reply = vi.fn(async () => undefined)
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
+    const interactions = newInteractions(reply)
     interactions.acceptQuestion(scope, {
       id: "question-1",
       sessionID: "native-session-1",
@@ -422,10 +370,7 @@ describe("OpenCodeInteractions", () => {
     const reply = vi.fn(async () => {
       throw new OpenCodeMutationUncertainError()
     })
-    const interactions = new OpenCodeInteractions({
-      questions: { reply, reject: vi.fn(async () => undefined) },
-      permissions: { reply: vi.fn(async () => undefined) },
-    })
+    const interactions = newInteractions(reply)
     const question = {
       id: "question-1",
       sessionID: "native-session-1",

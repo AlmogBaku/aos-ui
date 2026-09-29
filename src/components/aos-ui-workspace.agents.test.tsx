@@ -1,92 +1,68 @@
-import {
-  act,
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 
-import { CatalogFixture, deferred } from "./aos-ui-workspace.test-helpers"
+import {
+  deferred,
+  renderedConversation,
+  renderNavigation,
+  renderWorkspace,
+  resetWorkspaceBetweenTests,
+  useCatalogRuntime,
+  type WorkspaceNavigation,
+} from "./aos-ui-workspace.test-helpers"
 
-vi.mock("react-router", () => ({
-  useLocation: () => ({ pathname: window.location.pathname }),
-  useNavigate: () => (href: string, options?: { replace?: boolean }) => {
-    window.history[options?.replace ? "replaceState" : "pushState"](
-      null,
-      "",
-      href
-    )
-  },
-}))
+vi.mock("react-router", () => import("./test-utils/window-router"))
 
-beforeEach(() => {
-  window.history.replaceState({}, "", "/")
-  window.localStorage.clear()
-})
-afterEach(cleanup)
+resetWorkspaceBetweenTests()
+
+/** The creator's own Session opens as a conversation under its name. */
+const expectCreatorConversation = (nav: WorkspaceNavigation) => {
+  expect(nav.selectedAgent?.name).toBe("Agent Creator")
+  expect(renderedConversation(nav)).toBeTruthy()
+}
 
 describe("Agent management", () => {
   it("defaults to an ordinary Agent when the creator is listed first", async () => {
-    render(<CatalogFixture creatorFirst />)
+    const view = renderNavigation(() =>
+      useCatalogRuntime({ creatorFirst: true })
+    )
 
-    expect(
-      await screen.findByRole("button", { name: /^Aster,/ })
-    ).toHaveAttribute("aria-current", "true")
+    await waitFor(() => expect(view.nav.selectedAgentId).toBe("agent-aster"))
   })
 
   it("resolves an explicit creator route when no ordinary Agents exist", async () => {
     window.history.replaceState({}, "", "/agent-builder")
-    render(<CatalogFixture creatorOnly />)
+    const view = renderNavigation(() =>
+      useCatalogRuntime({ creatorOnly: true })
+    )
 
-    expect(
-      within(
-        await screen.findByRole("main", { name: "Conversation" })
-      ).getByRole("heading", { name: "What would you like to work on?" })
-    ).toBeVisible()
-    expect(
-      within(
-        screen.getByRole("complementary", { name: "Agent details" })
-      ).getByText("Agent Creator")
-    ).toBeVisible()
+    await waitFor(() => expectCreatorConversation(view.nav))
   })
 
   it("waits for a delayed catalog before resolving a creator route", async () => {
     const agentGate = deferred<void>()
     window.history.replaceState({}, "", "/agent-builder")
-    render(<CatalogFixture creatorOnly agentGate={agentGate.promise} />)
+    const view = renderNavigation(() =>
+      useCatalogRuntime({ creatorOnly: true, agentGate: agentGate.promise })
+    )
 
     await act(
       () => new Promise<void>((resolve) => window.setTimeout(resolve, 0))
     )
     await act(async () => agentGate.resolve())
 
-    expect(
-      await within(
-        screen.getByRole("complementary", { name: "Agent details" })
-      ).findByText("Agent Creator")
-    ).toBeVisible()
+    await waitFor(() => expectCreatorConversation(view.nav))
   })
 
-  it("keeps the creator out of Agent management catalogs", async () => {
-    const user = userEvent.setup()
-    render(<CatalogFixture creatorInCatalog />)
-
-    await user.click(
-      await screen.findByRole("button", { name: "Manage Agents" })
-    )
-    const dialog = await screen.findByRole("dialog", { name: "Manage Agents" })
-    expect(within(dialog).queryByText("Agent Creator")).toBeNull()
-  })
-
+  // Full mount: hiding goes through the dialog, then reconciles the rail and
+  // the conversation's empty roster, three parts only the workspace joins.
   it("shows hidden Agents and reconciles hiding the selected and last visible Agent", async () => {
     const user = userEvent.setup()
-    render(<CatalogFixture />)
+    renderWorkspace(useCatalogRuntime)
     await screen.findByRole("button", { name: /^Aster,/ })
     await user.click(screen.getByRole("button", { name: "Manage Agents" }))
     const dialog = await screen.findByRole("dialog", { name: "Manage Agents" })
@@ -130,26 +106,17 @@ describe("Agent management", () => {
     ).toBeVisible()
   })
 
-  it("keeps provider-managed entries read-only and omits unavailable creation", async () => {
-    const user = userEvent.setup()
-    render(<CatalogFixture readOnly />)
-    await user.click(screen.getByRole("button", { name: "Manage Agents" }))
-    const dialog = await screen.findByRole("dialog", { name: "Manage Agents" })
-    expect(
-      (await within(dialog).findAllByText("Managed by provider")).length
-    ).toBeGreaterThan(0)
-    expect(within(dialog).queryByRole("switch")).toBeNull()
-    expect(
-      within(dialog).queryByRole("button", { name: "New Agent" })
-    ).toBeNull()
-  })
-
+  // Full mount: the empty roster, the Manage Agents dialog's direction and
+  // creation offer, and focus return span the workspace and the shell.
   it.each(["en", "he"] as const)(
     "renders a truly empty roster in %s and retains management",
     async (locale) => {
       const user = userEvent.setup()
       const dictionary = locale === "he" ? he : en
-      render(<CatalogFixture empty readOnly locale={locale} />)
+      renderWorkspace(
+        () => useCatalogRuntime({ empty: true, readOnly: true }),
+        { locale }
+      )
       const heading =
         locale === "en"
           ? "Add an Agent to your workspace."
@@ -170,6 +137,11 @@ describe("Agent management", () => {
         name: dictionary.workspace.manageAgents,
       })
       expect(dialog).toHaveAttribute("dir", locale === "he" ? "rtl" : "ltr")
+      expect(
+        within(dialog).queryByRole("button", {
+          name: dictionary.actions.newAgent,
+        })
+      ).toBeNull()
       await user.keyboard("{Escape}")
       await waitFor(() =>
         expect(

@@ -29,6 +29,7 @@ import {
   parkedRun,
   startParkedRun,
   OverlayComposer,
+  draft,
   messageText,
   LocalThread,
   MultiSessionThread,
@@ -36,48 +37,87 @@ import {
 
 afterEach(resetThreadTestEnvironment)
 
-describe("Thread accessibility", () => {
-  it("uses Shift+Enter for newlines and plain Enter to send a desktop draft", async () => {
-    const user = userEvent.setup()
-    const run = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "Done" }],
-    }))
-    render(<LocalThread model={{ run }} initialMessages={[]} />)
+type User = ReturnType<typeof userEvent.setup>
 
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    expect(input).toHaveAttribute("enterkeyhint", "enter")
-
-    await user.type(input, "First line")
-    await user.keyboard("{Shift>}{Enter}{/Shift}")
-    await user.type(input, "Second line")
-
-    expect(input).toHaveValue("First line\nSecond line")
-    expect(run).not.toHaveBeenCalled()
-
-    await user.keyboard("{Enter}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    expect(input).toHaveValue("")
-  })
-
-  it("uses plain Return for newlines on a touch-primary device", async () => {
-    setTouchPrimary(true)
-    const user = userEvent.setup()
-    const run = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "Done" }],
-    }))
-    render(<LocalThread model={{ run }} initialMessages={[]} />)
-
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "First line")
-    await user.keyboard("{Enter}")
-    await user.type(input, "Second line")
-
-    expect(input).toHaveValue("First line\nSecond line")
-    expect(run).not.toHaveBeenCalled()
-
+/** Sends each text from the composer with Ctrl+Enter, without typing it. */
+async function sendEach(user: User, input: HTMLElement, ...texts: string[]) {
+  for (const text of texts) {
+    draft(input, text)
     await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+  }
+}
+
+/**
+ * Mounts a queue-enabled thread that offers `steer`, and sends a first
+ * message whose run never ends, so every later send queues behind it.
+ */
+async function startBusyQueue(
+  user: User,
+  steer: NonNullable<ComposerFeatureViewModel["steer"]>
+) {
+  let runtime: AssistantRuntime | undefined
+  const run = vi.fn(async () => {
+    await new Promise(() => undefined)
+    return { content: [] }
   })
+  render(
+    <LocalThread
+      model={{ run }}
+      enableMessageQueue
+      initialMessages={[]}
+      composerFeatures={{ steer }}
+      exposeRuntime={(value) => {
+        runtime = value
+      }}
+    />
+  )
+  const input = await screen.findByRole("textbox", { name: "Message input" })
+  await sendEach(user, input, "running")
+  await waitFor(() => expect(run).toHaveBeenCalledOnce())
+  return { input, run, runtime: runtime! }
+}
+
+describe("Thread accessibility", () => {
+  it.each([
+    {
+      device: "desktop",
+      touch: false,
+      newline: "{Shift>}{Enter}{/Shift}",
+      submit: "{Enter}",
+    },
+    {
+      device: "touch-primary",
+      touch: true,
+      newline: "{Enter}",
+      submit: "{Control>}{Enter}{/Control}",
+    },
+  ])(
+    "keeps a $device draft multiline until its submit shortcut",
+    async ({ touch, newline, submit }) => {
+      setTouchPrimary(touch)
+      const user = userEvent.setup()
+      const run = vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "Done" }],
+      }))
+      render(<LocalThread model={{ run }} initialMessages={[]} />)
+
+      const input = await screen.findByRole("textbox", {
+        name: "Message input",
+      })
+      expect(input).toHaveAttribute("enterkeyhint", "enter")
+
+      await user.type(input, "First line")
+      await user.keyboard(newline)
+      await user.type(input, "Second line")
+
+      expect(input).toHaveValue("First line\nSecond line")
+      expect(run).not.toHaveBeenCalled()
+
+      await user.keyboard(submit)
+      await waitFor(() => expect(run).toHaveBeenCalledOnce())
+      expect(input).toHaveValue("")
+    }
+  )
 
   it("renders both roles' prose through one Markdown mechanism", async () => {
     render(
@@ -273,8 +313,10 @@ describe("Thread accessibility", () => {
     render(
       <LocalThread labels={{ assistantWorking: "הסוכן עובד" }} model={model} />
     )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "Continue")
+    draft(
+      await screen.findByRole("textbox", { name: "Message input" }),
+      "Continue"
+    )
     await user.click(screen.getByRole("button", { name: "Send message" }))
 
     const status = screen.getByRole("status")
@@ -352,7 +394,7 @@ describe("Thread accessibility", () => {
     ).toBeDisabled()
 
     const input = screen.getByRole("textbox", { name: "Message input" })
-    await user.type(input, "Start")
+    draft(input, "Start")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await waitFor(() =>
       expect(
@@ -360,8 +402,7 @@ describe("Thread accessibility", () => {
       ).toBeVisible()
     )
 
-    await user.type(input, "Follow up")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "Follow up")
     expect(
       await screen.findByRole("region", { name: "Queued messages" })
     ).toBeVisible()
@@ -369,36 +410,6 @@ describe("Thread accessibility", () => {
     expect(
       screen.queryByRole("button", { name: "Steer queued message" })
     ).not.toBeInTheDocument()
-  })
-
-  it("cancels a streaming response while preserving its partial content", async () => {
-    const user = userEvent.setup()
-    let providerSignal: AbortSignal | undefined
-    const model: ChatModelAdapter = {
-      async *run({ abortSignal }) {
-        providerSignal = abortSignal
-        yield { content: [{ type: "text", text: "Partial response" }] }
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true })
-        })
-      },
-    }
-
-    render(<LocalThread model={model} />)
-    await user.type(
-      await screen.findByRole("textbox", { name: "Message input" }),
-      "Continue"
-    )
-    await user.click(screen.getByRole("button", { name: "Send message" }))
-    expect(await screen.findByText("Partial response")).toBeInTheDocument()
-
-    await user.click(screen.getByRole("button", { name: "Stop generating" }))
-
-    await waitFor(() => expect(providerSignal?.aborted).toBe(true))
-    expect(screen.getByText("Partial response")).toBeInTheDocument()
-    expect(
-      screen.getByRole("button", { name: "Send message" })
-    ).toBeInTheDocument()
   })
 
   it("offers Queue only for a focused text draft while a response runs", async () => {
@@ -412,7 +423,7 @@ describe("Thread accessibility", () => {
       <LocalThread model={{ run }} enableMessageQueue initialMessages={[]} />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "first")
+    draft(input, "first")
     await user.click(screen.getByRole("button", { name: "Send message" }))
     await waitFor(() => expect(run).toHaveBeenCalledOnce())
 
@@ -420,7 +431,7 @@ describe("Thread accessibility", () => {
       screen.getByRole("button", { name: "Stop generating" })
     ).toBeVisible()
 
-    await user.type(input, "queue this")
+    draft(input, "queue this")
     const queue = screen.getByRole("button", { name: "Queue message" })
     expect(queue).toBeVisible()
     expect(screen.queryByRole("button", { name: "Stop generating" })).toBeNull()
@@ -440,47 +451,54 @@ describe("Thread accessibility", () => {
     expect(run).toHaveBeenCalledOnce()
   })
 
-  it.each(["button", "escape"])(
-    "routes explicit Stop (%s) through the runtime exactly once",
-    async (trigger) => {
-      const user = userEvent.setup()
-      const stop = vi.fn()
-      const model: ChatModelAdapter = {
-        async *run({ abortSignal }) {
-          yield { content: [{ type: "text", text: "Waiting on native run" }] }
-          await new Promise<void>((resolve) =>
-            abortSignal.addEventListener(
-              "abort",
-              () => {
-                stop()
-                resolve()
-              },
-              {
-                once: true,
-              }
-            )
-          )
-        },
-      }
-      const view = render(<LocalThread model={model} />)
-      await user.type(
-        screen.getByRole("textbox", { name: "Message input" }),
-        "Run"
-      )
-      await user.click(screen.getByRole("button", { name: "Send message" }))
-      await screen.findByText("Waiting on native run")
-      expect(stop).not.toHaveBeenCalled()
-      if (trigger === "button")
-        await user.click(
-          screen.getByRole("button", { name: "Stop generating" })
-        )
-      else {
+  it.each<
+    [
+      string,
+      (
+        user: ReturnType<typeof userEvent.setup>,
+        input: HTMLElement
+      ) => Promise<void>,
+    ]
+  >([
+    [
+      "the Stop button",
+      (user) =>
+        user.click(screen.getByRole("button", { name: "Stop generating" })),
+    ],
+    [
+      "Escape aimed at the transcript",
+      async () => {
         fireEvent.keyDown(screen.getByText("Waiting on native run"), {
           key: "Escape",
           bubbles: true,
         })
-      }
+      },
+    ],
+    [
+      "Escape aimed at the composer",
+      async (user, input) => {
+        input.focus()
+        await user.keyboard("{Escape}")
+      },
+    ],
+  ])(
+    "cancels a running response exactly once through %s, keeping its partial content",
+    async (_trigger, cancel) => {
+      const user = userEvent.setup()
+      const stop = vi.fn()
+      const view = render(
+        <LocalThread model={parkedRun(stop)} initialMessages={[]} />
+      )
+      const input = await startParkedRun(user)
+      expect(stop).not.toHaveBeenCalled()
+
+      await cancel(user, input)
+
       expect(stop).toHaveBeenCalledTimes(1)
+      expect(
+        await screen.findByRole("button", { name: "Send message" })
+      ).toBeInTheDocument()
+      expect(screen.getByText("Waiting on native run")).toBeInTheDocument()
       view.unmount()
       expect(stop).toHaveBeenCalledTimes(1)
     }
@@ -570,18 +588,6 @@ describe("Thread accessibility", () => {
       expect(stop).not.toHaveBeenCalled()
     }
   )
-
-  it("cancels a running response when Escape is aimed at the composer", async () => {
-    const user = userEvent.setup()
-    const stop = vi.fn()
-    render(<LocalThread model={parkedRun(stop)} initialMessages={[]} />)
-    const input = await startParkedRun(user)
-
-    input.focus()
-    await user.keyboard("{Escape}")
-
-    expect(stop).toHaveBeenCalledTimes(1)
-  })
 
   it("runs a local slash command instead of sending it as a turn", async () => {
     const user = userEvent.setup()
@@ -673,6 +679,7 @@ describe("Thread accessibility", () => {
       mimeType: "audio/wav",
       data: "YXVkaW8=",
       sourceType: undefined,
+      labels: undefined,
       label: "Audio attachment: raw-audio.wav",
       player: HTMLAudioElement,
       src: "data:audio/wav;base64,YXVkaW8=",
@@ -683,15 +690,28 @@ describe("Thread accessibility", () => {
       mimeType: "video/webm",
       data: "blob:https://aos.test/media-1",
       sourceType: "url" as const,
+      labels: undefined,
       label: "Video attachment: local-clip.webm",
       player: HTMLVideoElement,
       src: "blob:https://aos.test/media-1",
     },
+    {
+      source: "an https URL under a localized accessible name",
+      name: "walkthrough.mp4",
+      mimeType: "video/mp4",
+      data: "https://media.example.test/walkthrough.mp4",
+      sourceType: "url" as const,
+      labels: { attachments: { video: "וידאו מצורף" } },
+      label: "וידאו מצורף: walkthrough.mp4",
+      player: HTMLVideoElement,
+      src: "https://media.example.test/walkthrough.mp4",
+    },
   ])(
     "plays a sent media attachment from $source in an inline native player",
-    ({ name, mimeType, data, sourceType, label, player, src }) => {
+    ({ name, mimeType, data, sourceType, labels, label, player, src }) => {
       render(
         <LocalThread
+          labels={labels}
           initialMessages={[
             {
               id: "message-media",
@@ -729,114 +749,60 @@ describe("Thread accessibility", () => {
     }
   )
 
-  it("falls back to a media tile for an unsafe URL source", () => {
-    render(
-      <LocalThread
-        initialMessages={[
-          {
-            id: "message-unsafe-audio",
-            role: "user",
-            content: [],
-            attachments: [
-              {
-                id: "attachment-unsafe-audio",
-                type: "file",
-                name: "unsafe.mp3",
-                contentType: "audio/mpeg",
-                status: { type: "complete" },
-                content: [
-                  {
-                    type: "file",
-                    data: "javascript:alert(1)",
-                    filename: "unsafe.mp3",
-                    mimeType: "audio/mpeg",
-                    sourceType: "url",
-                  },
-                ],
-              },
-            ],
-          },
-        ]}
-      />
-    )
+  it.each([
+    {
+      source: "an unsafe URL source",
+      name: "unsafe.mp3",
+      contentType: "audio/mpeg",
+      content: [
+        {
+          type: "file" as const,
+          data: "javascript:alert(1)",
+          filename: "unsafe.mp3",
+          mimeType: "audio/mpeg",
+          sourceType: "url" as const,
+        },
+      ],
+      tile: "Audio attachment",
+      player: "audio",
+    },
+    {
+      source: "provider history with no playable source",
+      name: "archived.mov",
+      contentType: "video/quicktime",
+      content: [],
+      tile: "Video attachment",
+      player: "video",
+    },
+  ])(
+    "falls back to a media tile for $source",
+    ({ name, contentType, content, tile, player }) => {
+      render(
+        <LocalThread
+          initialMessages={[
+            {
+              id: "message-media-tile",
+              role: "user",
+              content: [],
+              attachments: [
+                {
+                  id: "attachment-media-tile",
+                  type: "file",
+                  name,
+                  contentType,
+                  status: { type: "complete" },
+                  content,
+                },
+              ],
+            },
+          ]}
+        />
+      )
 
-    expect(
-      screen.getByRole("button", { name: "Audio attachment" })
-    ).toBeVisible()
-    expect(document.querySelector("audio")).toBeNull()
-  })
-
-  it("renders a URL-backed sent video with a localized accessible name", () => {
-    render(
-      <LocalThread
-        labels={{ attachments: { video: "וידאו מצורף" } }}
-        initialMessages={[
-          {
-            id: "message-video",
-            role: "user",
-            content: [{ type: "text", text: "Watch this" }],
-            attachments: [
-              {
-                id: "attachment-video",
-                type: "file",
-                name: "walkthrough.mp4",
-                contentType: "video/mp4",
-                status: { type: "complete" },
-                content: [
-                  {
-                    type: "file",
-                    data: "https://media.example.test/walkthrough.mp4",
-                    filename: "walkthrough.mp4",
-                    mimeType: "video/mp4",
-                    sourceType: "url",
-                  },
-                ],
-              },
-            ],
-          },
-        ]}
-      />
-    )
-
-    const player = screen.getByLabelText("וידאו מצורף: walkthrough.mp4")
-    expect(player).toBeInstanceOf(HTMLVideoElement)
-    expect(player).toHaveAttribute(
-      "src",
-      "https://media.example.test/walkthrough.mp4"
-    )
-    expect(player).toHaveAttribute("controls")
-    expect(player).toHaveAttribute("preload", "metadata")
-    expect(player).not.toHaveAttribute("autoplay")
-  })
-
-  it("keeps a media attachment tile when provider history has no playable source", () => {
-    render(
-      <LocalThread
-        initialMessages={[
-          {
-            id: "message-metadata-only-video",
-            role: "user",
-            content: [],
-            attachments: [
-              {
-                id: "attachment-metadata-only-video",
-                type: "file",
-                name: "archived.mov",
-                contentType: "video/quicktime",
-                status: { type: "complete" },
-                content: [],
-              },
-            ],
-          },
-        ]}
-      />
-    )
-
-    expect(
-      screen.getByRole("button", { name: "Video attachment" })
-    ).toBeVisible()
-    expect(document.querySelector("video")).toBeNull()
-  })
+      expect(screen.getByRole("button", { name: tile })).toBeVisible()
+      expect(document.querySelector(player)).toBeNull()
+    }
+  )
 
   it("keeps playable audio compact while it is still in the composer", async () => {
     let runtime: AssistantRuntime | undefined
@@ -1020,9 +986,10 @@ describe("Thread accessibility", () => {
     act(() => {
       runtime!.thread.getMessageById("message-user").composer.beginEdit()
     })
-    const editor = await screen.findByDisplayValue("Review this image")
-    await user.clear(editor)
-    await user.type(editor, "Review this image carefully")
+    draft(
+      await screen.findByDisplayValue("Review this image"),
+      "Review this image carefully"
+    )
     await user.click(screen.getByRole("button", { name: "Update" }))
 
     await waitFor(() => {
@@ -1243,7 +1210,6 @@ describe("Thread accessibility", () => {
   })
 
   it("moves the caret to the draft's start before Up enters history, and Down restores the draft", async () => {
-    const user = userEvent.setup()
     render(
       <LocalThread
         initialMessages={[
@@ -1258,7 +1224,7 @@ describe("Thread accessibility", () => {
     const input = (await screen.findByRole("textbox", {
       name: "Message input",
     })) as HTMLTextAreaElement
-    await user.type(input, "present draft")
+    draft(input, "present draft")
     input.setSelectionRange(3, 3)
     fireEvent.keyDown(input, { key: "ArrowUp" })
     expect(input).toHaveValue("present draft")
@@ -1300,12 +1266,10 @@ describe("Thread accessibility", () => {
       expect(runtime?.thread.getState().capabilities.queue).toBe(true)
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "first")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "first")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
 
-    await user.type(input, "second")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "second")
     await waitFor(() =>
       expect(
         screen.getByRole("region", { name: "Queued messages" })
@@ -1332,8 +1296,7 @@ describe("Thread accessibility", () => {
     expect(
       screen.queryByRole("button", { name: "Resume queued message" })
     ).not.toBeInTheDocument()
-    await user.type(input, "third")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "third")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2))
     expect(screen.getByText("second")).toBeInTheDocument()
     await act(async () => release?.())
@@ -1341,31 +1304,9 @@ describe("Thread accessibility", () => {
 
   it("steers the targeted queued row and leaves the remaining FIFO order intact", async () => {
     const user = userEvent.setup()
-    let runtime: AssistantRuntime | undefined
-    const run = vi.fn(async () => {
-      await new Promise(() => undefined)
-      return { content: [] }
-    })
     const steer = vi.fn(async () => ({ status: "steered" as const }))
-    render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-        composerFeatures={{ steer }}
-        exposeRuntime={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "running")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    await user.type(input, "steer this")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await user.type(input, "keep this")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    const { input, runtime } = await startBusyQueue(user, steer)
+    await sendEach(user, input, "steer this", "keep this")
 
     const rows = await screen.findAllByRole("listitem")
     expect(rows).toHaveLength(2)
@@ -1388,30 +1329,14 @@ describe("Thread accessibility", () => {
   it("disables a queued row while steering and preserves it after a definite rejection", async () => {
     const user = userEvent.setup()
     let rejectSteer: ((error: Error) => void) | undefined
-    const run = vi.fn(async () => {
-      await new Promise(() => undefined)
-      return { content: [] }
-    })
     const steer = vi.fn(
       () =>
         new Promise<{ status: "steered" }>((_resolve, reject) => {
           rejectSteer = reject
         })
     )
-    render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-        composerFeatures={{ steer }}
-      />
-    )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "running")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    await user.type(input, "keep on failure")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    const { input } = await startBusyQueue(user, steer)
+    await sendEach(user, input, "keep on failure")
 
     const steerButton = await screen.findByRole("button", {
       name: "Steer queued message",
@@ -1433,34 +1358,14 @@ describe("Thread accessibility", () => {
 
   it("clears a queued row once its correction lands as a user turn", async () => {
     const user = userEvent.setup()
-    let runtime: AssistantRuntime | undefined
-    const run = vi.fn(async () => {
-      await new Promise(() => undefined)
-      return { content: [] }
-    })
     let steered: string | undefined
     const steer = vi.fn(async ({ requestId }: { requestId: string }) => {
       steered = requestId
       await new Promise(() => undefined)
       return { status: "steered" as const }
     })
-    render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-        composerFeatures={{ steer }}
-        exposeRuntime={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "running")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    await user.type(input, "correct now")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    const { input, runtime } = await startBusyQueue(user, steer)
+    await sendEach(user, input, "correct now")
     await user.click(
       await screen.findByRole("button", { name: "Steer queued message" })
     )
@@ -1491,31 +1396,11 @@ describe("Thread accessibility", () => {
 
   it("turns an uncertain queued steer into a non-sending receipt", async () => {
     const user = userEvent.setup()
-    let runtime: AssistantRuntime | undefined
-    const run = vi.fn(async () => {
-      await new Promise(() => undefined)
-      return { content: [] }
-    })
     const steer = vi.fn(async () => {
       throw { code: "uncertain_mutation" }
     })
-    render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-        composerFeatures={{ steer }}
-        exposeRuntime={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "running")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    await user.type(input, "maybe delivered")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    const { input, run, runtime } = await startBusyQueue(user, steer)
+    await sendEach(user, input, "maybe delivered")
     await user.click(
       await screen.findByRole("button", { name: "Steer queued message" })
     )
@@ -1544,28 +1429,9 @@ describe("Thread accessibility", () => {
 
   it("uses the busy steering shortcut without adding an assistant-ui queue item", async () => {
     const user = userEvent.setup()
-    let runtime: AssistantRuntime | undefined
-    const run = vi.fn(async () => {
-      await new Promise(() => undefined)
-      return { content: [] }
-    })
     const steer = vi.fn(async () => ({ status: "steered" as const }))
-    render(
-      <LocalThread
-        model={{ run }}
-        enableMessageQueue
-        initialMessages={[]}
-        composerFeatures={{ steer }}
-        exposeRuntime={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "running")
-    await user.keyboard("{Control>}{Enter}{/Control}")
-    await waitFor(() => expect(run).toHaveBeenCalledOnce())
-    await user.type(input, "correct now")
+    const { input, runtime } = await startBusyQueue(user, steer)
+    draft(input, "correct now")
     fireEvent.keyDown(input, {
       key: "Enter",
       ctrlKey: true,
@@ -1609,11 +1475,9 @@ describe("Thread accessibility", () => {
       expect(runtime?.thread.getState().capabilities.queue).toBe(true)
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "first")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "first")
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1))
-    await user.type(input, "park me")
-    await user.keyboard("{Control>}{Enter}{/Control}")
+    await sendEach(user, input, "park me")
     await screen.findByText("park me")
 
     // Escape aimed at the transcript, not at the composer.
@@ -1647,10 +1511,7 @@ describe("Thread accessibility", () => {
       <LocalThread model={model} enableMessageQueue initialMessages={[]} />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    for (const text of ["first", "A", "B", "C"]) {
-      await user.type(input, text)
-      await user.keyboard("{Control>}{Enter}{/Control}")
-    }
+    await sendEach(user, input, "first", "A", "B", "C")
     const region = await screen.findByRole("region", {
       name: "Queued messages",
     })
@@ -1695,7 +1556,7 @@ describe("Thread accessibility", () => {
     const user = userEvent.setup()
     render(<LocalThread />)
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "recover me")
+    draft(input, "recover me")
     await user.keyboard("{Escape}")
     expect(input).toHaveValue("recover me")
 
@@ -1718,7 +1579,7 @@ describe("Thread accessibility", () => {
       />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "session one draft")
+    draft(input, "session one draft")
     await user.keyboard("{Escape}")
     await user.keyboard("{Escape}")
     await waitFor(() => expect(input).toHaveValue(""))
@@ -1742,7 +1603,7 @@ describe("Thread accessibility", () => {
       />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "session one draft")
+    draft(input, "session one draft")
     await user.keyboard("{Control>}r{/Control}")
     expect(
       await screen.findByRole("dialog", { name: "Search conversation history" })
@@ -1834,7 +1695,7 @@ describe("Thread accessibility", () => {
       />
     )
     const input = await screen.findByRole("textbox", { name: "Message input" })
-    await user.type(input, "recover attachment")
+    draft(input, "recover attachment")
     await act(() => runtime!.thread.composer.addAttachment(file))
     expect(runtime!.thread.composer.getState().attachments).toHaveLength(1)
 

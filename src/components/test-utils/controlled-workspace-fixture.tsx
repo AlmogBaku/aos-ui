@@ -23,13 +23,12 @@ export type WorkspaceFixtureRuntime = Pick<
   "assistantRuntime" | "workspace"
 > & { artifacts?: ArtifactAdapter }
 
-type ControlledWorkspaceFixtureProps = {
+type ControlledWorkspaceOptions = {
   initialThreadId: string
   workspace?: FixtureWorkspaceOptions
   messagesByThread?: Readonly<Record<string, readonly ThreadMessageLike[]>>
   workspaceOverrides?: Partial<WorkspaceAdapter>
   onThreadIdChange?: (sessionId: string | undefined) => void
-  children: (bundle: WorkspaceFixtureRuntime) => ReactNode
 }
 
 /**
@@ -38,13 +37,22 @@ type ControlledWorkspaceFixtureProps = {
  * the public fixture's prose, artifacts, or chart renderer.
  */
 export function ControlledWorkspaceFixture({
+  children,
+  ...options
+}: ControlledWorkspaceOptions & {
+  children: (bundle: WorkspaceFixtureRuntime) => ReactNode
+}) {
+  return <>{children(useControlledWorkspace(options))}</>
+}
+
+/** The bundle `ControlledWorkspaceFixture` hands its children. */
+export function useControlledWorkspace({
   initialThreadId,
   workspace: workspaceOptions,
   messagesByThread = {},
   workspaceOverrides,
   onThreadIdChange,
-  children,
-}: ControlledWorkspaceFixtureProps) {
+}: ControlledWorkspaceOptions): WorkspaceFixtureRuntime {
   const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
   const [workspace] = useState(() =>
     createFixtureWorkspace({
@@ -82,7 +90,7 @@ export function ControlledWorkspaceFixture({
     },
   } satisfies FixtureRuntimeBundleOptions)
 
-  const bundle: WorkspaceFixtureRuntime = workspaceOverrides
+  return workspaceOverrides
     ? {
         ...fixture,
         workspace: Object.assign(
@@ -91,6 +99,4 @@ export function ControlledWorkspaceFixture({
         ) as WorkspaceAdapter,
       }
     : fixture
-
-  return <>{children(bundle)}</>
 }

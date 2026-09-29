@@ -6,6 +6,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { ComponentProps } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -94,22 +95,37 @@ const navigation: AgentSessionNavigation = {
   lastSelectedThreadId: "history-match",
 }
 
+type HistoryProps = ComponentProps<typeof AgentSessionHistory>
+
+/** Renders the history over `navigation` with no query and inert callbacks. */
+function renderHistory(props: Partial<HistoryProps> = {}) {
+  const element = (next: Partial<HistoryProps>) => (
+    <AgentSessionHistory
+      navigation={navigation}
+      activeThreadId={null}
+      locale="en"
+      copy={copy}
+      query=""
+      onQueryChange={vi.fn()}
+      onOpenSession={vi.fn()}
+      {...props}
+      {...next}
+    />
+  )
+  const view = render(element({}))
+  return {
+    rerender: (next: Partial<HistoryProps>) => view.rerender(element(next)),
+  }
+}
+
 describe("AgentSessionHistory", () => {
   it("offers Session creation beside search, including empty results", async () => {
     const user = userEvent.setup()
     const onCreateSession = vi.fn()
-    render(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query="missing"
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        onCreateSession={onCreateSession}
-      />
-    )
+    renderHistory({
+      query: "missing",
+      onCreateSession,
+    })
 
     const controls = screen.getByRole("group", { name: "Session actions" })
     expect(
@@ -124,17 +140,10 @@ describe("AgentSessionHistory", () => {
   it("renders unique open and history rows and opens the chosen owner pair", async () => {
     const user = userEvent.setup()
     const onOpenSession = vi.fn()
-    render(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={onOpenSession}
-      />
-    )
+    renderHistory({
+      activeThreadId: "open-match",
+      onOpenSession,
+    })
 
     const open = screen.getByRole("region", { name: "Open sessions" })
     const history = screen.getByRole("region", { name: "History" })
@@ -151,27 +160,20 @@ describe("AgentSessionHistory", () => {
   })
 
   it("names an unread Session last and shows its row indicator", () => {
-    render(
-      <AgentSessionHistory
-        navigation={{
-          ...navigation,
-          openSessions: [
-            {
-              ...navigation.openSessions[0]!,
-              status: "waiting-for-input",
-              unread: true,
-            },
-          ],
-          historySessions: [],
-        }}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-      />
-    )
+    renderHistory({
+      navigation: {
+        ...navigation,
+        openSessions: [
+          {
+            ...navigation.openSessions[0]!,
+            status: "waiting-for-input",
+            unread: true,
+          },
+        ],
+        historySessions: [],
+      },
+      activeThreadId: "open-match",
+    })
 
     const row = screen.getByRole("button", {
       name: "Open Session: Shared research, Status: Waiting for input, Selected, Unread",
@@ -182,32 +184,15 @@ describe("AgentSessionHistory", () => {
   it("searches both sections and offers a clear action for an empty result", async () => {
     const user = userEvent.setup()
     const onQueryChange = vi.fn()
-    const view = render(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query="research"
-        onQueryChange={onQueryChange}
-        onOpenSession={vi.fn()}
-      />
-    )
+    const view = renderHistory({
+      query: "research",
+      onQueryChange,
+    })
 
     expect(screen.getByRole("region", { name: "Open sessions" })).toBeVisible()
     expect(screen.queryByRole("region", { name: "History" })).toBeNull()
 
-    view.rerender(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query="missing"
-        onQueryChange={onQueryChange}
-        onOpenSession={vi.fn()}
-      />
-    )
+    view.rerender({ query: "missing" })
     expect(screen.getByText("No matching Sessions")).toBeVisible()
     await user.click(screen.getByRole("button", { name: "Clear search" }))
     expect(onQueryChange).toHaveBeenCalledWith("")
@@ -216,19 +201,11 @@ describe("AgentSessionHistory", () => {
   it("offers the same row menu on every listed Session", async () => {
     const user = userEvent.setup()
     const onRename = vi.fn()
-    render(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        availability={allActions}
-        sessionMenu={{ onRename }}
-      />
-    )
+    renderHistory({
+      activeThreadId: "open-match",
+      availability: allActions,
+      sessionMenu: { onRename },
+    })
 
     expect(
       screen.getByRole("button", { name: "Session actions: Shared research" })
@@ -243,29 +220,21 @@ describe("AgentSessionHistory", () => {
   })
 
   it("names a pinned Session and keeps it at the head of its list", () => {
-    render(
-      <AgentSessionHistory
-        navigation={{
-          ...navigation,
-          openSessions: [
-            { ...navigation.openSessions[0]!, pinned: true },
-            {
-              sessionId: "open-other",
-              title: "Quarterly plan",
-              status: "idle",
-              updatedAt: "2026-09-09T09:00:00.000Z",
-            },
-          ],
-          historySessions: [],
-        }}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-      />
-    )
+    renderHistory({
+      navigation: {
+        ...navigation,
+        openSessions: [
+          { ...navigation.openSessions[0]!, pinned: true },
+          {
+            sessionId: "open-other",
+            title: "Quarterly plan",
+            status: "idle",
+            updatedAt: "2026-09-09T09:00:00.000Z",
+          },
+        ],
+        historySessions: [],
+      },
+    })
 
     const names = within(screen.getByRole("region", { name: "Open sessions" }))
       .getAllByRole("button", { name: /^Open Session:/ })
@@ -279,30 +248,22 @@ describe("AgentSessionHistory", () => {
   it("keeps archived Sessions behind a collapsed disclosure that can restore them", async () => {
     const user = userEvent.setup()
     const onToggleArchive = vi.fn()
-    render(
-      <AgentSessionHistory
-        navigation={{
-          ...navigation,
-          archivedSessions: [
-            {
-              sessionId: "archived-one",
-              title: "Campaign retrospective",
-              status: "idle",
-              updatedAt: "2026-09-01T09:00:00.000Z",
-              archived: true,
-            },
-          ],
-        }}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        availability={allActions}
-        sessionMenu={{ onToggleArchive }}
-      />
-    )
+    renderHistory({
+      navigation: {
+        ...navigation,
+        archivedSessions: [
+          {
+            sessionId: "archived-one",
+            title: "Campaign retrospective",
+            status: "idle",
+            updatedAt: "2026-09-01T09:00:00.000Z",
+            archived: true,
+          },
+        ],
+      },
+      availability: allActions,
+      sessionMenu: { onToggleArchive },
+    })
 
     const archived = screen.getByRole("region", { name: "Archived" })
     expect(
@@ -326,19 +287,10 @@ describe("AgentSessionHistory", () => {
   })
 
   it("hides the archived disclosure for an Agent without archived Sessions", () => {
-    render(
-      <AgentSessionHistory
-        navigation={navigation}
-        activeThreadId={null}
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        availability={allActions}
-        sessionMenu={{ onToggleArchive: vi.fn() }}
-      />
-    )
+    renderHistory({
+      availability: allActions,
+      sessionMenu: { onToggleArchive: vi.fn() },
+    })
 
     expect(screen.queryByRole("region", { name: "Archived" })).toBeNull()
   })
@@ -346,19 +298,12 @@ describe("AgentSessionHistory", () => {
   it("opens the row menu from a right click on the row", async () => {
     const onDelete = vi.fn()
     const user = userEvent.setup()
-    render(
-      <AgentSessionHistory
-        navigation={{ ...navigation, historySessions: [] }}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        availability={allActions}
-        sessionMenu={{ onDelete }}
-      />
-    )
+    renderHistory({
+      navigation: { ...navigation, historySessions: [] },
+      activeThreadId: "open-match",
+      availability: allActions,
+      sessionMenu: { onDelete },
+    })
 
     fireEvent.contextMenu(
       screen.getByRole("button", { name: /Open Session: Shared research/ }),
@@ -372,19 +317,12 @@ describe("AgentSessionHistory", () => {
 
   it("disables an action the runtime does not declare and says so", async () => {
     const user = userEvent.setup()
-    render(
-      <AgentSessionHistory
-        navigation={{ ...navigation, historySessions: [] }}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        availability={{ ...allActions, pin: false }}
-        sessionMenu={{ onRename: vi.fn(), onTogglePin: vi.fn() }}
-      />
-    )
+    renderHistory({
+      navigation: { ...navigation, historySessions: [] },
+      activeThreadId: "open-match",
+      availability: { ...allActions, pin: false },
+      sessionMenu: { onRename: vi.fn(), onTogglePin: vi.fn() },
+    })
 
     await user.click(
       screen.getByRole("button", { name: "Session actions: Shared research" })
@@ -401,20 +339,13 @@ describe("AgentSessionHistory", () => {
 
   it("hides runtime-owned actions until the runtime answers", async () => {
     const user = userEvent.setup()
-    render(
-      <AgentSessionHistory
-        navigation={{ ...navigation, historySessions: [] }}
-        activeThreadId="open-match"
-        locale="en"
-        copy={copy}
-        query=""
-        onQueryChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        onRemoveOpenSession={vi.fn()}
-        availability={null}
-        sessionMenu={{ onRename: vi.fn(), onDelete: vi.fn() }}
-      />
-    )
+    renderHistory({
+      navigation: { ...navigation, historySessions: [] },
+      activeThreadId: "open-match",
+      onRemoveOpenSession: vi.fn(),
+      availability: null,
+      sessionMenu: { onRename: vi.fn(), onDelete: vi.fn() },
+    })
 
     await user.click(
       screen.getByRole("button", { name: "Session actions: Shared research" })

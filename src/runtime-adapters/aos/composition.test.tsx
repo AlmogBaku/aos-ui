@@ -308,6 +308,12 @@ function createProxyAgent() {
   }
 }
 
+const CONFIG = {
+  status: "ready",
+  mode: "aos",
+  composerFeatures: { modelSelectorEnabled: true, contextEnabled: true },
+} as const
+
 /** A WebSocket-shaped pipe to the in-process proxy agent. */
 function pipedSocket(app: AgentApp) {
   return class PipedSocket extends EventTarget {
@@ -357,17 +363,7 @@ function mount() {
   let supplied: HarnessRuntime | undefined
   const Provider = runtimeAdapter.Provider
   render(
-    <Provider
-      config={{
-        status: "ready",
-        mode: "aos",
-        composerFeatures: {
-          modelSelectorEnabled: true,
-          contextEnabled: true,
-        },
-      }}
-      locale="en"
-    >
+    <Provider config={CONFIG} locale="en">
       {(runtime) => {
         supplied = runtime
         return (
@@ -492,27 +488,10 @@ describe("provider-neutral AOS runtime composition", () => {
 function mountWorkspace(pathname: string) {
   window.history.replaceState(null, "", pathname)
   const proxy = createProxyAgent()
-  const sockets: unknown[] = []
-  const socket = pipedSocket(proxy.app)
-  vi.stubGlobal(
-    "WebSocket",
-    class extends socket {
-      constructor() {
-        super()
-        sockets.push(this)
-      }
-    }
-  )
+  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
   const Provider = runtimeAdapter.Provider
   const view = render(
-    <Provider
-      config={{
-        status: "ready",
-        mode: "aos",
-        composerFeatures: { modelSelectorEnabled: true, contextEnabled: true },
-      }}
-      locale="en"
-    >
+    <Provider config={CONFIG} locale="en">
       {(runtime) => (
         <AosUiWorkspace
           runtime={runtime}
@@ -523,7 +502,7 @@ function mountWorkspace(pathname: string) {
       )}
     </Provider>
   )
-  return { proxy, sockets, view }
+  return { proxy, view }
 }
 
 describe("the workspace over one ACP connection", () => {
@@ -598,17 +577,7 @@ describe("the workspace over one ACP connection", () => {
     const Provider = runtimeAdapter.Provider
     const view = render(
       <Suspense fallback={<span>Loading workspace</span>}>
-        <Provider
-          config={{
-            status: "ready",
-            mode: "aos",
-            composerFeatures: {
-              modelSelectorEnabled: true,
-              contextEnabled: true,
-            },
-          }}
-          locale="en"
-        >
+        <Provider config={CONFIG} locale="en">
           {() => <Workspace />}
         </Provider>
       </Suspense>

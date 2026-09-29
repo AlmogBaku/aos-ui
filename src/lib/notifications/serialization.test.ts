@@ -32,33 +32,25 @@ describe("versioned Activity persistence", () => {
     expect(deserializeActivity(serialized)).toEqual({ version: 3, preferences })
   })
 
-  it("adopts default-on for a version 2 device that never chose", () => {
-    expect(deserializeActivity(version2(false))).toEqual({
-      version: 3,
-      preferences: {
-        enabled: true,
-        completion: true,
-        failure: true,
-        input: false,
-        sound: true,
-        prompt: "pending",
-      },
-    })
-  })
-
-  it("reads a version 2 opt-in as an already answered ask", () => {
-    expect(deserializeActivity(version2(true))).toEqual({
-      version: 3,
-      preferences: {
-        enabled: true,
-        completion: true,
-        failure: true,
-        input: false,
-        sound: true,
-        prompt: "accepted",
-      },
-    })
-  })
+  it.each([
+    [false, "pending"],
+    [true, "accepted"],
+  ] as const)(
+    "carries a version 2 opt-in of %s forward as a %s ask, default-on",
+    (optedIn, prompt) => {
+      expect(deserializeActivity(version2(optedIn))).toEqual({
+        version: 3,
+        preferences: {
+          enabled: true,
+          completion: true,
+          failure: true,
+          input: false,
+          sound: true,
+          prompt,
+        },
+      })
+    }
+  )
 
   it("drops a version 1 snapshot instead of restoring its Activity history", () => {
     expect(

@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
 
-import type { TurnEvent } from "../../core/events"
-import { READY_LINK } from "../../core/link"
-import type { ServerTurnHandle } from "../../core/runtime"
 import { OpenClawServerAdapter } from "./adapter"
+import { OpenClawClientRequestError } from "./client"
 import {
-  OpenClawClientRequestError,
-  type OpenClawGatewayClient,
-} from "./client"
+  RESEARCH_AGENTS,
+  idleTurns,
+  stubOpenClawClient,
+} from "./test-utils/fake-openclaw"
 
 const sessionKey = "agent:research:main"
 const otherKey = "agent:research:other"
@@ -61,13 +60,7 @@ const appHistory = {
 function gateway(answers: Record<string, (params: never) => unknown> = {}) {
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method in answers) return answers[method]!(params as never)
-    if (method === "agents.list")
-      return {
-        defaultId: "research",
-        mainKey: "main",
-        scope: "global",
-        agents: [{ id: "research", name: "Research", kind: "agent" }],
-      }
+    if (method === "agents.list") return RESEARCH_AGENTS
     if (method === "sessions.list")
       return {
         sessions: [sessionKey, otherKey].map((key) => ({
@@ -84,21 +77,9 @@ function gateway(answers: Record<string, (params: never) => unknown> = {}) {
       return { agentId: "research", profile: "default", groups: [] }
     throw new Error(`Unexpected method ${method}`)
   })
-  const client = {
-    link: READY_LINK,
-    start: vi.fn(),
-    stopAndWait: vi.fn(async () => undefined),
-    request,
-  } as unknown as OpenClawGatewayClient & { link: typeof READY_LINK }
-  const idle: ServerTurnHandle = {
-    events: (async function* (): AsyncIterable<TurnEvent> {})(),
-    settled: Promise.resolve(),
-    stop: async () => "idle",
-    recoveryPosition: () => "token-1",
-  }
   const adapter = new OpenClawServerAdapter({
-    client,
-    turns: { start: async () => idle, recover: async () => idle },
+    client: stubOpenClawClient(request),
+    turns: idleTurns(),
     subscribeSession: async () => () => undefined,
   })
   return { adapter, request, mcpApps: adapter.mcpApps }

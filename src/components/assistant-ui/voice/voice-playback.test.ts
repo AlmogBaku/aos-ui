@@ -1,30 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 import { VoicePlayback } from "./voice-playback"
-
-class AudioElement extends EventTarget {
-  src = ""
-  currentTime = 0
-  duration = 24
-  playbackRate = 1
-  paused = true
-  play = vi.fn(async () => {
-    this.paused = false
-    this.dispatchEvent(new Event("play"))
-  })
-  pause = vi.fn(() => {
-    this.paused = true
-    this.dispatchEvent(new Event("pause"))
-  })
-  load = vi.fn()
-  removeAttribute = vi.fn(() => {
-    this.src = ""
-  })
-}
+import { FakeAudio } from "./voice.test-helpers"
 
 function setup(
   synthesize = vi.fn(async () => new Blob(["audio"], { type: "audio/wav" }))
 ) {
-  const audio = new AudioElement()
+  const audio = new FakeAudio()
   const revokeObjectURL = vi.fn()
   const createObjectURL = vi.fn(() => "blob:voice")
   const onState = vi.fn()
