@@ -2,6 +2,8 @@ import { configDefaults, defineConfig } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import path from "node:path"
 
+import { reactCompiler } from "./react-compiler.config"
+
 /**
  * The `.test.ts` files that need a DOM: they render, lay out, or reach browser
  * storage, media, or history. Every other `.test.ts` runs in Node, and one
@@ -38,7 +40,7 @@ const gateTests = [
 ]
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), reactCompiler()],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "src"),
