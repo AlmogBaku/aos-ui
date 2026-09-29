@@ -168,6 +168,14 @@ function useUsageTimers() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 }
 
+/** Connects a second browser tab and opens the Session in it. */
+async function openInSecondTab(test: Awaited<ReturnType<typeof harness>>) {
+  const other = await test.connect("connection-2")
+  await other.list()
+  await open(other)
+  return other
+}
+
 /** Prompts a Session, and has the turn it starts ask `requests` and end. */
 async function promptAsking(
   test: Awaited<ReturnType<typeof harness>>,
@@ -697,9 +705,7 @@ describe("AOS ACP agent", () => {
   it("writes the Session model a config option selects and tells every browser on the Session", async () => {
     const test = await harness()
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     const written = await test.agent.request(
       methods.agent.session.setConfigOption,
@@ -926,9 +932,7 @@ describe("AOS ACP agent", () => {
     await test.list()
     await open(test)
     await usageOf(test)
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await usageOf(other)
 
     await prompt(test, "Summarize")
@@ -981,9 +985,7 @@ describe("AOS ACP agent", () => {
   it("renames a Session for every browser on it, leaving the one that renamed it no membership", async () => {
     const test = await harness()
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const clock = useFakeClock()
 
     await test.agent.request(AOS_METHODS.session.update, {
@@ -1573,9 +1575,7 @@ describe("Session rooms", () => {
   it("shows an open Session another browser's prompt, then its stream", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const from = other.recorder.entries.length
 
     const messageId = await prompt(test, "Summarize")
@@ -1675,9 +1675,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const cleanup = vi.fn(async () => undefined)
     const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
       public: [],
@@ -1706,9 +1704,7 @@ describe("Session rooms", () => {
   it("lets another operator browser stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await prompt(test, "Long job")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -1932,9 +1928,7 @@ describe("Session rooms", () => {
   it("takes the first of two answers given at once and continues the turn once", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await promptAsking(test, "Delete it", [APPROVAL])
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
@@ -2191,9 +2185,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     held = true
     const from = other.recorder.entries.length
@@ -2223,9 +2215,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     failing = true
     await expect(
@@ -2255,9 +2245,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     held = true
     const from = other.recorder.entries.length
@@ -2340,9 +2328,7 @@ describe("Session rooms", () => {
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
 
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
@@ -2386,9 +2372,7 @@ describe("Session rooms", () => {
     const sent = prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const from = other.recorder.entries.length
     admission.release()
     const messageId = await sent
@@ -2683,9 +2667,7 @@ describe("Session rooms", () => {
   it("streams each chunk once to a browser that reopens twice in a row", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await liveTurn(test, [other])
 
     const first = other.recorder.entries.length
@@ -2713,9 +2695,7 @@ describe("Session rooms", () => {
   it("keeps streaming a reopen whose turn outgrew its journal", async () => {
     const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await liveTurn(test, [other])
     // A third event outgrows the journal, so the turn's start is gone.
     chunk(test.sources[0], "Aside", "assistant-2")
@@ -2876,9 +2856,7 @@ describe("Session rooms", () => {
       rows: [sessionRow(), sessionRow({ id: "session-2" })],
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await open(other, { sessionId: "session-2" })
     const from = other.recorder.entries.length
 
@@ -2906,9 +2884,7 @@ describe("Session rooms", () => {
     })
     await test.list()
     await open(test)
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     // An earlier turn of this proxy's own, as a Session that ran one has.
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
@@ -2962,9 +2938,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     const from = other.recorder.entries.length
     const messageId = await prompt(test, "Summarize")
@@ -2983,9 +2957,7 @@ describe("Session rooms", () => {
   it("sends nothing to a browser that closed the Session", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await other.agent.request(methods.agent.session.close, {
       sessionId: SESSION,
     })
