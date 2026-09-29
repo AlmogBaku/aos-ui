@@ -38,6 +38,7 @@ import {
 import { createHermesMcpApps } from "./mcp-apps"
 import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
+import { HermesPublishedArtifacts } from "./published-artifacts"
 import {
   HermesTurnEngine,
   HermesTurnPublicError,
@@ -387,6 +388,7 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
+  readonly #publishedArtifacts = new HermesPublishedArtifacts()
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
   readonly #invitedSessionCreates = new Map<
@@ -489,7 +491,10 @@ export class HermesServerAdapter implements ServerRuntime {
       authority: {
         requireSession,
         requireArtifact: async (scope, artifactId) =>
+          this.#publishedArtifacts.find(scope, artifactId) ??
           publishedArtifact(await this.#rawHistory(scope), artifactId),
+        publishArtifact: (scope, artifact) =>
+          this.#publishedArtifacts.record(scope, artifact),
       },
       transport: {
         request: (method, params, maxResponseBytes) =>
@@ -622,6 +627,7 @@ export class HermesServerAdapter implements ServerRuntime {
     this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
+      publishedArtifacts: this.#publishedArtifacts,
       // A watch stops where the adapter reports a Session gone or the token
       // refused, and redials once the gateway is up again.
       watch: {

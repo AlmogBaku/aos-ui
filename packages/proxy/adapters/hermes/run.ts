@@ -44,6 +44,7 @@ import {
   redactedText,
 } from "./tool-data"
 import { hermesRowMessageId } from "./history"
+import type { HermesPublishedArtifacts } from "./published-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
 import { attachTurn, scheduleCatchUp } from "./run-attach"
@@ -181,6 +182,7 @@ export class HermesTurnEngine {
   readonly #host: TurnEngineHost
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
+  readonly #publishedArtifacts?: HermesPublishedArtifacts
 
   constructor(
     native: HermesTurnNative,
@@ -189,12 +191,15 @@ export class HermesTurnEngine {
       lostInteractionGraceMs?: number
       /** Keyed by profile; a turn reads the names its profile last loaded. */
       mcpToolNames?: McpToolNames
+      /** Grants each MEDIA-line artifact before its assistant row persists. */
+      publishedArtifacts?: HermesPublishedArtifacts
       /** Without it, a watch retries every failure and logs nothing. */
       watch?: Partial<HermesWatchOptions>
     } = {}
   ) {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
+    this.#publishedArtifacts = options.publishedArtifacts
     this.#log = options.log ?? { warn: () => undefined }
     this.#watch = {
       publicError: () => undefined,
@@ -1125,11 +1130,13 @@ export class HermesTurnEngine {
         text: delta,
       })
     }
-    for (const { descriptor } of active.mediaFilter.takeArtifacts())
+    for (const artifact of active.mediaFilter.takeArtifacts()) {
+      this.#publishedArtifacts?.record(active.scope, artifact)
       this.#emit(active, {
         kind: TurnEventKind.ArtifactPublished,
-        artifact: descriptor,
+        artifact: artifact.descriptor,
       })
+    }
   }
 
   /**
