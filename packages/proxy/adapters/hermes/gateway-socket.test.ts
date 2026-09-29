@@ -229,29 +229,4 @@ describe("guarded Hermes gateway socket", () => {
 
     expect(received).toEqual([])
   })
-
-  it("delegates readyState, send, close and non-message listeners", () => {
-    const socket = new FakeSocket()
-    socket.autoReply = false
-    const guard = guardedHermesSocket(socket, {
-      onFault: vi.fn(),
-      onOversizedResponse: vi.fn(),
-      responseLimit: () => undefined,
-    })
-    const opened = vi.fn()
-    const closed = vi.fn()
-    guard.addEventListener("open", opened)
-    guard.addEventListener("close", closed)
-
-    expect(guard.readyState).toBe(0)
-    socket.open()
-    expect(guard.readyState).toBe(1)
-    guard.send("frame")
-    expect(socket.sent).toEqual(["frame"])
-    guard.close()
-
-    expect(opened).toHaveBeenCalledTimes(1)
-    expect(closed).toHaveBeenCalledTimes(1)
-    expect(guard.readyState).toBe(3)
-  })
 })

@@ -54,7 +54,7 @@ describe("conversation search", () => {
     const search = await screen.findByRole("searchbox", {
       name: "Search in conversation",
     })
-    await user.type(search, "launch")
+    fireEvent.change(search, { target: { value: "launch" } })
     expect(await screen.findByText("1 of 2")).toBeVisible()
     await user.keyboard("{Enter}")
     expect(screen.getByText("2 of 2")).toBeVisible()
@@ -105,21 +105,39 @@ describe("virtualized thread", () => {
 
   /** The top row sits right before the list; the sr-only heading does not count. */
   function topRowHeight(viewport: Element) {
-    const list = rows(viewport)[0]?.parentElement
+    return topRowHeightOf(rows(viewport)[0]?.parentElement)
+  }
+
+  function topRowHeightOf(list: HTMLElement | null | undefined) {
     return list?.previousElementSibling instanceof HTMLDivElement
       ? TOP_ROW_HEIGHT
       : 0
   }
 
+  /**
+   * One pass over the mounted rows: each row's top within the viewport's
+   * scrolled content and its height, and where the rows end.
+   */
+  function layout(viewport: Element) {
+    const mounted = rows(viewport)
+    const list = mounted[0]?.parentElement
+    const boxes = new Map<HTMLElement, { top: number; height: number }>()
+    let end = topRowHeightOf(list)
+    for (const row of mounted) {
+      end += Number.parseFloat(row.style.marginTop) || 0
+      const height = messageHeight(row)
+      boxes.set(row, { top: end, height })
+      end += height
+    }
+    const paddingBottom =
+      Number.parseFloat(list?.style.paddingBottom ?? "") || 0
+    return { mounted, boxes, end, paddingBottom }
+  }
+
   /** A row's top within the viewport's scrolled content. */
   function rowTop(viewport: Element, row: HTMLElement) {
-    let top = topRowHeight(viewport)
-    for (const other of rows(viewport)) {
-      top += Number.parseFloat(other.style.marginTop) || 0
-      if (other === row) return top
-      top += messageHeight(other)
-    }
-    return top
+    const { boxes, end } = layout(viewport)
+    return boxes.get(row)?.top ?? end
   }
 
   function rect(top: number, height: number) {
@@ -138,14 +156,15 @@ describe("virtualized thread", () => {
 
   /** The first row still in view, as the browser picks its anchor node. */
   function selectAnchor(viewport: HTMLElement) {
-    const row = rows(viewport).find(
-      (candidate) =>
-        rowTop(viewport, candidate) + messageHeight(candidate) >
-        viewport.scrollTop
-    )
+    const { mounted, boxes } = layout(viewport)
+    const scrollTop = viewport.scrollTop
+    const row = mounted.find((candidate) => {
+      const box = boxes.get(candidate)
+      return box !== undefined && box.top + box.height > scrollTop
+    })
     anchor = row && {
       row,
-      top: rowTop(viewport, row),
+      top: boxes.get(row)?.top ?? 0,
       margin: row.style.marginTop,
     }
   }
@@ -181,19 +200,8 @@ describe("virtualized thread", () => {
 
   /** Laid out like a real page: the mounted rows plus the spacing around them. */
   function contentHeight(viewport: HTMLElement) {
-    const mounted = rows(viewport)
-    const list = mounted[0]?.parentElement
-    return (
-      topRowHeight(viewport) +
-      mounted.reduce(
-        (total, row) =>
-          total +
-          messageHeight(row) +
-          (Number.parseFloat(row.style.marginTop) || 0),
-        0
-      ) +
-      (Number.parseFloat(list?.style.paddingBottom ?? "") || 0)
-    )
+    const { end, paddingBottom } = layout(viewport)
+    return end + paddingBottom
   }
 
   function maximumScrollTop(viewport: HTMLElement) {
@@ -327,19 +335,29 @@ describe("virtualized thread", () => {
     )
   }
 
-  /** Lets rows measure, the viewport react to growth, and frames run out. */
-  async function settle(rounds = 6) {
-    for (let round = 0; round < rounds; round += 1) {
-      await act(async () => {
-        const mounted = document.querySelector<HTMLElement>(VIEWPORT_SELECTOR)
-        if (mounted) anchorScroll(mounted)
-        for (const notify of resizeCallbacks) notify()
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => resolve())
-        )
+  /**
+   * `settle` lets rows measure, the viewport react to growth, and frames run
+   * out. It is bound to its own test's signal: Vitest does not cancel a timed
+   * out test, and its leftover act() rounds would otherwise run into the next.
+   */
+  const layoutIt = it.extend<{ settle: (rounds?: number) => Promise<void> }>({
+    settle: async ({ signal }, provide) => {
+      await provide(async (rounds = 6) => {
+        for (let round = 0; round < rounds; round += 1) {
+          signal.throwIfAborted()
+          await act(async () => {
+            const mounted =
+              document.querySelector<HTMLElement>(VIEWPORT_SELECTOR)
+            if (mounted) anchorScroll(mounted)
+            for (const notify of resizeCallbacks) notify()
+            await new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve())
+            )
+          })
+        }
       })
-    }
-  }
+    },
+  })
 
   function viewport() {
     const element = document.querySelector<HTMLElement>(VIEWPORT_SELECTOR)
@@ -351,147 +369,166 @@ describe("virtualized thread", () => {
     return document.querySelectorAll("[data-message-id]").length
   }
 
-  it("mounts only the messages near the viewport and opens a long Session at its latest message", async () => {
-    render(<LocalThread initialMessages={longThread()} />)
-    await settle()
+  layoutIt(
+    "mounts only the messages near the viewport and opens a long Session at its latest message",
+    async ({ settle }) => {
+      render(<LocalThread initialMessages={longThread()} />)
+      await settle()
 
-    expect(mountedMessageCount()).toBeGreaterThan(0)
-    expect(mountedMessageCount()).toBeLessThanOrEqual(30)
-    expect(
-      screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
-    ).toBeInTheDocument()
-    expect(screen.queryByText("Long thread message 0")).not.toBeInTheDocument()
-  })
+      expect(mountedMessageCount()).toBeGreaterThan(0)
+      expect(mountedMessageCount()).toBeLessThanOrEqual(30)
+      expect(
+        screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByText("Long thread message 0")
+      ).not.toBeInTheDocument()
+    }
+  )
 
-  it("finds a message outside the mounted window and reveals it", async () => {
-    const user = userEvent.setup()
-    render(
-      <LocalThread
-        initialMessages={longThread({
-          index: 12,
-          text: "The zephyr checkpoint",
-        })}
-      />
-    )
-    await settle()
-    expect(screen.queryByText("The zephyr checkpoint")).not.toBeInTheDocument()
+  layoutIt(
+    "finds a message outside the mounted window and reveals it",
+    async ({ settle }) => {
+      render(
+        <LocalThread
+          initialMessages={longThread({
+            index: 12,
+            text: "The zephyr checkpoint",
+          })}
+        />
+      )
+      await settle()
+      expect(
+        screen.queryByText("The zephyr checkpoint")
+      ).not.toBeInTheDocument()
 
-    window.dispatchEvent(new Event("aos:conversation-search"))
-    const search = await screen.findByRole("searchbox", {
-      name: "Search in conversation",
-    })
-    await user.type(search, "zephyr")
+      window.dispatchEvent(new Event("aos:conversation-search"))
+      const search = await screen.findByRole("searchbox", {
+        name: "Search in conversation",
+      })
+      fireEvent.change(search, { target: { value: "zephyr" } })
 
-    expect(await screen.findByText("1 of 1")).toBeVisible()
-    expect(await screen.findByText("The zephyr checkpoint")).toBeInTheDocument()
-    expect(mountedMessageCount()).toBeLessThanOrEqual(30)
-  })
+      expect(await screen.findByText("1 of 1")).toBeVisible()
+      expect(
+        await screen.findByText("The zephyr checkpoint")
+      ).toBeInTheDocument()
+      expect(mountedMessageCount()).toBeLessThanOrEqual(30)
+    }
+  )
 
-  it("keeps a fold the reader opened open after its message leaves the window and returns", async () => {
-    const user = userEvent.setup()
-    const messages = longThread()
-    messages[LONG_THREAD_LENGTH - 1] = {
-      id: "folded-turn",
-      role: "assistant",
-      metadata: { timing: TURN_TIMING },
-      content: [
-        { type: "text", text: "Checking the notes first." },
-        {
-          type: "tool-call",
-          toolCallId: "read",
-          toolName: "read_file",
-          args: { path: "README.md" },
-          result: "contents",
+  layoutIt(
+    "keeps a fold the reader opened open after its message leaves the window and returns",
+    async ({ settle }) => {
+      const user = userEvent.setup()
+      const messages = longThread()
+      messages[LONG_THREAD_LENGTH - 1] = {
+        id: "folded-turn",
+        role: "assistant",
+        metadata: { timing: TURN_TIMING },
+        content: [
+          { type: "text", text: "Checking the notes first." },
+          {
+            type: "tool-call",
+            toolCallId: "read",
+            toolName: "read_file",
+            args: { path: "README.md" },
+            result: "contents",
+          },
+          { type: "text", text: "The settled answer." },
+        ],
+      }
+      render(<LocalThread initialMessages={messages} />)
+      await settle()
+
+      await user.click(
+        await screen.findByRole("button", { name: "Worked for 29s" })
+      )
+      expect(
+        screen.getByRole("button", { name: "Worked for 29s" })
+      ).toHaveAttribute("aria-expanded", "true")
+
+      // The focused message stays mounted, so the reader moves on to another.
+      viewport().scrollTop = 0
+      await settle()
+      const elsewhere = screen.getByText("Long thread message 0")
+      elsewhere.tabIndex = -1
+      act(() => elsewhere.focus())
+      await settle()
+      expect(screen.queryByText("The settled answer.")).not.toBeInTheDocument()
+
+      viewport().scrollTop = maximumScrollTop(viewport())
+      await settle()
+      expect(
+        await screen.findByRole("button", { name: "Worked for 29s" })
+      ).toHaveAttribute("aria-expanded", "true")
+    }
+  )
+
+  layoutIt(
+    "keeps the newest streamed content in view until the reader scrolls up",
+    async ({ settle }) => {
+      const gates: Array<() => void> = []
+      const nextChunk = () =>
+        new Promise<void>((resolve) => {
+          gates.push(resolve)
+        })
+      const release = async () => {
+        await waitFor(() => expect(gates).toHaveLength(1))
+        await act(async () => gates.shift()?.())
+      }
+      const growing = "Streaming words that keep arriving".repeat(4)
+      let runtime: AssistantRuntime | undefined
+      const model: ChatModelAdapter = {
+        async *run() {
+          yield { content: [{ type: "text", text: "Streaming first words" }] }
+          await nextChunk()
+          yield { content: [{ type: "text", text: growing }] }
+          await nextChunk()
+          yield { content: [{ type: "text", text: growing.repeat(3) }] }
         },
-        { type: "text", text: "The settled answer." },
-      ],
-    }
-    render(<LocalThread initialMessages={messages} />)
-    await settle()
+      }
+      render(
+        <LocalThread
+          initialMessages={longThread()}
+          model={model}
+          exposeRuntime={(value) => {
+            runtime = value
+          }}
+        />
+      )
+      await settle()
 
-    await user.click(
-      await screen.findByRole("button", { name: "Worked for 29s" })
-    )
-    expect(
-      screen.getByRole("button", { name: "Worked for 29s" })
-    ).toHaveAttribute("aria-expanded", "true")
-
-    // The focused message stays mounted, so the reader moves on to another.
-    viewport().scrollTop = 0
-    await settle()
-    const elsewhere = screen.getByText("Long thread message 0")
-    elsewhere.tabIndex = -1
-    act(() => elsewhere.focus())
-    await settle()
-    expect(screen.queryByText("The settled answer.")).not.toBeInTheDocument()
-
-    viewport().scrollTop = maximumScrollTop(viewport())
-    await settle()
-    expect(
-      await screen.findByRole("button", { name: "Worked for 29s" })
-    ).toHaveAttribute("aria-expanded", "true")
-  })
-
-  it("keeps the newest streamed content in view until the reader scrolls up", async () => {
-    const gates: Array<() => void> = []
-    const nextChunk = () =>
-      new Promise<void>((resolve) => {
-        gates.push(resolve)
+      await act(async () => {
+        runtime?.thread.append({
+          role: "user",
+          content: [{ type: "text", text: "Keep going" }],
+        })
       })
-    const release = async () => {
-      await waitFor(() => expect(gates).toHaveLength(1))
-      await act(async () => gates.shift()?.())
+      expect(
+        await screen.findByText("Streaming first words")
+      ).toBeInTheDocument()
+      await settle()
+      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+
+      const beforeGrowth = viewport().scrollTop
+      await release()
+      expect(await screen.findByText(growing)).toBeInTheDocument()
+      await settle()
+      expect(viewport().scrollTop).toBeGreaterThan(beforeGrowth)
+      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+
+      fireEvent.wheel(viewport())
+      viewport().scrollTop = viewport().scrollTop - 300
+      await settle()
+      const readingTop = viewport().scrollTop
+
+      await release()
+      expect(await screen.findByText(growing.repeat(3))).toBeInTheDocument()
+      await settle()
+      expect(viewport().scrollTop).toBe(readingTop)
+      expect(viewport().scrollTop).toBeLessThan(maximumScrollTop(viewport()))
     }
-    const growing = "Streaming words that keep arriving".repeat(4)
-    let runtime: AssistantRuntime | undefined
-    const model: ChatModelAdapter = {
-      async *run() {
-        yield { content: [{ type: "text", text: "Streaming first words" }] }
-        await nextChunk()
-        yield { content: [{ type: "text", text: growing }] }
-        await nextChunk()
-        yield { content: [{ type: "text", text: growing.repeat(3) }] }
-      },
-    }
-    render(
-      <LocalThread
-        initialMessages={longThread()}
-        model={model}
-        exposeRuntime={(value) => {
-          runtime = value
-        }}
-      />
-    )
-    await settle()
-
-    await act(async () => {
-      runtime?.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Keep going" }],
-      })
-    })
-    expect(await screen.findByText("Streaming first words")).toBeInTheDocument()
-    await settle()
-    expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
-
-    const beforeGrowth = viewport().scrollTop
-    await release()
-    expect(await screen.findByText(growing)).toBeInTheDocument()
-    await settle()
-    expect(viewport().scrollTop).toBeGreaterThan(beforeGrowth)
-    expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
-
-    fireEvent.wheel(viewport())
-    viewport().scrollTop = viewport().scrollTop - 300
-    await settle()
-    const readingTop = viewport().scrollTop
-
-    await release()
-    expect(await screen.findByText(growing.repeat(3))).toBeInTheDocument()
-    await settle()
-    expect(viewport().scrollTop).toBe(readingTop)
-    expect(viewport().scrollTop).toBeLessThan(maximumScrollTop(viewport()))
-  })
+  )
 
   /** The text of the first message the reader can see. */
   function firstVisibleText() {
@@ -507,146 +544,144 @@ describe("virtualized thread", () => {
     screen.getByText(text).getBoundingClientRect().top
 
   describe("as older messages land", () => {
-    it("keeps the reader's place in a long thread as older messages land above", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      render(
-        <PagedThread
-          initialMessages={longThread()}
-          history={historyState()}
-          ref={thread}
-        />
-      )
-      await settle()
-      fireEvent.wheel(viewport())
-      viewport().scrollTop = maximumScrollTop(viewport()) - 4000
-      await settle()
-      const reading = firstVisibleText()
-      const top = topOf(reading)
+    layoutIt(
+      "keeps the reader's place in a long thread as older messages land above",
+      async ({ settle }) => {
+        const thread = createRef<PagedThreadHandle>()
+        render(
+          <PagedThread
+            initialMessages={longThread()}
+            history={historyState()}
+            ref={thread}
+          />
+        )
+        await settle()
+        fireEvent.wheel(viewport())
+        viewport().scrollTop = maximumScrollTop(viewport()) - 4000
+        await settle()
+        const reading = firstVisibleText()
+        const top = topOf(reading)
 
-      act(() => thread.current?.prepend(olderMessages(20)))
+        act(() => thread.current?.prepend(olderMessages(20)))
 
-      // Already in place as the page commits, before any frame runs.
-      expect(topOf(reading)).toBe(top)
-      await settle()
-      expect(topOf(reading)).toBe(top)
-    })
+        // Already in place as the page commits, before any frame runs.
+        expect(topOf(reading)).toBe(top)
+        await settle()
+        expect(topOf(reading)).toBe(top)
+      }
+    )
 
-    it("keeps the reader's place near the top of a long thread as unmeasured messages mount above it", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      render(
-        <PagedThread
-          initialMessages={longThread()}
-          history={historyState()}
-          ref={thread}
-        />
-      )
-      await settle()
-      fireEvent.wheel(viewport())
-      viewport().scrollTop = 150
-      await settle()
-      const reading = firstVisibleText()
-      const top = topOf(reading)
+    layoutIt(
+      "keeps the reader's place near the top of a long thread as unmeasured messages mount above it",
+      async ({ settle }) => {
+        const thread = createRef<PagedThreadHandle>()
+        render(
+          <PagedThread
+            initialMessages={longThread()}
+            history={historyState()}
+            ref={thread}
+          />
+        )
+        await settle()
+        fireEvent.wheel(viewport())
+        viewport().scrollTop = 150
+        await settle()
+        const reading = firstVisibleText()
+        const top = topOf(reading)
 
-      act(() => thread.current?.prepend(olderMessages(20)))
-      await settle()
+        act(() => thread.current?.prepend(olderMessages(20)))
+        await settle()
 
-      expect(topOf(reading)).toBe(top)
-    })
+        expect(topOf(reading)).toBe(top)
+      }
+    )
 
-    it("keeps the reader's place at the top of a short thread as older messages land above", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      render(
-        <PagedThread
-          initialMessages={longThread().slice(0, 20)}
-          history={historyState()}
-          ref={thread}
-        />
-      )
-      await settle()
-      fireEvent.wheel(viewport())
-      viewport().scrollTop = 0
-      await settle()
-      const top = topOf("Long thread message 0")
+    layoutIt.for([
+      { page: 8, outcome: "older messages land above" },
+      { page: 15, outcome: "a page makes it long enough to window" },
+    ])(
+      "keeps the reader's place at the top of a short thread as $outcome",
+      async ({ page }, { settle }) => {
+        const thread = createRef<PagedThreadHandle>()
+        render(
+          <PagedThread
+            initialMessages={longThread().slice(0, 20)}
+            history={historyState()}
+            ref={thread}
+          />
+        )
+        await settle()
+        fireEvent.wheel(viewport())
+        viewport().scrollTop = 0
+        await settle()
+        const top = topOf("Long thread message 0")
 
-      act(() => thread.current?.prepend(olderMessages(8)))
+        act(() => thread.current?.prepend(olderMessages(page)))
 
-      expect(topOf("Long thread message 0")).toBe(top)
-      await settle()
-      expect(topOf("Long thread message 0")).toBe(top)
-      expect(screen.getByText("Older message 7")).toBeInTheDocument()
-    })
+        expect(topOf("Long thread message 0")).toBe(top)
+        await settle()
+        expect(topOf("Long thread message 0")).toBe(top)
+        expect(
+          screen.getByText(`Older message ${page - 1}`)
+        ).toBeInTheDocument()
+      }
+    )
 
-    it("keeps the reader's place as a page makes a short thread long enough to window", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      render(
-        <PagedThread
-          initialMessages={longThread().slice(0, 20)}
-          history={historyState()}
-          ref={thread}
-        />
-      )
-      await settle()
-      fireEvent.wheel(viewport())
-      viewport().scrollTop = 0
-      await settle()
-      const top = topOf("Long thread message 0")
+    layoutIt(
+      "keeps a reader following the latest message at the bottom as a page lands",
+      async ({ settle }) => {
+        const thread = createRef<PagedThreadHandle>()
+        render(
+          <PagedThread
+            initialMessages={longThread()}
+            history={historyState()}
+            ref={thread}
+          />
+        )
+        await settle()
+        expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
 
-      act(() => thread.current?.prepend(olderMessages(15)))
+        act(() => thread.current?.prepend(olderMessages(20)))
+        await settle()
 
-      expect(topOf("Long thread message 0")).toBe(top)
-      await settle()
-      expect(topOf("Long thread message 0")).toBe(top)
-    })
+        expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+        expect(
+          screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
+        ).toBeInTheDocument()
+      }
+    )
 
-    it("keeps a reader following the latest message at the bottom as a page lands", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      render(
-        <PagedThread
-          initialMessages={longThread()}
-          history={historyState()}
-          ref={thread}
-        />
-      )
-      await settle()
-      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
+    layoutIt(
+      "keeps the reader's place as a page lands while the latest turn streams",
+      async ({ settle }) => {
+        const thread = createRef<PagedThreadHandle>()
+        const growing = "Streaming words that keep arriving"
+        render(
+          <PagedThread
+            initialMessages={longThread()}
+            history={historyState()}
+            running
+            ref={thread}
+          />
+        )
+        await settle()
+        fireEvent.wheel(viewport())
+        viewport().scrollTop = maximumScrollTop(viewport()) - 4000
+        await settle()
+        const reading = firstVisibleText()
+        const top = topOf(reading)
 
-      act(() => thread.current?.prepend(olderMessages(20)))
-      await settle()
+        act(() => {
+          thread.current?.stream(growing)
+          thread.current?.prepend(olderMessages(20))
+        })
+        expect(topOf(reading)).toBe(top)
+        act(() => thread.current?.stream(growing.repeat(4)))
+        await settle()
 
-      expect(viewport().scrollTop).toBe(maximumScrollTop(viewport()))
-      expect(
-        screen.getByText(`Long thread message ${LONG_THREAD_LENGTH - 1}`)
-      ).toBeInTheDocument()
-    })
-
-    it("keeps the reader's place as a page lands while the latest turn streams", async () => {
-      const thread = createRef<PagedThreadHandle>()
-      const growing = "Streaming words that keep arriving"
-      render(
-        <PagedThread
-          initialMessages={longThread()}
-          history={historyState()}
-          running
-          ref={thread}
-        />
-      )
-      await settle()
-      fireEvent.wheel(viewport())
-      viewport().scrollTop = maximumScrollTop(viewport()) - 4000
-      await settle()
-      const reading = firstVisibleText()
-      const top = topOf(reading)
-
-      act(() => {
-        thread.current?.stream(growing)
-        thread.current?.prepend(olderMessages(20))
-      })
-      expect(topOf(reading)).toBe(top)
-      act(() => thread.current?.stream(growing.repeat(4)))
-      await settle()
-
-      expect(topOf(reading)).toBe(top)
-    })
+        expect(topOf(reading)).toBe(top)
+      }
+    )
   })
 })
 

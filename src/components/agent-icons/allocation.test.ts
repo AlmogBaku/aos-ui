@@ -48,9 +48,9 @@ function editable(agents: readonly AgentAvatarInput[]) {
 }
 
 describe("the pool", () => {
-  it("holds 34 silhouettes and 8 tones with unique slugs", () => {
-    expect(new Set(silhouettes.map((s) => s.slug)).size).toBe(34)
-    expect(new Set(tones.map((t) => t.slug)).size).toBe(8)
+  it("keeps every silhouette and tone slug unique", () => {
+    expect(new Set(silhouettes.map((s) => s.slug)).size).toBe(S)
+    expect(new Set(tones.map((t) => t.slug)).size).toBe(T)
   })
 })
 

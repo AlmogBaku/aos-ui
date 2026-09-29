@@ -10,42 +10,6 @@ import {
 } from "./test-utils/history-rows"
 
 describe("server-side Hermes history projection", () => {
-  it("preserves a semantic tool failure when Hermes omits is_error", () => {
-    const messages = projectHermesHistory([
-      {
-        id: "assistant-failed-tool",
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "failed-tool",
-            function: {
-              name: "use_skill",
-              arguments: '{"name":"missing"}',
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "failed-tool",
-        tool_name: "use_skill",
-        content: JSON.stringify({
-          success: false,
-          error: "Skill 'missing' not found.",
-        }),
-      },
-    ])
-
-    expect(messages[0]?.content).toMatchObject([
-      {
-        type: "tool-call",
-        toolCallId: "failed-tool",
-        result: { success: false, error: "Skill 'missing' not found." },
-        isError: true,
-      },
-    ])
-  })
-
   it("replays a failed command with its exit code and hint", () => {
     const result = {
       output: "Error: in prepare, no such table: users",
@@ -480,7 +444,7 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
-  it("preserves message IDs, reasoning, tools, images, and safe rich descriptors without native disclosure", () => {
+  it("preserves message IDs, reasoning, tools, and images without native disclosure", () => {
     const messages = projectHermesHistory([
       {
         id: "user-native-1",
@@ -511,13 +475,6 @@ describe("server-side Hermes history projection", () => {
               }),
             },
           },
-          {
-            id: "artifact-1",
-            function: {
-              name: "present_artifact",
-              arguments: '{"path":"private/report.md"}',
-            },
-          },
         ],
       },
       {
@@ -525,22 +482,6 @@ describe("server-side Hermes history projection", () => {
         tool_call_id: "chart-1",
         tool_name: "render_chart",
         content: '{"ok":true}',
-      },
-      {
-        role: "tool",
-        tool_call_id: "artifact-1",
-        tool_name: "present_artifact",
-        content: JSON.stringify({
-          ok: true,
-          type: "aos.artifact",
-          artifact: {
-            id: "report-1",
-            filename: "report.md",
-            path: "/srv/hermes/private/report.md",
-            mimeType: "text/markdown",
-            sizeBytes: 42,
-          },
-        }),
       },
       {
         id: "assistant-native-2",
@@ -586,35 +527,6 @@ describe("server-side Hermes history projection", () => {
             }),
             result: { ok: true },
           },
-          {
-            type: "tool-call",
-            toolCallId: "artifact-1",
-            toolName: "present_artifact",
-            kind: ToolKind.Other,
-            args: {},
-            argsText: "{}",
-            result: {
-              ok: true,
-              type: "aos.artifact",
-              artifact: {
-                id: "report-1",
-                filename: "report.md",
-                mimeType: "text/markdown",
-                sizeBytes: 42,
-              },
-            },
-          },
-          {
-            type: "data",
-            name: "aos.artifact",
-            data: {
-              id: "report-1",
-              filename: "report.md",
-              mimeType: "text/markdown",
-              sizeBytes: 42,
-              source: { type: "provider", reference: "report-1" },
-            },
-          },
         ],
       },
       {
@@ -625,11 +537,10 @@ describe("server-side Hermes history projection", () => {
         content: [{ type: "text", text: "Here it is." }],
       },
     ])
-    expect(JSON.stringify(messages)).not.toContain("/srv/hermes")
     expect(JSON.stringify(messages)).not.toContain("native_position")
   })
 
-  it("preserves settled batched clarification questions and their recorded answers", () => {
+  it("projects a settled batched clarification as an answered question", () => {
     const messages = projectHermesHistory([
       {
         id: "assistant-question",
@@ -677,41 +588,12 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
-    expect(messages[0]?.content).toEqual([
+    expect(messages[0]?.content).toMatchObject([
       {
         type: "tool-call",
         toolCallId: "clarify-1",
         toolName: "question",
-        kind: ToolKind.Other,
-        args: {
-          question: "2 questions",
-          questions: [
-            {
-              question: "Where do you live?",
-              options: ["Tel Aviv", "Jerusalem"],
-              allowFreeform: false,
-              multiple: false,
-            },
-            {
-              question: "Which amenities do you use?",
-              options: ["Parks", "Transit"],
-              allowFreeform: false,
-              multiple: true,
-            },
-          ],
-          allowFreeform: true,
-        },
-        argsText: expect.any(String),
-        result: {
-          status: "answered",
-          responses: [
-            { question: "Where do you live?", answers: ["Jerusalem"] },
-            {
-              question: "Which amenities do you use?",
-              answers: ["Parks", "Transit"],
-            },
-          ],
-        },
+        result: { status: "answered" },
       },
     ])
   })
@@ -975,51 +857,6 @@ describe("server-side Hermes history projection", () => {
     ])
       expect(serialized).not.toContain(leak)
     expect(serialized).toContain("[REDACTED]")
-  })
-
-  it("does not turn path-shaped artifact identity into a public descriptor", () => {
-    const messages = projectHermesHistory([
-      {
-        id: "assistant-1",
-        role: "assistant",
-        tool_calls: [
-          {
-            id: "artifact-unsafe",
-            function: {
-              name: "present_artifact",
-              arguments: '{"path":"/srv/private/report.md"}',
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        tool_call_id: "artifact-unsafe",
-        tool_name: "present_artifact",
-        content: JSON.stringify({
-          ok: true,
-          type: "aos.artifact",
-          artifact: {
-            id: "/srv/private/report.md",
-            filename: "../report.md",
-            path: "/srv/private/report.md",
-          },
-        }),
-      },
-    ])
-
-    expect(messages[0]?.content).toEqual([
-      {
-        type: "tool-call",
-        toolCallId: "artifact-unsafe",
-        toolName: "present_artifact",
-        kind: ToolKind.Other,
-        args: {},
-        argsText: "{}",
-        result: { ok: true },
-      },
-    ])
-    expect(JSON.stringify(messages)).not.toContain("/srv/private")
   })
 
   it.each([

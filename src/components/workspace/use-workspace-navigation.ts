@@ -362,33 +362,52 @@ export function useWorkspaceNavigation({
     () => runtimeThreads.map(({ sessionId }) => sessionId),
     [runtimeThreads]
   )
-  const sessionQueryKey = `${refreshKey}:${runtimeThreadIds.join("\u001f")}`
-  const sessionSnapshotIsCurrent = sessionSnapshot.key === sessionQueryKey
-  // Loading a further catalog page only adds thread ids. The previous
-  // snapshot still describes every Session it listed, so History keeps those
-  // rows, and its scroll position, while the new page's metadata loads.
-  const sessionSnapshotStillCovers = useMemo(() => {
-    if (!sessionSnapshot.key.startsWith(`${refreshKey}:`)) return false
-    const listed = new Set(runtimeThreadIds)
-    return sessionSnapshot.sessions.every(({ sessionId }) =>
-      listed.has(sessionId)
+  const mainItem = threadState.threadItems[threadState.mainThreadId]
+  const mainItemId = mainItem?.id
+  const openSessionId = mainItem?.remoteId ?? mainItem?.externalId
+  // A reload lists page one only, so a shown Session can drop out of the
+  // thread list; its metadata is still read, so the conversation stays up.
+  // One not shown yet waits for the list: mounting it sooner races its replay.
+  const keepsOpenSession =
+    openSessionId !== undefined &&
+    !runtimeThreadIds.includes(openSessionId) &&
+    sessionSnapshot.sessions.some(
+      ({ sessionId }) => sessionId === openSessionId
     )
-  }, [refreshKey, runtimeThreadIds, sessionSnapshot])
-  const sessions =
-    sessionSnapshotIsCurrent || sessionSnapshotStillCovers
-      ? draftProjection.sessions
-      : emptySessions
+  const sessionQueryIds = useMemo(
+    () =>
+      keepsOpenSession && openSessionId
+        ? [...runtimeThreadIds, openSessionId]
+        : runtimeThreadIds,
+    [keepsOpenSession, openSessionId, runtimeThreadIds]
+  )
+  const sessionQueryKey = `${refreshKey}:${sessionQueryIds.join("\u001f")}`
+  const sessionSnapshotIsCurrent = sessionSnapshot.key === sessionQueryKey
+  // While a changed list's metadata loads, the previous snapshot keeps the
+  // rows still queried, so neither History nor the open conversation blanks.
+  const sessions = useMemo(() => {
+    if (sessionSnapshotIsCurrent) return draftProjection.sessions
+    if (!sessionSnapshot.key.startsWith(`${refreshKey}:`)) return emptySessions
+    const queried = new Set(sessionQueryIds)
+    return draftProjection.sessions.filter(({ sessionId }) =>
+      queried.has(sessionId)
+    )
+  }, [
+    draftProjection.sessions,
+    refreshKey,
+    sessionQueryIds,
+    sessionSnapshot.key,
+    sessionSnapshotIsCurrent,
+  ])
   const sessionError = sessionSnapshotIsCurrent ? sessionSnapshot.error : null
   const sessionsLoading =
     threadState.isLoading ||
-    (runtimeThreadIds.length > 0 && !sessionSnapshotIsCurrent)
+    (sessionQueryIds.length > 0 && !sessionSnapshotIsCurrent)
   const titles = useMemo(
     () =>
       new Map(runtimeThreads.map(({ sessionId, title }) => [sessionId, title])),
     [runtimeThreads]
   )
-  const mainItem = threadState.threadItems[threadState.mainThreadId]
-  const mainItemId = mainItem?.id
   const activeThreadId =
     mainItem?.remoteId ??
     mainItem?.externalId ??
@@ -700,7 +719,7 @@ export function useWorkspaceNavigation({
     if (workspace.subscribeSessionMetadata) {
       try {
         unsubscribe = workspace.subscribeSessionMetadata(
-          runtimeThreadIds,
+          sessionQueryIds,
           publish,
           publishError
         )
@@ -711,7 +730,7 @@ export function useWorkspaceNavigation({
 
     const loadGeneration = ++generation
     void workspace
-      .getSessionMetadata(runtimeThreadIds)
+      .getSessionMetadata(sessionQueryIds)
       .then((metadata) => {
         if (active && generation === loadGeneration) {
           setSessionSnapshot({
@@ -735,7 +754,7 @@ export function useWorkspaceNavigation({
       generation += 1
       unsubscribe?.()
     }
-  }, [runtimeThreadIds, sessionQueryKey, threadState.isLoading, workspace])
+  }, [sessionQueryIds, sessionQueryKey, threadState.isLoading, workspace])
 
   const scopedCatalogAgent = useRef<string | null>(null)
   /**

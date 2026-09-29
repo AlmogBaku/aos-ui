@@ -14,30 +14,10 @@ import {
   ToolUiLocaleProvider,
   ToolUiSessionLinkProvider,
   isAosRichTool,
-  type RichToolPart,
 } from "./index"
-import { withAosToolArtifact, type AosToolArtifact } from "@/lib/tool-artifact"
+import { toolPart } from "./tool-part.test-helpers"
 
 afterEach(cleanup)
-
-function toolPart(
-  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">,
-  artifact?: AosToolArtifact
-): RichToolPart {
-  const args = overrides.args ?? {}
-  return {
-    type: "tool-call",
-    toolCallId: `test-${overrides.toolName}`,
-    args,
-    argsText: JSON.stringify(args),
-    status: { type: "complete" },
-    addResult: vi.fn(),
-    resume: vi.fn(),
-    respondToApproval: vi.fn().mockResolvedValue(undefined),
-    ...(artifact ? { artifact: withAosToolArtifact(undefined, artifact) } : {}),
-    ...overrides,
-  }
-}
 
 const patch = [
   "--- a/src/pricing/tiers.ts",

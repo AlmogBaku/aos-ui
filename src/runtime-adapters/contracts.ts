@@ -331,10 +331,10 @@ export type HarnessRuntime = {
   push?: PushSubscriptionManager
   environmentLabel?: string
   /**
-   * Present while the connection is recovering, past its grace; the runtime
-   * keeps retrying on its own.
+   * Present while the connection is recovering, past its grace, and for a
+   * moment once it has recovered; the runtime keeps retrying on its own.
    */
-  connectionStatus?: "reconnecting" | "capacity"
+  connectionStatus?: "reconnecting" | "capacity" | "reconnected"
   /** Present only while the selected Session is gone at its provider. */
   sessionStatus?: "unavailable"
 }
@@ -350,11 +350,4 @@ export type WorkspaceCapabilities = {
   sessionArchival: boolean
   sessionDeletion: boolean
   sessionPin: boolean
-}
-
-export type WorkspaceProviderEvent<TPayload = unknown> = {
-  agentId: string
-  sessionId: string
-  sequence: number
-  payload: TPayload
 }

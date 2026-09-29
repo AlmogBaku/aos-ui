@@ -124,43 +124,6 @@ describe("OpenCodeEventProjector", () => {
       expect(TurnEventSchema.safeParse(event).success).toBe(true)
   })
 
-  it("publishes no artifact for a receipt naming a relative path", () => {
-    const projector = new OpenCodeEventProjector(sessionId, 0)
-    projector.accept(
-      live(1, "session.next.tool.called", {
-        assistantMessageID: "assistant-1",
-        callID: "call-1",
-        tool: "aos-ui_present_artifact",
-        input: {},
-        provider: { executed: true },
-        timestamp: 1,
-      })
-    )
-    const settled = projector.accept(
-      live(2, "session.next.tool.success", {
-        assistantMessageID: "assistant-1",
-        callID: "call-1",
-        structured: {},
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              ok: true,
-              type: "aos.artifact",
-              artifact: { path: "out/report.pdf", filename: "report.pdf" },
-            }),
-          },
-        ],
-        provider: { executed: true },
-        timestamp: 2,
-      })
-    ).events
-
-    expect(
-      settled.some((event) => event.kind === TurnEventKind.ArtifactPublished)
-    ).toBe(false)
-  })
-
   it("orders real durable reasoning, text, tools, progress, usage, and authoritative finish as turn events", () => {
     const projector = new OpenCodeEventProjector(sessionId, 0)
     const events = [

@@ -16,8 +16,10 @@ test("mobile Session rows rename, pin, and list archived in en", async ({
 test("mobile message menu opens by long press in en", async ({ page }) => {
   await exerciseMessageActions(page, true)
 })
-test("Manage Agents supports visibility controls in en", async ({ page }) => {
-  await exerciseAgentManagement(page, true)
+test("mobile Manage Agents opens from the drawer and returns focus to it", async ({
+  page,
+}) => {
+  await exerciseAgentManagement(page)
 })
 
 /** F6 lands on the transcript: inside the conversation, short of the composer. */

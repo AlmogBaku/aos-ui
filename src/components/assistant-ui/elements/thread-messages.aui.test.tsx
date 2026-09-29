@@ -251,77 +251,58 @@ describe("failed turn presentation", () => {
     },
   ]
 
-  it("reads a normalized code as localized AOS copy, not the Agent's words, and keeps retry out of the notice", () => {
-    render(
-      <LocalThread
-        initialMessages={failedTurn({ code: "AOS_PROVIDER_RUN_FAILED" })}
-      />
-    )
-
-    const notice = screen.getByRole("alert", {
+  it.each<{
+    failure: string
+    error: Parameters<typeof failedTurn>[0]
+    name: string
+    detail?: string
+  }>([
+    {
+      failure: "a normalized code as localized AOS copy, not the Agent's words",
+      error: { code: "AOS_PROVIDER_RUN_FAILED" },
       name: `AOS ${en.runErrors.AOS_PROVIDER_RUN_FAILED}`,
-    })
-    expect(notice).toBeVisible()
-    expect(within(notice).queryByRole("button")).not.toBeInTheDocument()
-  })
-
-  it("keeps the provider's own description for a code this build cannot know", () => {
-    render(
-      <LocalThread
-        initialMessages={failedTurn({
-          code: "AOS_UNKNOWN_TO_THIS_BUILD",
-          message: "The upstream model returned 503.",
-        })}
-      />
-    )
-
-    const notice = screen.getByRole("alert", {
+    },
+    {
+      // The description is already the headline, so it is not repeated as detail.
+      failure:
+        "a code this build cannot know by the provider's own description",
+      error: {
+        code: "AOS_UNKNOWN_TO_THIS_BUILD",
+        message: "The upstream model returned 503.",
+      },
       name: "AOS The upstream model returned 503.",
-    })
-    expect(notice).toBeVisible()
-    // The description is already the headline, so it is not repeated as detail.
-    expect(
-      within(notice).getAllByText("The upstream model returned 503.")
-    ).toHaveLength(1)
-  })
-
-  it("shows the provider's description beside a localized headline", () => {
-    render(
-      <LocalThread
-        initialMessages={failedTurn({
-          code: "AOS_SESSION_BUSY",
-          message: "run 9f2 is still streaming",
-        })}
-      />
-    )
-
-    const notice = screen.getByRole("alert", {
+      detail: "The upstream model returned 503.",
+    },
+    {
+      failure: "the provider's description beside a localized headline",
+      error: {
+        code: "AOS_SESSION_BUSY",
+        message: "run 9f2 is still streaming",
+      },
       name: `AOS ${en.runErrors.AOS_SESSION_BUSY}`,
-    })
-    expect(within(notice).getByText("run 9f2 is still streaming")).toBeVisible()
-  })
+      detail: "run 9f2 is still streaming",
+    },
+    {
+      failure: "generic copy when nothing named the failure",
+      error: undefined,
+      name: `AOS ${en.turnFailed}`,
+    },
+    {
+      failure: "a replayed string failure as the provider's description",
+      error: "The provider rejected this turn.",
+      name: "AOS The provider rejected this turn.",
+    },
+  ])(
+    "reads $failure, keeping retry out of the notice",
+    ({ error, name, detail }) => {
+      render(<LocalThread initialMessages={failedTurn(error)} />)
 
-  it("falls back to generic copy when nothing named the failure", () => {
-    render(<LocalThread initialMessages={failedTurn(undefined)} />)
-
-    expect(
-      screen.getByRole("alert", { name: `AOS ${en.turnFailed}` })
-    ).toBeVisible()
-  })
-
-  it("reads a replayed string failure as the provider's description", () => {
-    render(
-      <LocalThread
-        initialMessages={failedTurn("The provider rejected this turn.")}
-      />
-    )
-
-    expect(
-      screen.getByRole("alert", {
-        name: "AOS The provider rejected this turn.",
-      })
-    ).toBeVisible()
-  })
+      const notice = screen.getByRole("alert", { name })
+      expect(notice).toBeVisible()
+      expect(within(notice).queryByRole("button")).not.toBeInTheDocument()
+      if (detail) expect(within(notice).getByText(detail)).toBeVisible()
+    }
+  )
 
   it("speaks Hebrew for the same normalized code", () => {
     render(

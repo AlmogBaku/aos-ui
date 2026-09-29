@@ -1,60 +1,24 @@
-import {
-  AssistantRuntimeProvider,
-  useLocalRuntime,
-  type ThreadMessageLike,
-} from "@assistant-ui/react"
-import { act, cleanup, render, screen, within } from "@testing-library/react"
+import { type ThreadMessageLike } from "@assistant-ui/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 
-import type { ComposerFeatureViewModel } from "@/components/assistant-ui/composer-features"
 import type { ComposerModelCurrent } from "@/runtime-adapters/contracts"
 import { threadLabels } from "@/components/assistant-ui/thread-labels"
-import {
-  AosToolPresentation,
-  ToolUiLocaleProvider,
-  type ToolUiLocale,
-} from "@/components/tool-ui"
+import { AosToolPresentation } from "@/components/tool-ui"
 import { he } from "@/lib/i18n/dictionaries/he"
-import { Thread, type ThreadLabels } from "./thread.aui"
+import {
+  LocalThread,
+  resetThreadTestEnvironment,
+} from "./thread.aui.test-helpers"
 
-afterEach(cleanup)
+afterEach(resetThreadTestEnvironment)
 
 const TIMING = {
   streamStartTime: Date.parse("2026-09-03T09:11:31.000Z"),
   totalStreamTime: 40_000,
   totalChunks: 12,
   toolCallCount: 2,
-}
-
-function LocalThread({
-  messages = [],
-  locale,
-  labels,
-  composerFeatures,
-}: {
-  messages?: readonly ThreadMessageLike[]
-  locale?: ToolUiLocale
-  labels?: Partial<ThreadLabels>
-  composerFeatures?: ComposerFeatureViewModel
-}) {
-  const runtime = useLocalRuntime(
-    { run: async () => ({ content: [] }) },
-    { initialMessages: messages }
-  )
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <ToolUiLocaleProvider locale={locale}>
-        <Thread
-          autoFocus={false}
-          labels={labels}
-          direction={locale === "he" ? "rtl" : "ltr"}
-          composerFeatures={composerFeatures}
-          components={{ ToolFallback: AosToolPresentation }}
-        />
-      </ToolUiLocaleProvider>
-    </AssistantRuntimeProvider>
-  )
 }
 
 const read = {
@@ -85,10 +49,14 @@ describe("model stop notices", () => {
   it("keeps a length-limited answer and says under it why it ends", async () => {
     render(
       <LocalThread
-        messages={turn([read, { type: "text", text: "First, second, third" }], {
-          type: "incomplete",
-          reason: "length",
-        })}
+        toolFallback={AosToolPresentation}
+        initialMessages={turn(
+          [read, { type: "text", text: "First, second, third" }],
+          {
+            type: "incomplete",
+            reason: "length",
+          }
+        )}
       />
     )
 
@@ -108,11 +76,16 @@ describe("model stop notices", () => {
   it("names a refusal in Hebrew as AOS, not as the Agent", async () => {
     render(
       <LocalThread
+        toolFallback={AosToolPresentation}
+        direction="rtl"
         locale="he"
-        messages={turn([read, { type: "text", text: "לא אוכל לעזור." }], {
-          type: "incomplete",
-          reason: "content-filter",
-        })}
+        initialMessages={turn(
+          [read, { type: "text", text: "לא אוכל לעזור." }],
+          {
+            type: "incomplete",
+            reason: "content-filter",
+          }
+        )}
       />
     )
 
@@ -126,7 +99,12 @@ describe("model stop notices", () => {
   })
 
   it("adds no stop notice to a turn that completed", () => {
-    render(<LocalThread messages={turn([{ type: "text", text: "Done." }])} />)
+    render(
+      <LocalThread
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([{ type: "text", text: "Done." }])}
+      />
+    )
 
     expect(screen.queryByRole("status", { name: /^AOS / })).toBeNull()
   })
@@ -136,7 +114,8 @@ describe("turn failure detail", () => {
   it("names the provider and model that failed", () => {
     render(
       <LocalThread
-        messages={turn([{ type: "text", text: "Half an answer" }], {
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([{ type: "text", text: "Half an answer" }], {
           type: "incomplete",
           reason: "error",
           error: {
@@ -159,7 +138,8 @@ describe("turn failure detail", () => {
   it("shows no attribution line when the failure names neither", () => {
     render(
       <LocalThread
-        messages={turn([{ type: "text", text: "Half an answer" }], {
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([{ type: "text", text: "Half an answer" }], {
           type: "incomplete",
           reason: "error",
           error: { code: "AOS_PROVIDER_RUN_FAILED" },
@@ -183,7 +163,8 @@ describe("settled fold headline", () => {
   it("names only the turn's duration, not what its tools changed", async () => {
     render(
       <LocalThread
-        messages={turn([
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([
           {
             ...read,
             toolCallId: "edit-1",
@@ -240,7 +221,8 @@ describe("context compaction", () => {
     const user = userEvent.setup()
     render(
       <LocalThread
-        messages={turn([
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([
           read,
           compaction({
             compactionId: "c1",
@@ -281,7 +263,8 @@ describe("context compaction", () => {
   it("says a compaction is under way while it runs", async () => {
     render(
       <LocalThread
-        messages={turn([
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([
           compaction({ compactionId: "c2", status: "started" }),
           { type: "text", text: "Continuing." },
         ])}
@@ -294,7 +277,8 @@ describe("context compaction", () => {
   it("reports a failed compaction as a warning from AOS", async () => {
     render(
       <LocalThread
-        messages={turn([
+        toolFallback={AosToolPresentation}
+        initialMessages={turn([
           compaction({
             compactionId: "c3",
             status: "failed",
@@ -340,6 +324,7 @@ describe("composer model follow", () => {
     const provider = modelFeed({ selectedId: "model-a" })
     render(
       <LocalThread
+        initialMessages={[]}
         composerFeatures={{
           model: {
             options: MODEL_OPTIONS,
@@ -365,6 +350,7 @@ describe("composer model follow", () => {
     const provider = modelFeed({ selectedId: "model-a" })
     render(
       <LocalThread
+        initialMessages={[]}
         composerFeatures={{
           model: {
             options: MODEL_OPTIONS,
@@ -398,7 +384,7 @@ describe("composer usage and cost", () => {
   }
 
   it("shows the last turn's tokens and the Session's cost", () => {
-    render(<LocalThread composerFeatures={{ context }} />)
+    render(<LocalThread initialMessages={[]} composerFeatures={{ context }} />)
 
     expect(screen.getByText("Last turn")).toBeInTheDocument()
     expect(
@@ -411,6 +397,8 @@ describe("composer usage and cost", () => {
   it("formats both rows for the Hebrew locale", () => {
     render(
       <LocalThread
+        initialMessages={[]}
+        direction="rtl"
         locale="he"
         labels={threadLabels.he}
         composerFeatures={{ context }}
@@ -425,7 +413,10 @@ describe("composer usage and cost", () => {
 
   it("leaves both rows out when the provider reports neither", () => {
     render(
-      <LocalThread composerFeatures={{ context: { usage: context.usage } }} />
+      <LocalThread
+        initialMessages={[]}
+        composerFeatures={{ context: { usage: context.usage } }}
+      />
     )
 
     expect(screen.queryByText("Last turn")).toBeNull()

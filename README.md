@@ -144,6 +144,7 @@ The [operator documentation index](docs/README.md) lists every maintained guide.
 
 ```bash
 bun run test
+bun run test:gate
 bun run typecheck
 bun run lint
 bun run build

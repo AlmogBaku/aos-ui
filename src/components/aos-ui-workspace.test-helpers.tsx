@@ -1,20 +1,26 @@
-import { useEffect, useMemo, useState } from "react"
+import { useLayoutEffect, useMemo, useState, type ReactNode } from "react"
 import {
+  AssistantRuntimeProvider,
   useLocalRuntime,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react"
+import { cleanup, render } from "@testing-library/react"
+import { afterEach, beforeEach } from "vitest"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 import { he } from "@/lib/i18n/dictionaries/he"
 import type {
   HarnessRuntime,
+  SessionMetadata,
   WorkspaceActivityEvent,
   WorkspaceAdapter,
 } from "@/runtime-adapters/contracts"
+import { isDraftAgentId } from "@/runtime-adapters/draft-agents"
 import {
   createFixtureChatModel,
   FixtureThreadListAdapter,
   useFixtureRuntimeBundle,
+  type FixtureRuntimeBundleOptions,
 } from "@/runtime-adapters/fixture/fixture-runtime"
 import {
   FIXTURE_NOW,
@@ -22,53 +28,173 @@ import {
   type FixtureWorkspace,
 } from "@/runtime-adapters/fixture/fixture-workspace"
 
-import {
-  ControlledWorkspaceFixture,
-  type WorkspaceFixtureRuntime,
-} from "./test-utils/controlled-workspace-fixture"
+import { type WorkspaceFixtureRuntime } from "./test-utils/controlled-workspace-fixture"
+import { useWorkspaceNavigation } from "./workspace/use-workspace-navigation"
 import { AosUiWorkspace } from "./aos-ui-workspace"
 
 // The one module the split AosUiWorkspace suites reach fixture internals
 // through; the runtime-boundary rule exempts exactly this file.
 
-const fixtureClock = () => FIXTURE_NOW
+/** What a test hands both the workspace and its navigation hook. */
+export type TestRuntime = WorkspaceFixtureRuntime &
+  Pick<HarnessRuntime, "createSessionDraft">
 
-export function asHarnessRuntime(
-  bundle: WorkspaceFixtureRuntime
-): HarnessRuntime {
+export type WorkspaceNavigation = ReturnType<typeof useWorkspaceNavigation>
+
+type Locale = "en" | "he"
+
+type ClockOptions = {
+  locale?: Locale
+  now?: Date
+  /** Defaults to the system clock, as the workspace itself does. */
+  readNow?: () => Date
+}
+
+export function asHarnessRuntime(runtime: TestRuntime): HarnessRuntime {
   return {
-    assistantRuntime: bundle.assistantRuntime,
-    workspace: bundle.workspace,
-    artifacts: bundle.artifacts ? { resolver: bundle.artifacts } : undefined,
+    assistantRuntime: runtime.assistantRuntime,
+    workspace: runtime.workspace,
+    createSessionDraft: runtime.createSessionDraft,
+    artifacts: runtime.artifacts ? { resolver: runtime.artifacts } : undefined,
     activityCoverage: "workspace",
   }
 }
 
-export function RegisteredDraftWorkspace({
-  bundle,
-  capture,
-  beforeDraftSelection,
-}: {
-  bundle: WorkspaceFixtureRuntime
-  capture: (bundle: WorkspaceFixtureRuntime) => void
-  beforeDraftSelection?: () => Promise<void>
-}) {
-  useEffect(() => capture(bundle), [bundle, capture])
-  return (
+/** Resets the route and local preferences around every test in a suite. */
+export function resetWorkspaceBetweenTests() {
+  beforeEach(() => {
+    window.history.replaceState({}, "", "/")
+    window.localStorage.clear()
+  })
+  afterEach(cleanup)
+}
+
+/**
+ * Renders `useRuntime` once as the root, so a re-render below it never re-runs
+ * the runtime hook, the way the app owns its runtime above the workspace.
+ */
+function renderRuntime<Runtime>(
+  useRuntime: () => Runtime,
+  View: (props: { runtime: Runtime }) => ReactNode
+) {
+  const latest: { runtime?: Runtime } = {}
+  function Root() {
+    const runtime = useRuntime()
+    useLayoutEffect(() => {
+      latest.runtime = runtime
+    })
+    return <View runtime={runtime} />
+  }
+  const view = render(<Root />)
+  return {
+    get runtime() {
+      return latest.runtime!
+    },
+    rerender: () => view.rerender(<Root />),
+  }
+}
+
+/** Mounts the full workspace over the runtime `useRuntime` builds. */
+export function renderWorkspace<Runtime extends TestRuntime>(
+  useRuntime: () => Runtime,
+  { locale = "en", now = FIXTURE_NOW, readNow }: ClockOptions = {}
+) {
+  return renderRuntime(useRuntime, ({ runtime }) => (
     <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={{
-        ...asHarnessRuntime(bundle),
-        createSessionDraft: async () => {
-          await beforeDraftSelection?.()
-          await bundle.assistantRuntime.threads.switchToNewThread()
-          return bundle.assistantRuntime.threads.getState().mainThreadId
-        },
-      }}
-      now={FIXTURE_NOW}
+      runtime={asHarnessRuntime(runtime)}
+      locale={locale}
+      dictionary={locale === "he" ? he : en}
+      now={now}
+      readNow={readNow}
     />
-  )
+  ))
+}
+
+/**
+ * Runs only the workspace's navigation hook over the runtime `useRuntime`
+ * builds, with the thread runtime mounted but no workspace UI.
+ */
+export function renderNavigation<Runtime extends TestRuntime>(
+  useRuntime: () => Runtime,
+  {
+    locale = "en",
+    now = FIXTURE_NOW,
+    readNow = () => new Date(),
+  }: ClockOptions = {}
+) {
+  const latest: { nav?: WorkspaceNavigation } = {}
+  function Navigation({ runtime }: { runtime: Runtime }) {
+    const nav = useWorkspaceNavigation({
+      bundle: runtime,
+      locale,
+      dictionary: locale === "he" ? he : en,
+      now,
+      readNow,
+    })
+    useLayoutEffect(() => {
+      latest.nav = nav
+    })
+    return (
+      <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
+        {null}
+      </AssistantRuntimeProvider>
+    )
+  }
+  const rendered = renderRuntime(useRuntime, Navigation)
+  return {
+    get nav() {
+      return latest.nav!
+    },
+    get runtime() {
+      return rendered.runtime
+    },
+    rerender: rendered.rerender,
+  }
+}
+
+/** The ids of the Session tabs navigation shows. */
+export const openTabIds = (nav: WorkspaceNavigation) =>
+  nav.shellOpenSessions.map(({ sessionId }) => sessionId)
+
+/**
+ * The thread the workspace would render from this navigation state, or null
+ * while it shows its loading state or the empty roster instead.
+ */
+export const renderedConversation = (nav: WorkspaceNavigation) =>
+  !nav.agentsLoading && nav.selectedAgent ? nav.conversationThreadId : null
+
+/** The creator-interview rows navigation adds to the Agent roster. */
+export const draftAgents = (nav: WorkspaceNavigation) =>
+  nav.displayAgents.filter(({ id }) => isDraftAgentId(id))
+
+/** The public fixture runtime, starting on Aster's running Session. */
+export function useFixtureBundle({
+  initialThreadId = "thread-aster-market",
+  ...options
+}: Omit<FixtureRuntimeBundleOptions, "sessionId" | "onThreadIdChange"> & {
+  initialThreadId?: string
+} = {}) {
+  const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
+  return useFixtureRuntimeBundle({
+    ...options,
+    sessionId,
+    onThreadIdChange: setThreadId,
+  })
+}
+
+/** Opens a New Session as a local draft thread, after an optional gate. */
+export function registeredDraftRuntime(
+  bundle: WorkspaceFixtureRuntime,
+  beforeDraftSelection?: () => Promise<void>
+): TestRuntime {
+  return {
+    ...bundle,
+    createSessionDraft: async () => {
+      await beforeDraftSelection?.()
+      await bundle.assistantRuntime.threads.switchToNewThread()
+      return bundle.assistantRuntime.threads.getState().mainThreadId
+    },
+  }
 }
 
 class DraftPromotingThreadListAdapter extends FixtureThreadListAdapter {
@@ -85,11 +211,8 @@ class DraftPromotingThreadListAdapter extends FixtureThreadListAdapter {
   }
 }
 
-export function DraftPromotionRaceWorkspace({
-  capture,
-}: {
-  capture: (runtime: HarnessRuntime) => void
-}) {
+/** Promotes a draft to a Session its metadata does not list yet. */
+export function useDraftPromotionRaceRuntime(): TestRuntime {
   const [workspace] = useState(() => createFixtureWorkspace())
   const [threadList] = useState(
     () => new DraftPromotingThreadListAdapter(workspace)
@@ -135,105 +258,16 @@ export function DraftPromotionRaceWorkspace({
       },
     } satisfies WorkspaceAdapter
   }, [threadList, workspace])
-  const runtime = useMemo<HarnessRuntime>(
+  return useMemo(
     () => ({
       assistantRuntime,
       workspace: filteredWorkspace,
-      activityCoverage: "workspace",
       createSessionDraft: async () => {
         await assistantRuntime.threads.switchToNewThread()
         return assistantRuntime.threads.getState().mainThreadId
       },
     }),
     [assistantRuntime, filteredWorkspace]
-  )
-  useEffect(() => capture(runtime), [capture, runtime])
-  return (
-    <AosUiWorkspace
-      runtime={runtime}
-      locale="en"
-      dictionary={en}
-      now={FIXTURE_NOW}
-    />
-  )
-}
-
-export function TabFixture({
-  capture,
-}: {
-  capture: (bundle: WorkspaceFixtureRuntime) => void
-}) {
-  return (
-    <ControlledWorkspaceFixture
-      initialThreadId="thread-aster-market"
-      messagesByThread={{
-        "thread-aster-market": [
-          {
-            id: "test-market-user",
-            role: "user",
-            content: "Test request",
-          },
-          {
-            id: "test-market-assistant",
-            role: "assistant",
-            content: "Test response",
-          },
-        ],
-      }}
-    >
-      {(bundle) => <TabWorkspace bundle={bundle} capture={capture} />}
-    </ControlledWorkspaceFixture>
-  )
-}
-
-function TabWorkspace({
-  bundle,
-  capture,
-}: {
-  bundle: WorkspaceFixtureRuntime
-  capture: (bundle: WorkspaceFixtureRuntime) => void
-}) {
-  useEffect(() => capture(bundle), [bundle, capture])
-  return (
-    <AosUiWorkspace
-      runtime={asHarnessRuntime(bundle)}
-      locale="en"
-      dictionary={en}
-      now={FIXTURE_NOW}
-    />
-  )
-}
-
-export function CreatorFixtureAosUiApp({
-  locale,
-  workspace,
-  initialThreadId = "thread-aster-market",
-  capture,
-}: {
-  locale: "en" | "he"
-  workspace?: FixtureWorkspace
-  initialThreadId?: string
-  capture?: (bundle: {
-    workspace: FixtureWorkspace
-    assistantRuntime: WorkspaceFixtureRuntime["assistantRuntime"]
-  }) => void
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(initialThreadId)
-  const bundle = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-    enableAgentCreator: true,
-    ...(workspace ? { testOnly: { workspace } } : {}),
-  })
-  useEffect(() => capture?.(bundle), [bundle, capture])
-  return (
-    <AosUiWorkspace
-      runtime={asHarnessRuntime(bundle)}
-      locale={locale}
-      dictionary={locale === "he" ? he : en}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
   )
 }
 
@@ -269,6 +303,12 @@ export function interviewWorkspace(interviewAgeMs: number) {
   })
 }
 
+/** The Session the creator interview runs in, once the provider has one. */
+export const interviewSession = (workspace: FixtureWorkspace) =>
+  workspace
+    .listAllSessionMetadata()
+    .find(({ agentId }) => agentId === "agent-builder")
+
 /**
  * Mirrors a provider that owns Session creation: the interview stays a local
  * thread until its first turn persists it, gated so the pending draft the
@@ -297,13 +337,7 @@ class PendingInterviewThreadListAdapter extends FixtureThreadListAdapter {
   }
 }
 
-export function PendingInterviewFixture({
-  firstTurn,
-  capture,
-}: {
-  firstTurn: Promise<void>
-  capture: (workspace: FixtureWorkspace) => void
-}) {
+export function usePendingInterviewRuntime(firstTurn: Promise<void>) {
   const [workspace] = useState(() =>
     createFixtureWorkspace({
       clock: () => FIXTURE_NOW,
@@ -333,12 +367,11 @@ export function PendingInterviewFixture({
       return useLocalRuntime(chatModel)
     },
   })
-  const runtime = useMemo<HarnessRuntime>(
+  return useMemo(
     () => ({
       assistantRuntime,
       workspace,
-      activityCoverage: "workspace",
-      createSessionDraft: async (agentId) => {
+      createSessionDraft: async (agentId: string) => {
         await assistantRuntime.threads.switchToNewThread()
         const draftId = assistantRuntime.threads.getState().mainThreadId
         threadList.record(draftId, agentId)
@@ -347,43 +380,25 @@ export function PendingInterviewFixture({
     }),
     [assistantRuntime, threadList, workspace]
   )
-  useEffect(() => capture(workspace), [capture, workspace])
-
-  return (
-    <AosUiWorkspace
-      runtime={runtime}
-      locale="en"
-      dictionary={en}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
-  )
 }
 
-export function CatalogFixture({
-  empty = false,
-  readOnly = false,
-  creatorInCatalog = false,
-  creatorFirst = false,
-  creatorOnly = false,
-  agentGate,
-  locale = "en",
-}: {
+type CatalogOptions = {
   empty?: boolean
   readOnly?: boolean
-  creatorInCatalog?: boolean
   creatorFirst?: boolean
   creatorOnly?: boolean
   agentGate?: Promise<void>
-  locale?: "en" | "he"
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-  })
+}
+
+/** The public fixture's catalog, shaped the way a real runtime could list it. */
+export function useCatalogRuntime({
+  empty = false,
+  readOnly = false,
+  creatorFirst = false,
+  creatorOnly = false,
+  agentGate,
+}: CatalogOptions = {}): TestRuntime {
+  const fixture = useFixtureBundle()
   const agentCreator = fixture.workspace.agentCreator!
   const workspace = useMemo(() => {
     // The roster and the management catalog are one read, as on a real
@@ -395,15 +410,7 @@ export function CatalogFixture({
         .filter(({ summary }) => !readOnly || summary.role !== "creator")
         .map((entry) =>
           entry.summary.role === "creator"
-            ? creatorInCatalog
-              ? {
-                  ...entry,
-                  visibility: "visible" as const,
-                  selectable: true,
-                  editable: !readOnly,
-                  avatarEditable: !readOnly,
-                }
-              : entry
+            ? entry
             : { ...entry, editable: !readOnly }
         )
       const isCreator = ({ summary }: (typeof entries)[number]) =>
@@ -427,7 +434,6 @@ export function CatalogFixture({
     })
   }, [
     creatorFirst,
-    creatorInCatalog,
     creatorOnly,
     agentGate,
     agentCreator,
@@ -435,17 +441,7 @@ export function CatalogFixture({
     fixture.workspace,
     readOnly,
   ])
-  return (
-    <AosUiWorkspace
-      runtime={asHarnessRuntime({
-        assistantRuntime: fixture.assistantRuntime,
-        workspace,
-      })}
-      locale={locale}
-      dictionary={locale === "he" ? he : en}
-      now={FIXTURE_NOW}
-    />
-  )
+  return { assistantRuntime: fixture.assistantRuntime, workspace }
 }
 
 export function deferred<T>() {
@@ -512,24 +508,13 @@ function workspaceFacade(
   }
 }
 
-export function GatedMetadataCreatorFixture({
-  workspace: seed,
-  hold,
-  capture,
-}: {
-  workspace: FixtureWorkspace
+/** Holds Session metadata reads while `hold` is pending. */
+export function useGatedMetadataRuntime(
+  seed: FixtureWorkspace,
   hold: () => Promise<void>
-  capture: (runtime: WorkspaceFixtureRuntime["assistantRuntime"]) => void
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-    testOnly: { workspace: seed },
-  })
-  const bundle = useMemo<WorkspaceFixtureRuntime>(
+): TestRuntime {
+  const fixture = useFixtureBundle({ testOnly: { workspace: seed } })
+  return useMemo(
     () => ({
       assistantRuntime: fixture.assistantRuntime,
       workspace: workspaceFacade(fixture.workspace, {
@@ -541,86 +526,67 @@ export function GatedMetadataCreatorFixture({
     }),
     [fixture.assistantRuntime, fixture.workspace, hold]
   )
-  useEffect(
-    () => capture(fixture.assistantRuntime),
-    [capture, fixture.assistantRuntime]
-  )
+}
 
-  return (
-    <AosUiWorkspace
-      runtime={asHarnessRuntime(bundle)}
-      locale="en"
-      dictionary={en}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
+// Each provider below keeps its test-driven state in a holder from `useState`
+// and wraps the fixture in a module function, since only callbacks, never
+// render, touch that state.
+
+type CatalogSignal = { complete: () => void; fail: (error: Error) => void }
+type BuilderSignalProvider = { completed: boolean; signal?: CatalogSignal }
+
+/**
+ * A provider whose catalog lists Sora only after its catalog signal reports
+ * Builder completion; `signal` is live once navigation subscribes.
+ */
+export function useBuilderSignalRuntime() {
+  const [provider] = useState<BuilderSignalProvider>(() => ({
+    completed: false,
+  }))
+  const fixture = useFixtureBundle()
+  return useMemo(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: builderSignalWorkspace(fixture.workspace, provider),
+      provider,
+    }),
+    [fixture.assistantRuntime, fixture.workspace, provider]
   )
 }
 
-export function BuilderSignalFixture({
-  captureCatalogEvent,
-}: {
-  captureCatalogEvent: (event: {
-    complete: () => void
-    fail: (error: Error) => void
-  }) => void
-}) {
-  const [providerState] = useState(() => ({ completed: false }))
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
+function builderSignalWorkspace(
+  base: FixtureWorkspace,
+  provider: BuilderSignalProvider
+) {
+  return workspaceFacade(base, {
+    refreshAgents: async () => [
+      ...(await base.listAgents()),
+      ...(provider.completed
+        ? [
+            {
+              kind: "ready" as const,
+              id: "agent-sora",
+              name: "Sora",
+              description: "Customer insight",
+              status: "idle" as const,
+            },
+          ]
+        : []),
+    ],
+    subscribeAgentCatalog: (listener, onError) => {
+      provider.signal = {
+        complete: () => {
+          provider.completed = true
+          listener()
+        },
+        fail: (error) => onError?.(error),
+      }
+      return () => undefined
+    },
   })
-  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
-    const workspace = workspaceFacade(fixture.workspace, {
-      refreshAgents: async () => [
-        ...(await fixture.workspace.listAgents()),
-        ...(providerState.completed
-          ? [
-              {
-                kind: "ready" as const,
-                id: "agent-sora",
-                name: "Sora",
-                description: "Customer insight",
-                status: "idle" as const,
-              },
-            ]
-          : []),
-      ],
-      subscribeAgentCatalog: (listener, onError) => {
-        captureCatalogEvent({
-          complete: () => {
-            providerState.completed = true
-            listener()
-          },
-          fail: (error) => onError?.(error),
-        })
-        return () => undefined
-      },
-    })
-    return { assistantRuntime: fixture.assistantRuntime, workspace }
-  }, [
-    captureCatalogEvent,
-    fixture.assistantRuntime,
-    fixture.workspace,
-    providerState,
-  ])
-
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
-  )
 }
 
 export type CreatedAgentHandle = {
-  workspace: FixtureWorkspace
   emitActivity: (event: WorkspaceActivityEvent) => void
   refreshCalls: () => number
   /** Makes the next catalog refresh fail the way a transport failure does. */
@@ -633,28 +599,48 @@ type CreatedAgentState = {
   listeners: Set<(event: WorkspaceActivityEvent) => void>
 }
 
-/** Hides the created Agent from the first `hideFor` catalog refreshes. */
+/**
+ * The public fixture with a catalog that hides Sora from the first `hideFor`
+ * refreshes, and a handle to its Activity feed and refresh count.
+ */
+export function useCreatedAgentRuntime({ hideFor = 0 } = {}) {
+  const fixture = useFixtureBundle()
+  const [state] = useState<CreatedAgentState>(() => ({
+    refreshCalls: 0,
+    failNextRefresh: false,
+    listeners: new Set(),
+  }))
+  return useMemo(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: createdAgentWorkspace(fixture.workspace, state, hideFor),
+      provider: fixture.workspace,
+      handle: createdAgentHandle(state),
+    }),
+    [fixture.assistantRuntime, fixture.workspace, hideFor, state]
+  )
+}
+
 function createdAgentWorkspace(
-  workspace: FixtureWorkspace,
+  provider: FixtureWorkspace,
   state: CreatedAgentState,
-  hideFor: number,
-  hiddenAgentId: string
+  hideFor: number
 ) {
-  return workspaceFacade(workspace, {
+  return workspaceFacade(provider, {
     refreshAgents: async () => {
       state.refreshCalls += 1
       if (state.failNextRefresh) {
         state.failNextRefresh = false
         throw new Error("Agent catalog refresh failed")
       }
-      const agents = await workspace.listAgents()
+      const agents = await provider.listAgents()
       return state.refreshCalls <= hideFor
-        ? agents.filter(({ id }) => id !== hiddenAgentId)
+        ? agents.filter(({ id }) => id !== "agent-sora")
         : agents
     },
     subscribeActivity: (listener, onError) => {
       state.listeners.add(listener)
-      const unsubscribe = workspace.subscribeActivity(listener, onError)
+      const unsubscribe = provider.subscribeActivity(listener, onError)
       return () => {
         state.listeners.delete(listener)
         unsubscribe()
@@ -663,106 +649,24 @@ function createdAgentWorkspace(
   })
 }
 
-export function CreatedAgentFixture({
-  capture,
-  hideFor = 0,
-  hiddenAgentId = "agent-sora",
-}: {
-  capture: (handle: CreatedAgentHandle) => void
-  hideFor?: number
-  hiddenAgentId?: string
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-  })
-  const [state] = useState<CreatedAgentState>(() => ({
-    refreshCalls: 0,
-    failNextRefresh: false,
-    listeners: new Set(),
-  }))
-  const bundle = useMemo<WorkspaceFixtureRuntime>(
-    () => ({
-      assistantRuntime: fixture.assistantRuntime,
-      workspace: createdAgentWorkspace(
-        fixture.workspace,
-        state,
-        hideFor,
-        hiddenAgentId
-      ),
-    }),
-    [fixture.assistantRuntime, fixture.workspace, hiddenAgentId, hideFor, state]
-  )
-  useEffect(
-    () =>
-      capture({
-        workspace: fixture.workspace,
-        emitActivity: (event) => {
-          for (const listener of state.listeners) listener(event)
-        },
-        refreshCalls: () => state.refreshCalls,
-        failNextRefresh: () => {
-          state.failNextRefresh = true
-        },
-      }),
-    [capture, fixture.workspace, state]
-  )
-
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
-  )
+function createdAgentHandle(state: CreatedAgentState): CreatedAgentHandle {
+  return {
+    emitActivity: (event) => {
+      for (const listener of state.listeners) listener(event)
+    },
+    refreshCalls: () => state.refreshCalls,
+    failNextRefresh: () => {
+      state.failNextRefresh = true
+    },
+  }
 }
 
-export function BuilderLifecycleFixture({
-  captureWorkspace,
-}: {
-  captureWorkspace: (workspace: FixtureWorkspace) => void
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-  })
-
-  useEffect(() => {
-    captureWorkspace(fixture.workspace)
-  }, [captureWorkspace, fixture.workspace])
-
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(fixture)}
-      now={FIXTURE_NOW}
-      readNow={fixtureClock}
-    />
-  )
-}
-
-export function EmptyAgentFixture({
-  createSession,
-}: {
+/** The public fixture plus an Agent with no Sessions, and no creator. */
+export function useEmptyAgentRuntime(
   createSession?: WorkspaceAdapter["createSession"]
-} = {}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-  })
-  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
+): TestRuntime {
+  const fixture = useFixtureBundle()
+  return useMemo(() => {
     const workspace = workspaceFacade(fixture.workspace, {
       listAgents: async () => [
         ...(await fixture.workspace.listAgents()).filter(
@@ -781,153 +685,94 @@ export function EmptyAgentFixture({
     workspace.refreshAgents = workspace.listAgents
     return { assistantRuntime: fixture.assistantRuntime, workspace }
   }, [createSession, fixture.assistantRuntime, fixture.workspace])
+}
 
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
-      now={FIXTURE_NOW}
-    />
+type StaleTodos = { emit: () => void }
+
+/**
+ * Todos from a provider that keeps delivering to Market brief after
+ * unsubscription; `stale.emit` sends that delayed event.
+ */
+export function useStaleTodoRuntime() {
+  const [stale] = useState<StaleTodos>(() => ({ emit: () => {} }))
+  const fixture = useFixtureBundle()
+  return useMemo(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: staleTodoWorkspace(fixture.workspace, stale),
+      stale,
+    }),
+    [fixture.assistantRuntime, fixture.workspace, stale]
   )
 }
 
-export function StaleTodoFixture({
-  captureStaleEmission,
-}: {
-  captureStaleEmission: (emit: () => void) => void
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
+function staleTodoWorkspace(base: FixtureWorkspace, stale: StaleTodos) {
+  return workspaceFacade(base, {
+    subscribeTodos: (subscribedThreadId, listener) => {
+      if (subscribedThreadId === "thread-aster-market") {
+        listener([{ id: "old", label: "Old Agent task", status: "active" }])
+        stale.emit = () =>
+          listener([
+            { id: "late", label: "Leaked delayed task", status: "failed" },
+          ])
+      } else {
+        listener([])
+      }
+      // Deliberately misbehave like a provider that delivers a queued event
+      // after unsubscription. The surface must still isolate the old Session.
+      return () => undefined
+    },
   })
-  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
-    const workspace = workspaceFacade(fixture.workspace, {
-      subscribeTodos: (subscribedThreadId, listener) => {
-        if (subscribedThreadId === "thread-aster-market") {
-          listener([{ id: "old", label: "Old Agent task", status: "active" }])
-          captureStaleEmission(() =>
-            listener([
-              { id: "late", label: "Leaked delayed task", status: "failed" },
-            ])
-          )
-        } else {
-          listener([])
-        }
-        // Deliberately misbehave like a provider that delivers a queued event
-        // after unsubscription. The surface must still isolate the old Session.
-        return () => undefined
-      },
-    })
-    return { assistantRuntime: fixture.assistantRuntime, workspace }
-  }, [captureStaleEmission, fixture.assistantRuntime, fixture.workspace])
+}
 
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
-      now={FIXTURE_NOW}
-    />
+type MetadataSignal = {
+  publish: (metadata: SessionMetadata[]) => void
+  fail: (error: Error) => void
+}
+type MetadataFeed = { signal?: MetadataSignal }
+
+/**
+ * Session metadata driven by the test: `signal` is live once navigation
+ * subscribes, and `initialMetadata` replaces the first fetch when given.
+ */
+export function useSessionMetadataSignalRuntime(
+  initialMetadata?: Promise<SessionMetadata[]>
+) {
+  const [feed] = useState<MetadataFeed>(() => ({}))
+  const fixture = useFixtureBundle()
+  return useMemo(
+    () => ({
+      assistantRuntime: fixture.assistantRuntime,
+      workspace: metadataSignalWorkspace(
+        fixture.workspace,
+        feed,
+        initialMetadata
+      ),
+      feed,
+    }),
+    [feed, fixture.assistantRuntime, fixture.workspace, initialMetadata]
   )
 }
 
-export function SessionMetadataSignalFixture({
-  captureSignal,
-  initialMetadata,
-}: {
-  captureSignal: (signal: {
-    publish: (
-      metadata: Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
-    ) => void
-    fail: (error: Error) => void
-  }) => void
-  initialMetadata?: Promise<
-    Awaited<ReturnType<WorkspaceAdapter["getSessionMetadata"]>>
-  >
-}) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
+function metadataSignalWorkspace(
+  base: FixtureWorkspace,
+  feed: MetadataFeed,
+  initialMetadata?: Promise<SessionMetadata[]>
+) {
+  return workspaceFacade(base, {
+    ...(initialMetadata ? { getSessionMetadata: () => initialMetadata } : {}),
+    subscribeSessionMetadata: (_sessionIds, listener, onError) => {
+      feed.signal = {
+        publish: listener,
+        fail: (error) => onError?.(error),
+      }
+      return () => undefined
+    },
   })
-  const bundle = useMemo<WorkspaceFixtureRuntime>(() => {
-    const workspace = workspaceFacade(fixture.workspace, {
-      ...(initialMetadata ? { getSessionMetadata: () => initialMetadata } : {}),
-      subscribeSessionMetadata: (_sessionIds, listener, onError) => {
-        captureSignal({
-          publish: listener,
-          fail: (error) => onError?.(error),
-        })
-        return () => undefined
-      },
-    })
-    return { assistantRuntime: fixture.assistantRuntime, workspace }
-  }, [
-    captureSignal,
-    fixture.assistantRuntime,
-    fixture.workspace,
-    initialMetadata,
-  ])
-
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(bundle)}
-      now={FIXTURE_NOW}
-    />
-  )
-}
-
-export function ClockBoundaryFixture({ readNow }: { readNow: () => Date }) {
-  const [sessionId, setThreadId] = useState<string | undefined>(
-    "thread-aster-market"
-  )
-  const fixture = useFixtureRuntimeBundle({
-    sessionId,
-    onThreadIdChange: setThreadId,
-  })
-
-  return (
-    <AosUiWorkspace
-      locale="en"
-      dictionary={en}
-      runtime={asHarnessRuntime(fixture)}
-      now={readNow()}
-      readNow={readNow}
-    />
-  )
-}
-
-export function ScopedArtifactWorkspace({
-  bundle,
-  capture,
-}: {
-  bundle: WorkspaceFixtureRuntime
-  capture: (bundle: WorkspaceFixtureRuntime) => void
-}) {
-  useEffect(() => capture(bundle), [bundle, capture])
-  return (
-    <AosUiWorkspace
-      runtime={asHarnessRuntime(bundle)}
-      locale="en"
-      dictionary={en}
-      now={FIXTURE_NOW}
-    />
-  )
 }
 
 export { FixtureAosUiApp } from "@/runtime-adapters/fixture/composition"
-export {
-  FixtureThreadListAdapter,
-  useFixtureRuntimeBundle,
-} from "@/runtime-adapters/fixture/fixture-runtime"
+export { FixtureThreadListAdapter } from "@/runtime-adapters/fixture/fixture-runtime"
 export {
   FIXTURE_NOW,
   type FixtureWorkspace,

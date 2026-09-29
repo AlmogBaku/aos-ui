@@ -15,7 +15,7 @@ import {
 } from "./native"
 import { parseJsonOrValue } from "../todos"
 
-type HermesMediaArtifact = {
+export type HermesMediaArtifact = {
   reference: string
   descriptor: {
     id: string

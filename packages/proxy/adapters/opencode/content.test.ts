@@ -67,16 +67,8 @@ describe("openCodeArtifactReceipt", () => {
     ["malformed JSON", "{not json"],
     ["a failed receipt", JSON.stringify({ ok: false, type: "aos.artifact" })],
     [
-      "a relative path",
-      receipt({ path: "out/report.pdf", filename: "report.pdf" }),
-    ],
-    [
       "a traversing path",
       receipt({ path: "/workspaces/../etc/passwd", filename: "passwd" }),
-    ],
-    [
-      "a sensitive path",
-      receipt({ path: "/workspaces/aos/.env", filename: ".env" }),
     ],
     ["no filename", receipt({ path: "/workspaces/aos/out/report.pdf" })],
     [

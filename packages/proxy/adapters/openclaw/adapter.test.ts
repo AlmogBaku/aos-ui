@@ -1,9 +1,5 @@
-import type { TurnEvent } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
-import { READY_LINK } from "../../core/link"
-import type { ServerTurnEngine, ServerTurnHandle } from "../../core/runtime"
-import { SessionWorkspaceCapabilitiesResponseSchema } from "../../../protocol"
 import {
   OpenClawAdapterUnavailableError,
   OpenClawServerAdapter,
@@ -14,37 +10,20 @@ import {
   type OpenClawGatewayClient,
 } from "./client"
 import {
+  RESEARCH_AGENTS,
+  idleTurns,
+  stubOpenClawClient,
+} from "./test-utils/fake-openclaw"
+import {
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
 
 const sessionKey = "agent:research:main"
 
-function idleHandle(): ServerTurnHandle {
-  return {
-    events: (async function* (): AsyncIterable<TurnEvent> {})(),
-    settled: Promise.resolve(),
-    stop: async () => "idle",
-    recoveryPosition: () => "token-1",
-  }
-}
-
-function engine(): ServerTurnEngine {
-  return {
-    start: async () => idleHandle(),
-    recover: async () => idleHandle(),
-  }
-}
-
 function client(overrides: Partial<OpenClawGatewayClient> = {}) {
   const request = vi.fn(async (method: string) => {
-    if (method === "agents.list")
-      return {
-        defaultId: "research",
-        mainKey: "main",
-        scope: "global",
-        agents: [{ id: "research", name: "Research", kind: "agent" }],
-      }
+    if (method === "agents.list") return RESEARCH_AGENTS
     if (method === "sessions.list")
       return {
         sessions: [
@@ -82,16 +61,16 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
       }
     throw new Error(`Unexpected method ${method}`)
   })
-  return {
-    link: READY_LINK,
-    start: vi.fn(async () => undefined),
-    stopAndWait: vi.fn(async () => undefined),
-    request,
-    ...overrides,
-  } as OpenClawGatewayClient & {
-    request: typeof request
-    link: typeof READY_LINK
-  }
+  return stubOpenClawClient(request, overrides)
+}
+
+/** The adapter over `gateway`, with idle turns and no-op subscriptions. */
+function adapterOver(gateway: OpenClawGatewayClient) {
+  return new OpenClawServerAdapter({
+    client: gateway,
+    turns: idleTurns(),
+    subscribeSession: async () => () => undefined,
+  })
 }
 
 describe("OpenClaw ServerRuntime assembly", () => {
@@ -106,7 +85,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const subscribe = vi.fn(async () => () => undefined)
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      turns: engine(),
+      turns: idleTurns(),
       subscribeSession: subscribe,
     })
 
@@ -151,11 +130,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
 
   it("creates native Sessions without imposing a title", async () => {
     const gateway = client()
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
+    const adapter = adapterOver(gateway)
 
     await expect(
       adapter.createSession("research", "New Session")
@@ -173,11 +148,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
 
   it("renames, archives, pins, and deletes through the exact native Session RPCs", async () => {
     const gateway = client()
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
+    const adapter = adapterOver(gateway)
 
     await adapter.updateSession("research", sessionKey, {
       title: "Renamed",
@@ -220,11 +191,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
 
   it("fails closed for unproven mutations and maps only bounded provider outcomes", async () => {
     const gateway = client()
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
+    const adapter = adapterOver(gateway)
 
     // The provider has no native read state to write.
     await expect(
@@ -267,11 +234,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
       },
     }
     const gateway = client({ negotiatedPolicy: () => policy })
-    const adapter = new OpenClawServerAdapter({
-      client: gateway,
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
+    const adapter = adapterOver(gateway)
 
     await expect(
       adapter.workspaceCapabilities("research", sessionKey)
@@ -286,11 +249,6 @@ describe("OpenClaw ServerRuntime assembly", () => {
         }),
       })
     )
-    expect(
-      SessionWorkspaceCapabilitiesResponseSchema.parse(
-        await adapter.workspaceCapabilities("research", sessionKey)
-      )
-    ).toBeDefined()
     await expect(
       adapter.stageAttachments("research", sessionKey, [
         { type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" },
@@ -299,13 +257,11 @@ describe("OpenClaw ServerRuntime assembly", () => {
       public: [{ type: "image", dataUrl: "data:image/png;base64,aGVsbG8=" }],
     })
 
-    const withoutAttachments = new OpenClawServerAdapter({
-      client: client({
+    const withoutAttachments = adapterOver(
+      client({
         negotiatedPolicy: () => ({ maxPayload: policy.maxPayload }),
-      }),
-      turns: engine(),
-      subscribeSession: async () => () => undefined,
-    })
+      })
+    )
     await expect(
       withoutAttachments.workspaceCapabilities("research", sessionKey)
     ).resolves.toMatchObject({
@@ -393,7 +349,7 @@ describe("OpenClaw artifact reads", () => {
     const gateway = client({ request } as Partial<OpenClawGatewayClient>)
     const adapter = new OpenClawServerAdapter({
       client: gateway,
-      turns: engine(),
+      turns: idleTurns(),
       subscribeSession: async () => () => undefined,
       gatewayOrigin: "http://127.0.0.1:18789",
       ...(fetch ? { fetch } : {}),

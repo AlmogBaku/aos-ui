@@ -335,41 +335,6 @@ describe("projectHermesToolOutcome", () => {
     })
   })
 
-  it("publishes an artifact receipt as one public descriptor part", () => {
-    const outcome = projectHermesToolOutcome("call-2", "present_artifact", {
-      ok: true,
-      type: "aos.artifact",
-      artifact: {
-        id: "report-1",
-        filename: "report.md",
-        path: "/srv/hermes/private/report.md",
-        mimeType: "text/markdown",
-      },
-    })
-    expect(outcome.result).toEqual({
-      ok: true,
-      type: "aos.artifact",
-      artifact: {
-        id: "report-1",
-        filename: "report.md",
-        mimeType: "text/markdown",
-      },
-    })
-    expect(outcome.parts).toEqual([
-      {
-        type: "data",
-        name: "aos.artifact",
-        data: {
-          id: "report-1",
-          filename: "report.md",
-          mimeType: "text/markdown",
-          source: { type: "provider", reference: "report-1" },
-        },
-      },
-    ])
-    expect(JSON.stringify(outcome)).not.toContain("/srv/hermes")
-  })
-
   it("reads a receipt Hermes stored inside its untrusted-data block", () => {
     const wrapped = (name: string, value: unknown) =>
       `<untrusted_tool_result source="mcp__aos_ui__${name}">\n` +

@@ -7,18 +7,7 @@ import { Collapsible } from "@/components/ui/collapsible"
 
 import { ImageContentFilterError, ImageGenerating, ImageZoom } from "./image"
 import { CodeHeader } from "./markdown-text"
-import {
-  ReasoningContent,
-  ReasoningFade,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "./reasoning"
-import {
-  ToolFallbackContent,
-  ToolFallbackRoot,
-  ToolFallbackTrigger,
-} from "./tool-fallback.aui"
+import { ReasoningTrigger } from "./reasoning"
 import { ToolGroupTrigger } from "./tool-group.aui"
 
 afterEach(cleanup)
@@ -63,30 +52,6 @@ describe("localized conversation presentation", () => {
     const copy = screen.getByRole("button", { name: "העתקת קוד" })
     await user.click(copy)
     expect(screen.getByRole("button", { name: "הועתק" })).toBeVisible()
-  })
-})
-
-describe("presentation disclosure behavior", () => {
-  it("renders fallback and reasoning disclosures without requiring implementation classes", () => {
-    render(
-      <>
-        <ToolFallbackRoot defaultOpen>
-          <ToolFallbackTrigger toolName="search" status={{ type: "running" }} />
-          <ToolFallbackContent>Searching</ToolFallbackContent>
-        </ToolFallbackRoot>
-        <ReasoningRoot defaultOpen>
-          <ReasoningTrigger active />
-          <ReasoningContent>
-            <ReasoningFade side="top" />
-            <ReasoningText>Thinking</ReasoningText>
-          </ReasoningContent>
-        </ReasoningRoot>
-      </>
-    )
-
-    expect(screen.getByRole("button", { name: /search/i })).toBeVisible()
-    expect(screen.getByText("Searching")).toBeVisible()
-    expect(screen.getByText("Thinking")).toBeVisible()
   })
 })
 

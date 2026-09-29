@@ -5,15 +5,12 @@ import {
 } from "@assistant-ui/react"
 import { describe, expect, it, vi } from "vitest"
 
-import { parseArtifactDescriptor } from "@/artifacts/artifacts"
-
 import type { WorkspaceActivityEvent } from "../contracts"
 import { ActivityStore } from "../../lib/notifications/store"
 import {
   createFixtureChatModel,
   createFixtureThreadListAdapter,
 } from "./fixture-runtime"
-import { FIXTURE_ARTIFACT_CATALOG } from "./fixture-artifacts"
 import { FIXTURE_NOW, createFixtureWorkspace } from "./fixture-workspace"
 
 function runOptions(
@@ -227,16 +224,6 @@ describe("fixture Assistant UI thread adapter", () => {
     await expect(
       workspace.getSessionMetadata(["thread-aster-launch"])
     ).resolves.toEqual([])
-  })
-
-  it("keeps artifact descriptors parseable and uniquely identified", async () => {
-    const artifacts = Object.values(FIXTURE_ARTIFACT_CATALOG.examples)
-
-    const parsed = artifacts.map(parseArtifactDescriptor)
-    expect(parsed.length).toBeGreaterThan(0)
-    expect(parsed.every((artifact) => artifact !== null)).toBe(true)
-    const ids = parsed.flatMap((artifact) => (artifact ? [artifact.id] : []))
-    expect(new Set(ids).size).toBe(ids.length)
   })
 
   it("uses the market Session as the rich-output fixture, with a plottable chart", async () => {

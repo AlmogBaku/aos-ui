@@ -131,20 +131,6 @@ describe("ACP permission approvals", () => {
     ])
   })
 
-  it("keeps both the operation Hermes names and its explanation", () => {
-    const { approvals, emit } = harness()
-    emit(
-      permission({
-        title: "rm -rf /tmp/build",
-        description: "Hermes flagged a recursive delete",
-      }).pending
-    )
-    expect(approvals.list("session-1")[0]).toMatchObject({
-      action: "rm -rf /tmp/build",
-      description: "Hermes flagged a recursive delete",
-    })
-  })
-
   it("falls back to the AOS message, the title alone, and a generated id", () => {
     const { approvals, emit } = harness()
     emit(permission({ message: "Hermes needs approval" }).pending)

@@ -38,6 +38,7 @@ import {
 import { createHermesMcpApps } from "./mcp-apps"
 import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
+import { HermesPublishedArtifacts } from "./published-artifacts"
 import {
   HermesTurnEngine,
   HermesTurnPublicError,
@@ -199,6 +200,8 @@ function historyPagination(
  * rows. A healthy Session spends none of the budget.
  */
 const MAX_EXTRA_HISTORY_PAGE_FETCHES = 32
+/** Rows per raw history read; artifact grants page past the first. */
+const RAW_HISTORY_PAGE = 500
 
 /**
  * A stored Hermes row never says a turn is live. Its `is_active` only means the
@@ -387,6 +390,7 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
+  readonly #publishedArtifacts = new HermesPublishedArtifacts()
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
   readonly #invitedSessionCreates = new Map<
@@ -488,8 +492,19 @@ export class HermesServerAdapter implements ServerRuntime {
     this.#content = createHermesContentOperations({
       authority: {
         requireSession,
-        requireArtifact: async (scope, artifactId) =>
-          publishedArtifact(await this.#rawHistory(scope), artifactId),
+        requireArtifact: async (scope, artifactId) => {
+          const published = this.#publishedArtifacts.find(scope, artifactId)
+          if (published) return published
+          // A long Session's artifact can sit far past the newest page, so the
+          // grant scan keeps reading older pages until Hermes runs out.
+          for (let offset = 0; ; offset += RAW_HISTORY_PAGE) {
+            const rows = await this.#rawHistory(scope, offset)
+            const found = publishedArtifact(rows, artifactId)
+            if (found || rows.length < RAW_HISTORY_PAGE) return found
+          }
+        },
+        publishArtifact: (scope, artifact) =>
+          this.#publishedArtifacts.record(scope, artifact),
       },
       transport: {
         request: (method, params, maxResponseBytes) =>
@@ -622,6 +637,7 @@ export class HermesServerAdapter implements ServerRuntime {
     this.turns = new HermesTurnEngine(this.native, {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
+      publishedArtifacts: this.#publishedArtifacts,
       // A watch stops where the adapter reports a Session gone or the token
       // refused, and redials once the gateway is up again.
       watch: {
@@ -911,7 +927,8 @@ export class HermesServerAdapter implements ServerRuntime {
   async #rawHistory(
     scope: Pick<HermesWorkspaceSession, "agentId" | "providerSessionId"> & {
       info?: unknown
-    }
+    },
+    offset = 0
   ) {
     if (!this.#dashboard) throw new HermesUnavailableError()
     const storedId = storedSessionIdentity(
@@ -924,8 +941,8 @@ export class HermesServerAdapter implements ServerRuntime {
       value = await this.#dashboard.getSessionMessages(
         scope.agentId,
         storedId,
-        500,
-        0
+        RAW_HISTORY_PAGE,
+        offset
       )
     } catch (error) {
       if (

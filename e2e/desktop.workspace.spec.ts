@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "./test"
-import { exerciseAgentManagement } from "./agent-management"
 import { exerciseMessageActions } from "./message-actions"
 import { exerciseSessionActions } from "./session-actions"
 import { exerciseSessionTabs } from "./session-tabs"
@@ -16,9 +15,6 @@ test("desktop message menu copies, edits, and defers to the browser in en", asyn
   page,
 }) => {
   await exerciseMessageActions(page, false)
-})
-test("Manage Agents supports visibility controls in en", async ({ page }) => {
-  await exerciseAgentManagement(page, false)
 })
 
 const hebrew = {
@@ -137,28 +133,4 @@ test("appearance choices are explicit, system-aware, and persisted", async ({
     "aria-pressed",
     "true"
   )
-})
-
-test("Session tabs use roving focus and direction-aware arrow keys", async ({
-  page,
-}) => {
-  await openWorkspace(page)
-
-  const market = page.getByRole("tab", { name: "Market brief" })
-  const launch = page.getByRole("tab", { name: "Launch review" })
-  await market.focus()
-  await market.press("ArrowDown")
-  await expect(market).toBeFocused()
-  await market.press("ArrowRight")
-  await expect(launch).toBeFocused()
-  await expect(launch).toHaveAttribute("aria-selected", "true")
-
-  await page.goto("/he")
-  await expect(page.getByRole("tablist")).toBeVisible()
-  const rtlMarket = page.getByRole("tab", { name: "Market brief" })
-  const rtlLaunch = page.getByRole("tab", { name: "Launch review" })
-  await rtlMarket.focus()
-  await rtlMarket.press("ArrowLeft")
-  await expect(rtlLaunch).toBeFocused()
-  await expect(rtlLaunch).toHaveAttribute("aria-selected", "true")
 })

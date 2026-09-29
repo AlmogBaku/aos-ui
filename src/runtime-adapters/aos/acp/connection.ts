@@ -834,8 +834,9 @@ export function createAcpConnection(
 
   /**
    * Sends one request under its tier's deadline. A reply that never comes
-   * means the transport has stalled, so it is closed and the connection
-   * reconnects; a request `parent` aborts leaves the transport as it is.
+   * fails the request and checks the transport in with a liveness probe; only
+   * an unanswered probe closes it, so a slow proxy costs no reconnect. A
+   * request `parent` aborts leaves the transport as it is.
    */
   async function request<Response>(tier: RequestTier, send: Send<Response>) {
     return requestOn(await readyTransport(), tier, send)
@@ -853,7 +854,10 @@ export function createAcpConnection(
         send(connection.agent, { cancellationSignal })
       )
     } catch (error) {
-      if (deadline.signal.aborted && !parent?.aborted) connection.close(error)
+      if (deadline.signal.aborted && !parent?.aborted) {
+        if (tier === "probe") connection.close(error)
+        else sendLivenessProbeAsync()
+      }
       throw error
     }
   }

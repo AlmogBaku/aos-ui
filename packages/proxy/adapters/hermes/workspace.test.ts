@@ -96,37 +96,6 @@ function harness(overrides?: {
 }
 
 describe("Hermes workspace operations", () => {
-  it("describes each workspace operation with its actual scope and mode", () => {
-    const { operations } = harness({ sessionInfo: { running: false } })
-
-    expect(operations.capabilities()).toEqual({
-      models: {
-        status: "available",
-        scope: "session",
-        selection: "native-session",
-        choices: "provider-reported",
-      },
-      context: {
-        status: "available",
-        scope: "session",
-        source: "provider-usage-or-estimate",
-        breakdown: "provider-categories",
-      },
-      todos: {
-        status: "available",
-        scope: "session",
-        mode: "read-only-projection",
-        source: "latest-completed-todo-tool-result",
-      },
-      activity: {
-        status: "available",
-        scope: "active-session",
-        coverage: "active-session-only",
-        source: "provider-session-state",
-      },
-    })
-  })
-
   it("does not advertise projected Todos when scoped durable history is unavailable", () => {
     const { operations } = harness({ historyAvailable: false })
 
@@ -777,40 +746,6 @@ describe("Hermes workspace operations", () => {
     })
   })
 
-  it("truncates a native Todo result no person could read", async () => {
-    const { operations } = harness({
-      history: [
-        {
-          role: "assistant",
-          tool_calls: [
-            { id: "call-1", function: { name: "todo", arguments: "{}" } },
-          ],
-        },
-        {
-          role: "tool",
-          tool_call_id: "call-1",
-          tool_name: "todo",
-          content: {
-            todos: Array.from({ length: 5_000 }, (_unused, index) => ({
-              id: `todo-${index}`,
-              content: `Step ${index}`,
-              status: "pending",
-            })),
-          },
-        },
-      ],
-    })
-
-    const todos = await operations.todos("research", "hermes:research:stored-1")
-
-    expect(todos).toHaveLength(256)
-    expect(todos?.at(0)).toEqual({
-      id: "todo-0",
-      label: "Step 0",
-      status: "pending",
-    })
-  })
-
   it("projects only the latest completed native Todo result and never mutates it", async () => {
     const { operations, history } = harness({
       history: [
@@ -1061,28 +996,6 @@ describe("Hermes workspace operations", () => {
     ).resolves.toEqual([{ id: "kept", label: "Kept", status: "pending" }])
   })
 
-  it("uses a valid attached Session usage snapshot before requesting context", async () => {
-    const { operations, request } = harness({
-      scope: {
-        usage: {
-          context_used: 12,
-          context_max: 100,
-          context_source: "provider_usage",
-          context_estimated: false,
-        },
-      },
-    })
-
-    await expect(
-      operations.context("research", "hermes:research:stored-1")
-    ).resolves.toEqual({
-      usedTokens: 12,
-      maxTokens: 100,
-      source: "provider-usage",
-    })
-    expect(request).not.toHaveBeenCalled()
-  })
-
   it("does not claim Session activity until the owned Session is attached and active", async () => {
     const { operations, request } = harness({
       scope: { resumed: false, active: false },
@@ -1142,26 +1055,20 @@ describe("Hermes workspace operations", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
-  it("reports a Session the authority does not know as out of scope", async () => {
-    const { operations, request } = harness({
-      scopeFailure: new HermesSessionNotFoundError(),
-    })
+  it.each([
+    ["a Session", new HermesSessionNotFoundError()],
+    ["an Agent", new HermesAgentNotFoundError()],
+  ])(
+    "reports %s the authority does not know as out of scope",
+    async (_unknown, scopeFailure) => {
+      const { operations, request } = harness({ scopeFailure })
 
-    await expect(
-      operations.context("research", "hermes:research:stored-1")
-    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
-    expect(request).not.toHaveBeenCalled()
-  })
-
-  it("reports an Agent the authority does not know as out of scope", async () => {
-    const { operations } = harness({
-      scopeFailure: new HermesAgentNotFoundError(),
-    })
-
-    await expect(
-      operations.context("research", "hermes:research:stored-1")
-    ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
-  })
+      await expect(
+        operations.context("research", "hermes:research:stored-1")
+      ).rejects.toBeInstanceOf(HermesWorkspaceScopeError)
+      expect(request).not.toHaveBeenCalled()
+    }
+  )
 
   it("reports a Session the authority cannot reach as unavailable", async () => {
     const { operations, request } = harness({

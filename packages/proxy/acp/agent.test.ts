@@ -168,6 +168,28 @@ function useUsageTimers() {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
 }
 
+/** Connects a second browser tab and opens the Session in it. */
+async function openInSecondTab(test: Awaited<ReturnType<typeof harness>>) {
+  const other = await test.connect("connection-2")
+  await other.list()
+  await open(other)
+  return other
+}
+
+/** Prompts a Session, and has the turn it starts ask `requests` and end. */
+async function promptAsking(
+  test: Awaited<ReturnType<typeof harness>>,
+  text: string,
+  requests: PendingRequest[],
+  sessionId = SESSION
+) {
+  await prompt(test, text, sessionId)
+  await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+  test.sources[0]?.emit(turnStarted())
+  test.sources[0]?.emit({ kind: TurnEventKind.TurnRequiresAction, requests })
+  test.sources[0]?.finish()
+}
+
 describe("AOS ACP agent", () => {
   it("reports the AOS extension contract on initialize", async () => {
     const test = await harness()
@@ -198,23 +220,27 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers the build it serves as its version, so a tab on another reloads", async () => {
-    const test = await harness({ buildId: "b1" })
-
-    expect(test.initialize).toMatchObject({ info: { version: "b1" } })
-    test.close()
-  })
-
-  it("advertises no catalog invalidation for a runtime that cannot signal one", async () => {
-    const test = await harness({ withoutCatalogChanges: true })
-
-    expect(test.initialize).toMatchObject({
-      _meta: {
-        [AOS_META_KEY]: {
-          extensions: { invalidation: false, steer: true, readState: true },
+  it.each([
+    [
+      "the build it serves as its version, so a tab on another reloads",
+      { buildId: "b1" },
+      { info: { version: "b1" } },
+    ],
+    [
+      "no catalog invalidation for a runtime that cannot signal one",
+      { withoutCatalogChanges: true },
+      {
+        _meta: {
+          [AOS_META_KEY]: {
+            extensions: { invalidation: false, steer: true, readState: true },
+          },
         },
       },
-    })
+    ],
+  ])("initializes with %s", async (_case, options, expected) => {
+    const test = await harness(options)
+
+    expect(test.initialize).toMatchObject(expected)
     test.close()
   })
 
@@ -583,25 +609,7 @@ describe("AOS ACP agent", () => {
   it("answers a permission request and starts the reply segment", async () => {
     const test = await harness()
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
 
     const asked = await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
@@ -697,9 +705,7 @@ describe("AOS ACP agent", () => {
   it("writes the Session model a config option selects and tells every browser on the Session", async () => {
     const test = await harness()
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     const written = await test.agent.request(
       methods.agent.session.setConfigOption,
@@ -926,9 +932,7 @@ describe("AOS ACP agent", () => {
     await test.list()
     await open(test)
     await usageOf(test)
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await usageOf(other)
 
     await prompt(test, "Summarize")
@@ -962,11 +966,17 @@ describe("AOS ACP agent", () => {
     // Session.
     for (const browser of [test, other]) {
       expect(usages(browser.recorder)).toHaveLength(3)
-      expect(
-        updates(browser.recorder).filter((update) =>
-          JSON.stringify(update).includes("config_option_update")
-        )
-      ).toHaveLength(3)
+      const options = updates(browser.recorder).filter((update) =>
+        JSON.stringify(update).includes("config_option_update")
+      )
+      expect(options).toHaveLength(3)
+      // The switch restates the options with the model the provider moved to.
+      expect(options[1]).toMatchObject({
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [{ configId: "model", currentValue: "opus" }],
+        },
+      })
     }
     test.close()
     other.close()
@@ -975,9 +985,7 @@ describe("AOS ACP agent", () => {
   it("renames a Session for every browser on it, leaving the one that renamed it no membership", async () => {
     const test = await harness()
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const clock = useFakeClock()
 
     await test.agent.request(AOS_METHODS.session.update, {
@@ -1182,55 +1190,42 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("records the presence an exposed Session implies", async () => {
-    const test = await harness()
-    await test.list()
+  it.each([
+    [
+      "an exposed Session",
+      { sessionId: SESSION },
+      { sessionId: SESSION, foreground: true, idle: false },
+      "focus",
+    ],
+    [
+      "a background, idle workspace as reported",
+      { sessionId: SESSION, foreground: false, idle: true },
+      { sessionId: SESSION, foreground: false, idle: true },
+      "focus",
+    ],
+    [
+      "a foreground workspace showing no Session, and still blurs",
+      { sessionId: null, foreground: true },
+      { sessionId: null, foreground: true, idle: false },
+      "blur",
+    ],
+  ] as const)(
+    "records the presence of %s",
+    async (_case, params, presence, readState) => {
+      const test = await harness()
+      await test.list()
 
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+      await test.agent.request(AOS_METHODS.session.focus, params)
 
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: SESSION,
-      foreground: true,
-      idle: false,
-    })
-    test.close()
-  })
-
-  it("records a reported background or idle workspace as reported", async () => {
-    const test = await harness()
-    await test.list()
-
-    await test.agent.request(AOS_METHODS.session.focus, {
-      sessionId: SESSION,
-      foreground: false,
-      idle: true,
-    })
-
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: SESSION,
-      foreground: false,
-      idle: true,
-    })
-    test.close()
-  })
-
-  it("records a foreground workspace showing no Session, and still blurs", async () => {
-    const test = await harness()
-    await test.list()
-
-    await test.agent.request(AOS_METHODS.session.focus, {
-      sessionId: null,
-      foreground: true,
-    })
-
-    expect(test.presence.set).toHaveBeenCalledWith(PRINCIPAL, CONNECTION, {
-      sessionId: null,
-      foreground: true,
-      idle: false,
-    })
-    expect(test.readState.blur).toHaveBeenCalled()
-    test.close()
-  })
+      expect(test.presence.set).toHaveBeenCalledWith(
+        PRINCIPAL,
+        CONNECTION,
+        presence
+      )
+      expect(test.readState[readState]).toHaveBeenCalled()
+      test.close()
+    }
+  )
 
   it("acknowledges an exposure once, however often its heartbeat repeats it", async () => {
     const test = await harness()
@@ -1366,25 +1361,7 @@ describe("AOS ACP agent", () => {
       subscribeTurns: () => () => undefined,
     })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
       "the permission request"
@@ -1414,25 +1391,7 @@ describe("AOS ACP agent", () => {
     const answer = Promise.withResolvers<RequestPermissionResponse>()
     const test = await harness({ permission: () => answer.promise })
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await test.recorder.wait(
       (entry) => entry.method === methods.client.session.requestPermission,
       "the permission request"
@@ -1450,25 +1409,7 @@ describe("AOS ACP agent", () => {
   it("logs the connection, its Session's membership, the Stop it received, and the reply it settled", async () => {
     const test = await harness()
     await test.create()
-    await test.agent.request(methods.agent.session.prompt, {
-      sessionId: CREATED,
-      prompt: [{ type: "text", text: "Delete it" }],
-      _meta: { [AOS_META_KEY]: {} },
-    })
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    const source = test.sources[0]
-    source?.emit(turnStarted())
-    source?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [
-        {
-          requestId: "approval-1",
-          kind: PendingRequestKind.Permission,
-          message: "permission-required",
-        },
-      ],
-    })
-    source?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL], CREATED)
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
 
     await test.agent.notify(methods.agent.session.cancel, {
@@ -1634,9 +1575,7 @@ describe("Session rooms", () => {
   it("shows an open Session another browser's prompt, then its stream", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const from = other.recorder.entries.length
 
     const messageId = await prompt(test, "Summarize")
@@ -1736,9 +1675,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const cleanup = vi.fn(async () => undefined)
     const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
       public: [],
@@ -1767,9 +1704,7 @@ describe("Session rooms", () => {
   it("lets another operator browser stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await prompt(test, "Long job")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -1801,14 +1736,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Delete it")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [APPROVAL],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Delete it", [APPROVAL])
     const asked = (entry: Recorded) =>
       entry.method === methods.client.session.requestPermission
     await other.recorder.wait(asked, "the request both browsers are asked")
@@ -1849,14 +1777,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Pick one")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [QUESTION],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Pick one", [QUESTION])
     const asked = (entry: Recorded) =>
       entry.method === methods.client.elicitation.create
     await other.recorder.wait(asked, "the request both browsers are asked")
@@ -1947,14 +1868,7 @@ describe("Session rooms", () => {
     })
     await other.list()
     await open(other)
-    await prompt(test, "Pick two")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [QUESTION, SECOND],
-    })
-    test.sources[0]?.finish()
+    await promptAsking(test, "Pick two", [QUESTION, SECOND])
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
@@ -2014,17 +1928,8 @@ describe("Session rooms", () => {
   it("takes the first of two answers given at once and continues the turn once", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
-    await prompt(test, "Delete it")
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    test.sources[0]?.emit(turnStarted())
-    test.sources[0]?.emit({
-      kind: TurnEventKind.TurnRequiresAction,
-      requests: [APPROVAL],
-    })
-    test.sources[0]?.finish()
+    const other = await openInSecondTab(test)
+    await promptAsking(test, "Delete it", [APPROVAL])
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [test, other])
@@ -2280,9 +2185,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     held = true
     const from = other.recorder.entries.length
@@ -2312,9 +2215,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     failing = true
     await expect(
@@ -2344,9 +2245,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     held = true
     const from = other.recorder.entries.length
@@ -2429,9 +2328,7 @@ describe("Session rooms", () => {
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
 
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
@@ -2475,9 +2372,7 @@ describe("Session rooms", () => {
     const sent = prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     const from = other.recorder.entries.length
     admission.release()
     const messageId = await sent
@@ -2772,9 +2667,7 @@ describe("Session rooms", () => {
   it("streams each chunk once to a browser that reopens twice in a row", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await liveTurn(test, [other])
 
     const first = other.recorder.entries.length
@@ -2802,9 +2695,7 @@ describe("Session rooms", () => {
   it("keeps streaming a reopen whose turn outgrew its journal", async () => {
     const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await liveTurn(test, [other])
     // A third event outgrows the journal, so the turn's start is gone.
     chunk(test.sources[0], "Aside", "assistant-2")
@@ -2965,9 +2856,7 @@ describe("Session rooms", () => {
       rows: [sessionRow(), sessionRow({ id: "session-2" })],
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await open(other, { sessionId: "session-2" })
     const from = other.recorder.entries.length
 
@@ -3003,9 +2892,7 @@ describe("Session rooms", () => {
     })
     await test.list()
     await open(test)
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     // An earlier turn of this proxy's own, as a Session that ran one has.
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
@@ -3087,9 +2974,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
 
     const from = other.recorder.entries.length
     const messageId = await prompt(test, "Summarize")
@@ -3108,9 +2993,7 @@ describe("Session rooms", () => {
   it("sends nothing to a browser that closed the Session", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
-    const other = await test.connect("connection-2")
-    await other.list()
-    await open(other)
+    const other = await openInSecondTab(test)
     await other.agent.request(methods.agent.session.close, {
       sessionId: SESSION,
     })
@@ -3373,9 +3256,15 @@ const pageTag = (update: SentUpdate) =>
 
 const INVALID_PARAMS = { code: invalidParams().code }
 
+/** Pages of five rows reaching back twenty, so a few rows make a long Session. */
+const REACH = { pageSize: 5, maxOffset: 20 }
+
 describe("History pages", () => {
   it("gives a replaying resume the cursor of the next older page", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
 
     const replayed = await test.agent.request(methods.agent.session.resume, {
@@ -3389,7 +3278,7 @@ describe("History pages", () => {
     })
 
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
-      nextCursor: cursorOf(500),
+      nextCursor: cursorOf(5),
     })
     expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
     test.close()
@@ -3397,7 +3286,8 @@ describe("History pages", () => {
 
   it("replays the whole Session from the start to a client that does not page history", async () => {
     const test = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       pagesHistory: false,
     })
     await test.list()
@@ -3411,15 +3301,16 @@ describe("History pages", () => {
 
     expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({})
     expect(replayedIds(test.recorder, from)).toEqual(
-      conversation(1_200).map(({ id }) => id)
+      conversation(12).map(({ id }) => id)
     )
     test.close()
   })
 
   it("replays a message once when a turn stored during the replay shifts its page", async () => {
-    const transcript = conversation(1_200)
+    const transcript = conversation(12)
     let reads = 0
     const test = await harness({
+      historyReach: REACH,
       transcript,
       pagesHistory: false,
       beforeHistory: async () => {
@@ -3427,8 +3318,8 @@ describe("History pages", () => {
         reads += 1
         if (reads === 2)
           transcript.push(
-            ...conversation(1_202)
-              .slice(1_200)
+            ...conversation(14)
+              .slice(12)
               .map((message) => ({ ...message, id: `late-${message.id}` }))
           )
       },
@@ -3444,62 +3335,68 @@ describe("History pages", () => {
     })
 
     expect(replayedIds(test.recorder, from)).toEqual(
-      conversation(1_200).map(({ id }) => id)
+      conversation(12).map(({ id }) => id)
     )
     test.close()
   })
 
   it("sends each older page as tagged updates before its reply, one per message", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    const page = await older(test, cursorOf(500))
+    const page = await older(test, cursorOf(5))
 
     const sent = pageUpdates(test.recorder, from)
     expect(page).toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
-    expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 500, 500)
+    expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 5, 5)
     expect(sent.map((update) => update.messageId)).toEqual(
-      conversation(1_200)
-        .slice(200, 700)
+      conversation(12)
+        .slice(2, 7)
         .map(({ id }) => id)
     )
     for (const update of sent)
       expect(update._meta).toEqual({
-        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(500) } },
+        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(5) } },
       })
     expect(test.logged()).toContainEqual(
       expect.objectContaining({
         event: "acp.history.page",
         sessionId: SESSION,
-        offset: 500,
-        count: 500,
+        offset: 5,
+        count: 5,
       })
     )
 
     const last = test.recorder.entries.length
-    const oldest = await older(test, cursorOf(1_000))
+    const oldest = await older(test, cursorOf(10))
 
     expect(oldest).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
-    expect(pageUpdates(test.recorder, last)).toHaveLength(200)
+    expect(pageUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
 
   it("reads a page without rejoining, following, or reporting the Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
     await settled()
 
-    expect(test.recorder.entries.slice(from)).toHaveLength(500)
+    expect(test.recorder.entries.slice(from)).toHaveLength(5)
     expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
     await liveTurn(test, [test])
     const live = await test.recorder.wait(
@@ -3544,22 +3441,26 @@ describe("History pages", () => {
         },
       },
     ]
-    const transcript = [...special, ...conversation(500)]
-    const test = await harness({ transcript, translateHistory })
+    const transcript = [...special, ...conversation(5)]
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
 
     const expected = translateHistory(
       {
         sessionId: SESSION,
         messages: special,
         total: transcript.length,
-        limit: 500,
-        offset: 500,
+        limit: 5,
+        offset: 5,
         nextOffset: transcript.length,
       },
       "operator"
@@ -3577,7 +3478,7 @@ describe("History pages", () => {
           ...update._meta,
           [AOS_META_KEY]: {
             ...(update._meta?.[AOS_META_KEY] as object | undefined),
-            historyPage: { cursor: cursorOf(500) },
+            historyPage: { cursor: cursorOf(5) },
           },
         },
       }))
@@ -3588,37 +3489,43 @@ describe("History pages", () => {
   })
 
   it("serves a page only to a connection that resumed the Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
 
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
     })
     await test.create()
-    await expect(older(test, cursorOf(500), CREATED)).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+    await expect(older(test, cursorOf(5), CREATED)).resolves.toEqual({
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     await open(test)
     await test.agent.request(methods.agent.session.close, {
       sessionId: SESSION,
     })
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject({
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
     })
     test.close()
   })
 
   it("refuses a replay cursor it does not understand", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test, { replayFrom: { type: "start" } })
-    const cursor = cursorOf(500)
+    const cursor = cursorOf(5)
 
     for (const replayFrom of [
       { type: AOS_REPLAY_BEFORE },
       { type: AOS_REPLAY_BEFORE, cursor: "" },
       { type: AOS_REPLAY_BEFORE, cursor, after: 1 },
-      { type: AOS_REPLAY_BEFORE, cursor: 500 },
+      { type: AOS_REPLAY_BEFORE, cursor: 5 },
       { type: "_aos/after", cursor },
       { type: "future" },
     ])
@@ -3629,58 +3536,65 @@ describe("History pages", () => {
   })
 
   it("reports history past the proxy's or the runtime's reach as truncated", async () => {
-    const test = await harness({ transcript: conversation(100_600) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(26),
+    })
     await test.list()
     await open(test)
 
-    await expect(older(test, cursorOf(99_800))).resolves.toEqual({
+    await expect(older(test, cursorOf(18))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
-    await expect(older(test, cursorOf(100_000))).rejects.toMatchObject(
+    await expect(older(test, cursorOf(20))).rejects.toMatchObject(
       INVALID_PARAMS
     )
     test.close()
 
     const cut = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       truncated: true,
     })
     await cut.list()
     await open(cut)
-    await expect(older(cut, cursorOf(1_000))).resolves.toEqual({
+    await expect(older(cut, cursorOf(10))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     // A runtime at its reach may still count rows past it; no cursor leads there.
     cut.history.mockResolvedValueOnce({
       sessionId: SESSION,
-      messages: conversation(100),
-      total: 601,
-      limit: 500,
-      offset: 500,
-      nextOffset: 600,
+      messages: conversation(1),
+      total: 7,
+      limit: 5,
+      offset: 5,
+      nextOffset: 6,
       truncated: true,
     })
-    await expect(older(cut, cursorOf(500))).resolves.toEqual({
+    await expect(older(cut, cursorOf(5))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
     })
     cut.close()
   })
 
   it("reaches the beginning of a Session whose runtime estimated one more row", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test)
     // The previous page was full, so the runtime counted a row past it.
     test.history.mockResolvedValueOnce({
       sessionId: SESSION,
       messages: [],
-      total: 500,
-      limit: 500,
-      offset: 500,
-      nextOffset: 500,
+      total: 5,
+      limit: 5,
+      offset: 5,
+      nextOffset: 5,
     })
 
-    await expect(older(test, cursorOf(500))).resolves.toEqual({
+    await expect(older(test, cursorOf(5))).resolves.toEqual({
       _meta: { [AOS_META_KEY]: { history: {} } },
     })
     test.close()
@@ -3688,24 +3602,28 @@ describe("History pages", () => {
 
   it("sends a page of large messages one frame per message", async () => {
     const large = "x".repeat(900_000)
-    const transcript = conversation(1_000).map((message, index) =>
-      index < 505
+    const transcript = conversation(10).map((message, index) =>
+      index < 5
         ? { ...message, content: [{ type: "text" as const, text: large }] }
         : message
     )
-    const test = await harness({ transcript, translateHistory })
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
     await test.list()
     await open(test)
     await settled()
     const from = test.recorder.entries.length
 
-    await older(test, cursorOf(500))
+    await older(test, cursorOf(5))
 
     const frames = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)
       .map((entry) => Buffer.byteLength(JSON.stringify(entry)))
-    expect(frames.length).toBeGreaterThanOrEqual(500)
+    expect(frames.length).toBeGreaterThanOrEqual(5)
     // The page as a whole is far past the socket's 4 MiB output limit.
     expect(frames.reduce((sum, bytes) => sum + bytes, 0)).toBeGreaterThan(
       4 * 1_024 * 1_024
@@ -3715,18 +3633,21 @@ describe("History pages", () => {
   })
 
   it("refuses a cursor it could not have issued for this Session", async () => {
-    const test = await harness({ transcript: conversation(1_200) })
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+    })
     await test.list()
     await open(test)
     const encoded = (text: string) => Buffer.from(text).toString("base64url")
 
     for (const cursor of [
       "not-a-cursor",
-      `${cursorOf(500)}==`,
-      encoded("5e2"),
-      encoded("-500"),
+      `${cursorOf(5)}==`,
+      encoded("5e0"),
+      encoded("-5"),
       encoded("0"),
-      cursorOf(5_000),
+      cursorOf(15),
     ])
       await expect(older(test, cursor)).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
@@ -3736,25 +3657,24 @@ describe("History pages", () => {
     const pending = gate()
     let hold = false
     const test = await harness({
-      transcript: conversation(1_200),
+      historyReach: REACH,
+      transcript: conversation(12),
       beforeHistory: () => (hold ? pending.held : Promise.resolve()),
     })
     await test.list()
     await open(test)
     hold = true
 
-    const first = older(test, cursorOf(500))
+    const first = older(test, cursorOf(5))
     await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
-    await expect(older(test, cursorOf(500))).rejects.toMatchObject(
-      INVALID_PARAMS
-    )
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject(INVALID_PARAMS)
     pending.release()
 
     await expect(first).resolves.toMatchObject({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(1_000) } } },
+      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     hold = false
-    await expect(older(test, cursorOf(1_000))).resolves.toBeDefined()
+    await expect(older(test, cursorOf(10))).resolves.toBeDefined()
     test.close()
   })
 
@@ -3763,16 +3683,17 @@ describe("History pages", () => {
     const background = new EventSource()
     const turns = [adopted(background)]
     // The live turn stored more rows than a page holds.
-    const steps = Array.from({ length: 700 }, (_, index) => ({
+    const steps = Array.from({ length: 7 }, (_, index) => ({
       id: `live-${index}`,
       text: `Step ${index}`,
     }))
     const transcript = [
-      ...conversation(601),
+      ...conversation(6),
       storedRow("live-prompt", "user", "Go", NOW),
       ...steps.map(({ id, text }) => storedRow(id, "assistant", text, NOW)),
     ]
     const test = await harness({
+      historyReach: REACH,
       providerIds: true,
       transcript,
       // The journal holds the whole turn.
@@ -3788,7 +3709,7 @@ describe("History pages", () => {
     background.emit(turnStarted())
     for (const { id, text } of steps) chunk(background, text, id)
     watchers[0]!.onTurn()
-    await test.recorder.wait(said("Step 699"), "an update carrying Step 699")
+    await test.recorder.wait(said("Step 6"), "an update carrying Step 6")
 
     /** The message ids of the page older than `offset`. */
     const pageIds = async (offset: number) => {
@@ -3798,8 +3719,8 @@ describe("History pages", () => {
     }
     const ids = (from: number, to: number) =>
       transcript.slice(from, to).map(({ id }) => id)
-    expect(await pageIds(500)).toEqual(ids(302, 602))
-    expect(await pageIds(1_000)).toEqual(ids(0, 302))
+    expect(await pageIds(5)).toEqual(ids(4, 7))
+    expect(await pageIds(10)).toEqual(ids(0, 4))
     test.close()
   })
 })

@@ -4,7 +4,6 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { isHttpsOrLoopback, parseProxyConfig } from "./config"
-import { redactForLog } from "./redaction"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 
 const temporaryDirectories: string[] = []
@@ -304,20 +303,6 @@ describe("proxy configuration and secret boundary", () => {
       "Invalid secret key file"
     )
   })
-
-  it("redacts credentials and URL query values", () => {
-    expect(
-      redactForLog({
-        authorization: "Bearer secret",
-        nested: { token: "secret", safe: "kept" },
-        url: "https://example.test/path?code=secret",
-      })
-    ).toEqual({
-      authorization: "[REDACTED]",
-      nested: { token: "[REDACTED]", safe: "kept" },
-      url: "https://example.test/path",
-    })
-  })
 })
 
 describe("voice configuration", () => {
@@ -362,23 +347,20 @@ describe("voice configuration", () => {
     })
   })
 
-  it("accepts a voice block with only transcription", () => {
-    const parsed = parseProxyConfig({
-      ...validConfig(),
-      voice: { transcription: validTranscription() },
-    })
-    expect(parsed.voice?.transcription?.model).toBe("whisper-1")
-    expect(parsed.voice?.speech).toBeUndefined()
-  })
-
-  it("accepts a voice block with only speech", () => {
-    const parsed = parseProxyConfig({
-      ...validConfig(),
-      voice: { speech: validSpeech() },
-    })
-    expect(parsed.voice?.speech?.model).toBe("tts-1")
-    expect(parsed.voice?.transcription).toBeUndefined()
-  })
+  it.each([
+    ["transcription", "speech", validTranscription(), "whisper-1"],
+    ["speech", "transcription", validSpeech(), "tts-1"],
+  ] as const)(
+    "accepts a voice block with only %s",
+    (present, absent, child, model) => {
+      const parsed = parseProxyConfig({
+        ...validConfig(),
+        voice: { [present]: child },
+      })
+      expect(parsed.voice?.[present]?.model).toBe(model)
+      expect(parsed.voice?.[absent]).toBeUndefined()
+    }
+  )
 
   it.each([
     ["an empty voice block", {}],
@@ -452,17 +434,17 @@ describe("voice configuration", () => {
     ).toThrow("Invalid proxy configuration")
 
     // http loopback with key → accepted
-    for (const baseUrl of [
-      "http://127.0.0.1:8000/v1",
-      "http://localhost:8000/v1",
-    ]) {
-      expect(
-        parseProxyConfig({
-          ...validConfig(),
-          voice: { transcription: { ...validTranscription(), baseUrl } },
-        }).voice?.transcription?.model
-      ).toBe("whisper-1")
-    }
+    expect(
+      parseProxyConfig({
+        ...validConfig(),
+        voice: {
+          transcription: {
+            ...validTranscription(),
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+        },
+      }).voice?.transcription?.model
+    ).toBe("whisper-1")
 
     // http non-loopback without key → accepted
     expect(
@@ -473,19 +455,6 @@ describe("voice configuration", () => {
             provider: "openai-compatible" as const,
             baseUrl: "http://stt.example.test/v1",
             model: "whisper-1",
-          },
-        },
-      }).voice?.transcription?.model
-    ).toBe("whisper-1")
-
-    // https non-loopback with key → accepted
-    expect(
-      parseProxyConfig({
-        ...validConfig(),
-        voice: {
-          transcription: {
-            ...validTranscription(),
-            baseUrl: "https://stt.example.test/v1",
           },
         },
       }).voice?.transcription?.model

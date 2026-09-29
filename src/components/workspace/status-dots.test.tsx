@@ -19,16 +19,9 @@ describe("StatusDot", () => {
     }
   )
 
-  it.each<[RowStatus, string]>([
-    ["running", "Running"],
-    ["active", "Active"],
-    ["attention", "Needs attention"],
-    ["waiting-for-input", "Waiting for input"],
-    ["failed", "Failed"],
-    ["unknown", "Status unavailable"],
-  ])("labels the %s dot with its own status", (status, label) => {
-    render(<StatusDot status={status} label={label} />)
-    expect(screen.getByTitle(label)).toHaveAttribute("aria-hidden", "true")
+  it("labels a non-quiet dot without repeating it to assistive technology", () => {
+    render(<StatusDot status="running" label="Running" />)
+    expect(screen.getByTitle("Running")).toHaveAttribute("aria-hidden", "true")
   })
 })
 
@@ -59,30 +52,20 @@ describe("RowIndicators", () => {
     expect(screen.queryByTitle("Unread")).toBeNull()
   })
 
-  it("lets unread outrank a run that is still in progress", () => {
+  it.each<[RowStatus, string]>([
+    ["running", "Running"],
+    ["idle", "Idle"],
+  ])("shows the unread dot alone for a %s Session", (status, label) => {
     render(
       <RowIndicators
-        status="running"
-        statusLabel="Running"
+        status={status}
+        statusLabel={label}
         unread
         unreadLabel="Unread"
       />
     )
     expect(screen.getByTitle("Unread")).toBeVisible()
-    expect(screen.queryByTitle("Running")).toBeNull()
-  })
-
-  it("shows the unread dot alone for an idle Session", () => {
-    render(
-      <RowIndicators
-        status="idle"
-        statusLabel="Idle"
-        unread
-        unreadLabel="Unread"
-      />
-    )
-    expect(screen.queryByTitle("Idle")).toBeNull()
-    expect(screen.getByTitle("Unread")).toBeVisible()
+    expect(screen.queryByTitle(label)).toBeNull()
   })
 
   it("shows nothing for an idle Session the operator has read", () => {

@@ -16,9 +16,10 @@ import {
   useAosSessionCapabilities,
   useAosSlashCommands,
 } from "./aos-composer-features"
+import { sessionCapabilities } from "./test-capabilities"
 
 function capabilities(): AosWorkspaceCapabilities {
-  return {
+  return sessionCapabilities({
     workspace: {
       slashCommands: {
         status: "available",
@@ -37,8 +38,6 @@ function capabilities(): AosWorkspaceCapabilities {
         source: "provider-usage-or-estimate",
         breakdown: "provider-categories",
       },
-      todos: { status: "unavailable", reason: "history-unavailable" },
-      activity: { status: "unavailable", reason: "session-state-unavailable" },
     },
     interactions: {
       steering: {
@@ -71,7 +70,6 @@ function capabilities(): AosWorkspaceCapabilities {
         maxAnswerValuesPerQuestion: 64,
         maxStringBytes: 4096,
       },
-      reactions: { status: "unavailable", reason: "not-supported" },
     },
     content: {
       attachments: {
@@ -87,12 +85,8 @@ function capabilities(): AosWorkspaceCapabilities {
         maxFileBytes: 1,
         maxTotalBytes: 1,
       },
-      artifacts: { status: "unavailable", reason: "not-supported" },
-      mcpApps: { status: "unavailable", reason: "not-supported" },
-      transcription: { status: "unavailable", reason: "not-supported" },
-      speech: { status: "unavailable", reason: "not-supported" },
     },
-  }
+  })
 }
 
 const CAPABILITIES = capabilities()
@@ -168,12 +162,12 @@ function renderComposer(
 ) {
   return renderHook(
     ({ sessionId }: { sessionId: string }) => {
-      const sessionCapabilities = useAosSessionCapabilities(client, sessionId)
+      const reported = useAosSessionCapabilities(client, sessionId)
       return useAosComposerFeatures(
         client,
         config,
         sessionId,
-        sessionCapabilities,
+        reported,
         onError
       )
     },

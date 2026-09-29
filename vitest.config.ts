@@ -2,11 +2,39 @@ import { configDefaults, defineConfig } from "vitest/config"
 import react from "@vitejs/plugin-react"
 import path from "node:path"
 
-const nodeTests = [
-  "packages/**/*.test.ts",
-  "shared/**/*.test.ts",
-  "test/**/*.test.ts",
-  "scripts/**/*.test.ts",
+/**
+ * The `.test.ts` files that need a DOM: they render, lay out, or reach browser
+ * storage, media, or history. Every other `.test.ts` runs in Node, and one
+ * missing here fails there on the first browser global it touches.
+ */
+const domTests = [
+  "src/components/agent-icons/pointer-tracking.test.ts",
+  "src/components/artifacts/artifact-renderers.test.ts",
+  "src/components/assistant-ui/elements/mermaid-sanitize.test.ts",
+  "src/components/assistant-ui/elements/thread-reading-position.test.ts",
+  "src/components/keyboard/focus-regions.test.ts",
+  "src/components/keyboard/keyboard-settings.test.ts",
+  "src/components/mcp-apps/sandbox-relay.test.ts",
+  "src/components/workspace/session-tab-undo.test.ts",
+  "src/components/workspace/use-install-prompt.test.ts",
+  "src/lib/keyboard/foundation.test.ts",
+  "src/lib/notifications/browser-platform.test.ts",
+  "src/lib/notifications/push-subscription.test.ts",
+  "src/lib/notifications/sound.test.ts",
+  "src/runtime-adapters/aos/acp/connection.test.ts",
+  "src/runtime-adapters/aos/use-connection-outage.test.ts",
+]
+
+/**
+ * Checks that run a production build or an external tool. They take most of a
+ * sweep's time and change only with the build, the bundle, Compose, or the lint
+ * rules, so `bun run test` skips them and `bun run test:gate` runs them.
+ */
+const gateTests = [
+  "packages/tools-mcp/views/build.test.ts",
+  "test/architecture/runtime-import-boundaries.test.ts",
+  "test/architecture/startup-bundle.test.ts",
+  "test/containers/compose.test.ts",
 ]
 
 export default defineConfig({
@@ -57,13 +85,20 @@ export default defineConfig({
     // cores keeps a concurrent sweep survivable; a machine running one sweep
     // alone can raise it.
     maxWorkers: Number(process.env.AOS_UI_TEST_WORKERS) || "50%",
-    // Server, protocol, and tooling tests need no DOM, so they skip jsdom and
-    // the Testing Library setup. The `dom` project excludes exactly these globs,
-    // so every test file lands in one project and no file can fall between.
+    // Lists the slowest tests past their project's budget after every run.
+    reporters: ["default", "./test/support/slow-tests-reporter.ts"],
+    // Tests that need no DOM skip jsdom and the Testing Library setup. Each
+    // test file lands in exactly one project: `.tsx` files and `domTests` in
+    // `dom`, `gateTests` in `gate`, every other `.test.ts` in `node`.
     projects: [
       {
         extends: true,
-        test: { name: "node", environment: "node", include: nodeTests },
+        test: {
+          name: "node",
+          environment: "node",
+          include: ["**/*.test.ts"],
+          exclude: [...domTests, ...gateTests],
+        },
       },
       {
         extends: true,
@@ -71,9 +106,12 @@ export default defineConfig({
           name: "dom",
           environment: "jsdom",
           setupFiles: ["./test/setup.ts"],
-          include: ["**/*.test.{ts,tsx}"],
-          exclude: nodeTests,
+          include: ["**/*.test.tsx", ...domTests],
         },
+      },
+      {
+        extends: true,
+        test: { name: "gate", environment: "node", include: gateTests },
       },
     ],
   },

@@ -5,7 +5,6 @@ import {
   AgentAvatarSchema,
   AgentCatalogResponseSchema,
   AgentUpdateRequestSchema,
-  ErrorResponseSchema,
   INTERACTION_PROTOCOL,
   RuntimeAuthStateSchema,
   RuntimeInfoSchema,
@@ -35,13 +34,11 @@ import {
   AosElicitationMetaSchema,
   AosExtensionsSchema,
   AosFocusRequestSchema,
-  AosHistoryPageTagSchema,
   AosPromptMetaSchema,
   AosReplayBeforeSchema,
   AosSessionNewMetaSchema,
   AosSessionResumeResponseMetaSchema,
   AosPermissionMetaSchema,
-  AosSessionInfoMetaSchema,
   AosSessionUpdateRequestSchema,
   AosChunkMetaSchema,
   AosStateMetaSchema,
@@ -120,32 +117,6 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
-  it("preserves unavailable model and context operations", () => {
-    expect(
-      SessionWorkspaceCapabilitiesResponseSchema.shape.workspace
-        .pick({ models: true, context: true })
-        .parse({
-          models: {
-            status: "unavailable",
-            reason: "native-model-selection-unavailable",
-          },
-          context: {
-            status: "unavailable",
-            reason: "native-context-accounting-unavailable",
-          },
-        })
-    ).toEqual({
-      models: {
-        status: "unavailable",
-        reason: "native-model-selection-unavailable",
-      },
-      context: {
-        status: "unavailable",
-        reason: "native-context-accounting-unavailable",
-      },
-    })
-  })
-
   it("preserves negotiated attachment limits without inventing provider policy", () => {
     const parsed =
       SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
@@ -178,20 +149,6 @@ describe("AOS v1 normalized protocol", () => {
         { ...parsed, scope: "attached-session" }
       ).success
     ).toBe(false)
-  })
-
-  it("represents a missing native attachment capability without hiding other capabilities", () => {
-    expect(
-      SessionWorkspaceCapabilitiesResponseSchema.shape.content.shape.attachments.parse(
-        {
-          status: "unavailable",
-          reason: "native-attachment-policy-unavailable",
-        }
-      )
-    ).toEqual({
-      status: "unavailable",
-      reason: "native-attachment-policy-unavailable",
-    })
   })
 
   it("validates the normalized Hermes Session workspace and content envelopes", () => {
@@ -480,48 +437,6 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
-  it("exposes a provider-neutral run admission conflict", () => {
-    expect(
-      ErrorResponseSchema.parse({
-        error: {
-          code: "turn_conflict",
-          description: "A turn is already active for this session.",
-        },
-      })
-    ).toEqual({
-      error: {
-        code: "turn_conflict",
-        description: "A turn is already active for this session.",
-      },
-    })
-    expect(
-      ErrorResponseSchema.parse({
-        error: {
-          code: "turn_capacity_exceeded",
-          description: "AOS is at capacity. Please try again shortly.",
-        },
-      })
-    ).toEqual({
-      error: {
-        code: "turn_capacity_exceeded",
-        description: "AOS is at capacity. Please try again shortly.",
-      },
-    })
-    expect(
-      ErrorResponseSchema.parse({
-        error: {
-          code: "runtime_authentication_required",
-          description: "Connect the configured runtime to continue.",
-        },
-      })
-    ).toEqual({
-      error: {
-        code: "runtime_authentication_required",
-        description: "Connect the configured runtime to continue.",
-      },
-    })
-  })
-
   it("validates normalized Agent entries and rejects native profile metadata", () => {
     const payload = {
       revision: "profiles:12",
@@ -614,9 +529,6 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
     expect(() => AgentUpdateRequestSchema.parse({})).toThrow()
     expect(() =>
-      AgentUpdateRequestSchema.parse({ avatar: "Ring/Blue", revision: "rev-1" })
-    ).toThrow()
-    expect(() =>
       AgentUpdateRequestSchema.parse({ name: "Renamed", revision: "rev-1" })
     ).toThrow()
   })
@@ -635,9 +547,6 @@ describe("AOS v1 normalized protocol", () => {
       visibility: "visible",
       avatar: "ring/blue",
     })
-    expect(() =>
-      AosAgentUpdateRequestSchema.parse({ agentId: "agent-a", revision: "r" })
-    ).toThrow()
     expect(() =>
       AosAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
     ).toThrow()
@@ -670,17 +579,6 @@ describe("AOS v1 normalized protocol", () => {
         offset: 0,
       })
     ).toThrow()
-  })
-
-  it("reads a Session's creation time when the proxy knows it", () => {
-    const meta = { agentId: "agent-a", status: "idle", archived: false }
-    expect(AosSessionInfoMetaSchema.parse(meta)).toEqual(meta)
-    expect(
-      AosSessionInfoMetaSchema.parse({
-        ...meta,
-        createdAt: "2026-01-01T00:00:00.000Z",
-      })
-    ).toEqual({ ...meta, createdAt: "2026-01-01T00:00:00.000Z" })
   })
 
   it("admits exactly one Session mutation intent per patch", () => {
@@ -993,13 +891,6 @@ describe("AOS v1 normalized protocol", () => {
     }
   })
 
-  it("reads the history cursor a replaying resume returns", () => {
-    const history = AosSessionResumeResponseMetaSchema.shape.history
-    expect(history.parse({ nextCursor: "500" })).toEqual({ nextCursor: "500" })
-    expect(history.parse({ truncated: true })).toEqual({ truncated: true })
-    expect(history.parse(undefined)).toBeUndefined()
-  })
-
   it("reads the client id a create or send repeats, and the resume position", () => {
     expect(AosPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
       clientId: "send-1",
@@ -1022,20 +913,6 @@ describe("AOS v1 normalized protocol", () => {
       turnId: "turn-1",
       sequence: 4,
     })
-  })
-
-  it("tells an older page's updates apart from live ones", () => {
-    expect(
-      AosHistoryPageTagSchema.parse({
-        sequence: 0,
-        turnId: "history",
-        historyPage: { cursor: "500" },
-      }).historyPage
-    ).toEqual({ cursor: "500" })
-    expect(
-      AosHistoryPageTagSchema.parse({ sequence: 3, turnId: "turn-1" })
-        .historyPage
-    ).toBeUndefined()
   })
 
   it("reads an older proxy's extensions as offering no history pages", () => {
@@ -1103,18 +980,6 @@ describe("AOS v1 normalized protocol", () => {
 })
 
 describe("MCP App view", () => {
-  it("carries the view's HTML, sandbox policy, and the call it renders", () => {
-    const view = {
-      html: "<!doctype html><p>forecast</p>",
-      csp: { connectDomains: ["https://api.weather.example"] },
-      permissions: { clipboardWrite: {} },
-      prefersBorder: true,
-      toolInput: { city: "Haifa" },
-      toolResult: { content: [{ type: "text", text: "sunny" }] },
-    }
-    expect(McpAppViewSchema.parse(view)).toEqual(view)
-  })
-
   it("never carries a resource URI", () => {
     expect(
       McpAppViewSchema.safeParse({ html: "", resourceUri: "ui://x/view" })

@@ -7,10 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
-import { READY_LINK, type LinkState, type ServerLink } from "../../core/link"
+import type { LinkState, ServerLink } from "../../core/link"
 import { CredentialValues } from "../../redaction"
 import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
+import { RESEARCH_AGENTS, stubOpenClawClient } from "./test-utils/fake-openclaw"
 
 /** The services the proxy hands a runtime, logging to a capture. */
 const services = () => ({
@@ -63,13 +64,9 @@ describe("OpenClaw runtime factory", () => {
   it("loads server credentials on every read and owns one configured official client", async () => {
     const files = await credentials()
     let options: OpenClawClientOptions | undefined
-    const client = {
-      link: READY_LINK,
-      start: vi.fn(async () => undefined),
-      stopAndWait: vi.fn(async () => undefined),
-      request: vi.fn(),
+    const client = stubOpenClawClient(vi.fn(), {
       negotiatedPolicy: vi.fn(() => ({ maxPayload: 1024 })),
-    }
+    })
     const instance = await createOpenClawRuntime(
       {
         kind: "openclaw",
@@ -185,13 +182,7 @@ describe("OpenClaw runtime factory", () => {
     const resubscribed = Promise.withResolvers<void>()
     let subscribes = 0
     const request = vi.fn(async (method: string) => {
-      if (method === "agents.list")
-        return {
-          defaultId: "research",
-          mainKey: "main",
-          scope: "global",
-          agents: [{ id: "research", name: "Research", kind: "agent" }],
-        }
+      if (method === "agents.list") return RESEARCH_AGENTS
       if (method === "sessions.list")
         return { sessions: [{ key: sessionKey, agentId: "research" }] }
       if (method === "sessions.messages.subscribe" && ++subscribes === 2)
@@ -244,12 +235,7 @@ describe("OpenClaw runtime factory", () => {
       limits,
       {
         ...services(),
-        clientFactory: () => ({
-          link,
-          start: vi.fn(async () => undefined),
-          stopAndWait: vi.fn(async () => undefined),
-          request,
-        }),
+        clientFactory: () => stubOpenClawClient(request, { link }),
       }
     )
 

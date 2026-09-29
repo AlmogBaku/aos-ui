@@ -2,9 +2,7 @@ import {
   agent,
   methods,
   RequestError,
-  type AgentApp,
   type AgentContext,
-  type AnyWireMessage,
   type PromptRequest,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
@@ -24,21 +22,20 @@ import {
   AOS_AUTH_METHOD_INVITE,
   AOS_META_KEY,
   AOS_METHODS,
-  AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
   AosSteerRequestSchema,
 } from "@aos/protocol/acp"
 
 import { en } from "@/lib/i18n/dictionaries/en"
 
+import { pipedSockets } from "./acp/test-socket"
 import { fetchGuestRuntimeContext, GuestAosSurface } from "./guest-composition"
+import { sessionCapabilities } from "./test-capabilities"
 
 const AGENT_ID = "researcher"
 const REF = "guest_ref"
 const TOKEN = "invitation.token"
 const BASE_PATH = "/api/guest/v1"
-
-const unavailable = { status: "unavailable", reason: "not-supported" } as const
 
 const steeringAvailable = {
   status: "available",
@@ -50,16 +47,9 @@ const steeringAvailable = {
 
 /** What the guest lane reports for the invited Session on `session/resume`. */
 function capabilities(options: { steering?: boolean } = {}) {
-  return {
-    workspace: {
-      slashCommands: unavailable,
-      models: unavailable,
-      context: unavailable,
-      todos: unavailable,
-      activity: unavailable,
-    },
+  return sessionCapabilities({
     interactions: {
-      steering: options.steering ? steeringAvailable : unavailable,
+      ...(options.steering ? { steering: steeringAvailable } : {}),
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
@@ -78,16 +68,8 @@ function capabilities(options: { steering?: boolean } = {}) {
         maxAnswerValuesPerQuestion: "complete-request",
         maxStringBytes: 4096,
       },
-      reactions: unavailable,
     },
-    content: {
-      attachments: unavailable,
-      artifacts: unavailable,
-      mcpApps: unavailable,
-      transcription: unavailable,
-      speech: unavailable,
-    },
-  }
+  })
 }
 
 function guestRuntimeContext() {
@@ -324,49 +306,6 @@ function createGuestProxyAgent(options: GuestProxyOptions = {}) {
   }
 }
 
-/** A WebSocket-shaped pipe to the in-process guest agent. */
-function pipedSocket(app: AgentApp) {
-  return class PipedSocket extends EventTarget {
-    readyState = 0
-    readonly #inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-    readonly #writer: WritableStreamDefaultWriter<AnyWireMessage>
-
-    constructor() {
-      super()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      app.connect({
-        readable: this.#inbound.readable,
-        writable: outbound.writable,
-      })
-      this.#writer = this.#inbound.writable.getWriter()
-      void this.#pump(outbound.readable.getReader())
-      queueMicrotask(() => {
-        this.readyState = 1
-        this.dispatchEvent(new Event("open"))
-      })
-    }
-
-    async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
-      for (;;) {
-        const { value, done } = await reader.read()
-        if (done) return
-        this.dispatchEvent(
-          new MessageEvent("message", { data: JSON.stringify(value) })
-        )
-      }
-    }
-
-    send(data: string) {
-      void this.#writer.write(JSON.parse(data) as AnyWireMessage)
-    }
-
-    close() {
-      this.readyState = 3
-      this.dispatchEvent(new Event("close"))
-    }
-  }
-}
-
 function stubMatchMedia() {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
@@ -386,7 +325,7 @@ function mount({
 }: GuestProxyOptions & { inviteToken?: string } = {}) {
   stubMatchMedia()
   const proxy = createGuestProxyAgent(options)
-  vi.stubGlobal("WebSocket", pipedSocket(proxy.app))
+  vi.stubGlobal("WebSocket", pipedSockets(() => proxy.app).WebSocket)
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url === `${BASE_PATH}/runtime`)
@@ -680,11 +619,6 @@ describe("AOS guest browser composition", () => {
 
     proxy.finishRun()
     await waitFor(() => expect(composer).toHaveValue("What about pricing?"))
-    expect(
-      AosComposerPrefillNotificationSchema.safeParse(
-        prefillParams("What about pricing?")
-      ).success
-    ).toBe(true)
   })
 
   it("never lets a suggested turn overwrite what the guest typed", async () => {

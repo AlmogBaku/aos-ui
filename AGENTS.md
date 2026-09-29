@@ -236,17 +236,6 @@ database or provider registry.
   constraint cannot be expressed by the standard scale.
 - Prefer focused modules and pure functions at provider/configuration
   boundaries. Validate external HTTP payloads before adapting them.
-- Add or update focused tests with behavior changes. Fixtures must stay
-  deterministic and provider mocks must preserve ownership semantics.
-- Treat tests as contracts for observable behavior. Exact text is appropriate
-  for accessible names, user-authored input, provider fidelity, protocols,
-  security, configuration, and localization keys; editorial fixture copy is
-  not a readiness or state contract. Never assert styling: no CSS classes,
-  `data-slot` markup, computed styles, pixel sizes, bounding boxes, colors,
-  contrast ratios, or font sizes, in vitest or Playwright. Verify appearance
-  by looking at the rendered app. Do not assert icon internals or storage
-  keys, and do not add test IDs solely to preserve implementation-coupled
-  tests.
 - Load public runtime configuration from `/runtime-config.json`, separate from
   the frontend build. Never put credentials in it or `VITE_*`. The Bun proxy
   serves the production assets and normalized APIs; Nginx may be an external
@@ -255,6 +244,63 @@ database or provider registry.
   at runtime (`shared/runtime-config.ts`).
 - Use `@/` imports for project modules and logical CSS properties for RTL-safe
   layout.
+
+## Writing tests
+
+A test earns its place by protecting one rule nothing else protects, at the
+cheapest layer that proves it. The suite has been cut back twice for breaking
+this (duplicates across layers, copied setup, tests that could not fail), so
+each step below leaves evidence a reviewer can check.
+
+- **Name the rule, then find its cover.** Write the rule in one sentence, then
+  grep the tests for it and the helpers for its setup: `test/support/`
+  (`fake-clock`, `acp-bridge-socket`, `production-sources`, `leak-oracle`,
+  `log-capture`), the `*.test-helpers.ts(x)` files beside the component, and
+  the fixture scenarios under `src/runtime-adapters/fixture/`. Extend the
+  test that already covers the rule; write a new one only when none does.
+  An "already covered by X" claim, in a deletion or a review, quotes X's
+  assertion with its file and line.
+- **Pick the cheapest layer that proves it:** a pure function, then a hook
+  (`renderHook`), then a component with props (`WorkspaceShell`), then a full
+  `aos-ui-workspace` mount, then Playwright. Mount the workspace only for
+  wiring that crosses components, such as navigation moving focus after Undo.
+  Playwright keeps only what a real browser alone proves: layout, touch, focus
+  order across regions, and real navigation. Test a rule once, not again
+  through a higher layer, and in one viewport and one locale unless the rule
+  is about the viewport or the locale.
+- **Make it able to fail.** Break the production line once and watch the test
+  fail. Assert the negative case too (absence, rejection, the path not
+  taken), and prefer an observable result over a mock's call record.
+- **Earns no test:** a constant or capability object restated, a schema
+  accepting valid input, a template echo, a library doing what its own tests
+  prove, or code nothing else calls; delete that code instead.
+- **Reuse setup.** Build on the nearest helper; add one at the third copy of
+  a shape, beside its callers, named for what it builds. Keep the input that
+  matters and the expected outcome visible in the test body. Runs of cases
+  that differ only in data become an `it.each` table that asserts everything
+  each case did.
+- **Give production code seams, not tests huge data.** A limit, page size,
+  or clock a test must reach is a constructor option with a production
+  default; tests pass small values and drive time with `fake-clock`, never
+  real sleeps. A slow test usually means a missing seam or too high a layer:
+  find that cause before raising a budget or tuning the test. The Vitest run
+  lists every test over 1 s in `node` or 3 s in `dom`; one you add or touch
+  stays under.
+- **Keep a test in its project.** A `.test.ts` that needs no DOM stays in
+  `node`; add it to `domTests` in `vitest.config.ts` only when it touches a
+  browser global. Anything that builds, runs Compose, or runs type-aware
+  ESLint belongs in `gateTests`.
+- **Assert behavior, never styling.** Exact text is appropriate for
+  accessible names, user-authored input, provider fidelity, protocols,
+  security, configuration, and localization keys; editorial fixture copy is
+  not a readiness or state contract. No CSS classes, `data-slot` markup,
+  computed styles, pixel sizes, bounding boxes, colors, contrast ratios, or
+  font sizes, in Vitest or Playwright; ESLint rejects the common forms.
+  Verify appearance by looking at the rendered app. Do not assert icon
+  internals or storage keys, and do not add test IDs solely to preserve
+  implementation-coupled tests.
+- **Fixtures and mocks stay honest.** Fixtures are deterministic, and provider
+  mocks preserve ownership semantics.
 
 ## Verify changes
 
@@ -266,7 +312,7 @@ diff looks:
 | styling, layout, copy, text, theme tokens | `bun run typecheck` and `bun run build` if code was touched; look once at the rendered surface | `test:e2e`, a new test, the unit suite |
 | a mechanical rename across files | `bun run typecheck`, `bun run build` | the full suite |
 | logic in one module | that module's tests (`bun run test <path>` or `vitest --changed`) | the full suite |
-| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `typecheck`, `lint`, `build`, once | — |
+| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `test:gate`, `typecheck`, `lint`, `build`, once | — |
 | behavior a Playwright flow covers | that one spec, once | the whole e2e suite |
 
 A green run stays valid while the tree is unchanged: do not rerun before the
@@ -279,8 +325,12 @@ Several worktrees sweeping at once oversubscribe a shared machine and starve any
 deployment running on it, so `vitest.config.ts` caps workers at half the cores.
 Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
 prefer `nice bun run test` for a full sweep beside a live deployment.
-The suite is two Vitest projects: `bunx vitest run --project node` runs the
-DOM-free server, protocol, and tooling tests, and `--project dom` the jsdom rest.
+The everyday suite is two Vitest projects: `bunx vitest run --project node`
+runs the DOM-free server, protocol, browser-logic, and tooling tests, and
+`--project dom` the jsdom rest (`.tsx` files and the `domTests` list in
+`vitest.config.ts`). A third project, `gate`, holds the production-build,
+Compose, and type-aware ESLint checks; `bun run test` skips it and
+`bun run test:gate` runs it alone.
 
 When a worktree-isolated session's shell guard rejects a compound command, put
 the steps in a script file under `/tmp` and run that script. The tracked skills
@@ -298,7 +348,7 @@ Additional checks by area:
   what renders needs no theme pass at all, its tests already cover it.
 - Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
   and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root
-  test and typecheck gates.
+  test, test:gate, and typecheck gates.
 - Compose or Docker changes:
 
   ```bash

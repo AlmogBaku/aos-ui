@@ -11,7 +11,10 @@ import {
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 
 import { isRecord, utf8BytesWithin } from "./native"
-import { hermesAttachedImageArtifact } from "./media-artifacts"
+import {
+  hermesAttachedImageArtifact,
+  type HermesMediaArtifact,
+} from "./media-artifacts"
 
 type NativeRecord = Record<string, unknown>
 
@@ -62,6 +65,11 @@ export interface HermesContentAuthority {
     scope: HermesContentSession,
     artifactId: string
   ): Promise<HermesArtifactAuthority | undefined>
+  /** Grants an artifact this Session published before its row persists. */
+  publishArtifact?(
+    scope: HermesContentSession,
+    artifact: HermesMediaArtifact
+  ): void
 }
 
 export interface HermesContentTransport {
@@ -574,9 +582,9 @@ export function createHermesContentOperations(input: {
             )
               throw new HermesContentUnavailableError()
             images.push(String(result.path))
-            artifactIds.push(
-              hermesAttachedImageArtifact(String(result.path))?.descriptor.id
-            )
+            const artifact = hermesAttachedImageArtifact(String(result.path))
+            if (artifact) input.authority.publishArtifact?.(scope, artifact)
+            artifactIds.push(artifact?.descriptor.id)
             publicAttachments.push({
               type: "image",
               dataUrl: attachment.dataUrl,

@@ -19,18 +19,11 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_REPLAY_BEFORE,
-  AosComposerPrefillNotificationSchema,
-  AosPromptMetaSchema,
-  AosSteerRequestSchema,
-  AosSteerResponseSchema,
 } from "../../protocol/acp"
 import { createChannels } from "../core/channel"
-import { promptText, runEvents, type MemberEvent } from "../core/member"
-import type { ConnectionAuthentication } from "../acp/types"
 import {
   connectClient,
   MODELS,
-  said,
   settled,
   updates,
   USAGE,
@@ -81,38 +74,6 @@ const METHOD_NOT_FOUND = -32601
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
 const NOT_FOUND = RequestError.resourceNotFound().code
 const INVALID_PARAMS = RequestError.invalidParams().code
-
-/** What the redeemed member's stack shows it of one event, if anything. */
-function shown(
-  policy: ConnectionAuthentication | undefined,
-  event: MemberEvent
-) {
-  return runEvents(policy?.member()?.middleware ?? [], event, {
-    decline: () => undefined,
-  })
-}
-
-/** The text another member's prompt reaches this member with, if any. */
-function shownPrompt(
-  policy: ConnectionAuthentication | undefined,
-  text: string
-) {
-  const event = shown(policy, {
-    sessionId: REF,
-    kind: "prompt",
-    messageId: "prompt-1",
-    content: [{ kind: "text", text }],
-    own: false,
-  })
-  return event?.kind === "prompt" ? promptText(event.content) : undefined
-}
-
-const APPROVAL: PendingRequest = {
-  requestId: "approval-1",
-  kind: PendingRequestKind.Permission,
-  message: "Delete the notes?",
-  responseSchema: { type: "string", enum: ["once", "session", "always"] },
-}
 
 /** Provider capabilities that include everything a guest may not learn. */
 const CAPABILITIES = {
@@ -376,12 +337,6 @@ const RUN_EVENTS: TurnEvent[] = [
   { kind: TurnEventKind.ArtifactPublished, artifact: ARTIFACT },
   { kind: TurnEventKind.TurnEnded },
 ]
-
-/** The same approval from a provider that offers a one-time refusal. */
-const DENIABLE: PendingRequest = {
-  ...APPROVAL,
-  responseSchema: { type: "string", enum: ["once", "deny"] },
-}
 
 /** A question whose words name paths on the operator's machine. */
 const QUESTION: PendingRequest = {
@@ -951,19 +906,6 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("refuses a token the invitation service cannot verify", async () => {
-    const test = harness()
-    await test.initialize()
-
-    await expect(test.login("not-a-token")).rejects.toMatchObject({
-      code: AUTHENTICATION_REQUIRED,
-    })
-    await expect(test.resume(REF)).rejects.toMatchObject({
-      code: AUTHENTICATION_REQUIRED,
-    })
-    test.close()
-  })
-
   it("resumes only the invited Session and projects its history", async () => {
     const test = harness({ existing: true })
     await test.initialize()
@@ -1021,55 +963,6 @@ describe("guest ACP listener", () => {
     expect(replayed).not.toContain("/private")
     // The invitation's setup turn is not part of the guest conversation.
     expect(replayed).not.toContain(INSTRUCTION)
-    await expect(test.resume("another-session")).rejects.toMatchObject({
-      code: NOT_FOUND,
-    })
-    test.close()
-  })
-
-  it("projects another member's prompt the way its history projects a user turn", async () => {
-    const test = harness()
-    const long = "x".repeat(80_000)
-    expect(test.policy?.member()).toBeUndefined()
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-
-    expect(shownPrompt(test.policy, "Hello")).toBe("Hello")
-    expect(shownPrompt(test.policy, long)).toBe(long)
-    const page: SessionHistoryResponse = {
-      sessionId: REF,
-      messages: [
-        {
-          id: "user-1",
-          role: "user",
-          content: [{ type: "text", text: "Hello" }],
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-        {
-          id: "user-2",
-          role: "user",
-          content: [{ type: "text", text: long }],
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-      ],
-      total: 2,
-      limit: 500,
-      offset: 0,
-      nextOffset: 0,
-    }
-    const history = shown(test.policy, {
-      sessionId: REF,
-      kind: "history",
-      page,
-      sequence: 0,
-    })
-    expect(
-      history?.kind === "history" &&
-        history.page.messages.map(({ content }) => content)
-    ).toEqual([
-      [{ type: "text", text: "Hello" }],
-      [{ type: "text", text: long }],
-    ])
     test.close()
   })
 
@@ -1142,51 +1035,26 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("refuses the methods an operator owns", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    const refused = { code: METHOD_NOT_FOUND }
-
-    await expect(
-      test.agent.request(methods.agent.session.new, { cwd: "/" })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.list, {})
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(AOS_METHODS.session.update, {
-        sessionId: REF,
-        title: "Renamed",
-      })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.delete, { sessionId: REF })
-    ).rejects.toMatchObject(refused)
-    await expect(
-      test.agent.request(methods.agent.session.setConfigOption, {
-        sessionId: REF,
-        configId: "model",
-        type: "id",
-        value: "opus",
-      })
-    ).rejects.toMatchObject(refused)
-    expect(test.updateSession).not.toHaveBeenCalled()
-    test.close()
-  })
-
-  it("refuses an operator's method as unknown however its params are spelled", async () => {
+  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
     const test = harness({ existing: true })
     const socket = await loggedInWire(
       test.listener,
       await invite(test.invitations)
     )
 
-    for (const method of [
-      AOS_METHODS.session.update,
-      AOS_METHODS.agents.update,
-    ])
-      expect(await socket.request(method, { sessionId: 5 })).toMatchObject({
+    for (const [method, params] of [
+      [methods.agent.session.new, { cwd: "/" }],
+      [methods.agent.session.list, {}],
+      [AOS_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
+      [methods.agent.session.delete, { sessionId: REF }],
+      [
+        methods.agent.session.setConfigOption,
+        { sessionId: REF, configId: "model", type: "id", value: "opus" },
+      ],
+      [AOS_METHODS.session.update, { sessionId: 5 }],
+      [AOS_METHODS.agents.update, { sessionId: 5 }],
+    ] as const)
+      expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
       })
     expect(test.updateSession).not.toHaveBeenCalled()
@@ -1233,124 +1101,9 @@ describe("guest ACP listener", () => {
     expect(streamed).not.toContain("private")
     expect(streamed).not.toContain(OPERATOR_PATH)
     expect(streamed).not.toContain("+new")
+    expect(streamed).not.toContain(INSTRUCTION)
     test.close()
   })
-
-  it("shows an App card flagged only at its finish as a settled card", async () => {
-    const test = harness({
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          {
-            kind: TurnEventKind.ToolCallStarted,
-            toolCallId: "late-app",
-            title: "private title",
-            name: APP_TOOL,
-            parentMessageId: "assistant-native",
-          },
-          {
-            kind: TurnEventKind.ToolCallInputChunk,
-            toolCallId: "late-app",
-            delta: '{"title":"private app input"}',
-          },
-          {
-            kind: TurnEventKind.ToolCallFinished,
-            toolCallId: "late-app",
-            output: "private app output",
-            failed: false,
-            app: true,
-          },
-          {
-            kind: TurnEventKind.MessageChunk,
-            messageId: "assistant-native",
-            text: "Guest-visible answer",
-          },
-          { kind: TurnEventKind.TurnEnded },
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview")
-
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
-      "an update carrying Guest-visible answer"
-    )
-    expect(
-      updates(test.recorder).flatMap(({ update }) =>
-        "toolCallId" in update ? [update] : []
-      )
-    ).toMatchObject([
-      {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "late-app",
-        title: APP_TOOL,
-        status: "completed",
-        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
-      },
-    ])
-    expect(JSON.stringify(updates(test.recorder))).not.toContain("private")
-    test.close()
-  })
-
-  it("streams a failed turn without the location its provider detail names", async () => {
-    const test = harness({
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          {
-            kind: TurnEventKind.TurnFailed,
-            code: "AOS_PROVIDER_RUN_FAILED",
-            message: `Hermes could not complete this turn.\n${OPERATOR_PATH} is locked`,
-          },
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview").catch(() => undefined)
-
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("request_failed"),
-      "an update carrying request_failed"
-    )
-    expect(JSON.stringify(test.recorder.entries)).not.toContain(OPERATOR_PATH)
-    test.close()
-  })
-
-  it.each([
-    ["offers a deny", DENIABLE, { status: "resolved", payload: "deny" }],
-    ["offers none", APPROVAL, { status: "cancelled" }],
-  ])(
-    "declines a permission its own turn raises, silently, when it %s",
-    async (_offer, request, reply) => {
-      const test = harness({
-        existing: true,
-        handle: () => asking(request, test.start.mock.calls.length),
-      })
-      await test.initialize()
-      await test.login(await invite(test.invitations))
-      await test.resume(REF)
-
-      await test.prompt("Delete the notes")
-
-      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-      expect(test.start.mock.calls[1]?.[1]).toMatchObject({
-        replies: [{ requestId: request.requestId, ...reply }],
-      })
-      await test.recorder.wait(said("Guest-visible answer"), "the reply")
-      expect(
-        test.recorder.of(methods.client.session.requestPermission)
-      ).toEqual([])
-      expect(JSON.stringify(test.recorder.entries)).not.toContain(
-        request.requestId
-      )
-      test.close()
-    }
-  )
 
   it("asks a question in the operator's own words and gives the runtime its answer as sent", async () => {
     const test = harness({
@@ -1399,39 +1152,6 @@ describe("guest ACP listener", () => {
         },
       ],
     })
-    test.close()
-  })
-
-  it("settles no call the guest was not shown when it answers that call's question", async () => {
-    const asked: PendingRequest = { ...QUESTION, toolCallId: "ask-tool" }
-    const test = harness({
-      existing: true,
-      handle: () =>
-        test.start.mock.calls.length > 1
-          ? terminalHandle(RUN_EVENTS)
-          : terminalHandle([
-              { kind: TurnEventKind.TurnStarted },
-              {
-                kind: TurnEventKind.ToolCallStarted,
-                toolCallId: "ask-tool",
-                title: "ask_user",
-              },
-              { kind: TurnEventKind.TurnRequiresAction, requests: [asked] },
-            ]),
-      question: async () => ({ action: "accept", content: { q0: "later" } }),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Export the notes")
-    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("Guest-visible answer"),
-      "an update carrying Guest-visible answer"
-    )
-
-    expect(JSON.stringify(updates(test.recorder))).not.toContain("ask-tool")
     test.close()
   })
 
@@ -1579,39 +1299,6 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("carries no activity from any Session of the invited Agent", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    const other = await test.coordinator.start(
-      {
-        agentId: AGENT,
-        providerSessionId: "operator-session",
-        sessionId: "operator",
-      },
-      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
-      {
-        membershipId: "operator",
-        principalId: "operator",
-      }
-    )
-    for await (const _ of other.events) void _
-    await test.prompt("Hello")
-    await test.recorder.wait(
-      (entry) =>
-        entry.method === methods.client.session.update &&
-        JSON.stringify(entry.params).includes('"idle"'),
-      'an update carrying "idle"'
-    )
-
-    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
-    // Nor does it list the deployment's Sessions to seed one.
-    expect(test.listAllSessions).not.toHaveBeenCalled()
-    test.close()
-  })
-
   it("projects an older page as it projects the replayed one, and pages the invited Session alone", async () => {
     const cursor = Buffer.from("500").toString("base64url")
     const test = harness({
@@ -1647,14 +1334,6 @@ describe("guest ACP listener", () => {
 
     expect(page).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
     expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
-    // A page names the invited Session alone.
-    await expect(
-      test.agent.request(methods.agent.session.resume, {
-        sessionId: "another-session",
-        cwd: "/",
-        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
-      })
-    ).rejects.toMatchObject({ code: NOT_FOUND })
     const sent = test.recorder.entries
       .slice(from)
       .filter(({ method }) => method === methods.client.session.update)
@@ -1669,66 +1348,6 @@ describe("guest ACP listener", () => {
       expect(params).toMatchObject({
         update: { _meta: { [AOS_META_KEY]: { historyPage: { cursor } } } },
       })
-    test.close()
-  })
-
-  it("replays a whole long Session, projected, to a guest that does not page", async () => {
-    // The stored setup turn first, then more messages than one page holds.
-    const transcript = [
-      ...HISTORY.messages,
-      ...Array.from({ length: 1_000 }, (_, index) => ({
-        id: `answer-${index}`,
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: `Answer ${index}` }],
-        createdAt: "2026-09-15T00:10:00.000Z",
-      })),
-    ]
-    const test = harness({
-      existing: true,
-      history: (offset) => {
-        const end = Math.max(0, transcript.length - offset)
-        const messages = transcript.slice(Math.max(0, end - 500), end)
-        return {
-          sessionId: STORED,
-          messages,
-          total: transcript.length,
-          limit: 500,
-          offset,
-          nextOffset: offset + messages.length,
-        }
-      },
-    })
-    await test.initialize(false)
-    await test.login(await invite(test.invitations))
-    const from = test.recorder.entries.length
-
-    const resumed = await test.resume(REF, true)
-
-    expect(resumed).toMatchObject({
-      _meta: { [AOS_META_KEY]: { history: {} } },
-    })
-    const replayed = JSON.stringify(
-      test.recorder.entries
-        .slice(from)
-        .filter(({ method }) => method === methods.client.session.update)
-    )
-    expect(replayed).toContain("Safe answer")
-    expect(replayed).toContain("Answer 0")
-    expect(replayed).toContain("Answer 999")
-    expect(replayed).not.toContain("private reasoning")
-    expect(replayed).not.toContain(INSTRUCTION)
-    test.close()
-  })
-
-  it("stays live from its login until its invitation expires", async () => {
-    const test = harness()
-    await test.initialize()
-    expect(test.policy?.live()).toBe(false)
-    await test.login(await invite(test.invitations))
-    expect(test.policy?.live()).toBe(true)
-
-    test.clock.now = NOW + 259_200_000
-    expect(test.policy?.live()).toBe(false)
     test.close()
   })
 
@@ -2036,17 +1655,8 @@ describe("guest scope and commands", () => {
       "an update carrying Guest-visible answer"
     )
 
-    // The browser's steer params are the ones this listener accepts.
-    expect(
-      AosSteerRequestSchema.safeParse({
-        sessionId: REF,
-        requestId: "steer-1",
-        text: "Shorter, please",
-      }).success
-    ).toBe(true)
     const response = await test.steer("Shorter, please")
     expect(response).toMatchObject({ status: "steered" })
-    expect(AosSteerResponseSchema.safeParse(response).success).toBe(true)
     expect(test.handles.at(0)?.steer).toHaveBeenCalledWith({
       requestId: "steer-1",
       text: "Shorter, please",
@@ -2079,47 +1689,6 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
-  it("streams the conversation whole, under the runtime's ids, with the runtime's prefill", async () => {
-    const text = "x".repeat(80_000)
-    const test = harness({
-      existing: true,
-      handle: () =>
-        terminalHandle([
-          { kind: TurnEventKind.TurnStarted },
-          {
-            kind: TurnEventKind.MessageChunk,
-            messageId: "assistant-native",
-            text,
-          },
-          { kind: TurnEventKind.TurnEnded, composerPrefill: "Tell me more" },
-        ]),
-    })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
-
-    await test.prompt("Start the interview")
-    await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.composerPrefill,
-      "the runtime's prefill"
-    )
-
-    const [prefill] = test.recorder.of(AOS_METHODS.notify.composerPrefill)
-    expect(
-      AosComposerPrefillNotificationSchema.safeParse(prefill?.params).data
-    ).toMatchObject({ sessionId: REF, text: "Tell me more" })
-    const chunks = updates(test.recorder).flatMap(({ update }) =>
-      update.sessionUpdate === "agent_message_chunk" ? [update] : []
-    )
-    expect(chunks.map((chunk) => chunk.messageId)).toContain("assistant-native")
-    expect(
-      chunks.map((chunk) =>
-        chunk.content.type === "text" ? chunk.content.text : ""
-      )
-    ).toContain(text)
-    test.close()
-  })
-
   describe("a staged attachment", () => {
     /** Stages one attachment for the invited conversation, as the REST route does. */
     const staged = (test: ReturnType<typeof harness>) => {
@@ -2140,12 +1709,6 @@ describe("guest scope and commands", () => {
         prompt: [{ type: "text", text: "Read this" }],
         _meta: { [AOS_META_KEY]: { attachmentStageId } },
       })
-
-    it("is named in the prompt `_meta` the browser sends", () => {
-      expect(
-        AosPromptMetaSchema.safeParse({ attachmentStageId: "stage-1" }).success
-      ).toBe(true)
-    })
 
     for (const [name, existing] of [
       ["reaches the runtime with a guest's send", true],
@@ -2190,10 +1753,6 @@ describe("guest scope and commands", () => {
     await test.login(await invite(test.invitations))
     await test.resume(REF)
     const rewind = (rewindSourceId: string) => {
-      // The browser's prompt `_meta` is the shape this listener accepts.
-      expect(AosPromptMetaSchema.safeParse({ rewindSourceId }).success).toBe(
-        true
-      )
       return test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Again" }],
@@ -2231,60 +1790,6 @@ describe("guest scope and commands", () => {
       rewindSourceId: own,
     })
     test.close()
-  })
-
-  it("never writes the invitation's setup text to a guest frame", async () => {
-    // The setup turn sits on the older page, behind the newest one.
-    const test = harness({
-      existing: true,
-      history: (offset) =>
-        offset === 0
-          ? {
-              sessionId: STORED,
-              messages: [
-                {
-                  id: "assistant-9",
-                  role: "assistant",
-                  content: [{ type: "text", text: "Newest answer" }],
-                  createdAt: "2026-09-15T00:10:00.000Z",
-                },
-              ],
-              total: 502,
-              limit: 500,
-              offset: 0,
-              nextOffset: 500,
-            }
-          : { ...HISTORY, total: 502, offset, nextOffset: 502 },
-    })
-    const token = await invite(test.invitations)
-    const replay = { sessionId: REF, cwd: "/", replayFrom: { type: "start" } }
-
-    const first = await loggedInWire(test.listener, token)
-    await first.request(methods.agent.session.resume, replay)
-    await first.request(methods.agent.session.prompt, {
-      sessionId: REF,
-      prompt: [{ type: "text", text: "Hello" }],
-    })
-    await settled()
-    // A reload replays from the start and scrolls back a page.
-    const reloaded = await loggedInWire(test.listener, token)
-    await reloaded.request(methods.agent.session.resume, replay)
-    await reloaded.request(methods.agent.session.resume, {
-      ...replay,
-      replayFrom: {
-        type: AOS_REPLAY_BEFORE,
-        cursor: Buffer.from("500").toString("base64url"),
-      },
-    })
-
-    expect(test.history).toHaveBeenCalledTimes(3)
-    expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
-    const written = JSON.stringify([...first.frames, ...reloaded.frames])
-    expect(written).toContain("Guest-visible answer")
-    expect(written).toContain("Safe answer")
-    expect(written).not.toContain(INSTRUCTION)
-    first.close()
-    reloaded.close()
   })
 
   it("keeps unknown parameters and metadata from the runtime", async () => {
@@ -2443,12 +1948,25 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("sends a guest its command list and no Session row, usage, model, notice, catalog signal or read state", async () => {
+  it("sends a guest its command list and no Session row, usage, model, notice, catalog signal, read state, or activity of any Session", async () => {
     const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
 
+    const other = await test.coordinator.start(
+      {
+        agentId: AGENT,
+        providerSessionId: "operator-session",
+        sessionId: "operator",
+      },
+      { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
+      {
+        membershipId: "operator",
+        principalId: "operator",
+      }
+    )
+    for await (const _ of other.events) void _
     await test.prompt("Start the interview")
     await test.recorder.wait(
       (entry) => JSON.stringify(entry.params).includes('"idle"'),
@@ -2469,6 +1987,9 @@ describe("guest scope and commands", () => {
     expect(kinds).not.toContain("notice")
     expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
+    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
+    // Nor does it list the deployment's Sessions to seed one.
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
   })
 })

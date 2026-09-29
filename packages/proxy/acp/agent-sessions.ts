@@ -12,11 +12,7 @@ import {
   type AosSessionInfoMeta,
 } from "../../protocol/acp"
 import type { SessionRow } from "../core/session-rows"
-import {
-  HISTORY_MAX_OFFSET,
-  hasOlderPage,
-  type Membership,
-} from "../core/channel"
+import { hasOlderPage, type Membership } from "../core/channel"
 import {
   hasSession,
   showWorkspace,
@@ -98,9 +94,9 @@ export function decodeCursor(cursor: string | null | undefined) {
 }
 
 /** An older page's offset: past the start replay, short of the reach. */
-export function decodeHistoryCursor(cursor: string) {
+export function decodeHistoryCursor(cursor: string, maxOffset: number) {
   const offset = decodeCursor(cursor)
-  if (offset < 1 || offset >= HISTORY_MAX_OFFSET) throw invalidParams()
+  if (offset < 1 || offset >= maxOffset) throw invalidParams()
   return offset
 }
 
@@ -109,10 +105,14 @@ export function decodeHistoryCursor(cursor: string) {
  * nothing once the page reached the start, or `truncated` when older history
  * exists that neither the runtime nor the reach serves.
  */
-export function historyCursor(page: SessionHistoryResponse): AosHistoryCursor {
+export function historyCursor(
+  page: SessionHistoryResponse,
+  maxOffset: number
+): AosHistoryCursor {
   // A runtime that cannot read further back has no page to offer beyond this.
   if (page.truncated) return { truncated: true }
-  if (hasOlderPage(page)) return { nextCursor: encodeCursor(page.nextOffset) }
+  if (hasOlderPage(page, maxOffset))
+    return { nextCursor: encodeCursor(page.nextOffset) }
   return page.nextOffset < page.total ? { truncated: true } : {}
 }
 

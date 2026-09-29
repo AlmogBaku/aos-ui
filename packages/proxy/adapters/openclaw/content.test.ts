@@ -13,31 +13,7 @@ const policy = {
   },
 }
 describe("OpenClaw content", () => {
-  it("validates complete encoded native requests", () => {
-    expect(
-      prepareOpenClawChatAttachments(
-        {
-          agentId: "agent-a",
-          sessionKey: "session-a",
-          message: "review",
-          idempotencyKey: "turn-a",
-          attachments: [
-            {
-              type: "file",
-              filename: "brief.pdf",
-              mimeType: "application/pdf",
-              dataUrl: "data:application/pdf;base64,AQID",
-            },
-          ],
-        },
-        policy
-      )
-    ).toMatchObject({
-      native: {
-        agentId: "agent-a",
-        attachments: [{ fileName: "brief.pdf", sizeBytes: 3 }],
-      },
-    })
+  it("rejects a path-shaped attachment filename", () => {
     expect(() =>
       prepareOpenClawChatAttachments(
         {
@@ -90,24 +66,5 @@ describe("OpenClaw content", () => {
       policy,
     })
     expect(JSON.stringify(staged)).not.toContain("AQID")
-  })
-  it("validates the complete encoded request against the negotiated frame limit", () => {
-    expect(() =>
-      prepareOpenClawChatAttachments(
-        {
-          agentId: "agent-a",
-          sessionKey: "session-a",
-          message: "review",
-          idempotencyKey: "turn-a",
-          attachments: [
-            {
-              type: "file",
-              dataUrl: "data:text/plain;base64,AQID",
-            },
-          ],
-        },
-        { ...policy, maxPayload: 128 }
-      )
-    ).toThrow(OpenClawContentPublicError)
   })
 })

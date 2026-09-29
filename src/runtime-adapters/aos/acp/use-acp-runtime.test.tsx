@@ -29,8 +29,8 @@ import {
   type AosInitializeMeta,
 } from "@aos/protocol/acp"
 
-import { ARTIFACT_DATA_PART_NAME } from "@/artifacts/artifacts"
 import { Thread } from "@/components/assistant-ui/elements/thread.aui"
+import { draft } from "@/components/assistant-ui/elements/thread.aui.test-helpers"
 import {
   queueControlsExtras,
   type QueueControls,
@@ -301,6 +301,52 @@ const visible = (runtime: ReturnType<typeof useAcpRuntime>) =>
     text: message.content.map(messageText).join(""),
   }))
 
+/** An image the composer has finished attaching. */
+const CHART: CompleteAttachment = {
+  id: "att-1",
+  type: "image",
+  name: "chart.png",
+  contentType: "image/png",
+  status: { type: "complete" },
+  content: [{ type: "image", image: "data:image/png;base64,AAA" }],
+}
+
+/** The Session reports a run under way. */
+const running = (fake: Fake, meta = TURN_META) => {
+  act(() => {
+    fake.emit({ sessionUpdate: "state_update", state: "running" }, meta)
+  })
+}
+
+/** The Session reports its run ended normally, and the queue gets a tick. */
+const ends = async (fake: Fake, meta = TURN_META) => {
+  await act(async () => {
+    fake.emit(
+      {
+        sessionUpdate: "state_update",
+        state: "idle",
+        stopReason: "end_turn",
+      },
+      meta
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
+
+/** Sends each text as its own user turn. */
+const queue = async (
+  runtime: ReturnType<typeof useAcpRuntime>,
+  ...texts: string[]
+) => {
+  await act(async () => {
+    for (const text of texts)
+      runtime.thread.append({
+        role: "user",
+        content: [{ type: "text", text }],
+      })
+  })
+}
+
 describe("useAcpRuntime", () => {
   it("replays the Session on mount and projects its turns", async () => {
     const fake = createFakeConnection()
@@ -432,26 +478,6 @@ describe("useAcpRuntime", () => {
     })
   })
 
-  it("keeps the turns an update leaves alone, so only the changed one re-renders", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("user_message", "u1", "Ship it"))
-      fake.emit(chunkUpdate("a1", "Working"))
-    })
-    const [user, assistant] = result.current.thread.getState().messages
-    act(() => {
-      fake.emit(chunkUpdate("a1", " on it"))
-    })
-    const [nextUser, nextAssistant] = result.current.thread.getState().messages
-    expect(nextUser).toBe(user)
-    expect(nextAssistant).not.toBe(assistant)
-    expect(visible(result.current)).toEqual([
-      { id: "u1", role: "user", text: "Ship it" },
-      { id: "a1", role: "assistant", text: "Working on it" },
-    ])
-  })
-
   it("converts only the streaming turn per chunk, however long the transcript", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
@@ -573,29 +599,16 @@ describe("useAcpRuntime", () => {
   it("tracks the run state the Session reports", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
-    act(() => {
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
+    running(fake)
     expect(result.current.thread.getState().isRunning).toBe(true)
-    act(() => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-    })
+    await ends(fake)
     expect(result.current.thread.getState().isRunning).toBe(false)
   })
 
   it("prompts with the user's blocks and re-keys the optimistic turn", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Ship it" }],
-      })
-    })
+    await queue(result.current, "Ship it")
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
@@ -666,28 +679,10 @@ describe("useAcpRuntime", () => {
     })
   })
 
-  it("cancels the Session's run", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "Working"))
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
-    await act(async () => {
-      result.current.thread.cancelRun()
-    })
-    expect(fake.cancel).toHaveBeenCalledWith(SESSION_ID)
-  })
-
   it("keeps a prompt stopped before any reply, since the provider saved it", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake)
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Ship it" }],
-      })
-    })
+    await queue(result.current, "Ship it")
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalled()
     })
@@ -752,12 +747,7 @@ describe("useAcpRuntime", () => {
 
     it("reloads the Session and keeps the failure in view", async () => {
       const { fake, result } = await mountWithHistory()
-      await act(async () => {
-        result.current.thread.append({
-          role: "user",
-          content: [{ type: "text", text: "Again" }],
-        })
-      })
+      await queue(result.current, "Again")
       await waitFor(() => {
         expect(fake.prompt).toHaveBeenCalled()
       })
@@ -880,12 +870,7 @@ describe("useAcpRuntime", () => {
       })
     )
     expect(subscribeSession).not.toHaveBeenCalled()
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Ship it" }],
-      })
-    })
+    await queue(result.current, "Ship it")
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
@@ -917,19 +902,11 @@ describe("useAcpRuntime", () => {
       ],
     }))
     const { result } = await mount(fake, { stageAttachments })
-    const attachment: CompleteAttachment = {
-      id: "att-1",
-      type: "image",
-      name: "chart.png",
-      contentType: "image/png",
-      status: { type: "complete" },
-      content: [{ type: "image", image: "data:image/png;base64,AAA" }],
-    }
     await act(async () => {
       result.current.thread.append({
         role: "user",
         content: [{ type: "text", text: "Read this" }],
-        attachments: [attachment],
+        attachments: [CHART],
       })
     })
     await waitFor(() => {
@@ -947,7 +924,7 @@ describe("useAcpRuntime", () => {
         expect.objectContaining({ attachmentStageId: "stage-1" })
       )
     })
-    expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [attachment])
+    expect(stageAttachments).toHaveBeenCalledWith(SESSION_ID, [CHART])
   })
 
   it("reports a composer prefill for the bound Session only", async () => {
@@ -972,37 +949,6 @@ describe("useAcpRuntime", () => {
     expect(onComposerPrefill).toHaveBeenCalledWith("Next question?")
   })
 
-  it("projects a published artifact link as an artifact part", async () => {
-    const fake = createFakeConnection()
-    const { result } = await mount(fake)
-    act(() => {
-      fake.emit(textUpdate("agent_message", "a1", "On it"))
-      fake.emit({
-        sessionUpdate: "agent_message_chunk",
-        messageId: "a1",
-        content: {
-          type: "resource_link",
-          uri: "artifact://art-1",
-          name: "chart.json",
-          mimeType: "application/json",
-        },
-      })
-    })
-    expect(result.current.thread.getState().messages[0]?.content).toEqual([
-      { type: "text", text: "On it" },
-      {
-        type: "data",
-        name: ARTIFACT_DATA_PART_NAME,
-        data: {
-          id: "art-1",
-          filename: "chart.json",
-          mimeType: "application/json",
-          source: { type: "provider", reference: "art-1" },
-        },
-      },
-    ])
-  })
-
   it("holds queued sends while a run owns the Session, then sends them as one", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake, { enableMessageQueue: true })
@@ -1010,21 +956,9 @@ describe("useAcpRuntime", () => {
       fake.emit(textUpdate("agent_message", "a1", "Working"))
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
-    await act(async () => {
-      for (const text of ["Also check the logs", "And the metrics"])
-        result.current.thread.append({
-          role: "user",
-          content: [{ type: "text", text }],
-        })
-    })
+    await queue(result.current, "Also check the logs", "And the metrics")
     expect(fake.prompt).not.toHaveBeenCalled()
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-    })
+    await ends(fake)
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledWith(
         SESSION_ID,
@@ -1041,36 +975,6 @@ describe("useAcpRuntime", () => {
         ?.queueControls
     const queuedIds = (runtime: ReturnType<typeof useAcpRuntime>) =>
       runtime.thread.composer.getState().queue.map((item) => item.id)
-    const running = (fake: Fake, meta = TURN_META) => {
-      act(() => {
-        fake.emit({ sessionUpdate: "state_update", state: "running" }, meta)
-      })
-    }
-    const ends = async (fake: Fake, meta = TURN_META) => {
-      await act(async () => {
-        fake.emit(
-          {
-            sessionUpdate: "state_update",
-            state: "idle",
-            stopReason: "end_turn",
-          },
-          meta
-        )
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      })
-    }
-    const queue = async (
-      runtime: ReturnType<typeof useAcpRuntime>,
-      ...texts: string[]
-    ) => {
-      await act(async () => {
-        for (const text of texts)
-          runtime.thread.append({
-            role: "user",
-            content: [{ type: "text", text }],
-          })
-      })
-    }
     const sentText = (fake: Fake) =>
       fake.prompt.mock.calls.map((call) =>
         (call as unknown as [string, { type: string }[]])[1]
@@ -1095,16 +999,7 @@ describe("useAcpRuntime", () => {
         result.current.thread.append({
           role: "user",
           content: [{ type: "text", text: "Read tihs" }],
-          attachments: [
-            {
-              id: "att-1",
-              type: "image",
-              name: "chart.png",
-              contentType: "image/png",
-              status: { type: "complete" },
-              content: [{ type: "image", image: "data:image/png;base64,AAA" }],
-            },
-          ],
+          attachments: [CHART],
         })
       })
       const [id] = queuedIds(result.current)
@@ -1252,19 +1147,11 @@ describe("useAcpRuntime", () => {
       const fake = createFakeConnection()
       const { result } = await mount(fake, { enableMessageQueue: true })
       running(fake)
-      const image: CompleteAttachment = {
-        id: "att-1",
-        type: "image",
-        name: "chart.png",
-        contentType: "image/png",
-        status: { type: "complete" },
-        content: [{ type: "image", image: "data:image/png;base64,AAA" }],
-      }
       await act(async () => {
         result.current.thread.append({
           role: "user",
           content: [{ type: "text", text: "First" }],
-          attachments: [image],
+          attachments: [CHART],
         })
       })
       await queue(result.current, "Second")
@@ -1272,7 +1159,7 @@ describe("useAcpRuntime", () => {
       act(() => {
         draft = controlsOf(result.current)?.takeAll()
       })
-      expect(draft).toEqual({ text: "First\n\nSecond", attachments: [image] })
+      expect(draft).toEqual({ text: "First\n\nSecond", attachments: [CHART] })
       expect(queuedIds(result.current)).toEqual([])
       await ends(fake)
       expect(fake.prompt).not.toHaveBeenCalled()
@@ -1321,44 +1208,17 @@ describe("useAcpRuntime", () => {
   it("holds the next queued send until the accepted turn ends", async () => {
     const fake = createFakeConnection()
     const { result } = await mount(fake, { enableMessageQueue: true })
-    act(() => {
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
-    const append = (text: string) =>
-      act(async () => {
-        result.current.thread.append({
-          role: "user",
-          content: [{ type: "text", text }],
-        })
-      })
-    await append("First")
+    running(fake)
+    await queue(result.current, "First")
     // The proxy accepts the first send before its turn reports running.
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
+    await ends(fake)
     expect(fake.prompt).toHaveBeenCalledTimes(1)
-    await append("Second")
+    await queue(result.current, "Second")
 
     const accepted = { sequence: 0, turnId: "run-2" }
-    act(() => {
-      fake.emit({ sessionUpdate: "state_update", state: "running" }, accepted)
-    })
+    running(fake, accepted)
     expect(fake.prompt).toHaveBeenCalledTimes(1)
-    await act(async () => {
-      fake.emit(
-        {
-          sessionUpdate: "state_update",
-          state: "idle",
-          stopReason: "end_turn",
-        },
-        accepted
-      )
-    })
+    await ends(fake, accepted)
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenLastCalledWith(
         SESSION_ID,
@@ -1381,19 +1241,8 @@ describe("useAcpRuntime", () => {
       fake.emit(textUpdate("agent_message", "a1", "Working"))
       fake.emit({ sessionUpdate: "state_update", state: "running" })
     })
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Queued" }],
-      })
-    })
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-    })
+    await queue(result.current, "Queued")
+    await ends(fake)
 
     await waitFor(() => expect(fake.prompt).toHaveBeenCalledTimes(2))
     expect(fake.prompt).toHaveBeenLastCalledWith(
@@ -1417,28 +1266,13 @@ describe("useAcpRuntime", () => {
           accept = resolve
         })
     )
-    act(() => {
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
-    const append = (text: string) =>
-      act(async () => {
-        result.current.thread.append({
-          role: "user",
-          content: [{ type: "text", text }],
-        })
-      })
-    await append("First")
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-    })
+    running(fake)
+    await queue(result.current, "First")
+    await ends(fake)
     await waitFor(() => {
       expect(fake.prompt).toHaveBeenCalledTimes(1)
     })
-    await append("Second")
+    await queue(result.current, "Second")
 
     await act(async () => {
       fake.emit(
@@ -1506,12 +1340,7 @@ describe("useAcpRuntime approvals", () => {
       },
     })
 
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Also check the logs" }],
-      })
-    })
+    await queue(result.current, "Also check the logs")
     expect(fake.prompt).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -1637,18 +1466,14 @@ describe("useAcpRuntime older history", () => {
     })
   })
 
-  it("offers nothing when the proxy does not serve older pages", async () => {
-    const fake = createFakeConnection({
-      history: { nextCursor: "cursor-1" },
-      historyPages: false,
-    })
-    const { result } = await mount(fake)
-
-    expect(historyOf(result.current)).toBeUndefined()
-  })
-
-  it("offers nothing until a replay reports where history stands", async () => {
-    const fake = createFakeConnection()
+  it.each([
+    [
+      "when the proxy does not serve older pages",
+      { history: { nextCursor: "cursor-1" }, historyPages: false },
+    ],
+    ["until a replay reports where history stands", {}],
+  ])("offers nothing %s", async (_, options) => {
+    const fake = createFakeConnection(options)
     const { result } = await mount(fake)
 
     expect(historyOf(result.current)).toBeUndefined()
@@ -2057,11 +1882,10 @@ describe("the queue row editor", () => {
     await act(async () => {
       await fake.settleResume()
     })
-    act(() => {
-      fake.emit({ sessionUpdate: "state_update", state: "running" })
-    })
+    running(fake)
     const input = screen.getByRole("textbox", { name: "Message input" })
-    await user.type(input, `${text}{Enter}`)
+    draft(input, text)
+    await user.keyboard("{Enter}")
     const region = await screen.findByRole("region", {
       name: "Queued messages",
     })
@@ -2075,16 +1899,8 @@ describe("the queue row editor", () => {
       name: "Edit queued message",
     })
     expect(editor).toHaveFocus()
-    await user.clear(editor)
-    await user.type(editor, "Check the logs")
-    await act(async () => {
-      fake.emit({
-        sessionUpdate: "state_update",
-        state: "idle",
-        stopReason: "end_turn",
-      })
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
+    draft(editor, "Check the logs")
+    await ends(fake)
     expect(fake.prompt).not.toHaveBeenCalled()
 
     await user.keyboard("{Enter}")
@@ -2102,9 +1918,9 @@ describe("the queue row editor", () => {
     const row = within(region).getByRole("listitem")
     act(() => row.focus())
     await user.keyboard("{Enter}")
-    await user.type(
+    draft(
       within(region).getByRole("textbox", { name: "Edit queued message" }),
-      " not"
+      "Keep me not"
     )
     await user.keyboard("{Escape}")
     expect(within(region).getByText("Keep me")).toBeInTheDocument()
@@ -2117,8 +1933,9 @@ describe("the queue row editor", () => {
 
   it("pulls the whole queue ahead of the draft with Esc, leaving the turn running until the next Esc", async () => {
     const { user, fake, input, region } = await queued("First")
-    await user.type(input, "Second{Enter}")
-    await user.type(input, "Draft")
+    draft(input, "Second")
+    await user.keyboard("{Enter}")
+    draft(input, "Draft")
     await user.keyboard("{Escape}")
     await waitFor(() => expect(input).toHaveValue("First\n\nSecond\n\nDraft"))
     expect(region).not.toBeInTheDocument()
@@ -2143,18 +1960,8 @@ describe("useAcpRuntime clientId", () => {
       }
     )
 
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Send one" }],
-      })
-    })
-    await act(async () => {
-      result.current.thread.append({
-        role: "user",
-        content: [{ type: "text", text: "Send two" }],
-      })
-    })
+    await queue(result.current, "Send one")
+    await queue(result.current, "Send two")
 
     await waitFor(() => expect(capturedIds).toHaveLength(2))
     expect(capturedIds[0]).toMatch(/^[0-9a-f-]{36}$/)

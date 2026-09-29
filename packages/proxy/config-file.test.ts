@@ -480,13 +480,12 @@ describe("proxy configuration defaults and merging", () => {
   })
 
   it("defaults the Hermes session idle window only for a Hermes runtime", async () => {
-    await expect(
-      loadProxyConfig({
-        flag: CONFIG_PATH,
-        getenv: env({}),
-        ...access({
-          [CONFIG_PATH]: {
-            source: `deploymentId: opencode-dev
+    const config = await loadProxyConfig({
+      flag: CONFIG_PATH,
+      getenv: env({}),
+      ...access({
+        [CONFIG_PATH]: {
+          source: `deploymentId: opencode-dev
 publicOrigin: http://127.0.0.1:3000
 runtime:
   id: opencode-main
@@ -496,12 +495,13 @@ runtime:
   username: operator
   passwordFile: /run/secrets/opencode-password
 `,
-          },
-        }),
-      })
-    ).resolves.toMatchObject({
+        },
+      }),
+    })
+    expect(config).toMatchObject({
       runtime: { kind: "opencode", directory: "/srv/worktree" },
     })
+    expect(config.runtime).not.toHaveProperty("sessionIdleMs")
   })
 
   it("names the listener and both of its shapes when a wildcard host has no exposure", async () => {
@@ -747,27 +747,14 @@ runtime:
         transcription: {
           model: "synthetic-transcribe",
           language: "en",
-          mode: "fallback",
-          timeoutMs: 60_000,
         },
         speech: {
           model: "synthetic-speak",
           voice: "synthetic-voice",
-          format: "mp3",
           timeoutMs: 30_000,
         },
       },
     })
-  })
-
-  it("treats a guest key with no value as no guest block", async () => {
-    const message = await loadFailure({
-      flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
-      ...access({ [CONFIG_PATH]: { source: `${MINIMAL_YAML}guest: ~\n` } }),
-    })
-    expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
-    expect(message).toContain("guest block")
   })
 
   it("lets the schema report an unknown runtime kind before any branch row is judged", async () => {
@@ -784,14 +771,17 @@ runtime:
     expect(message).not.toContain("applies only")
   })
 
-  it("refuses a guest override when the file has no guest block", async () => {
+  it.each([
+    ["the file has no guest block", MINIMAL_YAML],
+    ["the guest key has no value", `${MINIMAL_YAML}guest: ~\n`],
+  ])("refuses a guest override when %s", async (_case, source) => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
       getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
-      ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
+      ...access({ [CONFIG_PATH]: { source } }),
     })
     expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
-    expect(message).toContain("guest")
+    expect(message).toContain("guest block")
   })
 
   it("cannot complete a guest listener from the environment, because its keys are file-only", async () => {

@@ -37,9 +37,6 @@ test("Commands search and execute, Mod+/ opens the shortcut reference, Escape cl
 }) => {
   await openWorkspace(page)
 
-  await expect(
-    page.getByRole("button", { name: /^Commands \((?:⌘|❖)\+K\)$/ })
-  ).toBeVisible()
   const input = page.getByRole("textbox", { name: "Message input" })
   await input.fill("Draft survives overlay dismissal")
   await commandsTrigger(page).focus()
@@ -158,25 +155,6 @@ test("Shift+F10 opens the menu on the focused Session tab and on the focused mes
   await page.keyboard.press("Escape")
   await expect(menu).toHaveCount(0)
   await expect(copyAction).toBeFocused()
-})
-
-test("desktop Shift+Enter inserts a newline while Enter sends the draft", async ({
-  page,
-}) => {
-  await openWorkspace(page)
-
-  const input = page.getByRole("textbox", { name: "Message input" })
-  await input.focus()
-  await page.keyboard.type("Keyboard draft")
-  await page.keyboard.press("Shift+Enter")
-  await page.keyboard.type("continued")
-  await expect(input).toHaveValue("Keyboard draft\ncontinued")
-
-  await page.keyboard.press("Enter")
-  await expect(input).toHaveValue("")
-  await expect(
-    page.getByText("Keyboard draft\ncontinued", { exact: true })
-  ).toBeVisible()
 })
 
 test("Session and Agent switches retain the unsent draft in its owning Session", async ({

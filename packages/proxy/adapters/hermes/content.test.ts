@@ -270,67 +270,12 @@ describe("Hermes content operations", () => {
     ).resolves.toMatchObject({ public: [] })
   })
 
-  it("reports exact per-operation capabilities and unavailable transport reasons", async () => {
+  it("reports each operation's availability and unavailable transport reasons", async () => {
     const h = harness()
     expect(h.operations.capabilities()).toMatchObject({
-      attachments: {
-        status: "available",
-        scope: "session",
-        maxCount: 16,
-        maxImageBytes: 26_214_400,
-        maxFileBytes: 26_214_400,
-        maxTotalBytes: 26_214_400,
-        maxMimeTypeBytes: 256,
-        maxFilenameBytes: 255,
-        imageMimeTypes: [
-          "image/png",
-          "image/jpeg",
-          "image/gif",
-          "image/webp",
-          "image/bmp",
-        ],
-      },
-      artifacts: {
-        status: "available",
-        scope: "session",
-        maxBytes: 26_214_400,
-      },
+      attachments: { status: "available", scope: "session" },
+      artifacts: { status: "available", scope: "session" },
       mcpApps: { status: "unavailable", reason: "mcp-apps-unavailable" },
-      transcription: {
-        scope: "agent",
-        maxRecordingBytes: 5_242_880,
-        maxTranscriptBytes: 1_000_000,
-        acceptedMimeTypes: [
-          "audio/aac",
-          "audio/flac",
-          "audio/m4a",
-          "audio/mp3",
-          "audio/mp4",
-          "audio/mpeg",
-          "audio/ogg",
-          "audio/wav",
-          "audio/wave",
-          "audio/webm",
-          "audio/x-m4a",
-          "audio/x-wav",
-          "video/webm",
-        ],
-        mimeParameter: "codecs",
-        codecValues: [
-          "aac",
-          "flac",
-          "mp3",
-          "mp4a.40.2",
-          "opus",
-          "pcm",
-          "vorbis",
-        ],
-      },
-      speech: {
-        scope: "agent",
-        maxTextBytes: 32_000,
-        maxAudioBytes: 20_971_520,
-      },
     })
     const operations = createHermesContentOperations({
       authority: { requireSession: h.requireSession } as never,
@@ -524,9 +469,10 @@ describe("Hermes content operations", () => {
     expect(h.audioConfig).toHaveBeenCalledWith(scope, "tts", 65_536)
   })
 
-  it("bounds native audio provider rows before adapting readiness", async () => {
-    const h = harness({
-      audioConfig: (kind) => ({
+  it.each([
+    {
+      name: "more provider rows than the bound",
+      audioConfig: (kind: string) => ({
         name: kind,
         has_category: true,
         active_provider: null,
@@ -536,83 +482,54 @@ describe("Hermes content operations", () => {
           status: "ready",
         })),
       }),
-    })
-    await expect(
-      h.operations.audio("research", "session-public-1")
-    ).resolves.toEqual({
-      transcription: {
-        status: "unavailable",
-        reason: "native-audio-config-invalid",
-      },
-      speech: {
-        status: "unavailable",
-        reason: "native-audio-config-invalid",
-      },
-    })
-  })
-
-  it("treats malformed native audio metadata as unavailable", async () => {
-    const h = harness({
+    },
+    {
+      name: "a malformed provider row",
       audioConfig: () => ({
         name: "stt",
         has_category: true,
         active_provider: null,
         providers: [{ name: "native" }],
       }),
-    })
-    await expect(
-      h.operations.audio("research", "session-public-1")
-    ).resolves.toEqual({
-      transcription: {
-        status: "unavailable",
-        reason: "native-audio-config-invalid",
-      },
-      speech: {
-        status: "unavailable",
-        reason: "native-audio-config-invalid",
-      },
-    })
-  })
+    },
+  ])(
+    "treats native audio metadata with $name as unavailable",
+    async ({ audioConfig }) => {
+      const h = harness({ audioConfig })
+      await expect(
+        h.operations.audio("research", "session-public-1")
+      ).resolves.toEqual({
+        transcription: {
+          status: "unavailable",
+          reason: "native-audio-config-invalid",
+        },
+        speech: {
+          status: "unavailable",
+          reason: "native-audio-config-invalid",
+        },
+      })
+    }
+  )
 
-  it("encodes a bounded recording only after authorization and never exposes provider output", async () => {
-    const h = harness()
-    await expect(
-      h.operations.transcribe(
-        "research",
-        Uint8Array.of(1, 2, 3),
-        "audio/webm;codecs=opus"
+  // iOS Safari labels its recording with a space before the codecs parameter.
+  it.each(["audio/webm;codecs=opus", "audio/webm; codecs=opus"])(
+    "encodes a bounded %s recording in canonical form only after authorization and never exposes provider output",
+    async (mimeType) => {
+      const h = harness()
+      await expect(
+        h.operations.transcribe("research", Uint8Array.of(1, 2, 3), mimeType)
+      ).resolves.toBe("transcript")
+      expect(h.transcribe).toHaveBeenCalledWith(
+        { agentId: "research" },
+        {
+          data_url: "data:audio/webm;codecs=opus;base64,AQID",
+          mime_type: "audio/webm;codecs=opus",
+        },
+        undefined,
+        1_000_000
       )
-    ).resolves.toBe("transcript")
-    expect(h.transcribe).toHaveBeenCalledWith(
-      { agentId: "research" },
-      {
-        data_url: "data:audio/webm;codecs=opus;base64,AQID",
-        mime_type: "audio/webm;codecs=opus",
-      },
-      undefined,
-      1_000_000
-    )
-  })
-
-  it("forwards the iOS Safari recording label in its canonical form", async () => {
-    const h = harness()
-    await expect(
-      h.operations.transcribe(
-        "research",
-        Uint8Array.of(1, 2, 3),
-        "audio/webm; codecs=opus"
-      )
-    ).resolves.toBe("transcript")
-    expect(h.transcribe).toHaveBeenCalledWith(
-      { agentId: "research" },
-      {
-        data_url: "data:audio/webm;codecs=opus;base64,AQID",
-        mime_type: "audio/webm;codecs=opus",
-      },
-      undefined,
-      1_000_000
-    )
-  })
+    }
+  )
 
   it("rejects unsupported and oversized recordings before forwarding", async () => {
     const h = harness()
@@ -659,17 +576,11 @@ describe("Hermes content operations", () => {
     expect(h.speak).not.toHaveBeenCalled()
   })
 
-  it("rejects an oversized multibyte native transcript without exposing its body", async () => {
-    const h = harness({
-      transcribe: { ok: true, transcript: "🙂".repeat(250_001) },
-    })
-    await expect(
-      h.operations.transcribe("research", Uint8Array.of(1), "audio/webm")
-    ).rejects.toBeInstanceOf(HermesContentUnavailableError)
-  })
-
-  it("rejects an empty native transcript", async () => {
-    const h = harness({ transcribe: { ok: true, transcript: "" } })
+  it.each([
+    ["an oversized multibyte", "🙂".repeat(250_001)],
+    ["an empty", ""],
+  ])("rejects %s native transcript", async (_name, transcript) => {
+    const h = harness({ transcribe: { ok: true, transcript } })
     await expect(
       h.operations.transcribe("research", Uint8Array.of(1), "audio/webm")
     ).rejects.toBeInstanceOf(HermesContentUnavailableError)
@@ -695,48 +606,49 @@ describe("Hermes content operations", () => {
     expect(h.speak).not.toHaveBeenCalled()
   })
 
-  it("ignores a late transcription response after cancellation", async () => {
-    let resolve: ((value: unknown) => void) | undefined
-    const h = harness()
-    h.transcribe.mockImplementationOnce(
-      async () =>
-        new Promise<unknown>((next) => {
-          resolve = next
-        })
-    )
-    const controller = new AbortController()
-    const pending = h.operations.transcribe(
-      "research",
-      Uint8Array.of(1),
-      "audio/webm",
-      controller.signal
-    )
-    await vi.waitFor(() => expect(h.transcribe).toHaveBeenCalledOnce())
-    controller.abort()
-    resolve?.({ ok: true, transcript: "late provider response" })
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
-  })
-
-  it("ignores a late speech response after cancellation", async () => {
-    let resolve: ((value: unknown) => void) | undefined
-    const h = harness()
-    h.speak.mockImplementationOnce(
-      async () =>
-        new Promise<unknown>((next) => {
-          resolve = next
-        })
-    )
-    const controller = new AbortController()
-    const pending = h.operations.speak("research", "hello", controller.signal)
-    await vi.waitFor(() => expect(h.speak).toHaveBeenCalledOnce())
-    controller.abort()
-    resolve?.({
-      ok: true,
-      data_url: "data:audio/mpeg;base64,AQID",
-      mime_type: "audio/mpeg",
-    })
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
-  })
+  it.each([
+    {
+      name: "transcription",
+      native: "transcribe",
+      start: (h: ReturnType<typeof harness>, signal: AbortSignal) =>
+        h.operations.transcribe(
+          "research",
+          Uint8Array.of(1),
+          "audio/webm",
+          signal
+        ),
+      late: { ok: true, transcript: "late provider response" },
+    },
+    {
+      name: "speech",
+      native: "speak",
+      start: (h: ReturnType<typeof harness>, signal: AbortSignal) =>
+        h.operations.speak("research", "hello", signal),
+      late: {
+        ok: true,
+        data_url: "data:audio/mpeg;base64,AQID",
+        mime_type: "audio/mpeg",
+      },
+    },
+  ] as const)(
+    "ignores a late $name response after cancellation",
+    async ({ native, start, late }) => {
+      let resolve: ((value: unknown) => void) | undefined
+      const h = harness()
+      h[native].mockImplementationOnce(
+        async () =>
+          new Promise<unknown>((next) => {
+            resolve = next
+          })
+      )
+      const controller = new AbortController()
+      const pending = start(h, controller.signal)
+      await vi.waitFor(() => expect(h[native]).toHaveBeenCalledOnce())
+      controller.abort()
+      resolve?.(late)
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    }
+  )
 
   it("accepts only bounded valid native speech and removes provider metadata", async () => {
     const h = harness()

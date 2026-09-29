@@ -169,6 +169,7 @@ export function connectionMachine(logger: Logger, clock: Clock) {
 
 export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { role, translators, readState, activityFeed, catalog } = context
+  const { maxOffset } = context.channels.historyReach
   /** The extensions this connection is served, which `initialize` reports. */
   const extensions =
     context.authentication?.extensions ?? operatorExtensions(catalog)
@@ -329,7 +330,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (!membership) throw notFound()
     return context.channels.olderPage(membership, {
       cursor,
-      offset: decodeHistoryCursor(cursor),
+      offset: decodeHistoryCursor(cursor, maxOffset),
     })
   }
 
@@ -595,7 +596,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           },
           requestId
         )
-        return { _meta: { [AOS_META_KEY]: { history: historyCursor(page) } } }
+        return {
+          _meta: {
+            [AOS_META_KEY]: { history: historyCursor(page, maxOffset) },
+          },
+        }
       }
       admit(method, "resume")
       const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
@@ -617,7 +622,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           [AOS_META_KEY]: {
             ...(history === undefined
               ? {}
-              : { history: historyCursor(history) }),
+              : { history: historyCursor(history, maxOffset) }),
           },
         },
       }

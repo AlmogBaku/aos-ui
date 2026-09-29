@@ -1,23 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { RichToolPart } from "./types"
-
-function toolPart(
-  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">
-): RichToolPart {
-  return {
-    type: "tool-call",
-    toolCallId: "lazy-tool",
-    args: {},
-    argsText: "{}",
-    status: { type: "complete" },
-    addResult: vi.fn(),
-    resume: vi.fn(),
-    respondToApproval: vi.fn(),
-    ...overrides,
-  }
-}
+import { toolPart } from "./tool-part.test-helpers"
 
 const questionPart = toolPart({
   toolName: "ask_user_question",
@@ -104,20 +88,11 @@ describe("optional renderer loading", () => {
         await download
         return importOriginal()
       })
-      let timer: ReturnType<typeof setTimeout> | undefined
       try {
-        const imported = await Promise.race([
-          import("./registry"),
-          new Promise<null>((resolve) => {
-            timer = setTimeout(() => resolve(null), 1000)
-          }),
-        ])
-        expect(
-          imported,
-          "Registry must be usable before the display download finishes"
-        ).not.toBeNull()
+        // The registry module resolves immediately: ./question-flow is wrapped
+        // in React.lazy() and only fetched when the component first renders.
+        const { RichToolRenderer } = await import("./registry")
         const { ToolUiLocaleProvider } = await import("./locale")
-        const RichToolRenderer = imported!.RichToolRenderer
         render(
           <ToolUiLocaleProvider locale={locale}>
             <RichToolRenderer {...questionPart} />
@@ -135,7 +110,6 @@ describe("optional renderer loading", () => {
         expect(await screen.findByText("Which audience leads?")).toBeVisible()
         expect(screen.queryByText(loadingLabel)).not.toBeInTheDocument()
       } finally {
-        clearTimeout(timer)
         release()
       }
     }

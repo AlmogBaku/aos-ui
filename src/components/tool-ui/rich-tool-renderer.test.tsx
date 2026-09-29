@@ -31,6 +31,7 @@ import { LazyVisualBoundary } from "./lazy-boundary"
 import { permissionProviderMetadata } from "@/lib/tool-artifact"
 import { QuestionFlow } from "./question-flow/index"
 import { SerializableQuestionFlowSchema } from "./question-flow/schema"
+import { toolPart } from "./tool-part.test-helpers"
 
 afterEach(cleanup)
 
@@ -49,24 +50,6 @@ async function renderTool(ui: Parameters<typeof render>[0]) {
       view.rerender(next)
       await waitForDisplay()
     },
-  }
-}
-
-function toolPart(
-  overrides: Partial<RichToolPart> & Pick<RichToolPart, "toolName">
-): RichToolPart {
-  const args = overrides.args ?? {}
-
-  return {
-    type: "tool-call",
-    toolCallId: `test-${overrides.toolName}`,
-    args,
-    argsText: JSON.stringify(args),
-    status: { type: "complete" },
-    addResult: vi.fn(),
-    resume: vi.fn(),
-    respondToApproval: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
   }
 }
 
@@ -825,6 +808,7 @@ describe("QuestionFlow renderer", () => {
 
     expect(screen.getByText("Cancelled")).toBeVisible()
     expect(screen.getByText("Where do you live?")).toBeVisible()
+    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
     expect(screen.getAllByText("Discarded")).toHaveLength(2)
     expect(screen.queryByRole("textbox", { name: "Your answer" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Submit answer" })).toBeNull()
@@ -1139,85 +1123,76 @@ describe("provider permission renderer", () => {
     expect(screen.getByText("Answered: Run in a sandbox")).toBeInTheDocument()
   })
 
-  it("confirms a persistent permission and shows its provider scope", async () => {
-    const user = userEvent.setup()
-    const respondToApproval = vi.fn().mockResolvedValue(undefined)
+  it.each([
+    {
+      scope: "datasets/market/**",
+      options: [
+        { id: "once", kind: "allow-once", label: "Allow once" },
+        {
+          id: "always-dataset",
+          kind: "allow-always",
+          label: "Always for this dataset",
+          grants: ["datasets/market/**"],
+        },
+        { id: "reject", kind: "reject-once", label: "Reject" },
+      ],
+      button: "Always for this dataset",
+      optionId: "always-dataset",
+    },
+    {
+      scope: undefined,
+      options: [
+        { id: "once", kind: "allow-once" },
+        { id: "always", kind: "allow-always" },
+      ],
+      button: "Always allow",
+      optionId: "always",
+    },
+  ] satisfies {
+    scope?: string
+    options: NonNullable<RichToolPart["approval"]>["options"]
+    button: string
+    optionId: string
+  }[])(
+    "confirms a persistent permission behind one step (scope $scope)",
+    async ({ scope, options, button, optionId }) => {
+      const user = userEvent.setup()
+      const respondToApproval = vi.fn().mockResolvedValue(undefined)
 
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "request_permission",
-          args: { action: "Read the shared market dataset" },
-          status: { type: "requires-action", reason: "tool-calls" },
-          approval: {
-            id: "permission-1",
-            prompt: "Allow Aster to read the shared market dataset?",
-            options: [
-              { id: "once", kind: "allow-once", label: "Allow once" },
-              {
-                id: "always-dataset",
-                kind: "allow-always",
-                label: "Always for this dataset",
-                grants: ["datasets/market/**"],
-              },
-              { id: "reject", kind: "reject-once", label: "Reject" },
-            ],
-          },
-          respondToApproval,
-        })}
-      />
-    )
+      await renderTool(
+        <RichToolRenderer
+          {...toolPart({
+            toolName: "request_permission",
+            args: { action: "Read the shared market dataset" },
+            status: { type: "requires-action", reason: "tool-calls" },
+            approval: {
+              id: "permission-always",
+              prompt: "Allow Aster to read the shared market dataset?",
+              options,
+            },
+            respondToApproval,
+          })}
+        />
+      )
 
-    expect(screen.getByText("datasets/market/**")).toBeInTheDocument()
+      if (scope) {
+        expect(screen.getByText(scope)).toBeInTheDocument()
+      } else {
+        expect(
+          screen.queryByRole("list", { name: "Persistent permission scope" })
+        ).not.toBeInTheDocument()
+      }
 
-    await user.click(
-      screen.getByRole("button", { name: "Always for this dataset" })
-    )
-    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Confirm always" }))
+      await user.click(screen.getByRole("button", { name: button }))
+      expect(respondToApproval).not.toHaveBeenCalled()
+      expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
+      await user.click(screen.getByRole("button", { name: "Confirm always" }))
 
-    await waitFor(() =>
-      expect(respondToApproval).toHaveBeenCalledWith({
-        optionId: "always-dataset",
-      })
-    )
-  })
-
-  it("offers a persistent permission without a scope behind the confirm step", async () => {
-    const user = userEvent.setup()
-    const respondToApproval = vi.fn().mockResolvedValue(undefined)
-
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "request_permission",
-          args: { action: "Run the deploy script" },
-          status: { type: "requires-action", reason: "tool-calls" },
-          approval: {
-            id: "permission-always",
-            prompt: "Run the deploy script?",
-            options: [
-              { id: "once", kind: "allow-once" },
-              { id: "always", kind: "allow-always" },
-            ],
-          },
-          respondToApproval,
-        })}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "Always allow" }))
-    expect(respondToApproval).not.toHaveBeenCalled()
-    expect(screen.getByText("Keep this permission?")).toBeInTheDocument()
-    expect(
-      screen.queryByRole("list", { name: "Persistent permission scope" })
-    ).not.toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Confirm always" }))
-
-    await waitFor(() =>
-      expect(respondToApproval).toHaveBeenCalledWith({ optionId: "always" })
-    )
-  })
+      await waitFor(() =>
+        expect(respondToApproval).toHaveBeenCalledWith({ optionId })
+      )
+    }
+  )
 
   it.each([
     ["en", "Allow for this session"],
@@ -1322,36 +1297,6 @@ describe("provider permission renderer", () => {
     expect(screen.queryByText("Unavailable")).toBeNull()
   })
 
-  it("renders every settled Hermes question with its recorded answer or discard", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "question",
-          args: {
-            question: "2 questions",
-            questions: [
-              { question: "Where do you live?" },
-              { question: "Which amenities do you use?" },
-            ],
-            allowFreeform: true,
-          },
-          result: {
-            status: "cancelled",
-            responses: [
-              { question: "Where do you live?", answers: [] },
-              { question: "Which amenities do you use?", answers: [] },
-            ],
-          },
-          status: { type: "complete" },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Where do you live?")).toBeVisible()
-    expect(screen.getByText("Which amenities do you use?")).toBeVisible()
-    expect(screen.getAllByText("Discarded")).toHaveLength(2)
-  })
-
   it("retries the same provider-native choice once without double-submit", async () => {
     const user = userEvent.setup()
     let resolveRetry: (() => void) | undefined
@@ -1406,26 +1351,6 @@ describe("provider permission renderer", () => {
 })
 
 describe("informational renderers", () => {
-  it("keeps subagent activity visible as message content", async () => {
-    await renderTool(
-      <RichToolRenderer
-        {...toolPart({
-          toolName: "delegate_subagent",
-          args: { task: "Validate the market segments" },
-          result: {
-            name: "Data analyst",
-            status: "completed",
-            summary: "Validated three segments.",
-          },
-        })}
-      />
-    )
-
-    expect(screen.getByText("Validated three segments.")).toBeVisible()
-    expect(screen.queryByText("Transcript")).toBeNull()
-    expect(screen.queryByText("Transcript unavailable.")).toBeNull()
-  })
-
   it.each([
     ["running", "Running", "Transcript is loading…"],
     ["waiting", "Waiting", "Transcript is loading…"],
@@ -1459,12 +1384,17 @@ describe("informational renderers", () => {
           {...toolPart({
             toolName: "delegate_subagent",
             args: { task: "Inspect child state" },
-            result: { name: "Child agent", status },
+            result: {
+              name: "Child agent",
+              status,
+              summary: "Validated three segments.",
+            },
           })}
         />
       )
 
       expect(screen.getByText(statusLabel)).toBeInTheDocument()
+      expect(screen.getByText("Validated three segments.")).toBeVisible()
       expect(screen.queryByText("Transcript")).toBeNull()
       expect(screen.queryByText("Transcript unavailable.")).toBeNull()
     }

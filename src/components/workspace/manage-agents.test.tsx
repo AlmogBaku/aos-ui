@@ -19,18 +19,18 @@ it.each([
   ["en", "Shown in workspace", "Hidden from workspace", "Managed by provider"],
   ["he", "מוצג בסביבת העבודה", "מוסתר מסביבת העבודה", "מנוהל על ידי הספק"],
 ] as const)(
-  "distinguishes shown and hidden read-only Agents in %s",
+  "distinguishes shown and hidden read-only Agents in %s, leaving out the creator and unavailable creation",
   async (locale, shown, hidden, ownership) => {
     const workspace = new FixtureWorkspace()
-    const catalog = (await workspace.listAgentCatalog()).filter(
-      ({ summary }) => summary.role !== "creator"
-    )
+    // The provider lists its creator in the same catalog as every Agent.
+    const catalog = await workspace.listAgentCatalog()
     vi.spyOn(workspace, "listAgentCatalog").mockResolvedValue(
       catalog.map((entry) => ({ ...entry, editable: false }))
     )
-    renderCatalog(workspace, locale)
+    renderCatalog(workspace, locale, { creatorAvailable: false })
     await screen.findByText("Aster")
     for (const entry of catalog) {
+      if (entry.summary.role === "creator") continue
       const row = screen.getByText(entry.summary.name).closest("li")!
       expect(within(row).getByText(ownership)).toBeVisible()
       expect(
@@ -38,6 +38,11 @@ it.each([
       ).toBeVisible()
       expect(within(row).queryByRole("switch")).toBeNull()
     }
+    expect(screen.queryByText("Agent Creator")).toBeNull()
+    const dictionary = locale === "he" ? he : en
+    expect(
+      screen.queryByRole("button", { name: dictionary.actions.newAgent })
+    ).toBeNull()
   }
 )
 
@@ -158,7 +163,8 @@ it("hiding sends {visibility: hidden, avatar: null}; showing sends visible with 
 
 function renderCatalog(
   workspace = new FixtureWorkspace(),
-  locale: "en" | "he" = "en"
+  locale: "en" | "he" = "en",
+  { creatorAvailable = true } = {}
 ) {
   const onVisibilityChanged = vi.fn(async () => {})
   const onNewAgent = vi.fn(async () => {})
@@ -172,7 +178,7 @@ function renderCatalog(
       dictionary={locale === "he" ? he : en}
       onVisibilityChanged={onVisibilityChanged}
       onNewAgent={onNewAgent}
-      creatorAvailable
+      creatorAvailable={creatorAvailable}
       onActionError={vi.fn()}
     />
   )
