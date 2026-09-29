@@ -377,8 +377,7 @@ export function fakeOpenClaw() {
           isError: false,
         })
       },
-      async secondResponse() {
-        const text = "The file lists three names."
+      async secondResponse(text = "The file lists three names.") {
         agentEvent("assistant", { delta: text })
         complete(text)
       },

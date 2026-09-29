@@ -136,10 +136,17 @@ describe("guest in a Session channel", () => {
   })
 
   it("shows a guest a live turn history already stored once", async () => {
-    const test = await harness({ providerIds: true, history: storedLiveTurn() })
+    const history: ReturnType<typeof storedLiveTurn> = []
+    const test = await harness({ providerIds: true, history })
     await test.list()
     const guest = await connectGuest(test)
-    await liveTurn(test, [test])
+    const messageId = await liveTurn(test, [test])
+    // Stored under the live turn's own ids, which history and live join by.
+    const [stored, reply] = storedLiveTurn()
+    history.push(
+      { ...stored!, id: messageId },
+      { ...reply!, id: "assistant-1" }
+    )
 
     await open(guest, { sessionId: GUEST_REF, replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")

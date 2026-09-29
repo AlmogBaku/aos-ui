@@ -299,11 +299,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       client,
       command.scope ?? sessions.scope(command.sessionId)
     )
-    return context.channels.resume(
-      membership,
-      command,
-      command.fromStart ? { paged: clientPagesHistory } : undefined
-    )
+    return context.channels.resume(membership, command, {
+      fromStart: command.fromStart,
+      paged: clientPagesHistory,
+    })
   }
 
   /**
@@ -513,7 +512,6 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       return {
         _meta: {
           [AOS_META_KEY]: {
-            ...(resumed.resync ? { resync: true } : {}),
             ...(history === undefined
               ? {}
               : { history: historyCursor(history) }),

@@ -431,7 +431,10 @@ const ROWS: Row[] = [
     async recovered(t) {
       await join(t, t.operator, fromStart)
       // Each member is shown the stored conversation once.
-      for (const member of members(t)) expect(shownTo(member)).toHaveLength(1)
+      for (const member of members(t))
+        expect(
+          shownTo(member).filter((item) => item.startsWith("history"))
+        ).toHaveLength(1)
     },
     calls: { history: 3 },
   },
@@ -830,23 +833,27 @@ const ROWS: Row[] = [
     stage: "live",
     async meet(t) {
       t.test.faults.gone(t.test.scope)
-      // Both sockets drop, and both browsers rejoin at their cursor.
+      // Both sockets drop, and both browsers rejoin at their cursor. The
+      // operator's readings find the Session gone, so the guest's cursor is
+      // lost with it, and the history its view is rebuilt from refuses it.
       for (const member of members(t)) member.close()
       t.operator = await connectOperator(t.test, "connection-3")
       t.guest = await connectGuest(t.test)
       t.browsers.push(t.operator, t.guest)
-      await redial(t)
+      await join(t, t.operator, atCursor(t.turnId, LIVE_CURSOR))
+      await expect(
+        join(t, t.guest, atCursor(t.turnId, LIVE_CURSOR))
+      ).rejects.toMatchObject({ code: NOT_FOUND })
     },
     bound: 0,
     async recovered(t) {
       for (const member of members(t))
         expect(notices(member)).toEqual(["not_found"])
-      // A later rejoin learns its cursor is lost, and a reload is refused.
-      const resumed = await join(t, t.operator, atCursor(t.turnId, LIVE_CURSOR))
-      expect(resumed._meta?.[AOS_META_KEY]).toEqual({ resync: true })
-      await expect(join(t, t.operator, fromStart)).rejects.toMatchObject({
-        code: NOT_FOUND,
-      })
+      // A later rejoin, whose cursor is lost, and a reload are both refused.
+      for (const params of [atCursor(t.turnId, LIVE_CURSOR), fromStart])
+        await expect(join(t, t.operator, params)).rejects.toMatchObject({
+          code: NOT_FOUND,
+        })
     },
     calls: {},
   },
@@ -948,10 +955,11 @@ const ROWS: Row[] = [
     },
     bound: 0,
     async recovered(t) {
-      // Neither cursor means anything to the new process.
+      // Neither cursor means anything to the new process, so each view is
+      // rebuilt from history.
       for (const member of members(t)) {
         const answer = await join(t, member, atCursor(t.turnId, LIVE_CURSOR))
-        expect(answer._meta?.[AOS_META_KEY]).toEqual({ resync: true })
+        expect(answer._meta?.[AOS_META_KEY]).toHaveProperty("history")
       }
       chunk(t.source(), " reply")
       t.foreign.end()

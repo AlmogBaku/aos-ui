@@ -392,8 +392,7 @@ export function fakeHermes() {
     },
 
     /** The wire contract's second model response: the final text. */
-    async secondResponse() {
-      const text = "The file lists three names."
+    async secondResponse(text = "The file lists three names.") {
       emit(turn.delta(text))
       complete(text)
     },

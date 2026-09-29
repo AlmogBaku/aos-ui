@@ -61,7 +61,7 @@ function member(
   const sent: string[] = []
   const reported: unknown[] = []
   let follows = 0
-  let invalidations = 0
+  let rebuilds = 0
   const fake: MembershipDelivery = {
     sendTurn(sentTurn) {
       sent.push(sentTurn.turnId)
@@ -72,8 +72,8 @@ function member(
       return options.follow?.() ?? Promise.resolve("following")
     },
     followedTurn: () => options.followedTurn,
-    invalidate() {
-      invalidations += 1
+    rebuild() {
+      rebuilds += 1
     },
     report(cause) {
       reported.push(cause)
@@ -84,7 +84,7 @@ function member(
     sent,
     reported,
     follows: () => follows,
-    invalidations: () => invalidations,
+    rebuilds: () => rebuilds,
   }
 }
 
@@ -340,7 +340,7 @@ describe("createChannel", () => {
     ])
   })
 
-  it("invalidates only a member shown a channel prompt whose reply it missed", async () => {
+  it("rebuilds only a member shown a channel prompt whose reply it missed", async () => {
     const { channels, setSnapshot } = harness()
     const idle = () => Promise.resolve("idle" as const)
     const sender = member({ follow: idle })
@@ -357,10 +357,10 @@ describe("createChannel", () => {
 
     await channels.sync(SCOPE)
 
-    expect(missed.invalidations()).toBe(1)
-    expect(sender.invalidations()).toBe(0)
-    expect(streamed.invalidations()).toBe(0)
-    expect(holder.invalidations()).toBe(0)
+    expect(missed.rebuilds()).toBe(1)
+    expect(sender.rebuilds()).toBe(0)
+    expect(streamed.rebuilds()).toBe(0)
+    expect(holder.rebuilds()).toBe(0)
   })
 
   it("reports a failing member and still serves the others", async () => {
@@ -557,8 +557,8 @@ describe("createChannel adopting runtime-started turns", () => {
     runtime.end("aos-recovered-1")
     await settle()
 
-    expect(first.invalidations()).toBe(1)
-    expect(second.invalidations()).toBe(1)
+    expect(first.rebuilds()).toBe(1)
+    expect(second.rebuilds()).toBe(1)
   })
 
   it("asks the runtime again when the channel's own turn ends, without a reload", async () => {
@@ -569,7 +569,7 @@ describe("createChannel adopting runtime-started turns", () => {
     runtime.end("turn-1")
     await settle()
 
-    expect(first.invalidations()).toBe(0)
+    expect(first.rebuilds()).toBe(0)
     expect(runtime.discovered).toHaveLength(1)
   })
 
@@ -859,11 +859,12 @@ describe("a membership's declines", () => {
 })
 
 describe("a membership's resume", () => {
-  it("answers a Session its follow finds gone as gone, not resync", async () => {
+  it("answers a Session its follow finds gone as gone, rebuilding nothing", async () => {
     const gone = new ServerSessionNotFoundError()
     const coordinator = {
       snapshot: () => ({ state: "running", turnId: "turn-1" }),
       subscribeScope: () => () => undefined,
+      subscribeReadings: () => () => undefined,
       recover: () => Promise.reject(gone),
       endIfGone: (_scope: SessionScope, cause: unknown) => cause === gone,
     } as unknown as SessionCoordinator

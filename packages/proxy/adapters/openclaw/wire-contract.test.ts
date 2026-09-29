@@ -55,6 +55,7 @@ runWireContract(
       sameIdsLiveAndAfterReload: LIVE_IDS_ADAPTER_MADE,
       historyAndLiveJoinedById: LIVE_IDS_ADAPTER_MADE,
       oneTurnThroughQuestion: LIVE_IDS_ADAPTER_MADE,
+      catchUpWithStandardUpdates: LIVE_IDS_ADAPTER_MADE,
       // Every approval carries a reviewer-safe presentation, so the adapter
       // holds none back, and `sessions.messages.subscribe` replays each
       // pending one (`SessionApprovalReplaySchema`), so a restarted proxy

@@ -21,7 +21,6 @@ import {
   AOS_REPLAY_BEFORE,
   AosComposerPrefillNotificationSchema,
   AosPromptMetaSchema,
-  AosSteerAcceptedNotificationSchema,
   AosSteerRequestSchema,
   AosSteerResponseSchema,
 } from "../../protocol/acp"
@@ -2027,13 +2026,19 @@ describe("guest scope and commands", () => {
       requestId: "steer-1",
       text: "Shorter, please",
     })
+    // The turn shows the steer it took as a user message under its requestId.
     const accepted = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.steerAccepted,
-      "the steer's acknowledgement"
+      (entry) => JSON.stringify(entry.params).includes('"messageId":"steer-1"'),
+      "the steer's user message"
     )
-    expect(
-      AosSteerAcceptedNotificationSchema.safeParse(accepted.params).data
-    ).toMatchObject({ sessionId: REF, requestId: "steer-1" })
+    expect(accepted.params).toMatchObject({
+      sessionId: REF,
+      update: {
+        sessionUpdate: "user_message",
+        messageId: "steer-1",
+        content: [{ type: "text", text: "Shorter, please" }],
+      },
+    })
 
     // Another connection on the same invitation steers only once it joins.
     const other = await loggedInWire(test.listener, token)

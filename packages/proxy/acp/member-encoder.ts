@@ -122,7 +122,10 @@ function executionUpdate({
   turnId,
   sequence,
   awaitingStop,
+  startedAt,
 }: Extract<MemberEvent, { kind: "execution" }>): SessionUpdate {
+  const live =
+    state === "running" || state === "stopping" || state === "waiting-for-input"
   const meta =
     turnId === undefined
       ? {}
@@ -134,6 +137,8 @@ function executionUpdate({
               ...(state === "stopping"
                 ? { execution: "stopping" as const }
                 : {}),
+              // A live turn is dated where it began, as its stream dated it.
+              ...(startedAt === undefined || !live ? {} : { at: startedAt }),
             },
           },
         }
@@ -250,14 +255,19 @@ export function createMemberEncoder({
     switch (outbound.kind) {
       case "update":
         return update(sessionId, outbound.update)
+      // A steer the turn took is a user message on it, as any client reads one.
       case "steer-accepted":
-        return client.notify(AOS_METHODS.notify.steerAccepted, {
-          sessionId,
-          sequence,
-          turnId: outbound.turnId,
-          requestId: outbound.requestId,
-          text: outbound.text,
-          delivery: outbound.delivery,
+        return update(sessionId, {
+          sessionUpdate: "user_message",
+          messageId: outbound.requestId,
+          content: [{ type: "text", text: outbound.text }],
+          _meta: {
+            [AOS_META_KEY]: {
+              turnId: outbound.turnId,
+              sequence,
+              delivery: outbound.delivery,
+            },
+          },
         })
       case "composer-prefill":
         return client.notify(AOS_METHODS.notify.composerPrefill, {
@@ -362,6 +372,13 @@ export function createMemberEncoder({
     states.set(stream, translated.state)
     for (const outbound of translated.outbound) {
       if (stream.dropped) return
+      // A replayed state has passed; the view is told the turn's own after.
+      if (
+        event.replayed &&
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate === "state_update"
+      )
+        continue
       await send(sessionId, outbound, sequence)
     }
   }

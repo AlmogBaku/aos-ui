@@ -96,6 +96,8 @@ export type SessionSnapshot = {
   startedBy?: string
   /** The running turn waits on a prompt no client here answers: only Stop ends it. */
   awaitingStop?: true
+  /** When the live turn began, where the runtime or this proxy dated it. */
+  startedAt?: string
 }
 
 export type SequencedTurnEvent = {
@@ -126,6 +128,8 @@ export type CoordinatedTurnSubscription = {
   close(): void
   /** The id the provider stored the turn's prompt under, once it did. */
   messageId?: string
+  /** How many of `events` the journal buffered before the live ones. */
+  replayed?: number
 }
 
 /**
@@ -532,11 +536,16 @@ type Segment = {
   answers: Map<string, RequestReply>
   onTerminal?: (event: TurnEvent) => void | Promise<void>
   /**
-   * Epoch ms the turn's replay starts from: its admission, the answer that
-   * continued it, or the native start an adopted turn reported. Absent for a
+   * Epoch ms the turn's replay starts from: its admission, which a wait's end
+   * carries on, or the native start an adopted turn reported. Absent for a
    * turn joined midway, or adopted without a start.
    */
   startedAt?: number
+  /**
+   * The segment a wait's end continued under a fresh turnId, as a cursor into
+   * this one's journal: a member that followed it holds the journal that far.
+   */
+  continues?: { turnId: string; after: number }
 }
 
 /** How a segment relates to the replayable history of its turn. */
@@ -705,6 +714,19 @@ function compactedEvent(
   )
     return { ...previous, text: previous.text + next.text }
   return undefined
+}
+
+/** The message and tool call ids one event names, which history keys rows by. */
+function rowIds({ event }: SequencedTurnEvent): string[] {
+  return [
+    ...("messageId" in event ? [event.messageId] : []),
+    ...("parentMessageId" in event && event.parentMessageId !== undefined
+      ? [event.parentMessageId]
+      : []),
+    ...("toolCallId" in event && event.toolCallId !== undefined
+      ? [event.toolCallId]
+      : []),
+  ]
 }
 
 /**
@@ -1177,19 +1199,40 @@ export class SessionCoordinator {
       requests: segment ? structuredClone(openRequests(segment)) : [],
       ...(startedBy === undefined ? {} : { startedBy }),
       ...(segment?.awaitingStop ? { awaitingStop: true as const } : {}),
+      ...(segment?.startedAt === undefined
+        ? {}
+        : { startedAt: new Date(segment.startedAt).toISOString() }),
     }
   }
 
   /**
-   * The live turn a cursorless follow replays from its first event, and when
-   * that start was if it is known: a view rebuilt from history reads the turn
-   * from there.
+   * The live turn a cursorless follow replays from its first event, and the
+   * ids of the messages and tool calls that replay carries: a view rebuilt
+   * from history leaves those rows to the replay, so each shows once.
    */
   replayStart(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
-    if (!segment || replayPlan(segment, undefined) !== "history")
+    if (!segment?.journal || replayPlan(segment, undefined) !== "history")
       return undefined
-    return { turnId: segment.turnId, at: segment.startedAt }
+    return {
+      turnId: segment.turnId,
+      ...(segment.continues ? { continues: segment.continues } : {}),
+      ids: new Set(
+        segment.journal.entries.flatMap(({ value }) => rowIds(value))
+      ),
+    }
+  }
+
+  /**
+   * Whether a view `after` events into the Session's latest turn holds all
+   * of it, which no further event of that turn changes.
+   */
+  holds(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    after: number
+  ) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    return !segment || after >= segment.nextSequence
   }
 
   /**
@@ -2155,7 +2198,6 @@ export class SessionCoordinator {
     const { turn, generation } = this.#admit(execution.scope, input.turnId)
     const deadline = this.#deadline()
     try {
-      const at = Date.now()
       const handle = await this.#startNative(
         execution.scope,
         input,
@@ -2173,7 +2215,8 @@ export class SessionCoordinator {
           input.turnId
         ),
         handle,
-        history: { journal: "start", at },
+        // The answer continues the turn, whose journal it carries on.
+        history: { journal: "continue", previous: execution.segment },
       })
       this.#forgetJournal(execution.segment)
       // A continued turn is a fresh admission on the same execution record.
@@ -2248,8 +2291,9 @@ export class SessionCoordinator {
         turnId,
         generation: this.#landed(turn, generation, "running", turnId),
         handle: paused.handle,
-        history: { journal: "start", at: Date.now() },
+        history: { journal: "continue", previous: paused },
       })
+      this.#forgetJournal(paused)
       segment.reader = paused.reader
       paused.handle.wait?.continue(turnId)
       // A command running on the execution keeps its place in line.
@@ -2313,6 +2357,14 @@ export class SessionCoordinator {
         : previous?.startedAt === undefined
           ? {}
           : { startedAt: previous.startedAt }),
+      ...(previous && previous.turnId !== init.turnId
+        ? {
+            continues: {
+              turnId: previous.turnId,
+              after: previous.nextSequence,
+            },
+          }
+        : {}),
       nextSequence: previous?.nextSequence ?? 0,
       terminal: false,
       requests: [],
@@ -2390,9 +2442,11 @@ export class SessionCoordinator {
           if (!interrupted) this.#remember(segment, sequenced)
           segment.fanout.publish(sequenced)
           if (ended) {
-            this.#forgetJournal(segment)
             segment.terminal = true
             segment.requests = pendingRequestsOf(event)
+            // A wait keeps its journal, so a view rebuilt while it waits reads
+            // the turn so far and the wait from it.
+            if (!segment.requests.length) this.#forgetJournal(segment)
             outcome(segment.requests.length ? "paused" : "ended")
             const origin = this.#origin(execution.scope, segment.turnId)
             if (segment.requests.length) {
@@ -2644,6 +2698,7 @@ export class SessionCoordinator {
     return {
       turnId: segment.turnId,
       events,
+      replayed: replay.length,
       close: () => {
         closed = true
         live.close()

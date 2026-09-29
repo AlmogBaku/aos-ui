@@ -444,8 +444,8 @@ export function fakeOpenCode() {
           read: "/tmp/demo.txt",
         })
       },
-      async secondResponse() {
-        step({ text: "The file lists three names." })
+      async secondResponse(text = "The file lists three names.") {
+        step({ text })
         await finish()
       },
       /** The turn's in-turn prompts, as the release's `question` tool asks. */

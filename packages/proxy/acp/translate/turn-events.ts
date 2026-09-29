@@ -40,6 +40,8 @@ import {
   toolContentOutbound,
   ACP_STOP_REASON,
   diffContent,
+  outputContent,
+  textContent,
   toolOutbound,
   update,
 } from "./updates"
@@ -112,10 +114,6 @@ function attribution(state: TranslateState, subagentId: string | undefined) {
 function wireSubagent(subagent: Subagent | undefined) {
   const parsed = AosSubagentSchema.safeParse(subagent)
   return parsed.success ? { subagent: parsed.data } : {}
-}
-
-function textContent(text: string): ToolCallContent {
-  return { type: "content", content: { type: "text", text } }
 }
 
 /**
@@ -411,13 +409,14 @@ function toolFinished(
     ([terminalId, toolCallId]): ToolCallContent[] =>
       toolCallId === event.toolCallId ? [{ type: "terminal", terminalId }] : []
   )
+  const output = jsonOr(event.output, event.output)
   const call = {
     toolCallId: event.toolCallId,
     ...(event.name ? { title: event.name, name: event.name } : {}),
     status: event.failed ? "failed" : "completed",
-    rawOutput: jsonOr(event.output, event.output),
+    rawOutput: output,
     content: [
-      textContent(event.output),
+      outputContent(output),
       ...(event.diffs ?? []).map(diffContent),
       ...terminals,
     ],

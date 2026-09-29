@@ -24,6 +24,7 @@ import {
   methods,
   SessionUpdate,
   type AnyWireMessage,
+  type ContentBlock,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -40,6 +41,7 @@ import {
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_META_KEY,
+  AOS_STOP_REASONS,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredProxy } from "../composition"
@@ -57,6 +59,8 @@ export type WireContractRow =
   | "withdrawnQuestion"
   | "heldAndLostQuestions"
   | "questionsDuringOwnTurn"
+  | "reloadMidTurn"
+  | "catchUpWithStandardUpdates"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -69,8 +73,8 @@ export type WireTurn = Readonly<{
    * a `read_file` call on `/tmp/demo.txt` that completes, all stored.
    */
   firstResponse(): Promise<void>
-  /** The text "The file lists three names.", stored; the turn ends. */
-  secondResponse(): Promise<void>
+  /** The text "The file lists three names." or `text`, stored; the turn ends. */
+  secondResponse(text?: string): Promise<void>
   /** Absent only when every row that asks a question is a gap. */
   questions?: WireQuestions
 }>
@@ -122,6 +126,13 @@ const GUEST_ORIGIN = "https://guest.example.test"
 
 type Clock = ReturnType<typeof useFakeClock>
 type Proxy = Awaited<ReturnType<typeof createConfiguredProxy>>
+/** The bounds one subscriber's stream and replay keep. */
+type SubscriberLimits = { subscriberEvents: number; subscriberBytes: number }
+
+const SUBSCRIBER_LIMITS: SubscriberLimits = {
+  subscriberEvents: 512,
+  subscriberBytes: 2_097_152,
+}
 
 /** What one case holds: the proxy, the Agent, and whatever it opened. */
 type WireHarness = Readonly<{
@@ -143,7 +154,7 @@ type WireHarness = Readonly<{
  * Awaited directly, not on the fake clock: composing reads that key from
  * disk, and real I/O takes no fixed count of clock steps.
  */
-async function composeProxy(runtime: WireRuntime) {
+async function composeProxy(runtime: WireRuntime, limits: SubscriberLimits) {
   const directory = await mkdtemp(join(tmpdir(), "aos-wire-contract-"))
   const invitationKey = join(directory, "invitation-key")
   await writeFile(
@@ -164,8 +175,7 @@ async function composeProxy(runtime: WireRuntime) {
           activeExecutions: 256,
           guestActiveExecutions: 32,
           operatorEventPeers: 256,
-          subscriberEvents: 512,
-          subscriberBytes: 2_097_152,
+          ...limits,
         },
         guest: {
           listen: { host: "127.0.0.1", port: 4101 },
@@ -198,10 +208,12 @@ function connectClient(
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
+  const timeline: TimelineEntry[] = []
   const stateWaiters = new Set<(update: SessionUpdate) => void>()
   const askWaiters = new Set<(ask: WireAsk) => void>()
   /** Holds one request open until the case answers it or the proxy withdraws it. */
   function hold<T>(signal: AbortSignal, reply: T) {
+    timeline.push("asked")
     return new Promise<T>((resolve, reject) => {
       const ask: WireAsk = {
         withdrawn: new Promise((settle) =>
@@ -218,6 +230,7 @@ function connectClient(
   const app = client({ name: "wire-contract" })
     .onNotification(methods.client.session.update, ({ params }) => {
       updates.push(params.update)
+      timeline.push(params.update)
       for (const settle of stateWaiters) settle(params.update)
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
@@ -256,6 +269,12 @@ function connectClient(
     bridge,
     /** Every `session/update` this client read, in order. */
     updates,
+    /** Every update, request and marked answer this client read, in order. */
+    timeline,
+    /** Marks the answer to a request, where the client read it. */
+    answered: () => {
+      timeline.push("answer")
+    },
     nextState,
     /** Settles at the next update that says a turn went idle. */
     nextIdle: () => nextState("idle"),
@@ -278,6 +297,12 @@ function connectClient(
       }),
   }
 }
+
+/**
+ * One thing a client read: an update, a request the proxy `asked` it, or the
+ * `answer` to a request the case marked.
+ */
+type TimelineEntry = SessionUpdate | "asked" | "answer"
 
 /** One request the proxy sent this client, held open until answered. */
 type WireAsk = Readonly<{
@@ -385,25 +410,41 @@ async function stopTurn(
   return { beforeConfirmation, after: states(plain.updates).at(-1) }
 }
 
+/** A content block as the text a reader shows, or its type. */
+function blockText(block: ContentBlock) {
+  return block.type === "text" ? block.text : block.type
+}
+
 /**
  * The Agent's side as a plain reader sees it in standard fields: each message
- * in order with its kind and text, and each tool call's final status.
+ * in order with its kind and text, and each tool call's final status. An
+ * `agent_message` or `agent_thought` replaces its message's content; a chunk
+ * extends it.
  */
 function agentSide(updates: readonly SessionUpdate[]) {
   const messages = new Map<string, { kind: string; text: string }>()
   const calls: Record<string, string> = {}
   for (const update of updates) {
     if (
+      SessionUpdate.isAgentMessage(update) ||
+      SessionUpdate.isAgentThought(update)
+    ) {
+      const kind = update.sessionUpdate
+      const text = (update.content ?? []).map(blockText).join("")
+      const message = messages.get(update.messageId)
+      if (message) Object.assign(message, { kind, text })
+      else messages.set(update.messageId, { kind, text })
+    }
+    if (
       SessionUpdate.isAgentMessageChunk(update) ||
       SessionUpdate.isAgentThoughtChunk(update)
     ) {
       const id = update.messageId ?? "(no id)"
       const message = messages.get(id) ?? {
-        kind: update.sessionUpdate,
+        kind: update.sessionUpdate.replace(/_chunk$/u, ""),
         text: "",
       }
-      const { content } = update
-      message.text += content.type === "text" ? content.text : content.type
+      message.text += blockText(update.content)
       messages.set(id, message)
     }
     if (SessionUpdate.isToolCallUpdate(update) && update.status)
@@ -425,11 +466,56 @@ function userSide(updates: readonly SessionUpdate[]) {
     if (SessionUpdate.isUserMessage(update))
       messages.set(
         update.messageId,
-        (update.content ?? [])
-          .map((block) => (block.type === "text" ? block.text : block.type))
-          .join("")
+        (update.content ?? []).map(blockText).join("")
       )
   return [...messages].map(([id, text]) => ({ id, text }))
+}
+
+/**
+ * Each tool call a plain reader holds, by id: its last status and its
+ * content, which `tool_call_update` replaces and a content chunk extends.
+ */
+function toolCalls(updates: readonly SessionUpdate[]) {
+  const calls: Record<string, { status?: string; content: unknown[] }> = {}
+  for (const update of updates) {
+    if (
+      !SessionUpdate.isToolCallUpdate(update) &&
+      !SessionUpdate.isToolCallContentChunk(update)
+    )
+      continue
+    const call = (calls[update.toolCallId] ??= { content: [] })
+    if (SessionUpdate.isToolCallContentChunk(update)) {
+      call.content.push(update.content)
+      continue
+    }
+    if (update.status) call.status = update.status
+    if (update.content) call.content = [...update.content]
+  }
+  return calls
+}
+
+/**
+ * The order a reader read a reload in: the conversation, each state, each
+ * request and the answer, a run of conversation read as one step.
+ */
+function reloadOrder(timeline: readonly TimelineEntry[]) {
+  const order: string[] = []
+  for (const entry of timeline) {
+    const step =
+      typeof entry === "string"
+        ? entry
+        : SessionUpdate.isStateUpdate(entry)
+          ? `state:${entry.state}`
+          : SessionUpdate.isUserMessage(entry) ||
+              SessionUpdate.isAgentMessageChunk(entry) ||
+              SessionUpdate.isAgentThoughtChunk(entry) ||
+              SessionUpdate.isToolCallUpdate(entry) ||
+              SessionUpdate.isToolCallContentChunk(entry)
+            ? "conversation"
+            : undefined
+    if (step !== undefined && order.at(-1) !== step) order.push(step)
+  }
+  return order
 }
 
 /** Each turn state a plain reader read, an idle one with its stop reason. */
@@ -443,10 +529,32 @@ function states(updates: readonly SessionUpdate[]) {
 
 /** What every turn the rows play reads as, ids aside. */
 const PLAYED_TURN = [
-  { kind: "agent_thought_chunk", text: "I should read the file." },
-  { kind: "agent_message_chunk", text: "Reading the file." },
-  { kind: "agent_message_chunk", text: "The file lists three names." },
+  { kind: "agent_thought", text: "I should read the file." },
+  { kind: "agent_message", text: "Reading the file." },
+  { kind: "agent_message", text: "The file lists three names." },
 ]
+
+/** One model response longer than the bound the catch-up row sets. */
+const LONG_RESPONSE = "The file lists three names. ".repeat(64).trim()
+
+/** Bounds one `LONG_RESPONSE` delta overflows, stream and replay alike. */
+const TIGHT_LIMITS: SubscriberLimits = {
+  subscriberEvents: 512,
+  subscriberBytes: 1_024,
+}
+
+/** The AOS-only methods a client read that name a view to rebuild. */
+function rebuildNotices(client: WireClient) {
+  return client.bridge.sockets().flatMap(({ frames }) =>
+    frames.flatMap((raw) => {
+      const { method } = JSON.parse(raw) as { method?: string }
+      return method === "_aos/session_invalidated" ||
+        method === "_aos/steer_accepted"
+        ? [method]
+        : []
+    })
+  )
+}
 
 /** A fake with no turn driver fails the row that plays one, never skips it. */
 const NO_TURN: WireTurn = {
@@ -474,12 +582,13 @@ function questionsOf(turn: WireTurn): WireQuestions {
 /** One case over a freshly composed proxy, closing all it opened. */
 function wireCase(
   createRuntime: () => WireRuntime,
-  body: (harness: WireHarness) => Promise<void>
+  body: (harness: WireHarness) => Promise<void>,
+  limits = SUBSCRIBER_LIMITS
 ) {
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { proxy, release } = await composeProxy(runtime)
+    const { proxy, release } = await composeProxy(runtime, limits)
     const clients: WireClient[] = []
     try {
       await body({
@@ -519,10 +628,11 @@ export function runWireContract(
   function row(
     id: WireContractRow,
     title: string,
-    body: (harness: WireHarness) => Promise<void>
+    body: (harness: WireHarness) => Promise<void>,
+    limits?: SubscriberLimits
   ) {
     if (gaps[id] !== undefined) it.skip(`${title} (gap: ${gaps[id]})`)
-    else it(title, wireCase(createRuntime, body))
+    else it(title, wireCase(createRuntime, body, limits))
   }
 
   describe(
@@ -789,6 +899,98 @@ export function runWireContract(
             askQuestion(clock, plain, questionsOf(turn))
           ).resolves.toBeTypeOf("object")
         }
+      )
+
+      row(
+        "reloadMidTurn",
+        "rebuilds a turn waiting on a question from history, then its state and question, then answers",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          await askQuestion(clock, plain, questionsOf(turn))
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          const asked = reader.nextAsked()
+          await until(
+            clock,
+            resumeFromStart(reader, sessionId, agentId).then(reader.answered)
+          )
+          await until(clock, asked)
+
+          expect(reloadOrder(reader.timeline)).toEqual([
+            "conversation",
+            "state:requires_action",
+            "asked",
+            "answer",
+          ])
+          expect(userSide(reader.updates)).toEqual(userSide(plain.updates))
+          expect(agentSide(reader.updates)).toEqual(agentSide(plain.updates))
+          const calls = toolCalls(reader.updates)
+          expect(Object.values(calls)).toMatchObject([
+            { status: "completed", content: [expect.anything()] },
+          ])
+          expect(calls).toEqual(toolCalls(plain.updates))
+        }
+      )
+
+      row(
+        "catchUpWithStandardUpdates",
+        "rebuilds a view that fell behind or lost its place from history in standard updates, then states the turn",
+        async (harness) => {
+          const { proxy, agentId, clock, turn, connect } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          // One delta past the bound overflows the live stream and the replay.
+          await until(clock, turn.secondResponse(LONG_RESPONSE))
+          await until(clock, idle)
+          // A cursor the replay no longer holds.
+          const stale = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, stale.initialize())
+          const resumed = await until(
+            clock,
+            stale.connection.agent.request(methods.agent.session.resume, {
+              sessionId,
+              cwd: "/",
+              _meta: { [AOS_META_KEY]: { agentId, after: 1 } },
+            })
+          )
+          const reader = connect(
+            proxy.acpService,
+            OPERATOR_ORIGIN,
+            AOS_ACP_OPERATOR_PATH
+          )
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId, agentId))
+
+          const stored = agentSide(reader.updates)
+          expect(stored.messages.map(({ text }) => text)).toContain(
+            LONG_RESPONSE
+          )
+          expect(agentSide(plain.updates)).toEqual(stored)
+          expect(agentSide(stale.updates)).toEqual(stored)
+          expect(userSide(stale.updates)).toEqual(userSide(reader.updates))
+          for (const client of [plain, stale]) {
+            expect(states(client.updates).at(-1)).toMatch(/^idle/u)
+            expect(states(client.updates).join()).not.toContain(
+              AOS_STOP_REASONS.uncertain
+            )
+            expect(rebuildNotices(client)).toEqual([])
+          }
+          expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("resync")
+        },
+        TIGHT_LIMITS
       )
     })
   )

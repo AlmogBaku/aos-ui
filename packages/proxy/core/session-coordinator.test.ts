@@ -1121,10 +1121,7 @@ describe("SessionCoordinator", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000)
     try {
       const own = await sessions.start(scope, input("run-1"), access("own"))
-      expect(sessions.replayStart(scope)).toEqual({
-        turnId: "run-1",
-        at: 1_000,
-      })
+      expect(sessions.replayStart(scope)).toMatchObject({ turnId: "run-1" })
 
       // Emitted long after admission, the start still reads as the admission.
       clock.mockReturnValue(61_000)
@@ -1150,9 +1147,8 @@ describe("SessionCoordinator", () => {
       own.close()
 
       // A continued turn's journal starts at the answer, not at the prompt.
-      clock.mockReturnValue(90_000)
       const turnId = await continueTurn(sessions)
-      expect(sessions.replayStart(scope)).toEqual({ turnId, at: 90_000 })
+      expect(sessions.replayStart(scope)).toMatchObject({ turnId })
     } finally {
       clock.mockRestore()
     }
@@ -2574,30 +2570,23 @@ describe("SessionCoordinator", () => {
       member.close()
     })
 
-    it("starts the replay where the runtime says the adopted turn began", async () => {
+    it("dates the adopted turn's start where the runtime says it began", async () => {
       const startedAt = Date.now() - 60_000
-      const reported = await afterOneTurn(async () => ({
-        handle: new EventSource(),
+      const adopted = new EventSource()
+      const { sessions } = await afterOneTurn(async () => ({
+        handle: adopted,
         state: "running",
         fromStart: true,
         startedAt,
       }))
-      const unreported = await afterOneTurn(async () => ({
-        handle: new EventSource(),
-        state: "running",
-        fromStart: true,
-      }))
 
-      await reported.sessions.discover(scope)
-      await unreported.sessions.discover(scope)
+      await sessions.discover(scope)
+      adopted.emit(turnStarted)
 
-      expect(reported.sessions.replayStart(scope)).toEqual({
-        turnId: reported.sessions.snapshot(scope).turnId,
-        at: startedAt,
-      })
-      expect(unreported.sessions.replayStart(scope)).toEqual({
-        turnId: unreported.sessions.snapshot(scope).turnId,
-        at: undefined,
+      await expect(
+        reloadedHead(sessions, scope, sessions.snapshot(scope).turnId!)
+      ).resolves.toMatchObject({
+        event: { startedAt: new Date(startedAt).toISOString() },
       })
     })
 
@@ -3407,7 +3396,7 @@ describe("SessionCoordinator", () => {
       expect(onTerminal).not.toHaveBeenCalled()
     }
 
-    // A resumed segment gets a fresh journal.
+    // A resumed segment carries on its turn's journal.
     {
       const interrupted = new EventSource()
       const resumed = new EventSource()
@@ -3454,15 +3443,22 @@ describe("SessionCoordinator", () => {
       )
       const readLive = reader(live)
       resumed.emit(turnStarted)
-      // A resumed turn is a fresh segment: its own journal and sequence.
+      // A resumed turn carries on its turn's journal and sequence, so a reload
+      // still reads what it streamed before its question.
       await expect(readLive()).resolves.toMatchObject({
-        value: { sequence: 1, event: { kind: TurnEventKind.TurnStarted } },
+        value: {
+          sequence: 1,
+          event: { kind: TurnEventKind.TurnRequiresAction },
+        },
+      })
+      await expect(readLive()).resolves.toMatchObject({
+        value: { sequence: 2, event: { kind: TurnEventKind.TurnStarted } },
       })
       await expect(
         reloadedHead(sessions, scope, turnId)
       ).resolves.toMatchObject({
         sequence: 1,
-        event: { kind: TurnEventKind.TurnStarted },
+        event: { kind: TurnEventKind.TurnRequiresAction },
       })
       await expect(reloadNeighbor()).resolves.toMatchObject({
         sequence: 1,

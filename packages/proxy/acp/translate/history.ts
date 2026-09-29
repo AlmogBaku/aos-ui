@@ -1,16 +1,16 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { StopReason, type SessionMessage } from "../../../protocol"
+import type { SessionMessage } from "../../../protocol"
 import {
   AOS_STOP_REASONS,
   AosArtifactDescriptorSchema,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext, TranslateHistory } from "../types"
 import {
-  ACP_STOP_REASON,
   artifactOutbound,
   chunkOutbound,
   diffContent,
+  outputContent,
   planUpdate,
   stateOutbound,
   toolOutbound,
@@ -91,6 +91,11 @@ function toolCallOutbound(
     name: part.toolName,
     status: part.isError ? "failed" : "completed",
   }
+  // The content the live call settles with: its output, then its diffs.
+  const content = [
+    ...(part.result === undefined ? [] : [outputContent(part.result)]),
+    ...(part.diffs ?? []).map(diffContent),
+  ]
   return [
     toolOutbound(
       context,
@@ -101,7 +106,7 @@ function toolCallOutbound(
         ...(part.result === undefined ? {} : { rawOutput: part.result }),
         ...(part.kind ? { kind: part.kind } : {}),
         ...(part.locations ? { locations: part.locations } : {}),
-        ...(part.diffs ? { content: part.diffs.map(diffContent) } : {}),
+        ...(content.length ? { content } : {}),
       },
       {
         argsText: part.argsText,
@@ -117,35 +122,25 @@ function toolCallOutbound(
 }
 
 /**
- * How the turn ended, as the live turn reports it. The provider's own failure
- * carries the stored message; every other stored turn ended its turn, including
- * one still waiting on an answer, because the request the attachment reissues is
- * what reopens it.
- *
- * A clean end replays the stop reason the provider stored, and an ordinary end
- * of turn when it stored none.
+ * The failure a provider stored on an assistant message, as the live turn
+ * reports it. Only a failure replays a state: the browser shows it, and no
+ * other stored turn has a state that still stands.
  */
-function settledOutbound(
+function failureOutbound(
   context: TranslateContext,
   message: SessionMessage
-): AcpOutbound {
-  const at = message.completedAt ?? message.createdAt
-  const failure =
-    message.status?.type === "incomplete" ? message.status : undefined
-  return failure
-    ? stateOutbound(
-        context,
-        { state: "idle", stopReason: AOS_STOP_REASONS.error },
-        { at, message: failure.error }
-      )
-    : stateOutbound(
-        context,
-        {
-          state: "idle",
-          stopReason: ACP_STOP_REASON[message.stopReason ?? StopReason.EndTurn],
-        },
-        { at }
-      )
+): AcpOutbound[] {
+  if (message.status?.type !== "incomplete") return []
+  return [
+    stateOutbound(
+      context,
+      { state: "idle", stopReason: AOS_STOP_REASONS.error },
+      {
+        at: message.completedAt ?? message.createdAt,
+        message: message.status.error,
+      }
+    ),
+  ]
 }
 
 /**
@@ -181,50 +176,62 @@ function partsOutbound(
   return outbound
 }
 
+/** The upsert an agent chunk's message starts from. */
+const MESSAGE_START = {
+  agent_message_chunk: "agent_message",
+  agent_thought_chunk: "agent_thought",
+} as const
+
+/**
+ * Starts each agent message from empty content before its first chunk, so a
+ * view that already holds the message, as one rebuilt in place does, shows it
+ * once.
+ */
+function fromEmpty(outbound: readonly AcpOutbound[]): AcpOutbound[] {
+  const started = new Set<string>()
+  return outbound.flatMap((item) => {
+    if (item.kind !== "update") return [item]
+    const { update: value } = item
+    if (
+      value.sessionUpdate !== "agent_message_chunk" &&
+      value.sessionUpdate !== "agent_thought_chunk"
+    )
+      return [item]
+    const sessionUpdate = MESSAGE_START[value.sessionUpdate]
+    const key = `${sessionUpdate}\u0000${value.messageId}`
+    if (value.messageId == null || started.has(key)) return [item]
+    started.add(key)
+    return [
+      update({
+        sessionUpdate,
+        messageId: value.messageId,
+        content: [],
+        ...(value._meta ? { _meta: value._meta } : {}),
+      }),
+      item,
+    ]
+  })
+}
+
+/**
+ * The Session's stored conversation as standard updates: each message once,
+ * and no turn state but a stored failure's, since no past state still stands.
+ * The live turn's state follows the replay on its own.
+ */
 export const translateHistory = ((history) => {
   const context = HISTORY_CONTEXT
   const outbound: AcpOutbound[] = []
-  // What live's TurnStarted approximates: the turn started when its prompt
-  // landed. A page that opens mid-conversation has only the turn's own time.
-  let promptedAt: string | undefined
-  // A turn's agent messages replay between the two state updates its stream
-  // sent, because that is what opens the turn, dates it, and settles it on the
-  // browser's one code path. Its last message says how it ended.
-  let last: SessionMessage | undefined
-  const settle = () => {
-    if (last) outbound.push(settledOutbound(context, last))
-    last = undefined
-  }
   for (const message of history.messages) {
-    if (message.role === "activity") {
-      settle()
+    if (message.role === "activity")
       outbound.push(update(planUpdate(message.content.todos, { sequence: 0 })))
-    } else if (message.role === "assistant") {
-      const parts = partsOutbound(message, context)
-      // A message that shows nothing is no part of a turn. Only a failure the
-      // provider persisted is worth bracketing alone, because the browser
-      // shows it.
-      if (parts.length === 0 && message.status === undefined) continue
-      if (!last)
-        outbound.push(
-          stateOutbound(
-            context,
-            { state: "running" },
-            { at: promptedAt ?? message.createdAt }
-          )
-        )
-      outbound.push(...parts)
-      last = message
-      // A failure ends its turn where the provider stored it.
-      if (message.status?.type === "incomplete") settle()
-    } else if (message.role === "system") {
-      // A notice the provider wrote is no turn: no turn produced it, so no
-      // turn state brackets it.
-      settle()
+    else if (message.role === "assistant")
+      outbound.push(
+        ...partsOutbound(message, context),
+        ...failureOutbound(context, message)
+      )
+    else if (message.role === "system")
       outbound.push(...partsOutbound(message, context))
-    } else {
-      settle()
-      promptedAt = message.createdAt
+    else {
       outbound.push(
         update({
           sessionUpdate: "user_message",
@@ -238,6 +245,5 @@ export const translateHistory = ((history) => {
         outbound.push(...storedArtifactOutbound(context, message, part))
     }
   }
-  settle()
-  return outbound
+  return fromEmpty(outbound)
 }) satisfies TranslateHistory

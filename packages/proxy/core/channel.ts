@@ -19,23 +19,20 @@ import {
   READING_BACKOFF,
   READING_RETRIES,
 } from "./limits"
+import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
-  beforeLiveTurn,
-  lastPromptIndex,
-  persistedCorrections,
-} from "./replay-page"
-import {
+  isAwaitingStopFailure,
   isRedialableFailure,
   ReplyStatus,
   TurnEventKind,
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
+  type TurnEvent,
 } from "./events"
 import {
   CommandRefusedError,
   hasSession,
-  promptText,
   runEvents,
   type CommandResults,
   type Member,
@@ -92,8 +89,11 @@ export type MembershipDelivery = {
   follow(): Promise<"following" | "idle">
   /** The turnId the member's own subscription last carried, if any. */
   followedTurn(): string | undefined
-  /** Tell the member's browser to reload the Session from history. */
-  invalidate(): void | Promise<void>
+  /**
+   * Rebuild the member's view from the Session's history, once its stream of
+   * the `ended` turn, if it reads one, has shown that turn's end.
+   */
+  rebuild(ended?: string): void | Promise<void>
   /** Record a send/follow failure for this member alone. */
   report(cause: unknown): void
 }
@@ -160,6 +160,12 @@ function declineReply(request: PendingRequest): RequestReply {
 /** Where a resuming view already reaches in the live turn. */
 export type ResumePosition = { turnId?: string; after?: number }
 
+/**
+ * How a resume builds its view: rebuilt from history `fromStart`, and from
+ * the newest page alone for a member that `paged` older history itself.
+ */
+export type ResumeView = { fromStart: boolean; paged: boolean }
+
 /** The bounded history one from-start read or one older page reads. */
 const HISTORY_REPLAY_LIMIT = 500
 
@@ -177,24 +183,9 @@ export function hasOlderPage(page: SessionHistoryResponse) {
 }
 
 /**
- * Where a page shows the live turn's prompt, or `-1`. A correction is a steer
- * inside the turn, so the prompt is the last user message before them.
- */
-function promptIndex(turn: ChannelTurn, history: SessionHistoryResponse) {
-  const index = lastPromptIndex(history)
-  const prompt = history.messages[index]
-  if (!prompt || !Array.isArray(prompt.content)) return -1
-  const text = prompt.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n")
-  // A prompt without text matches any other, so it never names the live one.
-  const expected = promptText(turn.content).trim()
-  return expected && text.trim() === expected ? index : -1
-}
-
-/**
  * Whether a resume already shows the live turn's prompt: its cursor sits inside
- * that turn, or the page it replayed ends on that prompt.
+ * that turn, or the page it replayed holds the prompt's id, the one the
+ * provider stored it under.
  */
 function showsPrompt(
   turn: ChannelTurn | undefined,
@@ -203,7 +194,33 @@ function showsPrompt(
 ) {
   if (!turn) return false
   if (position.turnId === turn.turnId) return true
-  return history !== undefined && promptIndex(turn, history) >= 0
+  return history?.messages.some(({ id }) => id === turn.messageId) ?? false
+}
+
+/** A turn's state as a member's view reads it, from the event that set it. */
+function statedBy(event: TurnEvent) {
+  switch (event.kind) {
+    case TurnEventKind.TurnStarted:
+      return "running"
+    case TurnEventKind.TurnRequiresAction:
+      return "requires_action"
+    case TurnEventKind.TurnEnded:
+      return "idle"
+    case TurnEventKind.TurnFailed:
+      return isAwaitingStopFailure(event) ? "requires_action" : "idle"
+    default:
+      return undefined
+  }
+}
+
+/**
+ * The same state, from the coordinator's view of the Session. Stopping and
+ * uncertain read as no stream event does, so a resume always states them.
+ */
+function viewState(state: string, awaitingStop?: boolean) {
+  if (state === "waiting-for-input" || (state === "running" && awaitingStop))
+    return "requires_action"
+  return state
 }
 
 /**
@@ -313,7 +330,7 @@ function createChannelTable({
     }
     // Shown a prompt whose reply it never streamed; history has the reply.
     delivery.fromChannel = false
-    await attempt(member, () => member.invalidate())
+    await attempt(member, () => member.rebuild())
   }
 
   async function syncChannel(scope: ChannelScope, channel: Channel) {
@@ -424,16 +441,16 @@ function createChannelTable({
 
   /**
    * Every turn's end asks the runtime once more, which finds a turn it started
-   * while the proxy's own ran. An adopted turn's end reloads every member,
-   * since none of them was shown its prompt.
+   * while the proxy's own ran. An adopted turn's end rebuilds every member's
+   * view from history, which holds the prompt none of them was shown.
    */
   function onExecution(channel: Channel, event: ExecutionEvent) {
     if (event.kind !== "turn-finished" && event.kind !== "turn-failed") return
     if (event.turnId === channel.adopted) {
       channel.adopted = undefined
       for (const member of channel.memberships.keys())
-        attempt(member, () => member.invalidate()).catch((err: unknown) =>
-          logger.error({ err }, "channel.invalidate.failed")
+        attempt(member, () => member.rebuild(event.turnId)).catch(
+          (err: unknown) => logger.error({ err }, "channel.rebuild.failed")
         )
     }
     adoptLater(channel)
@@ -603,6 +620,11 @@ export type MembershipOptions = {
 type MembershipContext = MembershipOptions & {
   coordinator: SessionCoordinator
   clock: Clock
+  /** The history a from-start view replays, the newest page alone if `paged`. */
+  readReplay: (
+    scope: SessionScope,
+    paged: boolean
+  ) => Promise<SessionHistoryResponse>
 }
 
 /**
@@ -743,41 +765,38 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator, clock },
+        { ...membership, coordinator, clock, readReplay },
         owner
       )
     },
 
     /**
      * Resumes one member's view of its Session, rebuilt from its history
-     * first when `replay` asks: the newest page alone for a member that
-     * `paged` older history itself. The join lands once the answer is
-     * written, and the Session's execution, readings and row reach the member
-     * as events after it. A Session waiting on input asks its runtime whether
-     * the wait still stands, which the answer does not wait for. A resume the
-     * journal serves asks the provider nothing first: the reads its join
-     * starts, and the turn subscription, find a Session gone meanwhile and end
-     * it, which spares every rejoin a round trip.
+     * first when `view` asks `fromStart` or its position cannot be followed:
+     * the newest page alone for a member that `paged` older history itself.
+     * The view reads the history, then the
+     * live events the journal buffered, then the Session's state, before the
+     * answer. The join lands once the answer is written, and the Session's
+     * readings and row reach the member as events after it. A Session waiting
+     * on input asks its runtime whether the wait still stands, which the
+     * answer does not wait for. A resume the journal serves asks the provider
+     * nothing first: the reads its join starts, and the turn subscription,
+     * find a Session gone meanwhile and end it, which spares every rejoin a
+     * round trip.
      */
     async resume(
       membership: Membership,
       position: ResumePosition,
-      replay?: { paged: boolean }
+      view?: ResumeView
     ): Promise<CommandResults["resume"]> {
-      const resumed = await membership.resume(
-        position,
-        replay && (() => readReplay(membership.scope, replay.paged))
+      const resumed = await membership.resume(position, view)
+      membership.joined()
+      if (
+        !membership.pending &&
+        coordinator.state(membership.scope) === "waiting-for-input"
       )
-      if (membership.pending) {
-        membership.joined()
-        return resumed
-      }
-      const { scope } = membership
-      const { state, turnId } = coordinator.snapshot(scope)
-      membership.joined({ turnId })
-      if (state === "waiting-for-input")
         channels
-          .recheck(scope)
+          .recheck(membership.scope)
           .catch((err: unknown) =>
             logger.error({ err }, "channel.adopt.failed")
           )
@@ -865,8 +884,19 @@ class Membership {
   #stopRequested = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
-  /** The turn this member last asked its client to rebuild the view for. */
-  #reloadedTurn: string | undefined
+  /** The turn whose stream this member last fell behind and rebuilt for. */
+  #rebuiltTurn: string | undefined
+  /** Whether this member's view pages older history itself. */
+  #paged = false
+  /** Settles once the member was shown what the journal buffered. */
+  #caughtUp: Promise<void> = Promise.resolve()
+  /** The turn state the member's stream last showed it since its resume. */
+  #stated: string | undefined
+  /**
+   * Set while a resume builds the view, which is told the turn's state once
+   * caught up: what a follow meanwhile replays says no state of its own.
+   */
+  #restating = false
   /**
    * The turn whose stream an interrupt ended, which this member follows again
    * once its coordinator settles whether it still runs.
@@ -876,6 +906,8 @@ class Membership {
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
   #rebuilding = false
+  /** The last stream this member was shown, settling once it has shown all. */
+  #streamed: { turnId: string; done: Promise<void> } | undefined
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
@@ -922,7 +954,11 @@ class Membership {
           ? "following"
           : "idle",
       followedTurn: () => this.#followedTurn,
-      invalidate: () => this.#invalidate(),
+      rebuild: async (ended) => {
+        if (ended !== undefined && this.#streamed?.turnId === ended)
+          await this.#streamed.done
+        await this.#rebuild()
+      },
       // A Session the provider reports gone ends each of its memberships.
       report: (cause) => {
         if (this.detached || this.endIfGone(cause)) return
@@ -996,69 +1032,127 @@ class Membership {
   }
 
   /**
-   * Builds this member's view on resume. `read` gives the page a from-start
-   * resume replays, which rebuilds the view first; without it the view keeps
-   * what it holds up to `position`. Either way the member then joins the
-   * channel and follows the live turn. Returns the page it replayed, and
-   * `resync` when the view must rebuild itself. A join that has not landed
-   * by its deadline detaches the membership, and the resume rejects then; one
-   * that finds its Session gone ends it.
+   * Builds this member's view on resume, as its `view` asks. One from the
+   * start is rebuilt from history first; any other keeps what it holds up to
+   * `position`, and is rebuilt all the same when that cannot be positioned.
+   * The view keeps whether it pages older history, for each rebuild after.
+   * Either way the
+   * member joins the channel, reads the live events the journal buffered and
+   * then the Session's state. Returns the page it replayed. A join that has
+   * not landed by its deadline detaches the membership, and the resume
+   * rejects then; one that finds its Session gone ends it.
    */
   resume(
     position: ResumePosition,
-    read?: () => Promise<SessionHistoryResponse>
+    view: ResumeView = { fromStart: false, paged: this.#paged }
   ) {
     this.#releaseCells()
+    // The resume answers before its join lands; a Session found gone between
+    // the two still ends this member.
+    if (!this.pending)
+      this.#cells = this.#options.coordinator.subscribeReadings(
+        this.#scope,
+        this.#options.membershipId,
+        { gone: (cause) => this.#end(cause) }
+      )
     this.#send({ type: "join" })
-    return unlessAborted(this.#resume(position, read), this.#detaching).catch(
-      (cause: unknown) => {
-        this.endIfGone(cause)
-        throw cause
-      }
-    )
+    this.#paged = view.paged
+    return unlessAborted(
+      this.#resume(position, view.fromStart),
+      this.#detaching
+    ).catch((cause: unknown) => {
+      this.endIfGone(cause)
+      throw cause
+    })
   }
 
   async #resume(
     position: ResumePosition,
-    read?: () => Promise<SessionHistoryResponse>
-  ): Promise<{ history?: SessionHistoryResponse; resync?: true }> {
+    fromStart: boolean
+  ): Promise<{ history?: SessionHistoryResponse }> {
     // A fresh invitation has no history to replay and no turn to follow.
     if (this.pending) return {}
+    this.#stated = undefined
+    this.#restating = true
+    try {
+      const history =
+        fromStart || !(await this.#followPositioned(position))
+          ? await this.#replay()
+          : undefined
+      await this.#reportView()
+      return history === undefined ? {} : { history }
+    } finally {
+      this.#restating = false
+    }
+  }
+
+  /**
+   * Closes a view with the Session's state, once the member was shown what
+   * the journal buffered: stated unless its stream already said it, with the
+   * requests a wait still holds asked again.
+   */
+  async #reportView() {
+    await this.#caughtUp
+    const { state, awaitingStop } = this.#coordinator.snapshot(this.#scope)
+    const stated = viewState(state, awaitingStop)
+    if (this.#stated !== stated) {
+      this.#stated = stated
+      await this.reportExecution()
+    }
+    if (state === "waiting-for-input") this.reissuePending()
+  }
+
+  /**
+   * Rebuilds the view from history and follows the live turn beside it,
+   * returning the page it showed.
+   */
+  async #replay(): Promise<SessionHistoryResponse> {
     // A correction the provider persisted the moment it accepted the steer is
     // already in this page, so the journal's acknowledgement of it is dropped.
-    const replay = read ? await this.#replayHistory(read) : undefined
-    const history = replay?.history
+    const replay = await this.#replayHistory(() =>
+      this.#options.readReplay(this.#scope, this.#paged)
+    )
     // Joined after its history and before any other provider read, so a turn
     // another browser starts meanwhile reaches it, prompt first.
     this.joinChannel(
-      showsPrompt(this.#channels.current(this.#scope), position, history),
-      history !== undefined
+      showsPrompt(this.#channels.current(this.#scope), {}, replay.history),
+      true
     )
-    // A view rebuilt from the whole page holds the turn as far as it had
-    // streamed when the page was read, so its stream continues from there on.
-    if (replay && replay.restarted === undefined) {
-      await this.#followPage(replay)
-      return { history: replay.history }
+    const followed = await this.#followPage(replay)
+    // A turn that ended before it was followed took the rows the page left to
+    // its replay, and history now holds them.
+    if ("cut" in replay && followed !== replay.cut) return this.#replay()
+    return replay.history
+  }
+
+  /**
+   * Rebuilds this member's view in place, as a from-start resume builds it:
+   * what a view that fell behind, lost its place, or was shown a prompt
+   * without its reply is owed. One that cannot be rebuilt pauses.
+   */
+  async #rebuild() {
+    if (this.detached || this.pending) return
+    try {
+      await this.#resume({}, true)
+    } catch (cause) {
+      this.#send({ type: "fell-behind" })
+      await this.report(cause)
     }
-    // A cursor for another turn cannot position this one, and a cursor the
-    // journal no longer holds cannot be served: both need a full reload. A view
-    // rebuilt from a page cut where the turn began owns nothing of it, so it
-    // follows without a cursor.
-    const resync = await this.#followPositioned(replay ? {} : position, replay)
-    return { ...(history === undefined ? {} : { history }), ...resync }
   }
 
   /**
    * Lands this member's join once the response to it has been written. From
    * then on the member is given its Session's readings, each the last value
-   * at once and then each change, so none overtakes that response. A resume
-   * that `answered` with the execution of one turn has it restated.
+   * at once and then each change, so none overtakes that response.
    */
-  joined(answered?: { turnId: string | undefined }) {
+  joined() {
     this.afterResponse(async () => {
       if (!this.#owner.actor.getSnapshot().matches("joining")) return
       this.#send({ type: "joined" })
-      this.#cells = this.#subscribeCells(answered)
+      // Taken before the resume's hold is let go, so the Session stays held.
+      const held = this.#cells
+      this.#cells = this.#subscribeCells()
+      held?.()
     })
   }
 
@@ -1078,27 +1172,16 @@ class Membership {
   /**
    * Shows this member one older page of its Session. A page resumes
    * nothing: the view keeps its channel, follow, and reports, and learns
-   * only where the next page starts. Beside a live turn the view streams from
-   * its start, a turn longer than the newest page leaves its first rows on
-   * older pages too, so a page holding a row stored after the turn began is
-   * cut as the newest page is. A page wholly before the turn is kept, so the
-   * clock skew the cut allows never drops the end of the turn before it.
+   * only where the next page starts. A turn longer than the newest page
+   * leaves its first rows on older pages too, and the live turn's replay owns
+   * those, so the page drops them as the newest page does.
    */
   showOlderPage(
     page: SessionHistoryResponse,
     older: { cursor: string; offset: number }
   ) {
-    const at = this.#coordinator.replayStart(this.#scope)?.at
-    const reached =
-      at !== undefined &&
-      page.messages.some(
-        (message) =>
-          message.role !== "activity" && Date.parse(message.createdAt) >= at
-      )
-    return this.#showHistory(
-      reached ? (beforeLiveTurn(page, at) ?? page) : page,
-      older
-    )
+    const live = this.#coordinator.replayStart(this.#scope)?.ids
+    return this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
   }
 
   /** Shows this member a history page at the cursor it has reached. */
@@ -1115,15 +1198,14 @@ class Membership {
   }
 
   /**
-   * The page a from-start resume replays. A running turn the coordinator
-   * replays from its start is shown by that replay alone: the stream the
-   * member held stops before the page is read, and the page is cut where the
-   * turn began, so `restarted` names the turn the view then shows only while
-   * its follow streams it. A page that cannot be cut there, or a turn adopted
-   * without its native start, is kept whole and its follow `reset`. Any other
-   * turn keeps the page, whose history stands for the start the journal no
-   * longer holds, and its live events follow it. A turn that starts during the
-   * read waits for the page and is replayed the same way.
+   * The page a from-start resume replays. The stream the member held stops
+   * before the page is read. A running turn the coordinator replays from its
+   * start is shown by that replay: the page drops each row the journal
+   * buffered, joined by id, so the turn shows once. Any other turn
+   * keeps the page, whose history stands for the start the journal no longer
+   * holds, and its live events follow it from as far as it had `streamed`. A
+   * turn that starts during the read waits for the page and is replayed the
+   * same way.
    */
   async #replayPage(read: () => Promise<SessionHistoryResponse>) {
     const scope = this.#scope
@@ -1140,40 +1222,45 @@ class Membership {
     // The channel's prompts and streams wait while the view is rebuilt, so
     // none lands above the page; `joinChannel` or a recovery ends the hold.
     this.#rebuilding = true
-    if (restarted) await this.#restartStream()
+    // Any live stream waits for the page, so none of it lands inside it.
+    const stopped = restarted !== undefined || before !== undefined
+    if (stopped) await this.#restartStream()
     let history: SessionHistoryResponse
     try {
       history = await read()
     } catch (cause) {
       // A turn that started during the read was held back, so it streams the
-      // same way a restarted one does once its reload failed.
-      await this.#recoverReplay(restarted?.turnId, started())
+      // same way a stopped one does once its reload failed.
+      await this.#recoverReplay(stopped || started())
       throw cause
     }
     const held = started()
+    // Read after the page, so a row the journal buffered during the read is
+    // dropped from it too.
     const shown =
-      restarted ?? (held ? this.#coordinator.replayStart(scope) : undefined)
+      restarted || held ? this.#coordinator.replayStart(scope) : undefined
+    const replay = { held, stopped }
     if (!shown)
-      return { history, held, streamed: this.#coordinator.streamed(scope) }
-    const cut =
-      shown.at === undefined ? undefined : beforeLiveTurn(history, shown.at)
+      return {
+        ...replay,
+        history,
+        ...(restarted ? {} : { streamed: this.#coordinator.streamed(scope) }),
+      }
     return {
-      history: cut ?? history,
-      held,
-      restarted: shown.turnId,
-      reset: cut === undefined,
+      ...replay,
+      history: withoutLiveRows(history, shown.ids),
+      cut: shown.turnId,
     }
   }
 
   /**
    * Ends the hold of a from-start replay that failed before the view was
-   * rebuilt. The stream stopped on `restarted` is gone: the view is asked to
-   * reload, and once that failed too, it streams the turn from its prompt, as
-   * it does a turn the hold kept `held` back.
+   * rebuilt. A stream the replay stopped, or a turn the hold kept back, still
+   * `needsFollow`: the view streams it from its prompt.
    */
-  async #recoverReplay(restarted: string | undefined, held: boolean) {
+  async #recoverReplay(needsFollow: boolean) {
     this.#rebuilding = false
-    if (restarted ? !(await this.#reloadOnce(restarted)) : held) {
+    if (needsFollow) {
       this.joinChannel(false, true)
       await this.#follow(true).catch((err: unknown) =>
         this.#options.logger.warn({ err }, "membership.follow.failed")
@@ -1195,63 +1282,66 @@ class Membership {
       await this.#showHistory(replay.history)
       return { ...replay, corrections }
     } catch (cause) {
-      await this.#recoverReplay(replay.restarted, replay.held)
+      await this.#recoverReplay(replay.stopped || replay.held)
       throw cause
     }
   }
 
   /**
-   * Follows the live turn beside a whole page from as far as it had `streamed`
-   * when the page was read. A journal that pruned that point since streams its
-   * live events alone, and a turn that ended with it adds nothing to the page.
+   * Follows the live turn beside a page from as far as it had `streamed` when
+   * the page was read, or else as the page left it to the journal. A journal
+   * that pruned that point since streams its live events alone, and a turn
+   * that ended with it adds nothing to the page. Returns the turnId it streams.
    */
   async #followPage(replay: {
     corrections: number
     streamed?: { turnId: string; after: number }
   }) {
     const { corrections, streamed } = replay
-    const follow = (after: number): Promise<unknown> =>
-      this.#follow(true, after, corrections).catch((cause: unknown) => {
-        if (!(cause instanceof ReplayCursorLostError)) throw cause
-        return after === 0 ? undefined : follow(0)
-      })
     const { turnId } = this.#coordinator.snapshot(this.#scope)
-    await follow(streamed && streamed.turnId === turnId ? streamed.after : 0)
+    if (streamed && streamed.turnId === turnId) {
+      const followed = await this.#follow(
+        true,
+        streamed.after,
+        corrections
+      ).catch((cause: unknown) => {
+        if (!(cause instanceof ReplayCursorLostError)) throw cause
+        return null
+      })
+      if (followed !== null) return followed
+    }
+    return this.#follow(true, undefined, corrections)
   }
 
   /**
-   * Subscribes to the live turn, reporting a cursor that cannot position it.
-   * A view whose stream `restarted` on a turn shows it only while this follow
-   * streams that turn; a view whose page could not be cut for it is `reset`.
+   * Follows the live turn from `position`, returning whether the view holds
+   * the Session from there: a cursor for another turn, one the journal no
+   * longer holds, or none beside a turn the journal cannot replay whole
+   * leaves the view to be rebuilt from history.
    */
-  async #followPositioned(
-    position: ResumePosition,
-    replay?: { corrections: number; restarted?: string; reset?: boolean }
-  ): Promise<{ resync?: true }> {
-    const positioned =
-      position.turnId === undefined ||
-      position.turnId === this.#coordinator.snapshot(this.#scope).turnId
-    const restarted = replay?.restarted
-    const followed = await this.#follow(
-      true,
-      replay?.reset ? "reset" : positioned ? position.after : undefined,
-      replay?.corrections
-    ).catch((cause: unknown) => {
-      // Only a cursor the journal lost is resynced; a Session gone or
-      // unavailable answers so.
-      if (!(cause instanceof ReplayCursorLostError)) throw cause
-      return null
-    })
-    if (restarted !== undefined && followed !== restarted) {
-      // A view rebuilt from the start does not act on `resync`, and this one
-      // lacks the rest of its turn: have it rebuild again once this response
-      // lands.
-      this.afterResponse(async () => {
-        await this.#reloadOnce(restarted)
-      })
-      return { resync: true }
+  async #followPositioned(position: ResumePosition) {
+    this.joinChannel(showsPrompt(this.#channels.current(this.#scope), position))
+    const { state, turnId } = this.#coordinator.snapshot(this.#scope)
+    if (position.turnId !== undefined && position.turnId !== turnId)
+      return false
+    const { after } = position
+    if (after === undefined) {
+      if (state === "idle" || turnId === undefined) return true
+      if (!this.#coordinator.replayStart(this.#scope)) return false
+      await this.#follow(true)
+      return true
     }
-    return positioned && followed !== null ? {} : { resync: true }
+    // A settled turn streams nothing more: the view holds it once its cursor
+    // reached the turn's last event.
+    if (state === "idle") return this.#coordinator.holds(this.#scope, after)
+    return this.#follow(true, after).then(
+      () => true,
+      (cause: unknown) => {
+        // Only a lost cursor rebuilds; a Session gone or unavailable answers so.
+        if (!(cause instanceof ReplayCursorLostError)) throw cause
+        return false
+      }
+    )
   }
 
   /**
@@ -1269,17 +1359,6 @@ class Membership {
     })
   }
 
-  /**
-   * Tells the member to rebuild this Session's view from history, once per
-   * turn: a rebuild that fails the same way again must not ask again. Returns
-   * whether it asked.
-   */
-  async #reloadOnce(turnId: string) {
-    if (this.#reloadedTurn === turnId) return false
-    this.#reloadedTurn = turnId
-    await this.#invalidate()
-    return true
-  }
   /**
    * Admits one user turn and subscribes to the segment it starts, settling
    * once the coordinator admitted or refused it and the channel was shown
@@ -1434,14 +1513,14 @@ class Membership {
    * an acknowledged Stop owes the member.
    */
   reportExecution() {
-    const { state, turnId, awaitingStop } = this.#coordinator.snapshot(
-      this.#scope
-    )
+    const { state, turnId, awaitingStop, startedAt } =
+      this.#coordinator.snapshot(this.#scope)
     return this.emit({
       kind: "execution",
       state,
       ...(turnId === undefined ? {} : { turnId }),
       ...(awaitingStop ? { awaitingStop } : {}),
+      ...(startedAt === undefined ? {} : { startedAt }),
       sequence: this.#sequence,
     })
   }
@@ -1451,11 +1530,11 @@ class Membership {
    * or hides. The coordinator's reporter re-reads a value that is unreadable
    * right after joining, usually the provider's agent still being built, and
    * leaves the last reading standing if it never becomes readable. The
-   * execution is restated once, for the resume that `answered` with it: each
-   * later move reaches the member on its turn's stream, which a reading would
-   * run ahead of.
+   * execution is never restated here: the resume stated it, and each later
+   * move reaches the member on its turn's stream, which a reading would run
+   * ahead of.
    */
-  #subscribeCells(answered?: { turnId: string | undefined }) {
+  #subscribeCells() {
     const { coordinator, membershipId } = this.#options
     const { agentId, sessionId } = this.#addressed
     const subscribeCapabilities = () =>
@@ -1466,17 +1545,8 @@ class Membership {
       )
     // A fresh invitation has no Session to read, only what it can do there.
     if (this.pending) return subscribeCapabilities()
-    let restating = answered
     const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
-      execution: async () => {
-        const turn = restating
-        restating = undefined
-        if (turn)
-          await this.#restate(turn.turnId).catch((cause: unknown) =>
-            this.report(cause)
-          )
-        await this.#followInterrupted()
-      },
+      execution: () => this.#followInterrupted(),
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
       model: (models) => this.#deliver({ kind: "model", models }),
       gone: (cause) => this.#end(cause),
@@ -1492,20 +1562,6 @@ class Membership {
       capabilities()
       row()
     }
-  }
-
-  /**
-   * Restates the execution a resume answered with, unless the turn it named
-   * as `turnId` was replaced since, and asks again the requests a recovered
-   * wait still holds.
-   */
-  async #restate(turnId: string | undefined) {
-    // A turn admitted since the answer was built reports itself on its own
-    // stream; restating it here would run ahead of that stream.
-    if (this.#coordinator.snapshot(this.#scope).turnId === turnId)
-      await this.reportExecution()
-    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
-      this.reissuePending()
   }
 
   /**
@@ -1529,7 +1585,7 @@ class Membership {
       (cause: unknown) =>
         // A cursor the journal no longer holds leaves history the only way on.
         cause instanceof ReplayCursorLostError
-          ? this.#invalidate()
+          ? this.#rebuild()
           : this.report(cause)
     )
   }
@@ -1685,11 +1741,14 @@ class Membership {
    * turn whose stream it lost; the channel asks whether any subscription
    * ever did, so a member is never streamed one turn twice. `ended` names a
    * turn followed even once it ended, whose end the member is still owed.
-   * Returns the turnId it streams, or `undefined` when no turn is live.
+   * Without a cursor `after`, a turn the journal holds from its first event
+   * replays whole, and any other streams its live events alone; one that has
+   * none left to stream is stated instead. Returns the turnId it streams, or
+   * `undefined` when no turn is live.
    */
   #follow(
     refollow: boolean,
-    after?: number | "reset",
+    after?: number,
     replayedCorrections = 0,
     ended?: string
   ) {
@@ -1700,24 +1759,41 @@ class Membership {
         return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
       if (carried === turnId) return turnId
-      this.#consume(
-        await this.#coordinator.recover(
+      const cursor = after ?? this.#startCursor(refollow)
+      let subscription
+      try {
+        subscription = await this.#coordinator.recover(
           this.#scope,
           {
             sessionId: this.#scope.sessionId,
             turnId,
-            ...(after === "reset"
-              ? { reset: true as const }
-              : after === undefined
-                ? {}
-                : { after }),
+            ...(cursor === undefined ? {} : { after: cursor }),
           },
           this.#access()
-        ),
-        replayedCorrections
-      )
+        )
+      } catch (cause) {
+        if (after !== undefined || !(cause instanceof ReplayCursorLostError))
+          throw cause
+        await this.#reportView()
+        return undefined
+      }
+      this.#consume(subscription, replayedCorrections)
       return turnId
     })
+  }
+
+  /**
+   * Where a follow with no cursor reads the live turn from: its first event
+   * when the journal holds it, else its live events. A member that followed
+   * the turn a wait's end continued holds that journal as far as it went.
+   */
+  #startCursor(refollow: boolean) {
+    const start = this.#coordinator.replayStart(this.#scope)
+    if (!start) return 0
+    const { continues } = start
+    return !refollow && continues?.turnId === this.#followedTurn
+      ? continues?.after
+      : undefined
   }
 
   /** Runs one subscribing task once every earlier one has settled. */
@@ -1741,13 +1817,6 @@ class Membership {
         this.#options.logger.error({ err }, "membership.enter.failed")
       )
     })
-  }
-
-  /** Asks the member to reload the Session from history. */
-  async #invalidate() {
-    await this.emit({ kind: "invalidated" }).catch((err: unknown) =>
-      this.#options.logger.warn({ err }, "membership.invalidate.failed")
-    )
   }
 
   /**
@@ -1800,26 +1869,38 @@ class Membership {
     if (subscription.turnId !== this.#followedTurn) this.#stopRequested = false
     this.#followedTurn = subscription.turnId
     this.#send({ type: "followed" })
-    this.#pump(
+    let caughtUp = () => {}
+    this.#caughtUp = new Promise<void>((resolve) => (caughtUp = resolve))
+    const done = this.#pump(
       subscription,
       this.#owner.generation,
       replayedCorrections,
+      { restating: this.#restating, caughtUp },
       shown
-    ).catch((err: unknown) =>
-      this.#options.logger.error({ err }, "membership.stream.failed")
     )
+      .catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.stream.failed")
+      )
+      .finally(caughtUp)
+    this.#streamed = { turnId: subscription.turnId, done }
   }
 
   /**
-   * Shows one subscription's segment to the member, event by event. The
-   * stream is the membership's `generation` until a later follow replaces it.
+   * Shows one subscription's segment to the member, event by event, settling
+   * `caughtUp` once it showed what the journal buffered. A view `restating`
+   * is shown that buffer without its states or requests, which it is told as
+   * they stand once caught up. The stream is the membership's `generation`
+   * until a later follow replaces it.
    */
   async #pump(
     subscription: CoordinatedTurnSubscription,
     generation: number,
     replayedCorrections: number,
+    view: { restating: boolean; caughtUp: () => void },
     shown?: Promise<void>
   ) {
+    let buffered = subscription.replayed ?? 0
+    if (buffered === 0) view.caughtUp()
     const dropped = this.#dropped
     const stream: TurnStream = {
       turnId: subscription.turnId,
@@ -1836,15 +1917,24 @@ class Membership {
         if (stream.dropped) break
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
+        const replayed = view.restating && buffered > 0
         await this.emit({
           kind: "turn",
           stream,
           sequence,
           event,
           stopping: this.#stopping,
+          ...(replayed ? { replayed: true as const } : {}),
         })
-        if (event.kind === TurnEventKind.TurnRequiresAction && !stream.dropped)
-          for (const request of event.requests) this.#offer(request)
+        if (!replayed) {
+          this.#stated = statedBy(event) ?? this.#stated
+          if (
+            event.kind === TurnEventKind.TurnRequiresAction &&
+            !stream.dropped
+          )
+            for (const request of event.requests) this.#offer(request)
+        }
+        if (--buffered === 0) view.caughtUp()
       }
     } catch (cause) {
       if (cause instanceof FanoutOverflowError) overflow = cause
@@ -1854,7 +1944,7 @@ class Membership {
     }
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
-    if (overflow) return this.#resync(subscription.turnId, overflow)
+    if (overflow) return this.#fellBehind(subscription.turnId, overflow)
     // An interrupt ends the stream, not the turn: its reconcile decides that.
     if (interrupted && !this.#owner.stale(generation)) {
       this.#interrupted = subscription.turnId
@@ -1868,16 +1958,16 @@ class Membership {
   }
 
   /**
-   * Tells the member that what it holds of this Session is incomplete,
-   * because the stream it was reading was dropped for falling behind its
-   * bounds.
+   * Rebuilds the view of a member whose stream was dropped for falling behind
+   * its bounds, once per turn: one that falls behind the same turn again is
+   * paused until it resumes.
    *
    * The turn itself is unharmed and may still be going, so this is not a turn
    * failure and the segment did not settle: reporting either would leave the
    * member believing a turn it only saw part of had ended. The member owes
-   * itself the Session from the start, which is what invalidation asks for.
+   * itself the Session from history, then the turn's live events and state.
    */
-  async #resync(turnId: string, overflow: FanoutOverflowError) {
+  async #fellBehind(turnId: string, overflow: FanoutOverflowError) {
     this.#options.logger.error(
       {
         membershipId: this.#options.membershipId,
@@ -1885,10 +1975,14 @@ class Membership {
         events: overflow.events,
         bytes: overflow.bytes,
       },
-      "membership.detached"
+      "membership.fell-behind"
     )
-    this.#send({ type: "fell-behind" })
-    await this.#invalidate()
+    if (this.#rebuiltTurn === turnId) {
+      this.#send({ type: "fell-behind" })
+      return
+    }
+    this.#rebuiltTurn = turnId
+    await this.#rebuild()
   }
 
   /**
