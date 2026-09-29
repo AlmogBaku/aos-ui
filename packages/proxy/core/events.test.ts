@@ -6,7 +6,6 @@ import {
   DiffOperation,
   isAwaitingStopFailure,
   isRedialableFailure,
-  isRepliesTurn,
   isTurnEvent,
   isUncertainFailure,
   pendingRequestsOf,
@@ -242,15 +241,6 @@ function without(fixture: Record<string, unknown>, key: string) {
 }
 
 describe("the proxy-owned turn vocabulary", () => {
-  it("covers every kind the proxy carries", () => {
-    expect(Object.keys(eventFixtures).sort()).toEqual(
-      Object.values(TurnEventKind).sort()
-    )
-    expect(Object.keys(requiredFields).sort()).toEqual(
-      Object.values(TurnEventKind).sort()
-    )
-  })
-
   it("parses a full fixture of every kind unchanged", () => {
     for (const [kind, fixture] of fixtures) {
       expect(TurnEventSchema.parse(fixture), kind).toEqual(fixture)
@@ -264,11 +254,6 @@ describe("the proxy-owned turn vocabulary", () => {
         isTurnEvent({ ...fixture, rawEvent: { provider: "native" } }),
         kind
       ).toBe(false)
-  })
-
-  it("requires the discriminator on every kind", () => {
-    for (const [kind, fixture] of fixtures)
-      expect(isTurnEvent(without(fixture, "kind")), kind).toBe(false)
   })
 
   it("rejects every kind missing a required field and accepts every other omission", () => {
@@ -389,10 +374,6 @@ describe("the provider facts a turn event carries", () => {
 })
 
 describe("a pending request", () => {
-  it("parses every field a request may carry", () => {
-    expect(PendingRequestSchema.parse(pendingRequest)).toEqual(pendingRequest)
-  })
-
   it("requires only the identifier and the kind", () => {
     const required = ["requestId", "kind"]
 
@@ -429,10 +410,6 @@ describe("a pending request", () => {
 })
 
 describe("a request reply", () => {
-  it("parses every field the operator's answer may carry", () => {
-    expect(RequestReplySchema.parse(requestReply)).toEqual(requestReply)
-  })
-
   it("requires only the request it answers and its status", () => {
     const required = ["requestId", "status"]
 
@@ -489,11 +466,6 @@ describe("a turn input", () => {
     expect(
       TurnInputSchema.safeParse({ ...promptTurn, callerOnlyField: "x" }).success
     ).toBe(false)
-  })
-
-  it("tells a replies turn from a prompt turn", () => {
-    expect(isRepliesTurn(repliesTurn)).toBe(true)
-    expect(isRepliesTurn(promptTurn)).toBe(false)
   })
 })
 

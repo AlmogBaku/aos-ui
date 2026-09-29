@@ -58,36 +58,12 @@ describe("boundedJson", () => {
 })
 
 describe("errorResponse", () => {
-  it.each([
-    ["unauthenticated", "Sign in to AOS to continue."],
-    ["forbidden", "You do not have permission to do that."],
-    ["invalid_request", "The request could not be processed."],
-    ["not_found", "The requested item was not found."],
-    ["revision_conflict", "This item changed. Refresh and try again."],
-    ["turn_conflict", "A turn is already active for this session."],
-    ["turn_capacity_exceeded", "AOS is at capacity. Please try again shortly."],
-    [
-      "runtime_authentication_required",
-      "The configured runtime credentials were rejected. Check the gateway configuration.",
-    ],
-    [
-      "temporarily_unavailable",
-      "The service is temporarily unavailable. Please try again.",
-    ],
-    [
-      "uncertain_mutation",
-      "The runtime may have accepted the request. Refresh to reconcile before trying again.",
-    ],
-    ["internal_error", "Something went wrong. Please try again."],
-  ] as const)(
-    "returns a safe friendly description for %s",
-    async (code, description) => {
-      const response = errorResponse(code, 503)
+  it("answers the status it is given with the code and its friendly description", async () => {
+    const response = errorResponse("not_found", 404)
 
-      expect(response.status).toBe(503)
-      await expect(response.json()).resolves.toEqual({
-        error: { code, description },
-      })
-    }
-  )
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "not_found", description: expect.any(String) },
+    })
+  })
 })

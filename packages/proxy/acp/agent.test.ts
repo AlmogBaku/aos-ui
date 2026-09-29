@@ -962,11 +962,17 @@ describe("AOS ACP agent", () => {
     // Session.
     for (const browser of [test, other]) {
       expect(usages(browser.recorder)).toHaveLength(3)
-      expect(
-        updates(browser.recorder).filter((update) =>
-          JSON.stringify(update).includes("config_option_update")
-        )
-      ).toHaveLength(3)
+      const options = updates(browser.recorder).filter((update) =>
+        JSON.stringify(update).includes("config_option_update")
+      )
+      expect(options).toHaveLength(3)
+      // The switch restates the options with the model the provider moved to.
+      expect(options[1]).toMatchObject({
+        update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [{ configId: "model", currentValue: "opus" }],
+        },
+      })
     }
     test.close()
     other.close()
