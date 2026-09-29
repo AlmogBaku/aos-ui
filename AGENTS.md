@@ -266,7 +266,7 @@ diff looks:
 | styling, layout, copy, text, theme tokens | `bun run typecheck` and `bun run build` if code was touched; look once at the rendered surface | `test:e2e`, a new test, the unit suite |
 | a mechanical rename across files | `bun run typecheck`, `bun run build` | the full suite |
 | logic in one module | that module's tests (`bun run test <path>` or `vitest --changed`) | the full suite |
-| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `typecheck`, `lint`, `build`, once | — |
+| a shared surface (`shared/`, build config, dependencies) or genuinely uncertain impact | `bun run test`, `test:gate`, `typecheck`, `lint`, `build`, once | — |
 | behavior a Playwright flow covers | that one spec, once | the whole e2e suite |
 
 A green run stays valid while the tree is unchanged: do not rerun before the
@@ -279,8 +279,12 @@ Several worktrees sweeping at once oversubscribe a shared machine and starve any
 deployment running on it, so `vitest.config.ts` caps workers at half the cores.
 Raise it through `AOS_UI_TEST_WORKERS` only when the machine is yours alone, and
 prefer `nice bun run test` for a full sweep beside a live deployment.
-The suite is two Vitest projects: `bunx vitest run --project node` runs the
-DOM-free server, protocol, and tooling tests, and `--project dom` the jsdom rest.
+The everyday suite is two Vitest projects: `bunx vitest run --project node`
+runs the DOM-free server, protocol, browser-logic, and tooling tests, and
+`--project dom` the jsdom rest (`.tsx` files and the `domTests` list in
+`vitest.config.ts`). A third project, `gate`, holds the production-build,
+Compose, and type-aware ESLint checks; `bun run test` skips it and
+`bun run test:gate` runs it alone.
 
 When a worktree-isolated session's shell guard rejects a compound command, put
 the steps in a script file under `/tmp` and run that script. The tracked skills
@@ -298,7 +302,7 @@ Additional checks by area:
   what renders needs no theme pass at all, its tests already cover it.
 - Tools MCP server or shared presentation schemas: `bunx vitest run packages/tools-mcp`
   and `tsc -p tsconfig.tools-mcp.json --noEmit`; both also run inside the root
-  test and typecheck gates.
+  test, test:gate, and typecheck gates.
 - Compose or Docker changes:
 
   ```bash
