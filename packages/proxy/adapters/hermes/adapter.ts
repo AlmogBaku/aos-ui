@@ -36,7 +36,11 @@ import {
   projectHermesHistory,
 } from "./history"
 import { createHermesMcpApps } from "./mcp-apps"
-import { hermesInflightTurn, restoredHermesFailedTurn } from "./inflight"
+import {
+  hermesInflightTurn,
+  restoredHermesFailedTurn,
+  unansweredPrompt,
+} from "./inflight"
 import { publishedArtifact } from "./media-artifacts"
 import { HermesPublishedArtifacts } from "./published-artifacts"
 import {
@@ -1609,13 +1613,13 @@ export class HermesServerAdapter implements ServerRuntime {
       messages = projectHermesHistory(rows, resolve)
     }
     // Hermes keeps a turn that failed out of its transcript, so the newest page
-    // ending with an unanswered prompt is the one history load that asks Hermes
-    // for the retained turn. Every other load leaves the Session alone.
-    const trailing = messages.at(-1)
-    const restored =
-      offset === 0 && trailing?.role === "user"
-        ? await this.#restoredFailedTurn(profile, storedId, trailing)
-        : undefined
+    // ending with an unanswered prompt, or with a tool call nothing answered,
+    // is the one history load that asks Hermes for the retained turn. Every
+    // other load leaves the Session alone.
+    const prompt = offset === 0 ? unansweredPrompt(messages) : undefined
+    const restored = prompt
+      ? await this.#restoredFailedTurn(profile, storedId, prompt)
+      : undefined
     if (restored) messages.push(restored)
     if (todos !== undefined)
       messages.push({
@@ -1637,15 +1641,15 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   /**
-   * The failed turn Hermes retained for the prompt this transcript ends with,
-   * read from the Session's own inflight snapshot.
+   * The failed turn Hermes retained for the prompt this transcript's newest
+   * turn opened with, read from the Session's own inflight snapshot.
    */
   async #restoredFailedTurn(
     agentId: string,
     storedId: string,
-    trailing: SessionMessage
+    opening: SessionMessage
   ) {
-    const prompt = trailing.content.find((part) => part.type === "text")
+    const prompt = opening.content.find((part) => part.type === "text")
     if (prompt?.type !== "text") return undefined
     try {
       // The registry single-flights `session.resume`: a Session someone is
@@ -1672,7 +1676,7 @@ export class HermesServerAdapter implements ServerRuntime {
       : restoredHermesFailedTurn(inflight, {
           id: `aos-inflight:${sessionId(agentId, storedId)}`,
           userText: prompt.text,
-          createdAt: trailing.createdAt,
+          createdAt: opening.createdAt,
         })
   }
 

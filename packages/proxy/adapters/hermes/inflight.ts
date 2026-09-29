@@ -14,7 +14,10 @@
  * `recoverable` and `error_surface`; nothing outside the fields validated below
  * is read.
  */
-import type { SessionMessage } from "../../../protocol"
+import type {
+  SessionMessage,
+  SessionPlanActivityMessage,
+} from "../../../protocol"
 
 import { projectHermesMediaText } from "./media-artifacts"
 import { isRecord, nativeId } from "./native"
@@ -110,6 +113,28 @@ function answersPrompt(native: string | undefined, publicText: string) {
   const prompt = native?.trim()
   const text = publicText.trim()
   return prompt !== undefined && text.length > 0 && prompt.startsWith(text)
+}
+
+/**
+ * The prompt a transcript's newest turn opened with, when that turn has no
+ * answer: the transcript ends with the prompt itself, or with a tool call no
+ * model call followed. A failed turn that already ran tools leaves its calls
+ * and results in Hermes' transcript, so the prompt is not always the last row.
+ */
+export function unansweredPrompt(
+  messages: readonly (SessionMessage | SessionPlanActivityMessage)[]
+): SessionMessage | undefined {
+  const trailing = messages.at(-1)
+  if (trailing?.role === "user") return trailing
+  if (
+    trailing?.role !== "assistant" ||
+    trailing.stopReason !== undefined ||
+    trailing.content.at(-1)?.type !== "tool-call"
+  )
+    return undefined
+  return messages.findLast(
+    (message): message is SessionMessage => message.role === "user"
+  )
 }
 
 /**
