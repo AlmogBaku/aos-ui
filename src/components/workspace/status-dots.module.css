@@ -22,8 +22,27 @@
 
 .statusDot[data-status="active"],
 .statusDot[data-status="running"] {
+  position: relative;
   background: var(--workspace-status-running, var(--info));
   animation: status-breathe 2.2s ease-in-out infinite;
+}
+
+/* The breathing halo is a static disc that only scales and fades, so the
+   compositor runs it without repainting. Its 0.45rem radius at full scale
+   matches a 0.2rem spread around the 0.25rem dot; the smallest scale sits at
+   the dot's own edge, and opacity carries the 0% to 16% colour mix. */
+.statusDot[data-status="active"]::after,
+.statusDot[data-status="running"]::after {
+  position: absolute;
+  inset: -0.2rem;
+  border-radius: inherit;
+  background: color-mix(
+    in oklab,
+    var(--workspace-status-running, var(--info)) 16%,
+    transparent
+  );
+  content: "";
+  animation: status-halo 2.2s ease-in-out infinite;
 }
 
 .statusDot[data-status="attention"],
@@ -42,23 +61,24 @@
 @keyframes status-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0
-      color-mix(
-        in oklab,
-        var(--workspace-status-running, var(--info)) 0%,
-        transparent
-      );
     opacity: 0.62;
   }
 
   50% {
-    box-shadow: 0 0 0 0.2rem
-      color-mix(
-        in oklab,
-        var(--workspace-status-running, var(--info)) 16%,
-        transparent
-      );
     opacity: 1;
+  }
+}
+
+@keyframes status-halo {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(calc(0.25 / 0.45));
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 
@@ -67,5 +87,10 @@
   .statusDot[data-status="running"] {
     animation: none;
     opacity: 1;
+  }
+
+  .statusDot[data-status="active"]::after,
+  .statusDot[data-status="running"]::after {
+    content: none;
   }
 }
