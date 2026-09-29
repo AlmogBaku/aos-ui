@@ -24,6 +24,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
+import { useLocation } from "react-router"
 
 import {
   Thread,
@@ -469,6 +470,7 @@ function WorkspaceContent({
   composer?: ThreadComponents["Composer"]
 }) {
   const { assistantRuntime: runtime, workspace } = bundle
+  const location = useLocation()
   const {
     environmentLabel,
     activityCoverage,
@@ -638,7 +640,10 @@ function WorkspaceContent({
     )?.agentId
     if (!agentId) return undefined
     return {
-      href: workspaceHref(window.location.href, { agentId, sessionId }),
+      href: workspaceHref(
+        `${window.location.origin}${location.pathname}${location.search}${location.hash}`,
+        { agentId, sessionId }
+      ),
       open: () => {
         setPreferredAgentId(agentId)
         openSession(sessionId, agentId).catch((reason: unknown) =>

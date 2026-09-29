@@ -85,11 +85,6 @@ type Options = {
   }
 }
 /**
- * State re-read from a store on every focus change and activity event. The
- * setter keeps the value it has when the re-read carries the same data, so an
- * unchanged read does not re-render the workspace.
- */
-/**
  * Runs a provider call whose failure the workspace outlives. It lives outside
  * the hook because React Compiler cannot compile optional chaining inside `try`.
  */
@@ -101,6 +96,11 @@ function ignoreFailure(action: () => void) {
   }
 }
 
+/**
+ * State re-read from a store on every focus change and activity event. The
+ * setter keeps the value it has when the re-read carries the same data, so an
+ * unchanged read does not re-render the workspace.
+ */
 function useDataState<Value>(initial: Value) {
   const [value, setValue] = useState(initial)
   const setData = useCallback(
@@ -409,6 +409,7 @@ export function useActivityCoordinator(
     return () => {
       active = false
       reported.current = undefined
+      // A provider that cannot accept the report keeps the workspace usable.
       ignoreFailure(() =>
         workspace.reportFocus?.(null, { foreground: false, idle: false })
       )
@@ -425,6 +426,7 @@ export function useActivityCoordinator(
       window.removeEventListener("focus", onFocus)
       window.removeEventListener("blur", refresh)
       document.removeEventListener("visibilitychange", refresh)
+      // Subscription teardown cannot break the workspace.
       ignoreFailure(() => unsubscribe?.())
     }
   }, [setBrowserState, setRecords, workspace])
