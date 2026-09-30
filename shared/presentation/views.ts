@@ -10,6 +10,8 @@ export type PresentationView = {
   resourceUri: `ui://aos-ui/${PresentationViewName}`
   /** The origins the view loads from, beyond its own inlined document. */
   csp: { connectDomains?: string[]; resourceDomains?: string[] }
+  /** The browser features the view asks its host frames to allow. */
+  permissions?: { clipboardWrite?: Record<string, never> }
 }
 
 /**
@@ -27,11 +29,12 @@ export const presentationViews: Record<AosUiToolName, PresentationView> = {
   },
   render_stats: { name: "stats", resourceUri: "ui://aos-ui/stats", csp: {} },
   // The page adds each call's own file addresses to this view's policy, so
-  // it declares no origin of its own.
+  // it declares no origin of its own. Its Copy button writes the clipboard.
   present_artifact: {
     name: "artifact",
     resourceUri: "ui://aos-ui/artifact",
     csp: {},
+    permissions: { clipboardWrite: {} },
   },
 }
 

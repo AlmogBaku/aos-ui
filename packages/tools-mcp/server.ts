@@ -90,7 +90,10 @@ function presentationResult(
 }
 
 function registerView(server: McpServer, view: PresentationView, html: string) {
-  const ui = { csp: view.csp }
+  const ui = {
+    csp: view.csp,
+    ...(view.permissions ? { permissions: view.permissions } : {}),
+  }
   registerAppResource(
     server,
     `aos-ui ${view.name} view`,
